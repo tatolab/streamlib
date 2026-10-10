@@ -2096,6 +2096,9 @@ mod tests {
                         .unwrap_err()
                         .to_string(),
                     TatolabStateDirectory::resolve().unwrap_err().to_string(),
+                    TatolabStateDirectory::resolve_for_a_reader_without_creating()
+                        .unwrap_err()
+                        .to_string(),
                     MachineRuntimeLock::take().unwrap_err().to_string(),
                     holder_of_the_machine_runtime_lock()
                         .unwrap_err()

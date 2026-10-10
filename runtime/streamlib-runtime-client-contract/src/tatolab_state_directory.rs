@@ -75,7 +75,7 @@ impl StateDirectoryPlacementRule {
     }
 }
 
-/// The machine runtime's state directory, resolved and present on disk.
+/// The machine runtime's state directory, resolved: present on disk unless resolved for a reader.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TatolabStateDirectory {
     path: PathBuf,
@@ -85,16 +85,15 @@ impl TatolabStateDirectory {
     /// Resolve this user's state directory, creating it owner-only if absent and
     /// refusing a path that stands and is not a directory.
     pub fn resolve() -> Result<Self, TatolabStateDirectoryRefusal> {
-        #[cfg(feature = "machine-directories-under-a-test-root")]
-        let path = crate::machine_directories_test_root::TestMachineRoot::from_the_environment()?
-            .state_directory();
-        #[cfg(not(feature = "machine-directories-under-a-test-root"))]
-        let path = tatolab_state_directory_path_from(
-            std::env::var_os("XDG_STATE_HOME"),
-            std::env::var_os("HOME"),
-            StateDirectoryPlacementRule::for_this_platform(),
-        )?;
-        tatolab_state_directory_present_at(path)
+        tatolab_state_directory_present_at(this_users_tatolab_state_directory_path()?)
+    }
+
+    /// Resolve where this user's state directory is, creating nothing: a reader naming the
+    /// directory, which may not exist.
+    pub fn resolve_for_a_reader_without_creating() -> Result<Self, TatolabStateDirectoryRefusal> {
+        Ok(TatolabStateDirectory {
+            path: this_users_tatolab_state_directory_path()?,
+        })
     }
 
     /// The resolved directory itself.
@@ -111,6 +110,23 @@ impl TatolabStateDirectory {
     pub fn runtime_log_directory(&self) -> PathBuf {
         self.path.join("logs")
     }
+}
+
+/// This user's state directory path, from the process environment.
+fn this_users_tatolab_state_directory_path() -> Result<PathBuf, TatolabStateDirectoryRefusal> {
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    {
+        Ok(
+            crate::machine_directories_test_root::TestMachineRoot::from_the_environment()?
+                .state_directory(),
+        )
+    }
+    #[cfg(not(feature = "machine-directories-under-a-test-root"))]
+    tatolab_state_directory_path_from(
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+        StateDirectoryPlacementRule::for_this_platform(),
+    )
 }
 
 /// The resolver with its inputs named, so every arm is testable without the
@@ -293,6 +309,56 @@ mod tests {
             0o750
         );
         assert!(path.join("left-by-an-earlier-run").exists());
+    }
+
+    /// Set only in the child process the reader test re-runs itself in, to the scratch home.
+    const READER_RESOLVE_CHILD_SCRATCH_HOME_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_STATE_DIRECTORY_READER_SCRATCH_HOME";
+
+    #[test]
+    fn a_reader_resolves_the_state_directory_without_creating_it() {
+        if let Some(scratch_home) =
+            std::env::var_os(READER_RESOLVE_CHILD_SCRATCH_HOME_ENVIRONMENT_VARIABLE)
+        {
+            let read_path = TatolabStateDirectory::resolve_for_a_reader_without_creating()
+                .unwrap()
+                .path()
+                .to_path_buf();
+
+            assert!(
+                read_path.starts_with(&scratch_home),
+                "{}",
+                read_path.display()
+            );
+            assert!(!read_path.exists(), "{} was created", read_path.display());
+            assert_eq!(TatolabStateDirectory::resolve().unwrap().path(), read_path);
+            assert!(read_path.is_dir());
+            return;
+        }
+
+        let scratch_home = tempfile::Builder::new()
+            .prefix("tl-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let child = crate::test_support::rerun_this_test_in_a_child_process_with_its_environment(
+            "tatolab_state_directory::tests::a_reader_resolves_the_state_directory_without_creating_it",
+            |child_command| {
+                child_command
+                    .env(
+                        READER_RESOLVE_CHILD_SCRATCH_HOME_ENVIRONMENT_VARIABLE,
+                        scratch_home.path(),
+                    )
+                    .env("TATOLAB_TEST_MACHINE_ROOT", scratch_home.path())
+                    .env("HOME", scratch_home.path())
+                    .env_remove("XDG_STATE_HOME");
+            },
+        );
+        assert!(
+            child.status.success(),
+            "the reader arm failed in the child: {}{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr),
+        );
     }
 
     #[test]
