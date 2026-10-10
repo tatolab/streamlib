@@ -1132,25 +1132,44 @@ pub(crate) mod router_surface_tests {
     }
 
     /// The runtime stops as a service does, or by a signal in its terminal:
-    /// no route asks it to, and the spec documents none.
-    #[tokio::test]
-    async fn no_route_shuts_the_runtime_down() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/runtime/shutdown")
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from("{}"))
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::NOT_FOUND);
-
+    /// the spec documents reads alone, every operation a `GET`, and names no
+    /// type that stops it.
+    #[test]
+    fn no_route_shuts_the_runtime_down() {
         let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();
-        assert!(
-            spec["paths"]["/api/runtime/shutdown"].is_null(),
-            "{}",
-            spec["paths"]
+        let mut documented_operations: Vec<(String, String)> = spec["paths"]
+            .as_object()
+            .expect("the spec documents its paths")
+            .iter()
+            .flat_map(|(path, path_item)| {
+                path_item
+                    .as_object()
+                    .expect("each path documents its operations")
+                    .keys()
+                    .filter(|key| {
+                        [
+                            "get", "put", "post", "delete", "patch", "options", "head", "trace",
+                        ]
+                        .contains(&key.as_str())
+                    })
+                    .map(move |method| (path.clone(), method.clone()))
+            })
+            .collect();
+        documented_operations.sort_unstable();
+
+        assert_eq!(
+            documented_operations,
+            [
+                ("/api/graph", "get"),
+                ("/api/registry", "get"),
+                ("/api/surfaces/{surface_id}/image", "get"),
+                ("/health", "get"),
+                ("/ws/tap/{channel}", "get"),
+            ]
+            .map(|(path, method)| (path.to_owned(), method.to_owned()))
         );
         assert!(
-            !spec.to_string().contains("RuntimeShutdown"),
+            !spec.to_string().contains("Shutdown"),
             "the spec names no shutdown type"
         );
     }
