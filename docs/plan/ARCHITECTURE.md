@@ -3376,7 +3376,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   sharing step's (the moq-on-the-tailnet entries below).
   [zenoh-and-moq-wheel-removal — SHIPPED #2643]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_key_this_runtime_does_not_read_is_refused_naming_it_and_where_it_sits -->
-  <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_a_machine_is_refused_by_load_naming_the_key -->
+  <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the_address_shape -->
+  <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machine -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_an_input_as_its_source_naming_the_fix -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
@@ -3387,6 +3388,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   from code on the machine, or by opening the port's URL. Owner, 2026-10-04: a source never
   wires itself into a reader, the way a server never wires its URL into a client's browser.
   [exposure-levels]
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_between_streams_carries_a_native_source_into_python_and_a_python_source_into_a_native_window -->
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_reader_run_before_its_source_awaits_naming_it_then_wires_once_the_source_runs -->
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_the_builders_address_refusals_are_the_compiles_refusal -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_an_address_as_its_destination_because_a_link_is_only_pulled -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test a_link_loaded_before_its_source_stream_awaits_naming_it_then_wires_when_it_starts -->
 - **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
   is one clock per machine, and a stamp is never compared against one from another clock. No
   link can carry a stamp from another machine, so nothing reads or renders a clock identity,
@@ -3432,6 +3438,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting;
   amended by moq-on-the-tailnet: a machine name is its tailnet name (the entry below)]
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_names_the_port_a_fixture_address_parses_to -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_refuses_a_fixture_address_naming_no_port_where_it_is_written -->
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_the_builders_address_refusals_are_the_compiles_refusal -->
 - **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
   any node of the stream may link to it, and nothing outside the stream may read it.
@@ -3452,6 +3462,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   moq-on-the-tailnet: off the machine a public port is read over MoQ on the tailnet, and at a
   relay once the machine has joined one; machines are listed from Tailscale's status and asked
   for their public ports]
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_to_an_internal_port_is_refused_naming_the_port_and_its_level_and_wires_once_it_is_private -->
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_lowering_the_source_to_internal_cuts_the_link_at_once_and_a_link_to_a_still_private_port_keeps_flowing -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test a_link_to_an_internal_port_of_another_stream_is_refused_naming_the_port_and_its_level -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test lowering_the_source_to_internal_disconnects_the_link_at_once_and_other_links_keep_carrying -->
 - **DECIDED** — Every public port is reachable by URL, and every private port from any tool
   on the machine. A user with no account can see and use their own streams locally (owner,
   2026-09-30). [one-runtime-per-machine; amended by moq-on-the-tailnet: live data has one form,
@@ -3508,6 +3522,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   tailnet name is accepted in the machine position for a machine shared in from another
   tailnet. With no Tailscale the machine's name is its hostname and matters only on that
   machine. Owner, 2026-10-04. [moq-on-the-tailnet]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_naming_another_machine_is_refused_by_name -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ, the `moq-net` and `moq-tokio`
   crates, pinned to exact versions, and serves sessions itself with no relay program beside it.
   Known (2026-10-04): the line's compatibility with Cloudflare's hosted relays is
