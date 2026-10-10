@@ -7,10 +7,10 @@
 //! every settled save and, when the runtime goes away, waits for it and loads again.
 
 use std::future::Future;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use streamlib_runtime_client_contract::local_api_wire_contract::RunStreamToolResult;
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -26,20 +26,20 @@ use crate::process_signal_handling::block_the_stop_signals_and_listen;
 use crate::project_source_change_watcher::watch_project_sources;
 use crate::runtime_log_files_reader::RuntimeLogRecordFilters;
 use crate::stream_actions_on_the_runtime::{
-    RUN_STREAM_TOOL_NAME, RunStreamToolResult, STOP_STREAM_TOOL_NAME, StreamLoadArguments,
-    StreamLoadRequest, rendered_compile_warning_lines, stop_stream_tool_arguments,
+    StreamActionTool, StreamLoadArguments, StreamLoadRequest, rendered_compile_warning_lines,
+    stop_stream_tool_arguments, tool_result_from,
 };
 use crate::stream_log_records_from_the_runtime::{
     LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
     render_stream_log_records_page, stream_log_records_page_from,
 };
-use crate::verb_standard_output::{standard_output_closed_or_failed, write_verb_standard_error};
+use crate::verb_standard_output::{
+    standard_output_closed_or_failed, write_and_flush_verb_standard_output,
+    write_verb_standard_error,
+};
 
-/// Bounds a load: the compile in the project's interpreter, the description of its Python types
-/// and the load itself, each bounded runtime-side well within it.
-const ATTACHED_STREAM_LOAD_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// Bounds every other request of an attached stream's connection.
+/// Bounds every request of an attached stream's connection but a stream action's, which each
+/// waits as long as its own tool's timeout.
 const ATTACHED_STREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How often `dev` looks for the runtime's socket again after losing its connection.
@@ -271,9 +271,9 @@ impl AttachedStreamSession {
         let run_stream_arguments = self.stream_load_request.run_stream_tool_arguments(false);
         let load_outcome = match self
             .finish_unless_stopped(connected_client.call_tool_bounded_by(
-                RUN_STREAM_TOOL_NAME,
+                StreamActionTool::RunStream.tool_name(),
                 run_stream_arguments,
-                ATTACHED_STREAM_LOAD_TIMEOUT,
+                StreamActionTool::RunStream.tool_call_timeout(),
             ))
             .await
         {
@@ -284,14 +284,11 @@ impl AttachedStreamSession {
             }
         };
         let run_stream_result = match load_outcome.and_then(|run_stream_result_text| {
-            serde_json::from_str::<RunStreamToolResult>(&run_stream_result_text).map_err(
-                |parse_failure| {
-                    LocalApiMcpToolClientFailure::request_refused_by_the_runtime(format!(
-                        "run_stream answered something other than its result ({parse_failure}): \
-                         {run_stream_result_text}"
-                    ))
-                },
+            tool_result_from::<RunStreamToolResult>(
+                StreamActionTool::RunStream,
+                &run_stream_result_text,
             )
+            .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)
         }) {
             Ok(run_stream_result) => run_stream_result,
             Err(load_failure) => return self.after_a_failed_load(load_failure),
@@ -314,33 +311,46 @@ impl AttachedStreamSession {
         }
     }
 
-    fn after_a_failed_load(
+    /// Where the session goes after `failure` lost its connection: `run` exits naming the
+    /// runtime's log, `dev` connects again. `None` when the connection holds.
+    fn after_a_lost_connection(
         &mut self,
-        load_failure: LocalApiMcpToolClientFailure,
-    ) -> AttachedStreamSessionStep {
-        match (self.attached_stream_verb, load_failure.kind) {
+        failure: &LocalApiMcpToolClientFailure,
+    ) -> Option<AttachedStreamSessionStep> {
+        match (self.attached_stream_verb, failure.kind) {
             (
                 AttachedStreamVerb::Run,
                 LocalApiMcpToolClientFailureKind::LocalApiConnectionClosed,
-            ) => AttachedStreamSessionStep::Exit(Err(TatolabCommandFailure::refused(
-                the_runtime_closed_the_connection_message(),
+            ) => Some(AttachedStreamSessionStep::Exit(Err(
+                TatolabCommandFailure::refused(the_runtime_closed_the_connection_message()),
             ))),
-            (AttachedStreamVerb::Run, _) => {
-                AttachedStreamSessionStep::Exit(Err(load_failure.into()))
-            }
             (
                 AttachedStreamVerb::Dev,
                 LocalApiMcpToolClientFailureKind::LocalApiConnectionClosed,
             ) => {
                 self.note(&the_runtime_closed_the_connection_message());
-                AttachedStreamSessionStep::Reconnect
+                Some(AttachedStreamSessionStep::Reconnect)
             }
             (AttachedStreamVerb::Dev, LocalApiMcpToolClientFailureKind::LocalApiUnreachable) => {
-                // A load that did not answer may still land; closing this connection unloads it.
-                self.note(&format!("{load_failure}; connecting again"));
-                AttachedStreamSessionStep::Reconnect
+                // A call that did not answer may still land; closing this connection unloads
+                // what it loaded.
+                self.note(&format!("{failure}; connecting again"));
+                Some(AttachedStreamSessionStep::Reconnect)
             }
-            (AttachedStreamVerb::Dev, _) => {
+            _ => None,
+        }
+    }
+
+    fn after_a_failed_load(
+        &mut self,
+        load_failure: LocalApiMcpToolClientFailure,
+    ) -> AttachedStreamSessionStep {
+        if let Some(after_a_lost_connection) = self.after_a_lost_connection(&load_failure) {
+            return after_a_lost_connection;
+        }
+        match self.attached_stream_verb {
+            AttachedStreamVerb::Run => AttachedStreamSessionStep::Exit(Err(load_failure.into())),
+            AttachedStreamVerb::Dev => {
                 self.note(&load_failure.to_string());
                 if self.project_sources_changed_during_a_call {
                     return AttachedStreamSessionStep::Load;
@@ -387,7 +397,7 @@ impl AttachedStreamSession {
                 &RuntimeLogRecordFilters::default(),
                 &mut std::io::stderr(),
             );
-            if let Err(write_failure) = write_and_flush_to_standard_output(&rendered_records) {
+            if let Err(write_failure) = write_and_flush_verb_standard_output(&rendered_records) {
                 self.stop_the_stream(connected_client, &stream).await;
                 return AttachedStreamSessionStep::Exit(standard_output_closed_or_failed(
                     write_failure,
@@ -419,39 +429,25 @@ impl AttachedStreamSession {
         stream: &str,
         logs_failure: LocalApiMcpToolClientFailure,
     ) -> AttachedStreamSessionStep {
-        match (self.attached_stream_verb, logs_failure.kind) {
-            (_, LocalApiMcpToolClientFailureKind::ToolCallFailed) => {
-                self.note(&format!(
-                    "{stream} was unloaded by the runtime — stopped elsewhere or by its \
-                     watchdog: {logs_failure}"
-                ));
-                match self.attached_stream_verb {
-                    AttachedStreamVerb::Run => AttachedStreamSessionStep::Exit(Ok(0)),
-                    AttachedStreamVerb::Dev => AttachedStreamSessionStep::WaitForTheNextSave,
-                }
-            }
-            (
-                AttachedStreamVerb::Run,
-                LocalApiMcpToolClientFailureKind::LocalApiConnectionClosed,
-            ) => AttachedStreamSessionStep::Exit(Err(TatolabCommandFailure::refused(
-                the_runtime_closed_the_connection_message(),
-            ))),
-            (
-                AttachedStreamVerb::Dev,
-                LocalApiMcpToolClientFailureKind::LocalApiConnectionClosed,
-            ) => {
-                self.note(&the_runtime_closed_the_connection_message());
-                AttachedStreamSessionStep::Reconnect
-            }
-            (AttachedStreamVerb::Dev, LocalApiMcpToolClientFailureKind::LocalApiUnreachable) => {
-                self.note(&format!("{logs_failure}; connecting again"));
-                AttachedStreamSessionStep::Reconnect
-            }
-            (AttachedStreamVerb::Run, _) => {
+        if logs_failure.kind == LocalApiMcpToolClientFailureKind::ToolCallFailed {
+            self.note(&format!(
+                "{stream} was unloaded by the runtime — stopped elsewhere or by its watchdog: \
+                 {logs_failure}"
+            ));
+            return match self.attached_stream_verb {
+                AttachedStreamVerb::Run => AttachedStreamSessionStep::Exit(Ok(0)),
+                AttachedStreamVerb::Dev => AttachedStreamSessionStep::WaitForTheNextSave,
+            };
+        }
+        if let Some(after_a_lost_connection) = self.after_a_lost_connection(&logs_failure) {
+            return after_a_lost_connection;
+        }
+        match self.attached_stream_verb {
+            AttachedStreamVerb::Run => {
                 self.stop_the_stream(connected_client, stream).await;
                 AttachedStreamSessionStep::Exit(Err(logs_failure.into()))
             }
-            (AttachedStreamVerb::Dev, _) => {
+            AttachedStreamVerb::Dev => {
                 // A refusal or a page this CLI cannot read comes back the same on every load.
                 self.note(&logs_failure.to_string());
                 self.stop_the_stream(connected_client, stream).await;
@@ -468,10 +464,7 @@ impl AttachedStreamSession {
     /// anyway. A stop signal meanwhile ends the wait.
     async fn stop_the_stream(&mut self, connected_client: &LocalApiMcpToolClient, stream: &str) {
         match self
-            .finish_unless_stopped(
-                connected_client
-                    .call_tool(STOP_STREAM_TOOL_NAME, stop_stream_tool_arguments(stream)),
-            )
+            .finish_unless_stopped(stop_stream_over(connected_client, stream))
             .await
         {
             FinishedUnlessStopped::Finished(Ok(_stop_stream_result_text)) => {
@@ -505,10 +498,7 @@ impl AttachedStreamSession {
     ) -> AttachedStreamSessionStep {
         self.note(&format!("a saved change — loading {stream} again"));
         let stop_outcome = match self
-            .finish_unless_stopped(
-                connected_client
-                    .call_tool(STOP_STREAM_TOOL_NAME, stop_stream_tool_arguments(stream)),
-            )
+            .finish_unless_stopped(stop_stream_over(connected_client, stream))
             .await
         {
             FinishedUnlessStopped::Finished(stop_outcome) => stop_outcome,
@@ -579,6 +569,20 @@ impl AttachedStreamSession {
     }
 }
 
+/// `stop_stream` for `stream` over `connected_client`, waiting as long as the tool may take.
+async fn stop_stream_over(
+    connected_client: &LocalApiMcpToolClient,
+    stream: &str,
+) -> Result<String, LocalApiMcpToolClientFailure> {
+    connected_client
+        .call_tool_bounded_by(
+            StreamActionTool::StopStream.tool_name(),
+            stop_stream_tool_arguments(stream),
+            StreamActionTool::StopStream.tool_call_timeout(),
+        )
+        .await
+}
+
 /// What an attached stream's verb says when the runtime closed its connection unasked.
 fn the_runtime_closed_the_connection_message() -> String {
     format!(
@@ -587,9 +591,10 @@ fn the_runtime_closed_the_connection_message() -> String {
     )
 }
 
-/// `<state dir>/logs/`, or the state directory's refusal when it has no place.
+/// `<state dir>/logs/`, resolved without creating anything, or the state directory's refusal
+/// when it has no place.
 fn runtime_log_directory_named_for_the_user() -> String {
-    match TatolabStateDirectory::resolve() {
+    match TatolabStateDirectory::resolve_for_a_reader_without_creating() {
         Ok(tatolab_state_directory) => {
             directory_with_its_trailing_slash(&tatolab_state_directory.runtime_log_directory())
         }
@@ -603,15 +608,6 @@ fn runtime_log_directory_named_for_the_user() -> String {
 
 fn directory_with_its_trailing_slash(directory: &Path) -> String {
     format!("{}/", directory.display())
-}
-
-fn write_and_flush_to_standard_output(rendered_records: &str) -> std::io::Result<()> {
-    if rendered_records.is_empty() {
-        return Ok(());
-    }
-    let mut locked_standard_output = std::io::stdout().lock();
-    locked_standard_output.write_all(rendered_records.as_bytes())?;
-    locked_standard_output.flush()
 }
 
 #[cfg(test)]

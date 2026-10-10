@@ -6,10 +6,10 @@
 
 use std::io::Write;
 
-use serde::Deserialize;
+use streamlib_runtime_client_contract::local_api_wire_contract::LogsToolResult;
 use streamlib_runtime_client_contract::runtime_log_event_pretty_rendering::format_event_pretty;
 
-use crate::runtime_log_files_reader::{RuntimeLogRecordFilters, decode_runtime_log_line};
+use crate::runtime_log_files_reader::{RuntimeLogRecordFilters, decode_runtime_log_record_value};
 
 /// The local API tool that pages a loaded stream's log records by sequence number.
 pub(crate) const LOGS_TOOL_NAME: &str = "logs";
@@ -17,26 +17,6 @@ pub(crate) const LOGS_TOOL_NAME: &str = "logs";
 /// How long a reader following a stream's records waits after a page that brought nothing.
 pub(crate) const STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(100);
-
-/// One answer of `logs {stream, after}`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub(crate) struct StreamLogRecordsPage {
-    /// The records after `after`, oldest first.
-    pub(crate) records: Vec<NumberedStreamLogRecord>,
-    /// The `after` the next call passes to read on from this page.
-    pub(crate) next_after: u64,
-    /// How many records after `after` the runtime dropped from its history before this read.
-    pub(crate) records_no_longer_held: u64,
-}
-
-/// One record of a stream's log, numbered by the runtime from 1 per loaded stream.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub(crate) struct NumberedStreamLogRecord {
-    /// The record's place in its stream's log.
-    pub(crate) sequence: u64,
-    /// The JSONL record, as the stream's log file holds it.
-    pub(crate) record: serde_json::Value,
-}
 
 /// `logs`' arguments for the records of `stream` after the sequence number `after`.
 pub(crate) fn logs_tool_arguments_after(
@@ -52,7 +32,7 @@ pub(crate) fn logs_tool_arguments_after(
 /// The page `logs_tool_result_text` carries, or why it is not one.
 pub(crate) fn stream_log_records_page_from(
     logs_tool_result_text: &str,
-) -> Result<StreamLogRecordsPage, String> {
+) -> Result<LogsToolResult, String> {
     serde_json::from_str(logs_tool_result_text).map_err(|parse_failure| {
         format!("logs answered something other than a page of records: {parse_failure}")
     })
@@ -63,7 +43,7 @@ pub(crate) fn stream_log_records_page_from(
 /// `note_output`.
 pub(crate) fn render_stream_log_records_page(
     stream: &str,
-    stream_log_records_page: &StreamLogRecordsPage,
+    stream_log_records_page: &LogsToolResult,
     record_filters: &RuntimeLogRecordFilters,
     note_output: &mut dyn Write,
 ) -> String {
@@ -76,8 +56,7 @@ pub(crate) fn render_stream_log_records_page(
     }
     let mut rendered_records = String::new();
     for numbered_record in &stream_log_records_page.records {
-        let record_line = numbered_record.record.to_string();
-        if let Some(event) = decode_runtime_log_line(record_line.as_bytes(), note_output)
+        if let Some(event) = decode_runtime_log_record_value(&numbered_record.record, note_output)
             && record_filters.admits(&event)
         {
             format_event_pretty(&event, &mut rendered_records);
@@ -94,10 +73,7 @@ mod tests {
     use super::*;
     use crate::runtime_log_line_fixtures::a_log_record;
 
-    fn a_page_of(
-        records: &[serde_json::Value],
-        records_no_longer_held: u64,
-    ) -> StreamLogRecordsPage {
+    fn a_page_of(records: &[serde_json::Value], records_no_longer_held: u64) -> LogsToolResult {
         stream_log_records_page_from(
             &json!({
                 "stream": "camera",
@@ -187,6 +163,33 @@ mod tests {
             String::from_utf8(notes).unwrap(),
             "note: 7 records of `camera` were no longer held by the runtime when they were read\n\
              warning: skipping JSONL line whose fields do not match the record schema\n"
+        );
+    }
+
+    #[test]
+    fn a_record_that_is_not_an_object_is_noted_as_one_and_the_page_reads_on() {
+        let mut notes = Vec::new();
+
+        let rendered = render_stream_log_records_page(
+            "camera",
+            &a_page_of(
+                &[
+                    json!("a bare string"),
+                    a_log_record(json!({"message": "after"})),
+                ],
+                0,
+            ),
+            &RuntimeLogRecordFilters::default(),
+            &mut notes,
+        );
+
+        assert_eq!(
+            rendered,
+            "21:04:27.573 [ INFO] [Rabc/rust] tatolabd — after\n"
+        );
+        assert_eq!(
+            String::from_utf8(notes).unwrap(),
+            "warning: skipping JSONL line that is not a record object\n"
         );
     }
 

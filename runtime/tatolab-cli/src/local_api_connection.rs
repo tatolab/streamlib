@@ -76,6 +76,17 @@ impl LocalApiConnection {
         tool_name: &str,
         tool_arguments: serde_json::Map<String, serde_json::Value>,
     ) -> Result<String, LocalApiMcpToolClientFailure> {
+        self.call_tool_bounded_by(tool_name, tool_arguments, self.request_timeout)
+    }
+
+    /// [`Self::call_tool`], waiting at most `call_timeout` for the result rather than the
+    /// connection's request bound, which still bounds the connect.
+    pub(crate) fn call_tool_bounded_by(
+        &mut self,
+        tool_name: &str,
+        tool_arguments: serde_json::Map<String, serde_json::Value>,
+        call_timeout: Duration,
+    ) -> Result<String, LocalApiMcpToolClientFailure> {
         let connected_mcp_client = local_api_mcp_tool_client_connected_on_first_use(
             &self.local_api_tokio_runtime,
             &mut self.connected_mcp_client,
@@ -83,7 +94,11 @@ impl LocalApiConnection {
             self.request_timeout,
         )?;
         self.local_api_tokio_runtime
-            .block_on(connected_mcp_client.call_tool(tool_name, tool_arguments))
+            .block_on(connected_mcp_client.call_tool_bounded_by(
+                tool_name,
+                tool_arguments,
+                call_timeout,
+            ))
     }
 
     /// `GET origin_form_request_target` over the kept HTTP/1.1 connection, answering the status,

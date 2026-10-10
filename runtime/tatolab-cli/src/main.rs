@@ -44,9 +44,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use streamlib_runtime_client_contract::local_api_wire_contract::ExposePortLevel;
 
 use crate::attached_stream_on_the_runtime::AttachedStreamVerb;
-use crate::stream_actions_on_the_runtime::{RequestedPortExposureLevel, StreamLoadArguments};
+use crate::stream_actions_on_the_runtime::StreamLoadArguments;
 use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
@@ -322,9 +323,9 @@ fn main() -> ExitCode {
             &node,
             &port,
             match (public, remove) {
-                (true, _) => RequestedPortExposureLevel::Public,
-                (false, true) => RequestedPortExposureLevel::Internal,
-                (false, false) => RequestedPortExposureLevel::Private,
+                (true, _) => ExposePortLevel::Public,
+                (false, true) => ExposePortLevel::Internal,
+                (false, false) => ExposePortLevel::Private,
             },
         ),
         TatolabVerb::Graph { requested_stream } => {

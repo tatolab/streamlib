@@ -12,14 +12,18 @@ use crate::TatolabCommandFailure;
 /// Write `verb_output` to the locked standard output and flush it; exit code 0 when written or
 /// when the reader had already closed the pipe.
 pub(crate) fn write_verb_standard_output(verb_output: &str) -> Result<u8, TatolabCommandFailure> {
-    let mut locked_standard_output = io::stdout().lock();
-    match locked_standard_output
-        .write_all(verb_output.as_bytes())
-        .and_then(|()| locked_standard_output.flush())
-    {
+    match write_and_flush_verb_standard_output(verb_output) {
         Ok(()) => Ok(0),
         Err(write_failure) => standard_output_closed_or_failed(write_failure),
     }
+}
+
+/// Write `verb_output` to the locked standard output and flush it, answering the write's own
+/// failure for a caller that does more than end the verb on it.
+pub(crate) fn write_and_flush_verb_standard_output(verb_output: &str) -> io::Result<()> {
+    let mut locked_standard_output = io::stdout().lock();
+    locked_standard_output.write_all(verb_output.as_bytes())?;
+    locked_standard_output.flush()
 }
 
 /// Write `standard_error_text` — a note or a warning — to the locked standard error and flush
