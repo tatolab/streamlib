@@ -15,7 +15,6 @@ pub mod local_api_wire_contract;
 pub mod machine_directories_test_root;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod machine_runtime_lock;
-pub mod node_registry;
 pub mod runtime_log_event;
 pub mod runtime_log_event_pretty_rendering;
 pub mod runtime_log_file_paths;

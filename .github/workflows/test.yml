@@ -130,8 +130,9 @@ jobs:
             -p streamlib-surface-client -p streamlib-error --lib
           # The contract a running runtime offers its clients: STREAMLIB_HOME,
           # the runtime directory and its trust check for the runtime and for a
-          # reader, the node registry, the JSONL log's paths, schema and pretty
-          # rendering, and the local API's exchange route and tap result shape.
+          # reader, the machine runtime lock, the state directory, the JSONL
+          # log's paths, schema and pretty rendering, and the local API's
+          # exchange route and tap result shape.
           cargo test --locked -p streamlib-runtime-client-contract
           # The same crate as a test build sees it: the runtime directory, the
           # state directory and the machine runtime lock moved under
