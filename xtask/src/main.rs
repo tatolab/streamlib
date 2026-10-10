@@ -472,9 +472,16 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             &["test", "--locked", "-p", "tatolabd"],
         ),
         (
-            "CLI tests (tatolab new, and run/dev supervising tatolabd)",
+            "CLI tests (tatolab's verbs against a stub runtime at an isolated machine's socket)",
             "cargo",
-            &["test", "--locked", "-p", "tatolab-cli"],
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "tatolab-cli",
+                "--features",
+                "machine-directories-under-a-test-root",
+            ],
         ),
         // Mirrors `test.yml`'s named slice exactly. `streamlib-engine`'s lib
         // tests are not run wholesale anywhere, so this list *is* the set of
