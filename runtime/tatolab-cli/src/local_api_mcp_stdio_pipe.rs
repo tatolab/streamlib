@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab mcp`: an MCP host's stdin and stdout, piped to a running runtime's MCP server.
+//! `tatolab mcp`: an MCP host's stdin and stdout, piped to the machine's runtime's MCP server.
 //!
 //! The verb sends the one `/mcp/stdio` upgrade over the runtime's local API socket and then only
 //! copies bytes, stdin to socket and socket to stdout. It parses no message, so the protocol
@@ -11,29 +11,21 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
-use streamlib_runtime_client_contract::node_registry::NodeRegistryEntry;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::TatolabCommandFailure;
 use crate::local_api_connection::tokio_runtime_for_a_local_api_connection;
-use crate::local_api_runtime_selection::{
-    LocalApiRuntimeSelectionFailure, select_live_runtime_in_node_registry,
-    this_users_node_registry_directory,
-};
 use crate::local_api_unix_socket_http_client::{
     UpgradedLocalApiMcpStdioStream, upgrade_local_api_connection_to_mcp_stdio,
 };
+use crate::machine_runtime_local_api_socket::local_api_socket_of_the_running_runtime;
 
 /// The most bytes one read takes from stdin or from the socket.
 const MCP_STDIO_PIPE_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Bounds the wait for a runtime's `101` to the `/mcp/stdio` upgrade.
 const MCP_STDIO_UPGRADE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// The refusal when no runtime on this machine answers, `--node` or not.
-const NO_LIVE_RUNTIME_FOR_THE_MCP_VERB_REFUSAL: &str = "no runtime is live on this machine \
-     for `tatolab mcp` to reach; `tatolab nodes` lists the live ones.";
 
 /// How copying the host's stdin to the runtime stopped. Every ending drops the socket's owned
 /// write half, which shuts down its write direction, so the runtime reads the end of its input
@@ -75,62 +67,27 @@ enum McpStdioPipeEnding {
     McpHostOutputFailed(io::Error),
 }
 
-/// `tatolab mcp`: pipe this process's stdin and stdout to the MCP server of the live runtime
-/// `requested_runtime_name_or_id` names, or of the sole live one.
-pub(crate) fn pipe_stdio_to_the_selected_runtimes_mcp_server(
-    requested_runtime_name_or_id: Option<&str>,
-) -> Result<u8, TatolabCommandFailure> {
-    pipe_mcp_host_io_to_a_runtime_in_node_registry(
-        &this_users_node_registry_directory()?,
-        requested_runtime_name_or_id,
+/// `tatolab mcp`: pipe this process's stdin and stdout to the MCP server of the machine's
+/// running runtime.
+pub(crate) fn pipe_stdio_to_the_running_runtimes_mcp_server() -> Result<u8, TatolabCommandFailure> {
+    pipe_mcp_host_io_to_the_runtimes_mcp_server(
+        &local_api_socket_of_the_running_runtime()?,
         tokio::io::stdin(),
         tokio::io::stdout(),
         MCP_STDIO_UPGRADE_TIMEOUT,
     )
 }
 
-/// Select the live runtime in `node_registry_directory` and pipe the host's input and output to
-/// its MCP server, refusing a runtime that does not answer the upgrade within
-/// `mcp_stdio_upgrade_timeout`.
-fn pipe_mcp_host_io_to_a_runtime_in_node_registry(
-    node_registry_directory: &Path,
-    requested_runtime_name_or_id: Option<&str>,
-    mcp_host_input: impl AsyncRead + Unpin,
-    mcp_host_output: impl AsyncWrite + Unpin,
-    mcp_stdio_upgrade_timeout: Duration,
-) -> Result<u8, TatolabCommandFailure> {
-    let selected_runtime = match select_live_runtime_in_node_registry(
-        node_registry_directory,
-        requested_runtime_name_or_id,
-    ) {
-        Ok(selected_runtime) => selected_runtime,
-        Err(LocalApiRuntimeSelectionFailure::NoRunningRuntime) => {
-            return Err(TatolabCommandFailure::refused(
-                NO_LIVE_RUNTIME_FOR_THE_MCP_VERB_REFUSAL.to_owned(),
-            ));
-        }
-        Err(runtime_selection_failure) => return Err(runtime_selection_failure.into()),
-    };
-    pipe_mcp_host_io_to_the_runtimes_mcp_server(
-        &selected_runtime,
-        mcp_host_input,
-        mcp_host_output,
-        mcp_stdio_upgrade_timeout,
-    )
-}
-
-/// Open `selected_runtime`'s MCP stream, waiting at most `mcp_stdio_upgrade_timeout` for its
-/// `101`, and copy bytes both ways until the runtime closes it or the host stops reading.
+/// Open the MCP stream of the runtime at `local_api_socket_path`, waiting at most
+/// `mcp_stdio_upgrade_timeout` for its `101`, and copy bytes both ways until the runtime closes
+/// it or the host stops reading.
 fn pipe_mcp_host_io_to_the_runtimes_mcp_server(
-    selected_runtime: &NodeRegistryEntry,
+    local_api_socket_path: &Path,
     mcp_host_input: impl AsyncRead + Unpin,
     mcp_host_output: impl AsyncWrite + Unpin,
     mcp_stdio_upgrade_timeout: Duration,
 ) -> Result<u8, TatolabCommandFailure> {
-    let runtime_named_for_stderr = format!(
-        "runtime `{}` ({})",
-        selected_runtime.runtime_name, selected_runtime.runtime_id
-    );
+    let runtime_named_for_stderr = format!("the runtime at {}", local_api_socket_path.display());
     let mcp_stream_not_opened = |why_not_opened: &dyn std::fmt::Display| {
         TatolabCommandFailure::refused(format!(
             "{runtime_named_for_stderr} did not open its MCP stream: {why_not_opened}"
@@ -145,7 +102,7 @@ fn pipe_mcp_host_io_to_the_runtimes_mcp_server(
         .block_on(async {
             let upgraded_mcp_stdio_stream = match tokio::time::timeout(
                 mcp_stdio_upgrade_timeout,
-                upgrade_local_api_connection_to_mcp_stdio(&selected_runtime.local_api_socket_path),
+                upgrade_local_api_connection_to_mcp_stdio(local_api_socket_path),
             )
             .await
             {
@@ -337,10 +294,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::isolated_node_registry::{
-        IsolatedNodeRegistry, NOTHING_LISTENS_LOCAL_API_SOCKET_PATH, PID_NO_PROCESS_HAS,
-        SCRIPTED_RUNTIME_ID, SCRIPTED_RUNTIME_NAME, a_registry_entry_hosted_by,
-    };
     use crate::stub_local_api_server::{
         RecordedHttpRequestHead, RecordedToolCall, StubLocalApiScript, StubLocalApiServer,
         StubMcpStdioUpgradeAnswer, StubToolAnswer,
@@ -367,8 +320,7 @@ mod tests {
 
     /// [`pipe_within_the_test_deadline_bounding_the_upgrade_by`] the verb's own upgrade bound.
     fn pipe_within_the_test_deadline<McpHostInput, McpHostOutput>(
-        node_registry_directory: PathBuf,
-        requested_runtime_name_or_id: Option<&'static str>,
+        local_api_socket_path: PathBuf,
         mcp_host_input: McpHostInput,
         mcp_host_output: McpHostOutput,
     ) -> (Result<u8, TatolabCommandFailure>, McpHostOutput)
@@ -377,20 +329,18 @@ mod tests {
         McpHostOutput: AsyncWrite + Unpin + Send + 'static,
     {
         pipe_within_the_test_deadline_bounding_the_upgrade_by(
-            node_registry_directory,
-            requested_runtime_name_or_id,
+            local_api_socket_path,
             mcp_host_input,
             mcp_host_output,
             MCP_STDIO_UPGRADE_TIMEOUT,
         )
     }
 
-    /// Run the pipe on a thread of its own against `node_registry_directory`, answering its
-    /// outcome and the host output it wrote; fails the test if it outlives
+    /// Run the pipe on a thread of its own against the runtime at `local_api_socket_path`,
+    /// answering its outcome and the host output it wrote; fails the test if it outlives
     /// [`PIPE_TEST_DEADLINE`].
     fn pipe_within_the_test_deadline_bounding_the_upgrade_by<McpHostInput, McpHostOutput>(
-        node_registry_directory: PathBuf,
-        requested_runtime_name_or_id: Option<&'static str>,
+        local_api_socket_path: PathBuf,
         mcp_host_input: McpHostInput,
         mcp_host_output: McpHostOutput,
         mcp_stdio_upgrade_timeout: Duration,
@@ -402,9 +352,8 @@ mod tests {
         let (pipe_finished, pipe_finishing) = mpsc::channel();
         std::thread::spawn(move || {
             let mut mcp_host_output = mcp_host_output;
-            let pipe_outcome = pipe_mcp_host_io_to_a_runtime_in_node_registry(
-                &node_registry_directory,
-                requested_runtime_name_or_id,
+            let pipe_outcome = pipe_mcp_host_io_to_the_runtimes_mcp_server(
+                &local_api_socket_path,
                 mcp_host_input,
                 &mut mcp_host_output,
                 mcp_stdio_upgrade_timeout,
@@ -435,13 +384,9 @@ mod tests {
                 written_once_the_client_half_closed: runtime_bytes_once_stdin_ended.clone(),
             },
         );
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            None,
+            stub_local_api_server.local_api_socket_path.clone(),
             std::io::Cursor::new(mcp_host_bytes.clone()),
             Vec::new(),
         );
@@ -492,13 +437,9 @@ mod tests {
                 written_once_the_client_half_closed: answer_owed_after_stdin_ended.to_vec(),
             },
         );
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            None,
+            stub_local_api_server.local_api_socket_path.clone(),
             std::io::Cursor::new(b"{\"id\":1}\n".to_vec()),
             Vec::new(),
         );
@@ -520,14 +461,10 @@ mod tests {
         let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
             StubMcpStdioUpgradeAnswer::CloseOnceUpgraded,
         );
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
         let (_held_open_mcp_host_input_writer, held_open_mcp_host_input) = tokio::io::duplex(64);
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            None,
+            stub_local_api_server.local_api_socket_path.clone(),
             held_open_mcp_host_input,
             Vec::new(),
         );
@@ -535,7 +472,8 @@ mod tests {
         assert_eq!(
             refusal_line(pipe_outcome),
             format!(
-                "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) closed its MCP stream."
+                "the runtime at {} closed its MCP stream.",
+                stub_local_api_server.local_api_socket_path.display()
             )
         );
         assert_eq!(mcp_host_output, b"");
@@ -552,13 +490,9 @@ mod tests {
                 written_once_the_client_half_closed: answer_owed_once_stdin_ended.to_vec(),
             },
         );
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            None,
+            stub_local_api_server.local_api_socket_path.clone(),
             McpHostInputThatCannotBeRead,
             Vec::new(),
         );
@@ -566,8 +500,9 @@ mod tests {
         assert_eq!(
             refusal_line(pipe_outcome),
             format!(
-                "cannot read stdin into the MCP stream of runtime `{SCRIPTED_RUNTIME_NAME}` \
-                 ({SCRIPTED_RUNTIME_ID}): the host's stdin went away"
+                "cannot read stdin into the MCP stream of the runtime at {}: the host's stdin \
+                 went away",
+                stub_local_api_server.local_api_socket_path.display()
             )
         );
         assert_eq!(mcp_host_output, answer_owed_once_stdin_ended);
@@ -579,14 +514,10 @@ mod tests {
         let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
             StubMcpStdioUpgradeAnswer::NeverAnswer,
         );
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
         let pipe_started = std::time::Instant::now();
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline_bounding_the_upgrade_by(
-            isolated_node_registry.node_registry_directory(),
-            None,
+            stub_local_api_server.local_api_socket_path.clone(),
             tokio::io::empty(),
             Vec::new(),
             SHORT_MCP_STDIO_UPGRADE_TIMEOUT,
@@ -595,8 +526,8 @@ mod tests {
         assert_eq!(
             refusal_line(pipe_outcome),
             format!(
-                "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) did not open its MCP \
-                 stream: it did not answer within 200ms"
+                "the runtime at {} did not open its MCP stream: it did not answer within 200ms",
+                stub_local_api_server.local_api_socket_path.display()
             )
         );
         assert!(
@@ -618,13 +549,9 @@ mod tests {
         let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
             StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { http_status: 426 },
         );
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            None,
+            stub_local_api_server.local_api_socket_path.clone(),
             tokio::io::empty(),
             Vec::new(),
         );
@@ -632,80 +559,12 @@ mod tests {
         assert_eq!(
             refusal_line(pipe_outcome),
             format!(
-                "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) did not open its MCP \
-                 stream: it answered `HTTP/1.1 426 Upgrade Required`"
+                "the runtime at {} did not open its MCP stream: it answered `HTTP/1.1 426 Upgrade \
+                 Required`",
+                stub_local_api_server.local_api_socket_path.display()
             )
         );
         assert_eq!(mcp_host_output, b"");
-    }
-
-    #[test]
-    fn no_live_runtime_is_a_one_line_refusal_naming_tatolab_nodes() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-
-        let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            None,
-            tokio::io::empty(),
-            Vec::new(),
-        );
-
-        assert_eq!(
-            refusal_line(pipe_outcome),
-            "no runtime is live on this machine for `tatolab mcp` to reach; `tatolab nodes` lists \
-             the live ones."
-        );
-        assert_eq!(mcp_host_output, b"");
-    }
-
-    #[test]
-    fn no_live_runtime_is_the_same_refusal_when_node_names_one() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        isolated_node_registry.write_registry_entry(&a_registry_entry_hosted_by(
-            "Rgone",
-            Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH),
-            PID_NO_PROCESS_HAS,
-        ));
-
-        let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            Some("absent-runtime"),
-            tokio::io::empty(),
-            Vec::new(),
-        );
-
-        assert_eq!(
-            refusal_line(pipe_outcome),
-            NO_LIVE_RUNTIME_FOR_THE_MCP_VERB_REFUSAL
-        );
-        assert_eq!(mcp_host_output, b"");
-    }
-
-    #[test]
-    fn a_node_flag_matching_no_live_runtime_is_refused_naming_it_and_the_live_ones() {
-        let stub_local_api_server = StubLocalApiServer::serve_default();
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
-
-        let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            Some("absent-runtime"),
-            tokio::io::empty(),
-            Vec::new(),
-        );
-
-        let printed_refusal_line = refusal_line(pipe_outcome);
-        assert!(
-            printed_refusal_line.contains("`absent-runtime`"),
-            "{printed_refusal_line}"
-        );
-        assert!(
-            printed_refusal_line.contains(SCRIPTED_RUNTIME_NAME),
-            "the refusal lists the live runtimes: {printed_refusal_line}"
-        );
-        assert_eq!(mcp_host_output, b"");
-        assert_eq!(stub_local_api_server.recorded_mcp_stdio_request_heads(), []);
     }
 
     #[test]
@@ -717,16 +576,12 @@ mod tests {
                 written_once_the_client_half_closed: Vec::new(),
             },
         );
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
         let (_held_open_mcp_host_input_writer, held_open_mcp_host_input) = tokio::io::duplex(64);
         let (mcp_host_output_with_no_reader, mcp_host_output_reader) = tokio::io::duplex(64);
         drop(mcp_host_output_reader);
 
         let (pipe_outcome, _mcp_host_output) = pipe_within_the_test_deadline(
-            isolated_node_registry.node_registry_directory(),
-            None,
+            stub_local_api_server.local_api_socket_path.clone(),
             held_open_mcp_host_input,
             mcp_host_output_with_no_reader,
         );
@@ -784,20 +639,12 @@ mod tests {
             listed_tool_names: vec!["graph".to_owned()],
             ..StubLocalApiScript::default()
         });
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
         let (mcp_client_side, pipe_side) = tokio::io::duplex(64 * 1024);
         let (pipe_side_input, pipe_side_output) = tokio::io::split(pipe_side);
-        let node_registry_directory = isolated_node_registry.node_registry_directory();
+        let local_api_socket_path = stub_local_api_server.local_api_socket_path.clone();
         let pipe_thread = std::thread::spawn(move || {
-            pipe_within_the_test_deadline(
-                node_registry_directory,
-                None,
-                pipe_side_input,
-                pipe_side_output,
-            )
-            .0
+            pipe_within_the_test_deadline(local_api_socket_path, pipe_side_input, pipe_side_output)
+                .0
         });
 
         let (listed_tool_names, graph_tool_text) = tokio::runtime::Builder::new_current_thread()

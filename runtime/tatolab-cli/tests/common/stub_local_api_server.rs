@@ -1,10 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A runtime's local API stood in by a stub on a fresh Unix socket: the official MCP SDK's server
-//! answering scripted tool calls, beside the surface-image route answering scripted images and
-//! the `/mcp/stdio` upgrade playing a scripted stream, each recording what it was sent. Shared by
-//! the integration tests and, through `#[path]`, the unit tests; either mounts it beside
+//! A runtime's local API stood in by a stub on a Unix socket: the official MCP SDK's server
+//! answering scripted tool calls — by tool name, and `logs` paging a stream's records by
+//! sequence number — beside the surface-image route answering scripted images and the
+//! `/mcp/stdio` upgrade playing a scripted stream, each recording what it was sent. Shared by the
+//! integration tests and, through `#[path]`, the unit tests; either mounts it beside
 //! `tapped_channel_bag_fixtures`.
 
 #![allow(dead_code)]
@@ -12,7 +13,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::IntoFuture;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -42,6 +43,13 @@ use super::tapped_channel_bag_fixtures::empty_tap_result_text;
 
 /// What the stub answers a tool call with when the script names no fixed answer.
 pub const STUB_DEFAULT_TOOL_ANSWER_TEXT: &str = "{}";
+
+/// A local API socket path nothing listens on: its directory does not exist, so a connect fails
+/// at once rather than waiting on a slow answer.
+pub const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str = "/nonexistent-tatolab-test/local-api.sock";
+
+/// The local API tool that pages a loaded stream's log records by sequence number.
+const LOGS_TOOL_NAME: &str = "logs";
 
 /// The revision the stub serves, and the only one: a runtime's local API serves the latest alone.
 const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
@@ -176,10 +184,24 @@ pub struct RecordedHttpRequestHead {
     pub header_lines: Vec<(String, String)>,
 }
 
-/// What the stub answers. Tool calls drain `queued_tool_answers` in order, then
-/// `fixed_tool_answer` answers forever, so a test names only the rounds it cares about.
+/// The records a stub's `logs` tool pages through: record `n` (from 0) carries sequence `n + 1`,
+/// and one call answers at most `page_size` of those after the call's `after`.
+#[derive(Debug, Clone)]
+pub struct StubStreamLogRecords {
+    pub records: Vec<serde_json::Value>,
+    pub page_size: usize,
+}
+
+/// What the stub answers. A tool named in `tool_answers_by_name` drains its own answers in order,
+/// the last repeating forever; `logs` pages `stream_log_records` when set; every other call
+/// drains `queued_tool_answers` in order, then `fixed_tool_answer` answers forever, so a test
+/// names only the rounds it cares about.
 #[derive(Debug, Clone, Default)]
 pub struct StubLocalApiScript {
+    /// Answers by tool name, in order, the last repeating.
+    pub tool_answers_by_name: HashMap<String, Vec<StubToolAnswer>>,
+    /// The records `logs` pages through by `after`, when set.
+    pub stream_log_records: Option<StubStreamLogRecords>,
     /// Answers every call once the queue is drained; `{}` when unset.
     pub fixed_tool_answer: Option<StubToolAnswer>,
     pub queued_tool_answers: Vec<StubToolAnswer>,
@@ -193,7 +215,58 @@ pub struct StubLocalApiScript {
     pub mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
 }
 
+impl StubLocalApiScript {
+    /// A script answering every tool call with `stub_tool_answer`.
+    pub fn answering_every_tool_call_with(stub_tool_answer: StubToolAnswer) -> Self {
+        Self {
+            fixed_tool_answer: Some(stub_tool_answer),
+            ..Self::default()
+        }
+    }
+
+    /// A script whose surface-image route answers `surface_image_answers` by surface id.
+    pub fn answering_surface_images<PublishedSurfaceId: Into<String>>(
+        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
+    ) -> Self {
+        Self {
+            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
+            ..Self::default()
+        }
+    }
+
+    /// A script whose `tap` answers `queued_tap_results` in order and then an empty round
+    /// forever, and whose surface-image route answers `surface_image_answers` by surface id.
+    pub fn tapping<PublishedSurfaceId: Into<String>>(
+        queued_tap_results: &[String],
+        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
+    ) -> Self {
+        Self {
+            fixed_tool_answer: Some(StubToolAnswer::tool_result(&empty_tap_result_text())),
+            queued_tool_answers: queued_tap_results
+                .iter()
+                .map(|tap_result| StubToolAnswer::tool_result(tap_result))
+                .collect(),
+            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
+            ..Self::default()
+        }
+    }
+
+    /// A script whose `/mcp/stdio` answers as `mcp_stdio_upgrade_answer` says.
+    pub fn answering_the_mcp_stdio_upgrade_with(
+        mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
+    ) -> Self {
+        Self {
+            mcp_stdio_upgrade_answer,
+            ..Self::default()
+        }
+    }
+}
+
 struct StubLocalApiState {
+    tool_answers_by_name: Mutex<HashMap<String, VecDeque<StubToolAnswer>>>,
+    stream_log_records: Mutex<Vec<serde_json::Value>>,
+    stream_log_page_size: Option<usize>,
+    mcp_stdio_connection_closing_generation: tokio::sync::watch::Sender<u64>,
     fixed_tool_answer: StubToolAnswer,
     queued_tool_answers: Mutex<VecDeque<StubToolAnswer>>,
     refuse_every_tool_call_with: Option<String>,
@@ -258,18 +331,14 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
             .unwrap()
             .push(RecordedToolCall {
                 tool_name: request.name.to_string(),
-                tool_arguments: serde_json::Value::Object(request.arguments.unwrap_or_default()),
+                tool_arguments: serde_json::Value::Object(
+                    request.arguments.clone().unwrap_or_default(),
+                ),
             });
         if let Some(refusal_message) = &self.stub_state.refuse_every_tool_call_with {
             return Err(ErrorData::invalid_params(refusal_message.clone(), None));
         }
-        let answer = self
-            .stub_state
-            .queued_tool_answers
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_else(|| self.stub_state.fixed_tool_answer.clone());
+        let answer = self.stub_state.answer_for(&request);
         let content = vec![ContentBlock::text(answer.text)];
         Ok(if answer.is_error {
             CallToolResult::error(content)
@@ -277,6 +346,73 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
             CallToolResult::success(content)
         }
         .into())
+    }
+}
+
+impl StubLocalApiState {
+    fn answer_for(&self, request: &CallToolRequestParams) -> StubToolAnswer {
+        if let Some(answers_for_this_tool) = self
+            .tool_answers_by_name
+            .lock()
+            .unwrap()
+            .get_mut(request.name.as_ref())
+            && let Some(next_answer) = answers_for_this_tool.front().cloned()
+        {
+            if answers_for_this_tool.len() > 1 {
+                answers_for_this_tool.pop_front();
+            }
+            return next_answer;
+        }
+        if request.name == LOGS_TOOL_NAME
+            && let Some(stream_log_page_size) = self.stream_log_page_size
+        {
+            return self.stream_log_records_page(request, stream_log_page_size);
+        }
+        self.queued_tool_answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| self.fixed_tool_answer.clone())
+    }
+
+    /// The `logs` page for `request`: the records after its `after`, at most its `count` and at
+    /// most `stream_log_page_size` of them, in the local API's shape.
+    fn stream_log_records_page(
+        &self,
+        request: &CallToolRequestParams,
+        stream_log_page_size: usize,
+    ) -> StubToolAnswer {
+        let arguments = request.arguments.clone().unwrap_or_default();
+        let after = arguments
+            .get("after")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let requested_count = arguments
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(usize::MAX, |count| count as usize);
+        let numbered_records: Vec<serde_json::Value> = self
+            .stream_log_records
+            .lock()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(record_index, record)| {
+                serde_json::json!({ "sequence": record_index as u64 + 1, "record": record })
+            })
+            .skip(after as usize)
+            .take(stream_log_page_size.min(requested_count))
+            .collect();
+        let next_after = after + numbered_records.len() as u64;
+        StubToolAnswer::tool_result(
+            &serde_json::json!({
+                "stream": arguments.get("stream").cloned().unwrap_or_default(),
+                "records": numbered_records,
+                "next_after": next_after,
+                "records_no_longer_held": 0,
+            })
+            .to_string(),
+        )
     }
 }
 
@@ -386,11 +522,20 @@ async fn play_the_upgraded_mcp_stdio_stream(
 ) {
     match stub_state.mcp_stdio_upgrade_answer.clone() {
         StubMcpStdioUpgradeAnswer::ServeTheStubMcpServer => {
+            let mut connection_closing_generation = stub_state
+                .mcp_stdio_connection_closing_generation
+                .subscribe();
             let mcp_server_handler = StubLocalApiMcpServerHandler { stub_state };
             if let Ok(running_mcp_server) =
                 mcp_server_handler.serve(upgraded_mcp_stdio_stream).await
             {
-                let _served_until_the_client_closed = running_mcp_server.waiting().await;
+                let cancellation_token = running_mcp_server.cancellation_token();
+                tokio::select! {
+                    _served_until_the_client_closed = running_mcp_server.waiting() => {}
+                    _closing_requested = connection_closing_generation.changed() => {
+                        cancellation_token.cancel();
+                    }
+                }
             }
         }
         StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
@@ -472,7 +617,7 @@ pub struct StubLocalApiServer {
     stub_state: Arc<StubLocalApiState>,
     stop_serving: Option<tokio::sync::oneshot::Sender<()>>,
     serving_thread: Option<std::thread::JoinHandle<()>>,
-    local_api_socket_directory: tempfile::TempDir,
+    fresh_local_api_socket_directory: Option<tempfile::TempDir>,
 }
 
 impl StubLocalApiServer {
@@ -482,12 +627,44 @@ impl StubLocalApiServer {
             .prefix("tl-stub-")
             .tempdir_in(SHORT_SOCKET_DIRECTORY_PARENT)
             .unwrap();
-        let local_api_socket_path = local_api_socket_directory.path().join("local-api.sock");
+        let mut stub_local_api_server = Self::serve_at(
+            &local_api_socket_directory.path().join("local-api.sock"),
+            stub_local_api_script,
+        );
+        stub_local_api_server.fresh_local_api_socket_directory = Some(local_api_socket_directory);
+        stub_local_api_server
+    }
+
+    /// Serve `stub_local_api_script` on `local_api_socket_path`, whose directory exists; it
+    /// accepts connections once this returns, and the socket is removed when it is dropped.
+    pub fn serve_at(
+        local_api_socket_path: &Path,
+        stub_local_api_script: StubLocalApiScript,
+    ) -> Self {
+        let local_api_socket_path = local_api_socket_path.to_path_buf();
         let bound_listener =
             std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap();
         bound_listener.set_nonblocking(true).unwrap();
 
         let stub_state = Arc::new(StubLocalApiState {
+            tool_answers_by_name: Mutex::new(
+                stub_local_api_script
+                    .tool_answers_by_name
+                    .into_iter()
+                    .map(|(tool_name, answers)| (tool_name, answers.into()))
+                    .collect(),
+            ),
+            stream_log_page_size: stub_local_api_script
+                .stream_log_records
+                .as_ref()
+                .map(|stream_log_records| stream_log_records.page_size),
+            stream_log_records: Mutex::new(
+                stub_local_api_script
+                    .stream_log_records
+                    .map(|stream_log_records| stream_log_records.records)
+                    .unwrap_or_default(),
+            ),
+            mcp_stdio_connection_closing_generation: tokio::sync::watch::Sender::new(0),
             fixed_tool_answer: stub_local_api_script
                 .fixed_tool_answer
                 .unwrap_or_else(|| StubToolAnswer::tool_result(STUB_DEFAULT_TOOL_ANSWER_TEXT)),
@@ -528,16 +705,15 @@ impl StubLocalApiServer {
             stub_state,
             stop_serving: Some(stop_serving),
             serving_thread: Some(serving_thread),
-            local_api_socket_directory,
+            fresh_local_api_socket_directory: None,
         }
     }
 
     /// Serve a stub that answers every tool call with `stub_tool_answer`.
     pub fn serve_answering_every_tool_call_with(stub_tool_answer: StubToolAnswer) -> Self {
-        Self::serve(StubLocalApiScript {
-            fixed_tool_answer: Some(stub_tool_answer),
-            ..StubLocalApiScript::default()
-        })
+        Self::serve(StubLocalApiScript::answering_every_tool_call_with(
+            stub_tool_answer,
+        ))
     }
 
     /// Serve a stub that answers every tool call `{}`.
@@ -549,10 +725,9 @@ impl StubLocalApiServer {
     pub fn serve_answering_surface_images<PublishedSurfaceId: Into<String>>(
         surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
     ) -> Self {
-        Self::serve(StubLocalApiScript {
-            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
-            ..StubLocalApiScript::default()
-        })
+        Self::serve(StubLocalApiScript::answering_surface_images(
+            surface_image_answers,
+        ))
     }
 
     /// Serve a stub whose `tap` answers `queued_tap_results` in order and then an empty round
@@ -561,30 +736,50 @@ impl StubLocalApiServer {
         queued_tap_results: &[String],
         surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
     ) -> Self {
-        Self::serve(StubLocalApiScript {
-            fixed_tool_answer: Some(StubToolAnswer::tool_result(&empty_tap_result_text())),
-            queued_tool_answers: queued_tap_results
-                .iter()
-                .map(|tap_result| StubToolAnswer::tool_result(tap_result))
-                .collect(),
-            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
-            ..StubLocalApiScript::default()
-        })
+        Self::serve(StubLocalApiScript::tapping(
+            queued_tap_results,
+            surface_image_answers,
+        ))
     }
 
     /// Serve a stub whose `/mcp/stdio` answers as `mcp_stdio_upgrade_answer` says.
     pub fn serve_answering_the_mcp_stdio_upgrade_with(
         mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
     ) -> Self {
-        Self::serve(StubLocalApiScript {
+        Self::serve(StubLocalApiScript::answering_the_mcp_stdio_upgrade_with(
             mcp_stdio_upgrade_answer,
-            ..StubLocalApiScript::default()
-        })
+        ))
     }
 
     /// Every tool call received so far, in arrival order.
     pub fn recorded_tool_calls(&self) -> Vec<RecordedToolCall> {
         self.stub_state.recorded_tool_calls.lock().unwrap().clone()
+    }
+
+    /// The arguments of every call to `tool_name` received so far, in arrival order.
+    pub fn recorded_arguments_of(&self, tool_name: &str) -> Vec<serde_json::Value> {
+        self.recorded_tool_calls()
+            .into_iter()
+            .filter(|recorded_tool_call| recorded_tool_call.tool_name == tool_name)
+            .map(|recorded_tool_call| recorded_tool_call.tool_arguments)
+            .collect()
+    }
+
+    /// Append `appended_records` to the records `logs` pages through, numbered after the last.
+    pub fn append_stream_log_records(&self, appended_records: Vec<serde_json::Value>) {
+        self.stub_state
+            .stream_log_records
+            .lock()
+            .unwrap()
+            .extend(appended_records);
+    }
+
+    /// Close every `/mcp/stdio` connection serving the stub's MCP server, as a runtime that
+    /// crashed or was stopped does; the stub keeps accepting new ones.
+    pub fn close_every_mcp_stdio_connection(&self) {
+        self.stub_state
+            .mcp_stdio_connection_closing_generation
+            .send_modify(|closing_generation| *closing_generation += 1);
     }
 
     /// The path of every surface-image request received so far, percent-encoded as sent.
@@ -637,5 +832,28 @@ impl Drop for StubLocalApiServer {
         if let Some(serving_thread) = self.serving_thread.take() {
             let _serving_thread_outcome = serving_thread.join();
         }
+        let _removed_or_already_gone = std::fs::remove_file(&self.local_api_socket_path);
     }
+}
+
+/// The text a runtime's `run_stream` answers with.
+pub fn run_stream_tool_result_text(
+    stream: &str,
+    kept: bool,
+    project_directory: &Path,
+    node_count: usize,
+) -> String {
+    serde_json::json!({
+        "stream": stream,
+        "kept": kept,
+        "project_directory": project_directory,
+        "node_count": node_count,
+        "replaced_the_kept_record": false,
+    })
+    .to_string()
+}
+
+/// The text a runtime's `stop_stream` answers with.
+pub fn stop_stream_tool_result_text(stream: &str, kept: bool) -> String {
+    serde_json::json!({ "stream": stream, "stopped": true, "kept": kept }).to_string()
 }
