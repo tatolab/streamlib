@@ -62,7 +62,7 @@ pub(crate) use machine_state_directory::{
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 pub use runtime::{
-    OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
+    EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
     StreamLoadObservingMachineShutdownRequests,
 };
 pub use runtime_name::RuntimeName;

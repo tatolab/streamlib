@@ -4,9 +4,10 @@
 //! Compiling a project's stream function in the project's own interpreter.
 //!
 //! The runtime process never imports a project's code. It starts the
-//! project's venv interpreter on `tatolab.stream`'s compile entry, as a stream
-//! interpreter is started, and reads the one JSON document the entry prints on
-//! its standard output.
+//! project's venv interpreter on `tatolab.stream`'s compile entry, in the
+//! project directory, under `-I`: the compile ignores the environment's
+//! `PYTHON*` variables and takes its import root from the compile entry. It
+//! reads the one JSON document the entry prints on its standard output.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -111,7 +112,8 @@ pub(crate) fn stream_function_compile_command(
     )?;
     // `-I` keeps the project directory off `sys.path` until the compile entry
     // has imported what it needs, so a project module named like a
-    // standard-library one cannot replace it.
+    // standard-library one cannot replace it. It also ignores the `PYTHONPATH`
+    // the command builder sets.
     command.args([
         "-I",
         "-m",

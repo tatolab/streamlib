@@ -172,8 +172,9 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 - **The tools**: `stop_stream` (unload; record `stopped` for a kept stream, end an attached one's
   `run`), `start_stream` (a stopped or failed one), `remove_stream` (unload, forget),
   `list_streams` (name, attached / kept / stopped / failed and why, project, node count),
-  `expose_port {stream, node, port, exposed}` (the owner's ruling,
-  recorded for a kept stream; the function's `exposed` is the default for a port without one).
+  `expose_port {stream, node, port, level}`, `level` one of `internal`, `private`, `public` (sets
+  the port's level live — a reader the new level no longer allows is cut at once — and records the
+  owner's ruling for a kept stream; the function's `exposed` is the default for a port without one).
   `dev` is `run` plus a watch re-loading on save and, after a crash, waiting and loading again.
   `set --machine-name` writes `machine.json`, applied at the next start, said so — the flags `run`
   and `dev` carried today leave them.

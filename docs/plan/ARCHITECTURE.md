@@ -143,7 +143,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   test doubles of their Protocols; never a GPU, never the runtime. The runtime suite is Rust —
   the engine crates, `tatolabd` and `tatolab` — fed graph data and native built-ins only, with
   no Python node. The integration suite (`tests/stream-on-runtime/`) runs both on purpose: it
-  compiles a fixture stream, starts `tatolabd` and drives it over the local API — processor
+  starts `tatolabd`, loads each fixture stream with `tatolab run` (the runtime compiling it in
+  the suite project's venv) and drives it over the local API — processor
   interpreters, the lend, describe, escalate ops, pixel and device exchange, the CLI end to
   end. The division is structural, not a lint: each CI job installs only what its suite may
   touch, so a stream test reaching for the runtime fails to import. `requires_gpu` halves
@@ -3341,9 +3342,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   else the default
   `<hostname>-<app directory name>-<id>`: every forbidden character replaced by `-`, the id four
   base-36 characters of an FNV-1a hash over the app directory's full path — the virtual camera's
-  own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else `tatolabd`'s `--project`, else the
-  working directory. A host that reports no name takes a
-  stand-in, said once. Each part of an address is one address chunk — non-empty, no `/`, `*`,
+  own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else the working directory. A host that
+  reports no name takes a stand-in, said once. Each part of an address is one address chunk — non-empty, no `/`, `*`,
   `$`, `#` or `?`, not beginning with `@`, spaces and unicode legal — checked against the rule's
   own table, and an explicit runtime name that breaks it is refused at construction naming the
   character. The type is `PortAddress` (`core/graph/edges/port_address.rs`, the rule in

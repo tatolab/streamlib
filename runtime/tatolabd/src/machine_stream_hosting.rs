@@ -68,7 +68,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         ));
     }
 
-    let mut streams_loaded_when_the_machine_shutdown_was_requested = Vec::new();
+    let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
@@ -78,7 +78,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             );
             engine.wait_until_a_machine_shutdown_is_requested();
 
-            streams_loaded_when_the_machine_shutdown_was_requested = engine.every_loaded_stream();
+            streams_loaded_at_or_after_the_machine_shutdown_request = engine.every_loaded_stream();
             // First, so no call reaches a stream as it ends, and every stream a
             // connection attached unloads with its connection.
             drop(local_api_served_for_the_engine.take());
@@ -94,15 +94,21 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             }
             // Inside the run, so a second interrupt still forces every
             // stream's teardown and a third still ends the process.
-            let every_stream_end = engine.wait_until_every_stream_has_ended();
-            if streams_loaded_when_the_machine_shutdown_was_requested
+            let every_stream_ended_during_the_wait = engine.wait_until_every_stream_has_ended();
+            // A load in flight at the request may have inserted its stream
+            // after the snapshot above; the wait saw it.
+            add_each_stream_not_already_among(
+                &mut streams_loaded_at_or_after_the_machine_shutdown_request,
+                every_stream_ended_during_the_wait.streams_seen_during_the_wait,
+            );
+            if streams_loaded_at_or_after_the_machine_shutdown_request
                 .iter()
                 .any(|stream| stream_teardown_abandoned_by_its_watchdog(stream).is_some())
             {
                 // The teardown names the abandonment, so it is written once.
                 return Ok(());
             }
-            every_stream_end
+            every_stream_ended_during_the_wait.how_the_first_failed_stream_ended
         })
         .map_err(|run_refusal| format!("the runtime stopped on a refusal: {run_refusal}"));
     if let Err(run_refusal) = &run_outcome {
@@ -111,7 +117,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
 
     let engine_teardown_outcome = tear_the_engine_down(
         engine,
-        streams_loaded_when_the_machine_shutdown_was_requested,
+        streams_loaded_at_or_after_the_machine_shutdown_request,
         local_api_served_for_the_engine,
     );
     let exit_status =
@@ -136,6 +142,18 @@ fn log_the_kept_streams_reloaded_at_the_start(reloads: &[KeptStreamReloadAtTheSt
          until a signal stops it",
         reloads.len() - reloaded_count
     );
+}
+
+/// Add to `streams` each of `streams_to_add` it does not already hold.
+fn add_each_stream_not_already_among(
+    streams: &mut Vec<Arc<LoadedStreamInThisRuntime>>,
+    streams_to_add: Vec<Arc<LoadedStreamInThisRuntime>>,
+) {
+    for stream in streams_to_add {
+        if !streams.iter().any(|held| Arc::ptr_eq(held, &stream)) {
+            streams.push(stream);
+        }
+    }
 }
 
 /// How `stream`'s teardown was abandoned by its watchdog, or `None` when it
@@ -215,7 +233,7 @@ enum EngineTeardownOutcome {
 /// shutdown.
 fn tear_the_engine_down(
     engine: Arc<Runner>,
-    streams_loaded_when_the_machine_shutdown_was_requested: Vec<Arc<LoadedStreamInThisRuntime>>,
+    streams_loaded_at_or_after_the_machine_shutdown_request: Vec<Arc<LoadedStreamInThisRuntime>>,
     local_api_served_for_the_engine: Option<LocalApiServedForAnEngine>,
 ) -> EngineTeardownOutcome {
     let _watchdog = ArmedEngineTeardownWatchdog::arm("the engine teardown tatolabd began");
@@ -227,12 +245,12 @@ fn tear_the_engine_down(
     }
 
     let teardowns_abandoned_by_their_watchdogs: Vec<String> =
-        streams_loaded_when_the_machine_shutdown_was_requested
+        streams_loaded_at_or_after_the_machine_shutdown_request
             .iter()
             .filter_map(|stream| stream_teardown_abandoned_by_its_watchdog(stream))
             .collect();
     let abandoned_processor_threads: Vec<_> =
-        streams_loaded_when_the_machine_shutdown_was_requested
+        streams_loaded_at_or_after_the_machine_shutdown_request
             .iter()
             .flat_map(|stream| stream.processor_threads_abandoned_and_still_running())
             .collect();
@@ -242,7 +260,7 @@ fn tear_the_engine_down(
         // forgotten engine never drops its hold on the process logging
         // pathway, which is what gives the standard streams back.
         engine.stop_intercepting_the_standard_streams();
-        std::mem::forget(streams_loaded_when_the_machine_shutdown_was_requested);
+        std::mem::forget(streams_loaded_at_or_after_the_machine_shutdown_request);
         std::mem::forget(engine);
         return if teardowns_abandoned_by_their_watchdogs.is_empty() {
             EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(
@@ -254,7 +272,7 @@ fn tear_the_engine_down(
             )
         };
     }
-    drop(streams_loaded_when_the_machine_shutdown_was_requested);
+    drop(streams_loaded_at_or_after_the_machine_shutdown_request);
 
     note_what_the_engine_teardown_is_waiting_on("the engine's own drop");
     match Arc::try_unwrap(engine) {
