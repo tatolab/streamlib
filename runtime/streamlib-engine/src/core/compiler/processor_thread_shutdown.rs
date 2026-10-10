@@ -227,6 +227,10 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
                 {
                     node.insert_component_without_rendering_it(exposures);
                 }
+                put_every_link_reading_another_stream_back_on_its_link(
+                    &mut graph,
+                    links_reading_another_stream_into_the_removed_node,
+                );
                 first_node_left_behind.get_or_insert_with(|| processor_id.clone());
                 continue;
             }
@@ -258,11 +262,12 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
 }
 
 /// Take the component off every link reading another stream into
-/// `processor_id`, whose edge the node's removal drops with it.
+/// `processor_id`, whose edge the node's removal drops with it, each beside
+/// the link it came off.
 fn take_every_link_reading_another_stream_off_the_inbound_links_of(
     graph: &mut Graph,
     processor_id: &ProcessorUniqueId,
-) -> Vec<LinkReadingAnotherStreamComponent> {
+) -> Vec<(LinkUniqueId, LinkReadingAnotherStreamComponent)> {
     let inbound_links: Vec<LinkUniqueId> = graph
         .traversal_mut()
         .v(processor_id)
@@ -279,8 +284,23 @@ fn take_every_link_reading_another_stream_off_the_inbound_links_of(
                 .e(link_id)
                 .first_mut()
                 .and_then(|link| link.remove::<LinkReadingAnotherStreamComponent>())
+                .map(|component| (link_id.clone(), component))
         })
         .collect()
+}
+
+/// Put each component taken off a link reading another stream back on that
+/// link, for a node the removal left in the graph: its link still holds the
+/// wiring, the reason and the attempt count the component carries.
+fn put_every_link_reading_another_stream_back_on_its_link(
+    graph: &mut Graph,
+    taken: Vec<(LinkUniqueId, LinkReadingAnotherStreamComponent)>,
+) {
+    for (link_id, component) in taken {
+        if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
+            link.insert_component_without_rendering_it(component);
+        }
+    }
 }
 
 /// Cut every reader from outside the stream off the ports of
@@ -668,10 +688,15 @@ mod tests {
 
     /// The links reading another stream into a node being removed give up
     /// what they hold on the source's stream before the node's removal drops
-    /// their edges, so it is let go once the graph's lock is released.
+    /// their edges, so it is let go once the graph's lock is released; for a
+    /// node the removal leaves behind, each is put back on its link as it
+    /// was.
     ///
     /// Fail-without-fix: leave the component on the link and the node's
-    /// removal drops it with the edge, under the graph's lock.
+    /// removal drops it with the edge, under the graph's lock; drop what was
+    /// taken off a link left behind and the link loses its wiring, its reason
+    /// and its attempt count, so the next attempt restarts at a count a cut
+    /// still in flight may hold.
     #[test]
     fn a_removed_nodes_links_reading_another_stream_are_taken_off_before_its_edges_drop() {
         use crate::core::graph::{
@@ -703,7 +728,14 @@ mod tests {
             .e(&link_id)
             .first_mut()
             .expect("the link is in the graph")
-            .insert_component_without_rendering_it(LinkReadingAnotherStreamComponent::default());
+            .insert_component_without_rendering_it({
+                let mut component = LinkReadingAnotherStreamComponent::carrying_nothing_because(
+                    "the stream `a` has not started".to_string(),
+                );
+                component.begin_a_wiring_attempt();
+                component.begin_a_wiring_attempt();
+                component
+            });
 
         let taken = take_every_link_reading_another_stream_off_the_inbound_links_of(
             &mut graph,
@@ -711,6 +743,7 @@ mod tests {
         );
 
         assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].0, link_id);
         assert!(
             !graph
                 .traversal()
@@ -719,6 +752,22 @@ mod tests {
                 .expect("the link is still in the graph")
                 .has::<LinkReadingAnotherStreamComponent>(),
             "the component is off the link before the node's removal drops the edge"
+        );
+
+        put_every_link_reading_another_stream_back_on_its_link(&mut graph, taken);
+
+        let link = graph
+            .traversal()
+            .e(&link_id)
+            .first()
+            .expect("the link is still in the graph");
+        let put_back = link
+            .get::<LinkReadingAnotherStreamComponent>()
+            .expect("the component is back on the link");
+        assert_eq!(put_back.wiring_generation(), 2);
+        assert_eq!(
+            put_back.why_it_carries_nothing(),
+            Some("the stream `a` has not started")
         );
     }
 
