@@ -1528,6 +1528,9 @@ mod tests {
         ensure_test_mocks_registered, write_an_executable_script_from_a_child_process,
     };
     use serial_test::serial;
+    use std::collections::BTreeMap;
+
+    use crate::core::runtime::KEPT_STREAM_RECORD_SCHEMA_VERSION;
     use streamlib_runtime_client_contract::directory_at_an_explicit_mode;
 
     const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
@@ -2031,7 +2034,7 @@ mod tests {
                 .expect("a readable record to make unreadable"),
         )
         .unwrap();
-        later_schema["schema_version"] = serde_json::json!(2);
+        later_schema["schema_version"] = serde_json::json!(KEPT_STREAM_RECORD_SCHEMA_VERSION + 1);
         for unreadable_bytes in [
             b"{ not json".to_vec(),
             serde_json::to_vec(&later_schema).unwrap(),
@@ -3810,5 +3813,253 @@ mod tests {
             runner.unload_the_attached_stream_if_still_the_same("camera", first.stream_tag),
             "the first load's attachment holds the re-load"
         );
+    }
+
+    /// A previous run's crash pinned on each of `streams`, `SIGSEGV` on each.
+    fn a_crash_pinned_on(streams: &[&str]) -> HowThePreviousRuntimeRunEnded {
+        HowThePreviousRuntimeRunEnded::Crashed(CrashOfThePreviousRuntimeRun {
+            causes_by_implicated_stream: streams
+                .iter()
+                .map(|stream| (stream.to_string(), "SIGSEGV".to_string()))
+                .collect(),
+            causes_on_threads_no_stream_owns: Vec::new(),
+        })
+    }
+
+    fn the_record_of(state_directory: &Path, stream_name: &str) -> KeptStreamRecord {
+        records_in(state_directory)
+            .read(stream_name)
+            .expect("the record reads")
+            .expect("the record is there")
+    }
+
+    #[test]
+    #[serial]
+    fn a_kept_stream_implicated_in_two_crashes_in_a_row_is_failed_naming_the_last_cause() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::compiling(serde_json::json!({}));
+        for stream_name in ["crasher", "steady"] {
+            records_in(state_directory.path())
+                .write(&a_kept_record_of(
+                    &project,
+                    stream_name,
+                    serde_json::json!([]),
+                ))
+                .unwrap();
+        }
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+
+        let failed_by_the_first = runner
+            .count_the_previous_runtime_runs_end_against_the_kept_streams(&a_crash_pinned_on(&[
+                "crasher",
+            ]));
+
+        assert!(failed_by_the_first.is_empty(), "{failed_by_the_first:?}");
+        let crasher = the_record_of(state_directory.path(), "crasher");
+        assert_eq!(crasher.runtime_crashes_in_a_row_implicating_it, 1);
+        assert!(!crasher.is_failed());
+
+        let failed_by_the_second = runner
+            .count_the_previous_runtime_runs_end_against_the_kept_streams(&a_crash_pinned_on(&[
+                "crasher",
+            ]));
+
+        assert_eq!(failed_by_the_second, ["crasher"]);
+        let crasher = the_record_of(state_directory.path(), "crasher");
+        assert_eq!(crasher.runtime_crashes_in_a_row_implicating_it, 2);
+        let failed_because = crasher.failed_because.expect("the crasher is failed");
+        assert!(
+            failed_because.contains("last 2 crashes in a row"),
+            "{failed_because}"
+        );
+        assert!(failed_because.contains("SIGSEGV"), "{failed_because}");
+        let steady = the_record_of(state_directory.path(), "steady");
+        assert_eq!(steady.runtime_crashes_in_a_row_implicating_it, 0);
+        assert!(!steady.is_failed());
+        assert_eq!(
+            runner
+                .list_streams()
+                .into_iter()
+                .map(|listing| (
+                    listing.name,
+                    listing.state,
+                    listing.failed_because.is_some()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("crasher".to_string(), StreamListingState::Failed, true),
+                ("steady".to_string(), StreamListingState::Kept, false),
+            ]
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_clean_end_or_a_crash_pinned_elsewhere_between_two_crashes_resets_the_count() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::compiling(serde_json::json!({}));
+        records_in(state_directory.path())
+            .write(&a_kept_record_of(
+                &project,
+                "crasher",
+                serde_json::json!([]),
+            ))
+            .unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let a_crash_pinned_on_no_stream =
+            HowThePreviousRuntimeRunEnded::Crashed(CrashOfThePreviousRuntimeRun {
+                causes_by_implicated_stream: BTreeMap::new(),
+                causes_on_threads_no_stream_owns: vec!["SIGSEGV".to_string()],
+            });
+
+        for previous_run_between_the_crashes in [
+            HowThePreviousRuntimeRunEnded::Cleanly,
+            a_crash_pinned_on(&["another-stream"]),
+            a_crash_pinned_on_no_stream,
+        ] {
+            runner.count_the_previous_runtime_runs_end_against_the_kept_streams(
+                &a_crash_pinned_on(&["crasher"]),
+            );
+            runner.count_the_previous_runtime_runs_end_against_the_kept_streams(
+                &previous_run_between_the_crashes,
+            );
+            assert_eq!(
+                the_record_of(state_directory.path(), "crasher")
+                    .runtime_crashes_in_a_row_implicating_it,
+                0,
+                "{previous_run_between_the_crashes:?} did not reset the count"
+            );
+            let failed = runner.count_the_previous_runtime_runs_end_against_the_kept_streams(
+                &a_crash_pinned_on(&["crasher"]),
+            );
+
+            assert!(
+                failed.is_empty(),
+                "{previous_run_between_the_crashes:?}: {failed:?}"
+            );
+            assert!(!the_record_of(state_directory.path(), "crasher").is_failed());
+            runner.count_the_previous_runtime_runs_end_against_the_kept_streams(
+                &HowThePreviousRuntimeRunEnded::Cleanly,
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn a_failed_stream_is_left_failed_by_a_crash_count_and_skipped_at_the_start() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::compiling(serde_json::json!({}));
+        let mut failed = a_kept_record_of(&project, "crasher", serde_json::json!([]));
+        failed.failed_because = Some("it crashed the runtime".to_string());
+        failed.runtime_crashes_in_a_row_implicating_it = 2;
+        records_in(state_directory.path()).write(&failed).unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+
+        runner.count_the_previous_runtime_runs_end_against_the_kept_streams(
+            &HowThePreviousRuntimeRunEnded::Cleanly,
+        );
+        let reloads = runner.reload_every_kept_stream_neither_stopped_nor_failed();
+
+        assert_eq!(the_record_of(state_directory.path(), "crasher"), failed);
+        assert!(
+            matches!(
+                reloads.as_slice(),
+                [KeptStreamReloadAtTheStart::SkippedAsFailed { stream_name, failed_because }]
+                    if stream_name == "crasher" && failed_because == "it crashed the runtime"
+            ),
+            "{reloads:?}"
+        );
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        let refusal = refusal_of(runner.stop_stream("crasher"));
+        assert!(refusal.contains("is failed"), "{refusal}");
+        assert!(refusal.contains("it crashed the runtime"), "{refusal}");
+        assert_eq!(the_record_of(state_directory.path(), "crasher"), failed);
+    }
+
+    #[test]
+    #[serial]
+    fn a_kept_stream_whose_venv_is_gone_is_failed_at_the_start_naming_its_interpreter() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::with_no_venv();
+        records_in(state_directory.path())
+            .write(&a_kept_record_of(&project, "camera", serde_json::json!([])))
+            .unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+
+        let reloads = runner.reload_every_kept_stream_neither_stopped_nor_failed();
+
+        assert!(
+            matches!(
+                reloads.as_slice(),
+                [KeptStreamReloadAtTheStart::NotReloaded { stream_name, .. }] if stream_name == "camera"
+            ),
+            "{reloads:?}"
+        );
+        let failed_because = the_record_of(state_directory.path(), "camera")
+            .failed_because
+            .expect("the stream is failed");
+        assert!(
+            failed_because.contains(&project.interpreter().display().to_string()),
+            "{failed_because}"
+        );
+        assert!(failed_because.contains("re-load"), "{failed_because}");
+        let fresh_runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        assert!(matches!(
+            fresh_runner
+                .reload_every_kept_stream_neither_stopped_nor_failed()
+                .as_slice(),
+            [KeptStreamReloadAtTheStart::SkippedAsFailed { .. }]
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn a_refused_retry_of_a_failed_stream_keeps_it_failed_for_the_retrys_reason_its_count_reset() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let mut failed = a_kept_record_of(&project, "crasher", serde_json::json!([]));
+        failed.failed_because = Some("it crashed the runtime".to_string());
+        failed.runtime_crashes_in_a_row_implicating_it = 2;
+        records_in(state_directory.path()).write(&failed).unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+
+        let refusal = refusal_of(runner.start_stream("crasher"));
+
+        assert!(refusal.contains("interpreter"), "{refusal}");
+        let retried = the_record_of(state_directory.path(), "crasher");
+        assert_eq!(retried.runtime_crashes_in_a_row_implicating_it, 0);
+        let failed_because = retried.failed_because.expect("the stream stays failed");
+        assert!(
+            failed_because.contains("`start` retried it"),
+            "{failed_because}"
+        );
+        assert!(failed_because.contains("interpreter"), "{failed_because}");
+    }
+
+    #[test]
+    #[serial]
+    fn a_run_under_a_name_a_failed_record_holds_is_refused_naming_it_failed() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let recorded_project = ProjectWithAStubCompile::compiling(serde_json::json!({}));
+        let mut failed = a_kept_record_of(&recorded_project, "camera", serde_json::json!([]));
+        failed.failed_because = Some("it crashed the runtime".to_string());
+        records_in(state_directory.path()).write(&failed).unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let other_project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+
+        let refusal = refusal_of(runner.run_stream(RunStreamRequest {
+            project_directory: other_project.path().to_path_buf(),
+            stream_function: None,
+            stream_name: None,
+            holding: LoadedStreamHolding::Kept,
+            stream_tags_attached_to_the_caller: Vec::new(),
+        }));
+
+        assert!(refusal.contains("a failed kept stream"), "{refusal}");
+        let refusal = refusal_of(runner.remove_stream("nothing-here"));
+        assert!(refusal.contains("camera (failed)"), "{refusal}");
     }
 }

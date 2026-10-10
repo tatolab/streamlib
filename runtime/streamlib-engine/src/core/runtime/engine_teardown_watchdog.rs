@@ -240,6 +240,7 @@ fn the_watchdogs_expiry_message(teardown_name: &str, budget: Duration, waiting_o
 mod tests {
     use super::*;
     use crate::core::test_support::rerun_this_test_in_a_child_process;
+    use std::path::Path;
 
     /// Set in the child process a watchdog test re-runs itself in, naming the
     /// file the child records what it needs the parent to check.
@@ -367,12 +368,17 @@ mod tests {
     }
 
     /// Crossing the process-wide bound of abandoned threads ends the runtime
-    /// with 124 and takes every helper's process group with it.
+    /// with 124, takes every helper's process group with it, and pins the
+    /// crash on every stream a thread was abandoned for.
     #[test]
     fn abandoning_threads_past_the_engines_bound_ends_the_process() {
         if let Some(record_path) = std::env::var_os(WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
         {
             log_straight_to_standard_error();
+            crate::core::runtime::RuntimeRunInProgressRecord::begin_this_run_reading_the_previous(
+                &the_run_in_progress_record_beside(Path::new(&record_path)),
+            )
+            .expect("the run's record begins");
             let stand_in_helper =
                 crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
             std::fs::write(&record_path, stand_in_helper.id().to_string())
@@ -432,5 +438,29 @@ mod tests {
             ),
             "a helper's process group outlived the end past the abandoned-thread bound"
         );
+        let run_in_progress_record =
+            std::fs::read_to_string(the_run_in_progress_record_beside(&record_path))
+                .expect("the run's record is left behind");
+        let pinned_streams: Vec<&str> = run_in_progress_record
+            .lines()
+            .map(|line| line.split('\t').next().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            pinned_streams,
+            ["at-the-bound", "past-the-bound"],
+            "{run_in_progress_record}"
+        );
+        assert!(
+            run_in_progress_record.contains("exit 124"),
+            "{run_in_progress_record}"
+        );
+    }
+
+    /// The run-in-progress record a watchdog child writes beside its record.
+    fn the_run_in_progress_record_beside(record_path: &Path) -> std::path::PathBuf {
+        record_path
+            .parent()
+            .expect("the record sits in a directory")
+            .join("runtime-run-in-progress")
     }
 }
