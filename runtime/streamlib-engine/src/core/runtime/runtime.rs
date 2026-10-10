@@ -404,6 +404,16 @@ pub enum StreamLoadObservingMachineShutdownRequests {
     AbandonedForAMachineShutdownRequest,
 }
 
+/// What [`Runner::wait_until_every_stream_has_ended`] saw once every stream had
+/// ended.
+pub struct EveryStreamEndedDuringTheWait {
+    /// Every stream loaded at any point of the wait, in the order it was first
+    /// seen.
+    pub streams_seen_during_the_wait: Vec<Arc<LoadedStreamInThisRuntime>>,
+    /// How the first of them to end with a failure ended, or `Ok` when none did.
+    pub how_the_first_failed_stream_ended: Result<()>,
+}
+
 impl Runner {
     /// Build a runtime named from `STREAMLIB_RUNTIME_NAME` or the default.
     pub fn new() -> Result<Arc<Self>> {
@@ -929,9 +939,10 @@ impl Runner {
         stream.how_this_stream_ended_as_a_waiter_reports_it()
     }
 
-    /// Block until every loaded stream has ended, reporting the first that
-    /// ended with a failure.
-    pub fn wait_until_every_stream_has_ended(&self) -> Result<()> {
+    /// Block until every loaded stream has ended, including each loaded while
+    /// the wait runs, returning every stream it saw and the first that ended
+    /// with a failure.
+    pub fn wait_until_every_stream_has_ended(&self) -> EveryStreamEndedDuringTheWait {
         let streams_seen_during_the_wait: Mutex<Vec<Arc<LoadedStreamInThisRuntime>>> =
             Mutex::new(Vec::new());
         self.block_until(&|| {
@@ -946,12 +957,16 @@ impl Runner {
             }
             streams_seen.iter().all(|stream| stream.has_ended())
         });
-        streams_seen_during_the_wait
-            .into_inner()
+        let streams_seen_during_the_wait = streams_seen_during_the_wait.into_inner();
+        let how_the_first_failed_stream_ended = streams_seen_during_the_wait
             .iter()
             .map(|stream| stream.how_this_stream_ended_as_a_waiter_reports_it())
             .find(Result::is_err)
-            .unwrap_or(Ok(()))
+            .unwrap_or(Ok(()));
+        EveryStreamEndedDuringTheWait {
+            streams_seen_during_the_wait,
+            how_the_first_failed_stream_ended,
+        }
     }
 
     /// Block until the machine's shutdown is requested — a signal, or the
@@ -2648,7 +2663,9 @@ mod tests {
                 waiting_runner.request_the_shutdown_of_every_loaded_stream(
                     "the test shuts the machine down",
                 )?;
-                waiting_runner.wait_until_every_stream_has_ended()
+                waiting_runner
+                    .wait_until_every_stream_has_ended()
+                    .how_the_first_failed_stream_ended
             });
             let _ = every_stream_ended.send(outcome);
         });
@@ -2664,6 +2681,68 @@ mod tests {
             );
         }
         assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    /// A stream loaded while the wait for every stream runs is waited for and
+    /// returned with the others, so a teardown scanning what the wait returns
+    /// cannot miss it.
+    ///
+    /// Only the wait's own walk to the machine's shutdown ends that stream, so
+    /// the wait has polled while it was loaded.
+    #[test]
+    #[serial]
+    fn a_stream_loaded_while_every_stream_is_awaited_is_among_the_streams_the_wait_returns() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let first = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+
+        let (the_wait_began, the_wait_has_begun) = std::sync::mpsc::channel();
+        let (every_stream_ended, every_stream_has_ended) = std::sync::mpsc::channel();
+        let waiting_runner = Arc::clone(&runner);
+        std::thread::spawn(move || {
+            let outcome = waiting_runner.run_owning_the_machine_shutdown_signals(|| {
+                let _ = the_wait_began.send(());
+                Ok(waiting_runner.wait_until_every_stream_has_ended())
+            });
+            let _ = every_stream_ended.send(outcome);
+        });
+        the_wait_has_begun
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the waiting thread never began its wait");
+        let loaded_during_the_wait = an_empty_stream_loaded_into(
+            &runner,
+            project_directory.path(),
+            "loaded-during-the-wait",
+        );
+        runner.unload_stream("first").expect("first unloads");
+        runner
+            .request_the_shutdown_of_every_loaded_stream("the test shuts the machine down")
+            .expect("the machine's shutdown is requested");
+
+        let every_stream_ended_during_the_wait = every_stream_has_ended
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never returned once every stream had ended")
+            .expect("the waiting thread owned the machine's shutdown signals");
+        every_stream_ended_during_the_wait
+            .how_the_first_failed_stream_ended
+            .expect("every stream ended cleanly");
+        for stream in [&first, &loaded_during_the_wait] {
+            assert!(
+                every_stream_ended_during_the_wait
+                    .streams_seen_during_the_wait
+                    .iter()
+                    .any(|seen| Arc::ptr_eq(seen, stream)),
+                "the wait returned no `{}`",
+                stream.stream_name()
+            );
+        }
+        assert_eq!(
+            loaded_during_the_wait.how_this_stream_ended(),
+            Some(HowALoadedStreamEnded::Stopped)
+        );
     }
 
     /// The wait `tatolabd` blocks on returns only once the machine's shutdown
