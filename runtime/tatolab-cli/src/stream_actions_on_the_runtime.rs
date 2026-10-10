@@ -347,8 +347,8 @@ pub(crate) fn list_streams() -> Result<u8, TatolabCommandFailure> {
     write_verb_standard_output(&rendered_streams_table(&list_streams_result.streams))
 }
 
-/// The `NAME  STATE  NODES  PROJECT` table, each column as wide as its widest cell; one line when
-/// there is no stream.
+/// The `NAME  STATE  NODES  PROJECT` table, each column as wide as its widest cell, then a line
+/// per failed stream saying why it failed; one line when there is no stream.
 fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> String {
     if listed_streams.is_empty() {
         return NO_STREAMS_IN_THIS_RUNTIME_LINE.to_owned();
@@ -380,14 +380,31 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
     };
     let [name_width, state_width, nodes_width] =
         [column_width(0), column_width(1), column_width(2)];
-    table_rows
+    let mut rendered_table: String = table_rows
         .iter()
         .map(|[name, state, nodes, project]| {
             format!(
                 "{name:<name_width$}  {state:<state_width$}  {nodes:<nodes_width$}  {project}\n"
             )
         })
-        .collect()
+        .collect();
+    let failed_stream_lines: Vec<String> = listed_streams
+        .iter()
+        .filter_map(|listed_stream| {
+            listed_stream.failed_because.as_ref().map(|failed_because| {
+                format!(
+                    "{} failed: {failed_because}. `tatolab start {}` retries it, `tatolab rm {}` \
+                     forgets it.\n",
+                    listed_stream.name, listed_stream.name, listed_stream.name
+                )
+            })
+        })
+        .collect();
+    if !failed_stream_lines.is_empty() {
+        rendered_table.push('\n');
+        rendered_table.extend(failed_stream_lines);
+    }
+    rendered_table
 }
 
 /// `expose_port`'s arguments for `stream`'s `node`/`port` at `requested_level`.
@@ -704,6 +721,28 @@ mod tests {
              a       stopped   -      /srv/a\n"
         );
         assert_eq!(rendered_streams_table(&[]), "No streams in this runtime.\n");
+    }
+
+    #[test]
+    fn the_streams_table_says_under_it_why_each_failed_stream_failed() {
+        let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
+            "streams": [
+                {"name": "camera", "state": "kept", "project_directory": "/srv/cam", "node_count": 4, "failed_because": null},
+                {"name": "crasher", "state": "failed", "project_directory": "/srv/crash", "node_count": null,
+                 "failed_because": "it was implicated in the runtime's last 2 crashes in a row, the last: SIGSEGV"},
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            rendered_streams_table(&list_streams_result.streams),
+            "NAME     STATE   NODES  PROJECT\n\
+             camera   kept    4      /srv/cam\n\
+             crasher  failed  -      /srv/crash\n\
+             \n\
+             crasher failed: it was implicated in the runtime's last 2 crashes in a row, the \
+             last: SIGSEGV. `tatolab start crasher` retries it, `tatolab rm crasher` forgets it.\n"
+        );
     }
 
     #[test]

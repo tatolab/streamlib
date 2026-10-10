@@ -4925,6 +4925,7 @@ dependencies = [
  "clap",
  "libc",
  "rmcp",
+ "serde",
  "serde_json",
  "streamlib",
  "streamlib-api-server",

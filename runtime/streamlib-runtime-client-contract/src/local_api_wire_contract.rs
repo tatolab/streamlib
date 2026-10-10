@@ -212,12 +212,14 @@ pub struct ListStreamsToolResult {
 pub struct ListStreamsToolResultStream {
     /// The stream's cast name.
     pub name: String,
-    /// Whether it is attached, kept or stopped.
+    /// Whether it is attached, kept, stopped or failed.
     pub state: ListedStreamState,
     /// The stream's project directory.
     pub project_directory: PathBuf,
     /// How many nodes its loaded graph holds; `null` when it is not loaded.
     pub node_count: Option<usize>,
+    /// Why it is failed; `null` when it is not.
+    pub failed_because: Option<String>,
 }
 
 /// The state of one stream `list_streams` lists.
@@ -230,6 +232,9 @@ pub enum ListedStreamState {
     Kept,
     /// Kept, and stopped by its owner.
     Stopped,
+    /// Kept, and failed: skipped at the runtime's start until `start_stream`
+    /// retries it.
+    Failed,
 }
 
 impl ListedStreamState {
@@ -239,6 +244,7 @@ impl ListedStreamState {
             ListedStreamState::Attached => "attached",
             ListedStreamState::Kept => "kept",
             ListedStreamState::Stopped => "stopped",
+            ListedStreamState::Failed => "failed",
         }
     }
 }

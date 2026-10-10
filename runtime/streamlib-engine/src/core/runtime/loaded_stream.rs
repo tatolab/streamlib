@@ -658,6 +658,7 @@ impl LoadedStreamInThisRuntime {
         crate::core::runtime::count_threads_abandoned_in_this_process(
             1,
             &format!("the teardown of the stream `{}`", self.stream_name()),
+            self.stream_name(),
         );
         self.let_go_of_this_stream_then_mark_it_ended(
             HowALoadedStreamEnded::AbandonedByItsTeardownWatchdog {

@@ -40,6 +40,11 @@ const PROGRESS_NOTE_READ_BUDGET: Duration = Duration::from_millis(100);
 /// Every thread this process has abandoned, counted as each is abandoned.
 static THREADS_ABANDONED_IN_THIS_PROCESS: AtomicUsize = AtomicUsize::new(0);
 
+/// Each stream a thread was abandoned for, by its cast name, which the end
+/// past the bound pins the runtime's crash on.
+static STREAMS_WHOSE_THREADS_WERE_ABANDONED: parking_lot::Mutex<Vec<String>> =
+    parking_lot::Mutex::new(Vec::new());
+
 /// What the engine's own teardown is waiting on, in words, for its watchdog to
 /// report if it fires.
 static WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON: parking_lot::Mutex<String> =
@@ -50,12 +55,26 @@ pub fn note_what_the_engine_teardown_is_waiting_on(what: impl Into<String>) {
     *WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON.lock() = what.into();
 }
 
-/// Count `abandoned_thread_count` threads `whose` teardown abandoned into the
-/// process-wide total, ending the runtime with status 124 once it passes the
-/// engine's bound.
-pub(crate) fn count_threads_abandoned_in_this_process(abandoned_thread_count: usize, whose: &str) {
+/// Count `abandoned_thread_count` threads `whose` teardown abandoned for the
+/// stream `stream_name` into the process-wide total, ending the runtime with
+/// status 124 once it passes the engine's bound — a crash pinned on every
+/// stream a thread was abandoned for.
+pub(crate) fn count_threads_abandoned_in_this_process(
+    abandoned_thread_count: usize,
+    whose: &str,
+    stream_name: &str,
+) {
     if abandoned_thread_count == 0 {
         return;
+    }
+    {
+        let mut streams_whose_threads_were_abandoned = STREAMS_WHOSE_THREADS_WERE_ABANDONED.lock();
+        if !streams_whose_threads_were_abandoned
+            .iter()
+            .any(|abandoned_for| abandoned_for == stream_name)
+        {
+            streams_whose_threads_were_abandoned.push(stream_name.to_string());
+        }
     }
     let abandoned_so_far = THREADS_ABANDONED_IN_THIS_PROCESS
         .fetch_add(abandoned_thread_count, Ordering::SeqCst)
@@ -66,6 +85,14 @@ pub(crate) fn count_threads_abandoned_in_this_process(abandoned_thread_count: us
              abandoned {abandoned_so_far}, past the engine's bound of \
              {THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS}. Ending the process with \
              status {EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED}."
+        );
+        crate::core::runtime::pin_the_runtimes_crash_on_each_stream(
+            &STREAMS_WHOSE_THREADS_WERE_ABANDONED.lock(),
+            &format!(
+                "exit {EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED}: past the engine's bound of \
+                 {THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS} abandoned threads, \
+                 its threads among them"
+            ),
         );
         crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
             EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
@@ -358,8 +385,13 @@ mod tests {
             count_threads_abandoned_in_this_process(
                 THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS,
                 "the stream `at-the-bound`",
+                "at-the-bound",
             );
-            count_threads_abandoned_in_this_process(1, "the stream `past-the-bound`");
+            count_threads_abandoned_in_this_process(
+                1,
+                "the stream `past-the-bound`",
+                "past-the-bound",
+            );
             std::thread::sleep(Duration::from_secs(30));
             panic!("abandoning threads past the engine's bound did not end the process");
         }

@@ -7,6 +7,8 @@
 //! in its process.
 
 mod bundled_vulkan_driver_environment;
+#[cfg(feature = "machine-directories-under-a-test-root")]
+mod crash_on_demand_test_node;
 mod machine_stream_hosting;
 mod refusal_on_standard_error;
 mod runtime_unit_lend;
@@ -15,6 +17,9 @@ mod tatolabd_command_line;
 use std::process::ExitCode;
 
 use clap::Parser;
+use streamlib::sdk::runtime::{
+    RuntimeRunInProgressRecord, pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread,
+};
 use streamlib_runtime_client_contract::machine_runtime_lock::MachineRuntimeLock;
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
@@ -58,9 +63,27 @@ fn main() -> ExitCode {
         Ok(tatolab_state_directory) => tatolab_state_directory,
         Err(refusal) => return write_refusal_to_standard_error(&refusal.to_string()),
     };
+    let (runtime_run_in_progress_record, how_the_previous_run_ended) =
+        match RuntimeRunInProgressRecord::begin_this_run_reading_the_previous(
+            &tatolab_state_directory.runtime_run_in_progress_record_path(),
+        ) {
+            Ok(begun) => begun,
+            Err(refusal) => return write_refusal_to_standard_error(&refusal.to_string()),
+        };
 
-    machine_stream_hosting::host_the_machines_streams_until_a_machine_shutdown(
-        &tatolab_state_directory,
-        processor_interpreter_lend_directory,
-    )
+    let hosted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        machine_stream_hosting::host_the_machines_streams_until_a_machine_shutdown(
+            &tatolab_state_directory,
+            processor_interpreter_lend_directory,
+            runtime_run_in_progress_record,
+            &how_the_previous_run_ended,
+        )
+    }));
+    match hosted {
+        Ok(exit_code) => exit_code,
+        Err(panic_that_escaped_the_main_thread) => {
+            pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread();
+            std::panic::resume_unwind(panic_that_escaped_the_main_thread)
+        }
+    }
 }

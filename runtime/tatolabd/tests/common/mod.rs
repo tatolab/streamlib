@@ -224,6 +224,8 @@ pub fn a_kept_stream_record(
         stream_function: None,
         graph,
         stopped,
+        failed_because: None,
+        runtime_crashes_in_a_row_implicating_it: 0,
         exposure_rulings: Vec::new(),
     }
 }

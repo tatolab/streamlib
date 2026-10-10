@@ -31,6 +31,7 @@ use crate::core::logging::loaded_stream_log_record_history::{
 };
 use crate::core::logging::worker::DrainWorkerRecordQueue;
 use crate::core::logging::writer::JsonlBatchedWriter;
+use crate::core::runtime::{StreamThisThreadWorksFor, mark_this_thread_as_working_for};
 
 /// How long closing a stream's JSONL file waits for the drain worker to write
 /// the stream's records queued before the close.
@@ -85,6 +86,9 @@ thread_local! {
 pub struct LoadedStreamLogRoute {
     runtime_id: String,
     owner: LogRouteOwner,
+    /// The stream a thread carrying this route works for, so a crash on it is
+    /// pinned on the stream.
+    stream_a_thread_carrying_it_works_for: StreamThisThreadWorksFor,
     jsonl_log_file: Option<LoadedStreamJsonlLogFile>,
     /// This stream's records a full queue dropped since the drain worker last
     /// reported them.
@@ -198,6 +202,12 @@ impl LoadedStreamLogRoute {
             numbered_record_history: Mutex::new(LoadedStreamLogRecordHistory::holding_at_most(
                 owner.records_held_in_memory(),
             )),
+            stream_a_thread_carrying_it_works_for: match &owner {
+                LogRouteOwner::LoadedStream(stream_name) => {
+                    StreamThisThreadWorksFor::named(stream_name)
+                }
+                LogRouteOwner::TheRuntimeItself => StreamThisThreadWorksFor::NONE,
+            },
             owner,
             jsonl_log_file,
             records_dropped_from_a_full_queue: AtomicU64::new(0),
@@ -231,15 +241,19 @@ impl LoadedStreamLogRoute {
             .map(|jsonl_log_file| jsonl_log_file.path.as_path())
     }
 
-    /// Route every record this thread emits to this stream until the returned
-    /// entry drops, when the route the thread carried before is back.
+    /// Route every record this thread emits to this stream, and pin a crash
+    /// on it on the stream, until the returned entry drops, when the route the
+    /// thread carried before is back.
     pub fn enter_on_this_thread(self: &Arc<Self>) -> LoadedStreamLogRouteEnteredOnThisThread {
         let route_carried_before = LOADED_STREAM_LOG_ROUTE_OF_THIS_THREAD
             .try_with(|route| route.borrow_mut().replace(Arc::clone(self)))
             .ok()
             .flatten();
+        let stream_worked_for_before =
+            mark_this_thread_as_working_for(self.stream_a_thread_carrying_it_works_for);
         LoadedStreamLogRouteEnteredOnThisThread {
             route_carried_before,
+            stream_worked_for_before,
             entered_on_this_thread_only: PhantomData,
         }
     }
@@ -433,6 +447,7 @@ impl Drop for LoadedStreamLogRoute {
 /// route the thread carried before.
 pub struct LoadedStreamLogRouteEnteredOnThisThread {
     route_carried_before: Option<Arc<LoadedStreamLogRoute>>,
+    stream_worked_for_before: StreamThisThreadWorksFor,
     entered_on_this_thread_only: PhantomData<*const ()>,
 }
 
@@ -441,6 +456,7 @@ impl Drop for LoadedStreamLogRouteEnteredOnThisThread {
         let route_carried_before = self.route_carried_before.take();
         let _ = LOADED_STREAM_LOG_ROUTE_OF_THIS_THREAD
             .try_with(|route| *route.borrow_mut() = route_carried_before);
+        mark_this_thread_as_working_for(self.stream_worked_for_before);
     }
 }
 

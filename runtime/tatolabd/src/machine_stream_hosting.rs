@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Hosting the machine's streams: the engine built over the state directory,
-//! the local API served at its fixed socket, every kept stream not stopped
+//! the previous run's crash counted against the kept streams, the local API
+//! served at its fixed socket, every kept stream neither stopped nor failed
 //! re-loaded, the run until a machine shutdown is requested and every stream
 //! has ended, and a teardown that drops the engine — or leaves it beneath the
-//! threads a stream abandoned.
+//! threads a stream abandoned, a crash pinned on that stream.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -16,7 +17,8 @@ use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
     EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded,
-    KeptStreamReloadAtTheStart, LoadedStreamInThisRuntime, Runner, RunnerConstructionOptions,
+    HowThePreviousRuntimeRunEnded, KeptStreamReloadAtTheStart, LoadedStreamInThisRuntime, Runner,
+    RunnerConstructionOptions, RuntimeRunInProgressRecord,
     note_what_the_engine_teardown_is_waiting_on,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
@@ -31,14 +33,17 @@ use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_t
 const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10);
 
 /// Host the machine's streams until a machine shutdown is requested and every
-/// stream has ended, tear the engine down, and return the status `tatolabd`
-/// exits with.
+/// stream has ended, tear the engine down, end `runtime_run_in_progress_record`
+/// — cleanly, or as a crash pinned on the streams whose teardown was abandoned
+/// — and return the status `tatolabd` exits with.
 ///
 /// Called on the process's first thread: on macOS the engine drives the window
 /// event pump on it while it waits.
 pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     tatolab_state_directory: &TatolabStateDirectory,
     processor_interpreter_lend_directory: PathBuf,
+    runtime_run_in_progress_record: RuntimeRunInProgressRecord,
+    how_the_previous_run_ended: &HowThePreviousRuntimeRunEnded,
 ) -> ExitCode {
     let engine = match Runner::new_with_construction_options(RunnerConstructionOptions {
         runtime_name: None,
@@ -60,6 +65,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         ));
     }
     streamlib_media_builtins::register_media_builtin_processor_types();
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();
     if let Err(kept_streams_refusal) = engine
         .keep_streams_in_the_state_directory(&tatolab_state_directory.kept_streams_directory())
     {
@@ -67,6 +74,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "the runtime cannot keep streams: {kept_streams_refusal}"
         ));
     }
+    engine.count_the_previous_runtime_runs_end_against_the_kept_streams(how_the_previous_run_ended);
 
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
@@ -74,7 +82,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         .run_owning_the_machine_shutdown_signals(|| {
             local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
             log_the_kept_streams_reloaded_at_the_start(
-                &engine.reload_every_kept_stream_not_stopped(),
+                &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
             );
             engine.wait_until_a_machine_shutdown_is_requested();
 
@@ -122,6 +130,19 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     );
     let exit_status =
         exit_status_once_the_engine_is_torn_down(&run_outcome, &engine_teardown_outcome);
+    match &engine_teardown_outcome {
+        EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned {
+            streams_whose_teardown_was_abandoned,
+            ..
+        } => runtime_run_in_progress_record.end_this_run_as_a_crash_pinned_on(
+            streams_whose_teardown_was_abandoned,
+            &format!(
+                "exit {EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED}: its teardown outlived its \
+                 watchdog as the runtime stopped, and was abandoned"
+            ),
+        ),
+        _ => runtime_run_in_progress_record.end_this_run_cleanly(),
+    }
     for refusal in
         refusals_written_once_the_engine_is_torn_down(run_outcome, &engine_teardown_outcome)
     {
@@ -179,7 +200,7 @@ fn exit_status_once_the_engine_is_torn_down(
     engine_teardown_outcome: &EngineTeardownOutcome,
 ) -> u8 {
     match engine_teardown_outcome {
-        EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(_) => {
+        EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned { .. } => {
             EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED as u8
         }
         EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(_)
@@ -206,7 +227,10 @@ fn refusals_written_once_the_engine_is_torn_down(
     match engine_teardown_outcome {
         EngineTeardownOutcome::Dropped => {}
         EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(description)
-        | EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(description)
+        | EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned {
+            description,
+            ..
+        }
         | EngineTeardownOutcome::StillReferenced(description) => refusals.push(description.clone()),
     }
     refusals
@@ -222,8 +246,11 @@ enum EngineTeardownOutcome {
     LeftBeneathAbandonedProcessorThreads(String),
     /// A stream's teardown outlived its watchdog and its thread was
     /// abandoned, so the engine is left alive beneath it and the process ends
-    /// with the watchdog's status.
-    LeftBeneathAStreamTeardownItsWatchdogAbandoned(String),
+    /// with the watchdog's status, a crash pinned on each such stream.
+    LeftBeneathAStreamTeardownItsWatchdogAbandoned {
+        description: String,
+        streams_whose_teardown_was_abandoned: Vec<String>,
+    },
     /// Something else still held the engine, so its threads were not joined.
     StillReferenced(String),
 }
@@ -244,11 +271,16 @@ fn tear_the_engine_down(
         tracing::warn!(%shut_down_failure, "the engine shut down reporting a failure");
     }
 
-    let teardowns_abandoned_by_their_watchdogs: Vec<String> =
-        streams_loaded_at_or_after_the_machine_shutdown_request
-            .iter()
-            .filter_map(|stream| stream_teardown_abandoned_by_its_watchdog(stream))
-            .collect();
+    let (streams_whose_teardown_was_abandoned, teardowns_abandoned_by_their_watchdogs): (
+        Vec<String>,
+        Vec<String>,
+    ) = streams_loaded_at_or_after_the_machine_shutdown_request
+        .iter()
+        .filter_map(|stream| {
+            stream_teardown_abandoned_by_its_watchdog(stream)
+                .map(|abandoned| (stream.stream_name().to_string(), abandoned))
+        })
+        .unzip();
     let abandoned_processor_threads: Vec<_> =
         streams_loaded_at_or_after_the_machine_shutdown_request
             .iter()
@@ -267,9 +299,10 @@ fn tear_the_engine_down(
                 DescriptionOfTheAbandonedProcessorThreads(&abandoned_processor_threads).to_string(),
             )
         } else {
-            EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(
-                teardowns_abandoned_by_their_watchdogs.join("; "),
-            )
+            EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned {
+                description: teardowns_abandoned_by_their_watchdogs.join("; "),
+                streams_whose_teardown_was_abandoned,
+            }
         };
     }
     drop(streams_loaded_at_or_after_the_machine_shutdown_request);
@@ -326,9 +359,10 @@ mod tests {
                 "a processor thread was abandoned",
             ),
             (
-                EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(
-                    "a stream teardown was abandoned".to_owned(),
-                ),
+                EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned {
+                    description: "a stream teardown was abandoned".to_owned(),
+                    streams_whose_teardown_was_abandoned: vec!["camera".to_owned()],
+                },
                 "a stream teardown was abandoned",
             ),
             (
@@ -358,9 +392,10 @@ mod tests {
             assert_eq!(
                 exit_status_once_the_engine_is_torn_down(
                     &run_outcome,
-                    &EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(
-                        "a stream teardown was abandoned".to_owned(),
-                    ),
+                    &EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned {
+                        description: "a stream teardown was abandoned".to_owned(),
+                        streams_whose_teardown_was_abandoned: vec!["camera".to_owned()],
+                    },
                 ),
                 124
             );

@@ -110,6 +110,12 @@ impl TatolabStateDirectory {
     pub fn runtime_log_directory(&self) -> PathBuf {
         self.path.join("logs")
     }
+
+    /// `<state>/runtime-run-in-progress`, present while the runtime runs and
+    /// left behind by a crash, naming each stream the crash was pinned on.
+    pub fn runtime_run_in_progress_record_path(&self) -> PathBuf {
+        self.path.join("runtime-run-in-progress")
+    }
 }
 
 /// This user's state directory path, from the process environment.
@@ -292,6 +298,10 @@ mod tests {
             path.join("streams")
         );
         assert_eq!(state_directory.runtime_log_directory(), path.join("logs"));
+        assert_eq!(
+            state_directory.runtime_run_in_progress_record_path(),
+            path.join("runtime-run-in-progress")
+        );
     }
 
     #[test]

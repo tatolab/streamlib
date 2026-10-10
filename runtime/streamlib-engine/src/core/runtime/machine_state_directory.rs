@@ -20,7 +20,7 @@ use crate::core::graph::{OutputPortExposureLevel, cast_exposed_name_to_url_safe}
 use crate::core::{Error, Result};
 
 /// The schema version of a kept-stream record this runtime writes and reads.
-pub const KEPT_STREAM_RECORD_SCHEMA_VERSION: u32 = 1;
+pub const KEPT_STREAM_RECORD_SCHEMA_VERSION: u32 = 2;
 
 /// The mode a kept-stream record is written at: its owner's alone.
 pub(crate) const KEPT_STREAM_RECORD_FILE_MODE: u32 = 0o600;
@@ -29,8 +29,8 @@ pub(crate) const KEPT_STREAM_RECORD_FILE_MODE: u32 = 0o600;
 const KEPT_STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
 /// One kept stream, as its runtime re-loads it: the graph compiled at its
-/// load, the environment its interpreters start in, whether it was stopped,
-/// and the owner's exposure rulings.
+/// load, the environment its interpreters start in, whether it was stopped or
+/// has failed, and the owner's exposure rulings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeptStreamRecord {
@@ -49,6 +49,12 @@ pub struct KeptStreamRecord {
     pub graph: serde_json::Value,
     /// Whether the owner stopped the stream, so a restart leaves it unloaded.
     pub stopped: bool,
+    /// Why the stream is failed, so the runtime's start skips it until
+    /// `start_stream` retries it; `None` when it is not failed.
+    pub failed_because: Option<String>,
+    /// How many of the runtime's crashes in a row, the last included, the
+    /// stream was implicated in.
+    pub runtime_crashes_in_a_row_implicating_it: u32,
     /// The owner's exposure rulings, each overriding the level the stream
     /// function gave its port.
     pub exposure_rulings: Vec<OwnerExposureRuling>,
@@ -56,7 +62,8 @@ pub struct KeptStreamRecord {
 
 impl KeptStreamRecord {
     /// A record of the stream `stream_name` running from `stream_environment`,
-    /// not stopped and carrying no ruling.
+    /// neither stopped nor failed, implicated in no crash, and carrying no
+    /// ruling.
     pub fn of_a_running_stream(
         stream_name: impl Into<String>,
         stream_environment: &StreamEnvironment,
@@ -71,8 +78,15 @@ impl KeptStreamRecord {
             stream_function,
             graph,
             stopped: false,
+            failed_because: None,
+            runtime_crashes_in_a_row_implicating_it: 0,
             exposure_rulings: Vec::new(),
         }
+    }
+
+    /// Whether the stream is failed.
+    pub fn is_failed(&self) -> bool {
+        self.failed_because.is_some()
     }
 
     /// The environment the stream's interpreters start in.
@@ -641,8 +655,8 @@ mod tests {
         records.write(&a_record_named("d-microphone")).unwrap();
         std::fs::write(directory.join("b-malformed.json"), b"{ not json").unwrap();
         let mut later_schema = serde_json::to_value(a_record_named("c-later")).unwrap();
-        later_schema["schema_version"] = serde_json::json!(2);
-        later_schema["failed"] = serde_json::json!(true);
+        later_schema["schema_version"] = serde_json::json!(3);
+        later_schema["crashed_at"] = serde_json::json!("2026-10-10T00:00:00Z");
         std::fs::write(
             directory.join("c-later.json"),
             serde_json::to_vec(&later_schema).unwrap(),
@@ -660,7 +674,7 @@ mod tests {
         assert!(malformed.reason.contains("not JSON"), "{malformed}");
         let later = every_record[2].as_ref().unwrap_err();
         assert_eq!(later.path, directory.join("c-later.json"));
-        assert!(later.reason.contains("schema version 2"), "{later}");
+        assert!(later.reason.contains("schema version 3"), "{later}");
         assert_eq!(every_record[3], Ok(a_record_named("d-microphone")));
     }
 

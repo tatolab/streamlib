@@ -17,6 +17,7 @@ mod processor_interpreter_launch_record;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 #[allow(clippy::module_inception)]
 mod runtime;
+mod runtime_crash_pinned_on_a_stream;
 pub(crate) mod runtime_name;
 mod runtime_shutdown_request;
 mod runtime_unique_id;
@@ -67,6 +68,14 @@ pub use runtime::{
     EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
     StreamLoadObservingMachineShutdownRequests,
 };
+pub use runtime_crash_pinned_on_a_stream::{
+    CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, RuntimeRunInProgressRecord,
+    pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread,
+};
+pub(crate) use runtime_crash_pinned_on_a_stream::{
+    StreamThisThreadWorksFor, end_the_run_in_progress_record_as_the_owner_ends_the_process,
+    mark_this_thread_as_working_for, pin_the_runtimes_crash_on_each_stream,
+};
 pub use runtime_name::RuntimeName;
 #[cfg(test)]
 pub(crate) use runtime_shutdown_request::TheMachinesShutdownEscalationClearedOnDrop;
@@ -80,8 +89,9 @@ pub use runtime_shutdown_request::{
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
-    KeptStreamReloadAtTheStart, LoadedStreamHolding, OutputPortExposureOutcome, RunStreamRequest,
-    StreamListing, StreamListingState, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome,
+    KeptStreamReloadAtTheStart, LoadedStreamHolding, OutputPortExposureOutcome,
+    RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_KEPT_STREAM, RunStreamRequest, StreamListing,
+    StreamListingState, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome,
     StreamStopOutcome,
 };
 pub use stream_environment::StreamEnvironment;
