@@ -492,16 +492,22 @@ def test_every_verb_that_reaches_the_runtime_fails_at_once_naming_the_socket_and
 # --- a stopped kept stream, with no started stream --------------------------------
 
 
-def write_the_record_run_d_and_stop_leave(
-    private_machine_directories: PrivateMachineDirectories, project_directory: Path, stream_name: str
+def write_the_kept_record_run_d_leaves(
+    private_machine_directories: PrivateMachineDirectories,
+    project_directory: Path,
+    stream_name: str,
+    *,
+    stopped: bool,
 ) -> "dict[str, Any]":
-    """Write the kept-stream record `tatolab run -d` then `tatolab stop` leave for
-    the project's sole stream, its graph compiled by the project's own
-    interpreter as the runtime compiles it; return the record.
+    """Write the kept-stream record `tatolab run -d` leaves for the project's
+    sole stream — and, `stopped`, the one a `tatolab stop` after it leaves —
+    its graph compiled by the project's own interpreter as the runtime
+    compiles it; return the record.
 
     Starting a stream needs a GPU context, so a GPU-free test cannot have the
     runtime write it; a stopped stream is never started again by a restart, so
-    from here on the runtime treats it exactly as one it stopped itself.
+    from here on the runtime treats it exactly as one it stopped itself. A
+    record not stopped is one a `tatolabd` start re-loads.
     """
     project_interpreter = project_directory / ".venv" / "bin" / "python"
     compiled = subprocess.run(
@@ -520,11 +526,11 @@ def write_the_record_run_d_and_stop_leave(
         "interpreter": str(project_interpreter),
         "stream_function": None,
         "graph": compile_document["stream_graph"],
-        "stopped": True,
+        "stopped": stopped,
         "exposure_rulings": [],
     }
     record_path = kept_stream_record_path(private_machine_directories.machine_directories, stream_name)
-    record_path.parent.mkdir(parents=True, mode=0o700)
+    record_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     record_path.write_text(json.dumps(record), encoding="utf-8")
     record_path.chmod(KEPT_STREAM_RECORD_FILE_MODE)
     return record
@@ -537,8 +543,8 @@ def test_a_stopped_kept_stream_stays_stopped_across_restarts_takes_the_owners_ru
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     project_directory = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
-    record = write_the_record_run_d_and_stop_leave(
-        private_machine_directories, project_directory, ALPHA_STREAM
+    record = write_the_kept_record_run_d_leaves(
+        private_machine_directories, project_directory, ALPHA_STREAM, stopped=True
     )
     assert record["graph"]["exposed"] == exposure_at("public"), record["graph"]
     stopped_listing = listing_of(ALPHA_STREAM, "stopped", Path(record["project_directory"]), None)
@@ -891,6 +897,109 @@ def test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_bef
         ALPHA_STREAM: listing_of(ALPHA_STREAM, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
     }
     assert read_kept_stream_record(tatolabd, ALPHA_STREAM)["graph"]["exposed"] == exposure_at("public")
+    stop_tatolabd_cleanly(tatolabd)
+
+
+#: The kept streams a start re-loads ahead of the three an owner changes while
+#: it re-loads; each is a GPU start of its own, which holds the window open.
+STREAMS_RE_LOADED_AHEAD = tuple(f"a{index}_pattern" for index in range(6))
+#: Named to sort after every stream re-loaded ahead, as a start re-loads in
+#: record-file order.
+RESTRICTED_WHILE_RE_LOADING_STREAM = "zz_restricted_pattern"
+STOPPED_WHILE_RE_LOADING_STREAM = "zz_stopped_pattern"
+REMOVED_WHILE_RE_LOADING_STREAM = "zz_removed_pattern"
+#: How long a start re-loading seven kept streams may take to say it is serving.
+RE_LOAD_OF_SEVEN_STREAMS_TIMEOUT_SECONDS = 2 * STREAM_RUNNING_TIMEOUT_SECONDS
+
+
+@pytest.mark.requires_gpu
+def test_a_restriction_stop_or_rm_made_while_tatolabd_re_loads_its_kept_streams_holds(
+    private_machine_directories: PrivateMachineDirectories,
+    make_tatolab_project: "Callable[..., Path]",
+    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+):
+    """`tatolabd` serves before it re-loads its kept streams. An owner who
+    restricts a port, stops a stream and removes another the moment the socket
+    answers — before the re-load reaches them — is never overruled by it: the
+    restriction holds from the stream's load, the stopped stream stays
+    unloaded, and the removed one is not loaded."""
+    projects_by_stream = {
+        stream_name: make_project_running_a_pattern_stream(make_tatolab_project, stream_name)
+        for stream_name in (
+            *STREAMS_RE_LOADED_AHEAD,
+            RESTRICTED_WHILE_RE_LOADING_STREAM,
+            STOPPED_WHILE_RE_LOADING_STREAM,
+            REMOVED_WHILE_RE_LOADING_STREAM,
+        )
+    }
+    project_directories_by_stream = {
+        stream_name: Path(
+            write_the_kept_record_run_d_leaves(
+                private_machine_directories, project_directory, stream_name, stopped=False
+            )["project_directory"]
+        )
+        for stream_name, project_directory in projects_by_stream.items()
+    }
+
+    tatolabd = start_tatolabd()
+    some_project = projects_by_stream[RESTRICTED_WHILE_RE_LOADING_STREAM]
+    assert_tatolab_succeeded(
+        run_tatolab(
+            "expose",
+            RESTRICTED_WHILE_RE_LOADING_STREAM,
+            EXPOSED_NODE,
+            EXPOSED_PORT,
+            "--remove",
+            working_directory=some_project,
+        )
+    )
+    assert_tatolab_succeeded(
+        run_tatolab("stop", STOPPED_WHILE_RE_LOADING_STREAM, working_directory=some_project)
+    )
+    assert_tatolab_succeeded(
+        run_tatolab("rm", REMOVED_WHILE_RE_LOADING_STREAM, working_directory=some_project)
+    )
+    re_load_reached_them_first = "the runtime is serving: " in tatolabd.stderr_text
+    tatolabd.await_stderr_containing(
+        "the runtime is serving: ", timeout=RE_LOAD_OF_SEVEN_STREAMS_TIMEOUT_SECONDS
+    )
+    local_api = tatolabd.local_api_client()
+
+    restricted_graph = local_api.await_every_node_running(
+        stream=RESTRICTED_WHILE_RE_LOADING_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
+    )
+    assert restricted_graph["exposed"] == exposure_at("internal"), (
+        "the owner's restriction made while the start re-loaded was overruled by the re-load; "
+        f"the re-load had already finished when the owner acted: {re_load_reached_them_first}"
+    )
+    assert read_kept_stream_record(tatolabd, RESTRICTED_WHILE_RE_LOADING_STREAM)[
+        "exposure_rulings"
+    ] == [{"node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": "internal"}]
+    assert read_kept_stream_record(tatolabd, STOPPED_WHILE_RE_LOADING_STREAM)["stopped"] is True
+    assert not kept_stream_record_path(
+        tatolabd.machine_directories, REMOVED_WHILE_RE_LOADING_STREAM
+    ).exists()
+    assert listed_streams_by_name(local_api) == {
+        **{
+            stream_name: listing_of(
+                stream_name,
+                "kept",
+                project_directories_by_stream[stream_name],
+                PROJECT_STREAM_NODE_COUNT,
+            )
+            for stream_name in (*STREAMS_RE_LOADED_AHEAD, RESTRICTED_WHILE_RE_LOADING_STREAM)
+        },
+        STOPPED_WHILE_RE_LOADING_STREAM: listing_of(
+            STOPPED_WHILE_RE_LOADING_STREAM,
+            "stopped",
+            project_directories_by_stream[STOPPED_WHILE_RE_LOADING_STREAM],
+            None,
+        ),
+    }, f"the re-load had already finished when the owner acted: {re_load_reached_them_first}"
+    assert stream_names_in_the_machine_graph(local_api) == sorted(
+        (*STREAMS_RE_LOADED_AHEAD, RESTRICTED_WHILE_RE_LOADING_STREAM)
+    )
     stop_tatolabd_cleanly(tatolabd)
 
 
