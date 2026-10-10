@@ -91,6 +91,23 @@ impl Compiler {
         f(&mut graph, &tx)
     }
 
+    /// Access graph and transaction for mutations, waiting at most `bound` for
+    /// the graph's lock; `None` when it was not free within it.
+    pub(crate) fn scope_within<F, R>(&self, bound: std::time::Duration, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Graph, &CompilerTransactionHandle) -> R,
+    {
+        let mut graph = self.graph.try_write_for(bound)?;
+        let tx = CompilerTransactionHandle::new(Arc::clone(&self.transaction));
+        Some(f(&mut graph, &tx))
+    }
+
+    /// Hold off every commit of this compiler until the guard drops.
+    #[cfg(test)]
+    pub(crate) fn hold_every_commit_for_a_test(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.one_commit_at_a_time.lock()
+    }
+
     /// The operations logged and not yet committed, in the order they were
     /// logged.
     #[cfg(test)]
@@ -282,24 +299,16 @@ impl Compiler {
         if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);
             for link_id in &plan.links_to_add {
-                let mut graph = graph_arc.write();
-                let (from_port, to_port) = {
+                let (from_port, to_port, reads_another_stream) = {
+                    let graph = graph_arc.read();
                     let link = graph.traversal().e(link_id).first().ok_or_else(|| {
                         Error::LinkNotFound(format!("Link '{}' not found", link_id))
                     })?;
-                    if link.source_in_this_stream().is_none() {
-                        // Its source's output port is in another stream's
-                        // graph, which this stream's wiring never opens; the
-                        // link keeps the state it was added in.
-                        tracing::debug!(
-                            "[{}] {} reads `{}` in another stream; not wired by this stream",
-                            CompilePhase::Wire,
-                            link_id,
-                            link.source()
-                        );
-                        continue;
-                    }
-                    (link.source().to_string(), link.to_port().to_string())
+                    (
+                        link.source().to_string(),
+                        link.to_port().to_string(),
+                        link.source_in_this_stream().is_none(),
+                    )
                 };
 
                 the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
@@ -310,13 +319,20 @@ impl Compiler {
                     },
                 );
 
-                tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
-
-                super::compiler_ops::open_iceoryx2_service(
-                    &mut graph,
-                    link_id,
-                    runtime_ctx.iceoryx2_node(),
-                )?;
+                let wired = if reads_another_stream {
+                    wire_a_link_reading_another_stream(runtime_ctx, link_id)
+                } else {
+                    tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
+                    super::compiler_ops::open_iceoryx2_service(
+                        &mut graph_arc.write(),
+                        link_id,
+                        runtime_ctx.iceoryx2_node(),
+                    )?;
+                    true
+                };
+                if !wired {
+                    continue;
+                }
 
                 the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
                     RuntimeEvent::CompilerDidWireLink {
@@ -370,6 +386,16 @@ impl Compiler {
             .publish_on_this_streams_topic(RuntimeEvent::CompilerDidCompile);
         tracing::info!("Compile complete: {}", result);
 
+        // Processors this compile created may be the sources links in other
+        // streams wait on.
+        if result.processors_created > 0
+            && let Some(this_stream) = runtime_ctx.this_stream()
+        {
+            this_stream
+                .engine_resources_shared_by_every_stream()
+                .re_plan_every_link_reading_the_stream(this_stream.stream_name());
+        }
+
         if !abandoned_in_this_compile.is_empty() {
             return Err(Error::Runtime(
                 DescriptionOfTheAbandonedProcessorThreads(&abandoned_in_this_compile).to_string(),
@@ -377,6 +403,37 @@ impl Compiler {
         }
         Ok(())
     }
+}
+
+/// Reconcile link `link_id`, which reads another stream, against that stream;
+/// whether it is wired now or handed to its out-of-process ends. A link that
+/// waits or was refused says so in its own state and never fails the commit.
+fn wire_a_link_reading_another_stream(
+    runtime_ctx: &Arc<RuntimeContext>,
+    link_id: &LinkUniqueId,
+) -> bool {
+    use super::compiler_ops::HowALinkReadingAnotherStreamWasReconciled;
+
+    let Some(reading_stream) = runtime_ctx.this_stream() else {
+        tracing::warn!(
+            "[{}] {} reads another stream, and the stream compiling it is gone; not wired",
+            CompilePhase::Wire,
+            link_id
+        );
+        return false;
+    };
+    let how_it_was_reconciled =
+        super::compiler_ops::reconcile_a_link_reading_another_stream(&reading_stream, link_id);
+    tracing::info!(
+        "[{}] {} reads another stream: {:?}",
+        CompilePhase::Wire,
+        link_id,
+        how_it_was_reconciled
+    );
+    matches!(
+        how_it_was_reconciled,
+        HowALinkReadingAnotherStreamWasReconciled::WiredNow(_)
+    )
 }
 
 /// Unwire link `link_id` while the graph holds it, telling the stream's topic
@@ -478,8 +535,13 @@ fn the_plan_these_operations_make(
                 let graph = graph_arc.read();
                 let link = graph.traversal().e(&id).first();
                 let exists = link.is_some();
-                let already_wired_or_awaiting_an_answer =
-                    link.is_some_and(this_link_is_already_wired_or_awaiting_its_helpers_answer);
+                // A link reading another stream is reconciled on every add:
+                // the reconcile alone knows whether its wiring still stands
+                // against the source stream's load.
+                let already_wired_or_awaiting_an_answer = link.is_some_and(|link| {
+                    link.source_in_this_stream().is_some()
+                        && this_link_is_already_wired_or_awaiting_its_helpers_answer(link)
+                });
                 let pending_deletion = link
                     .map(|l| l.has::<PendingDeletionComponent>())
                     .unwrap_or(false);

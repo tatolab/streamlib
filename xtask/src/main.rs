@@ -886,6 +886,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::graph::graph_tests::links_reading_another_stream",
                 "core::graph::validation",
                 "core::runtime::operations_runtime::connect_from_another_stream_tests",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::wiring_across_two_graphs",
+                "core::compiler::compiler_ops::reconcile_a_link_reading_another_stream_op",
                 "core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests",
                 "iceoryx2::channel_name",
                 "linux::surface_share",

@@ -8,6 +8,7 @@ pub(crate) mod processor_interpreter_describe;
 pub(crate) mod processor_interpreter_shutdown_ladder;
 pub(crate) mod processor_interpreter_spawn_host;
 pub(crate) mod python_processor_declaration;
+mod reconcile_a_link_reading_another_stream_op;
 mod spawn_processor_op;
 pub(crate) mod stream_function_compile_in_the_projects_interpreter;
 pub(crate) mod subprocess_bridge;
@@ -22,4 +23,7 @@ pub(crate) use open_iceoryx2_service_op::{
 };
 pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_processor_op::prepare_processor;
+pub(crate) use reconcile_a_link_reading_another_stream_op::{
+    HowALinkReadingAnotherStreamWasReconciled, reconcile_a_link_reading_another_stream,
+};
 pub(crate) use spawn_processor_op::spawn_processor;

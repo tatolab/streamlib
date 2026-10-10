@@ -35,6 +35,9 @@ pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
     pub(crate) teardown_progress_note: TeardownProgressNoteOfOneStream,
     /// Where the records the stream's threads emit go.
     pub(crate) log_route: Arc<LoadedStreamLogRoute>,
+    /// The stream itself, held weakly so the context is never part of the
+    /// cycle its stop breaks.
+    pub(crate) this_stream: std::sync::Weak<crate::core::runtime::LoadedStreamInThisRuntime>,
 }
 
 #[derive(Clone)]
@@ -175,6 +178,13 @@ impl RuntimeContext {
     /// The process-unique tag of the stream this context serves.
     pub fn stream_tag(&self) -> LoadedStreamTag {
         self.loaded_stream.identity.stream_tag
+    }
+
+    /// The loaded stream this context serves, while it lives.
+    pub(crate) fn this_stream(
+        &self,
+    ) -> Option<Arc<crate::core::runtime::LoadedStreamInThisRuntime>> {
+        self.loaded_stream.this_stream.upgrade()
     }
 
     /// The runtime id and stream name this context's stream publishes its events under.

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use std::path::{Path, PathBuf};
 
@@ -13,10 +13,11 @@ use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, LinkReadingAnotherStreamComponent, LinkState,
-    LinkStateComponent, LinkUniqueId, OutputPortInAnotherStreamOnThisMachine,
-    OutputPortReaderOutsideItsStream, PendingDeletionComponent, ProcessorUniqueId, StateComponent,
-    node_named_or_refused,
+    CutOffAReaderOfAnExposedOutputPort, GraphEdgeWithComponents, GraphNodeWithComponents,
+    LinkReadingAnotherStreamComponent, LinkState, LinkStateComponent, LinkUniqueId,
+    OutputPortInAnotherStreamOnThisMachine, OutputPortReaderOutsideItsStream,
+    PendingDeletionComponent, ProcessorUniqueId, StateComponent,
+    WhyAReaderOfAnExposedOutputPortIsCutOff, node_named_or_refused,
 };
 use crate::core::logging::{
     carrying_this_threads_loaded_stream_log_route, polled_in_a_loaded_stream_log_route,
@@ -638,7 +639,7 @@ impl LoadedStreamInThisRuntime {
 
     /// Whether this stream has started and no shutdown of it has been asked
     /// for.
-    fn has_started_and_is_not_shutting_down(&self) -> bool {
+    pub(crate) fn has_started_and_is_not_shutting_down(&self) -> bool {
         *self.status.lock() == RuntimeStatus::Started
             && !self.this_streams_shutdown_escalation().is_requested()
     }
@@ -652,6 +653,173 @@ impl LoadedStreamInThisRuntime {
             self.lend_directory(),
             spec,
         ))
+    }
+}
+
+/// Run `act` against `stream` on the engine's tokio runtime, in the stream's
+/// log route, once the stream is upgraded; nothing when it has gone. A failure
+/// is logged naming `what_it_does`.
+pub(crate) fn spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly<Act, ActFuture>(
+    tokio: &tokio::runtime::Handle,
+    stream: Weak<LoadedStreamInThisRuntime>,
+    what_it_does: &'static str,
+    act: Act,
+) where
+    Act: FnOnce(Arc<LoadedStreamInThisRuntime>) -> ActFuture + Send + 'static,
+    ActFuture: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    tokio.spawn(async move {
+        let Some(stream) = stream.upgrade() else {
+            return;
+        };
+        let log_route = Arc::clone(stream.log_route());
+        let stream_name = stream.stream_name().to_string();
+        polled_in_a_loaded_stream_log_route(log_route, async move {
+            if let Err(failure) = act(stream).await {
+                tracing::warn!(
+                    stream = %stream_name,
+                    "{what_it_does} on the stream `{stream_name}` failed: {failure}"
+                );
+            }
+        })
+        .await;
+    });
+}
+
+/// The cut of the reader a link reading another stream registers against its
+/// source's port: it lets the link go on the reading stream, spawned on the
+/// engine's tokio runtime so it never blocks the thread that cut it. Holds the
+/// reading stream weakly and its own registration not at all.
+pub(crate) fn the_cut_of_a_link_reading_another_stream(
+    reading_stream: Weak<LoadedStreamInThisRuntime>,
+    link_id: LinkUniqueId,
+    wiring_generation: u64,
+    tokio: tokio::runtime::Handle,
+) -> CutOffAReaderOfAnExposedOutputPort {
+    Box::new(move |why| {
+        spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
+            &tokio,
+            reading_stream,
+            "letting a link reading another stream go",
+            move |reading_stream| async move {
+                reading_stream
+                    .let_a_link_reading_another_stream_go(link_id, wiring_generation, why)
+                    .await
+            },
+        );
+    })
+}
+
+impl LoadedStreamInThisRuntime {
+    /// Let link `link_id`, reading another stream, go for `why`, when its
+    /// wiring attempt `wiring_generation` is still the latest: a level that no
+    /// longer allows it disconnects it, and a source node that left its stream
+    /// returns it to waiting, to be wired again when that node is back.
+    pub(crate) async fn let_a_link_reading_another_stream_go(
+        &self,
+        link_id: LinkUniqueId,
+        wiring_generation: u64,
+        why: WhyAReaderOfAnExposedOutputPortIsCutOff,
+    ) -> Result<()> {
+        match why {
+            WhyAReaderOfAnExposedOutputPortIsCutOff::TheLevelNoLongerAllowsIt { level } => {
+                let still_the_latest_attempt = self.compiler.scope(|graph, _tx| {
+                    graph
+                        .traversal()
+                        .e(&link_id)
+                        .first()
+                        .and_then(|link| link.get::<LinkReadingAnotherStreamComponent>())
+                        .is_some_and(|component| component.wiring_generation() == wiring_generation)
+                });
+                if !still_the_latest_attempt {
+                    return Ok(());
+                }
+                tracing::info!(
+                    %link_id,
+                    "[exposure] disconnecting link `{link_id}`: its source port is now {level}"
+                );
+                match disconnect_impl(self.live_graph_change(), link_id).await {
+                    Ok(()) | Err(Error::NotFound(_)) => Ok(()),
+                    Err(failure) => Err(failure),
+                }
+            }
+            WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream => {
+                let logged = self.compiler.scope(|graph, tx| {
+                    let Some(link) = graph.traversal_mut().e(&link_id).first_mut() else {
+                        return false;
+                    };
+                    if link.has::<PendingDeletionComponent>() {
+                        return false;
+                    }
+                    let Some(component) = link.get_mut::<LinkReadingAnotherStreamComponent>()
+                    else {
+                        return false;
+                    };
+                    if component.wiring_generation() != wiring_generation {
+                        return false;
+                    }
+                    component.note_its_source_let_go();
+                    // Supersedes an attempt still in flight, which would
+                    // otherwise hold a wiring against the node that left.
+                    let _superseding_attempt = component.begin_a_wiring_attempt();
+                    tx.log(PendingOperation::AddLink(link_id.clone()));
+                    true
+                });
+                if !logged {
+                    return Ok(());
+                }
+                tracing::info!(
+                    %link_id,
+                    "[WIRE] the node publishing link `{link_id}`'s source left its stream"
+                );
+                commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+                self.loaded_stream_identity()
+                    .publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+                Ok(())
+            }
+        }
+    }
+
+    /// Queue every link of this stream reading the stream `source_stream_name`
+    /// — and neither refused nor on its way out — to be reconciled, and commit
+    /// them while this stream runs; a stream not started commits them at its
+    /// start.
+    pub(crate) async fn re_plan_every_link_reading_the_stream(
+        &self,
+        source_stream_name: &str,
+    ) -> Result<()> {
+        let logged = self.compiler.scope(|graph, tx| {
+            let links_reading_it: Vec<LinkUniqueId> = graph
+                .traversal()
+                .e(())
+                .iter()
+                .filter(|link| {
+                    link.source()
+                        .in_another_stream_on_this_machine()
+                        .is_some_and(|source| source.stream_name() == source_stream_name)
+                        && !link.has::<PendingDeletionComponent>()
+                        && !link
+                            .get::<LinkStateComponent>()
+                            .is_some_and(|state| state.0 == LinkState::Error)
+                })
+                .map(|link| link.id.clone())
+                .collect();
+            for link_id in &links_reading_it {
+                tx.log(PendingOperation::AddLink(link_id.clone()));
+            }
+            !links_reading_it.is_empty()
+        });
+        if !logged {
+            return Ok(());
+        }
+        tracing::debug!(
+            "[WIRE] re-planning the links of `{}` reading the stream `{source_stream_name}`",
+            self.stream_name()
+        );
+        commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+        self.loaded_stream_identity()
+            .publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(())
     }
 }
 
@@ -720,6 +888,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                     graph,
                     iceoryx2_node,
                     &source,
+                    false,
                 )?;
                 let channel_service_name =
                     crate::core::compiler::compiler_ops::channel_service_name(&source)?;
@@ -1664,13 +1833,18 @@ mod connect_from_another_stream_tests {
             )
             .expect("a link awaiting a stream not loaded never fails its commit");
         assert_eq!(TwoLoadedStreams::links_of(&loaded.b).len(), 2);
-        assert_eq!(loaded.readers_registered_against_the_camera(), 0);
+        assert_eq!(
+            loaded.readers_registered_against_the_camera(),
+            1,
+            "the wired link reads the camera's port as a reader from another stream"
+        );
 
         loaded
             .b
             .disconnect(&link_id)
             .expect("the link is disconnected");
         assert_eq!(TwoLoadedStreams::links_of(&loaded.b).len(), 1);
+        assert_eq!(loaded.readers_registered_against_the_camera(), 0);
 
         for stream in [&loaded.b, &loaded.a] {
             stream.ask_for_this_streams_shutdown("the test is done");

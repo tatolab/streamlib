@@ -275,14 +275,47 @@ impl EngineResourcesSharedByEveryStream {
     }
 
     /// Take `stream` out of the table, unless another stream has taken its
-    /// name since.
+    /// name since, then re-plan every link reading it.
     pub(crate) fn remove_from_the_stream_table(&self, stream: &Arc<LoadedStreamInThisRuntime>) {
-        let mut streams = self.streams_loaded_in_this_runtime.lock();
-        if streams
-            .get(stream.stream_name())
-            .is_some_and(|loaded| Arc::ptr_eq(loaded, stream))
-        {
-            streams.remove(stream.stream_name());
+        let removed = {
+            let mut streams = self.streams_loaded_in_this_runtime.lock();
+            let it_is_this_stream = streams
+                .get(stream.stream_name())
+                .is_some_and(|loaded| Arc::ptr_eq(loaded, stream));
+            if it_is_this_stream {
+                streams.remove(stream.stream_name());
+            }
+            it_is_this_stream
+        };
+        if removed {
+            self.re_plan_every_link_reading_the_stream(stream.stream_name());
+        }
+    }
+
+    /// Re-plan, on every other loaded stream, every link reading the stream
+    /// `source_stream_name`: each stream's re-plan is spawned on the engine's
+    /// tokio runtime and commits on that stream's own compiler, never inline.
+    /// Nothing once the engine is shutting down, when every stream is.
+    pub(crate) fn re_plan_every_link_reading_the_stream(&self, source_stream_name: &str) {
+        if self.shut_down.load(Ordering::SeqCst) {
+            return;
+        }
+        let tokio = self.tokio_runtime_variant.handle();
+        for reading_stream in self.every_loaded_stream() {
+            if reading_stream.stream_name() == source_stream_name {
+                continue;
+            }
+            let source_stream_name = source_stream_name.to_string();
+            crate::core::runtime::spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
+                &tokio,
+                Arc::downgrade(&reading_stream),
+                "re-planning the links reading another stream",
+                move |reading_stream| async move {
+                    reading_stream
+                        .re_plan_every_link_reading_the_stream(&source_stream_name)
+                        .await
+                },
+            );
         }
     }
 

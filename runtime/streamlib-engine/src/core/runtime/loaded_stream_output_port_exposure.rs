@@ -13,7 +13,8 @@ use crate::core::error::OutputPortNotExposedToTheReader;
 use crate::core::graph::{
     CutOffAReaderOfAnExposedOutputPort, ExposedOutputPortsComponent, Graph,
     GraphNodeWithComponents, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
-    ProcessorNode, ReaderOfAnExposedOutputPort, cast_exposed_name_to_url_safe,
+    ProcessorNode, ProcessorUniqueId, ReaderOfAnExposedOutputPort,
+    WhyAReaderOfAnExposedOutputPortIsCutOff, cast_exposed_name_to_url_safe,
     node_names_listed_for_a_refusal, output_port_exposure_allows_the_reader,
     port_names_listed_for_a_refusal,
 };
@@ -80,7 +81,9 @@ impl LoadedStreamInThisRuntime {
                 reader.location()
             );
             let cut_off = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                reader.cut_off_unless_its_registration_was_dropped()
+                reader.cut_off_unless_its_registration_was_dropped(
+                    WhyAReaderOfAnExposedOutputPortIsCutOff::TheLevelNoLongerAllowsIt { level },
+                )
             }));
             if cut_off.is_err() {
                 tracing::error!(
@@ -138,7 +141,7 @@ impl LoadedStreamInThisRuntime {
             });
         // A reader's cut may own anything, so it is dropped only once the graph lock is released.
         drop(readers_to_drop_outside_the_graph_lock);
-        registered
+        registered.map(|registered| registered.registration)
     }
 
     /// Refuse a reader from `location` of output port `port_name` of node
@@ -173,6 +176,14 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
+/// A reader registered against an output port on a graph: its registration,
+/// and the processor and cast port name it reads.
+pub(crate) struct ReaderRegisteredOnAGraph {
+    pub(crate) registration: ExposedOutputPortReaderRegistration,
+    pub(crate) processor_id: ProcessorUniqueId,
+    pub(crate) port_cast: String,
+}
+
 /// Register a reader from `location` against output port `port_name` of node
 /// `node_name` on `graph`, the graph of the stream `stream_name`, as
 /// [`LoadedStreamInThisRuntime::register_a_reader_of_an_exposed_output_port`]
@@ -186,7 +197,7 @@ pub(crate) fn register_a_reader_on_this_graph(
     location: OutputPortReaderOutsideItsStream,
     cut_off: CutOffAReaderOfAnExposedOutputPort,
 ) -> (
-    Result<ExposedOutputPortReaderRegistration>,
+    Result<ReaderRegisteredOnAGraph>,
     Vec<ReaderOfAnExposedOutputPort>,
 ) {
     let still_registered = Arc::new(AtomicBool::new(true));
@@ -202,7 +213,11 @@ pub(crate) fn register_a_reader_on_this_graph(
     };
     match outcome {
         Ok(registration_dropped) => (
-            Ok(ExposedOutputPortReaderRegistration { still_registered }),
+            Ok(ReaderRegisteredOnAGraph {
+                registration: ExposedOutputPortReaderRegistration { still_registered },
+                processor_id: node.id.clone(),
+                port_cast,
+            }),
             registration_dropped,
         ),
         Err((refused_reader, level)) => (

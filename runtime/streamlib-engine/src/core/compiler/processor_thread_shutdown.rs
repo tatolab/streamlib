@@ -19,8 +19,9 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    ExposedOutputPortsComponent, Graph, GraphNodeWithComponents, ProcessorUniqueId,
-    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
+    ExposedOutputPortsComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
+    LinkReadingAnotherStreamComponent, LinkUniqueId, ProcessorUniqueId, ShutdownChannelComponent,
+    StateComponent, ThreadHandleComponent, WhyAReaderOfAnExposedOutputPortIsCutOff,
 };
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -202,6 +203,7 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
     let mut first_node_left_behind = None;
     for processor_id in processor_ids {
         let mut exposures_of_the_removed_node;
+        let links_reading_another_stream_into_the_removed_node;
         {
             let mut graph = graph_arc.write();
             exposures_of_the_removed_node = graph
@@ -214,6 +216,11 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
                     }
                     node.remove::<ExposedOutputPortsComponent>()
                 });
+            links_reading_another_stream_into_the_removed_node =
+                take_every_link_reading_another_stream_off_the_inbound_links_of(
+                    &mut graph,
+                    processor_id,
+                );
             if graph.traversal_mut().v(processor_id).drop().exists() {
                 if let Some(node) = graph.traversal_mut().v(processor_id).first_mut()
                     && let Some(exposures) = exposures_of_the_removed_node.take()
@@ -224,8 +231,17 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
                 continue;
             }
         }
-        // Its readers' cuts may own anything, so they are dropped only once the graph lock is released.
-        drop(exposures_of_the_removed_node);
+        // Each releases its source's side in another stream, so it is dropped
+        // only once the graph lock is released, like the readers' cuts below.
+        drop(links_reading_another_stream_into_the_removed_node);
+        // Its readers' cuts may own anything, so they run only once the graph lock is released.
+        if let Some(exposures) = exposures_of_the_removed_node {
+            cut_off_every_reader_of_a_node_that_left_its_stream(
+                exposures,
+                the_stream_the_processors_belong_to,
+                processor_id,
+            );
+        }
         the_stream_the_processors_belong_to.publish_on_this_streams_topic(
             RuntimeEvent::CompilerDidDestroyProcessor {
                 processor_id: processor_id.clone(),
@@ -239,6 +255,67 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
     }
 
     Ok(abandoned_processors)
+}
+
+/// Take the component off every link reading another stream into
+/// `processor_id`, whose edge the node's removal drops with it.
+fn take_every_link_reading_another_stream_off_the_inbound_links_of(
+    graph: &mut Graph,
+    processor_id: &ProcessorUniqueId,
+) -> Vec<LinkReadingAnotherStreamComponent> {
+    let inbound_links: Vec<LinkUniqueId> = graph
+        .traversal_mut()
+        .v(processor_id)
+        .in_e()
+        .iter()
+        .filter(|link| link.source_in_this_stream().is_none())
+        .map(|link| link.id.clone())
+        .collect();
+    inbound_links
+        .iter()
+        .filter_map(|link_id| {
+            graph
+                .traversal_mut()
+                .e(link_id)
+                .first_mut()
+                .and_then(|link| link.remove::<LinkReadingAnotherStreamComponent>())
+        })
+        .collect()
+}
+
+/// Cut every reader from outside the stream off the ports of
+/// `processor_id`, which left its stream, each under its own unwind guard so
+/// one panicking cut still lets the rest run.
+fn cut_off_every_reader_of_a_node_that_left_its_stream(
+    exposures: ExposedOutputPortsComponent,
+    the_stream_the_processor_belonged_to: &LoadedStreamIdentity,
+    processor_id: &ProcessorUniqueId,
+) {
+    for reader in exposures.into_every_reader() {
+        if !reader.is_still_registered() {
+            continue;
+        }
+        tracing::info!(
+            stream = %the_stream_the_processor_belonged_to.stream_name,
+            processor_id = %processor_id,
+            reader = %reader.location(),
+            "[exposure] cutting off {} reading a port of '{processor_id}', which left its stream",
+            reader.location()
+        );
+        let cut_off = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reader.cut_off_unless_its_registration_was_dropped(
+                WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream,
+            )
+        }));
+        if cut_off.is_err() {
+            tracing::error!(
+                stream = %the_stream_the_processor_belonged_to.stream_name,
+                processor_id = %processor_id,
+                "[exposure] a reader's cut off a port of '{processor_id}' panicked; the readers \
+                 after it are still cut off"
+            );
+        }
+    }
 }
 
 /// Wait on every signalled thread at once, each within its own budget, and hand
@@ -505,34 +582,23 @@ mod tests {
         assert!(graph_arc.read().traversal().v(()).ids().is_empty());
     }
 
-    /// Fail-without-fix: dropping the node with its exposures on it drops
-    /// every reader's cut under the graph's write lock, so a cut owning
-    /// anything that takes that lock would hang the removal.
+    /// A removed node's readers from outside its stream are cut, told their
+    /// port's node left its stream, once the graph's lock is released.
+    ///
+    /// Fail-without-fix: drop the node's exposures uncut and the cut never
+    /// runs, so a link in another stream reading the port keeps a wiring to a
+    /// processor that is gone; cut them under the lock and a cut taking that
+    /// lock hangs the removal.
     #[test]
-    fn a_removed_nodes_readers_are_dropped_uncut_once_the_graph_lock_is_released() {
+    fn a_removed_nodes_readers_are_cut_naming_that_their_node_left_once_the_graph_lock_is_released()
+    {
         use std::sync::Weak;
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::atomic::AtomicBool;
 
         use crate::core::graph::{
             ExposedOutputPortsComponent, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
-            ReaderOfAnExposedOutputPort,
+            ReaderOfAnExposedOutputPort, WhyAReaderOfAnExposedOutputPortIsCutOff,
         };
-
-        /// Records, when dropped, whether the graph's lock was free.
-        struct GraphLockFreeWhenDropped {
-            graph: Arc<Mutex<Weak<RwLock<Graph>>>>,
-            lock_was_free: Arc<Mutex<Option<bool>>>,
-        }
-        impl Drop for GraphLockFreeWhenDropped {
-            fn drop(&mut self) {
-                let lock_was_free = self
-                    .graph
-                    .lock()
-                    .upgrade()
-                    .map(|graph| graph.try_write().is_some());
-                *self.lock_was_free.lock() = lock_was_free;
-            }
-        }
 
         ensure_test_mocks_registered();
         let mut graph = Graph::new();
@@ -543,16 +609,12 @@ mod tests {
             ProcessorThreadKind::HelperProcessHost,
             &WhenEachThreadWasToldToStop::default(),
         );
-        let graph_slot = Arc::new(Mutex::new(Weak::new()));
-        let lock_was_free = Arc::new(Mutex::new(None));
-        let cuts = Arc::new(AtomicUsize::new(0));
-        let guard = GraphLockFreeWhenDropped {
-            graph: Arc::clone(&graph_slot),
-            lock_was_free: Arc::clone(&lock_was_free),
-        };
-        let counted = Arc::clone(&cuts);
+        let graph_slot: Arc<Mutex<Weak<RwLock<Graph>>>> = Arc::new(Mutex::new(Weak::new()));
+        let cuts_and_whether_the_lock_was_free = Arc::new(Mutex::new(Vec::new()));
         let mut exposed_ports = ExposedOutputPortsComponent::default();
         let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        let graph_the_cut_reads = Arc::clone(&graph_slot);
+        let recorded = Arc::clone(&cuts_and_whether_the_lock_was_free);
         assert!(
             exposed_ports
                 .register_reader(
@@ -560,9 +622,12 @@ mod tests {
                     ReaderOfAnExposedOutputPort::new(
                         Arc::new(AtomicBool::new(true)),
                         OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                        Box::new(move || {
-                            let _owned_by_the_cut = &guard;
-                            counted.fetch_add(1, Ordering::SeqCst);
+                        Box::new(move |why| {
+                            let lock_was_free = graph_the_cut_reads
+                                .lock()
+                                .upgrade()
+                                .map(|graph| graph.try_write().is_some());
+                            recorded.lock().push((why, lock_was_free));
                         }),
                     ),
                 )
@@ -592,11 +657,68 @@ mod tests {
         )
         .expect("the removal completes");
 
-        assert_eq!(*lock_was_free.lock(), Some(true));
         assert_eq!(
-            cuts.load(Ordering::SeqCst),
-            0,
-            "a removed node's readers are not cut"
+            *cuts_and_whether_the_lock_was_free.lock(),
+            vec![(
+                WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream,
+                Some(true)
+            )]
+        );
+    }
+
+    /// The links reading another stream into a node being removed give up
+    /// what they hold on the source's stream before the node's removal drops
+    /// their edges, so it is let go once the graph's lock is released.
+    ///
+    /// Fail-without-fix: leave the component on the link and the node's
+    /// removal drops it with the edge, under the graph's lock.
+    #[test]
+    fn a_removed_nodes_links_reading_another_stream_are_taken_off_before_its_edges_drop() {
+        use crate::core::graph::{
+            InputLinkPortRef, LinkReadingAnotherStreamComponent,
+            OutputPortInAnotherStreamOnThisMachine,
+        };
+
+        ensure_test_mocks_registered();
+        let mut graph = Graph::new();
+        let processor_id = a_processor_node_running_a_thread(
+            &mut graph,
+            "Display",
+            ThreadOnceToldToStop::ReturnsAfter(Duration::ZERO),
+            ProcessorThreadKind::HelperProcessHost,
+            &WhenEachThreadWasToldToStop::default(),
+        );
+        let link_id = graph
+            .traversal_mut()
+            .add_e_reading_another_stream(
+                OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "video").unwrap(),
+                InputLinkPortRef::new(processor_id.clone(), "in1"),
+            )
+            .first()
+            .expect("the link is added")
+            .id
+            .clone();
+        graph
+            .traversal_mut()
+            .e(&link_id)
+            .first_mut()
+            .expect("the link is in the graph")
+            .insert_component_without_rendering_it(LinkReadingAnotherStreamComponent::default());
+
+        let taken = take_every_link_reading_another_stream_off_the_inbound_links_of(
+            &mut graph,
+            &processor_id,
+        );
+
+        assert_eq!(taken.len(), 1);
+        assert!(
+            !graph
+                .traversal()
+                .e(&link_id)
+                .first()
+                .expect("the link is still in the graph")
+                .has::<LinkReadingAnotherStreamComponent>(),
+            "the component is off the link before the node's removal drops the edge"
         );
     }
 

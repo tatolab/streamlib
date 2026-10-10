@@ -17,6 +17,7 @@ use streamlib::sdk::descriptors::{
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{
     CutOffAReaderOfAnExposedOutputPort, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
+    WhyAReaderOfAnExposedOutputPortIsCutOff,
 };
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
@@ -67,7 +68,7 @@ fn the_exposures_graph_renders_for(stream: &LoadedStreamInThisRuntime) -> serde_
 /// A cut that counts how often it ran.
 fn a_cut_counting_into(cuts: &Arc<AtomicUsize>) -> CutOffAReaderOfAnExposedOutputPort {
     let cuts = Arc::clone(cuts);
-    Box::new(move || {
+    Box::new(move |_why| {
         cuts.fetch_add(1, Ordering::SeqCst);
     })
 }
@@ -258,7 +259,7 @@ fn a_cut_runs_after_the_stream_lets_go_of_its_graph() {
             "camera",
             "video",
             OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            Box::new(move || {
+            Box::new(move |_why| {
                 let stream = stream_held_weakly.upgrade().expect("the stream is loaded");
                 *into.lock().unwrap() =
                     Some(stream.to_json().expect("the graph renders")["exposed"].clone());
@@ -274,6 +275,42 @@ fn a_cut_runs_after_the_stream_lets_go_of_its_graph() {
         graph_read_inside_the_cut.lock().unwrap().take(),
         Some(serde_json::json!([])),
         "the cut read the graph, already at the new level"
+    );
+}
+
+/// A reader cut off by a lowered level is told the level its port is at now.
+#[test]
+#[serial]
+fn a_lowered_level_tells_its_readers_cut_the_level_that_no_longer_allows_it() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = a_camera_stream_exposing(
+        &runner,
+        project_directory.path(),
+        serde_json::json!([{"node": "camera", "port": "video", "level": "public"}]),
+    );
+    let told = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let told_by_the_cut = Arc::clone(&told);
+    let _registration = stream
+        .register_a_reader_of_an_exposed_output_port(
+            "camera",
+            "video",
+            OutputPortReaderOutsideItsStream::OnAnotherMachine,
+            Box::new(move |why| told_by_the_cut.lock().unwrap().push(why)),
+        )
+        .unwrap();
+
+    stream
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+
+    assert_eq!(
+        *told.lock().unwrap(),
+        vec![
+            WhyAReaderOfAnExposedOutputPortIsCutOff::TheLevelNoLongerAllowsIt {
+                level: OutputPortExposureLevel::Private
+            }
+        ]
     );
 }
 
@@ -357,7 +394,7 @@ fn a_cut_that_owns_its_own_registration_is_cut_and_lets_it_go() {
             "camera",
             "video",
             OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            Box::new(move || {
+            Box::new(move |_why| {
                 counted.fetch_add(1, Ordering::SeqCst);
                 drop(held_by_the_cut.lock().unwrap().take());
             }),
@@ -388,7 +425,7 @@ fn a_cut_that_panics_leaves_every_other_reader_cut_off() {
             "camera",
             "video",
             OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            Box::new(|| panic!("a reader's cut that panics")),
+            Box::new(|_why| panic!("a reader's cut that panics")),
         )
         .unwrap();
     let cuts = Arc::new(AtomicUsize::new(0));
@@ -447,7 +484,7 @@ fn a_cut_probing_the_graph_lock_when_dropped(
         graph_was_free: Arc::clone(&graph_was_free),
     };
     (
-        Box::new(move || {
+        Box::new(move |_why| {
             let _owned_by_the_cut = &probe;
         }),
         graph_was_free,

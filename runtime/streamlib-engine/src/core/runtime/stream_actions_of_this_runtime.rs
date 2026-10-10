@@ -2718,7 +2718,7 @@ mod tests {
                 "source",
                 "out1",
                 crate::core::graph::OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                Box::new(|| {}),
+                Box::new(|_why| {}),
             )
             .expect_err("the owner's internal holds over the function's private");
         assert!(

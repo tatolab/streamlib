@@ -206,14 +206,15 @@ impl LoadedStreamInThisRuntime {
         );
 
         let shutdown_escalation = ShutdownEscalationOfOneStream::default();
-        let this_streams_identity_and_handles = Arc::new(LoadedStreamARuntimeContextBelongsTo {
-            identity: loaded_stream_identity.clone(),
-            project_directory: Arc::from(project_directory.as_path()),
-            shutdown_escalation: shutdown_escalation.clone(),
-            teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
-            log_route: Arc::clone(&log_route),
-        });
         Ok(Arc::new_cyclic(|this_stream| Self {
+            this_streams_identity_and_handles: Arc::new(LoadedStreamARuntimeContextBelongsTo {
+                identity: loaded_stream_identity.clone(),
+                project_directory: Arc::from(project_directory.as_path()),
+                shutdown_escalation: shutdown_escalation.clone(),
+                teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
+                log_route: Arc::clone(&log_route),
+                this_stream: this_stream.clone(),
+            }),
             processor_interpreter_launch_record: Arc::new(
                 ProcessorInterpreterLaunchRecordOfOneStream::new(
                     loaded_stream_identity.clone(),
@@ -226,7 +227,6 @@ impl LoadedStreamInThisRuntime {
                 ),
             ),
             node_types_this_stream_resolves,
-            this_streams_identity_and_handles,
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,

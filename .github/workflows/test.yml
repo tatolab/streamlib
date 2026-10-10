@@ -318,7 +318,12 @@ jobs:
           # target's node to itself every traversal and the cycle check read
           # right, the source rendered `{stream, node, port}` beside the
           # awaiting reason, and the stamping and removal of such a link in a
-          # stream that has not started.
+          # stream that has not started. Its wiring across two graphs — bags
+          # crossing, the source's publisher installed and released without the
+          # source graph's lock, other streams' readers counted against the
+          # channel's cap, helper ends on either side — and the reconcile that
+          # wires, waits, refuses, unwires a stale load and follows a cut, over
+          # two loaded streams read as running.
           # The surface-share service's Linux arm whole, and the verbs its Linux
           # and macOS arms share, named by module: none of their tests needs a
           # device.
@@ -700,6 +705,8 @@ jobs:
             core::graph::graph_tests::links_reading_another_stream \
             core::graph::validation \
             core::runtime::operations_runtime::connect_from_another_stream_tests \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::wiring_across_two_graphs \
+            core::compiler::compiler_ops::reconcile_a_link_reading_another_stream_op \
             core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests \
             iceoryx2::channel_name \
             linux::surface_share \

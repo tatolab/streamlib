@@ -868,7 +868,7 @@ mod mutation_persistence {
                     ReaderOfAnExposedOutputPort::new(
                         Arc::new(std::sync::atomic::AtomicBool::new(true)),
                         OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                        Box::new(move || {
+                        Box::new(move |_why| {
                             cut_holding_the_count.fetch_add(1, Ordering::SeqCst);
                         }),
                     ),
