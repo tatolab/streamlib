@@ -521,6 +521,7 @@ mod tests {
             ListedStreamState::Attached,
             ListedStreamState::Kept,
             ListedStreamState::Stopped,
+            ListedStreamState::Failed,
         ] {
             assert_eq!(
                 serde_json::to_value(state).unwrap(),
