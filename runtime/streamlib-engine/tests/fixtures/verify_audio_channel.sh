@@ -10,13 +10,13 @@
 # doing the checking — the tap reads what the source put on the wire.
 #
 # Usage:
-#   ./verify_audio_channel.sh <node-name> [--node RUNTIME_NAME_OR_ID]
+#   ./verify_audio_channel.sh <node-name> [--stream STREAM]
 #                             [--count N] [--port NAME]
 #                             [--expect-frame-not-restamped]
 #
-# `<node-name>` is the node's `name` as `tatolab graph` lists it. `--node`
-# is handed to `tatolab`'s own `--node`; without it the sole live runtime is the
-# one read. `--port`
+# `<node-name>` is the node's `name` as `tatolab graph` lists it. `--stream`
+# names the loaded stream it belongs to, handed to `tatolab`'s own `--stream`;
+# without it the runtime must hold exactly one stream, which is read. `--port`
 # names which output to tap. Without it the node must declare exactly one,
 # because guessing at a node that declares several would tap whichever the
 # graph happened to list first.
@@ -25,7 +25,7 @@
 # match the block's own, which a capture built-in publishes and a producer that
 # stamps at publication does not — so it is asked for rather than assumed.
 #
-# Assumes a node is already running and hosting its control plane. Exit status
+# Assumes the runtime is already running with the stream loaded. Exit status
 # is the verdict; stdout is the report JSON, progress is on stderr. The graph
 # and the tap are read through the runtime unit's `tatolab`, and the bag decoder
 # through its lend (see fixture_runtime_unit.sh).
@@ -38,15 +38,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 require_the_runtime_unit
 require_the_fixture_venv
 
-NODE_NAME="${1:?usage: verify_audio_channel.sh <node-name> [--node RUNTIME_NAME_OR_ID] [--count N]}"
+NODE_NAME="${1:?usage: verify_audio_channel.sh <node-name> [--stream STREAM] [--count N]}"
 shift
-RUNTIME_NAME_OR_ID=""
+STREAM_NAME=""
 BAG_COUNT=8
 OUTPUT_PORT=""
 EXPECT_FRAME_NOT_RESTAMPED=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --node) RUNTIME_NAME_OR_ID="$2"; shift 2 ;;
+        --stream) STREAM_NAME="$2"; shift 2 ;;
         --count) BAG_COUNT="$2"; shift 2 ;;
         --port) OUTPUT_PORT="$2"; shift 2 ;;
         --expect-frame-not-restamped) EXPECT_FRAME_NOT_RESTAMPED="--expect-frame-not-restamped"; shift ;;
@@ -59,9 +59,11 @@ done
 TEMPORARY_DIRECTORY="${TMPDIR:-/tmp}"
 OUTPUT_DIR="$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-channel-XXXXXX")"
 
-RUNTIME_SELECTION=()
-if [ -n "$RUNTIME_NAME_OR_ID" ]; then
-    RUNTIME_SELECTION=(--node "$RUNTIME_NAME_OR_ID")
+if [ -z "$STREAM_NAME" ] && ! STREAM_NAME="$(name_of_the_sole_stream_the_runtime_holds)"; then
+    echo "no --stream, and the runtime at this user's local API socket does not hold exactly" \
+        "one stream — name it with --stream:" >&2
+    tatolab_observation_verb streams >&2
+    exit 1
 fi
 
 # The channel is the port's address, `<runtime_name>/<node>/<port>`, with this
@@ -105,12 +107,11 @@ for node in graph["nodes"]:
 else:
     sys.exit(f"no node named {wanted} in the running graph")
 PY
-CHANNEL="$(tatolab_observation_verb graph ${RUNTIME_SELECTION[@]+"${RUNTIME_SELECTION[@]}"} \
+CHANNEL="$(tatolab_observation_verb graph --stream "$STREAM_NAME" \
     | "$FIXTURE_PYTHON" -c "$CHANNEL_RESOLVING_PROGRAM" "$NODE_NAME" "$OUTPUT_PORT")" || exit 1
 
 echo "tapping $CHANNEL for $BAG_COUNT bags" >&2
-if ! tatolab_observation_verb tap "$CHANNEL" --count "$BAG_COUNT" \
-    ${RUNTIME_SELECTION[@]+"${RUNTIME_SELECTION[@]}"} \
+if ! tatolab_observation_verb tap "$CHANNEL" --count "$BAG_COUNT" --stream "$STREAM_NAME" \
     > "$OUTPUT_DIR/tapped.json" 2>"$OUTPUT_DIR/tap.err"; then
     cat "$OUTPUT_DIR/tap.err" >&2
     exit 1

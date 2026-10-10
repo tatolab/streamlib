@@ -17,8 +17,10 @@
 #   ./verify_opus_roundtrip.sh [--record-seconds SECONDS]
 #
 # Exit status is the verdict, stdout is the report JSON and nothing else, so a
-# caller can pipe it. Progress goes to stderr. The stream runs on the runtime
-# unit with `tatolab run` (see fixture_runtime_unit.sh).
+# caller can pipe it. Progress goes to stderr. The fixture starts the runtime
+# unit's `tatolabd` and loads the stream into it with `tatolab run` (see
+# fixture_runtime_unit.sh), so it refuses to run while another runtime holds
+# the machine.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,63 +52,56 @@ fi
 
 OUTPUT_DIR="$(mktemp -d -t streamlib-opus-roundtrip-XXXXXX)"
 CAPTURED_WAVEFORM="$OUTPUT_DIR/decoded.wav"
+STREAM_NAME="opus_roundtrip_fixture"
+# The runtime's output — the engine's log mirror, the stream's records among
+# it — with `tatolab run`'s beside it.
+NODE_LOG="$OUTPUT_DIR/node.log"
+STREAM_RUN_LOG="$OUTPUT_DIR/stream_run.log"
 
-NODE_PID=""
-# Installed before the node starts and idempotent — `kill` of an unset pid is
-# swallowed. A strand here costs a live engine holding a GPU context and an
+STREAM_RUN_PID=""
+# Installed before the runtime starts and idempotent — `kill` of an unset pid
+# is swallowed. A strand here costs a live engine holding a GPU context and an
 # iceoryx2 node, which contaminates every later run on the same rig; the
-# SIGTERM reaches `tatolab run`, which forwards it to `tatolabd`, and the wait
-# is bounded so a stop that hangs cannot hold the script open.
-stop_and_wait_for_the_stream() {
-    [ -n "$NODE_PID" ] || return 0
-    kill "$NODE_PID" 2>/dev/null || return 0
-    for _ in $(seq 60); do
-        kill -0 "$NODE_PID" 2>/dev/null || break
-        sleep 0.5
-    done
-    wait "$NODE_PID" 2>/dev/null
+# SIGTERM makes `tatolab run` stop its stream, the runtime then takes SIGINT,
+# and each wait is bounded so a stop that hangs cannot hold the script open.
+stop_and_wait_for_the_stream_and_the_runtime() {
+    if [ -n "$STREAM_RUN_PID" ] && kill "$STREAM_RUN_PID" 2>/dev/null; then
+        for _ in $(seq 60); do
+            kill -0 "$STREAM_RUN_PID" 2>/dev/null || break
+            sleep 0.5
+        done
+        wait "$STREAM_RUN_PID" 2>/dev/null
+    fi
+    stop_the_fixture_runtime 30
 }
-trap stop_and_wait_for_the_stream EXIT
+trap stop_and_wait_for_the_stream_and_the_runtime EXIT
 # Without this the shell survives its interrupted children and runs on to the
 # analysis, which can report PASS for a run the user aborted.
 trap 'exit 130' INT TERM
 
-echo "starting the Opus round-trip stream" >&2
-# The recorder runs in its own helper process, and `tatolab run` hands a stream
-# no argv, so where it writes and how much it records travel in the environment
-# every helper inherits.
-STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
+echo "starting the runtime" >&2
+# The recorder runs in its own helper process, and a stream takes no argv, so
+# where it writes and how much it records travel in the runtime's environment,
+# which every processor interpreter inherits.
+if ! STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
     STREAMLIB_CAPTURED_WAVEFORM_SECONDS="$RECORD_SECONDS" \
-    "$TATOLAB_EXECUTABLE" run --dir "$HERE" opus_roundtrip_stream.py \
-    >"$OUTPUT_DIR/node.log" 2>&1 &
-NODE_PID=$!
+        start_the_fixture_runtime "$NODE_LOG" "$OUTPUT_DIR/runtime_state"; then
+    echo "ERROR: the fixture could not start its runtime" >&2
+    exit 1
+fi
+echo "loading the Opus round-trip stream as $STREAM_NAME" >&2
+"$TATOLAB_EXECUTABLE" run --dir "$HERE" --name "$STREAM_NAME" opus_roundtrip_stream.py \
+    >"$STREAM_RUN_LOG" 2>&1 &
+STREAM_RUN_PID=$!
 
-# Matched by the launched pid rather than by name, so another node on the
-# machine declaring an OpusDecoder of its own is never the one measured.
-
-# Polled rather than slept: the node has a GPU context and an iceoryx2 node to
-# bring up, and a fixed sleep is either flaky or slow.
-RUNTIME_ID=""
-NODE_ANSWERED=0
-for _ in $(seq 60); do
-    if ! kill -0 "$NODE_PID" 2>/dev/null; then
-        echo "ERROR: the round-trip node exited before serving its local API" >&2
-        cat "$OUTPUT_DIR/node.log" >&2
-        exit 1
-    fi
-    if [ -z "$RUNTIME_ID" ]; then
-        RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
-    fi
-    if [ -n "$RUNTIME_ID" ] \
-        && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
-        NODE_ANSWERED=1
-        break
-    fi
-    sleep 0.5
-done
-if [ "$NODE_ANSWERED" -ne 1 ]; then
-    echo "ERROR: the round-trip node never answered over its local API socket" >&2
-    tail -40 "$OUTPUT_DIR/node.log" >&2
+# Addressed by the name it was loaded under, so another stream declaring an
+# OpusDecoder of its own is never the one measured. Polled rather than slept:
+# the stream compiles and the engine brings up a GPU context and an iceoryx2
+# node, and a fixed sleep is either flaky or slow.
+if ! wait_until_the_stream_answers "$STREAM_NAME" "$STREAM_RUN_PID" 60; then
+    echo "ERROR: the round-trip stream never answered over the local API socket" >&2
+    tail -40 "$STREAM_RUN_LOG" >&2
+    tail -40 "$NODE_LOG" >&2
     exit 1
 fi
 
@@ -125,9 +120,9 @@ fi
 # their teardown counts at INFO, and the decoder's gap line is a WARN whose
 # message is "a gap in the encoded stream" rather than "process() failed".
 OPUS_REFUSALS='process\(\) failed: .*Opus(Encoder|Decoder)|\[ERROR\].*Opus(Encoder|Decoder)'
-if grep -qE "$OPUS_REFUSALS" "$OUTPUT_DIR/node.log"; then
+if grep -qE "$OPUS_REFUSALS" "$NODE_LOG"; then
     echo "ERROR: an Opus block refused what it was handed — see the reason below" >&2
-    grep -E "$OPUS_REFUSALS" "$OUTPUT_DIR/node.log" >&2
+    grep -E "$OPUS_REFUSALS" "$NODE_LOG" >&2
     exit 1
 fi
 
@@ -135,7 +130,7 @@ fi
 # cadence and timestamp continuity, read off the wire rather than from the
 # recorder that also does the measuring.
 if ! "$HERE/verify_audio_channel.sh" opusdecoder \
-    --node "$RUNTIME_ID" --count 64 --port audio >&2; then
+    --stream "$STREAM_NAME" --count 64 --port audio >&2; then
     echo "ERROR: the decoder's channel failed its block-level contract" >&2
     exit 1
 fi
@@ -143,19 +138,19 @@ fi
 # Second verdict, and the one this fixture exists for: the signal itself.
 echo "waiting for the node to write what it decoded" >&2
 for _ in $(seq 120); do
-    if grep -q "MARKER:WAVEFORM_WRITTEN" "$OUTPUT_DIR/node.log"; then
+    if grep -q "MARKER:WAVEFORM_WRITTEN" "$NODE_LOG"; then
         break
     fi
-    if ! kill -0 "$NODE_PID" 2>/dev/null; then
-        echo "ERROR: the round-trip node exited before writing its capture" >&2
-        tail -40 "$OUTPUT_DIR/node.log" >&2
+    if ! kill -0 "$STREAM_RUN_PID" 2>/dev/null; then
+        echo "ERROR: the round-trip stream was unloaded before writing its capture" >&2
+        tail -40 "$NODE_LOG" >&2
         exit 1
     fi
     sleep 0.5
 done
 if ! [ -s "$CAPTURED_WAVEFORM" ]; then
     echo "ERROR: the node never wrote a waveform to measure" >&2
-    tail -40 "$OUTPUT_DIR/node.log" >&2
+    tail -40 "$NODE_LOG" >&2
     exit 1
 fi
 

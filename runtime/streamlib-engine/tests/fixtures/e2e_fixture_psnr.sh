@@ -96,7 +96,8 @@ case "$CODEC" in
 esac
 
 # The rig is read through the runtime unit's `tatolab` observation verbs (see
-# fixture_runtime_unit.sh).
+# fixture_runtime_unit.sh). It serves this user's local API socket itself, so
+# each arm refuses to start while a runtime already answers there.
 require_the_runtime_unit
 require_the_fixture_venv
 
@@ -137,7 +138,7 @@ mkdir -p "$DECODED_DIR" "$ARMS_DIR" "$SCORED_REFERENCES_DIR"
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
 decoded_channel_of_running_rig() {
-    tatolab_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    tatolab_observation_verb graph --stream "$STREAM_NAME" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -222,23 +223,14 @@ stop_rig() {
 }
 trap stop_rig EXIT
 
-# `timeout` wraps the rig, so the runtime is the launched pid's child rather
-# than the pid itself; `runtime_id_of_the_node_launched_as` walks that chain.
-# Wait for the launched node to register and answer a graph round trip over its
-# local API socket, which is the first moment a tap can attach. Sets RUNTIME_ID.
-wait_for_the_launched_node() {
-    RUNTIME_ID=""
-    for _ in $(seq 1 60); do
-        kill -0 "$1" 2>/dev/null || return 1
-        if [ -z "$RUNTIME_ID" ]; then
-            RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$1")" || RUNTIME_ID=""
-        fi
-        if [ -n "$RUNTIME_ID" ] && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 0.5
-    done
-    return 1
+# Wait for the launched rig's stream to answer a graph round trip over the
+# local API socket, which is the first moment a tap can attach. Sets
+# STREAM_NAME to the name the rig loaded it under.
+wait_for_the_launched_rig() {
+    STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_answers "$1" 30)" || {
+        STREAM_NAME=""
+        return 1
+    }
 }
 
 # ── One cold run per reference ───────────────────────────────────────
@@ -251,6 +243,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
     pipeline_log="$arm_dir/pipeline.log"
 
     echo "[psnr] --- $stem ---"
+    refuse_while_a_runtime_answers_at_the_local_api_socket || exit 1
     DISPLAY="${DISPLAY:-:0}" \
     RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         timeout --kill-after=5 "$RUN_SECONDS" "$RIG_BINARY" \
@@ -260,7 +253,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
             > "$pipeline_log" 2>&1 &
     RIG_PID=$!
 
-    if ! wait_for_the_launched_node "$RIG_PID"; then
+    if ! wait_for_the_launched_rig "$RIG_PID"; then
         echo "[psnr] FAIL: $stem — the rig never answered over its local API socket" >&2
         tail -30 "$pipeline_log" >&2
         stop_rig
@@ -283,7 +276,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
             --channel "$decoded_channel" \
             --out "$arm_dir/exchanged" \
             --count "$SAMPLES_PER_REFERENCE" \
-            --node "$RUNTIME_ID" \
+            --stream "$STREAM_NAME" \
             > "$arm_dir/exchanged_paths.txt" 2> "$exchange_log"; then
         echo "[psnr] FAIL: $stem — exchanged fewer frames than asked for" >&2
         cat "$exchange_log" >&2

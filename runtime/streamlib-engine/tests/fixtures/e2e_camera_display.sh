@@ -2,24 +2,27 @@
 # E2E test: the camera-display stream (`camera_display_stream.py`, beside this
 # script) on a vivid virtual camera.
 #
-# Boots the stream with `tatolab run` on the runtime unit, proves it live
-# through the control plane, captures its window, and stops it with SIGTERM.
+# Starts the runtime unit's `tatolabd`, loads the stream into it with `tatolab
+# run --name`, proves it live through the control plane, captures its window,
+# then stops the stream with SIGTERM to `tatolab run` and the runtime with
+# SIGINT.
 #
 # Assertions ride the plan's durable contracts — the `graph` tool's JSON, the
 # JSONL log schema, and a captured PNG — never engine tracing prose, which is
 # renamed without notice and leaves a grep on it passing vacuously.
 #
 # Validates:
-#   - The stream's node registers a control plane and answers `graph`
+#   - The stream loads and answers `graph --stream`
 #   - Both native built-ins are in the graph, linked camera → window
 #   - The window renders (PNG captured and non-trivial)
 #   - No Vulkan allocation / device-loss / process() failure in the logs
-#   - SIGTERM to `tatolab run`, forwarded to `tatolabd`, tears the pipeline
-#     down cleanly
+#   - SIGTERM to `tatolab run` unloads the stream, and SIGINT to `tatolabd`
+#     tears the engine down, each cleanly
 #
 # Prerequisites:
 #   - vivid kernel module available: sudo modprobe vivid
 #   - the runtime unit: `cargo xtask build-runtime` (see fixture_runtime_unit.sh)
+#   - no runtime holding this machine: the fixture starts its own
 #   - uv, to make the fixture venv on first use
 #   - xdotool + xwd + python3-PIL for the window capture
 #
@@ -31,25 +34,29 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fixture_runtime_unit.sh
 . "$SCRIPT_DIR/fixture_runtime_unit.sh"
 STREAM_ENTRY_FILE_NAME="camera_display_stream.py"
+STREAM_NAME="camera_display_fixture"
 OUTPUT_DIR="${1:-/tmp/streamlib-e2e}"
-# Long enough for the swapchain to settle and several frames to present.
-RUN_SECS="${RUN_SECS:-20}"
+# Bounds the stream's compile, description and load, until it answers.
+LOAD_SECS="${LOAD_SECS:-60}"
 WINDOW_TITLE="StreamLib Camera Display"
 
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 PNG_DIR="$OUTPUT_DIR/png_samples"
 mkdir -p "$PNG_DIR"
+# The runtime's output: the engine's log mirror, the stream's records among it.
 LOG_FILE="$OUTPUT_DIR/pipeline.log"
+STREAM_RUN_LOG_FILE="$OUTPUT_DIR/stream_run.log"
 GRAPH_FILE="$OUTPUT_DIR/graph.json"
-NODE_PID=""
+STREAM_RUN_PID=""
 
 cleanup() {
-    if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
-        kill -TERM "$NODE_PID" 2>/dev/null || true
+    if [ -n "$STREAM_RUN_PID" ] && kill -0 "$STREAM_RUN_PID" 2>/dev/null; then
+        kill -TERM "$STREAM_RUN_PID" 2>/dev/null || true
         sleep 2
-        kill -KILL "$NODE_PID" 2>/dev/null || true
+        kill -KILL "$STREAM_RUN_PID" 2>/dev/null || true
     fi
+    stop_the_fixture_runtime
 }
 trap cleanup EXIT
 
@@ -107,44 +114,40 @@ if [ -z "$VIRTUAL_DEVICE" ]; then
 fi
 echo "[e2e] Using vivid capture device: $VIRTUAL_DEVICE"
 
-# ── Boot the stream ──────────────────────────────────────────────────
+# ── Start the runtime and load the stream ────────────────────────────
 # No build step here: the stream is Python and the runtime unit is already
-# built, so nothing sits between an edit of the stream file and this run.
-# `--dir` anchors the launch at this directory, so the stream compiles in the
-# fixture venv and the cross-floor check reads these fixtures rather than
-# whatever directory the script was started from.
-echo "[e2e] Booting $SCRIPT_DIR/$STREAM_ENTRY_FILE_NAME with \`tatolab run\` (${RUN_SECS}s)..."
-STREAMLIB_CAMERA_DEVICE="$VIRTUAL_DEVICE" \
-RUST_LOG="${RUST_LOG:-warn,streamlib=info}" \
-    "$TATOLAB_EXECUTABLE" run --dir "$SCRIPT_DIR" "$STREAM_ENTRY_FILE_NAME" >"$LOG_FILE" 2>&1 &
-NODE_PID=$!
+# built, so nothing sits between an edit of the stream file and this run. The
+# camera and the log filter are the runtime's environment, which the stream's
+# compile and its processor interpreters inherit. `--dir` anchors the load at
+# this directory, so the stream compiles in the fixture venv and the
+# cross-floor check reads these fixtures rather than whatever directory the
+# script was started from.
+echo "[e2e] Starting the runtime..."
+if ! STREAMLIB_CAMERA_DEVICE="$VIRTUAL_DEVICE" \
+    RUST_LOG="${RUST_LOG:-warn,streamlib=info}" \
+        start_the_fixture_runtime "$LOG_FILE" "$OUTPUT_DIR/runtime_state"; then
+    echo "[e2e] FAIL: the fixture could not start its runtime"
+    exit 1
+fi
+echo "[e2e] Loading $SCRIPT_DIR/$STREAM_ENTRY_FILE_NAME as $STREAM_NAME with \`tatolab run\`..."
+"$TATOLAB_EXECUTABLE" run --dir "$SCRIPT_DIR" --name "$STREAM_NAME" "$STREAM_ENTRY_FILE_NAME" \
+    >"$STREAM_RUN_LOG_FILE" 2>&1 &
+STREAM_RUN_PID=$!
 
-# ── Wait for the node to register ────────────────────────────────────
-# The registry entry is published only once the stream's graph has loaded, so
-# its appearance is the node's own liveness signal — not a fixed sleep. Matched
-# by the launched pid rather than by being the first live row, so another node
-# on the machine is never the one measured.
-RUNTIME_ID=""
-for _ in $(seq 1 "$RUN_SECS"); do
-    if ! kill -0 "$NODE_PID" 2>/dev/null; then
-        echo "[e2e] FAIL: the stream exited before registering a node"
-        tail -30 "$LOG_FILE"
-        exit 1
-    fi
-    RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
-    [ -n "$RUNTIME_ID" ] && break
-    sleep 1
-done
-
-if [ -z "$RUNTIME_ID" ]; then
-    echo "[e2e] FAIL: no live node registered within ${RUN_SECS}s"
+# ── Wait for the stream to answer ────────────────────────────────────
+# The stream answers `graph --stream` only once its graph has loaded, so that
+# is its own liveness signal — not a fixed sleep — and the name it was loaded
+# under is what every later verb addresses.
+if ! wait_until_the_stream_answers "$STREAM_NAME" "$STREAM_RUN_PID" "$LOAD_SECS"; then
+    echo "[e2e] FAIL: the stream did not answer within ${LOAD_SECS}s"
+    tail -30 "$STREAM_RUN_LOG_FILE"
     tail -30 "$LOG_FILE"
     exit 1
 fi
-echo "[e2e] Node registered: $RUNTIME_ID"
+echo "[e2e] Stream answering: $STREAM_NAME"
 
 # ── Graph assertions ─────────────────────────────────────────────────
-tatolab_observation_verb graph --node "$RUNTIME_ID" >"$GRAPH_FILE" 2>/dev/null || true
+tatolab_observation_verb graph --stream "$STREAM_NAME" >"$GRAPH_FILE" 2>/dev/null || true
 
 GRAPH_VERDICT="$(python3 - "$GRAPH_FILE" <<'PYEOF'
 import json
@@ -221,29 +224,35 @@ else
     echo "[e2e] No window matched '$WINDOW_TITLE'"
 fi
 
-# ── Stop the node ────────────────────────────────────────────────────
-# `tatolab run` forwards SIGTERM to `tatolabd`, whose signal ladder tears the
-# engine down and exits. A clean exit IS the gate.
-echo "[e2e] Stopping the node (SIGTERM)..."
-kill -TERM "$NODE_PID" 2>/dev/null || true
+# ── Stop the stream, then the runtime ────────────────────────────────
+# SIGTERM makes `tatolab run` stop its stream, which the runtime unloads before
+# the run exits; SIGINT then makes `tatolabd`'s signal ladder tear the engine
+# down. A clean exit of each IS the gate.
+echo "[e2e] Stopping the stream (SIGTERM to tatolab run)..."
+kill -TERM "$STREAM_RUN_PID" 2>/dev/null || true
 SHUTDOWN_STATUS="timeout"
 for _ in $(seq 1 15); do
-    if ! kill -0 "$NODE_PID" 2>/dev/null; then
+    if ! kill -0 "$STREAM_RUN_PID" 2>/dev/null; then
         SHUTDOWN_STATUS="clean"
         break
     fi
     sleep 1
 done
-# Reap only a process that is actually dying. A node that ignores SIGTERM would
+# Reap only a process that is actually dying. A run that ignores SIGTERM would
 # otherwise block `wait` forever — and the EXIT trap cannot fire while we are
 # blocked in it, so the fixture would hang instead of reporting the failure it
 # just detected. Hanging CI is strictly worse than a FAIL.
 if [ "$SHUTDOWN_STATUS" = "timeout" ]; then
-    echo "[e2e] Node ignored SIGTERM for 15s — escalating to SIGKILL."
-    kill -KILL "$NODE_PID" 2>/dev/null || true
+    echo "[e2e] tatolab run ignored SIGTERM for 15s — escalating to SIGKILL."
+    kill -KILL "$STREAM_RUN_PID" 2>/dev/null || true
 fi
-wait "$NODE_PID" 2>/dev/null || true
-NODE_PID=""
+wait "$STREAM_RUN_PID" 2>/dev/null || true
+STREAM_RUN_PID=""
+echo "[e2e] Stopping the runtime (SIGINT to tatolabd)..."
+stop_the_fixture_runtime 15
+if ! RUNTIME_STOP_REASON="$(the_fixture_runtime_stopped_cleanly 2>&1)"; then
+    SHUTDOWN_STATUS="$SHUTDOWN_STATUS; $RUNTIME_STOP_REASON"
+fi
 
 # ── Analyze results ──────────────────────────────────────────────────
 count_in_log() { grep -c "$1" "$LOG_FILE" 2>/dev/null || true; }
@@ -263,10 +272,10 @@ echo "════════════════════════�
 echo "  E2E camera-display (Python stream) Results"
 echo "══════════════════════════════════════════════════════════════"
 echo "  Virtual device:        $VIRTUAL_DEVICE (vivid)"
-echo "  Runtime id:            $RUNTIME_ID"
+echo "  Stream:                $STREAM_NAME"
 echo "  Graph:                 $GRAPH_VERDICT"
 echo "  Window PNG:            $PNG_BYTES bytes ($PNG_PATH)"
-echo "  Shutdown on SIGTERM:   $SHUTDOWN_STATUS"
+echo "  Stop (run, runtime):   $SHUTDOWN_STATUS"
 echo "  OUT_OF_DEVICE_MEMORY:  $VK_OOM"
 echo "  DEVICE_LOST:           $VK_DEVICE_LOST"
 echo "  process() failed:      $PROCESS_FAILED"
@@ -288,7 +297,7 @@ if [ "$PNG_BYTES" -lt 1024 ]; then
     PASS=false
 fi
 if [ "$SHUTDOWN_STATUS" != "clean" ]; then
-    echo "[e2e] FAIL: the node did not exit within 15s of SIGTERM"
+    echo "[e2e] FAIL: the stop was not clean — $SHUTDOWN_STATUS"
     PASS=false
 fi
 if [ "$VK_OOM" -gt 0 ]; then
@@ -310,7 +319,7 @@ if [ "$PASS" = true ]; then
     exit 0
 else
     echo "[e2e] RESULT: FAIL"
-    echo "[e2e] Last 30 lines of pipeline log:"
+    echo "[e2e] Last 30 lines of the runtime's log:"
     tail -30 "$LOG_FILE"
     exit 1
 fi

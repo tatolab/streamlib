@@ -16,10 +16,12 @@
 #
 # Three phases, each of which can fail on its own terms:
 #
-#   record   recording_stream.py runs on `tatolab run` until the file holds
-#            enough video, then `tatolab run` takes SIGTERM and forwards it to
-#            `tatolabd`. A run that needs SIGKILL is a hard FAIL, not a slow
-#            exit — teardown is what closes the last fragment.
+#   record   recording_stream.py is loaded with `tatolab run` into a
+#            `tatolabd` the fixture starts, until the file holds enough video;
+#            then `tatolab run` takes SIGTERM and stops the stream, and the
+#            runtime takes SIGINT. A stop that needs SIGKILL is a hard FAIL,
+#            not a slow exit — the stream's teardown is what closes the last
+#            fragment.
 #   inspect  `cargo xtask mp4-inspect` on the written file: two tracks named
 #            after their producers, the video one an avc1/hvc1 entry matching
 #            the codec, the audio one Opus, and fragments actually closed.
@@ -38,7 +40,9 @@
 #
 # The record phase runs on the runtime unit and the replay phase is the Rust
 # rig; both are read through the runtime unit's `tatolab` observation verbs
-# (see fixture_runtime_unit.sh).
+# (see fixture_runtime_unit.sh). Both serve this user's local API socket, so
+# the fixture refuses to run while another runtime holds the machine or
+# answers there.
 #
 # Environment overrides:
 #   VIVID_TEST_PATTERN     — vivid test_pattern index (default 7 = "100% Red"),
@@ -151,7 +155,11 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 RECORDING_PATH="$OUTPUT_DIR/recording.mp4"
+# The runtime's output — the engine's log mirror, the stream's records among
+# it — with `tatolab run`'s beside it.
 RECORD_LOG="$OUTPUT_DIR/recording.log"
+RECORD_RUN_LOG="$OUTPUT_DIR/recording_run.log"
+RECORDING_STREAM_NAME="recording_fixture"
 REPLAY_LOG="$OUTPUT_DIR/replay.log"
 EXCHANGED_DIR="$OUTPUT_DIR/exchanged"
 
@@ -170,10 +178,11 @@ RUNNING_PID=""
 #   stopped-cleanly  it was running, took SIGTERM, and exited inside the budget
 #   needed-sigkill   it was running, ignored SIGTERM, and had to be killed
 #   already-gone     it was not running when we went to stop it
-# `already-gone` is a failure and not a shortcut: the process crashed, or its
-# own `timeout` wrapper fired and killed it. Either way the graph never took a
-# SIGTERM, so teardown — which is what closes the last fragment — never ran,
-# and the file on disk stops at whatever the writer had already flushed.
+# `already-gone` is a failure and not a shortcut: the process crashed, its
+# stream was unloaded under it, or its own `timeout` wrapper fired. Either way
+# the stop was never the fixture's, so nothing says teardown — which is what
+# closes the last fragment — ran, and the file on disk may stop at whatever the
+# writer had already flushed.
 STOP_OUTCOME=""
 STOP_EXIT_STATUS=""
 stop_running_process() {
@@ -219,10 +228,10 @@ require_clean_stop() {
             ;;
         already-gone)
             echo "[recording] FAIL: the $phase process was already gone before it was asked" >&2
-            echo "[recording] to stop (exit status $STOP_EXIT_STATUS). It crashed, or its budget" >&2
-            echo "[recording] ran out and \`timeout\` killed it — 124 is the wrapper firing, 137" >&2
-            echo "[recording] its SIGKILL escalation. The graph never took a SIGTERM either way," >&2
-            echo "[recording] so teardown never closed the last fragment." >&2
+            echo "[recording] to stop (exit status $STOP_EXIT_STATUS). It crashed, its stream was" >&2
+            echo "[recording] unloaded under it, or its budget ran out and \`timeout\` stopped it —" >&2
+            echo "[recording] 124 is the wrapper firing, 137 its SIGKILL escalation. Either way the" >&2
+            echo "[recording] stop was not the fixture's, so the last fragment cannot be trusted." >&2
             ;;
         *)
             echo "[recording] FAIL: the $phase process was never started" >&2
@@ -233,27 +242,10 @@ require_clean_stop() {
 }
 restore_pattern_and_stop() {
     stop_running_process
+    stop_the_fixture_runtime
     v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$ORIGINAL_PATTERN" >/dev/null 2>&1 || true
 }
 trap restore_pattern_and_stop EXIT
-
-# Wait for the launched node to register and answer a graph round trip over its
-# local API socket. Sets RUNTIME_ID. `timeout` wraps both phases, so the node is
-# beneath the launched pid — `tatolab run`'s `tatolabd`, or the replay rig.
-wait_for_the_launched_node() {
-    RUNTIME_ID=""
-    for _ in $(seq 1 60); do
-        kill -0 "$1" 2>/dev/null || return 1
-        if [ -z "$RUNTIME_ID" ]; then
-            RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$1")" || RUNTIME_ID=""
-        fi
-        if [ -n "$RUNTIME_ID" ] && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 0.5
-    done
-    return 1
-}
 
 if ! v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$VIVID_TEST_PATTERN" 2>"$OUTPUT_DIR/vivid-ctl.log"; then
     echo "[recording] FAIL: could not set vivid test_pattern=$VIVID_TEST_PATTERN" >&2
@@ -285,21 +277,27 @@ XTASK="$REPO_ROOT/target/release/xtask"
 
 # ── Record ───────────────────────────────────────────────────────────
 echo "[recording] Recording $VIVID_DEVICE and the known signal..."
-# `tatolab run` hands a stream no argv, so its settings travel in the
-# environment. The camera is named rather than left to enumeration, so a rig
-# carrying both a virtual and a real one never records the wrong one.
-STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \
-STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE" \
-STREAMLIB_RECORDING_PATH="$RECORDING_PATH" \
-RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
-    timeout --kill-after=5 "$RECORD_SECONDS" \
-        "$TATOLAB_EXECUTABLE" run --dir "$SCRIPT_DIR" --runtime-name recording-node \
-        recording_stream.py \
-        > "$RECORD_LOG" 2>&1 &
+# A stream takes no argv, so its settings travel in the runtime's environment,
+# which the stream's compile and its processor interpreters inherit. The camera
+# is named rather than left to enumeration, so a rig carrying both a virtual
+# and a real one never records the wrong one.
+if ! STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \
+    STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE" \
+    STREAMLIB_RECORDING_PATH="$RECORDING_PATH" \
+    RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
+        start_the_fixture_runtime "$RECORD_LOG" "$OUTPUT_DIR/runtime_state"; then
+    echo "[recording] FAIL: the fixture could not start its runtime" >&2
+    exit 1
+fi
+timeout --kill-after=5 "$RECORD_SECONDS" \
+    "$TATOLAB_EXECUTABLE" run --dir "$SCRIPT_DIR" --name "$RECORDING_STREAM_NAME" \
+    recording_stream.py \
+    > "$RECORD_RUN_LOG" 2>&1 &
 RUNNING_PID=$!
 
-if ! wait_for_the_launched_node "$RUNNING_PID"; then
-    echo "[recording] FAIL: the recording node never answered over its local API socket" >&2
+if ! wait_until_the_stream_answers "$RECORDING_STREAM_NAME" "$RUNNING_PID" 60; then
+    echo "[recording] FAIL: the recording stream never answered over the local API socket" >&2
+    tail -30 "$RECORD_RUN_LOG" >&2
     tail -30 "$RECORD_LOG" >&2
     exit 1
 fi
@@ -344,6 +342,14 @@ echo "[recording] Landed on disk:    $RECORDED_FRAMES video samples"
 
 stop_running_process
 require_clean_stop "recording" "$RECORD_LOG"
+# Before the replay, which serves the same local API socket.
+stop_the_fixture_runtime 15
+if ! the_fixture_runtime_stopped_cleanly; then
+    echo "[recording] FAIL: the runtime did not stop cleanly once the recording stream" >&2
+    echo "[recording] was unloaded" >&2
+    tail -30 "$RECORD_LOG" >&2
+    exit 1
+fi
 
 if [ ! -s "$RECORDING_PATH" ]; then
     echo "[recording] FAIL: $RECORDING_PATH is empty or missing" >&2
@@ -428,6 +434,7 @@ echo "[recording] Inspector:         PASS ($OUTPUT_DIR/mp4_inspect.json)"
 
 # ── Replay ───────────────────────────────────────────────────────────
 echo "[recording] Replaying the recorded video track through the $CODEC decoder..."
+refuse_while_a_runtime_answers_at_the_local_api_socket || exit 1
 DISPLAY="${DISPLAY:-:0}" \
 RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
     timeout --kill-after=5 "$REPLAY_SECONDS" \
@@ -437,8 +444,8 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         > "$REPLAY_LOG" 2>&1 &
 RUNNING_PID=$!
 
-if ! wait_for_the_launched_node "$RUNNING_PID"; then
-    echo "[recording] FAIL: the replay rig never answered over its local API socket" >&2
+if ! REPLAY_STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_answers "$RUNNING_PID" 30)"; then
+    echo "[recording] FAIL: the replay rig never answered over the local API socket" >&2
     tail -30 "$REPLAY_LOG" >&2
     exit 1
 fi
@@ -446,7 +453,7 @@ fi
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
-DECODED_CHANNEL="$(tatolab_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+DECODED_CHANNEL="$(tatolab_observation_verb graph --stream "$REPLAY_STREAM_NAME" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -467,7 +474,7 @@ if ! tatolab_observation_verb exchange \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \
         --every "$SAMPLE_EVERY" \
-        --node "$RUNTIME_ID" \
+        --stream "$REPLAY_STREAM_NAME" \
         > "$OUTPUT_DIR/exchanged_paths.txt" 2> "$OUTPUT_DIR/exchange.log"; then
     echo "[recording] FAIL: exchanged fewer frames than asked for" >&2
     cat "$OUTPUT_DIR/exchange.log" >&2
