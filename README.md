@@ -268,12 +268,12 @@ tatolab rm STREAM
 tatolab expose STREAM NODE PORT [--public | --remove]
 
 tatolab graph [--stream STREAM]
-tatolab tap CHANNEL --stream STREAM [--count N] [--max-bag-bytes BYTES]
+tatolab tap CHANNEL [--stream STREAM] [--count N] [--max-bag-bytes BYTES]
 tatolab logs (--stream STREAM | RUNTIME_ID-STREAM) [-f | --follow] [--processor ID] [--pipeline ID]
              [--rhi] [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
 tatolab logs --list
 tatolab exchange SURFACE_ID --out DIR
-tatolab exchange --channel CHANNEL --stream STREAM [--count N] [--every N] [--field NAME] --out DIR
+tatolab exchange --channel CHANNEL [--stream STREAM] [--count N] [--every N] [--field NAME] --out DIR
 tatolab mcp
 
 tatolab enable-virtual-camera [--print]
