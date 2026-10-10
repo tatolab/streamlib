@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 
 use super::runtime::{
-    request_a_streams_shutdown_and_wait_until_it_has_ended,
+    a_stream_name_already_loaded_refusal, request_a_streams_shutdown_and_wait_until_it_has_ended,
     the_cast_name_of_the_stream_a_load_names,
 };
 use super::{
@@ -23,7 +23,10 @@ use super::{
     compile_the_stream_function_in_the_projects_interpreter,
     the_owners_exposure_rulings_split_around_the_load,
 };
-use crate::core::graph::{OutputPortExposureLevel, cast_exposed_name_to_url_safe};
+use crate::core::graph::{
+    OutputPortExposureLevel, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
+    node_names_listed_for_a_refusal,
+};
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::{Error, Result};
 
@@ -51,8 +54,8 @@ pub struct RunStreamRequest {
     /// The name to load the stream as, overriding the function's.
     pub stream_name: Option<String>,
     /// Whether the runtime keeps the stream, recording it in its state
-    /// directory; else the stream is attached.
-    pub keep: bool,
+    /// directory, or it is attached to what ran it.
+    pub holding: LoadedStreamHolding,
 }
 
 /// A stream [`Runner::run_stream`] loaded and started.
@@ -151,6 +154,9 @@ pub struct OutputPortExposureOutcome {
     pub ruling_not_recorded_because: Option<String>,
 }
 
+/// How a run refused for a name a loaded or kept stream holds is told to go on.
+const RUN_THIS_ONE_UNDER_ANOTHER_NAME: &str = "load this one under another name with `--name`";
+
 /// What [`Runner::reload_every_kept_stream_not_stopped`] did with one kept
 /// stream's record; a stream it left unloaded because it is stopped, removed
 /// or already loaded is not reported.
@@ -222,17 +228,21 @@ impl Runner {
             project_directory,
             stream_function,
             stream_name,
-            keep,
+            holding,
         } = request;
         let kept_stream_records = self.kept_stream_records();
-        if keep && kept_stream_records.is_none() {
-            return Err(Error::Configuration(format!(
-                "the stream in {} was not kept: this runtime keeps no stream, because its host \
-                 gave it no state directory to keep them in; load it attached, or run it in \
-                 `tatolabd`",
-                project_directory.display()
-            )));
-        }
+        let records_to_keep_it_in = match (holding, kept_stream_records) {
+            (LoadedStreamHolding::Attached, _) => None,
+            (LoadedStreamHolding::Kept, Some(kept_stream_records)) => Some(kept_stream_records),
+            (LoadedStreamHolding::Kept, None) => {
+                return Err(Error::Configuration(format!(
+                    "the stream in {} was not kept: this runtime keeps no stream, because its \
+                     host gave it no state directory to keep them in; load it attached, or run \
+                     it in `tatolabd`",
+                    project_directory.display()
+                )));
+            }
+        };
         let lend_directory = self
             .engine_resources_shared_by_every_stream
             .processor_interpreter_lend_directory
@@ -268,48 +278,40 @@ impl Runner {
             Some(kept_stream_records) => kept_stream_records.read(&stream_name)?,
             None => None,
         };
-        match (kept_record, kept_stream_records) {
-            (Some(kept_record), Some(kept_stream_records))
-                if keep
-                    && kept_record.project_directory == stream_environment.project_directory
-                    && kept_record.stream_function == stream_function
-                    && loaded
-                        .as_ref()
-                        .is_none_or(|loaded| loaded.holding() == LoadedStreamHolding::Kept) =>
-            {
-                self.replace_a_kept_stream(
-                    kept_stream_records,
-                    kept_record,
-                    loaded,
-                    KeptStreamRecord::of_a_running_stream(
-                        stream_name,
-                        &stream_environment,
-                        stream_function,
-                        graph_json,
-                    ),
-                    compile_warnings,
-                )
-            }
-            (Some(kept_record), _) => Err(Error::GraphError(format!(
-                "the stream name `{stream_name}` is held by a{} kept stream from {}; load this \
-                 one under another name with `--name`",
-                if kept_record.stopped { " stopped" } else { "" },
-                kept_record.project_directory.display()
-            ))),
-            (None, _) if loaded.is_some() => Err(Error::GraphError(format!(
-                "a stream named `{stream_name}` is already loaded in this runtime, from {}; \
-                 load this one under another name with `--name`",
-                loaded
-                    .as_ref()
-                    .map(|loaded| loaded.project_directory().display().to_string())
-                    .unwrap_or_default()
-            ))),
-            (None, _) => {
-                let holding = if keep {
-                    LoadedStreamHolding::Kept
-                } else {
-                    LoadedStreamHolding::Attached
-                };
+        match (kept_record, loaded) {
+            (Some(kept_record), loaded) => match records_to_keep_it_in {
+                Some(records_to_keep_it_in)
+                    if kept_record.project_directory == stream_environment.project_directory
+                        && kept_record.stream_function == stream_function
+                        && loaded
+                            .as_ref()
+                            .is_none_or(|loaded| loaded.holding() == LoadedStreamHolding::Kept) =>
+                {
+                    self.replace_a_kept_stream(
+                        records_to_keep_it_in,
+                        kept_record,
+                        loaded,
+                        KeptStreamRecord::of_a_running_stream(
+                            stream_name,
+                            &stream_environment,
+                            stream_function,
+                            graph_json,
+                        ),
+                        compile_warnings,
+                    )
+                }
+                _ => Err(Error::GraphError(format!(
+                    "the stream name `{stream_name}` is held by a{} kept stream from {}; \
+                     {RUN_THIS_ONE_UNDER_ANOTHER_NAME}",
+                    if kept_record.stopped { " stopped" } else { "" },
+                    kept_record.project_directory.display()
+                ))),
+            },
+            (None, Some(loaded)) => Err(a_stream_name_already_loaded_refusal(
+                &loaded,
+                RUN_THIS_ONE_UNDER_ANOTHER_NAME,
+            )),
+            (None, None) => {
                 let stream = self.load_and_start_a_stream(
                     &stream_name,
                     &graph_json,
@@ -317,14 +319,14 @@ impl Runner {
                     stream_environment.clone(),
                     holding,
                 )?;
-                if keep && let Some(kept_stream_records) = kept_stream_records {
+                if let Some(records_to_keep_it_in) = records_to_keep_it_in {
                     let record = KeptStreamRecord::of_a_running_stream(
                         stream_name.clone(),
                         &stream_environment,
                         stream_function,
                         graph_json,
                     );
-                    if let Err(write_refusal) = kept_stream_records.write(&record) {
+                    if let Err(write_refusal) = records_to_keep_it_in.write(&record) {
                         unload_a_stream_an_action_took_back(&stream, "its record was not written");
                         return Err(write_refusal);
                     }
@@ -749,17 +751,6 @@ impl Runner {
         }
     }
 
-    fn loaded_stream_of_the_cast_name(
-        &self,
-        stream_cast: &str,
-    ) -> Option<Arc<LoadedStreamInThisRuntime>> {
-        self.engine_resources_shared_by_every_stream
-            .streams_loaded_in_this_runtime
-            .lock()
-            .get(stream_cast)
-            .cloned()
-    }
-
     fn the_cast_name_of_a_stream_an_action_names(&self, stream_name: &str) -> Result<String> {
         cast_exposed_name_to_url_safe(stream_name)
             .map(|stream_cast| stream_cast.into_owned())
@@ -797,11 +788,7 @@ impl Runner {
                     .collect()
             })
             .unwrap_or_default();
-        if kept_names.is_empty() {
-            "none".to_string()
-        } else {
-            kept_names.join(", ")
-        }
+        names_listed_for_a_refusal(kept_names, "none")
     }
 
     /// Replace `previous_record` by `replacement`, whose compile already
@@ -1013,13 +1000,9 @@ fn refuse_a_node_the_recorded_graph_does_not_hold(
         return Ok(());
     }
     Err(Error::GraphError(format!(
-        "the kept stream `{}` holds no node `{node}`. Its nodes are: {}",
+        "the kept stream `{}` holds no node `{node}`. It holds: {}",
         kept_record.stream_name,
-        if recorded_node_names.is_empty() {
-            "none".to_string()
-        } else {
-            recorded_node_names.join(", ")
-        }
+        node_names_listed_for_a_refusal(recorded_node_names)
     )))
 }
 
@@ -1141,12 +1124,12 @@ mod tests {
             );
         }
 
-        fn run_request(&self, keep: bool) -> RunStreamRequest {
+        fn run_request(&self, holding: LoadedStreamHolding) -> RunStreamRequest {
             RunStreamRequest {
                 project_directory: self.path().to_path_buf(),
                 stream_function: None,
                 stream_name: None,
-                keep,
+                holding,
             }
         }
     }
@@ -1226,7 +1209,7 @@ mod tests {
             serde_json::json!([]),
         ));
 
-        let refusal = refusal_of(runner.run_stream(project.run_request(true)));
+        let refusal = refusal_of(runner.run_stream(project.run_request(LoadedStreamHolding::Kept)));
 
         assert!(refusal.contains("keeps no stream"), "{refusal}");
         assert!(refusal.contains("state directory"), "{refusal}");
@@ -1254,8 +1237,8 @@ mod tests {
         let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
 
-        for keep in [false, true] {
-            let refusal = refusal_of(runner.run_stream(project.run_request(keep)));
+        for holding in [LoadedStreamHolding::Attached, LoadedStreamHolding::Kept] {
+            let refusal = refusal_of(runner.run_stream(project.run_request(holding)));
 
             assert!(refusal.contains("uv sync"), "{refusal}");
         }
@@ -1275,8 +1258,8 @@ mod tests {
             serde_json::json!([]),
         ));
 
-        for keep in [false, true] {
-            let refusal = refusal_of(runner.run_stream(second_project.run_request(keep)));
+        for holding in [LoadedStreamHolding::Attached, LoadedStreamHolding::Kept] {
+            let refusal = refusal_of(runner.run_stream(second_project.run_request(holding)));
 
             assert!(
                 refusal.contains(&first_project.path().display().to_string()),
@@ -1309,12 +1292,14 @@ mod tests {
         ));
 
         let refusals = [
-            refusal_of(runner.run_stream(other_project.run_request(true))),
-            refusal_of(runner.run_stream(other_project.run_request(false))),
-            refusal_of(runner.run_stream(recorded_project.run_request(false))),
+            refusal_of(runner.run_stream(other_project.run_request(LoadedStreamHolding::Kept))),
+            refusal_of(runner.run_stream(other_project.run_request(LoadedStreamHolding::Attached))),
+            refusal_of(
+                runner.run_stream(recorded_project.run_request(LoadedStreamHolding::Attached)),
+            ),
             refusal_of(runner.run_stream(RunStreamRequest {
                 stream_function: Some("other.py".to_string()),
-                ..recorded_project.run_request(true)
+                ..recorded_project.run_request(LoadedStreamHolding::Kept)
             })),
         ];
 
@@ -1347,7 +1332,7 @@ mod tests {
             a_kept_stream_loaded_without_its_start(&runner, state_directory.path(), &record);
         project.fail_to_compile_printing("NameError: name cmaera is not defined");
 
-        let refusal = refusal_of(runner.run_stream(project.run_request(true)));
+        let refusal = refusal_of(runner.run_stream(project.run_request(LoadedStreamHolding::Kept)));
 
         assert!(refusal.contains("cmaera"), "{refusal}");
         assert_eq!(
@@ -1392,7 +1377,7 @@ mod tests {
             &previous_record,
         );
 
-        let refusal = refusal_of(runner.run_stream(project.run_request(true)));
+        let refusal = refusal_of(runner.run_stream(project.run_request(LoadedStreamHolding::Kept)));
 
         assert!(refusal.contains("absent-port"), "{refusal}");
         assert!(refusal.contains("did not re-load"), "{refusal}");
@@ -2174,10 +2159,10 @@ mod tests {
         );
 
         let kept = runner
-            .run_stream(kept_project.run_request(true))
+            .run_stream(kept_project.run_request(LoadedStreamHolding::Kept))
             .expect("the kept stream runs");
         let attached = runner
-            .run_stream(attached_project.run_request(false))
+            .run_stream(attached_project.run_request(LoadedStreamHolding::Attached))
             .expect("the attached stream runs");
 
         assert_eq!(kept.stream_name, "camera");
@@ -2230,7 +2215,9 @@ mod tests {
             "camera",
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
         ));
-        let first = runner.run_stream(project.run_request(true)).unwrap();
+        let first = runner
+            .run_stream(project.run_request(LoadedStreamHolding::Kept))
+            .unwrap();
         runner
             .expose_port(
                 "camera",
@@ -2252,7 +2239,7 @@ mod tests {
         );
 
         let replaced = runner
-            .run_stream(project.run_request(true))
+            .run_stream(project.run_request(LoadedStreamHolding::Kept))
             .expect("the kept stream is replaced");
 
         assert!(replaced.replaced_the_kept_record);
@@ -2297,7 +2284,9 @@ mod tests {
         ));
         {
             let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
-            runner.run_stream(project.run_request(true)).unwrap();
+            runner
+                .run_stream(project.run_request(LoadedStreamHolding::Kept))
+                .unwrap();
             runner
                 .expose_port("camera", "source", "out1", OutputPortExposureLevel::Private)
                 .unwrap();
@@ -2409,7 +2398,7 @@ mod tests {
             serde_json::json!([]),
         ));
 
-        let refusal = refusal_of(runner.run_stream(project.run_request(true)));
+        let refusal = refusal_of(runner.run_stream(project.run_request(LoadedStreamHolding::Kept)));
 
         assert!(refusal.contains("the setup hook refuses"), "{refusal}");
         assert!(runner.names_of_the_loaded_streams().is_empty());
@@ -2434,7 +2423,7 @@ mod tests {
         let refusal = {
             let _refusing_writes =
                 KeptStreamsDirectoryRefusingWrites::from_now_on(&kept_streams_directory);
-            refusal_of(runner.run_stream(project.run_request(true)))
+            refusal_of(runner.run_stream(project.run_request(LoadedStreamHolding::Kept)))
         };
 
         assert!(refusal.contains("was not written"), "{refusal}");
@@ -2455,7 +2444,9 @@ mod tests {
             "camera",
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
         ));
-        let first = runner.run_stream(project.run_request(true)).unwrap();
+        let first = runner
+            .run_stream(project.run_request(LoadedStreamHolding::Kept))
+            .unwrap();
         let previous_record = records_in(state_directory.path())
             .read("camera")
             .unwrap()
@@ -2464,7 +2455,7 @@ mod tests {
             "camera",
         ));
 
-        let refusal = refusal_of(runner.run_stream(project.run_request(true)));
+        let refusal = refusal_of(runner.run_stream(project.run_request(LoadedStreamHolding::Kept)));
 
         assert!(refusal.contains("absent-port"), "{refusal}");
         assert!(!refusal.contains("did not re-load"), "{refusal}");
@@ -2501,7 +2492,9 @@ mod tests {
             "camera",
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
         ));
-        let first = runner.run_stream(project.run_request(true)).unwrap();
+        let first = runner
+            .run_stream(project.run_request(LoadedStreamHolding::Kept))
+            .unwrap();
         let previous_record = records_in(&kept_streams_directory)
             .read("camera")
             .unwrap()
@@ -2514,7 +2507,7 @@ mod tests {
         let refusal = {
             let _refusing_writes =
                 KeptStreamsDirectoryRefusingWrites::from_now_on(&kept_streams_directory);
-            refusal_of(runner.run_stream(project.run_request(true)))
+            refusal_of(runner.run_stream(project.run_request(LoadedStreamHolding::Kept)))
         };
 
         assert!(refusal.contains("was not written"), "{refusal}");

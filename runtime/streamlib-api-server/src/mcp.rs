@@ -807,7 +807,11 @@ impl LocalApiMcpServerHandler {
                     project_directory,
                     stream_function,
                     stream_name: name,
-                    keep,
+                    holding: if keep {
+                        streamlib::sdk::runtime::LoadedStreamHolding::Kept
+                    } else {
+                        streamlib::sdk::runtime::LoadedStreamHolding::Attached
+                    },
                 })?;
                 if let Some(streams_attached_to_this_connection) =
                     streams_attached_to_this_connection

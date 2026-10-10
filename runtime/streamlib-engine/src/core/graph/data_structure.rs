@@ -219,17 +219,29 @@ pub(crate) fn node_named_or_refused<'graph>(
         })
 }
 
+/// Names, comma-joined in the order given for a refusal that lists them —
+/// `when_empty` when there are none.
+pub(crate) fn names_listed_for_a_refusal(
+    names: impl IntoIterator<Item = impl AsRef<str>>,
+    when_empty: &str,
+) -> String {
+    let listed: Vec<String> = names
+        .into_iter()
+        .map(|name| name.as_ref().to_string())
+        .collect();
+    if listed.is_empty() {
+        when_empty.to_string()
+    } else {
+        listed.join(", ")
+    }
+}
+
 /// Port names, comma-joined in the order a node declares them for a refusal
 /// that lists them — `none` when it declares none.
 pub(crate) fn port_names_listed_for_a_refusal<'name>(
     port_names: impl IntoIterator<Item = &'name str>,
 ) -> String {
-    let listed: Vec<&str> = port_names.into_iter().collect();
-    if listed.is_empty() {
-        "none".to_string()
-    } else {
-        listed.join(", ")
-    }
+    names_listed_for_a_refusal(port_names, "none")
 }
 
 /// Node names, sorted and comma-joined for a refusal that lists what a graph
@@ -239,9 +251,5 @@ pub(crate) fn node_names_listed_for_a_refusal<'name>(
 ) -> String {
     let mut sorted: Vec<&str> = node_names.into_iter().collect();
     sorted.sort_unstable();
-    if sorted.is_empty() {
-        "no node".to_string()
-    } else {
-        sorted.join(", ")
-    }
+    names_listed_for_a_refusal(sorted, "no node")
 }

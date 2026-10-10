@@ -19,7 +19,8 @@ mod graph_tests;
 // top level
 pub use data_structure::{Graph, GraphState};
 pub(crate) use data_structure::{
-    node_named_or_refused, node_names_listed_for_a_refusal, port_names_listed_for_a_refusal,
+    names_listed_for_a_refusal, node_named_or_refused, node_names_listed_for_a_refusal,
+    port_names_listed_for_a_refusal,
 };
 pub use graph_readiness::ObservableGraphReadiness;
 pub use output_port_exposure::{

@@ -18,7 +18,7 @@ use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirector
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
 use super::{RuntimeShutdownEscalation, StreamEnvironment};
 use crate::core::context::GpuContext;
-use crate::core::graph::cast_exposed_name_to_url_safe;
+use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, Result};
@@ -833,20 +833,24 @@ impl Runner {
                 self.loaded_stream_names_listed_for_a_refusal()
             ))
         })?;
-        // Read under its own statement: the refusal lists the table, and the
-        // table's lock is not reentrant.
-        let loaded = self
-            .engine_resources_shared_by_every_stream
-            .streams_loaded_in_this_runtime
-            .lock()
-            .get(cast.as_ref())
-            .cloned();
-        loaded.ok_or_else(|| {
+        self.loaded_stream_of_the_cast_name(&cast).ok_or_else(|| {
             Error::NotFound(format!(
                 "no stream named `{stream_name}` is loaded in this runtime. Loaded: {}",
                 self.loaded_stream_names_listed_for_a_refusal()
             ))
         })
+    }
+
+    /// The loaded stream `stream_cast`, already cast, names.
+    pub(super) fn loaded_stream_of_the_cast_name(
+        &self,
+        stream_cast: &str,
+    ) -> Option<Arc<LoadedStreamInThisRuntime>> {
+        self.engine_resources_shared_by_every_stream
+            .streams_loaded_in_this_runtime
+            .lock()
+            .get(stream_cast)
+            .cloned()
     }
 
     /// Every loaded stream, read under one lock of the stream table.
@@ -1197,7 +1201,10 @@ impl Runner {
             return Err(refusal);
         }
         if let Some(first) = streams.get(stream.stream_name()) {
-            let refusal = a_stream_name_already_loaded_refusal(first);
+            let refusal = a_stream_name_already_loaded_refusal(
+                first,
+                LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE,
+            );
             drop(streams);
             tear_down_a_stream_that_never_entered_the_table(&stream);
             return Err(refusal);
@@ -1213,7 +1220,10 @@ impl Runner {
             .lock()
             .get(stream_name)
         {
-            Some(first) => Err(a_stream_name_already_loaded_refusal(first)),
+            Some(first) => Err(a_stream_name_already_loaded_refusal(
+                first,
+                LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE,
+            )),
             None => Ok(()),
         }
     }
@@ -1246,12 +1256,7 @@ impl Runner {
     }
 
     pub(super) fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
-        let names = self.names_of_the_loaded_streams();
-        if names.is_empty() {
-            "none".to_string()
-        } else {
-            names.join(", ")
-        }
+        names_listed_for_a_refusal(self.names_of_the_loaded_streams(), "none")
     }
 }
 
@@ -1284,11 +1289,19 @@ pub(super) fn the_cast_name_of_the_stream_a_load_names(
         })
 }
 
-fn a_stream_name_already_loaded_refusal(first: &LoadedStreamInThisRuntime) -> Error {
+/// How a load refused for a name already loaded is told to go on, in code or
+/// on the command line.
+const LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE: &str = "load this one under another \
+     name — `OptionsForLoadingOneStream::named`, or `--name` on the `tatolab` command line";
+
+/// The refusal of a load under the name `first` is loaded as, naming its
+/// project and ending with `how_to_load_this_one`.
+pub(super) fn a_stream_name_already_loaded_refusal(
+    first: &LoadedStreamInThisRuntime,
+    how_to_load_this_one: &str,
+) -> Error {
     Error::GraphError(format!(
-        "a stream named `{}` is already loaded in this runtime, from `{}`; load this one under \
-         another name — `OptionsForLoadingOneStream::named`, or `--name` on the `tatolab` \
-         command line",
+        "a stream named `{}` is already loaded in this runtime, from `{}`; {how_to_load_this_one}",
         first.stream_name(),
         first.project_directory().display()
     ))

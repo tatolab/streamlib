@@ -8,9 +8,9 @@
 //! and reads the one JSON document the bootstrap prints on its standard output.
 
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::processor_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
 use super::processor_interpreter_spawn_host::{
@@ -396,6 +396,7 @@ mod tests {
     use serial_test::serial;
     use std::ffi::OsStr;
     use std::path::PathBuf;
+    use std::time::Instant;
 
     const GOOD_TYPE: &str = "my_app.filters:BlurProcessor";
 
