@@ -1,15 +1,21 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The runtime unit the suite drives, its `tatolab nodes` table as the suite
-reads it, and the suite's own directory and venv.
+"""The runtime unit the suite drives, the machine directories a test keeps
+under its own root, and the suite's own directory and venv.
 
-The runtime unit is what `cargo xtask build-runtime` lays out:
-`bin/tatolabd`, `bin/tatolab` and `lib/tatolab/lend/`. It is found at
+The runtime unit is what `cargo xtask build-runtime
+--machine-directories-under-a-test-root` lays out: `bin/tatolabd`, `bin/tatolab`,
+`lib/tatolab/lend/` and, at its root, the marker file saying both binaries keep
+the machine runtime lock, the state directory and the runtime directory under
+`$TATOLAB_TEST_MACHINE_ROOT`. A unit without the marker is refused by name: its
+`tatolabd` would take this machine's real lock. It is found at
 `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else `<repository root>/target/tatolab-runtime`.
 
-The suite directory is the `--project` every fixture stream is started with by
-default, and the suite venv's interpreter is its `--interpreter`: a venv holding
+The suite directory is the project every `@stream` function of the suite is
+run from — `tatolab run <module>:<function>` with the suite directory as the
+working directory — so its `.venv` is the interpreter that compiles each stream
+and that every processor interpreter starts from: a venv holding
 `tatolab-stream`, the fixture streams' own dependencies and the test tooling,
 and no `tatolab.runtime` — a processor interpreter borrows that from the lend.
 """
@@ -17,7 +23,6 @@ and no `tatolab.runtime` — a processor interpreter borrows that from the lend.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -45,39 +50,75 @@ PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND = Path(
     "tatolab/runtime/_processor_interpreter_bootstrap.py"
 )
 
+#: The file `cargo xtask build-runtime --machine-directories-under-a-test-root`
+#: leaves at the unit's root once both binaries carry the feature.
+MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_MARKER_FILE_NAME = "machine-directories-under-a-test-root"
+
+#: The variable a test build of `tatolabd` and `tatolab` reads its machine root from.
+TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_MACHINE_ROOT"
+
+#: The local API socket's name in the runtime directory: one per machine.
+LOCAL_API_SOCKET_FILE_NAME = "local-api.sock"
+
 OBSERVATION_VERB_TIMEOUT_SECONDS = 60.0
-
-#: The header `tatolab nodes` prints over its rows.
-TATOLAB_NODES_TABLE_COLUMN_NAMES = (
-    "RUNTIME_NAME",
-    "RUNTIME_ID",
-    "LOCAL_API_SOCKET",
-    "PID",
-    "ALIVE?",
-    "HINT",
-)
-
-#: `tatolab nodes` pads its columns apart with two or more spaces; the last,
-#: HINT, may carry single spaces of its own.
-TATOLAB_NODES_TABLE_COLUMN_SEPARATOR = re.compile(r" {2,}")
-
-#: What `tatolab nodes` prints over an empty registry, naming the registry directory.
-TATOLAB_NODES_EMPTY_REGISTRY_MESSAGE = re.compile(
-    r"No running nodes found in (?P<node_registry_directory>.+)\."
-)
-
-#: The registry's directory inside the runtime directory.
-NODE_REGISTRY_DIRECTORY_NAME = "nodes"
 
 
 @dataclass(frozen=True)
 class RuntimeUnitUnderTest:
-    """The runtime unit's two binaries and its lend, each checked present."""
+    """The runtime unit's two binaries and its lend, each checked present, and its marker."""
 
     runtime_unit_directory: Path
     tatolabd_executable: Path
     tatolab_executable: Path
     lend_directory: Path
+
+
+@dataclass(frozen=True)
+class MachineDirectoriesUnderATestRoot:
+    """The machine directories a test build keeps under one root, each by its path.
+
+    The layout is the client contract's `TestMachineRoot`: the runtime
+    directory `R/run/`, the state directory `R/state/`, and on macOS the lock
+    file `R/lock/runtime.lock`; on Linux the lock is the abstract socket
+    `tatolab-runtime:R`, which lives with no file.
+    """
+
+    root: Path
+
+    @property
+    def runtime_directory(self) -> Path:
+        """`R/run/`: the iceoryx2 domain, the surface-sharing socket and the local API socket."""
+        return self.root / "run"
+
+    @property
+    def local_api_socket_path(self) -> Path:
+        """`R/run/local-api.sock`, the one socket the machine's runtime serves its local API on."""
+        return self.runtime_directory / LOCAL_API_SOCKET_FILE_NAME
+
+    @property
+    def state_directory(self) -> Path:
+        """`R/state/`: the kept streams and the runtime's own log."""
+        return self.root / "state"
+
+    @property
+    def kept_streams_directory(self) -> Path:
+        """`R/state/streams/`, one record per kept stream."""
+        return self.state_directory / "streams"
+
+    @property
+    def runtime_log_directory(self) -> Path:
+        """`R/state/logs/`, the runtime's own JSONL log."""
+        return self.state_directory / "logs"
+
+    @property
+    def machine_runtime_lock_directory(self) -> Path:
+        """`R/lock/`, the directory the macOS lock file sits in."""
+        return self.root / "lock"
+
+    @property
+    def machine_runtime_lock_file(self) -> Path:
+        """`R/lock/runtime.lock`, the macOS lock file a test build expects owned by this user."""
+        return self.machine_runtime_lock_directory / "runtime.lock"
 
 
 def runtime_unit_directory_named_by_the_environment() -> Path:
@@ -95,6 +136,7 @@ def locate_the_runtime_unit() -> "RuntimeUnitUnderTest | str":
         tatolab_executable=runtime_unit_directory / "bin" / "tatolab",
         lend_directory=runtime_unit_directory / LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT,
     )
+    build_command = "cargo xtask build-runtime --machine-directories-under-a-test-root"
     required_files = (
         runtime_unit.tatolabd_executable,
         runtime_unit.tatolab_executable,
@@ -105,12 +147,22 @@ def locate_the_runtime_unit() -> "RuntimeUnitUnderTest | str":
         return (
             f"no runtime unit at {runtime_unit_directory} (set "
             f"{RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE} to name another): missing "
-            f"{', '.join(missing_files)}. Build one with `cargo xtask build-runtime`."
+            f"{', '.join(missing_files)}. Build one with `{build_command}`."
+        )
+    marker = runtime_unit_directory / MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_MARKER_FILE_NAME
+    if not marker.is_file():
+        return (
+            f"the runtime unit at {runtime_unit_directory} carries no "
+            f"`{MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_MARKER_FILE_NAME}` marker, so its "
+            f"binaries were built without that feature and would take this machine's real "
+            f"runtime lock, state directory and local API socket. The suite runs only a unit "
+            f"whose directories move under {TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE}: build one "
+            f"with `{build_command}`."
         )
     return runtime_unit
 
 
-def run_tatolab_observation_verb_in_environment(
+def run_tatolab_verb_in_environment(
     runtime_unit: RuntimeUnitUnderTest,
     environment: "dict[str, str]",
     *verb_arguments: str,
@@ -125,75 +177,3 @@ def run_tatolab_observation_verb_in_environment(
         check=False,
         env=environment,
     )
-
-
-@dataclass(frozen=True)
-class TatolabNodesTableRow:
-    """One row of `tatolab nodes`: a registered runtime, and whether its local API answered."""
-
-    runtime_name: str
-    runtime_id: str
-    local_api_socket_path: Path
-    pid: int
-    local_api_answered: bool
-    hint: str
-
-
-def rows_of_the_tatolab_nodes_table(tatolab_nodes_output: str) -> "list[TatolabNodesTableRow]":
-    """The rows `tatolab nodes` printed; none for its empty-registry message."""
-    lines = tatolab_nodes_output.splitlines()
-    if not lines or TATOLAB_NODES_EMPTY_REGISTRY_MESSAGE.fullmatch(lines[0]):
-        return []
-    header = TATOLAB_NODES_TABLE_COLUMN_SEPARATOR.split(lines[0].strip())
-    assert tuple(header) == TATOLAB_NODES_TABLE_COLUMN_NAMES, (
-        f"`tatolab nodes` printed neither its table nor its empty-registry message:\n"
-        f"{tatolab_nodes_output}"
-    )
-    rows: "list[TatolabNodesTableRow]" = []
-    for line in lines[1:]:
-        columns = TATOLAB_NODES_TABLE_COLUMN_SEPARATOR.split(
-            line.strip(), len(TATOLAB_NODES_TABLE_COLUMN_NAMES) - 1
-        )
-        if len(columns) == len(TATOLAB_NODES_TABLE_COLUMN_NAMES) - 1:
-            columns.append("")
-        assert len(columns) == len(TATOLAB_NODES_TABLE_COLUMN_NAMES), (
-            f"`tatolab nodes` printed a row this table does not hold: {line!r}"
-        )
-        runtime_name, runtime_id, local_api_socket_path, pid, alive, hint = columns
-        rows.append(
-            TatolabNodesTableRow(
-                runtime_name=runtime_name,
-                runtime_id=runtime_id,
-                local_api_socket_path=Path(local_api_socket_path),
-                pid=int(pid),
-                local_api_answered=alive == "yes",
-                hint=hint,
-            )
-        )
-    return rows
-
-
-def runtime_directory_tatolab_nodes_read(tatolab_nodes_output: str) -> Path:
-    """The runtime directory `tatolab nodes` read: the parent of the registry
-    directory its empty-registry message names, else the one directory every
-    listed local API socket sits in."""
-    empty_registry_message = TATOLAB_NODES_EMPTY_REGISTRY_MESSAGE.fullmatch(
-        tatolab_nodes_output.strip()
-    )
-    if empty_registry_message is not None:
-        node_registry_directory = Path(empty_registry_message["node_registry_directory"])
-        assert node_registry_directory.name == NODE_REGISTRY_DIRECTORY_NAME, (
-            f"`tatolab nodes` named {node_registry_directory} as its registry, which is not a "
-            f"runtime directory's `{NODE_REGISTRY_DIRECTORY_NAME}/`"
-        )
-        return node_registry_directory.parent
-    local_api_socket_directories = {
-        row.local_api_socket_path.parent
-        for row in rows_of_the_tatolab_nodes_table(tatolab_nodes_output)
-    }
-    assert len(local_api_socket_directories) == 1, (
-        f"`tatolab nodes` listed local API sockets in {sorted(map(str, local_api_socket_directories))}, "
-        f"not in one runtime directory:\n{tatolab_nodes_output}"
-    )
-    (runtime_directory,) = local_api_socket_directories
-    return runtime_directory

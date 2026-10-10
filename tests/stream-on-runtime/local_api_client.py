@@ -1,13 +1,15 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A client of one running `tatolabd`'s local API, from the suite venv alone.
+"""A client of the machine's runtime's local API, from the suite venv alone.
 
 Nothing here imports `tatolab.runtime`: the plain HTTP routes (`/health`,
 `/api/graph`, `/api/registry`) are read with the standard library over the Unix
 socket, and MCP is the official MCP Python SDK's streamable-HTTP client over the
-same socket. A graph's nodes carry their state at `components["state"]`, its
-links at `state`.
+same socket. One runtime holds every stream loaded into it, so a route or wait
+about one stream's graph names that stream; `/api/graph` without one answers
+`{"runtime_name", "streams": [...]}`. A graph's nodes carry their state at
+`components["state"]`, its links at `state`.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import http.client
 import json
 import socket
 import time
+import urllib.parse
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any, TypeVar
@@ -72,7 +75,7 @@ class _HttpConnectionOverUnixSocket(http.client.HTTPConnection):
 
 
 class LocalApiClient:
-    """One `tatolabd`'s local API, reached at its Unix socket."""
+    """The machine's runtime's local API, reached at its Unix socket."""
 
     def __init__(self, local_api_socket_path: Path) -> None:
         self.local_api_socket_path = Path(local_api_socket_path)
@@ -100,9 +103,16 @@ class LocalApiClient:
         """`GET /health`: `ok` from a local API that answers."""
         return self.get_text("/health")
 
-    def graph(self) -> "dict[str, Any]":
-        """`GET /api/graph`: the live graph, its nodes, links, exposures and runtime name."""
-        return self.get_json("/api/graph")
+    def graph(self, stream: "str | None" = None) -> "dict[str, Any]":
+        """`GET /api/graph`: the stream's live graph — its nodes, links, exposures
+        and the runtime's name — or, with no stream, `{"runtime_name", "streams"}`."""
+        if stream is None:
+            return self.get_json("/api/graph")
+        return self.get_json(f"/api/graph?stream={urllib.parse.quote(stream, safe='')}")
+
+    def list_streams(self) -> "list[dict[str, Any]]":
+        """MCP `list_streams`: each stream the runtime holds, `{name, state, project_directory, node_count}`."""
+        return self.call_tool("list_streams")["streams"]
 
     def registry(self) -> Any:
         """`GET /api/registry`: the node catalog this runtime can add."""
@@ -157,10 +167,11 @@ class LocalApiClient:
     def await_every_node_running(
         self,
         *,
+        stream: str,
         expected_node_names: "Iterable[str] | None" = None,
         timeout: float = EVERY_NODE_RUNNING_TIMEOUT_SECONDS,
     ) -> "dict[str, Any]":
-        """Poll `/api/graph` until every node — and each of `expected_node_names` — is Running.
+        """Poll the stream's graph until every node — and each of `expected_node_names` — is Running.
 
         Returns the graph that satisfied it; past the timeout raises naming each
         node's last state.
@@ -169,7 +180,7 @@ class LocalApiClient:
         deadline = time.monotonic() + timeout
         node_states: "dict[str, Any]" = {}
         while True:
-            graph = self.graph()
+            graph = self.graph(stream)
             node_states = {
                 node["name"]: node.get("components", {}).get("state") for node in graph["nodes"]
             }
@@ -187,9 +198,9 @@ class LocalApiClient:
             time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
 
     def await_every_node_past_setup(
-        self, *, timeout: float = EVERY_NODE_RUNNING_TIMEOUT_SECONDS
+        self, *, stream: str, timeout: float = EVERY_NODE_RUNNING_TIMEOUT_SECONDS
     ) -> "dict[str, Any]":
-        """Poll `/api/graph` until no node is still before setup, and return each node's state.
+        """Poll the stream's graph until no node is still before setup, and return each node's state.
 
         `Running` is a setup that returned and `Error` one that refused, so a
         caller asserting a refusal reads it here without waiting out a timeout
@@ -201,7 +212,7 @@ class LocalApiClient:
         while True:
             node_states = {
                 node["name"]: node.get("components", {}).get("state")
-                for node in self.graph()["nodes"]
+                for node in self.graph(stream)["nodes"]
             }
             if node_states and not any(
                 state in NODE_STATES_BEFORE_SETUP_COMPLETED for state in node_states.values()
@@ -214,9 +225,14 @@ class LocalApiClient:
             time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
 
     def await_link_state(
-        self, link_id: str, wanted_state: str, *, timeout: float = LINK_STATE_TIMEOUT_SECONDS
+        self,
+        link_id: str,
+        wanted_state: str,
+        *,
+        stream: str,
+        timeout: float = LINK_STATE_TIMEOUT_SECONDS,
     ) -> str:
-        """Poll `/api/graph` until the link reaches `wanted_state`, and report what it reached.
+        """Poll the stream's graph until the link reaches `wanted_state`, and report what it reached.
 
         A link that reaches `error` is returned as `error (<reason>)`, so the
         caller's assertion carries the refusal; a timeout returns `still <state>`.
@@ -224,7 +240,9 @@ class LocalApiClient:
         deadline = time.monotonic() + timeout
         link: "dict[str, Any] | None" = None
         while time.monotonic() < deadline:
-            link = next((each for each in self.graph()["links"] if each["id"] == link_id), None)
+            link = next(
+                (each for each in self.graph(stream)["links"] if each["id"] == link_id), None
+            )
             if link is not None and link["state"] in (wanted_state, LINK_ERROR_STATE):
                 return link["state"] + (
                     f" ({link['error_reason']})" if link.get("error_reason") else ""

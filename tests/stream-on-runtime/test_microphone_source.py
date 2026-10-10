@@ -22,7 +22,7 @@ from collections.abc import Callable
 import pytest
 
 import tatolab.stream
-from conftest import StreamGraphLoadOutcome
+from conftest import StreamRunWithNoVulkanDriverOutcome
 from microphone_source_probes import AudioBlockProbe
 from runtime_process_under_test import RuntimeProcessUnderTest
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
@@ -61,13 +61,13 @@ def microphone_source_naming_an_unopenable_device(stream_builder: StreamBuilder)
 
 
 def test_node_name_defaults_to_the_type_name(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     graph = compile_stream_to_graph(one_microphone_source_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == [MICROPHONE_NODE_NAME]
 
-    outcome = load_stream_graph_on_tatolabd(graph)
-    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
 # ---- the native block in a real graph (GPU) --------------------------------

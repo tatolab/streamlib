@@ -3,8 +3,8 @@
 
 """The four hardware video codec built-ins, built-in class to decoded frame.
 
-The load tests need no device: `tatolabd` loads the graph and is then refused
-at the GPU. The graph tests start the engine and need a hardware encoder and
+The load tests need no device: `tatolabd` loads the graph and its start is
+then refused at the GPU. The graph tests start the engine and need a hardware encoder and
 decoder — Vulkan Video queues on Linux, VideoToolbox
 on macOS — so they carry `requires_gpu` like every other graph test here and
 run nowhere in CI.
@@ -25,7 +25,8 @@ from collections.abc import Callable
 import pytest
 
 import tatolab.stream
-from conftest import StreamGraphLoadOutcome
+from block_wiring_streams import h264_round_trip_into_a_window, h265_round_trip_into_a_window
+from conftest import StreamRunWithNoVulkanDriverOutcome
 from runtime_process_under_test import RuntimeProcessUnderTest
 from tatolab.stream import (
     H264Decoder,
@@ -69,30 +70,6 @@ CODED_EXTENT_OF_THE_320_BY_180_PATTERN = (320, 192)
 ANNEX_B_START_CODES = ([0, 0, 0, 1], [0, 0, 1])
 
 FOUR_CODEC_MARKERS = [H264Encoder, H264Decoder, H265Encoder, H265Decoder]
-
-
-def _add_a_codec_round_trip_into_a_window(
-    stream_builder: StreamBuilder,
-    encoder_class: "type[H264Encoder] | type[H265Encoder]",
-    decoder_class: "type[H264Decoder] | type[H265Decoder]",
-) -> None:
-    pattern = stream_builder.add(tatolab.stream.TestPatternSource)
-    encoder = stream_builder.add(encoder_class)
-    decoder = stream_builder.add(decoder_class)
-    window = stream_builder.add(tatolab.stream.DisplayWindow)
-    stream_builder.connect(pattern.output("video"), encoder.input("video"))
-    stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-    stream_builder.connect(decoder.output("video"), window.input("video"))
-
-
-@stream
-def h264_round_trip_into_a_window(stream_builder: StreamBuilder) -> None:
-    _add_a_codec_round_trip_into_a_window(stream_builder, H264Encoder, H264Decoder)
-
-
-@stream
-def h265_round_trip_into_a_window(stream_builder: StreamBuilder) -> None:
-    _add_a_codec_round_trip_into_a_window(stream_builder, H265Encoder, H265Decoder)
 
 
 @stream
@@ -205,7 +182,7 @@ CODEC_ROUND_TRIPS = {
 
 @pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
 def test_node_name_defaults_to_the_type_name(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]", marker_class
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]", marker_class
 ):
     graph = compile_stream_to_graph(ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS[marker_class])
     (codec_node,) = [
@@ -213,20 +190,20 @@ def test_node_name_defaults_to_the_type_name(
     ]
     assert codec_node["name"] == marker_class.__name__.lower()
 
-    outcome = load_stream_graph_on_tatolabd(graph)
-    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 def test_the_round_trip_wires_without_an_adapter(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]", codec
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]", codec
 ):
     """Pattern into encoder, encoder into decoder, decoder into window — the
     port names compose as published, which is what makes four `stream_builder.add`
     calls and three `stream_builder.connect` calls the whole of a codec round trip.
     The builder checks no port name, so the proof is the engine's load."""
-    outcome = load_stream_graph_on_tatolabd(CODEC_ROUND_TRIPS[codec]["stream"])
-    assert outcome.loaded and outcome.loaded_node_count == 4, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(CODEC_ROUND_TRIPS[codec]["stream"])
+    assert outcome.loaded and outcome.loaded_node_count == 4, outcome.tatolab_run_stderr_text
 
 
 # ---- the round trip in a real graph (GPU) ----------------------------------

@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import PrivateRuntimeDirectories, environment_reaching_no_vulkan_driver
+from conftest import TatolabdUnderTest, environment_reaching_no_vulkan_driver
 from helper_process_observation import (
     a_process_is_gone_within,
     every_process_still_alive_after,
@@ -43,10 +43,9 @@ from interpreter_lifecycle_processors import (
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
 from runtime_process_under_test import (
     ENGINE_STARTED_LOG_LINE,
-    STREAM_LOADED_LOG_LINE_PATTERN,
     STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT,
+    STREAM_START_BEGAN_LOG_LINE_PATTERN,
     RuntimeProcessUnderTest,
-    registry_entry_paths_in,
 )
 from tatolab.stream import StreamBuilder, stream
 
@@ -72,7 +71,7 @@ CLEAN_EXIT_BUDGET_AFTER_OUTPUT_ENDS_SECONDS = 10.0
 # that waits on the survivor's hold of a helper's output cannot pass.
 EXIT_BUDGET_WHILE_A_SURVIVOR_SLEEPS_SECONDS = 10.0
 
-REGISTRY_POLL_INTERVAL_SECONDS = 0.01
+STREAM_LISTING_POLL_INTERVAL_SECONDS = 0.01
 
 #: How long the describing interpreter of a load given up to an interrupt may outlive it.
 DESCRIBING_INTERPRETER_OUTLIVING_AN_INTERRUPTED_LOAD_BUDGET_SECONDS = 5.0
@@ -361,19 +360,19 @@ def test_ctrl_c_while_a_helper_is_still_importing_exits_promptly(start_tatolabd:
 
 
 def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_starts(
-    start_tatolabd: StartTatolabd,
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
     held_node_module: NodeModuleWhoseDescribeHoldsTheLoad,
-    private_runtime_directories: PrivateRuntimeDirectories,
     tmp_path: Path,
 ):
     """#2657: a stop during a load never leaves the load succeeding on a stopped runtime.
 
-    The describe of the stream's one node parks the load. A Ctrl-C then ends
-    `tatolabd` cleanly — the load given up, not reported as loaded; no engine
-    started; no registry entry published; and no processor interpreter left
-    behind, the describing one included.
+    The describe of the stream's one node parks the load `tatolab run` asked
+    for. A Ctrl-C to `tatolabd` then ends it cleanly — the load given up, not
+    reported as loaded; no engine started; the stream never listed by the
+    runtime; and no processor interpreter left behind, the describing one
+    included.
     """
-    tatolabd = start_tatolabd(
+    tatolabd = start_tatolabd_running_stream(
         {
             "stream": "held",
             "nodes": [{"name": "held", "type": f"{held_node_module.name}:LoadedFrameRelay", "config": {}}],
@@ -381,20 +380,22 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
         project_directory=held_node_module.project_directory,
         extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
     )
-    registry_entries_ever_seen: "set[Path]" = set()
+    local_api = tatolabd.local_api_client()
+    streams_ever_listed: "list[dict[str, object]]" = []
 
-    def record_every_registry_entry_until_tatolabd_exits() -> None:
-        while True:
-            exited = tatolabd.process.poll() is not None
-            registry_entries_ever_seen.update(
-                registry_entry_paths_in(private_runtime_directories.streamlib_runtime_directory)
-            )
-            if exited:
+    def record_every_stream_listed_until_tatolabd_stops_answering() -> None:
+        while tatolabd.process.poll() is None:
+            try:
+                streams_ever_listed.extend(local_api.list_streams())
+            except Exception:
+                # The local API stops answering as tatolabd shuts down.
                 return
-            time.sleep(REGISTRY_POLL_INTERVAL_SECONDS)
+            time.sleep(STREAM_LISTING_POLL_INTERVAL_SECONDS)
 
-    registry_watcher = threading.Thread(target=record_every_registry_entry_until_tatolabd_exits, daemon=True)
-    registry_watcher.start()
+    stream_listing_watcher = threading.Thread(
+        target=record_every_stream_listed_until_tatolabd_stops_answering, daemon=True
+    )
+    stream_listing_watcher.start()
     assert held_node_module.wait_until_the_load_reaches_the_import(), (
         f"the load never reached the describe:\n{tatolabd.recent_stderr()}"
     )
@@ -402,20 +403,19 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
     assert describing_interpreter_process_id is not None
     tatolabd.interrupt()
     exit_status = tatolabd.await_exit(timeout=15)
-    registry_watcher.join(timeout=5)
+    stream_listing_watcher.join(timeout=5)
     stderr_text = tatolabd.stderr_text
 
     assert exit_status == 0, tatolabd.recent_stderr()
     assert STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT in stderr_text, tatolabd.recent_stderr()
     assert tatolabd.refusal() is None, tatolabd.recent_stderr()
-    assert STREAM_LOADED_LOG_LINE_PATTERN.search(stderr_text) is None, (
-        f"the load reported the stream loaded after the interrupt:\n{tatolabd.recent_stderr()}"
+    assert STREAM_START_BEGAN_LOG_LINE_PATTERN.search(stderr_text) is None, (
+        f"the stream began to start after the interrupt:\n{tatolabd.recent_stderr()}"
     )
     assert ENGINE_STARTED_LOG_LINE not in stderr_text, tatolabd.recent_stderr()
-    assert not registry_watcher.is_alive()
-    # The runtime directory is this test's own, so any entry in it at any moment is this tatolabd's.
-    assert registry_entries_ever_seen == set(), (
-        f"tatolabd published {sorted(registry_entries_ever_seen)} while the load was being given up"
+    assert not stream_listing_watcher.is_alive()
+    assert streams_ever_listed == [], (
+        f"tatolabd listed {streams_ever_listed} while the load was being given up"
     )
     assert helper_process_ids_started_in(stderr_text) == [], tatolabd.recent_stderr()
     assert a_process_is_gone_within(

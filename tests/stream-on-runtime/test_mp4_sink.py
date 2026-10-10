@@ -29,7 +29,11 @@ from pathlib import Path
 import pytest
 
 import tatolab.stream
-from conftest import StreamGraphLoadOutcome
+from block_wiring_streams import (
+    NEVER_OPENED_RECORDING_PATH,
+    two_microphone_encoder_pairs_into_one_mp4_sink,
+)
+from conftest import StreamRunWithNoVulkanDriverOutcome
 from opus_blocks_probes import StereoToneSource
 from runtime_process_under_test import RuntimeProcessUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT
@@ -57,10 +61,6 @@ WIDEST_CREDIBLE_DISAGREEMENT_BETWEEN_THE_TRACKS_SECONDS = 1.0
 # clock, so the last stamp it wrote can name an instant a little past now.
 SLACK_OVER_THE_OBSERVED_RUN_SECONDS = 2.0
 
-# The sink opens its file at `setup()`, which a graph loaded and never run does
-# not reach, so nothing is ever written here.
-NEVER_OPENED_RECORDING_PATH = "/nonexistent-streamlib-test/never-opened.mp4"
-
 RECORDER_NODE_NAME = "recorder"
 
 # What each recorded pair is called in the graph. Two entries, because the
@@ -71,16 +71,6 @@ RECORDED_PAIR_NAMES = ("first", "second")
 @stream
 def one_mp4_sink_left_unnamed(stream_builder: StreamBuilder) -> None:
     stream_builder.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
-
-
-@stream
-def two_microphone_encoder_pairs_into_one_mp4_sink(stream_builder: StreamBuilder) -> None:
-    sink = stream_builder.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
-    for _ in range(2):
-        microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
-        encoder = stream_builder.add(tatolab.stream.OpusEncoder)
-        stream_builder.connect(microphone.output("audio"), encoder.input("audio"))
-        stream_builder.connect(encoder.output("encoded_audio"), sink.input("tracks"))
 
 
 @stream
@@ -188,17 +178,17 @@ def await_recording_with_at_least(
 
 
 def test_node_name_defaults_to_the_type_name(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     graph = compile_stream_to_graph(one_mp4_sink_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == ["mp4sink"]
 
-    outcome = load_stream_graph_on_tatolabd(graph)
-    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
 def test_two_encoders_wire_into_the_one_input_without_an_adapter(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     """Two producers into `tracks`, and no fan-in machinery between them.
 
@@ -208,8 +198,8 @@ def test_two_encoders_wire_into_the_one_input_without_an_adapter(
     The builder checks no port names, so the engine accepting the load is the
     proof.
     """
-    outcome = load_stream_graph_on_tatolabd(two_microphone_encoder_pairs_into_one_mp4_sink)
-    assert outcome.loaded and outcome.loaded_node_count == 5, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(two_microphone_encoder_pairs_into_one_mp4_sink)
+    assert outcome.loaded and outcome.loaded_node_count == 5, outcome.tatolab_run_stderr_text
 
 
 # ---- a real recording (GPU) ------------------------------------------------

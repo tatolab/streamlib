@@ -40,7 +40,7 @@ from typing import Literal
 import pytest
 
 import tatolab.stream
-from conftest import StreamGraphLoadOutcome
+from conftest import StreamRunWithNoVulkanDriverOutcome
 from runtime_process_under_test import RuntimeProcessUnderTest
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
@@ -417,13 +417,13 @@ def a_test_pattern_into_a_loopback_camera_read_back_as_yuyv(
 
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 def test_node_name_defaults_to_the_type_name(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     graph = compile_stream_to_graph(a_virtual_camera_sink_alone)
     assert [node["name"] for node in graph["nodes"]] == ["virtualcamerasink"]
 
-    outcome = load_stream_graph_on_tatolabd(graph)
-    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
 # ---- without the permission: a refusal by name, and the runtime keeps running

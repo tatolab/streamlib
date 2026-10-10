@@ -15,8 +15,9 @@ varied with how the user named their stream to `tatolab run` would be three
 processors wearing one name.
 
 Every arm is observed at the load, which is where identity is derived — before
-the engine would initialize a GPU context. Each runs with no Vulkan driver
-reachable, so a stream that loads is refused at the GPU, before any device opens.
+the engine would initialize a GPU context. Each runs on a `tatolabd` that
+reaches no Vulkan driver, so a stream that loads is refused at the GPU, before
+any device opens, and the identities are read off `tatolabd`'s own log.
 """
 
 from __future__ import annotations
@@ -24,13 +25,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
-from conftest import NO_VULKAN_DRIVER_REFUSAL, StreamGraphLoadOutcome, environment_reaching_no_vulkan_driver
-from identity_stable_processor import IdentityStableProcessor
-from runtime_process_under_test import STREAM_LOADED_LOG_LINE_PATTERN, RuntimeProcessUnderTest
-from second_identity_stable_processor import SecondIdentityStableProcessor
-from tatolab.stream import StreamBuilder, stream
+from conftest import NO_VULKAN_DRIVER_REFUSAL, StreamRunWithNoVulkanDriverOutcome
+from processor_identity_streams import two_identity_stable_processors
+from stream_runs_on_tatolabd import TatolabRunOfAProject
 
 # The engine's own registration record. Asserting on `__module__` from the test
 # would agree with a derivation that never ran.
@@ -111,15 +109,7 @@ class ZeroArgumentProcess:
 '''
 
 MakeTatolabProject = Callable[..., Path]
-RunTatolab = Callable[..., Any]
-StartTatolab = Callable[..., RuntimeProcessUnderTest]
-
-
-@stream
-def two_identity_stable_processors(stream_builder: StreamBuilder) -> None:
-    """Both processors, in one stream."""
-    stream_builder.add(IdentityStableProcessor)
-    stream_builder.add(SecondIdentityStableProcessor)
+RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
 
 def identities_the_engine_logged(stderr_text: str) -> "list[str]":
@@ -135,78 +125,83 @@ def identities_the_engine_logged(stderr_text: str) -> "list[str]":
 
 def run_the_stream_entry(
     make_tatolab_project: MakeTatolabProject,
-    run_tatolab: RunTatolab,
-    tmp_path: Path,
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
     files: "dict[str, str]",
-):
-    """`tatolab run` a project holding `files`, with no Vulkan driver reachable."""
+) -> StreamRunWithNoVulkanDriverOutcome:
+    """`tatolab run` a project holding `files`, on a `tatolabd` that reaches no Vulkan driver."""
     project_directory = make_tatolab_project(files)
-    return run_tatolab(
-        "run",
-        working_directory=project_directory,
-        extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
+    return run_stream_on_tatolabd_with_no_vulkan_driver(
+        TatolabRunOfAProject(working_directory=project_directory)
     )
 
 
 def test_a_processor_declared_in_the_entry_file_is_refused(
-    make_tatolab_project: MakeTatolabProject, run_tatolab: RunTatolab, tmp_path: Path
+    make_tatolab_project: MakeTatolabProject,
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     """`__main__:Type` names the child's own entry file, not the user's class."""
-    finished = run_the_stream_entry(
-        make_tatolab_project, run_tatolab, tmp_path, {"stream.py": ENTRY_FILE_PROCESSOR_STREAM_SOURCE}
+    run_outcome = run_the_stream_entry(
+        make_tatolab_project,
+        run_stream_on_tatolabd_with_no_vulkan_driver,
+        {"stream.py": ENTRY_FILE_PROCESSOR_STREAM_SOURCE},
     )
+    refusal = run_outcome.refusal or ""
 
-    assert finished.returncode != 0, finished.stderr
-    assert "__main__:EntryFileProcessor" in finished.stderr, (
-        f"the refusal must show the unimportable identity:\n{finished.stderr}"
+    assert run_outcome.tatolab_run_exit_status != 0, run_outcome.tatolab_run_stderr_text
+    assert "__main__:EntryFileProcessor" in refusal, (
+        f"the refusal must show the unimportable identity:\n{run_outcome.tatolab_run_stderr_text}"
     )
-    assert "importable module" in finished.stderr, (
-        f"the refusal must name the fix, not just the problem:\n{finished.stderr}"
+    assert "importable module" in refusal, (
+        f"the refusal must name the fix, not just the problem:\n{run_outcome.tatolab_run_stderr_text}"
     )
-    assert STREAM_LOADED_LOG_LINE_PATTERN.search(finished.stderr) is None, finished.stderr
+    assert not run_outcome.loaded, run_outcome.tatolabd_stderr_text_during_the_run
 
 
 def test_a_processor_declared_inside_a_function_is_refused(
-    make_tatolab_project: MakeTatolabProject, run_tatolab: RunTatolab, tmp_path: Path
+    make_tatolab_project: MakeTatolabProject,
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     """`<locals>` marks a class that exists only for the duration of a call."""
-    finished = run_the_stream_entry(
-        make_tatolab_project, run_tatolab, tmp_path, {"stream.py": FUNCTION_LOCAL_PROCESSOR_STREAM_SOURCE}
+    run_outcome = run_the_stream_entry(
+        make_tatolab_project,
+        run_stream_on_tatolabd_with_no_vulkan_driver,
+        {"stream.py": FUNCTION_LOCAL_PROCESSOR_STREAM_SOURCE},
     )
+    refusal = run_outcome.refusal or ""
 
-    assert finished.returncode != 0, finished.stderr
-    assert "<locals>" in finished.stderr, (
-        f"the refusal must name what makes the class unimportable:\n{finished.stderr}"
+    assert run_outcome.tatolab_run_exit_status != 0, run_outcome.tatolab_run_stderr_text
+    assert "<locals>" in refusal, (
+        f"the refusal must name what makes the class unimportable:\n{run_outcome.tatolab_run_stderr_text}"
     )
-    assert "config=" in finished.stderr, (
-        f"the refusal must name how to pass what the closure captured:\n{finished.stderr}"
+    assert "config=" in refusal, (
+        f"the refusal must name how to pass what the closure captured:\n"
+        f"{run_outcome.tatolab_run_stderr_text}"
     )
 
 
 def test_the_same_class_in_an_importable_module_is_accepted(
-    make_tatolab_project: MakeTatolabProject, run_tatolab: RunTatolab, tmp_path: Path
+    make_tatolab_project: MakeTatolabProject,
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     """The fix the refusal names is the whole difference — one import line."""
-    finished = run_the_stream_entry(
+    run_outcome = run_the_stream_entry(
         make_tatolab_project,
-        run_tatolab,
-        tmp_path,
+        run_stream_on_tatolabd_with_no_vulkan_driver,
         {
             "stream.py": IMPORTABLE_PROCESSOR_STREAM_SOURCE,
             "zero_argument_process_processor.py": ZERO_ARGUMENT_PROCESS_PROCESSOR_SOURCE,
         },
     )
 
-    assert STREAM_LOADED_LOG_LINE_PATTERN.search(finished.stderr) is not None, (
-        f"an importable class must not be refused:\n{finished.stderr}"
+    assert run_outcome.loaded, (
+        f"an importable class must not be refused:\n{run_outcome.tatolab_run_stderr_text}"
     )
-    assert NO_VULKAN_DRIVER_REFUSAL in finished.stderr, finished.stderr
+    assert NO_VULKAN_DRIVER_REFUSAL in (run_outcome.refusal or ""), run_outcome.tatolab_run_stderr_text
 
 
 def identity_under(
     make_tatolab_project: MakeTatolabProject,
-    start_tatolab: StartTatolab,
-    tmp_path: Path,
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
     *run_arguments: str,
 ) -> str:
     """The identity the engine derived for the one class, the stream named to
@@ -218,30 +213,32 @@ def identity_under(
         },
         directory_name=re.sub(r"[^A-Za-z0-9_.-]", "-", "-".join(["project", *run_arguments])),
     )
-    tatolab = start_tatolab(
-        "run",
-        *run_arguments,
-        working_directory=project_directory,
-        extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
+        TatolabRunOfAProject(working_directory=project_directory, tatolab_run_arguments=run_arguments)
     )
-    tatolab.await_stream_loaded()
-    tatolab.await_exit()
-    identities = identities_the_engine_logged(tatolab.stderr_text)
-    assert identities, f"the engine logged no derived identity:\n{tatolab.recent_stderr()}"
+    assert run_outcome.loaded, run_outcome.tatolab_run_stderr_text
+    identities = identities_the_engine_logged(run_outcome.tatolabd_stderr_text_during_the_run)
+    assert identities, (
+        f"the engine logged no derived identity:\n{run_outcome.tatolabd_stderr_text_during_the_run}"
+    )
     return identities[0]
 
 
 def test_a_class_run_as_a_script_identifies_by_its_module(
-    make_tatolab_project: MakeTatolabProject, start_tatolab: StartTatolab, tmp_path: Path
+    make_tatolab_project: MakeTatolabProject,
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     assert (
-        identity_under(make_tatolab_project, start_tatolab, tmp_path, "identity_stability.py")
+        identity_under(
+            make_tatolab_project, run_stream_on_tatolabd_with_no_vulkan_driver, "identity_stability.py"
+        )
         == "identity_stable_processor:IdentityStableProcessor"
     )
 
 
 def test_the_launch_arrangement_never_changes_the_identity(
-    make_tatolab_project: MakeTatolabProject, start_tatolab: StartTatolab, tmp_path: Path
+    make_tatolab_project: MakeTatolabProject,
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     """`tatolab run <file>.py`, `tatolab run <module>:<function>` and `tatolab run -f <file>.py` — one name.
 
@@ -253,13 +250,18 @@ def test_the_launch_arrangement_never_changes_the_identity(
     property the entry-file refusal above exists to guarantee.
     """
     as_a_file_target = identity_under(
-        make_tatolab_project, start_tatolab, tmp_path, "identity_stability.py"
+        make_tatolab_project, run_stream_on_tatolabd_with_no_vulkan_driver, "identity_stability.py"
     )
     as_a_module_target = identity_under(
-        make_tatolab_project, start_tatolab, tmp_path, "identity_stability:identity_stability"
+        make_tatolab_project,
+        run_stream_on_tatolabd_with_no_vulkan_driver,
+        "identity_stability:identity_stability",
     )
     as_the_named_entry_file = identity_under(
-        make_tatolab_project, start_tatolab, tmp_path, "-f", "identity_stability.py"
+        make_tatolab_project,
+        run_stream_on_tatolabd_with_no_vulkan_driver,
+        "-f",
+        "identity_stability.py",
     )
 
     assert as_a_file_target == as_a_module_target == as_the_named_entry_file, (
@@ -270,7 +272,7 @@ def test_the_launch_arrangement_never_changes_the_identity(
 
 
 def test_two_classes_in_one_graph_register_under_two_distinct_paths(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     """A graph is keyed per class, not per app.
 
@@ -280,9 +282,9 @@ def test_two_classes_in_one_graph_register_under_two_distinct_paths(
     other would pass on any pair of distinct strings, including two the engine
     derived the same wrong way.
     """
-    load_outcome = load_stream_graph_on_tatolabd(two_identity_stable_processors)
-    assert load_outcome.loaded, load_outcome.stderr_text[-4000:]
-    assert identities_the_engine_logged(load_outcome.stderr_text) == [
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(two_identity_stable_processors)
+    assert run_outcome.loaded, run_outcome.tatolab_run_stderr_text
+    assert identities_the_engine_logged(run_outcome.tatolabd_stderr_text_during_the_run) == [
         "identity_stable_processor:IdentityStableProcessor",
         "second_identity_stable_processor:SecondIdentityStableProcessor",
     ]

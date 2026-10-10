@@ -22,8 +22,8 @@ from collections.abc import Callable
 
 import pytest
 
-import tatolab.stream
-from conftest import StreamGraphLoadOutcome
+from block_wiring_streams import microphone_through_the_opus_round_trip_into_a_speaker
+from conftest import StreamRunWithNoVulkanDriverOutcome
 from runtime_process_under_test import RuntimeProcessUnderTest
 from tatolab.stream import (
     OpusDecoder,
@@ -87,7 +87,7 @@ ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS = {
 
 @pytest.mark.parametrize("marker_class", TWO_OPUS_MARKERS)
 def test_node_name_defaults_to_the_type_name(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]", marker_class
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]", marker_class
 ):
     graph = compile_stream_to_graph(ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS[marker_class])
     [marker_node] = [
@@ -95,23 +95,12 @@ def test_node_name_defaults_to_the_type_name(
     ]
     assert marker_node["name"] == marker_class.__name__.lower()
 
-    outcome = load_stream_graph_on_tatolabd(graph)
-    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.stderr_text
-
-
-@stream
-def microphone_through_the_opus_round_trip_into_a_speaker(stream_builder: StreamBuilder) -> None:
-    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
-    encoder = stream_builder.add(OpusEncoder)
-    decoder = stream_builder.add(OpusDecoder)
-    speaker = stream_builder.add(tatolab.stream.SpeakerSink)
-    stream_builder.connect(microphone.output("audio"), encoder.input("audio"))
-    stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
-    stream_builder.connect(decoder.output("audio"), speaker.input("audio"))
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
 def test_the_round_trip_wires_without_an_adapter(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     """Source into encoder, encoder into decoder — the port names compose as
     published, which is what makes three `stream_builder.add` calls and two
@@ -119,8 +108,8 @@ def test_the_round_trip_wires_without_an_adapter(
     between the source and the encoder: the encoder's own window contract
     frames. The builder checks no port names, so the engine accepting the load
     is the proof."""
-    outcome = load_stream_graph_on_tatolabd(microphone_through_the_opus_round_trip_into_a_speaker)
-    assert outcome.loaded and outcome.loaded_node_count == 4, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(microphone_through_the_opus_round_trip_into_a_speaker)
+    assert outcome.loaded and outcome.loaded_node_count == 4, outcome.tatolab_run_stderr_text
 
 
 # ---- the round trip in a real graph (GPU) ----------------------------------

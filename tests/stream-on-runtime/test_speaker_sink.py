@@ -23,7 +23,8 @@ from collections.abc import Callable
 import pytest
 
 import tatolab.stream
-from conftest import StreamGraphLoadOutcome
+from block_wiring_streams import microphone_wired_straight_into_a_speaker
+from conftest import StreamRunWithNoVulkanDriverOutcome
 from runtime_process_under_test import RuntimeProcessUnderTest
 from speaker_sink_probes import AudioBlockCountingProbe
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
@@ -47,13 +48,6 @@ UNDERRUN_BYTES_A_COLD_START_MAY_COST = 8 * 1024 * 2 * 4
 @stream
 def one_speaker_sink_left_unnamed(stream_builder: StreamBuilder) -> None:
     stream_builder.add(tatolab.stream.SpeakerSink)
-
-
-@stream
-def microphone_wired_straight_into_a_speaker(stream_builder: StreamBuilder) -> None:
-    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
-    speaker = stream_builder.add(tatolab.stream.SpeakerSink)
-    stream_builder.connect(microphone.output("audio"), speaker.input("audio"))
 
 
 @stream
@@ -100,24 +94,24 @@ def the_speakers_settled_window_contract(graph: dict, speaker_node_name: str) ->
 
 
 def test_node_name_defaults_to_the_type_name(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     graph = compile_stream_to_graph(one_speaker_sink_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == [SPEAKER_NODE_NAME]
 
-    outcome = load_stream_graph_on_tatolabd(graph)
-    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
 def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     """The two audio built-ins have to compose without an adapter between them,
     which is what makes one `stream_builder.connect(microphone.output("audio"),
     speaker.input("audio"))` the whole of wiring audio through. The builder
     checks no port names, so the engine accepting the load is the proof."""
-    outcome = load_stream_graph_on_tatolabd(microphone_wired_straight_into_a_speaker)
-    assert outcome.loaded and outcome.loaded_node_count == 2, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(microphone_wired_straight_into_a_speaker)
+    assert outcome.loaded and outcome.loaded_node_count == 2, outcome.tatolab_run_stderr_text
 
 
 # ---- the native block in a real graph (GPU) --------------------------------

@@ -1,21 +1,20 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab run` / `dev` starting a stream on `tatolabd`, end to end.
+"""`tatolab run` / `dev` loading a project's stream into the machine's runtime, end to end.
 
-`tatolab` compiles the project's stream in the project's own venv — here a
+The runtime compiles the project's stream in the project's own venv — here a
 symlink to the suite venv, holding `tatolab-stream` and nothing of the runtime —
-and starts `tatolabd` beside itself. The stream it hosts is a first-class node:
-it publishes a registry entry naming `tatolabd`'s pid and an owner-only local
-API socket, `tatolab`'s observation verbs discover it, and a Ctrl-C to
-`tatolab` takes both away. Starting the engine initializes a GPU context, so the
-module needs a device.
+and loads it attached to the `tatolab` that asked: the local API names it by
+its stream name, every observation verb reaches it through the one socket, and
+a Ctrl-C to `tatolab` unloads it while `tatolabd` keeps serving. Starting a
+stream initializes a GPU context, so the module needs a device.
 
 The MVP minute is measured here too, with every processor in its own processor
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
 live inside the startup budget their interpreters cost, and the edit loop —
-`dev` restarting `tatolabd` on a save — keeps the running stream through a bad
-save and shows a good one.
+`dev` loading the stream again on each save — reports a bad save and loads the
+next good one, on the same runtime.
 """
 
 from __future__ import annotations
@@ -23,11 +22,9 @@ from __future__ import annotations
 import json
 import os
 import re
-import signal
 import socket
 import stat
 import subprocess
-import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -35,33 +32,24 @@ from typing import Any
 
 import pytest
 
-from conftest import PrivateRuntimeDirectories, StartedRuntimeProcesses
-from runtime_process_under_test import (
-    ENGINE_GRACEFUL_STOP_LOG_LINE,
-    ENGINE_STARTED_LOG_LINE,
-    RuntimeProcessUnderTest,
-    registry_entry_paths_in,
-)
+from conftest import AttachedTatolabRun, PrivateMachineDirectories, TatolabdUnderTest
+from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
 from runtime_unit_under_test import (
-    NODE_REGISTRY_DIRECTORY_NAME,
     STREAM_ON_RUNTIME_SUITE_DIRECTORY,
     SUITE_VENV_INTERPRETER,
     RuntimeUnitUnderTest,
-    TatolabNodesTableRow,
-    rows_of_the_tatolab_nodes_table,
-    run_tatolab_observation_verb_in_environment,
-    runtime_directory_tatolab_nodes_read,
 )
+from stream_runs_on_tatolabd import TatolabRunOfAProject
 from tatolab.stream import TestPatternSource
 from test_processor_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
 
 pytestmark = pytest.mark.requires_gpu
 
-# Boot is process start + compile + engine init + GPU context + socket bind.
+# A load is the project's compile + the describe of its Python types + the
+# engine's GPU context on the runtime's first start.
 NODE_READY_TIMEOUT_SECONDS = 90.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 LOCAL_API_SOCKET_FILE_MODE = 0o600
-NODE_REGISTRY_SCHEMA_VERSION = 3
 # Long enough that a per-frame failure or slowdown cannot hide inside it — and
 # long enough to outlast a warm-up. A window that ends before steady state
 # proves less than its length suggests: #1764 is a per-frame defect that needs
@@ -89,7 +77,7 @@ def main(stream_builder: StreamBuilder) -> None:
 # A fleet rather than a pair, and few enough that the rig pays for it in
 # seconds.
 HELPER_PLACED_PROCESSOR_COUNT = 6
-# The MVP sentence gives a minute for install, scaffold and run, and booting is
+# The MVP sentence gives a minute for install, scaffold and run, and loading is
 # the only part of that this test can measure — so the budget is the half of
 # the minute the other parts do not need.
 #
@@ -126,6 +114,7 @@ SCAFFOLDED_METER_REPORT = re.compile(r"brightness\b.*\bmean=")
 # (~360 in the window), and neither is a claim about wake latency.
 MINIMUM_METER_REPORTS = 5
 MAXIMUM_METER_REPORTS = 2 * int(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
+DISPLAY_WINDOW_STOPPED = "DisplayWindow: stopped"
 DISPLAY_WINDOW_FRAME_COUNT = re.compile(r"DisplayWindow: stopped \((\d+) frames\)")
 SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
 
@@ -136,13 +125,16 @@ OBSERVATION_VERB_TIMEOUT_SECONDS = 60.0
 SURFACE_ID_EXCHANGE_ATTEMPTS = 10
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
-# What `dev` says when a recompile fails and the running stream stays up.
-DEV_KEPT_THE_RUNNING_STREAM = "tatolab dev: kept the running stream"
-# What `dev` says when the first compile fails and nothing is running.
-DEV_NO_STREAM_IS_RUNNING = "tatolab dev: no stream is running"
-DEV_RESTARTING_THE_STREAM = "tatolab dev: restarting the stream"
-# What `dev` says when a stream it stopped for a restart did not exit 0.
-DEV_PREVIOUS_STREAM_EXITED_BADLY = "tatolab dev: the previous stream exited with"
+#: The one stream every project here compiles to.
+STREAM_NAME = "main"
+
+#: The engine's line once the attached stream's unload has finished.
+THE_STREAM_STOPPED_LOG_LINE = f"[stop] The stream `{STREAM_NAME}` stopped"
+
+# What `dev` says as a save makes it stop the stream and load it again.
+DEV_LOADING_AGAIN_AFTER_A_SAVE = f"tatolab dev: a saved change — loading {STREAM_NAME} again"
+# What `dev` says when a load is refused and nothing is loaded until the next save.
+DEV_NO_STREAM_IS_LOADED = "tatolab dev: no stream is loaded — fix it and save again"
 
 # The `surface_id` field of one bag `tatolab tap` forwarded, given its hex.
 # Run with the lend on `PYTHONPATH`: a tapped bag is the channel's
@@ -215,63 +207,58 @@ def make_scaffolded_test_pattern_project(
     return app_directory
 
 
+def attach_the_projects_stream(
+    tatolabd: TatolabdUnderTest, app_directory: Path, verb: str = "run"
+) -> AttachedTatolabRun:
+    """`tatolab <verb>` from `app_directory`, started on `tatolabd`."""
+    return tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory), verb=verb)
+
+
 @pytest.mark.parametrize("verb", ["run", "dev"])
-def test_a_launched_app_registers_as_a_node_and_tears_down(
+def test_an_attached_stream_loads_into_the_runtime_and_a_ctrl_c_unloads_it(
     verb: str,
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
-    private_runtime_directories: PrivateRuntimeDirectories,
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The MVP minute's observable half, for both verbs.
 
-    `run` and `dev` share one launch path — `dev` only adds the restart on an
-    edit — so a divergence in boot, registration or teardown between them is a
+    `run` and `dev` share one attached path — `dev` only adds the load again on
+    a save — so a divergence in load, listing or unload between them is a
     defect in the path itself.
     """
     app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
-    streamlib_runtime_directory = private_runtime_directories.streamlib_runtime_directory
+    tatolabd = start_tatolabd()
 
-    tatolab = start_tatolab(verb, working_directory=app_directory)
-    registry_entry_path = tatolab.registry_entry_path()
-    entry = tatolab.registry_entry()
-    running_graph = tatolab.local_api_client().await_every_node_running()
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
+    attached = attach_the_projects_stream(tatolabd, app_directory, verb)
+    loaded = attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    local_api = tatolabd.local_api_client()
+    running_graph = local_api.await_every_node_running(stream=STREAM_NAME)
+    listed_streams = local_api.list_streams()
 
-    assert entry["pid"] != tatolab.pid, "the entry names tatolabd, not the tatolab that started it"
-    assert entry["pid"] in tatolab.hosting_tatolabd_process_ids()
-    assert entry["schema_version"] == NODE_REGISTRY_SCHEMA_VERSION
-    local_api_socket_path = Path(entry["local_api_socket_path"])
-    assert local_api_socket_path == (
-        streamlib_runtime_directory / f"local-api-{entry['runtime_id']}.sock"
-    ), f"the local API socket sits in the runtime directory; got {local_api_socket_path}"
-    assert_only_its_owner_can_open(local_api_socket_path)
-    assert running_graph["stream"] == "main"
+    assert loaded["stream_name"] == STREAM_NAME
+    assert int(loaded["node_count"]) == 1
+    assert Path(loaded["project_directory"]) == app_directory.resolve()
+    assert listed_streams == [
+        {
+            "name": STREAM_NAME,
+            "state": "attached",
+            "project_directory": str(app_directory.resolve()),
+            "node_count": 1,
+        }
+    ]
+    assert running_graph["stream"] == STREAM_NAME
     assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1, (
         running_graph["nodes"]
     )
-    # The engine replaces every character an address chunk may not carry,
-    # so a host whose own name carries one is compared against the same
-    # substitution rather than against the raw `gethostname`.
-    this_host = re.sub(r"[/*$#?]", "-", socket.gethostname())
-    assert re.fullmatch(rf"{re.escape(this_host)}-app-[0-9a-z]{{4}}", entry["runtime_name"]), (
-        "an unnamed runtime is named after this host, its app directory and that "
-        f"directory's path; got {entry['runtime_name']}"
-    )
+    assert_only_its_owner_can_open(tatolabd.local_api_socket_path)
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
-        f"`tatolab {verb}` must exit cleanly on SIGINT; standard error:\n{tatolab.recent_stderr()}"
+    attached.interrupt()
+    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
+        f"`tatolab {verb}` must exit cleanly on SIGINT; standard error:\n{attached.recent_stderr()}"
     )
-    if sys.platform == "linux":
-        assert registry_entry_paths_in(streamlib_runtime_directory) == [], (
-            "clean teardown must leave this test's private registry empty"
-        )
-    else:
-        # The runtime directory is shared with every runtime on the machine.
-        assert registry_entry_path not in registry_entry_paths_in(streamlib_runtime_directory), (
-            "clean teardown must remove the node-registry entry"
-        )
-    assert not local_api_socket_path.exists(), "clean teardown must remove the local API socket"
+    tatolabd.await_stderr_containing(THE_STREAM_STOPPED_LOG_LINE, timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
+    assert local_api.list_streams() == [], "a Ctrl-C to `tatolab` unloads its stream"
+    assert tatolabd.process.poll() is None, "the runtime outlives the stream it unloaded"
 
 
 def socket_inodes_held_by(pid: int) -> "set[str]":
@@ -343,52 +330,51 @@ def unix_socket_listener_inode_at(pid: int, unix_socket_path: str) -> "str | Non
     return None
 
 
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
-def test_a_launched_node_listens_on_no_tcp_socket(
+@pytest.mark.linux_only_capability(reason="the scan reads Linux's /proc")
+def test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """Nothing on the network can reach a node's control API: neither `tatolabd`
-    nor the `tatolab` that started it holds a TCP socket in LISTEN, on any
-    address, loopback included.
+    """Nothing on the network can reach the runtime's control API: neither
+    `tatolabd` nor the `tatolab` attached to it holds a TCP socket in LISTEN, on
+    any address, loopback included.
 
     The same scan, read off Linux's `/proc`, has to find the TCP listeners the
-    test itself holds and the local API socket's listener, and the node has to
-    answer over it, so an empty TCP answer is the node's own and not a scan
-    that saw nothing.
+    test itself holds and the local API socket's listener, and the runtime has
+    to answer over it, so an empty TCP answer is the runtime's own and not a
+    scan that saw nothing.
     """
     app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
+    tatolabd = start_tatolabd()
 
-    tatolab = start_tatolab("run", working_directory=app_directory)
-    entry = tatolab.registry_entry(timeout=NODE_READY_TIMEOUT_SECONDS)
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    local_api_socket_path = entry["local_api_socket_path"]
-    graph = tatolab.local_api_client().call_tool("graph")
-    assert graph["runtime_name"] == entry["runtime_name"]
+    attached = attach_the_projects_stream(tatolabd, app_directory)
+    attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    local_api_socket_path = str(tatolabd.local_api_socket_path)
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": STREAM_NAME})
+    assert graph["stream"] == STREAM_NAME
 
     assert_the_tcp_listener_scan_sees_the_listeners_this_process_holds()
-    tatolabd_pid = entry["pid"]
-    held_socket_inodes = socket_inodes_held_by(tatolabd_pid)
-    local_api_listener_inode = unix_socket_listener_inode_at(tatolabd_pid, local_api_socket_path)
+    held_socket_inodes = socket_inodes_held_by(tatolabd.pid)
+    local_api_listener_inode = unix_socket_listener_inode_at(tatolabd.pid, local_api_socket_path)
     assert local_api_listener_inode is not None, (
-        f"no Unix socket listens at {local_api_socket_path} in /proc/{tatolabd_pid}/net/unix"
+        f"no Unix socket listens at {local_api_socket_path} in /proc/{tatolabd.pid}/net/unix"
     )
     assert local_api_listener_inode in held_socket_inodes, (
         f"tatolabd's descriptors must include its local API listener (inode "
         f"{local_api_listener_inode}); they hold sockets {sorted(held_socket_inodes)}"
     )
-    for process_name, pid in (("tatolabd", tatolabd_pid), ("tatolab", tatolab.pid)):
+    for process_name, pid in (("tatolabd", tatolabd.pid), ("tatolab", attached.pid)):
         listening_tcp_socket_inodes_it_holds = socket_inodes_held_by(
             pid
         ) & listening_tcp_socket_inodes_in_the_network_namespace_of(pid)
         assert listening_tcp_socket_inodes_it_holds == set(), (
             f"{process_name} holds TCP sockets in LISTEN (inodes "
             f"{sorted(listening_tcp_socket_inodes_it_holds)}); standard error ended:\n"
-            f"{tatolab.recent_stderr()}"
+            f"{tatolabd.recent_stderr()}"
         )
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    attached.interrupt()
+    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
@@ -400,32 +386,29 @@ def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
     return completed.stdout
 
 
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
-def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_socket(
+def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api_socket(
     tmp_path: Path,
     runtime_unit: RuntimeUnitUnderTest,
-    private_runtime_directories: PrivateRuntimeDirectories,
+    private_machine_directories: PrivateMachineDirectories,
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
     run_tatolab_observation_verb: "Callable[..., subprocess.CompletedProcess[str]]",
 ):
-    """`tatolab nodes`, `graph`, `tap`, `logs` and both forms of `exchange`,
-    driven the way a user drives them: a separate process, with only the
-    registry to find the node by. The source is wired to a reader, since a
-    channel is tappable only once a connect has wired its output."""
+    """`tatolab streams`, `graph`, `tap`, `logs` and both forms of `exchange`,
+    driven the way a user drives them: a separate process, naming the stream.
+    The source is wired to a reader, since a channel is tappable only once a
+    connect has wired its output."""
     app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
-    tatolab = start_tatolab("run", working_directory=app_directory)
-    entry = tatolab.registry_entry(timeout=NODE_READY_TIMEOUT_SECONDS)
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    runtime_name = entry["runtime_name"]
-    local_api_socket_path = entry["local_api_socket_path"]
+    tatolabd = start_tatolabd()
+    attached = attach_the_projects_stream(tatolabd, app_directory)
+    attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
 
-    listed = succeeded(run_tatolab_observation_verb("nodes"))
-    assert listed.splitlines()[0].split()[2] == "LOCAL_API_SOCKET", listed
-    assert local_api_socket_path in listed
+    listed = succeeded(run_tatolab_observation_verb("streams"))
+    assert listed.splitlines()[0].split() == ["NAME", "STATE", "NODES", "PROJECT"], listed
+    assert re.search(rf"^{STREAM_NAME}\s+attached\s+2\s+", listed, re.MULTILINE), listed
 
-    graph = json.loads(succeeded(run_tatolab_observation_verb("graph", "--node", runtime_name)))
-    assert graph["runtime_name"] == runtime_name
+    graph = json.loads(succeeded(run_tatolab_observation_verb("graph", "--stream", STREAM_NAME)))
+    runtime_name = graph["runtime_name"]
     source_name = next(
         graph_node["name"]
         for graph_node in graph["nodes"]
@@ -436,20 +419,20 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
     tapped = json.loads(
         succeeded(
             run_tatolab_observation_verb(
-                "tap", channel, "--count", "2", "--node", runtime_name,
+                "tap", channel, "--count", "2", "--stream", STREAM_NAME,
                 timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
             )
         )
     )  # fmt: skip
     assert tapped["received"] > 0, f"no bags reached the tap over the socket: {tapped}"
 
-    succeeded(run_tatolab_observation_verb("logs", "--node", runtime_name, "--count", "1"))
+    succeeded(run_tatolab_observation_verb("logs", "--stream", STREAM_NAME))
 
     channel_form_directory = tmp_path / "channel-form"
     channel_form_written = succeeded(
         run_tatolab_observation_verb(
             "exchange", "--channel", channel, "--count", "1",
-            "--out", str(channel_form_directory), "--node", runtime_name,
+            "--out", str(channel_form_directory), "--stream", STREAM_NAME,
             timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
         )
     ).split()  # fmt: skip
@@ -462,7 +445,7 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
         tapped_for_a_surface_id = json.loads(
             succeeded(
                 run_tatolab_observation_verb(
-                    "tap", channel, "--count", "1", "--node", runtime_name,
+                    "tap", channel, "--count", "1", "--stream", STREAM_NAME,
                     timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
                 )
             )
@@ -474,14 +457,13 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
         )
         published_surface_id = run_python_with_the_lend(
             runtime_unit,
-            private_runtime_directories.environment,
+            private_machine_directories.environment,
             SURFACE_ID_OF_A_TAPPED_BAG_SOURCE,
             tapped_for_a_surface_id["bags"][0]["hex_preview"],
         )
         assert published_surface_id is not None, f"{channel} published no surface id"
         exchanged = run_tatolab_observation_verb(
-            "exchange", published_surface_id,
-            "--out", str(id_form_directory), "--node", runtime_name,
+            "exchange", published_surface_id, "--out", str(id_form_directory),
             timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
         )  # fmt: skip
         if exchanged.returncode == 0:
@@ -494,211 +476,47 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
             f"attempts: {id_form_attempts}"
         )
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
-    assert not Path(local_api_socket_path).exists()
-
-
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
-def test_a_second_runtime_with_a_live_runtimes_id_is_refused_naming_its_local_api_socket(
-    make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
-    private_runtime_directories: PrivateRuntimeDirectories,
-):
-    """The surface socket refuses a pinned duplicate before the local API is
-    reached, so the local API's own refusal is driven with the surface socket
-    out of the way: a live listener at the pinned id's local API path stands in
-    for a second runtime. The refusal fails the api-server's start, which the
-    engine logs; the node publishes no registry entry."""
-    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
-    streamlib_runtime_directory = private_runtime_directories.streamlib_runtime_directory
-    pinned_runtime_id = f"Rpinned{os.getpid()}"
-    local_api_socket_path = streamlib_runtime_directory / f"local-api-{pinned_runtime_id}.sock"
-    local_api_socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    squatting_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    squatting_listener.bind(str(local_api_socket_path))
-    squatting_listener.listen(1)
-    try:
-        tatolab = start_tatolab(
-            "run",
-            working_directory=app_directory,
-            extra_environment={"STREAMLIB_RUNTIME_ID": pinned_runtime_id},
-        )
-        refusal_line = tatolab.await_stderr_containing(
-            "already bound by a live process", timeout=NODE_READY_TIMEOUT_SECONDS
-        )
-        assert str(local_api_socket_path) in refusal_line, (
-            f"the local API's refusal must name its socket; it read:\n{refusal_line}"
-        )
-        assert registry_entry_paths_in(streamlib_runtime_directory) == []
-        tatolab.interrupt()
-        tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
-        assert registry_entry_paths_in(streamlib_runtime_directory) == []
-        assert local_api_socket_path.exists(), "a refused bind must leave the live socket alone"
-    finally:
-        squatting_listener.close()
-
-
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
-def test_a_stale_local_api_socket_file_is_replaced(
-    make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
-    private_runtime_directories: PrivateRuntimeDirectories,
-):
-    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
-    pinned_runtime_id = f"Rstale{os.getpid()}"
-    local_api_socket_path = (
-        private_runtime_directories.streamlib_runtime_directory
-        / f"local-api-{pinned_runtime_id}.sock"
-    )
-    local_api_socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    crashed_runs_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    crashed_runs_listener.bind(str(local_api_socket_path))
-    crashed_runs_listener.close()
-    assert local_api_socket_path.exists(), "a closed listener leaves its file, as a crash does"
-
-    tatolab = start_tatolab(
-        "run",
-        working_directory=app_directory,
-        extra_environment={"STREAMLIB_RUNTIME_ID": pinned_runtime_id},
-    )
-    entry = tatolab.registry_entry(timeout=NODE_READY_TIMEOUT_SECONDS)
-
-    assert entry["local_api_socket_path"] == str(local_api_socket_path)
-    assert_only_its_owner_can_open(local_api_socket_path)
-    graph = tatolab.local_api_client().call_tool("graph")
-    assert graph["runtime_name"] == entry["runtime_name"]
-
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
-    assert not local_api_socket_path.exists()
-
-
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
-def test_a_launched_app_takes_the_runtime_name_its_command_line_gave_it(
-    make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
-):
-    """`--runtime-name` is the name the registry publishes, verbatim."""
-    app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
-
-    tatolab = start_tatolab("run", "--runtime-name", "desk rig", working_directory=app_directory)
-    entry = tatolab.registry_entry(timeout=NODE_READY_TIMEOUT_SECONDS)
-
-    assert entry["runtime_name"] == "desk rig"
-
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    attached.interrupt()
+    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 def iceoryx2_node_details_in(iceoryx2_domain_root: Path) -> "set[Path]":
     return set((iceoryx2_domain_root / "nodes").glob("*/*node.details"))
 
 
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
-def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the_per_user_fallback(
-    runtime_unit: RuntimeUnitUnderTest,
-    private_runtime_directories: PrivateRuntimeDirectories,
-    started_runtime_processes: StartedRuntimeProcesses,
+def test_the_runtime_and_its_processor_interpreter_share_the_runtime_directorys_iceoryx2_domain(
     make_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """A runtime starts anywhere with nothing set — a container, a CI runner —
-    and `nodes` still finds it.
-
-    The node carries a Python processor, so a frame reaching it proves
+    """The stream carries a Python processor, so a frame reaching it proves
     `tatolabd` and the processor interpreter opened their nodes in one iceoryx2
-    domain. Discovery goes through `tatolab nodes`, never a hand-built path,
-    because `nodes` resolving the runtime directory exactly as the engine does
-    is the contract. The launch tests above all set `XDG_RUNTIME_DIR`, so none
-    of them reaches this arm.
-    """
-    per_user_fallback = Path("/tmp") / f"streamlib-{os.getuid()}"
-    environment_without_xdg_runtime_dir = {
-        name: value
-        for name, value in private_runtime_directories.environment.items()
-        if name != "XDG_RUNTIME_DIR"
-    }
-    iceoryx2_node_details_before = iceoryx2_node_details_in(per_user_fallback / "iox2")
+    domain: the runtime directory's, where the surface socket sits too."""
     app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
-    tatolab = RuntimeProcessUnderTest(
-        subprocess.Popen(
-            [str(runtime_unit.tatolab_executable), "run"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            bufsize=1,
-            start_new_session=True,
-            cwd=app_directory,
-            env=environment_without_xdg_runtime_dir,
-        ),
-        command_description="tatolab run (XDG_RUNTIME_DIR unset)",
-        streamlib_runtime_directory=per_user_fallback,
-        hosting_tatolabd_is_a_child=True,
-    )
-    started_runtime_processes.started.append(tatolab)
+    tatolabd = start_tatolabd()
+    runtime_directory = tatolabd.machine_directories.runtime_directory
+    iceoryx2_node_details_before = iceoryx2_node_details_in(runtime_directory / "iox2")
 
-    tatolab.await_marker(LIVE_HELPER_MARKER_NAME, timeout=NODE_READY_TIMEOUT_SECONDS)
-    tatolabd_pid = tatolab.registry_entry()["pid"]
-
-    deadline = time.monotonic() + NODE_READY_TIMEOUT_SECONDS
-    listed_nodes = ""
-    discovered: "list[TatolabNodesTableRow]" = []
-    while not discovered and time.monotonic() < deadline:
-        listed_nodes = succeeded(
-            run_tatolab_observation_verb_in_environment(
-                runtime_unit, environment_without_xdg_runtime_dir, "nodes"
-            )
-        )
-        discovered = [
-            row
-            for row in rows_of_the_tatolab_nodes_table(listed_nodes)
-            if row.pid == tatolabd_pid and row.local_api_answered
-        ]
-        time.sleep(0.2)
-    runtime_directory_read_by_nodes = runtime_directory_tatolab_nodes_read(listed_nodes)
-    assert runtime_directory_read_by_nodes == per_user_fallback
-    assert discovered, (
-        f"`tatolab nodes` never listed the node live in {runtime_directory_read_by_nodes}:\n"
-        f"{listed_nodes}\nstandard error ended:\n{tatolab.recent_stderr()}"
-    )
-    runtime_id = discovered[0].runtime_id
-
-    entry_file = (
-        runtime_directory_read_by_nodes / NODE_REGISTRY_DIRECTORY_NAME / f"{runtime_id}.json"
-    )
-    assert entry_file.is_file()
-    assert (per_user_fallback / f"surface-share-{runtime_id}.sock").exists()
+    attached = attach_the_projects_stream(tatolabd, app_directory)
+    tatolabd.await_marker(LIVE_HELPER_MARKER_NAME, timeout=NODE_READY_TIMEOUT_SECONDS)
     new_node_details = (
-        iceoryx2_node_details_in(per_user_fallback / "iox2") - iceoryx2_node_details_before
+        iceoryx2_node_details_in(runtime_directory / "iox2") - iceoryx2_node_details_before
     )
+
     assert {details.name for details in new_node_details} == {f"sl{os.getuid()}_node.details"}
-    assert len(new_node_details) == 2, (
-        f"tatolabd and its processor interpreter must each open a node in the per-user "
-        f"fallback's domain; found {sorted(map(str, new_node_details))}"
+    assert len(new_node_details) == 1, (
+        f"the processor interpreter must open its node in the runtime directory's domain, "
+        f"beside tatolabd's; found {sorted(map(str, new_node_details))}"
     )
+    assert len(iceoryx2_node_details_before) == 1, sorted(map(str, iceoryx2_node_details_before))
+    assert len(list(runtime_directory.glob("surface-share-*.sock"))) == 1
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
-        f"the node must exit cleanly on SIGINT; standard error ended:\n{tatolab.recent_stderr()}"
-    )
-    assert not entry_file.exists(), "clean teardown must remove the node-registry entry"
-    listed_nodes_after_teardown = succeeded(
-        run_tatolab_observation_verb_in_environment(
-            runtime_unit, environment_without_xdg_runtime_dir, "nodes"
-        )
-    )
-    assert all(
-        row.pid != tatolabd_pid
-        for row in rows_of_the_tatolab_nodes_table(listed_nodes_after_teardown)
-    ), listed_nodes_after_teardown
+    attached.interrupt()
+    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, attached.recent_stderr()
 
 
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_native_block_added_without_config_reaches_a_running_graph(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """`stream_builder.add(TestPatternSource)` with no `config` — the spelling the plan
     blesses for a block that needs no configuration.
@@ -720,52 +538,57 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
             )
         }
     )
+    tatolabd = start_tatolabd()
 
-    tatolab = start_tatolab("run", working_directory=app_directory)
-    entry = tatolab.registry_entry(timeout=NODE_READY_TIMEOUT_SECONDS)
-
-    assert entry["pid"] in tatolab.hosting_tatolabd_process_ids(), (
-        "the graph must compile and start with no config given"
-    )
-    running_graph = tatolab.local_api_client().await_every_node_running()
+    attached = attach_the_projects_stream(tatolabd, app_directory)
+    attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    running_graph = tatolabd.local_api_client().await_every_node_running(stream=STREAM_NAME)
     assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    attached.interrupt()
+    assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
+def the_first_streams_output(tatolabd: TatolabdUnderTest) -> str:
+    """`tatolabd`'s standard error through the first stream's window stopping."""
+    the_first_streams_stop = tatolabd.await_stderr_containing(
+        DISPLAY_WINDOW_STOPPED, timeout=CLEAN_EXIT_TIMEOUT_SECONDS
+    )
+    return tatolabd.stderr_text.split(the_first_streams_stop, 1)[0] + the_first_streams_stop
+
+
+@pytest.mark.linux_only_capability(reason="a DisplayWindow on the rig's display")
 def test_the_scaffolded_app_reaches_a_running_graph(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """What `tatolab new` writes must actually run, frame after frame.
 
     Run exactly as scaffolded — window included, which is why this is rig-only:
-    `dev` compiles the scaffold's `@stream` and `tatolabd` loads the graph it
-    builds, so the graph the local API renders carries the stream's name and the
-    exposure it declared. A registry entry alone proves almost nothing here: it
-    appears whether or not `process()` ever succeeds, so the assertions that
-    carry this test are the ones on the run's own output. `process() failed`
-    catches an effect that raises every frame; the delivered-frame count catches
-    an effect that is correct but so slow the demo is a slideshow. The meter's
-    line is the logic half of the first minute: a fan-out reader that never
-    reports is a graph that shows the picture and drops the rest.
+    `dev` has the runtime compile the scaffold's `@stream` and load the graph
+    it builds, so the graph the local API renders carries the stream's name and
+    the exposure it declared. A listed stream alone proves almost nothing here:
+    it is listed whether or not `process()` ever succeeds, so the assertions
+    that carry this test are the ones on the run's own records. `process()
+    failed` catches an effect that raises every frame; the delivered-frame
+    count catches an effect that is correct but so slow the demo is a
+    slideshow. The meter's line is the logic half of the first minute: a
+    fan-out reader that never reports is a graph that shows the picture and
+    drops the rest.
     """
     app_directory = make_scaffolded_test_pattern_project(make_tatolab_project, run_tatolab)
+    tatolabd = start_tatolabd()
 
-    tatolab = start_tatolab("dev", working_directory=app_directory)
-    entry = tatolab.registry_entry(timeout=NODE_READY_TIMEOUT_SECONDS)
-    assert entry["pid"] in tatolab.hosting_tatolabd_process_ids()
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    live_graph = tatolab.local_api_client().call_tool("graph")
-    assert live_graph["stream"] == "main", (
-        f"the node must render the stream it was loaded as; graph was {live_graph}"
+    dev = attach_the_projects_stream(tatolabd, app_directory, "dev")
+    dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    live_graph = tatolabd.local_api_client().call_tool("graph", {"stream": STREAM_NAME})
+    assert live_graph["stream"] == STREAM_NAME, (
+        f"the runtime must render the stream it was loaded as; graph was {live_graph}"
     )
     assert live_graph["exposed"] == [
         {"node": "invertingeffect", "port": "video_to_downstream", "level": "private"}
-    ], f"the node must render the exposure the stream declared; graph was {live_graph}"
+    ], f"the runtime must render the exposure the stream declared; graph was {live_graph}"
     assert {
         "testpatternsource",
         "invertingeffect",
@@ -775,16 +598,15 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 
     # Long enough for the source to have driven many frames through the effect.
     time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
-    tatolab.interrupt()
-    tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
+    dev.interrupt()
+    assert dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, dev.recent_stderr()
 
-    assert_the_window_showed_live_video(
-        tatolab, tatolab.stderr_text, "the app `tatolab new` writes"
-    )
-    meter_reports = len(SCAFFOLDED_METER_REPORT.findall(tatolab.stderr_text))
+    stream_output = the_first_streams_output(tatolabd)
+    assert_the_window_showed_live_video(tatolabd, stream_output, "the app `tatolab new` writes")
+    meter_reports = len(SCAFFOLDED_METER_REPORT.findall(stream_output))
     assert meter_reports >= MINIMUM_METER_REPORTS, (
         f"the scaffolded meter logged a brightness {meter_reports} times in "
-        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s; standard error ended:\n{tatolab.recent_stderr()}"
+        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s; standard error ended:\n{tatolabd.recent_stderr()}"
     )
     assert meter_reports <= MAXIMUM_METER_REPORTS, (
         f"the scaffolded meter logged a brightness {meter_reports} times in "
@@ -795,13 +617,14 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The cross-floor check informs; it never walls off a start.
 
     The finding sits in a function nothing calls, so the app needs neither
     cupy nor CUDA to run: the check reads source, and this proves a finding in
-    it reaches the agent's terminal without costing the start.
+    it reaches the runtime's log — the compile's standard error — without
+    costing the start.
     """
     app_directory = make_scaffolded_test_pattern_project(make_tatolab_project, run_tatolab)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
@@ -812,28 +635,30 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
         "    import torch\n"
         '    return torch.device("cuda")\n'
     )
+    tatolabd = start_tatolabd()
 
-    tatolab = start_tatolab("dev", working_directory=app_directory)
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    tatolab.interrupt()
-    tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
+    dev = attach_the_projects_stream(tatolabd, app_directory, "dev")
+    dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
+    dev.interrupt()
+    dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
 
-    output = tatolab.stderr_text
+    output = tatolabd.stderr_text
     assert f"{SCAFFOLDED_EFFECT_MODULE_PATH}:" in output and "imports `cupy`" in output, (
         f"the warning block must name the cupy import; standard error ended:\n"
-        f"{tatolab.recent_stderr()}"
+        f"{tatolabd.recent_stderr()}"
     )
     assert "names the device 'cuda'" in output, (
         f"the warning block must name the device literal; standard error ended:\n"
-        f"{tatolab.recent_stderr()}"
+        f"{tatolabd.recent_stderr()}"
     )
     assert output.index("cross-floor check") < output.index(ENGINE_STARTED_LOG_LINE)
 
 
 def assert_the_window_showed_live_video(
-    tatolab: RuntimeProcessUnderTest, output: str, what_ran: str
+    tatolabd: TatolabdUnderTest, output: str, what_ran: str
 ) -> None:
-    """Require one stopped stream's output to show live video, not a slideshow.
+    """Require one stopped stream's records to show live video, not a slideshow.
 
     The window reports what it actually put on screen, which is the honest
     measure — an effect can be correct and still leave the demo at roughly 4
@@ -842,12 +667,12 @@ def assert_the_window_showed_live_video(
     """
     assert "process() failed" not in output, (
         f"{what_ran}: the effect raised on a live frame; standard error ended:\n"
-        f"{tatolab.recent_stderr()}"
+        f"{tatolabd.recent_stderr()}"
     )
     frames_shown = DISPLAY_WINDOW_FRAME_COUNT.search(output)
     assert frames_shown, (
         f"{what_ran}: the window never reported a frame count; standard error ended:\n"
-        f"{tatolab.recent_stderr()}"
+        f"{tatolabd.recent_stderr()}"
     )
     assert int(frames_shown.group(1)) >= MINIMUM_FRAMES_FOR_LIVE_VIDEO, (
         f"{what_ran} showed only {frames_shown.group(1)} frames in "
@@ -870,17 +695,17 @@ def assert_the_window_showed_live_video(
     assert undeliverable_notifications == 0, (
         f"{what_ran}: {undeliverable_notifications} undeliverable link notifications in "
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — a notify failed to reach its listener; "
-        f"standard error ended:\n{tatolab.recent_stderr()}"
+        f"standard error ended:\n{tatolabd.recent_stderr()}"
     )
 
 
 def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The N-processor-interpreter startup budget the MVP minute has to pay.
 
-    Every Python processor is its own processor interpreter, so a graph's boot
+    Every Python processor is its own processor interpreter, so a graph's load
     cost grows with its processor count, and the sentence gives that growth a
     minute to disappear into. The budget is a flat ceiling on the whole fleet —
     see the constant for what a ceiling this generous can and cannot catch.
@@ -895,27 +720,27 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
         project_files_with_helper_placed_processors(HELPER_PLACED_PROCESSOR_COUNT),
         directory_name="fleet",
     )
+    tatolabd = start_tatolabd()
     launched_at = time.monotonic()
-    fleet = start_tatolab("dev", working_directory=fleet_app)
+    fleet = attach_the_projects_stream(tatolabd, fleet_app, "dev")
     # Waited for on a bound far above the budget rather than on the budget
     # itself: a wait that expires exactly at the ceiling can only ever report a
     # timeout, and what a blown budget should say is how long it actually took.
-    fleet.await_marker(
+    tatolabd.await_marker(
         LIVE_HELPER_MARKER_NAME,
         occurrence=HELPER_PLACED_PROCESSOR_COUNT,
         timeout=NODE_READY_TIMEOUT_SECONDS,
     )
     seconds_for_every_helper = time.monotonic() - launched_at
 
-    reporting_pids = set(fleet.marker_payloads(LIVE_HELPER_MARKER_NAME))
+    reporting_pids = set(tatolabd.marker_payloads(LIVE_HELPER_MARKER_NAME))
     assert len(reporting_pids) == HELPER_PLACED_PROCESSOR_COUNT, (
         f"{HELPER_PLACED_PROCESSOR_COUNT} processors reported from "
         f"{len(reporting_pids)} processes — every Python processor gets its own"
     )
-    tatolabd_pid = fleet.registry_entry()["pid"]
     assert fleet.pid not in reporting_pids, "a processor reported from tatolab's own process"
     for reporting_pid in reporting_pids:
-        assert_runs_in_a_process_of_its_own_beneath(reporting_pid, tatolabd_pid)
+        assert_runs_in_a_process_of_its_own_beneath(reporting_pid, tatolabd.pid)
     assert seconds_for_every_helper < MAXIMUM_SECONDS_FOR_EVERY_HELPER_TO_GO_LIVE, (
         f"{HELPER_PLACED_PROCESSOR_COUNT} processor interpreters took "
         f"{seconds_for_every_helper:.2f}s to reach live traffic — the minute does "
@@ -923,8 +748,9 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     )
     fleet.interrupt()
     assert fleet.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
-        f"a graph of {HELPER_PLACED_PROCESSOR_COUNT} helpers must still tear down cleanly"
+        f"a graph of {HELPER_PLACED_PROCESSOR_COUNT} helpers must still unload cleanly"
     )
+    tatolabd.await_stderr_containing(THE_STREAM_STOPPED_LOG_LINE, timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
 
 
 def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
@@ -963,96 +789,68 @@ def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
     return edited
 
 
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
-def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
+@pytest.mark.linux_only_capability(reason="a DisplayWindow on the rig's display")
+def test_the_edit_loop_reports_a_bad_save_and_loads_the_next_good_one(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The MVP edit loop: `dev` recompiling on a save and restarting `tatolabd`.
+    """The MVP edit loop: `dev` stopping the stream on a save and loading it again.
 
-    A save is a file write. A broken one fails the recompile, so `dev` keeps the
-    stream already running — the same `tatolabd`, still showing live video —
-    and a good one restarts the stream on the edited code. Both halves are
-    asserted against the same `dev` in sequence because the first is only
-    meaningful if the second follows: a loop that survives a bad save by
-    ignoring the file entirely would pass the first alone.
+    A save is a file write. `dev` stops the running stream — which showed live
+    video until then — and has the runtime compile the saved code; a broken
+    save is refused, named, and leaves nothing loaded until the next save, and
+    a good one loads the edited code. Both halves run against the same `dev`
+    and the same `tatolabd` in sequence because the first is only meaningful if
+    the second follows: a loop that survives a bad save by ignoring the file
+    entirely would pass the first alone.
     """
     app_directory = make_scaffolded_test_pattern_project(make_tatolab_project, run_tatolab)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
     last_good_effect_source = effect_module.read_text()
+    tatolabd = start_tatolabd()
+    local_api = tatolabd.local_api_client()
 
-    tatolab = start_tatolab("dev", working_directory=app_directory)
-    tatolabd_pid_before_the_bad_save = tatolab.registry_entry(timeout=NODE_READY_TIMEOUT_SECONDS)[
-        "pid"
-    ]
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
+    dev = attach_the_projects_stream(tatolabd, app_directory, "dev")
+    dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
 
     time.sleep(SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS)
     effect_module.write_text("def process(self ctx:\n    this does not parse\n")
-    tatolab.await_stderr_containing(DEV_KEPT_THE_RUNNING_STREAM, timeout=NODE_READY_TIMEOUT_SECONDS)
-    time.sleep(
-        SCAFFOLD_OBSERVATION_WINDOW_SECONDS - SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS
+    dev.await_stderr_containing(DEV_LOADING_AGAIN_AFTER_A_SAVE, timeout=NODE_READY_TIMEOUT_SECONDS)
+    dev.await_stderr_containing(DEV_NO_STREAM_IS_LOADED, timeout=NODE_READY_TIMEOUT_SECONDS)
+    assert "SyntaxError" in dev.stderr_text, (
+        f"`dev` must show why the save was refused; standard error ended:\n{dev.recent_stderr()}"
     )
-    assert tatolab.process.poll() is None, (
-        f"a bad save must not take `dev` down; standard error ended:\n{tatolab.recent_stderr()}"
+    assert dev.process.poll() is None, (
+        f"a bad save must not take `dev` down; standard error ended:\n{dev.recent_stderr()}"
     )
-    assert tatolab.registry_entry()["pid"] == tatolabd_pid_before_the_bad_save, (
-        "a bad save must leave the running tatolabd in place"
+    assert local_api.list_streams() == [], "a refused load leaves nothing loaded"
+    assert_the_window_showed_live_video(
+        tatolabd, the_first_streams_output(tatolabd), "the stream running when the bad save landed"
     )
-    assert DISPLAY_WINDOW_FRAME_COUNT.search(tatolab.stderr_text) is None, (
-        "the window stopped although the bad save was to keep the stream running"
+    assert ENGINE_GRACEFUL_STOP_LOG_LINE in tatolabd.stderr_text, (
+        "the stream running when the bad save landed did not stop gracefully"
     )
 
     effect_module.write_text(the_scaffolded_effect_edited(last_good_effect_source))
-    tatolab.await_stderr_containing(DEV_RESTARTING_THE_STREAM, timeout=NODE_READY_TIMEOUT_SECONDS)
-    the_first_streams_stop = tatolab.await_stderr_containing(
-        "DisplayWindow: stopped", timeout=CLEAN_EXIT_TIMEOUT_SECONDS
-    )
-    first_stream_output = tatolab.stderr_text.split(the_first_streams_stop, 1)[0] + (
-        the_first_streams_stop
-    )
-    assert_the_window_showed_live_video(
-        tatolab, first_stream_output, "the stream running when the bad save landed"
-    )
-
-    tatolab.await_marker("EDITED_EFFECT", timeout=NODE_READY_TIMEOUT_SECONDS)
-    assert DEV_PREVIOUS_STREAM_EXITED_BADLY not in tatolab.stderr_text, (
-        "a bad save must not take the running node down: the stream that survived "
-        f"it exited unclean on the restart; standard error ended:\n{tatolab.recent_stderr()}"
-    )
-    tatolab.await_stderr_containing(
+    dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=2)
+    tatolabd.await_marker("EDITED_EFFECT", timeout=NODE_READY_TIMEOUT_SECONDS)
+    tatolabd.await_stderr_containing(
         ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=2
     )
-    stderr_lines = list(tatolab.stderr_lines)
-    engine_started_line_indices = [
-        line_index
-        for line_index, stderr_line in enumerate(stderr_lines)
-        if ENGINE_STARTED_LOG_LINE in stderr_line
-    ]
-    lines_before_the_second_stream_started = stderr_lines[: engine_started_line_indices[1]]
-    assert any(
-        ENGINE_GRACEFUL_STOP_LOG_LINE in stderr_line
-        for stderr_line in lines_before_the_second_stream_started
-    ), (
-        "the stream that survived the bad save did not shut down gracefully before "
-        "the restart started the edited one"
-    )
-    tatolabd_pid_after_the_good_save = tatolab.registry_entry()["pid"]
-    assert tatolabd_pid_after_the_good_save != tatolabd_pid_before_the_bad_save, (
-        "a good save restarts the stream on a tatolabd of its own"
-    )
+    assert tatolabd.process.poll() is None, "every load of the edit loop lands on the one runtime"
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab.recent_stderr()
+    dev.interrupt()
+    assert dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, dev.recent_stderr()
 
 
 def test_a_bad_config_is_reported_without_a_launcher_traceback(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """`tatolabd`'s load refuses a config its built-in does not take, naming the
-    node and the setting, before the engine starts. It is still the app's
+    """The runtime's load refuses a config its built-in does not take, naming
+    the node and the setting, before the engine starts. It is still the app's
     problem, not a launcher crash."""
     app_directory = make_tatolab_project(
         {
@@ -1066,32 +864,33 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
             )
         }
     )
+    tatolabd = start_tatolabd()
 
-    tatolab = start_tatolab("run", working_directory=app_directory)
+    attached = attach_the_projects_stream(tatolabd, app_directory)
 
-    assert tatolab.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1
-    output = tatolab.stderr_text
+    assert attached.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1
+    output = attached.stderr_text
     assert "Traceback (most recent call last)" not in output, (
         f"an engine-side failure must not arrive as a launcher traceback; output was:\n{output}"
     )
-    refusal = tatolab.refusal()
-    assert refusal is not None, f"tatolabd must end on its refusal; output was:\n{output}"
+    refusal = attached.refusal()
+    assert refusal is not None, f"`tatolab run` must end on the runtime's refusal; output was:\n{output}"
     assert "`tatolab.stream:TestPatternSource`" in refusal, refusal
     assert "width: invalid type" in refusal, refusal
-    assert ENGINE_STARTED_LOG_LINE not in output
+    assert ENGINE_STARTED_LOG_LINE not in tatolabd.stderr_text
+    assert tatolabd.local_api_client().list_streams() == []
 
 
 @pytest.mark.parametrize("verb", ["run", "dev"])
-def test_a_stream_function_that_raises_publishes_no_node(
+def test_a_stream_function_that_raises_loads_nothing(
     verb: str,
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
-    private_runtime_directories: PrivateRuntimeDirectories,
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """A graph that failed to build must not leave a node advertising itself.
+    """A graph that failed to build must not leave a stream in the runtime.
 
     `run` ends with the compile's failure; `dev` reports it and waits for the
-    save that fixes it, with no stream running, until a Ctrl-C ends it.
+    save that fixes it, with nothing loaded, until a Ctrl-C ends it.
     """
     app_directory = make_tatolab_project(
         {
@@ -1105,21 +904,21 @@ def test_a_stream_function_that_raises_publishes_no_node(
             )
         }
     )
-    streamlib_runtime_directory = private_runtime_directories.streamlib_runtime_directory
+    tatolabd = start_tatolabd()
 
-    tatolab = start_tatolab(verb, working_directory=app_directory)
+    attached = attach_the_projects_stream(tatolabd, app_directory, verb)
 
     if verb == "run":
-        assert tatolab.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1, (
+        assert attached.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 1, (
             f"a raising stream function must exit non-zero; standard error:\n"
-            f"{tatolab.recent_stderr()}"
+            f"{attached.recent_stderr()}"
         )
     else:
-        tatolab.await_stderr_containing(DEV_NO_STREAM_IS_RUNNING, timeout=NODE_READY_TIMEOUT_SECONDS)
-        assert tatolab.hosting_tatolabd_process_ids() == set(), "dev started a tatolabd anyway"
-        tatolab.interrupt()
-        assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 128 + signal.SIGINT
-    assert "ValueError: bad wiring" in tatolab.stderr_text, tatolab.recent_stderr()
-    assert registry_entry_paths_in(streamlib_runtime_directory) == [], (
-        "the control plane must be hosted only after the stream compiled and loaded"
+        attached.await_stderr_containing(DEV_NO_STREAM_IS_LOADED, timeout=NODE_READY_TIMEOUT_SECONDS)
+        attached.interrupt()
+        assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, attached.recent_stderr()
+    assert "ValueError: bad wiring" in attached.stderr_text, attached.recent_stderr()
+    assert tatolabd.local_api_client().list_streams() == [], (
+        "a stream whose function raised must never be loaded"
     )
+    assert "[start] Starting the stream" not in tatolabd.stderr_text, tatolabd.recent_stderr()

@@ -13,7 +13,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from runtime_process_under_test import NOT_A_MARKER_LINE, MarkerLineParser, RuntimeProcessUnderTest
+from runtime_process_under_test import (
+    NOT_A_MARKER_LINE,
+    TATOLABD_REFUSAL_LINE_PREFIX,
+    MarkerLineParser,
+    RuntimeProcessUnderTest,
+)
 
 HELPER_LOG_LINE_PREFIX = (
     "04:31:48.995 [ INFO] [Rkw2n8cmioeuanqbpm42ybutl/python] streamlib::polyglot::python — "
@@ -70,8 +75,7 @@ def test_waits_read_every_marker_and_line_from_the_start_of_standard_error(tmp_p
             start_new_session=True,
         ),
         command_description="write_standard_error.py",
-        streamlib_runtime_directory=tmp_path,
-        hosting_tatolabd_is_a_child=False,
+        refusal_line_prefix=TATOLABD_REFUSAL_LINE_PREFIX,
     )
     try:
         assert process_under_test.await_marker("FIRST", occurrence=2, timeout=10) == {"n": 2}
