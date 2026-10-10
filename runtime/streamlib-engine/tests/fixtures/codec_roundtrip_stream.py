@@ -12,10 +12,11 @@ All four blocks are native built-ins, so this stream declares no Python node
 and the graph spawns no helper process — what runs under the markers is the
 engine's own path, unwrapped.
 
-`PIPELINE=python e2e_fixture_psnr_vivid.sh` runs it with `tatolab run`, which
-hands a stream no argv: `STREAMLIB_FIXTURE_VIDEO_CODEC` picks the codec (`h264`
-by default) and `STREAMLIB_CAMERA_DEVICE` the V4L2 node, else the first the
-engine finds. The decoder is named `decoder` because that script derives the
+`PIPELINE=python e2e_fixture_psnr_vivid.sh` loads it with `tatolab run` into a
+`tatolabd` it starts with the stream's settings in its environment, which the
+compile inherits: `STREAMLIB_FIXTURE_VIDEO_CODEC` picks the codec (`h264` by
+default) and `STREAMLIB_CAMERA_DEVICE` the V4L2 node, else the first the engine
+finds. The decoder is named `decoder` because that script derives the
 channel it exchanges from the live graph by node name, and it derives it the
 same way for both arms.
 """

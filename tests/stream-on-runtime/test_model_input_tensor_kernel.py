@@ -31,9 +31,10 @@ pytestmark = pytest.mark.requires_gpu
 
 
 def run_scenario(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario_stream: "Callable[..., Any]"
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
+    scenario_stream: "Callable[..., Any]",
 ) -> dict:
-    tatolabd = start_tatolabd(scenario_stream)
+    tatolabd = start_tatolabd_running_stream(scenario_stream)
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -54,10 +55,10 @@ def expected_shape(fit_case_name: str, layout: str) -> "list[int]":
 
 @pytest.mark.parametrize("fit_case_name", list(FIT_CASES))
 def test_every_layout_and_dtype_of_a_fit_matches_the_torch_reference(
-    start_tatolabd, fit_case_name: str
+    start_tatolabd_running_stream, fit_case_name: str
 ):
     observed = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         model_input_tensor_kernel_streams.MATRIX_STREAM_BY_FIT_CASE_NAME[fit_case_name],
     )
 
@@ -80,11 +81,11 @@ def test_every_layout_and_dtype_of_a_fit_matches_the_torch_reference(
 
 
 def test_the_comparison_fails_for_a_kernel_compiled_with_the_wrong_mean(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The negative control: a mean a tenth off must not pass the check above."""
     observed = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         model_input_tensor_kernel_streams.a_test_pattern_into_the_letterbox_matrix_probe_with_the_wrong_mean,
     )
 
@@ -92,9 +93,9 @@ def test_the_comparison_fails_for_a_kernel_compiled_with_the_wrong_mean(
         assert case["max_error_in_pixel_levels"] > TOLERATED_ERROR_IN_PIXEL_LEVELS, name
 
 
-def test_a_bgra_frame_and_a_tensor_surface_are_refused_by_name(start_tatolabd):
+def test_a_bgra_frame_and_a_tensor_surface_are_refused_by_name(start_tatolabd_running_stream):
     observed = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         model_input_tensor_kernel_streams.a_test_pattern_into_the_non_rgba_source_refusal_probe,
     )
 
@@ -107,10 +108,10 @@ def test_a_bgra_frame_and_a_tensor_surface_are_refused_by_name(start_tatolabd):
 
 
 def test_a_pad_bottom_right_tensor_follows_its_frame_across_an_extent_change(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     observed = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         model_input_tensor_kernel_streams.a_test_pattern_into_the_pad_bottom_right_extent_change_probe,
     )
 

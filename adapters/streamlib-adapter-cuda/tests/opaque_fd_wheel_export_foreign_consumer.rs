@@ -19,17 +19,21 @@
 //! conformance is the separate work noted on the change.
 //!
 //! The stream is the integration suite's own
-//! (`tests/stream-on-runtime/device_exchange_streams.py`), compiled by the
-//! suite venv's interpreter and hosted by the runtime unit's `tatolabd`
-//! (`$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else `target/tatolab-runtime`,
-//! built by `cargo xtask build-runtime`), whose processor interpreters start
-//! from that same venv.
+//! (`tests/stream-on-runtime/device_exchange_streams.py`), loaded with the
+//! runtime unit's `tatolab run -d` into the unit's `tatolabd`, which compiles
+//! it in the suite venv and starts its processor interpreters from that same
+//! venv. The unit (`$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else
+//! `target/tatolab-runtime`) is the integration suite's, built by `cargo xtask
+//! build-runtime --machine-directories-under-a-test-root`, so the runtime this
+//! test starts keeps its lock, sockets and state under a temporary machine
+//! root and never touches the machine's own.
 //!
 //! Test gating: Linux-only by construction; skips when Vulkan (or the
 //! OPAQUE_FD pools the local staging allocation needs) is unavailable —
 //! mirroring the sibling carve-out tests. Once the device is proven, a
-//! missing suite venv or runtime unit, or a `tatolabd` that ends before the
-//! probe connects for any reason but a missing Vulkan driver, fails the test.
+//! missing suite venv, a missing runtime unit or one built without the test
+//! root, a refused load, or a `tatolabd` that ends before the probe connects
+//! for any reason but a missing Vulkan driver, fails the test.
 
 #![cfg(target_os = "linux")]
 
@@ -69,6 +73,18 @@ const OPAQUE_FD_EXPORT_HANDOFF_STREAM: &str = "opaque_fd_export_handoff_probe_al
 
 const RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_UNIT_DIRECTORY";
 
+/// The file `cargo xtask build-runtime --machine-directories-under-a-test-root`
+/// leaves at the root of a unit whose binaries keep the machine's directories
+/// under `TATOLAB_TEST_MACHINE_ROOT`.
+const TEST_MACHINE_ROOT_RUNTIME_UNIT_MARKER_FILE_NAME: &str =
+    "machine-directories-under-a-test-root";
+
+/// The variable a test-root build reads its machine root from.
+const TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE: &str = "TATOLAB_TEST_MACHINE_ROOT";
+
+/// The name the handoff stream is loaded under.
+const OPAQUE_FD_EXPORT_HANDOFF_STREAM_NAME: &str = "opaque_fd_export_handoff";
+
 /// The refusal `tatolabd` ends with when the loader finds no Vulkan driver at all.
 const TATOLABD_NO_VULKAN_DRIVER_REFUSAL: &str = "No usable Vulkan driver";
 
@@ -86,34 +102,47 @@ fn runtime_unit_directory() -> PathBuf {
         .unwrap_or_else(|| repository_root().join("target/tatolab-runtime"))
 }
 
-/// Compile the suite's handoff stream to a graph file with the suite venv's
-/// interpreter, from the suite directory so its modules import.
-fn compile_the_handoff_stream_graph(
-    suite_venv_interpreter: &Path,
-    stream_graph_file: &Path,
-) -> Result<(), String> {
-    let compiled = Command::new(suite_venv_interpreter)
-        .arg("-c")
-        .arg(format!(
-            "import json, sys\n\
-             from tatolab.stream import compile_stream_to_graph\n\
-             import device_exchange_streams\n\
-             json.dump(compile_stream_to_graph(device_exchange_streams.{OPAQUE_FD_EXPORT_HANDOFF_STREAM}), sys.stdout)\n"
-        ))
-        .current_dir(stream_on_runtime_suite_directory())
-        .env_remove("PYTHONPATH")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|spawn_failure| format!("the suite interpreter would not start: {spawn_failure}"))?;
-    if !compiled.status.success() {
-        return Err(format!(
-            "compiling the handoff stream exited {}:\n{}",
-            compiled.status,
-            String::from_utf8_lossy(&compiled.stderr)
-        ));
+/// The `tatolab run -d` that asks the runtime to load the handoff stream, and
+/// the file its output drains into. It runs beside the accept below, so a load
+/// that answers late never holds the probe's connect back; `Drop` kills a run
+/// still waiting when the test ends early.
+struct TatolabRunLoadingTheHandoffStream {
+    tatolab_run_process: Child,
+    output_capture_path: PathBuf,
+}
+
+impl TatolabRunLoadingTheHandoffStream {
+    fn exited(&mut self) -> Option<std::process::ExitStatus> {
+        self.tatolab_run_process.try_wait().ok().flatten()
     }
-    std::fs::write(stream_graph_file, &compiled.stdout)
-        .map_err(|write_failure| format!("writing the graph file failed: {write_failure}"))
+
+    fn output(&self) -> String {
+        String::from_utf8_lossy(&std::fs::read(&self.output_capture_path).unwrap_or_default())
+            .into_owned()
+    }
+
+    /// The run's exit status once it answers, within `budget`.
+    fn wait_for_its_exit(&mut self, budget: Duration) -> Option<std::process::ExitStatus> {
+        let deadline = Instant::now() + budget;
+        loop {
+            if let Some(exit) = self.exited() {
+                return Some(exit);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+impl Drop for TatolabRunLoadingTheHandoffStream {
+    fn drop(&mut self) {
+        if self.exited().is_none() {
+            let _ = self.tatolab_run_process.kill();
+            let _ = self.tatolab_run_process.wait();
+        }
+    }
 }
 
 /// The spawned `tatolabd` plus the files its stdout/stderr drain into. It
@@ -292,28 +321,38 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
          tests/stream-on-runtime"
     );
     let tatolabd = runtime_unit_directory().join("bin/tatolabd");
+    let tatolab = runtime_unit_directory().join("bin/tatolab");
+    for runtime_unit_binary in [&tatolabd, &tatolab] {
+        assert!(
+            runtime_unit_binary.exists(),
+            "no runtime unit binary at {runtime_unit_binary:?}; run `cargo xtask build-runtime \
+             --machine-directories-under-a-test-root` (or point \
+             {RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE} at a unit built so)"
+        );
+    }
+    let test_machine_root_marker =
+        runtime_unit_directory().join(TEST_MACHINE_ROOT_RUNTIME_UNIT_MARKER_FILE_NAME);
     assert!(
-        tatolabd.exists(),
-        "no runtime unit's tatolabd at {tatolabd:?}; run `cargo xtask build-runtime` \
-         (or point {RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE} at a built unit)"
+        test_machine_root_marker.exists(),
+        "the runtime unit at {:?} carries no {TEST_MACHINE_ROOT_RUNTIME_UNIT_MARKER_FILE_NAME} \
+         marker, so its tatolabd would take this machine's real runtime lock; build it with \
+         `cargo xtask build-runtime --machine-directories-under-a-test-root`",
+        runtime_unit_directory()
     );
 
-    // Under the shared temporary directory, short: the runtime directory
-    // under `XDG_RUNTIME_DIR` holds Unix sockets whose paths must fit `sun_path`.
+    // Under the shared temporary directory, short: the machine root holds the
+    // runtime directory, whose Unix sockets' paths must fit `sun_path`.
     let run_state_directory = tempfile::Builder::new()
         .prefix("sl-fd-")
         .tempdir_in("/tmp")
         .expect("a temporary state directory for tatolabd");
-    let xdg_runtime_directory = run_state_directory.path().join("xdg");
+    let test_machine_root = run_state_directory.path().join("m");
     let streamlib_home = run_state_directory.path().join("home");
-    for private_directory in [&xdg_runtime_directory, &streamlib_home] {
+    for private_directory in [&test_machine_root, &streamlib_home] {
         std::fs::create_dir(private_directory).expect("a private state directory");
         std::fs::set_permissions(private_directory, std::fs::Permissions::from_mode(0o700))
             .expect("the state directory is private");
     }
-    let stream_graph_file = run_state_directory.path().join("stream-graph.json");
-    compile_the_handoff_stream_graph(&suite_venv_interpreter, &stream_graph_file)
-        .unwrap_or_else(|compile_failure| panic!("{compile_failure}"));
 
     let socket_path = run_state_directory.path().join("opaque-fd-handoff.sock");
     let listener = UnixListener::bind(&socket_path).expect("bind the handoff socket");
@@ -326,14 +365,8 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     let stdout_capture_path = run_state_directory.path().join("tatolabd-stdout.log");
     let stderr_capture_path = run_state_directory.path().join("tatolabd-stderr.log");
     let tatolabd_process = Command::new(&tatolabd)
-        .arg("--stream-graph")
-        .arg(&stream_graph_file)
-        .arg("--project")
-        .arg(stream_on_runtime_suite_directory())
-        .arg("--interpreter")
-        .arg(&suite_venv_interpreter)
         .current_dir(run_state_directory.path())
-        .env("XDG_RUNTIME_DIR", &xdg_runtime_directory)
+        .env(TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE, &test_machine_root)
         .env("STREAMLIB_HOME", &streamlib_home)
         .env("STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET", &socket_path)
         .env_remove("STREAMLIB_RUNTIME_NAME")
@@ -350,11 +383,77 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
             File::create(&stderr_capture_path).expect("create the stderr capture"),
         ))
         .spawn()
-        .expect("spawn tatolabd hosting the handoff stream");
+        .expect("spawn tatolabd to host the handoff stream");
     let mut hosting_tatolabd = TatolabdHostingTheHandoffStream {
         tatolabd_process,
         stdout_capture_path,
         stderr_capture_path,
+    };
+
+    // Until the runtime's local API answers: the first `streams` call that
+    // succeeds. A runtime that ends first is told apart below.
+    let local_api_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(exit) = hosting_tatolabd.exited() {
+            let stderr_tail = TatolabdHostingTheHandoffStream::capture_tail(
+                &hosting_tatolabd.stderr_capture_path,
+            );
+            if stderr_tail.contains(TATOLABD_NO_VULKAN_DRIVER_REFUSAL) {
+                println!(
+                    "wheel export handoff: tatolabd found no Vulkan driver — skipping.\n{}",
+                    hosting_tatolabd.diagnostic_tails()
+                );
+                return;
+            }
+            panic!(
+                "tatolabd exited {exit} before its local API answered.\n{}",
+                hosting_tatolabd.diagnostic_tails()
+            );
+        }
+        let streams_listed = Command::new(&tatolab)
+            .arg("streams")
+            .env(TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE, &test_machine_root)
+            .stdin(Stdio::null())
+            .output()
+            .expect("run the runtime unit's tatolab");
+        if streams_listed.status.success() {
+            break;
+        }
+        assert!(
+            Instant::now() < local_api_deadline,
+            "tatolabd's local API never answered: {}\n{}",
+            String::from_utf8_lossy(&streams_listed.stderr),
+            hosting_tatolabd.diagnostic_tails()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let tatolab_run_output_capture_path = run_state_directory.path().join("tatolab-run.log");
+    let tatolab_run_output_capture =
+        File::create(&tatolab_run_output_capture_path).expect("create the tatolab run capture");
+    let tatolab_run_process = Command::new(&tatolab)
+        .arg("run")
+        .arg("-d")
+        .arg("--dir")
+        .arg(stream_on_runtime_suite_directory())
+        .arg("--name")
+        .arg(OPAQUE_FD_EXPORT_HANDOFF_STREAM_NAME)
+        .arg(format!(
+            "device_exchange_streams.py:{OPAQUE_FD_EXPORT_HANDOFF_STREAM}"
+        ))
+        .env(TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE, &test_machine_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(
+            tatolab_run_output_capture
+                .try_clone()
+                .expect("share the tatolab run capture"),
+        ))
+        .stderr(Stdio::from(tatolab_run_output_capture))
+        .spawn()
+        .expect("spawn tatolab run to load the handoff stream");
+    let mut loading_tatolab_run = TatolabRunLoadingTheHandoffStream {
+        tatolab_run_process,
+        output_capture_path: tatolab_run_output_capture_path,
     };
 
     let accept_deadline = Instant::now() + Duration::from_secs(120);
@@ -363,18 +462,15 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
             Ok((stream, _)) => break stream,
             Err(would_block) if would_block.kind() == std::io::ErrorKind::WouldBlock => {
                 if let Some(exit) = hosting_tatolabd.exited() {
-                    let stderr_tail = TatolabdHostingTheHandoffStream::capture_tail(
-                        &hosting_tatolabd.stderr_capture_path,
-                    );
-                    if stderr_tail.contains(TATOLABD_NO_VULKAN_DRIVER_REFUSAL) {
-                        println!(
-                            "wheel export handoff: tatolabd found no Vulkan driver — skipping.\n{}",
-                            hosting_tatolabd.diagnostic_tails()
-                        );
-                        return;
-                    }
                     panic!(
                         "tatolabd exited {exit} before the probe connected.\n{}",
+                        hosting_tatolabd.diagnostic_tails()
+                    );
+                }
+                if let Some(exit) = loading_tatolab_run.exited().filter(|exit| !exit.success()) {
+                    panic!(
+                        "tatolab run exited {exit} before the probe connected:\n{}\n{}",
+                        loading_tatolab_run.output(),
                         hosting_tatolabd.diagnostic_tails()
                     );
                 }
@@ -546,6 +642,10 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     use std::io::Write;
     let _ = (&stream).write_all(verdict);
     drop(stream);
+    let tatolab_run_exit = loading_tatolab_run.wait_for_its_exit(Duration::from_secs(120));
+    let tatolab_run_output = loading_tatolab_run.output();
+    drop(loading_tatolab_run);
+    let tatolabd_diagnostic_tails = hosting_tatolabd.diagnostic_tails();
     drop(hosting_tatolabd);
 
     assert!(
@@ -553,5 +653,10 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         "the foreign import driven by the processor's export bundle must read the kernel's \
          fill constant {FILL_CONSTANT_RGBA:?}; first pixel was {:?}",
         &readback[..4]
+    );
+    assert!(
+        tatolab_run_exit.is_some_and(|exit| exit.success()),
+        "tatolab run -d must load the handoff stream and exit 0; it ended {tatolab_run_exit:?}:\n\
+         {tatolab_run_output}\n{tatolabd_diagnostic_tails}"
     );
 }

@@ -35,9 +35,6 @@ mod apple_first_thread {
     use streamlib_engine::core::processor_owned_window::{
         ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget,
     };
-    use streamlib_engine::core::runtime::{
-        is_the_machines_shutdown_requested, take_the_machines_shutdown_escalation,
-    };
     use streamlib_engine::core::window_event_pump::{
         WindowEventPumpDriveOnTheFirstThreadOutcome,
         drive_the_window_event_pump_on_the_first_thread_until, process_wide_window_event_pump,
@@ -113,7 +110,7 @@ mod apple_first_thread {
                     let gpu_context_limited_access = gpu_context.limited_access();
                     let (presented_window, source_texture, window_to_open_later) =
                         mint_and_present_while_the_loop_is_driven(&gpu_context_limited_access);
-                    quit_from_the_application_menu_while_the_loop_is_driven();
+                    assert_no_menu_item_can_quit_the_process_while_the_loop_is_driven();
                     work_while_driven_is_done.store(true, Ordering::Release);
 
                     wait_until_the_loop_is_no_longer_driven
@@ -253,35 +250,37 @@ mod apple_first_thread {
         (presented_window, source_texture, window_to_open_later)
     }
 
-    /// Choose the application menu's Quit as a user would, and check it asks
-    /// for the shutdown of every loaded stream rather than terminating the process.
-    fn quit_from_the_application_menu_while_the_loop_is_driven() {
-        let mut quit_item_action = None;
+    /// No menu item the driven pump leaves in place can quit the process: the
+    /// runtime is stopped by a signal, and a stock Quit's `terminate:` would
+    /// end the process from under the loop.
+    fn assert_no_menu_item_can_quit_the_process_while_the_loop_is_driven() {
+        let mut items_that_quit = Vec::new();
         dispatch2::DispatchQueue::main().exec_sync(|| {
             let first_thread =
                 MainThreadMarker::new().expect("the main queue runs on the first thread");
-            let application_submenu = NSApplication::sharedApplication(first_thread)
-                .mainMenu()
-                .and_then(|menu_bar| menu_bar.itemAtIndex(0))
-                .and_then(|application_menu_item| application_menu_item.submenu())
-                .expect("the pump installs an application menu on its first drive");
-            quit_item_action = application_submenu
-                .itemAtIndex(0)
-                .and_then(|quit_item| quit_item.action());
-            if quit_item_action == Some(sel!(requestRuntimeShutdown:)) {
-                application_submenu.performActionForItemAtIndex(0);
+            let Some(menu_bar) = NSApplication::sharedApplication(first_thread).mainMenu() else {
+                return;
+            };
+            for menu_bar_index in 0..menu_bar.numberOfItems() {
+                let Some(submenu) = menu_bar
+                    .itemAtIndex(menu_bar_index)
+                    .and_then(|menu_bar_item| menu_bar_item.submenu())
+                else {
+                    continue;
+                };
+                for item_index in 0..submenu.numberOfItems() {
+                    if let Some(item) = submenu.itemAtIndex(item_index)
+                        && item.action() == Some(sel!(terminate:))
+                    {
+                        items_that_quit.push(item.title().to_string());
+                    }
+                }
             }
         });
-        assert_eq!(
-            quit_item_action,
-            Some(sel!(requestRuntimeShutdown:)),
-            "the menu's Quit must request a shutdown, never send `terminate:`"
-        );
         assert!(
-            is_the_machines_shutdown_requested(),
-            "the menu's Quit must reach the machine's shutdown request"
+            items_that_quit.is_empty(),
+            "the pump left menu items that send `terminate:`: {items_that_quit:?}"
         );
-        take_the_machines_shutdown_escalation();
     }
 
     fn open_and_release_while_the_loop_is_not_driven(

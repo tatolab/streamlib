@@ -96,7 +96,7 @@ def processor_interpreter_environment(
     environment = {
         name: value
         for name, value in os.environ.items()
-        if name not in ("PYTHONHOME", "PYTHONPATH") and not name.startswith("STREAMLIB_")
+        if not name.startswith("PYTHON") and not name.startswith("STREAMLIB_")
     }
     environment["PYTHONPATH"] = f"{lend_directory}{os.pathsep}{project_directory}"
     environment[processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV] = (

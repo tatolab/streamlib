@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab logs`: with RUNTIME_ID-STREAM, one loaded stream's on-disk JSONL log rendered as the
-//! runtime mirrored it; with `--list`, the stream logs on disk; with `--node`, a bounded sample of
-//! a running runtime's live event stream.
+//! runtime mirrored it; with `--list`, the stream logs on disk; with `--stream`, a loaded stream's
+//! records as the machine's runtime holds them, read by sequence number.
 
 use std::fmt::Write as _;
 use std::io::{self, Write};
@@ -19,6 +19,13 @@ use streamlib_runtime_client_contract::runtime_log_file_paths::{
     runtime_log_instances_in_directory,
 };
 
+use crate::TatolabCommandFailure;
+use crate::local_api_connection::LocalApiConnection;
+use crate::local_api_mcp_tool_client::{
+    LocalApiMcpToolClientFailure, OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+    tool_call_failure_worded_as_an_observation_verb_reports_it,
+};
+use crate::machine_runtime_local_api_socket::local_api_socket_of_the_running_runtime;
 use crate::process_signal_handling::{
     an_interrupt_was_delivered_during_the_read, end_the_read_on_interrupt,
 };
@@ -26,12 +33,11 @@ use crate::runtime_log_files_reader::{
     RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadFailure, RuntimeLogReadStep,
     RuntimeLogRecordFilters, RuntimeLogRecordsReader,
 };
-use crate::runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime;
+use crate::stream_log_records_from_the_runtime::{
+    LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
+    render_stream_log_records_page, stream_log_records_page_from,
+};
 use crate::verb_standard_output::standard_output_closed_or_failed;
-use crate::{RuntimeTargetArguments, TatolabCommandFailure};
-
-/// The local API tool `logs --node` drives.
-pub(crate) const LOGS_TOOL_NAME: &str = "logs";
 
 /// The width `--list` pads its RUNTIME_ID-STREAM and STARTED_AT columns to.
 const RUNTIME_LOG_LISTING_COLUMN_WIDTH: usize = 24;
@@ -43,13 +49,17 @@ const LATEST_STARTED_AT_YEAR_RENDERED_AS_A_DATE: i32 = 9999;
 #[derive(Args, Debug)]
 pub(crate) struct RuntimeLogsVerbArguments {
     /// The stream log to read: `<runtime_id>-<stream>`, as --list names it. Omit with --list or
-    /// --node.
+    /// --stream.
     #[arg(value_name = "RUNTIME_ID-STREAM")]
     pub(crate) stream_log_instance_name: Option<String>,
     /// Enumerate the stream logs on disk instead of reading one.
     #[arg(long = "list")]
     pub(crate) list_stream_logs_on_disk: bool,
-    /// Follow the log file as new records land (like `tail -F`).
+    /// Read this loaded stream's records from the running runtime instead of a file on disk.
+    #[arg(long = "stream", value_name = "STREAM")]
+    pub(crate) requested_stream: Option<String>,
+    /// Follow as new records land (like `tail -F`): the log file across rotations, or with
+    /// --stream the runtime's records by sequence number.
     #[arg(short = 'f', long = "follow")]
     pub(crate) follow_appended_records: bool,
     /// Only records from this processor id.
@@ -78,11 +88,6 @@ pub(crate) struct RuntimeLogsVerbArguments {
     /// Only intercepted records (captured stdout/stderr/print).
     #[arg(long = "intercepted-only")]
     pub(crate) intercepted_only: bool,
-    /// (--node only) Max events to collect before returning.
-    #[arg(long = "count", value_name = "N", allow_negative_numbers = true)]
-    pub(crate) requested_event_count: Option<i64>,
-    #[command(flatten)]
-    pub(crate) runtime_target: RuntimeTargetArguments,
 }
 
 /// A flag's value parser that takes exactly the JSONL record's spellings of `every_value`, listed
@@ -105,7 +110,7 @@ where
     )
 }
 
-/// What `logs` was asked to do on disk, once `--node` and `--count` are ruled out.
+/// What `logs` was asked to do on disk, once `--stream` is ruled out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct OnDiskRuntimeLogRequest {
     /// The stream log, `<runtime_id>-<stream>`, whose newest instance is read.
@@ -149,6 +154,14 @@ impl OnDiskRuntimeLogRequest {
             .filter(|&flag_name| flag_name != "--list")
             .collect()
     }
+
+    /// The flags given that name a file on disk, which a read from the runtime has no use for.
+    fn on_disk_only_flags_given(&self) -> Vec<&'static str> {
+        self.on_disk_flags_given()
+            .into_iter()
+            .filter(|&flag_name| matches!(flag_name, "RUNTIME_ID-STREAM" | "--list"))
+            .collect()
+    }
 }
 
 fn is_given(flag_value: &Option<String>) -> bool {
@@ -175,46 +188,50 @@ impl From<&RuntimeLogsVerbArguments> for OnDiskRuntimeLogRequest {
     }
 }
 
-/// `tatolab logs`: `--node` picks the live event stream, anything else reads the disk.
+/// `tatolab logs`: `--stream` reads a loaded stream's records from the runtime, anything else
+/// reads the disk.
 ///
-/// The on-disk flags have no meaning against a live event stream (the tool takes a count and
-/// nothing else), so asking for both is refused rather than silently ignoring the flag.
+/// A file's name and `--list` have no meaning against the runtime, so asking for both is refused
+/// rather than silently ignoring the flag.
 pub(crate) fn run_runtime_logs_verb(
     logs_arguments: RuntimeLogsVerbArguments,
 ) -> Result<u8, TatolabCommandFailure> {
     let on_disk_request = OnDiskRuntimeLogRequest::from(&logs_arguments);
-    if let Some(requested_runtime_name_or_id) = logs_arguments
-        .runtime_target
-        .requested_runtime_name_or_id
+    if let Some(requested_stream) = logs_arguments
+        .requested_stream
         .as_deref()
-        .filter(|requested_runtime_name_or_id| !requested_runtime_name_or_id.is_empty())
+        .filter(|requested_stream| !requested_stream.is_empty())
     {
-        let on_disk_flags_given = on_disk_request.on_disk_flags_given();
-        if !on_disk_flags_given.is_empty() {
+        let on_disk_only_flags_given = on_disk_request.on_disk_only_flags_given();
+        if !on_disk_only_flags_given.is_empty() {
             return Err(TatolabCommandFailure::refused(format!(
-                "`--node` reads a running runtime's live event stream, which takes no {}. Drop \
-                 `--node` to read an on-disk log file instead.",
-                on_disk_flags_given.join(", ")
+                "`--stream` reads a loaded stream's records from the runtime, which takes no {}. \
+                 Drop `--stream` to read an on-disk log file instead.",
+                on_disk_only_flags_given.join(", ")
             )));
         }
-        return print_local_api_tool_result_of_selected_runtime(
-            Some(requested_runtime_name_or_id),
-            LOGS_TOOL_NAME,
-            logs_tool_arguments(logs_arguments.requested_event_count),
+        let local_api_socket_path = local_api_socket_of_the_running_runtime()?;
+        route_ctrl_c_to_the_end_of_the_read()?;
+        let mut local_api_connection =
+            LocalApiConnection::open(&local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)?;
+        let standard_output = io::stdout();
+        let mut buffered_standard_output = io::BufWriter::new(standard_output.lock());
+        return print_stream_log_records_read_from_the_runtime(
+            requested_stream,
+            &mut |after| {
+                local_api_connection.call_tool(
+                    LOGS_TOOL_NAME,
+                    logs_tool_arguments_after(requested_stream, after),
+                )
+            },
+            &on_disk_request,
+            &mut buffered_standard_output,
+            &mut io::stderr(),
+            &an_interrupt_was_delivered_during_the_read,
+            STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL,
         );
     }
-    if logs_arguments.requested_event_count.is_some() {
-        return Err(TatolabCommandFailure::refused(
-            "`--count` bounds a live event-stream sample; it has no meaning for an on-disk log \
-             file. Use `--node`, or drop `--count`."
-                .to_owned(),
-        ));
-    }
-    end_the_read_on_interrupt().map_err(|interrupt_routing_failure| {
-        TatolabCommandFailure::refused(format!(
-            "cannot route Ctrl-C to the end of the read: {interrupt_routing_failure}"
-        ))
-    })?;
+    route_ctrl_c_to_the_end_of_the_read()?;
     let standard_output = io::stdout();
     let mut buffered_standard_output = io::BufWriter::new(standard_output.lock());
     print_stream_log_files_on_disk(
@@ -227,16 +244,66 @@ pub(crate) fn run_runtime_logs_verb(
     )
 }
 
-/// The `logs` tool's arguments: a count only when one was asked for and is not zero, so the
-/// tool's own default applies otherwise.
-pub(crate) fn logs_tool_arguments(
-    requested_event_count: Option<i64>,
-) -> serde_json::Map<String, serde_json::Value> {
-    let mut logs_arguments = serde_json::Map::new();
-    if let Some(requested_event_count) = requested_event_count.filter(|&count| count != 0) {
-        logs_arguments.insert("count".to_owned(), requested_event_count.into());
+fn route_ctrl_c_to_the_end_of_the_read() -> Result<(), TatolabCommandFailure> {
+    end_the_read_on_interrupt().map_err(|interrupt_routing_failure| {
+        TatolabCommandFailure::refused(format!(
+            "cannot route Ctrl-C to the end of the read: {interrupt_routing_failure}"
+        ))
+    })
+}
+
+/// `stream`'s records, each page read by `read_records_page_after` from a sequence number,
+/// rendered through the request's filters onto `standard_output` from the first record the
+/// runtime holds: to the newest when not following, and on until `read_interrupted` answers true
+/// when following, waiting `follow_poll_interval` after a page that brought nothing.
+pub(crate) fn print_stream_log_records_read_from_the_runtime(
+    stream: &str,
+    read_records_page_after: &mut dyn FnMut(u64) -> Result<String, LocalApiMcpToolClientFailure>,
+    stream_log_request: &OnDiskRuntimeLogRequest,
+    standard_output: &mut dyn Write,
+    standard_error: &mut dyn Write,
+    read_interrupted: &dyn Fn() -> bool,
+    follow_poll_interval: Duration,
+) -> Result<u8, TatolabCommandFailure> {
+    let mut after = 0;
+    while !read_interrupted() {
+        let logs_tool_result_text = read_records_page_after(after).map_err(|logs_failure| {
+            let _ = standard_output.flush();
+            tool_call_failure_worded_as_an_observation_verb_reports_it(LOGS_TOOL_NAME, logs_failure)
+        })?;
+        let stream_log_records_page = stream_log_records_page_from(&logs_tool_result_text)
+            .map_err(TatolabCommandFailure::refused)?;
+        let rendered_records = render_stream_log_records_page(
+            stream,
+            &stream_log_records_page,
+            &stream_log_request.record_filters,
+            standard_error,
+        );
+        let page_brought_nothing = stream_log_records_page.next_after == after;
+        after = stream_log_records_page.next_after;
+        let written = standard_output
+            .write_all(rendered_records.as_bytes())
+            .and_then(|()| {
+                if page_brought_nothing {
+                    standard_output.flush()
+                } else {
+                    Ok(())
+                }
+            });
+        if let Err(write_failure) = written {
+            return standard_output_closed_or_failed(write_failure);
+        }
+        if page_brought_nothing {
+            if !stream_log_request.follow_appended_records {
+                return Ok(0);
+            }
+            std::thread::sleep(follow_poll_interval);
+        }
     }
-    logs_arguments
+    match standard_output.flush() {
+        Ok(()) => Ok(0),
+        Err(write_failure) => standard_output_closed_or_failed(write_failure),
+    }
 }
 
 /// The on-disk side of `logs` against the log files in `log_directory`: `--list`, or one
@@ -275,7 +342,7 @@ pub(crate) fn print_stream_log_files_on_disk(
     let Some(stream_log_instance_name) = on_disk_request.stream_log_instance_name.as_deref() else {
         return Err(TatolabCommandFailure::refused(
             "missing RUNTIME_ID-STREAM.\n`tatolab logs --list` enumerates the stream logs on \
-             disk, and `--node` reads a running runtime's live event stream instead."
+             disk, and `--stream` reads a loaded stream's records from the runtime instead."
                 .to_owned(),
         ));
     };
@@ -470,12 +537,12 @@ pub(crate) fn format_size(size_bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     use clap::Parser;
 
     use super::*;
-    use crate::runtime_log_line_fixtures::a_log_line_with_message;
+    use crate::runtime_log_line_fixtures::{a_log_line_with_message, a_log_record};
 
     #[derive(Parser)]
     struct LogsVerbCommandLine {
@@ -490,49 +557,124 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_target_with_on_disk_flags_is_refused_naming_each_in_help_order() {
+    fn a_stream_with_a_file_name_or_list_is_refused_naming_each() {
         let refused = run_runtime_logs_verb(logs_arguments_parsed_from(&[
-            "--level",
-            "warn",
-            "Rabc",
-            "--node",
-            "rig-logs",
-            "--intercepted-only",
-            "--list",
-            "-f",
-            "--processor",
-            "proc",
-            "--pipeline",
-            "pipe",
-            "--rhi",
-            "--source",
-            "python",
+            "--level", "warn", "Rabc", "--stream", "camera", "--list", "-f",
         ]));
 
         assert_eq!(
             TatolabCommandFailure::refusal_message_of(refused),
-            "`--node` reads a running runtime's live event stream, which takes no \
-             RUNTIME_ID-STREAM, --list, --follow, --processor, --pipeline, --rhi, --level, --source, \
-             --intercepted-only. Drop `--node` to read an on-disk log file instead."
+            "`--stream` reads a loaded stream's records from the runtime, which takes no \
+             RUNTIME_ID-STREAM, --list. Drop `--stream` to read an on-disk log file instead."
         );
     }
 
-    #[test]
-    fn a_count_without_a_runtime_target_is_refused() {
-        for logs_flags in [
-            &["Rabc", "--count", "5"][..],
-            &["Rabc", "--count", "0"],
-            &["--list", "--count", "5", "--node", ""],
-        ] {
-            assert_eq!(
-                TatolabCommandFailure::refusal_message_of(run_runtime_logs_verb(
-                    logs_arguments_parsed_from(logs_flags)
-                )),
-                "`--count` bounds a live event-stream sample; it has no meaning for an on-disk \
-                 log file. Use `--node`, or drop `--count`.",
-                "{logs_flags:?}"
-            );
+    /// The pages `read_records_page_after` serves: `records` numbered from 1, at most
+    /// `page_size` after each `after`, every `after` asked for recorded.
+    fn paging_through(
+        records: Vec<serde_json::Value>,
+        page_size: usize,
+        afters_asked_for: &RefCell<Vec<u64>>,
+    ) -> impl FnMut(u64) -> Result<String, LocalApiMcpToolClientFailure> + '_ {
+        move |after| {
+            afters_asked_for.borrow_mut().push(after);
+            let page_records: Vec<serde_json::Value> = records
+                .iter()
+                .enumerate()
+                .skip(after as usize)
+                .take(page_size)
+                .map(|(record_index, record)| {
+                    serde_json::json!({"sequence": record_index + 1, "record": record})
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "stream": "camera",
+                "stream_instance": "4",
+                "next_after": after + page_records.len() as u64,
+                "records": page_records,
+                "records_no_longer_held": 0,
+            })
+            .to_string())
         }
+    }
+
+    #[test]
+    fn a_stream_read_pages_by_sequence_number_to_the_newest_record_and_ends() {
+        let afters_asked_for = RefCell::new(Vec::new());
+        let mut standard_output = Vec::new();
+
+        let printed = print_stream_log_records_read_from_the_runtime(
+            "camera",
+            &mut paging_through(
+                ["one", "two", "three"]
+                    .map(|message| a_log_record(serde_json::json!({"message": message})))
+                    .to_vec(),
+                2,
+                &afters_asked_for,
+            ),
+            &OnDiskRuntimeLogRequest::default(),
+            &mut standard_output,
+            &mut Vec::new(),
+            &|| false,
+            Duration::ZERO,
+        );
+
+        assert_eq!(printed.unwrap(), 0);
+        assert_eq!(
+            String::from_utf8(standard_output).unwrap(),
+            "21:04:27.573 [ INFO] [Rabc/rust] tatolabd — one\n\
+             21:04:27.573 [ INFO] [Rabc/rust] tatolabd — two\n\
+             21:04:27.573 [ INFO] [Rabc/rust] tatolabd — three\n"
+        );
+        assert_eq!(*afters_asked_for.borrow(), [0, 2, 3]);
+    }
+
+    #[test]
+    fn a_followed_stream_read_keeps_asking_after_the_newest_until_interrupted() {
+        let afters_asked_for = RefCell::new(Vec::new());
+        let read_interrupted = || afters_asked_for.borrow().len() >= 4;
+
+        let printed = print_stream_log_records_read_from_the_runtime(
+            "camera",
+            &mut paging_through(
+                vec![a_log_record(serde_json::json!({}))],
+                5,
+                &afters_asked_for,
+            ),
+            &OnDiskRuntimeLogRequest {
+                follow_appended_records: true,
+                ..Default::default()
+            },
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &read_interrupted,
+            Duration::ZERO,
+        );
+
+        assert_eq!(printed.unwrap(), 0);
+        assert_eq!(*afters_asked_for.borrow(), [0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn a_stream_the_runtime_refuses_is_refused_in_its_words() {
+        let printed = print_stream_log_records_read_from_the_runtime(
+            "gone",
+            &mut |_after| {
+                Err(LocalApiMcpToolClientFailure::tool_call_failed(
+                    "logs failed: no stream `gone` is loaded; loaded: camera".to_owned(),
+                ))
+            },
+            &OnDiskRuntimeLogRequest::default(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &|| false,
+            Duration::ZERO,
+        );
+
+        assert_eq!(
+            TatolabCommandFailure::refusal_message_of(printed),
+            "logs failed: no stream `gone` is loaded; loaded: camera"
+        );
     }
 
     #[test]
@@ -730,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_stream_log_instance_name_names_list_and_node() {
+    fn a_missing_stream_log_instance_name_names_list_and_stream() {
         let log_directory = tempfile::tempdir().unwrap();
 
         let (_, _, printed) = print_stream_log_files_on_disk_capturing_output(
@@ -741,7 +883,7 @@ mod tests {
         assert_eq!(
             TatolabCommandFailure::refusal_message_of(printed),
             "missing RUNTIME_ID-STREAM.\n`tatolab logs --list` enumerates the stream logs on \
-             disk, and `--node` reads a running runtime's live event stream instead."
+             disk, and `--stream` reads a loaded stream's records from the runtime instead."
         );
     }
 
@@ -899,22 +1041,6 @@ mod tests {
 
         assert_eq!(printed.unwrap(), 0);
         assert_eq!(standard_output, b"");
-    }
-
-    #[test]
-    fn the_logs_tool_is_sent_a_count_only_when_one_other_than_zero_was_asked_for() {
-        assert_eq!(
-            serde_json::Value::Object(logs_tool_arguments(Some(4))),
-            serde_json::json!({"count": 4})
-        );
-        assert_eq!(
-            serde_json::Value::Object(logs_tool_arguments(Some(0))),
-            serde_json::json!({})
-        );
-        assert_eq!(
-            serde_json::Value::Object(logs_tool_arguments(None)),
-            serde_json::json!({})
-        );
     }
 
     /// A pipe whose reader has gone, as `tatolab logs R | head -1` leaves it.

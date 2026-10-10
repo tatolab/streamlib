@@ -22,7 +22,8 @@ its own length and then stops, which is a legal recording — a `moof` owes a
 `traf` to no track — so the audio track is shorter than the video one by
 design.
 
-`tatolab run` hands a stream no argv, so its settings are the environment:
+A stream takes no argv, so its settings are the environment of the `tatolabd`
+it is loaded into, which its compile inherits:
 `STREAMLIB_RECORDING_PATH` is the file to record into, created or truncated at
 startup; `STREAMLIB_FIXTURE_VIDEO_CODEC` picks the codec (`h264` by default);
 `STREAMLIB_CAMERA_DEVICE` names the V4L2 node, else the first the engine finds.

@@ -37,6 +37,11 @@ audible-hardware-tests = ["hardware-tests"]
 # a consumer's `[dev-dependencies]`, so it is physically excluded from a
 # production build's dependency graph.
 test-support = []
+# Test builds only, never a release: the runtime directory the engine resolves moves under the
+# absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
+machine-directories-under-a-test-root = [
+    "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
+]
 
 # Codec-layer debug knob (`vulkan/video/codec_utils/vk_buffer_resource.rs`):
 # zero out bitstream buffers when (re)allocating, to make NAL-parser bugs
@@ -67,7 +72,7 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.43.1" }
 streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.43.1" }
 
 # What a running runtime leaves on disk for its clients — STREAMLIB_HOME, the
-# runtime directory, the node registry and the JSONL runtime log — defined once
+# runtime directory, the state directory and the JSONL runtime log — defined once
 # for the engine that writes it and the engine-free CLI that reads it.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.43.1" }
 

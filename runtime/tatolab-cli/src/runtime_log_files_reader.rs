@@ -12,6 +12,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde::de::IgnoredAny;
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogEvent, Source};
 use streamlib_runtime_client_contract::runtime_log_event_pretty_rendering::format_event_pretty;
@@ -112,7 +113,10 @@ impl RuntimeLogReadFailure {
 
 /// One JSONL line as a record, or `None` — with a warning on `warning_output` — when it is not
 /// one. A truncated or foreign line is skipped rather than ending the read.
-fn decode_runtime_log_line(line: &[u8], warning_output: &mut dyn Write) -> Option<RuntimeLogEvent> {
+pub(crate) fn decode_runtime_log_line(
+    line: &[u8],
+    warning_output: &mut dyn Write,
+) -> Option<RuntimeLogEvent> {
     let line_text = String::from_utf8_lossy(line);
     let trimmed_line = line_text.trim();
     if trimmed_line.is_empty() {
@@ -128,15 +132,37 @@ fn decode_runtime_log_line(line: &[u8], warning_output: &mut dyn Write) -> Optio
             warning_output,
             "warning: skipping malformed JSONL line: {json_syntax_failure}"
         ),
-        Ok(IgnoredAny) if !trimmed_line.starts_with('{') => writeln!(
-            warning_output,
-            "warning: skipping JSONL line that is not a record object"
-        ),
-        Ok(IgnoredAny) => writeln!(
-            warning_output,
-            "warning: skipping JSONL line whose fields do not match the record schema"
-        ),
+        Ok(IgnoredAny) if !trimmed_line.starts_with('{') => {
+            writeln!(warning_output, "{NOT_A_RECORD_OBJECT_WARNING}")
+        }
+        Ok(IgnoredAny) => writeln!(warning_output, "{RECORD_SCHEMA_MISMATCH_WARNING}"),
     };
+    None
+}
+
+/// The warning a JSON value that is not an object earns in place of a record.
+const NOT_A_RECORD_OBJECT_WARNING: &str =
+    "warning: skipping JSONL line that is not a record object";
+
+/// The warning an object whose fields are not a record's earns.
+const RECORD_SCHEMA_MISMATCH_WARNING: &str =
+    "warning: skipping JSONL line whose fields do not match the record schema";
+
+/// A record the runtime handed over already parsed, or `None` — with the warning the same JSONL
+/// line would earn on `warning_output` — when it is not one.
+pub(crate) fn decode_runtime_log_record_value(
+    record: &serde_json::Value,
+    warning_output: &mut dyn Write,
+) -> Option<RuntimeLogEvent> {
+    if let Ok(event) = RuntimeLogEvent::deserialize(record) {
+        return Some(event);
+    }
+    let warning = if record.is_object() {
+        RECORD_SCHEMA_MISMATCH_WARNING
+    } else {
+        NOT_A_RECORD_OBJECT_WARNING
+    };
+    let _ = writeln!(warning_output, "{warning}");
     None
 }
 

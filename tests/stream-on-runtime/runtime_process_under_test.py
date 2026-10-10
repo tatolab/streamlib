@@ -9,14 +9,12 @@ Standard output and standard error are pumped by two reader threads into two
 line lists, so neither pipe can fill and wedge the runtime while a test waits.
 
 `tatolabd` writes every log line to standard error and nothing to standard
-output. A node reports with `log.info("MARKER:<NAME> <json>")`; the line reaches
-`tatolabd`'s standard error through the helper log drain, wrapped in a log
-record, and is matched anywhere in the line. A `tatolab` run passes its
-`tatolabd`'s standard error through, so the same waits read both.
-
-A node's registry entry is found by the pid of the `tatolabd` hosting it —
-`tatolabd` itself, or a `tatolab`'s child — never as "the only entry", because
-on macOS the runtime directory is shared with every other runtime on the machine.
+output, every loaded stream's records included. A node reports with
+`log.info("MARKER:<NAME> <json>")`; the line reaches `tatolabd`'s standard error
+through the helper log drain, wrapped in a log record, and is matched anywhere
+in the line. An attached `tatolab run` prints its stream's records on standard
+output and its own notes and refusal on standard error, so the marker waits
+read `tatolabd`'s standard error.
 """
 
 from __future__ import annotations
@@ -29,13 +27,9 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
-from local_api_client import LocalApiClient
-
-#: How long a wait on output, a registry entry or an exit lasts unless a test
-#: names its own. A cold start stands up a GPU context, an iceoryx2 node and a
+#: How long a wait on output or an exit lasts unless a test names its own. A cold start stands up a GPU context, an iceoryx2 node and a
 #: socket; a real hang blows through it anyway.
 DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS = 90.0
 
@@ -52,17 +46,17 @@ ENGINE_STARTED_LOG_LINE = "[start] The stream `"
 #: The engine's line when an interrupt ended the load before the stream started.
 STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT = "a machine shutdown was requested while the stream"
 
-#: The line `tatolabd` logs once the graph loaded, before the engine starts.
-STREAM_LOADED_LOG_LINE_PATTERN = re.compile(
-    r"the stream `(?P<stream_name>[^`]+)` loaded with (?P<stream_node_count>\d+) nodes"
-)
+#: The engine's line once a stream's graph has loaded and its start begins,
+#: before the engine's GPU context is reached.
+STREAM_START_BEGAN_LOG_LINE_PATTERN = re.compile(r"\[start\] Starting the stream `(?P<stream_name>[^`]+)`")
 
 #: How `tatolabd` ends every refusal: a final line on standard error.
 TATOLABD_REFUSAL_LINE_PREFIX = "tatolabd: "
 
-RECENT_OUTPUT_CHARACTERS = 6000
+#: How `tatolab` writes every refusal: a line on standard error.
+TATOLAB_REFUSAL_LINE_PREFIX = "error: "
 
-REGISTRY_POLL_INTERVAL_SECONDS = 0.05
+RECENT_OUTPUT_CHARACTERS = 6000
 
 READER_THREAD_JOIN_TIMEOUT_SECONDS = 5.0
 
@@ -79,23 +73,25 @@ NOT_A_MARKER_LINE = object()
 
 
 class RuntimeProcessUnderTest:
-    """One started `tatolabd` or `tatolab`, its output pumped and its waits bounded."""
+    """One started `tatolabd` or `tatolab`, its output pumped and its waits bounded.
+
+    `refusal_line_prefix` is how the command begins the line its refusal
+    starts on: `TATOLABD_REFUSAL_LINE_PREFIX` or `TATOLAB_REFUSAL_LINE_PREFIX`.
+    """
 
     def __init__(
         self,
         process: "subprocess.Popen[str]",
         *,
         command_description: str,
-        streamlib_runtime_directory: Path,
-        hosting_tatolabd_is_a_child: bool,
+        refusal_line_prefix: str,
     ) -> None:
         assert process.stdout is not None and process.stderr is not None, (
             "the process was started without its output piped"
         )
         self.process = process
         self.command_description = command_description
-        self.streamlib_runtime_directory = streamlib_runtime_directory
-        self._hosting_tatolabd_is_a_child = hosting_tatolabd_is_a_child
+        self.refusal_line_prefix = refusal_line_prefix
         self.stdout_lines: "list[str]" = []
         self.stderr_lines: "list[str]" = []
         # Reentrant, so a failure message can read the output while a wait holds it.
@@ -196,6 +192,17 @@ class RuntimeProcessUnderTest:
             f"{self.recent_stderr()}"
         )
 
+    def stderr_line_count(self) -> int:
+        """How many lines of standard error have been read so far: a mark a later
+        `stderr_text_since` reads from."""
+        with self._output_arrived:
+            return len(self.stderr_lines)
+
+    def stderr_text_since(self, stderr_line_count: int) -> str:
+        """Standard error from the `stderr_line_count`-th line on."""
+        with self._output_arrived:
+            return "".join(self.stderr_lines[stderr_line_count:])
+
     def await_stderr_containing(
         self,
         awaited_text: str,
@@ -279,17 +286,6 @@ class RuntimeProcessUnderTest:
             observe, f"every one of {sorted(marker_names)}", timeout
         )
 
-    def await_stream_loaded(
-        self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS
-    ) -> "re.Match[str]":
-        """Wait for `tatolabd`'s load line; its groups are `stream_name` and `stream_node_count`."""
-
-        def observe(line: str) -> Any:
-            loaded = STREAM_LOADED_LOG_LINE_PATTERN.search(line)
-            return NOT_YET_SEEN if loaded is None else loaded
-
-        return self._await_stderr_line_satisfying(observe, "the stream's load line", timeout)
-
     def send_signal(self, signal_number: int) -> None:
         """Signal the started process itself."""
         self.process.send_signal(signal_number)
@@ -351,71 +347,26 @@ class RuntimeProcessUnderTest:
         )
 
     def refusal(self) -> "str | None":
-        """`tatolabd`'s refusal: its last `tatolabd: <reason>` line, without the prefix,
-        through the end of standard error — a reason quoting an interpreter's
-        traceback runs over several lines."""
+        """The command's refusal: its last line starting with its refusal line
+        prefix, without the prefix, through the end of standard error — a reason
+        quoting an interpreter's traceback runs over several lines."""
         with self._output_arrived:
             refusal_line_indexes = [
                 index
                 for index, line in enumerate(self.stderr_lines)
-                if line.startswith(TATOLABD_REFUSAL_LINE_PREFIX)
+                if line.startswith(self.refusal_line_prefix)
             ]
             if not refusal_line_indexes:
                 return None
             refusal_text = "".join(self.stderr_lines[refusal_line_indexes[-1] :])
-        return refusal_text[len(TATOLABD_REFUSAL_LINE_PREFIX) :].rstrip("\n")
-
-    def hosting_tatolabd_process_ids(self) -> "set[int]":
-        """The pids a registry entry of this run names: `tatolabd`'s own, or a `tatolab`'s children."""
-        if not self._hosting_tatolabd_is_a_child:
-            return {self.pid}
-        return set(_child_process_ids(self.pid))
-
-    def registry_entry_path(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> Path:
-        """Wait for the registry entry naming this run's `tatolabd`, and return its file."""
-        deadline = time.monotonic() + timeout
-        while True:
-            hosting_process_ids = self.hosting_tatolabd_process_ids()
-            for entry_path, entry in _registry_entries_in(self.streamlib_runtime_directory):
-                if entry.get("pid") in hosting_process_ids:
-                    return entry_path
-            if self.process.poll() is not None:
-                raise AssertionError(
-                    f"`{self.command_description}` exited {self.process.returncode} before "
-                    f"publishing a registry entry; standard error:\n{self.recent_stderr()}"
-                )
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    f"no registry entry named this run's tatolabd ({sorted(hosting_process_ids)}) "
-                    f"in {self.streamlib_runtime_directory / 'nodes'} within {timeout}s; "
-                    f"standard error:\n{self.recent_stderr()}"
-                )
-            time.sleep(REGISTRY_POLL_INTERVAL_SECONDS)
-
-    def registry_entry(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> "dict[str, Any]":
-        """Wait for the registry entry naming this run's `tatolabd`, and return it decoded."""
-        return json.loads(self.registry_entry_path(timeout=timeout).read_text(encoding="utf-8"))
-
-    def local_api_socket_path(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> Path:
-        """The local API socket this run's registry entry names."""
-        return Path(self.registry_entry(timeout=timeout)["local_api_socket_path"])
-
-    def local_api_client(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> LocalApiClient:
-        """A client of this run's local API, once its socket exists."""
-        local_api_socket_path = self.local_api_socket_path(timeout=timeout)
-        deadline = time.monotonic() + timeout
-        while not local_api_socket_path.exists():
-            if time.monotonic() >= deadline:
-                raise AssertionError(f"{local_api_socket_path} never appeared")
-            time.sleep(REGISTRY_POLL_INTERVAL_SECONDS)
-        return LocalApiClient(local_api_socket_path)
+        return refusal_text[len(self.refusal_line_prefix) :].rstrip("\n")
 
     def kill_every_process_it_started(self) -> None:
         """SIGKILL the process, its process group, and every descendant's group.
 
-        A `tatolab` starts `tatolabd` in a process group of its own, and a
-        processor interpreter may lead its own, so the group of every descendant
-        is killed too. Leaves nothing holding a GPU context, a device or a socket.
+        A processor interpreter, a describe and a compile each lead a process
+        group of their own, so the group of every descendant is killed too.
+        Leaves nothing holding a GPU context, a device or a socket.
         """
         descendant_process_ids = _descendant_process_ids(self.pid)
         for process_id in [self.pid, *descendant_process_ids]:
@@ -469,25 +420,6 @@ class MarkerLineParser:
         except json.JSONDecodeError:
             return without_the_record_fields
         return payload
-
-
-def registry_entry_paths_in(streamlib_runtime_directory: Path) -> "list[Path]":
-    """Every node registry file under `<runtime directory>/nodes`."""
-    nodes_directory = streamlib_runtime_directory / "nodes"
-    if not nodes_directory.is_dir():
-        return []
-    return sorted(nodes_directory.glob("*.json"))
-
-
-def _registry_entries_in(streamlib_runtime_directory: Path) -> "list[tuple[Path, dict[str, Any]]]":
-    entries = []
-    for entry_path in registry_entry_paths_in(streamlib_runtime_directory):
-        try:
-            entries.append((entry_path, json.loads(entry_path.read_text(encoding="utf-8"))))
-        except (OSError, ValueError):
-            # Half-written: the writer is mid-publish.
-            continue
-    return entries
 
 
 def _child_process_ids(parent_process_id: int) -> "list[int]":

@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
@@ -15,9 +15,10 @@ use super::RuntimeName;
 use super::RuntimeUniqueId;
 use super::loaded_stream::LoadedStreamInThisRuntime;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
+use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
 use super::{RuntimeShutdownEscalation, StreamEnvironment};
 use crate::core::context::GpuContext;
-use crate::core::graph::cast_exposed_name_to_url_safe;
+use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, Result};
@@ -91,7 +92,7 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
 pub(crate) struct EngineResourcesSharedByEveryStream {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
-    /// The name this runtime's tap channels and node-registry row carry.
+    /// The name this runtime's tap channels carry.
     pub(crate) runtime_name: Arc<RuntimeName>,
     /// The streams loaded in this runtime, keyed by their URL-safe cast name.
     pub(crate) streams_loaded_in_this_runtime:
@@ -145,6 +146,9 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) iceoryx2_node: Iceoryx2Node,
     /// Tokio runtime storage - either owned or external handle.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
+    /// The runtime's own log, when the host asked for one; closed before the
+    /// hold on the logging pathway lets go.
+    runtime_own_log: Option<crate::core::logging::TheRuntimesOwnLogWhileItsEngineLives>,
     /// This engine's hold on the process's logging pathway, which keeps the
     /// standard streams intercepted while any engine lives.
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
@@ -307,7 +311,10 @@ enum SetupHooksOfTheEngine {
 /// Every graph operation is a stream's: load a stream, then use the
 /// [`LoadedStreamInThisRuntime`] it hands back.
 pub struct Runner {
-    engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
+    pub(super) engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
+    /// Where this runtime keeps its streams, and the lock its stream actions
+    /// take one at a time.
+    pub(super) stream_actions: StreamActionsOfTheEngine,
 }
 
 /// What a host chooses as it constructs a [`Runner`].
@@ -319,6 +326,9 @@ pub struct RunnerConstructionOptions {
     /// The standard stream the pretty log mirror writes to, when this runtime
     /// is the first in its process to install the process's logging pathway.
     pub pretty_log_mirror_stream: crate::core::logging::PrettyLogMirrorStandardStream,
+    /// Where the records no stream emits are also written as JSONL, to
+    /// `tatolabd-<started_at_millis>.jsonl`, rotated as a stream's log is.
+    pub runtime_own_log_directory: Option<PathBuf>,
 }
 
 /// What a host chooses as it loads one stream into a [`Runner`].
@@ -394,6 +404,16 @@ pub enum StreamLoadObservingMachineShutdownRequests {
     AbandonedForAMachineShutdownRequest,
 }
 
+/// What [`Runner::wait_until_every_stream_has_ended`] saw once every stream had
+/// ended.
+pub struct EveryStreamEndedDuringTheWait {
+    /// Every stream loaded at any point of the wait, in the order it was first
+    /// seen.
+    pub streams_seen_during_the_wait: Vec<Arc<LoadedStreamInThisRuntime>>,
+    /// How the first of them to end with a failure ended, or `Ok` when none did.
+    pub how_the_first_failed_stream_ended: Result<()>,
+}
+
 impl Runner {
     /// Build a runtime named from `STREAMLIB_RUNTIME_NAME` or the default.
     pub fn new() -> Result<Arc<Self>> {
@@ -407,6 +427,7 @@ impl Runner {
         let RunnerConstructionOptions {
             runtime_name,
             pretty_log_mirror_stream,
+            runtime_own_log_directory,
         } = construction_options;
         // Cap per-thread timer slack at 1 ns on the calling thread before
         // spawning any worker. Linux defaults to 50 µs grouping for
@@ -459,6 +480,12 @@ impl Runner {
             },
         )
         .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
+        let runtime_own_log = runtime_own_log_directory.as_deref().and_then(|directory| {
+            crate::core::logging::TheRuntimesOwnLogWhileItsEngineLives::open(
+                runtime_id.as_str(),
+                directory,
+            )
+        });
         let runtime_name = Arc::new(
             resolved_runtime_name
                 .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(),
@@ -537,9 +564,11 @@ impl Runner {
                 runtime_directory,
                 iceoryx2_node,
                 tokio_runtime_variant,
+                runtime_own_log,
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
                 process_logging_pathway_hold,
             }),
+            stream_actions: StreamActionsOfTheEngine::default(),
         }))
     }
 
@@ -594,9 +623,17 @@ impl Runner {
         &self.engine_resources_shared_by_every_stream.runtime_id
     }
 
-    /// The name this runtime's tap channels and node-registry row carry.
+    /// The name this runtime's tap channels carry.
     pub fn runtime_name(&self) -> &RuntimeName {
         &self.engine_resources_shared_by_every_stream.runtime_name
+    }
+
+    /// The active segment of the runtime's own log, `None` when it keeps none.
+    pub fn runtime_own_log_path(&self) -> Option<&std::path::Path> {
+        self.engine_resources_shared_by_every_stream
+            .runtime_own_log
+            .as_ref()
+            .and_then(|runtime_own_log| runtime_own_log.jsonl_log_path())
     }
 
     /// The runtime directory this runtime resolved as it was built.
@@ -655,7 +692,11 @@ impl Runner {
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let stream = self.build_the_stream_a_graph_load_names(graph, load_options)?;
+        let stream = self.build_the_stream_a_graph_load_names(
+            graph,
+            load_options,
+            LoadedStreamHolding::Attached,
+        )?;
         self.load_the_graph_into_the_stream(&stream, graph)?;
         self.insert_a_complete_stream(stream)
     }
@@ -670,13 +711,28 @@ impl Runner {
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
     ) -> Result<StreamLoadObservingMachineShutdownRequests> {
+        self.load_stream_held_as_unless_a_machine_shutdown_is_requested(
+            graph,
+            load_options,
+            LoadedStreamHolding::Attached,
+        )
+    }
+
+    /// [`Self::load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested`],
+    /// the stream held as `holding` from the moment it enters the table.
+    pub(super) fn load_stream_held_as_unless_a_machine_shutdown_is_requested(
+        &self,
+        graph: &GraphSnapshot,
+        load_options: OptionsForLoadingOneStream,
+        holding: LoadedStreamHolding,
+    ) -> Result<StreamLoadObservingMachineShutdownRequests> {
         use std::sync::mpsc::RecvTimeoutError;
 
         use crate::core::runtime::{
             RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, is_the_machines_shutdown_requested,
         };
 
-        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options) {
+        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options, holding) {
             Ok(stream) => stream,
             // Read after the build, so a request landing during it abandons
             // the load rather than refusing it.
@@ -776,7 +832,12 @@ impl Runner {
             load_options.stream_name.as_deref(),
             "an empty stream",
         )?;
-        let stream = self.build_a_stream(stream_name, load_options, teardown_watchdog_budget)?;
+        let stream = self.build_a_stream(
+            stream_name,
+            load_options,
+            teardown_watchdog_budget,
+            LoadedStreamHolding::Attached,
+        )?;
         self.insert_a_complete_stream(stream)
     }
 
@@ -790,15 +851,7 @@ impl Runner {
                 self.loaded_stream_names_listed_for_a_refusal()
             ))
         })?;
-        // Read under its own statement: the refusal lists the table, and the
-        // table's lock is not reentrant.
-        let loaded = self
-            .engine_resources_shared_by_every_stream
-            .streams_loaded_in_this_runtime
-            .lock()
-            .get(cast.as_ref())
-            .cloned();
-        loaded.ok_or_else(|| {
+        self.loaded_stream_of_the_cast_name(&cast).ok_or_else(|| {
             Error::NotFound(format!(
                 "no stream named `{stream_name}` is loaded in this runtime. Loaded: {}",
                 self.loaded_stream_names_listed_for_a_refusal()
@@ -806,8 +859,20 @@ impl Runner {
         })
     }
 
+    /// The loaded stream `stream_cast`, already cast, names.
+    pub(super) fn loaded_stream_of_the_cast_name(
+        &self,
+        stream_cast: &str,
+    ) -> Option<Arc<LoadedStreamInThisRuntime>> {
+        self.engine_resources_shared_by_every_stream
+            .streams_loaded_in_this_runtime
+            .lock()
+            .get(stream_cast)
+            .cloned()
+    }
+
     /// Every loaded stream, read under one lock of the stream table.
-    pub(crate) fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+    pub fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
         self.engine_resources_shared_by_every_stream
             .every_loaded_stream()
     }
@@ -874,9 +939,10 @@ impl Runner {
         stream.how_this_stream_ended_as_a_waiter_reports_it()
     }
 
-    /// Block until every loaded stream has ended, reporting the first that
-    /// ended with a failure.
-    pub fn wait_until_every_stream_has_ended(&self) -> Result<()> {
+    /// Block until every loaded stream has ended, including each loaded while
+    /// the wait runs, returning every stream it saw and the first that ended
+    /// with a failure.
+    pub fn wait_until_every_stream_has_ended(&self) -> EveryStreamEndedDuringTheWait {
         let streams_seen_during_the_wait: Mutex<Vec<Arc<LoadedStreamInThisRuntime>>> =
             Mutex::new(Vec::new());
         self.block_until(&|| {
@@ -891,12 +957,33 @@ impl Runner {
             }
             streams_seen.iter().all(|stream| stream.has_ended())
         });
-        streams_seen_during_the_wait
-            .into_inner()
+        let streams_seen_during_the_wait = streams_seen_during_the_wait.into_inner();
+        let how_the_first_failed_stream_ended = streams_seen_during_the_wait
             .iter()
             .map(|stream| stream.how_this_stream_ended_as_a_waiter_reports_it())
             .find(Result::is_err)
-            .unwrap_or(Ok(()))
+            .unwrap_or(Ok(()));
+        EveryStreamEndedDuringTheWait {
+            streams_seen_during_the_wait,
+            how_the_first_failed_stream_ended,
+        }
+    }
+
+    /// Block until the machine's shutdown is requested — a signal, or the
+    /// request the Rust SDK makes — with zero, one or many streams loaded.
+    pub fn wait_until_a_machine_shutdown_is_requested(&self) {
+        self.block_until(&crate::core::runtime::is_the_machines_shutdown_requested);
+    }
+
+    /// Block, as the waits above do, until `self` is the one reference left to
+    /// this engine or `budget` has passed; whether it is.
+    pub fn wait_until_this_reference_alone_holds_the_engine(
+        self: &Arc<Self>,
+        budget: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + budget;
+        self.block_until(&|| Arc::strong_count(self) == 1 || Instant::now() >= deadline);
+        Arc::strong_count(self) == 1
     }
 
     /// Poll until `has_ended` holds — driving the window event pump where the
@@ -1062,6 +1149,7 @@ impl Runner {
         &self,
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
+        holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         let requested_stream_name = load_options
             .stream_name
@@ -1081,6 +1169,7 @@ impl Runner {
             stream_name,
             load_options,
             super::ENGINE_TEARDOWN_WATCHDOG_BUDGET,
+            holding,
         )
     }
 
@@ -1089,6 +1178,7 @@ impl Runner {
         stream_name: String,
         load_options: OptionsForLoadingOneStream,
         teardown_watchdog_budget: Duration,
+        holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         self.refuse_a_load_once_the_engine_is_shut_down(&stream_name)?;
         self.refuse_a_stream_name_already_loaded(&stream_name)?;
@@ -1099,6 +1189,7 @@ impl Runner {
             project_directory,
             load_options.stream_environment,
             teardown_watchdog_budget,
+            holding,
         )
     }
 
@@ -1137,7 +1228,10 @@ impl Runner {
             return Err(refusal);
         }
         if let Some(first) = streams.get(stream.stream_name()) {
-            let refusal = a_stream_name_already_loaded_refusal(first);
+            let refusal = a_stream_name_already_loaded_refusal(
+                first,
+                LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE,
+            );
             drop(streams);
             tear_down_a_stream_that_never_entered_the_table(&stream);
             return Err(refusal);
@@ -1153,7 +1247,10 @@ impl Runner {
             .lock()
             .get(stream_name)
         {
-            Some(first) => Err(a_stream_name_already_loaded_refusal(first)),
+            Some(first) => Err(a_stream_name_already_loaded_refusal(
+                first,
+                LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE,
+            )),
             None => Ok(()),
         }
     }
@@ -1185,13 +1282,8 @@ impl Runner {
         )))
     }
 
-    fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
-        let names = self.names_of_the_loaded_streams();
-        if names.is_empty() {
-            "none".to_string()
-        } else {
-            names.join(", ")
-        }
+    pub(super) fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
+        names_listed_for_a_refusal(self.names_of_the_loaded_streams(), "none")
     }
 }
 
@@ -1205,7 +1297,7 @@ impl Drop for Runner {
 
 /// The URL-safe cast of the stream name a load names, refused when it casts
 /// to nothing and when there is none.
-fn the_cast_name_of_the_stream_a_load_names(
+pub(super) fn the_cast_name_of_the_stream_a_load_names(
     requested_stream_name: Option<&str>,
     what_is_loaded: &str,
 ) -> Result<String> {
@@ -1224,11 +1316,19 @@ fn the_cast_name_of_the_stream_a_load_names(
         })
 }
 
-fn a_stream_name_already_loaded_refusal(first: &LoadedStreamInThisRuntime) -> Error {
+/// How a load refused for a name already loaded is told to go on, in code or
+/// on the command line.
+const LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE: &str = "load this one under another \
+     name — `OptionsForLoadingOneStream::named`, or `--name` on the `tatolab` command line";
+
+/// The refusal of a load under the name `first` is loaded as, naming its
+/// project and ending with `how_to_load_this_one`.
+pub(super) fn a_stream_name_already_loaded_refusal(
+    first: &LoadedStreamInThisRuntime,
+    how_to_load_this_one: &str,
+) -> Error {
     Error::GraphError(format!(
-        "a stream named `{}` is already loaded in this runtime, from `{}`; load this one under \
-         another name — `OptionsForLoadingOneStream::named`, or `--name` on the `tatolab` \
-         command line",
+        "a stream named `{}` is already loaded in this runtime, from `{}`; {how_to_load_this_one}",
         first.stream_name(),
         first.project_directory().display()
     ))
@@ -1249,13 +1349,20 @@ fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStre
 
 /// Ask `stream` for its shutdown and block until it has ended. Once its
 /// shutdown thread has started, the stream's watchdog bounds the wait; until
-/// then each poll asks again, retrying the thread's spawn.
-fn request_a_streams_shutdown_and_wait_until_it_has_ended(
+/// then each poll asks again, retrying the thread's spawn. A machine shutdown
+/// forced meanwhile forces this stream too, whichever thread is waiting on the
+/// machine.
+pub(super) fn request_a_streams_shutdown_and_wait_until_it_has_ended(
     stream: &LoadedStreamInThisRuntime,
     reason: &str,
 ) {
     loop {
         stream.ask_for_this_streams_shutdown(reason);
+        if crate::core::runtime::the_machines_shutdown_escalation()
+            >= RuntimeShutdownEscalation::Forced
+        {
+            stream.force_this_streams_shutdown("the machine's shutdown was forced");
+        }
         if stream.wait_for_this_streams_end_within(
             crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
         ) {
@@ -1327,13 +1434,18 @@ fn bring_up_surface_service(
     use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
     use crate::core::unix_socket_path_cleared_for_bind::{
-        UnixSocketPathClearedForBind, clear_unix_socket_path_for_bind,
+        UnixSocketPathClearedForBind, UnixSocketPathRefusedForBind, clear_unix_socket_path_for_bind,
     };
 
     let socket_path = runtime_directory.surface_share_socket_path(runtime_id);
 
-    let cleared = clear_unix_socket_path_for_bind(&socket_path)
-        .map_err(|refusal| Error::Runtime(format!("Surface-sharing socket: {refusal}")))?;
+    let cleared = clear_unix_socket_path_for_bind(&socket_path).map_err(|refusal| match refusal {
+        UnixSocketPathRefusedForBind::HeldByALiveProcess { .. } => Error::Runtime(format!(
+            "Surface-sharing socket: {refusal}; each runtime needs a unique runtime_id, so check \
+             for a duplicate STREAMLIB_RUNTIME_ID or another runtime in the same session"
+        )),
+        _ => Error::Runtime(format!("Surface-sharing socket: {refusal}")),
+    })?;
     if cleared == UnixSocketPathClearedForBind::StaleSocketFileRemoved {
         tracing::warn!(
             "[new] Removed stale surface-sharing socket left by prior runtime: {}",
@@ -2006,6 +2118,10 @@ mod tests {
                 refusal.contains("already bound by a live process"),
                 "the refusal must name the live runtime, not a node failure: {refusal}"
             );
+            assert!(
+                refusal.contains("duplicate STREAMLIB_RUNTIME_ID"),
+                "the surface-sharing socket is keyed by runtime id: {refusal}"
+            );
             drop(live_runtimes_socket);
         }
 
@@ -2464,9 +2580,8 @@ mod tests {
         );
     }
 
-    /// A call naming a stream that is not loaded, or naming none while several
-    /// are, is refused naming the loaded streams; naming none while one is
-    /// loaded finds that one.
+    /// A call naming a stream that is not loaded is refused naming the loaded
+    /// streams; a call's name is cast before it is looked up.
     #[test]
     #[serial]
     fn a_call_naming_a_stream_not_loaded_is_refused_naming_the_loaded_streams() {
@@ -2474,40 +2589,22 @@ mod tests {
 
         let project_directory = a_project_directory_this_test_owns();
         let runner = Runner::new().expect("Runner::new");
-        let Err(none_loaded) = runner.the_stream_a_call_names(None) else {
-            panic!("a call naming no stream found one where none is loaded");
-        };
-        assert!(
-            none_loaded.to_string().contains("no stream"),
-            "{none_loaded}"
-        );
-
-        let only = an_empty_stream_loaded_into(&runner, project_directory.path(), "camera");
-        assert!(Arc::ptr_eq(
-            &runner
-                .the_stream_a_call_names(None)
-                .expect("the only stream is the one a call naming none means"),
-            &only
-        ));
+        let camera = an_empty_stream_loaded_into(&runner, project_directory.path(), "camera");
         an_empty_stream_loaded_into(&runner, project_directory.path(), "microphone");
 
         for refusal in [
             runner
-                .runtime_operations_of_the_stream_a_call_names(Some("display"))
+                .runtime_operations_of_the_stream_a_call_names("display")
                 .err()
                 .expect("a stream not loaded is refused"),
             runner
-                .runtime_operations_of_the_stream_a_call_names(Some(""))
+                .runtime_operations_of_the_stream_a_call_names("")
                 .err()
                 .expect("a name that casts to nothing names no loaded stream"),
             runner
-                .runtime_operations_of_the_stream_a_call_names(Some(".."))
+                .runtime_operations_of_the_stream_a_call_names("..")
                 .err()
                 .expect("a name that casts to nothing names no loaded stream"),
-            runner
-                .runtime_operations_of_the_stream_a_call_names(None)
-                .err()
-                .expect("naming none while several are loaded is refused"),
         ] {
             let refusal = refusal.to_string();
             assert!(
@@ -2517,7 +2614,7 @@ mod tests {
         }
         for name_that_casts_to_nothing in ["", ".."] {
             let refusal = runner
-                .runtime_operations_of_the_stream_a_call_names(Some(name_that_casts_to_nothing))
+                .runtime_operations_of_the_stream_a_call_names(name_that_casts_to_nothing)
                 .err()
                 .expect("a name that casts to nothing is refused")
                 .to_string();
@@ -2530,14 +2627,19 @@ mod tests {
         }
         assert!(
             runner
-                .node_catalog_of_the_stream_a_call_names(Some("display"))
+                .node_catalog_of_the_stream_a_call_names("display")
+                .is_err()
+        );
+        assert!(
+            runner
+                .node_types_described_in_the_interpreter_of_the_stream_a_call_names("display")
                 .is_err()
         );
         assert!(Arc::ptr_eq(
             &runner
-                .the_stream_a_call_names(Some("Camera"))
+                .loaded_stream_named("Camera")
                 .expect("a call's name is cast"),
-            &only
+            &camera
         ));
     }
 
@@ -2561,7 +2663,9 @@ mod tests {
                 waiting_runner.request_the_shutdown_of_every_loaded_stream(
                     "the test shuts the machine down",
                 )?;
-                waiting_runner.wait_until_every_stream_has_ended()
+                waiting_runner
+                    .wait_until_every_stream_has_ended()
+                    .how_the_first_failed_stream_ended
             });
             let _ = every_stream_ended.send(outcome);
         });
@@ -2576,6 +2680,366 @@ mod tests {
                 Some(HowALoadedStreamEnded::Stopped)
             );
         }
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    /// A stream loaded while the wait for every stream runs is waited for and
+    /// returned with the others, so a teardown scanning what the wait returns
+    /// cannot miss it.
+    ///
+    /// Only the wait's own walk to the machine's shutdown ends that stream, so
+    /// the wait has polled while it was loaded.
+    #[test]
+    #[serial]
+    fn a_stream_loaded_while_every_stream_is_awaited_is_among_the_streams_the_wait_returns() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let first = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+
+        let (the_wait_began, the_wait_has_begun) = std::sync::mpsc::channel();
+        let (every_stream_ended, every_stream_has_ended) = std::sync::mpsc::channel();
+        let waiting_runner = Arc::clone(&runner);
+        std::thread::spawn(move || {
+            let outcome = waiting_runner.run_owning_the_machine_shutdown_signals(|| {
+                let _ = the_wait_began.send(());
+                Ok(waiting_runner.wait_until_every_stream_has_ended())
+            });
+            let _ = every_stream_ended.send(outcome);
+        });
+        the_wait_has_begun
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the waiting thread never began its wait");
+        let loaded_during_the_wait = an_empty_stream_loaded_into(
+            &runner,
+            project_directory.path(),
+            "loaded-during-the-wait",
+        );
+        runner.unload_stream("first").expect("first unloads");
+        runner
+            .request_the_shutdown_of_every_loaded_stream("the test shuts the machine down")
+            .expect("the machine's shutdown is requested");
+
+        let every_stream_ended_during_the_wait = every_stream_has_ended
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never returned once every stream had ended")
+            .expect("the waiting thread owned the machine's shutdown signals");
+        every_stream_ended_during_the_wait
+            .how_the_first_failed_stream_ended
+            .expect("every stream ended cleanly");
+        for stream in [&first, &loaded_during_the_wait] {
+            assert!(
+                every_stream_ended_during_the_wait
+                    .streams_seen_during_the_wait
+                    .iter()
+                    .any(|seen| Arc::ptr_eq(seen, stream)),
+                "the wait returned no `{}`",
+                stream.stream_name()
+            );
+        }
+        assert_eq!(
+            loaded_during_the_wait.how_this_stream_ended(),
+            Some(HowALoadedStreamEnded::Stopped)
+        );
+    }
+
+    /// The wait `tatolabd` blocks on returns only once the machine's shutdown
+    /// is requested, and walks every loaded stream to it on the way.
+    #[test]
+    #[serial]
+    fn the_wait_for_a_machine_shutdown_returns_once_one_is_requested_and_ends_every_stream() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+
+        let (wait_returned, the_wait_has_returned) = std::sync::mpsc::channel();
+        let waiting_runner = Arc::clone(&runner);
+        std::thread::spawn(move || {
+            let outcome = waiting_runner.run_owning_the_machine_shutdown_signals(|| {
+                waiting_runner.wait_until_a_machine_shutdown_is_requested();
+                Ok(())
+            });
+            let _ = wait_returned.send(outcome);
+        });
+        assert!(
+            the_wait_has_returned
+                .recv_timeout(Duration::from_millis(300))
+                .is_err(),
+            "the wait returned before any machine shutdown was requested"
+        );
+        assert!(!stream.has_ended());
+
+        crate::core::runtime::request_the_shutdown_of_every_loaded_stream(
+            "the test shuts the machine down",
+        )
+        .unwrap();
+
+        the_wait_has_returned
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never saw the machine's shutdown request")
+            .expect("the wait owned the machine's shutdown signals");
+        assert!(stream.wait_for_this_streams_end_within(A_STREAM_ENDS_WITHIN));
+    }
+
+    /// The wait for the last other reference returns once another holder
+    /// hands the engine back.
+    #[test]
+    #[serial]
+    fn the_wait_for_the_last_other_reference_returns_once_it_is_dropped() {
+        let runner = Runner::new().expect("Runner::new");
+        let held_by_another_holder = Arc::clone(&runner);
+        let other_holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(held_by_another_holder);
+        });
+
+        assert!(runner.wait_until_this_reference_alone_holds_the_engine(A_STREAM_ENDS_WITHIN));
+        other_holder
+            .join()
+            .expect("the other holder dropped its reference");
+    }
+
+    /// The wait for the last other reference gives up once its budget passes.
+    #[test]
+    #[serial]
+    fn the_wait_for_the_last_other_reference_stops_at_its_budget() {
+        let runner = Runner::new().expect("Runner::new");
+        let _held_past_the_budget = Arc::clone(&runner);
+
+        let wait_started = Instant::now();
+        assert!(
+            !runner.wait_until_this_reference_alone_holds_the_engine(Duration::from_millis(30))
+        );
+        assert!(wait_started.elapsed() < A_STREAM_ENDS_WITHIN);
+    }
+
+    /// The wait for the last other reference, inside a run that owns the
+    /// machine's shutdown signals, walks every loaded stream to the machine's
+    /// shutdown level while it waits.
+    #[test]
+    #[serial]
+    fn the_wait_for_the_last_other_reference_walks_every_loaded_stream_to_the_machines_shutdown() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+
+        let waiting_runner = Arc::clone(&runner);
+        let waiting_stream = Arc::clone(&stream);
+        let (wait_returned, the_wait_has_returned) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = waiting_runner.run_owning_the_machine_shutdown_signals(|| {
+                waiting_runner.request_the_shutdown_of_every_loaded_stream(
+                    "the test shuts the machine down",
+                )?;
+                let alone = waiting_runner
+                    .wait_until_this_reference_alone_holds_the_engine(Duration::from_secs(2));
+                Ok((alone, waiting_stream.has_ended()))
+            });
+            let _ = wait_returned.send(outcome);
+        });
+
+        let (alone, stream_ended_during_the_wait) = the_wait_has_returned
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never returned")
+            .expect("the wait owned the machine's shutdown signals");
+        assert!(!alone, "the test's own reference still holds the engine");
+        assert!(
+            stream_ended_during_the_wait,
+            "the wait never walked the loaded stream to the machine's shutdown"
+        );
+    }
+
+    /// Poll `escalation_of` until it reports `wanted` or `within` passes,
+    /// returning the last level it reported.
+    fn the_escalation_once_it_reaches(
+        wanted: RuntimeShutdownEscalation,
+        within: Duration,
+        escalation_of: impl Fn() -> RuntimeShutdownEscalation,
+    ) -> RuntimeShutdownEscalation {
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            let reached = escalation_of();
+            if reached >= wanted || std::time::Instant::now() >= deadline {
+                return reached;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// A machine shutdown forced while an unload waits on a stream forces
+    /// that stream, though no thread owns the machine's shutdown signals to
+    /// walk it there.
+    ///
+    /// Fail-without-fix: the unload's wait only ever asks for the graceful
+    /// step, so the stream stays `Graceful` and a native callback it holds
+    /// keeps its whole graceful join budget.
+    #[test]
+    #[serial]
+    fn a_forced_machine_shutdown_forces_a_stream_an_unload_is_waiting_on() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let unloading = an_empty_stream_loaded_into(&runner, project_directory.path(), "unloading");
+
+        // The stop takes this lock after it marks the stream stopping, so
+        // holding it keeps the unload waiting until the test lets go.
+        let the_held_teardown_waits_on = unloading.runtime_context.lock();
+        let (unload_returned, the_unload_has_returned) = std::sync::mpsc::channel();
+        let unloading_runner = Arc::clone(&runner);
+        std::thread::spawn(move || {
+            let _ = unload_returned.send(unloading_runner.unload_stream("unloading"));
+        });
+        let asked_for = the_escalation_once_it_reaches(
+            RuntimeShutdownEscalation::Graceful,
+            A_STREAM_ENDS_WITHIN,
+            || unloading.this_streams_shutdown_escalation().escalation(),
+        );
+
+        crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
+        crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
+        let forced_to = the_escalation_once_it_reaches(
+            RuntimeShutdownEscalation::Forced,
+            Duration::from_secs(2),
+            || unloading.this_streams_shutdown_escalation().escalation(),
+        );
+        let returned_while_held = the_unload_has_returned.try_recv().is_ok();
+        drop(the_held_teardown_waits_on);
+        let unload_outcome = the_unload_has_returned.recv_timeout(A_STREAM_ENDS_WITHIN);
+
+        assert_eq!(asked_for, RuntimeShutdownEscalation::Graceful);
+        assert_eq!(
+            forced_to,
+            RuntimeShutdownEscalation::Forced,
+            "the unload's wait left the stream at its graceful step after the machine's \
+             shutdown was forced"
+        );
+        assert!(
+            !returned_while_held,
+            "the unload returned while the stream's teardown was still held"
+        );
+        unload_outcome
+            .expect("the unload never returned once its teardown was let go")
+            .expect("the stream unloads cleanly");
+        assert_eq!(
+            unloading.how_this_stream_ended(),
+            Some(HowALoadedStreamEnded::Stopped)
+        );
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    /// Set once [`CallbackHeldUntilTheTestLetsGo`] is inside its callback.
+    static THE_HELD_CALLBACK_HAS_BEGUN: AtomicBool = AtomicBool::new(false);
+
+    /// Set by the test to let [`CallbackHeldUntilTheTestLetsGo`] return.
+    static THE_HELD_CALLBACK_MAY_RETURN: AtomicBool = AtomicBool::new(false);
+
+    /// A source whose first callback does not return until the test lets it,
+    /// or for a minute.
+    #[crate::processor(execution = continuous(interval_ms = 5))]
+    pub(crate) struct CallbackHeldUntilTheTestLetsGo;
+
+    impl crate::core::ContinuousProcessor for CallbackHeldUntilTheTestLetsGo::Processor {
+        fn process(
+            &mut self,
+            _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+        ) -> Result<()> {
+            THE_HELD_CALLBACK_HAS_BEGUN.store(true, Ordering::SeqCst);
+            let held_until = std::time::Instant::now() + Duration::from_secs(60);
+            while !THE_HELD_CALLBACK_MAY_RETURN.load(Ordering::SeqCst)
+                && std::time::Instant::now() < held_until
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(())
+        }
+    }
+
+    /// An unload of a stream whose native processor holds its callback returns
+    /// well inside the graceful join budget once the machine's shutdown is
+    /// forced, the thread abandoned rather than waited out.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn a_forced_machine_shutdown_abandons_a_held_native_callback_an_unload_is_waiting_on() {
+        use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+
+        /// The engine-chosen join budget of a native processor thread under a
+        /// graceful shutdown.
+        const NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET: Duration = Duration::from_secs(5);
+
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        THE_HELD_CALLBACK_HAS_BEGUN.store(false, Ordering::SeqCst);
+        THE_HELD_CALLBACK_MAY_RETURN.store(false, Ordering::SeqCst);
+        PROCESSOR_REGISTRY.register::<CallbackHeldUntilTheTestLetsGo::Processor>();
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let holding = an_empty_stream_loaded_into(&runner, project_directory.path(), "holding");
+        holding
+            .add_processor(ProcessorSpec::new(
+                CallbackHeldUntilTheTestLetsGo::processor_class_import_path(),
+                serde_json::json!({}),
+            ))
+            .expect("the holding source is added");
+        holding.start().expect("the stream starts");
+        let callback_begun_by = std::time::Instant::now() + Duration::from_secs(30);
+        while !THE_HELD_CALLBACK_HAS_BEGUN.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < callback_begun_by,
+                "the holding source never entered its callback"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let (unload_returned, the_unload_has_returned) = std::sync::mpsc::channel();
+        let unloading_runner = Arc::clone(&runner);
+        let unload_began = std::time::Instant::now();
+        std::thread::spawn(move || {
+            let outcome = unloading_runner.unload_stream("holding");
+            let _ = unload_returned.send((outcome, unload_began.elapsed()));
+        });
+        the_escalation_once_it_reaches(
+            RuntimeShutdownEscalation::Graceful,
+            A_STREAM_ENDS_WITHIN,
+            || holding.this_streams_shutdown_escalation().escalation(),
+        );
+        crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
+        crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
+        let unload_outcome = the_unload_has_returned.recv_timeout(A_STREAM_ENDS_WITHIN);
+        let abandoned_threads = holding
+            .processor_threads_abandoned_and_still_running()
+            .len();
+        THE_HELD_CALLBACK_MAY_RETURN.store(true, Ordering::SeqCst);
+
+        let (_ended_reporting, unloaded_in) = unload_outcome
+            .expect("the unload never returned after the machine's shutdown was forced");
+        assert_eq!(
+            holding.this_streams_shutdown_escalation().escalation(),
+            RuntimeShutdownEscalation::Forced
+        );
+        assert!(
+            unloaded_in < NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET / 2,
+            "the unload took {unloaded_in:?}; a forced shutdown abandons a held native callback \
+             well inside the {NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET:?} graceful budget"
+        );
+        assert_eq!(
+            abandoned_threads, 1,
+            "the held callback's thread is abandoned, not joined"
+        );
         assert!(runner.names_of_the_loaded_streams().is_empty());
     }
 
@@ -3101,6 +3565,133 @@ mod tests {
                 assert_eq!(&record.runtime_id, runtime_id, "{record:?}");
                 assert_eq!(record.stream.as_deref(), Some("main"), "{record:?}");
             }
+        }
+    }
+
+    /// A stream's records are numbered from 1 in the order its route wrote
+    /// them, readable by sequence number while the stream is loaded, and its
+    /// JSONL file holds the same records with no number added.
+    #[test]
+    #[serial]
+    fn a_streams_records_are_read_by_sequence_number_and_its_jsonl_file_carries_none() {
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("main"),
+            )
+            .expect("an empty stream loads");
+        stream.log_route().run_entered(|| {
+            for token_index in 0..3 {
+                tracing::info!("token-of-the-stream-{token_index}");
+            }
+        });
+        let stream_log = stream
+            .jsonl_log_path()
+            .expect("the stream logs")
+            .to_path_buf();
+        stream.log_route().close_the_jsonl_log_file();
+
+        let every_record = stream.log_records_after(0, 4096);
+        assert_eq!(every_record.records_no_longer_held, 0);
+        let sequences: Vec<u64> = every_record.records.iter().map(|r| r.sequence).collect();
+        assert_eq!(sequences, (1..=sequences.len() as u64).collect::<Vec<_>>());
+        assert_eq!(every_record.next_after, sequences.len() as u64);
+        let token_sequences: Vec<u64> = every_record
+            .records
+            .iter()
+            .filter(|numbered| {
+                numbered.record["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("token-of-the-stream-"))
+            })
+            .map(|numbered| numbered.sequence)
+            .collect();
+        assert_eq!(token_sequences.len(), 3, "{every_record:#?}");
+
+        let after_the_first_token = stream.log_records_after(token_sequences[0], 1);
+        assert_eq!(after_the_first_token.records.len(), 1);
+        assert_eq!(
+            after_the_first_token.records[0].sequence,
+            token_sequences[0] + 1
+        );
+
+        let lines_on_disk: Vec<serde_json::Value> = std::fs::read_to_string(&stream_log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSONL line"))
+            .collect();
+        assert!(!lines_on_disk.is_empty());
+        for (line_on_disk, numbered) in lines_on_disk.iter().zip(&every_record.records) {
+            assert_eq!(line_on_disk, &numbered.record);
+            assert!(line_on_disk.get("sequence").is_none(), "{line_on_disk}");
+        }
+        runner.unload_stream("main").expect("the stream unloads");
+    }
+
+    /// With a runtime own-log directory, the records no stream emitted are
+    /// written to `tatolabd-<started_at_millis>.jsonl` there, stamped with the
+    /// runtime's id and no stream, and a stream's records are not.
+    #[test]
+    #[serial]
+    fn the_records_no_stream_emitted_land_in_the_runtimes_own_log_and_a_streams_do_not() {
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let state_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let runtime_own_log_directory = state_directory.path().join("logs");
+        let runner = Runner::new_with_construction_options(RunnerConstructionOptions {
+            runtime_own_log_directory: Some(runtime_own_log_directory.clone()),
+            ..RunnerConstructionOptions::default()
+        })
+        .expect("the runner constructs");
+        let runtime_own_log = runner
+            .runtime_own_log_path()
+            .expect("the runtime keeps its own log")
+            .to_path_buf();
+        assert_eq!(
+            runtime_own_log.parent(),
+            Some(runtime_own_log_directory.as_path())
+        );
+        let file_name = runtime_own_log
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            file_name.starts_with("tatolabd-") && file_name.ends_with(".jsonl"),
+            "{file_name}"
+        );
+
+        let stream = runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("main"),
+            )
+            .expect("an empty stream loads");
+        stream
+            .log_route()
+            .run_entered(|| tracing::info!("token-of-the-stream"));
+        tracing::info!("token-no-stream-emitted");
+        runner.unload_stream("main").expect("the stream unloads");
+        let runtime_id = runner.runtime_id().to_string();
+        drop(stream);
+        drop(runner);
+
+        let records = every_record_of_the_stream_log_at(&runtime_own_log);
+        assert!(
+            records
+                .iter()
+                .any(|record| record.message == "token-no-stream-emitted"
+                    && record.runtime_id == runtime_id
+                    && record.stream.is_none()),
+            "the runtime's own log lacks the record no stream emitted: {records:#?}"
+        );
+        for record in &records {
+            assert_eq!(record.stream, None, "{record:?}");
+            assert_ne!(record.message, "token-of-the-stream", "{record:?}");
         }
     }
 

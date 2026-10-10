@@ -5,9 +5,9 @@
 //!
 //! A runtime that crashed leaves its socket file behind, and binding over it
 //! fails. A file nothing answers on is that leftover and is removed; a file a
-//! live process answers on belongs to a second runtime with the same id, which
-//! is refused rather than displaced. A connect that fails any other way proves
-//! neither, so the file is refused and left in place.
+//! live process answers on is refused rather than displaced, each caller naming
+//! who that process can be for its socket. A connect that fails any other way
+//! proves neither, so the file is refused and left in place.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -25,11 +25,7 @@ pub enum UnixSocketPathClearedForBind {
 #[derive(Debug, thiserror::Error)]
 pub enum UnixSocketPathRefusedForBind {
     /// A live process answers a connect on the path.
-    #[error(
-        "{} is already bound by a live process; each runtime needs a unique runtime_id, so check \
-         for a duplicate STREAMLIB_RUNTIME_ID or another runtime in the same session",
-        path.display()
-    )]
+    #[error("{} is already bound by a live process", path.display())]
     HeldByALiveProcess { path: PathBuf },
     /// No process answers on the path, and the file could not be removed.
     #[error("found a stale socket {} that no process answers on, but failed to remove it: {source}", path.display())]

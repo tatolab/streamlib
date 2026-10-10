@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use super::processor_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
     a_helper_process_has_exited_without_being_reaped,
+    wait_for_a_child_to_become_collectable_within,
 };
 use super::subprocess_bridge::{
     ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
@@ -105,7 +106,7 @@ pub fn processor_interpreter_bootstrap_path(lend_directory: &Path) -> PathBuf {
     lend_directory.join(PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY)
 }
 
-/// `PYTHONPATH` for a processor interpreter: the lend directory, then the
+/// `PYTHONPATH` for a stream's interpreter: the lend directory, then the
 /// project directory, and nothing inherited.
 ///
 /// The lend directory holds `tatolab/runtime/` and no `tatolab/__init__.py`,
@@ -122,30 +123,67 @@ pub(crate) fn processor_interpreter_python_path(
             .find(|directory| std::env::join_paths([directory]).is_err())
             .unwrap_or(project_directory);
         Error::Configuration(format!(
-            "`{}` cannot be on a processor interpreter's PYTHONPATH: its path holds the \
+            "`{}` cannot be on a stream interpreter's PYTHONPATH: its path holds the \
              path-list separator, which would split it into other directories",
             directory_holding_the_separator.display()
         ))
     })
 }
 
-/// A command running the processor interpreter bootstrap in `stream_environment`.
+/// A command starting `interpreter` as every interpreter a stream starts is
+/// started — its compile, its describe and each processor interpreter: in
+/// `project_directory`, with the runtime's environment minus every variable
+/// whose name begins with `PYTHON`, and `PYTHONPATH` set to the lend directory
+/// then the project.
 ///
-/// `PYTHONHOME` is removed because the interpreter is named by absolute path,
-/// and one inherited from a differently laid-out install would only send it
-/// looking for the wrong standard library.
+/// The compile adds `-I`, which ignores every `PYTHON*` variable, so this
+/// `PYTHONPATH` reaches only the describe and the processor interpreters; the
+/// compile takes its import root from the compile entry.
+///
+/// Nothing per stream and nothing from a caller is added: what the runtime
+/// itself was started with is what each stream's interpreters inherit.
+pub(crate) fn stream_interpreter_command_in_its_project_directory(
+    interpreter: &Path,
+    project_directory: &Path,
+    lend_directory: &Path,
+) -> Result<Command> {
+    let python_path = processor_interpreter_python_path(lend_directory, project_directory)?;
+    let mut command = Command::new(interpreter);
+    command.current_dir(project_directory);
+    remove_every_python_variable_named_in(
+        &mut command,
+        std::env::vars_os().map(|(variable_name, _)| variable_name),
+    );
+    command.env("PYTHONPATH", python_path);
+    Ok(command)
+}
+
+/// Remove from `command` each of `inherited_variable_names` that begins with
+/// `PYTHON`.
+fn remove_every_python_variable_named_in(
+    command: &mut Command,
+    inherited_variable_names: impl IntoIterator<Item = OsString>,
+) {
+    use std::os::unix::ffi::OsStrExt;
+    for variable_name in inherited_variable_names {
+        if variable_name.as_bytes().starts_with(b"PYTHON") {
+            command.env_remove(variable_name);
+        }
+    }
+}
+
+/// A command running the processor interpreter bootstrap in `stream_environment`.
 pub(crate) fn processor_interpreter_bootstrap_command(
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
 ) -> Result<Command> {
-    let python_path =
-        processor_interpreter_python_path(lend_directory, &stream_environment.project_directory)?;
-    let mut command = Command::new(&stream_environment.interpreter);
+    let mut command = stream_interpreter_command_in_its_project_directory(
+        &stream_environment.interpreter,
+        &stream_environment.project_directory,
+        lend_directory,
+    )?;
     command
         .arg(processor_interpreter_bootstrap_path(lend_directory))
-        .current_dir(&stream_environment.project_directory)
-        .env_remove("PYTHONHOME")
-        .env("PYTHONPATH", python_path)
         .env(ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, ENGINE_BUILD_ID);
     Ok(command)
 }
@@ -837,6 +875,75 @@ pub(super) fn standard_error_tail_as_a_refusal_quotes_it(standard_error_tail: &s
         return "It wrote nothing to its standard error.".to_string();
     }
     format!("Its standard error ended with:\n{standard_error_tail}")
+}
+
+/// How much of a standard output that is not the document a stream
+/// interpreter was to print a refusal quotes.
+const STREAM_INTERPRETER_STANDARD_OUTPUT_QUOTED_BYTES: usize = 512;
+
+/// The first [`STREAM_INTERPRETER_STANDARD_OUTPUT_QUOTED_BYTES`] of a stream
+/// interpreter's standard output, quoted.
+pub(super) fn standard_output_head_as_a_refusal_quotes_it(standard_output_bytes: &[u8]) -> String {
+    let head = &standard_output_bytes[..standard_output_bytes
+        .len()
+        .min(STREAM_INTERPRETER_STANDARD_OUTPUT_QUOTED_BYTES)];
+    let ellipsis = if head.len() < standard_output_bytes.len() {
+        "…"
+    } else {
+        ""
+    };
+    format!("{:?}{ellipsis}", String::from_utf8_lossy(head))
+}
+
+// =============================================================================
+// The bounded wait for a stream interpreter
+// =============================================================================
+
+/// How long the wait for a stream interpreter parks before it re-reads whether
+/// it was cut short.
+const STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
+
+/// How the wait for a stream interpreter that runs to its own exit — a
+/// describe, a compile — ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StreamInterpreterExitAwaited {
+    /// It exited, and is left unreaped.
+    Exited,
+    /// Its bound elapsed first.
+    BoundElapsed,
+    /// The shutdown of the stream it works for was requested first.
+    ItsStreamsShutdownRequested,
+    /// The runtime's host interrupted it first.
+    InterruptedByTheHost,
+}
+
+/// Wait up to `bound` for `child` to exit, leaving it unreaped, cut short
+/// whenever `is_its_streams_shutdown_requested` or `is_interrupted_by_the_host`
+/// reports true.
+pub(super) fn wait_for_a_stream_interpreter_to_exit(
+    child: &Child,
+    bound: Duration,
+    is_its_streams_shutdown_requested: &dyn Fn() -> bool,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+) -> StreamInterpreterExitAwaited {
+    let deadline = Instant::now() + bound;
+    loop {
+        let observation_slice = deadline
+            .saturating_duration_since(Instant::now())
+            .min(STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL);
+        if wait_for_a_child_to_become_collectable_within(child, observation_slice) {
+            return StreamInterpreterExitAwaited::Exited;
+        }
+        if is_its_streams_shutdown_requested() {
+            return StreamInterpreterExitAwaited::ItsStreamsShutdownRequested;
+        }
+        if is_interrupted_by_the_host() {
+            return StreamInterpreterExitAwaited::InterruptedByTheHost;
+        }
+        if Instant::now() >= deadline {
+            return StreamInterpreterExitAwaited::BoundElapsed;
+        }
+    }
 }
 
 // =============================================================================
@@ -2128,50 +2235,71 @@ sys.exit(0)
         );
     }
 
-    /// Set only in the child process the inherited-`PYTHONPATH` test re-runs
-    /// itself in, carrying the `PYTHONPATH` that child was started with.
-    const INHERITED_PYTHON_PATH_CHILD_ENVIRONMENT_VARIABLE: &str =
-        "STREAMLIB_TEST_INHERITED_PYTHON_PATH_CHILD";
+    /// Set only in the child process the inherited-`PYTHON*` test re-runs
+    /// itself in.
+    const INHERITED_PYTHON_VARIABLES_CHILD_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_INHERITED_PYTHON_VARIABLES_CHILD";
 
-    /// A `PYTHONPATH` the runtime process was started with names the runtime
-    /// process's own imports, which the stream's interpreter must not see.
-    ///
-    /// Asserted in a re-run of this test started with a `PYTHONPATH`, because
-    /// the process running the tests carries none to inherit.
+    /// The `PYTHON*` variables the re-run is started with, each of which would
+    /// change what a stream's interpreter imports or runs at startup.
+    const INHERITED_PYTHON_VARIABLES: [(&str, &str); 5] = [
+        ("PYTHONHOME", "/inherited/home"),
+        ("PYTHONSTARTUP", "/inherited/startup.py"),
+        ("PYTHONSAFEPATH", "1"),
+        ("PYTHONUSERBASE", "/inherited/user-base"),
+        ("PYTHONPATH", "/inherited/by/the/runtime"),
+    ];
+
+    /// Only a name beginning with `PYTHON` is removed; every other variable
+    /// the runtime carries, `STREAMLIB_*` included, is left to inherit.
     #[test]
-    fn an_inherited_python_path_is_not_passed_to_the_child() {
-        if let Some(inherited_python_path) =
-            std::env::var_os(INHERITED_PYTHON_PATH_CHILD_ENVIRONMENT_VARIABLE)
-        {
-            assert_eq!(
-                std::env::var_os("PYTHONPATH"),
-                Some(inherited_python_path),
-                "the re-run was started with the PYTHONPATH it checks against"
-            );
-            let command = spawn_host_for_test()
-                .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
-                .expect("the test directories hold no path-list separator");
-            assert_eq!(
-                value_of(&environment_of(&command), "PYTHONPATH"),
-                Some("/opt/tatolab/lib/tatolab/lend:/home/someone/my_app"),
-                "the child's PYTHONPATH is set outright, so nothing inherited is appended"
-            );
+    fn only_the_variables_whose_names_begin_with_python_are_removed() {
+        let mut command = Command::new("/usr/bin/env");
+        remove_every_python_variable_named_in(
+            &mut command,
+            [
+                "PYTHONHOME",
+                "PYTHONDONTWRITEBYTECODE",
+                "STREAMLIB_RUNTIME_NAME",
+                "HOME",
+                "MY_PYTHONPATH",
+            ]
+            .map(OsString::from),
+        );
+        let mut removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        removed.sort();
+        assert_eq!(removed, ["PYTHONDONTWRITEBYTECODE", "PYTHONHOME"]);
+        assert_eq!(command.get_envs().count(), 2, "nothing else is touched");
+    }
+
+    /// Every `PYTHON*` variable the runtime was started with is kept from the
+    /// bootstrap and the describe, and `PYTHONPATH` is set outright to the lend
+    /// directory then the project; the compile starts under `-I`, which ignores
+    /// them all.
+    ///
+    /// Asserted in a re-run of this test started with those variables,
+    /// because the process running the tests carries none to inherit.
+    #[test]
+    fn every_inherited_python_variable_is_kept_from_a_stream_interpreter_and_its_python_path_is_the_lend_then_the_project()
+     {
+        if std::env::var_os(INHERITED_PYTHON_VARIABLES_CHILD_ENVIRONMENT_VARIABLE).is_some() {
+            assert_every_inherited_python_variable_is_kept_from_a_stream_interpreter();
             return;
         }
 
-        let inherited_python_path = "/inherited/by/the/runtime";
         let re_run = Command::new(std::env::current_exe().unwrap())
             .args([
                 "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::\
-                 an_inherited_python_path_is_not_passed_to_the_child",
+                 every_inherited_python_variable_is_kept_from_a_stream_interpreter_and_its_python_path_is_the_lend_then_the_project",
                 "--exact",
                 "--test-threads=1",
             ])
-            .env("PYTHONPATH", inherited_python_path)
-            .env(
-                INHERITED_PYTHON_PATH_CHILD_ENVIRONMENT_VARIABLE,
-                inherited_python_path,
-            )
+            .envs(INHERITED_PYTHON_VARIABLES)
+            .env(INHERITED_PYTHON_VARIABLES_CHILD_ENVIRONMENT_VARIABLE, "1")
             .output()
             .expect("the test binary re-runs this test in a child process");
         let re_run_output = format!(
@@ -2183,6 +2311,94 @@ sys.exit(0)
         assert!(
             re_run_output.contains("1 passed"),
             "the re-run ran no test, so it asserted nothing: {re_run_output}"
+        );
+    }
+
+    /// The re-run's half: the built commands, then a real child's environment.
+    fn assert_every_inherited_python_variable_is_kept_from_a_stream_interpreter() {
+        for (name, value) in INHERITED_PYTHON_VARIABLES {
+            assert_eq!(
+                std::env::var(name).as_deref(),
+                Ok(value),
+                "the re-run was started with {name}"
+            );
+        }
+        let bootstrap_command = spawn_host_for_test()
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
+        let describe_command =
+            super::super::processor_interpreter_describe::processor_interpreter_describe_command(
+                &[crate::core::descriptors::ProcessorClassImportPath::new(
+                    "my_app.filters:BlurProcessor",
+                )
+                .unwrap()],
+                &stream_environment_for_test(),
+                Path::new(LEND_DIRECTORY_FOR_TEST),
+            )
+            .expect("the test directories hold no path-list separator");
+        let compile_command = super::super::stream_function_compile_in_the_projects_interpreter::stream_function_compile_command(
+            Path::new("/home/someone/my_app"),
+            None,
+            None,
+            Path::new(LEND_DIRECTORY_FOR_TEST),
+        )
+        .expect("the test directories hold no path-list separator");
+        for (command_kind, command) in [
+            ("bootstrap", &bootstrap_command),
+            ("describe", &describe_command),
+        ] {
+            for (name, _) in INHERITED_PYTHON_VARIABLES {
+                let entry = command
+                    .get_envs()
+                    .find(|(entry_name, _)| *entry_name == OsStr::new(name))
+                    .map(|(_, value)| value.map(OsStr::to_os_string));
+                let expected = if name == "PYTHONPATH" {
+                    Some(Some(OsString::from(
+                        "/opt/tatolab/lib/tatolab/lend:/home/someone/my_app",
+                    )))
+                } else {
+                    Some(None)
+                };
+                assert_eq!(entry, expected, "{name} on the {command_kind} command");
+            }
+        }
+        let compile_arguments: Vec<&OsStr> = compile_command.get_args().collect();
+        assert_eq!(
+            compile_arguments.first().copied(),
+            Some(OsStr::new("-I")),
+            "the compile ignores every PYTHON* variable: {compile_arguments:?}"
+        );
+
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let started = stream_interpreter_command_in_its_project_directory(
+            Path::new("/usr/bin/env"),
+            project_directory.path(),
+            Path::new(LEND_DIRECTORY_FOR_TEST),
+        )
+        .expect("the test directories hold no path-list separator")
+        .output()
+        .expect("env runs");
+        assert!(started.status.success());
+        let environment_the_child_saw = String::from_utf8_lossy(&started.stdout).into_owned();
+        let python_variables_the_child_saw: Vec<&str> = environment_the_child_saw
+            .lines()
+            .filter(|line| line.starts_with("PYTHON"))
+            .collect();
+        assert_eq!(
+            python_variables_the_child_saw,
+            [format!(
+                "PYTHONPATH={LEND_DIRECTORY_FOR_TEST}:{}",
+                project_directory.path().display()
+            )],
+            "{environment_the_child_saw}"
+        );
+        assert!(
+            environment_the_child_saw
+                .lines()
+                .any(|line| line.starts_with(&format!(
+                    "{INHERITED_PYTHON_VARIABLES_CHILD_ENVIRONMENT_VARIABLE}="
+                ))),
+            "a variable not named PYTHON* is inherited: {environment_the_child_saw}"
         );
     }
 
@@ -2214,20 +2430,5 @@ sys.exit(0)
             command.get_current_dir(),
             Some(Path::new("/home/someone/my_app"))
         );
-    }
-
-    /// An inherited `PYTHONHOME` points at whatever laid out the *parent's*
-    /// install; the child's interpreter was found by absolute path, so keeping
-    /// it would only send the child looking for the wrong standard library.
-    #[test]
-    fn an_inherited_python_home_is_not_passed_to_the_child() {
-        let command = spawn_host_for_test()
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
-            .expect("the test directories hold no path-list separator");
-        let cleared: Vec<_> = command
-            .get_envs()
-            .filter(|(name, value)| *name == OsStr::new("PYTHONHOME") && value.is_none())
-            .collect();
-        assert_eq!(cleared.len(), 1, "PYTHONHOME must be explicitly removed");
     }
 }

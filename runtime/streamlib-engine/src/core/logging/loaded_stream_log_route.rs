@@ -6,8 +6,8 @@
 //!
 //! A thread carries a route from the moment it is entered until the entry
 //! drops; the logging layer reads the route of the thread an event is emitted
-//! on. A record emitted where no route is entered reaches the pretty mirror
-//! only.
+//! on. A record emitted where no route is entered reaches the pretty mirror,
+//! and the runtime's own log when its runtime keeps one.
 
 use std::cell::RefCell;
 use std::future::Future;
@@ -20,9 +20,15 @@ use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::{Condvar, Mutex};
-use streamlib_runtime_client_contract::runtime_log_file_paths::loaded_stream_log_path;
+use streamlib_runtime_client_contract::runtime_log_file_paths::{
+    active_runtime_log_segment_file_name, loaded_stream_log_path,
+};
 
 use crate::core::logging::layer::JsonlSinkLayer;
+use crate::core::logging::loaded_stream_log_record_history::{
+    LOADED_STREAM_LOG_RECORDS_HELD_IN_MEMORY, LoadedStreamLogRecordHistory,
+    LoadedStreamLogRecordsPage,
+};
 use crate::core::logging::worker::DrainWorkerRecordQueue;
 use crate::core::logging::writer::JsonlBatchedWriter;
 
@@ -35,22 +41,57 @@ const QUEUED_RECORDS_WRITTEN_BEFORE_A_STREAM_LOG_CLOSES_BUDGET: Duration = Durat
 const HELPER_PIPE_READERS_FINISHED_BEFORE_A_STREAM_LOG_CLOSES_BUDGET: Duration =
     Duration::from_secs(2);
 
+/// The instance name the runtime's own log files are named after:
+/// `tatolabd-<started_at_millis>.jsonl`.
+pub const RUNTIME_OWN_LOG_INSTANCE_NAME: &str = "tatolabd";
+
+/// Whose records a log route carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LogRouteOwner {
+    /// One loaded stream, by its URL-safe cast name.
+    LoadedStream(String),
+    /// The runtime itself: the records no stream emitted, which no reader
+    /// pages through, so none is held in memory.
+    TheRuntimeItself,
+}
+
+impl LogRouteOwner {
+    /// What a log of this owner holds, as a warning names it.
+    fn what_its_log_holds(&self) -> String {
+        match self {
+            Self::LoadedStream(stream_name) => format!("the stream `{stream_name}`"),
+            Self::TheRuntimeItself => "the runtime's own log".to_string(),
+        }
+    }
+
+    /// How many of this owner's most recent records its route holds in memory.
+    fn records_held_in_memory(&self) -> usize {
+        match self {
+            Self::LoadedStream(_) => LOADED_STREAM_LOG_RECORDS_HELD_IN_MEMORY,
+            Self::TheRuntimeItself => 0,
+        }
+    }
+}
+
 thread_local! {
     static LOADED_STREAM_LOG_ROUTE_OF_THIS_THREAD: RefCell<Option<Arc<LoadedStreamLogRoute>>> =
         const { RefCell::new(None) };
 }
 
 /// Where the records one loaded stream emits go: its runtime's id and its
-/// name, stamped on every record, and its JSONL file under its project.
+/// name, stamped on every record, its JSONL file under its project, and the
+/// most recent of them, numbered, in memory. The runtime's own log is a route
+/// of no stream.
 pub struct LoadedStreamLogRoute {
     runtime_id: String,
-    stream_name: String,
+    owner: LogRouteOwner,
     jsonl_log_file: Option<LoadedStreamJsonlLogFile>,
     /// This stream's records a full queue dropped since the drain worker last
     /// reported them.
     records_dropped_from_a_full_queue: AtomicU64,
     helper_pipe_readers_still_reading: Mutex<usize>,
     a_helper_pipe_reader_finished: Condvar,
+    numbered_record_history: Mutex<LoadedStreamLogRecordHistory>,
 }
 
 /// One loaded stream's JSONL file, and the queue whose drain worker writes it.
@@ -64,7 +105,7 @@ impl std::fmt::Debug for LoadedStreamLogRoute {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoadedStreamLogRoute")
             .field("runtime_id", &self.runtime_id)
-            .field("stream_name", &self.stream_name)
+            .field("owner", &self.owner)
             .field("jsonl_log_path", &self.jsonl_log_path())
             .finish()
     }
@@ -83,6 +124,43 @@ impl LoadedStreamLogRoute {
         stream_name: &str,
         project_directory: &Path,
     ) -> Arc<Self> {
+        let owner = LogRouteOwner::LoadedStream(stream_name.to_string());
+        Self::open_writing_its_jsonl_file_at(runtime_id, owner, |started_at_millis| {
+            loaded_stream_log_path(
+                project_directory,
+                runtime_id,
+                stream_name,
+                started_at_millis,
+            )
+        })
+    }
+
+    /// The route of the records of the runtime `runtime_id` that no stream
+    /// emitted, its JSONL file opened as
+    /// `<runtime_own_log_directory>/tatolabd-<started_at_millis>.jsonl`.
+    ///
+    /// Opened as [`Self::open_in_project_directory`] opens a stream's.
+    pub(crate) fn open_the_runtimes_own_log_in(
+        runtime_id: &str,
+        runtime_own_log_directory: &Path,
+    ) -> Arc<Self> {
+        Self::open_writing_its_jsonl_file_at(
+            runtime_id,
+            LogRouteOwner::TheRuntimeItself,
+            |started_at_millis| {
+                runtime_own_log_directory.join(active_runtime_log_segment_file_name(
+                    RUNTIME_OWN_LOG_INSTANCE_NAME,
+                    started_at_millis,
+                ))
+            },
+        )
+    }
+
+    fn open_writing_its_jsonl_file_at(
+        runtime_id: &str,
+        owner: LogRouteOwner,
+        log_path_started_at: impl FnOnce(u128) -> PathBuf,
+    ) -> Arc<Self> {
         let jsonl_log_file = tracing::dispatcher::get_default(|dispatch| {
             dispatch
                 .downcast_ref::<JsonlSinkLayer>()
@@ -93,12 +171,7 @@ impl LoadedStreamLogRoute {
                 .duration_since(UNIX_EPOCH)
                 .map(|since_the_epoch| since_the_epoch.as_millis())
                 .unwrap_or(0);
-            let path = loaded_stream_log_path(
-                project_directory,
-                runtime_id,
-                stream_name,
-                started_at_millis,
-            );
+            let path = log_path_started_at(started_at_millis);
             match JsonlBatchedWriter::open(
                 &path,
                 tunables.batch_bytes,
@@ -112,8 +185,8 @@ impl LoadedStreamLogRoute {
                 }),
                 Err(open_failure) => {
                     tracing::warn!(
-                        "the stream `{stream_name}` writes no JSONL log: {} could not be opened: \
-                         {open_failure}",
+                        "{} writes no JSONL log: {} could not be opened: {open_failure}",
+                        owner.what_its_log_holds(),
                         path.display()
                     );
                     None
@@ -122,7 +195,10 @@ impl LoadedStreamLogRoute {
         });
         Arc::new(Self {
             runtime_id: runtime_id.to_string(),
-            stream_name: stream_name.to_string(),
+            numbered_record_history: Mutex::new(LoadedStreamLogRecordHistory::holding_at_most(
+                owner.records_held_in_memory(),
+            )),
+            owner,
             jsonl_log_file,
             records_dropped_from_a_full_queue: AtomicU64::new(0),
             helper_pipe_readers_still_reading: Mutex::new(0),
@@ -135,9 +211,17 @@ impl LoadedStreamLogRoute {
         &self.runtime_id
     }
 
-    /// The stream's URL-safe cast name.
-    pub fn stream_name(&self) -> &str {
-        &self.stream_name
+    /// The stream's URL-safe cast name; `None` for the runtime's own log.
+    pub fn stream_name(&self) -> Option<&str> {
+        match &self.owner {
+            LogRouteOwner::LoadedStream(stream_name) => Some(stream_name),
+            LogRouteOwner::TheRuntimeItself => None,
+        }
+    }
+
+    /// What this route's log holds, as a warning names it.
+    fn what_this_log_holds(&self) -> String {
+        self.owner.what_its_log_holds()
     }
 
     /// The stream's active JSONL segment, `None` when it writes none.
@@ -190,10 +274,10 @@ impl LoadedStreamLogRoute {
         drop(helper_pipe_readers_still_reading);
         if readers_outlasted_the_budget {
             tracing::warn!(
-                "the stream `{}` closed its JSONL log while {helper_pipe_readers_left_reading} \
-                 reader(s) of its helpers' pipes had not reached their end; what they read \
-                 later reaches the pretty mirror only",
-                self.stream_name
+                "{} closed its JSONL log while {helper_pipe_readers_left_reading} reader(s) of \
+                 its helpers' pipes had not reached their end; what they read later reaches the \
+                 pretty mirror only",
+                self.what_this_log_holds()
             );
         }
         if !jsonl_log_file
@@ -203,9 +287,9 @@ impl LoadedStreamLogRoute {
             )
         {
             tracing::warn!(
-                "the stream `{}` closed its JSONL log before the drain worker wrote every record \
-                 queued for it; the rest reach the pretty mirror only",
-                self.stream_name
+                "{} closed its JSONL log before the drain worker wrote every record queued for \
+                 it; the rest reach the pretty mirror only",
+                self.what_this_log_holds()
             );
         }
         let writer = jsonl_log_file.writer_while_open.lock().take();
@@ -213,9 +297,8 @@ impl LoadedStreamLogRoute {
             && let Err(sync_failure) = writer.flush_and_fsync()
         {
             tracing::warn!(
-                "the JSONL log of the stream `{}` at {} did not reach the disk whole: \
-                 {sync_failure}",
-                self.stream_name,
+                "the JSONL log of {} at {} did not reach the disk whole: {sync_failure}",
+                self.what_this_log_holds(),
                 jsonl_log_file.path.display()
             );
         }
@@ -236,9 +319,22 @@ impl LoadedStreamLogRoute {
             .swap(0, Ordering::Relaxed)
     }
 
-    /// Append one serialized record to the open file; `false` when the route
-    /// writes no file or it has closed.
+    /// The records this route numbered after `after`, at most `max_count` of
+    /// them, from the most recent it holds in memory; the runtime's own log
+    /// holds none.
+    pub fn log_records_after(&self, after: u64, max_count: usize) -> LoadedStreamLogRecordsPage {
+        self.numbered_record_history
+            .lock()
+            .records_after(after, max_count)
+    }
+
+    /// Number one serialized record into the in-memory history and append it
+    /// to the open file; `false` when the route writes no file or it has
+    /// closed.
     pub(crate) fn append_serialized_record(&self, serialized_record: &[u8]) -> bool {
+        self.numbered_record_history
+            .lock()
+            .append(serialized_record);
         let Some(jsonl_log_file) = &self.jsonl_log_file else {
             return false;
         };
@@ -266,6 +362,57 @@ impl LoadedStreamLogRoute {
             && let Some(writer) = jsonl_log_file.writer_while_open.lock().as_mut()
         {
             let _ = writer.flush_and_fsync();
+        }
+    }
+}
+
+/// The runtime's own log, written every record no stream emits while the
+/// engine that opened it lives.
+pub(crate) struct TheRuntimesOwnLogWhileItsEngineLives {
+    route: Arc<LoadedStreamLogRoute>,
+    runtime_own_log_route_of_the_queue: Arc<Mutex<Option<Arc<LoadedStreamLogRoute>>>>,
+}
+
+impl TheRuntimesOwnLogWhileItsEngineLives {
+    /// Open the runtime's own log under `runtime_own_log_directory` and have
+    /// the drain worker of the calling thread's pathway write the records no
+    /// stream emits to it; `None` when no pathway of the engine's runs or the
+    /// file cannot be opened, which the open says as a warning.
+    pub(crate) fn open(runtime_id: &str, runtime_own_log_directory: &Path) -> Option<Self> {
+        let route = LoadedStreamLogRoute::open_the_runtimes_own_log_in(
+            runtime_id,
+            runtime_own_log_directory,
+        );
+        let runtime_own_log_route_of_the_queue = route
+            .jsonl_log_file
+            .as_ref()?
+            .record_queue_drained_into_it
+            .runtime_own_log_route
+            .clone();
+        *runtime_own_log_route_of_the_queue.lock() = Some(Arc::clone(&route));
+        Some(Self {
+            route,
+            runtime_own_log_route_of_the_queue,
+        })
+    }
+
+    /// The log's active JSONL segment.
+    pub(crate) fn jsonl_log_path(&self) -> Option<&Path> {
+        self.route.jsonl_log_path()
+    }
+}
+
+impl Drop for TheRuntimesOwnLogWhileItsEngineLives {
+    /// Closed while the drain worker still writes to it, so every record
+    /// queued before the close lands; later ones reach the pretty mirror only.
+    fn drop(&mut self) {
+        self.route.close_the_jsonl_log_file();
+        let mut runtime_own_log_route = self.runtime_own_log_route_of_the_queue.lock();
+        if runtime_own_log_route
+            .as_ref()
+            .is_some_and(|installed| Arc::ptr_eq(installed, &self.route))
+        {
+            *runtime_own_log_route = None;
         }
     }
 }
@@ -401,5 +548,47 @@ impl<F: Future> Future for FuturePolledInALoadedStreamLogRoute<F> {
         let this = self.project();
         let _entered = this.route.enter_on_this_thread();
         this.future.poll(context)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_runtimes_own_log_holds_no_record_in_memory_and_a_streams_does() {
+        let runtime_own_log_directory = tempfile::tempdir().unwrap();
+        let project_directory = tempfile::tempdir().unwrap();
+        let the_runtimes_own_route = LoadedStreamLogRoute::open_the_runtimes_own_log_in(
+            "R-test",
+            runtime_own_log_directory.path(),
+        );
+        let a_streams_route = LoadedStreamLogRoute::open_in_project_directory(
+            "R-test",
+            "camera",
+            project_directory.path(),
+        );
+
+        for route in [&the_runtimes_own_route, &a_streams_route] {
+            route.append_serialized_record(br#"{"message":"first"}"#);
+            route.append_serialized_record(br#"{"message":"second"}"#);
+        }
+
+        let the_runtimes_own_page = the_runtimes_own_route.log_records_after(0, 256);
+        assert!(
+            the_runtimes_own_page.records.is_empty(),
+            "{the_runtimes_own_page:?}"
+        );
+        assert_eq!(the_runtimes_own_route.stream_name(), None);
+        let a_streams_page = a_streams_route.log_records_after(0, 256);
+        assert_eq!(
+            a_streams_page
+                .records
+                .iter()
+                .map(|numbered| numbered.sequence)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert_eq!(a_streams_route.stream_name(), Some("camera"));
     }
 }

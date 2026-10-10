@@ -19,6 +19,11 @@ pub use init::{
     ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES, ProcessLoggingPathwayHold, StreamlibLoggingGuard,
     hold_the_process_logging_pathway, init_for_tests,
 };
+pub use loaded_stream_log_record_history::{
+    LOADED_STREAM_LOG_RECORDS_HELD_IN_MEMORY, LoadedStreamLogRecordsPage, NumberedLogRecord,
+};
+pub use loaded_stream_log_route::RUNTIME_OWN_LOG_INSTANCE_NAME;
+pub(crate) use loaded_stream_log_route::TheRuntimesOwnLogWhileItsEngineLives;
 pub use loaded_stream_log_route::{
     LoadedStreamLogRoute, LoadedStreamLogRouteEnteredOnThisThread,
     carrying_this_threads_loaded_stream_log_route,
@@ -37,6 +42,7 @@ mod helper_process_engine_log_capture;
 pub(crate) mod iceoryx2_log_bridge;
 mod init;
 mod layer;
+mod loaded_stream_log_record_history;
 mod loaded_stream_log_route;
 mod polyglot_sink;
 mod record;

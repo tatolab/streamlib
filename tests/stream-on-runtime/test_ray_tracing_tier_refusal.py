@@ -18,9 +18,9 @@ pytestmark = pytest.mark.requires_gpu
 
 
 def test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    tatolabd = start_tatolabd(
+    tatolabd = start_tatolabd_running_stream(
         ray_tracing_kernel_streams.ray_tracing_tier_absent_refusal_probe_alone
     )
     observation = tatolabd.await_marker("PROBE_RESULT")

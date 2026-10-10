@@ -3,8 +3,9 @@
 
 //! `tatolab exchange` run as a user runs it, against a stub local API: its flags, what it prints
 //! on stdout and on stderr, and how it exits. Each sampling scenario is the in-crate tests'. The
-//! registry is isolated through `XDG_RUNTIME_DIR`, which only Linux honours, so the tests that
-//! read one are Linux-only; the usage refusals read none and run on every floor.
+//! tests that reach a runtime serve the stub at an isolated machine's fixed socket, which a build
+//! without the test feature can isolate on Linux alone; the usage refusals read no runtime
+//! directory and run on every floor.
 
 mod common;
 
@@ -26,7 +27,7 @@ fn the_exchange_help_names_both_forms_and_every_flag() {
         "--count <N>",
         "--every <N>",
         "--field <NAME>",
-        "--node <RUNTIME_NAME_OR_ID>",
+        "--stream <STREAM>",
         "--out is not cleared",
     ] {
         assert!(help_text.contains(named), "{named}:\n{help_text}");
@@ -98,6 +99,8 @@ fn a_sample_bound_below_one_is_refused() {
             "exchange",
             "--channel",
             "cam/frame",
+            "--stream",
+            "camera",
             "--out",
             scratch_directory.path().to_str().unwrap(),
             sample_bound_flag,
@@ -112,47 +115,41 @@ fn a_sample_bound_below_one_is_refused() {
     }
 }
 
-#[cfg(target_os = "linux")]
-mod against_an_isolated_registry {
+#[cfg(any(target_os = "linux", feature = "machine-directories-under-a-test-root"))]
+mod against_an_isolated_machine {
     use std::path::{Path, PathBuf};
     use std::process::Output;
 
     use serde_json::json;
 
-    use super::common::isolated_node_registry::IsolatedNodeRegistry;
-    use super::common::stub_local_api_server::{StubLocalApiServer, StubSurfaceImageAnswer};
+    use super::common::isolated_machine_directories::IsolatedMachineDirectories;
+    use super::common::stub_local_api_server::{StubLocalApiScript, StubSurfaceImageAnswer};
     use super::common::tapped_channel_bag_fixtures::{
         bag_publishing_surface_id, labelled_png_image_answer, png_bytes_for, png_files_in,
         tap_result_text,
     };
-    use super::common::tatolab_binary_run::{
-        run_tatolab_with_xdg_runtime_dir, standard_error_text, standard_output_text,
-    };
+    use super::common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
-    fn exchange_on_the_sole_runtime(
-        stub_local_api_server: &StubLocalApiServer,
+    fn exchange_on_the_machines_runtime(
+        isolated_machine_directories: &IsolatedMachineDirectories,
         exchange_arguments: &[&str],
     ) -> Output {
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
-        run_tatolab_with_xdg_runtime_dir(
-            isolated_node_registry.xdg_runtime_dir(),
-            &[&["exchange"], exchange_arguments].concat(),
-        )
+        isolated_machine_directories.run_tatolab(&[&["exchange"], exchange_arguments].concat())
     }
 
     fn sample_the_channel(
-        stub_local_api_server: &StubLocalApiServer,
+        isolated_machine_directories: &IsolatedMachineDirectories,
         output_directory: &Path,
         sampling_flags: &[&str],
     ) -> Output {
-        exchange_on_the_sole_runtime(
-            stub_local_api_server,
+        exchange_on_the_machines_runtime(
+            isolated_machine_directories,
             &[
                 &[
                     "--channel",
                     "cam/frame",
+                    "--stream",
+                    "camera",
                     "--out",
                     output_directory.to_str().unwrap(),
                 ],
@@ -171,15 +168,18 @@ mod against_an_isolated_registry {
 
     #[test]
     fn the_id_form_writes_the_exact_bytes_and_prints_the_path() {
-        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
-            "cam/frame#7",
-            labelled_png_image_answer("seven"),
-        )]);
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let _stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
+            StubLocalApiScript::answering_surface_images([(
+                "cam/frame#7",
+                labelled_png_image_answer("seven"),
+            )]),
+        );
         let scratch_directory = tempfile::tempdir().unwrap();
         let output_directory = scratch_directory.path().join("frames");
 
-        let exchanged = exchange_on_the_sole_runtime(
-            &stub_local_api_server,
+        let exchanged = exchange_on_the_machines_runtime(
+            &isolated_machine_directories,
             &["cam/frame#7", "--out", output_directory.to_str().unwrap()],
         );
 
@@ -203,15 +203,16 @@ mod against_an_isolated_registry {
 
     #[test]
     fn a_surface_id_that_does_not_resolve_fails_the_verb() {
-        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images(Vec::<(
-            String,
-            StubSurfaceImageAnswer,
-        )>::new(
-        ));
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let _stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
+            StubLocalApiScript::answering_surface_images(
+                Vec::<(String, StubSurfaceImageAnswer)>::new(),
+            ),
+        );
         let output_directory = tempfile::tempdir().unwrap();
 
-        let refused = exchange_on_the_sole_runtime(
-            &stub_local_api_server,
+        let refused = exchange_on_the_machines_runtime(
+            &isolated_machine_directories,
             &["gone#1", "--out", output_directory.path().to_str().unwrap()],
         );
 
@@ -226,15 +227,18 @@ mod against_an_isolated_registry {
     /// `--out` spelled with `.` components prints each path without them.
     #[test]
     fn a_written_path_prints_without_the_outputs_current_directory_components() {
-        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
-            "s#1",
-            labelled_png_image_answer("one"),
-        )]);
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let _stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
+            StubLocalApiScript::answering_surface_images([(
+                "s#1",
+                labelled_png_image_answer("one"),
+            )]),
+        );
         let scratch_directory = tempfile::tempdir().unwrap();
         let output_directory = scratch_directory.path().join("frames");
 
-        let exchanged = exchange_on_the_sole_runtime(
-            &stub_local_api_server,
+        let exchanged = exchange_on_the_machines_runtime(
+            &isolated_machine_directories,
             &[
                 "s#1",
                 "--out",
@@ -260,20 +264,22 @@ mod against_an_isolated_registry {
 
     #[test]
     fn the_channel_form_taps_then_exchanges_each_sampled_id() {
-        let stub_local_api_server = StubLocalApiServer::serve_tapping(
-            &[tap_result_text(&[
-                bag_publishing_surface_id("s#1"),
-                bag_publishing_surface_id("s#2"),
-            ])],
-            [
-                ("s#1", labelled_png_image_answer("one")),
-                ("s#2", labelled_png_image_answer("two")),
-            ],
-        );
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let stub_local_api_server =
+            isolated_machine_directories.serve_stub_local_api(StubLocalApiScript::tapping(
+                &[tap_result_text(&[
+                    bag_publishing_surface_id("s#1"),
+                    bag_publishing_surface_id("s#2"),
+                ])],
+                [
+                    ("s#1", labelled_png_image_answer("one")),
+                    ("s#2", labelled_png_image_answer("two")),
+                ],
+            ));
         let output_directory = tempfile::tempdir().unwrap();
 
         let sampled = sample_the_channel(
-            &stub_local_api_server,
+            &isolated_machine_directories,
             output_directory.path(),
             &["--count", "2"],
         );
@@ -286,7 +292,7 @@ mod against_an_isolated_registry {
         );
         assert_eq!(
             stub_local_api_server.recorded_tool_calls()[0].tool_arguments,
-            json!({"channel": "cam/frame", "count": 2})
+            json!({"stream": "camera", "channel": "cam/frame", "count": 2})
         );
         assert_eq!(
             standard_output_text(&sampled),
@@ -311,14 +317,16 @@ mod against_an_isolated_registry {
     /// all the channel had"; the one frame that landed is still named.
     #[test]
     fn a_short_sample_exits_nonzero() {
-        let stub_local_api_server = StubLocalApiServer::serve_tapping(
-            &[tap_result_text(&[bag_publishing_surface_id("s#1")])],
-            [("s#1", labelled_png_image_answer("one"))],
-        );
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let _stub_local_api_server =
+            isolated_machine_directories.serve_stub_local_api(StubLocalApiScript::tapping(
+                &[tap_result_text(&[bag_publishing_surface_id("s#1")])],
+                [("s#1", labelled_png_image_answer("one"))],
+            ));
         let output_directory = tempfile::tempdir().unwrap();
 
         let sampled = sample_the_channel(
-            &stub_local_api_server,
+            &isolated_machine_directories,
             output_directory.path(),
             &["--count", "3"],
         );
@@ -336,23 +344,25 @@ mod against_an_isolated_registry {
     /// will not find, so the stop is reported beside the frames rather than instead of them.
     #[test]
     fn frames_that_landed_before_a_fatal_stop_are_still_printed() {
-        let stub_local_api_server = StubLocalApiServer::serve_tapping(
-            &[tap_result_text(&[
-                bag_publishing_surface_id("s#1"),
-                bag_publishing_surface_id("s#2"),
-            ])],
-            [
-                ("s#1", labelled_png_image_answer("one")),
-                (
-                    "s#2",
-                    StubSurfaceImageAnswer::refusal(404, "no such surface"),
-                ),
-            ],
-        );
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let _stub_local_api_server =
+            isolated_machine_directories.serve_stub_local_api(StubLocalApiScript::tapping(
+                &[tap_result_text(&[
+                    bag_publishing_surface_id("s#1"),
+                    bag_publishing_surface_id("s#2"),
+                ])],
+                [
+                    ("s#1", labelled_png_image_answer("one")),
+                    (
+                        "s#2",
+                        StubSurfaceImageAnswer::refusal(404, "no such surface"),
+                    ),
+                ],
+            ));
         let output_directory = tempfile::tempdir().unwrap();
 
         let sampled = sample_the_channel(
-            &stub_local_api_server,
+            &isolated_machine_directories,
             output_directory.path(),
             &["--count", "2"],
         );

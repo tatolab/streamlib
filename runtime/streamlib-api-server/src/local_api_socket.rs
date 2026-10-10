@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::unix_socket_path_cleared_for_bind::{
-    UnixSocketPathClearedForBind, clear_unix_socket_path_for_bind,
+    UnixSocketPathClearedForBind, UnixSocketPathRefusedForBind, clear_unix_socket_path_for_bind,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -50,8 +50,17 @@ pub(crate) struct LocalApiSocketBoundAndNotYetServed {
 pub(crate) fn bind_local_api_socket(
     local_api_socket_path: &Path,
 ) -> Result<LocalApiSocketBoundAndNotYetServed> {
-    let cleared = clear_unix_socket_path_for_bind(local_api_socket_path)
-        .map_err(|refusal| Error::Runtime(format!("Local API socket: {refusal}")))?;
+    let cleared =
+        clear_unix_socket_path_for_bind(local_api_socket_path).map_err(
+            |refusal| match refusal {
+                UnixSocketPathRefusedForBind::HeldByALiveProcess { .. } => Error::Runtime(format!(
+                    "Local API socket: {refusal}: another runtime serves this machine's local API \
+                 there, or a stale process still holds the path. Stop that process, then start \
+                 this runtime again"
+                )),
+                _ => Error::Runtime(format!("Local API socket: {refusal}")),
+            },
+        )?;
     if cleared == UnixSocketPathClearedForBind::StaleSocketFileRemoved {
         tracing::warn!(
             "Removed a stale local API socket left by a prior runtime: {}",
@@ -342,16 +351,20 @@ mod tests {
             "{refusal}"
         );
         assert!(
-            refusal.contains("already bound by a live process"),
+            refusal.contains(
+                "already bound by a live process: another runtime serves this \
+                 machine's local API there, or a stale process still holds the path"
+            ),
             "{refusal}"
         );
+        assert!(!refusal.contains("runtime_id"), "{refusal}");
         assert_the_local_api_socket_answers_health(local_api_socket_path).await;
     }
 
     #[tokio::test]
     async fn a_stale_socket_file_is_replaced_and_served() {
         let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rstale.sock");
+        let local_api_socket_path = directory.path().join("local-api.sock");
         drop(std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap());
         assert!(local_api_socket_path.exists());
 
@@ -369,7 +382,7 @@ mod tests {
     #[test]
     fn dropping_a_socket_bound_and_never_served_removes_its_file() {
         let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rneverserved.sock");
+        let local_api_socket_path = directory.path().join("local-api.sock");
         let bound = bind_local_api_socket(&local_api_socket_path).unwrap();
         assert!(local_api_socket_path.exists());
 
@@ -381,7 +394,7 @@ mod tests {
     #[test]
     fn removing_the_socket_file_is_idempotent() {
         let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rgone.sock");
+        let local_api_socket_path = directory.path().join("local-api.sock");
         drop(std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap());
 
         remove_local_api_socket_file(&local_api_socket_path).unwrap();
@@ -444,8 +457,8 @@ mod tests {
     /// Serving the real router through [`LocalApiSocketBoundAndNotYetServed::serve_router`]
     /// leaves this process holding no new TCP listener, loopback included. The
     /// scan covers the whole test process, so no other test in this binary may
-    /// hold a TCP listener. A launched node's own proof is the rig test
-    /// `test_a_launched_node_listens_on_no_tcp_socket`.
+    /// hold a TCP listener. A running runtime's own proof is the rig test
+    /// `test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket`.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn serving_the_router_on_the_local_api_socket_opens_no_tcp_listener() {
@@ -486,7 +499,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_the_running_server_stops_serving_and_removes_its_socket_file() {
         let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rdrop.sock");
+        let local_api_socket_path = directory.path().join("local-api.sock");
         let running_server = serve_the_stub_router_at(&local_api_socket_path);
         let mut held_connection = tokio::net::UnixStream::connect(&local_api_socket_path)
             .await

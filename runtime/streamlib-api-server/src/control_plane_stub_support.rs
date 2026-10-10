@@ -102,7 +102,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
             _reason: &str,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(
-                "the control plane asks for the shutdown of every loaded stream, never of one"
+                "the control plane never asks a stream to shut down; `stop_stream` unloads it"
             )
         }
     };
@@ -150,37 +150,58 @@ pub(crate) const STUB_RUNTIME_NAME: &str = "stub-runtime";
 /// The one stream a stub runtime loads: the stub itself.
 pub(crate) const STUB_STREAM_NAME: &str = "stub-stream";
 
-/// The topic the stub stream's events publish on.
-pub(crate) const STUB_STREAM_EVENT_TOPIC: &str = "stream:stub-runtime-id/stub-stream#1";
+/// The tag of the stub's one load, the same for every call in this process.
+pub(crate) fn the_stub_streams_tag() -> ::streamlib::sdk::runtime::LoadedStreamTag {
+    static STUB_STREAM_TAG: ::std::sync::OnceLock<::streamlib::sdk::runtime::LoadedStreamTag> =
+        ::std::sync::OnceLock::new();
+    *STUB_STREAM_TAG.get_or_init(|| {
+        ::streamlib::sdk::runtime::LoadedStreamTag::next_in_this_process()
+            .expect("a test process has a stream tag left")
+    })
+}
 
 /// Refuse a call naming a stream other than [`STUB_STREAM_NAME`], in the
-/// engine's words; `None` names the stub stream, the only one loaded.
+/// engine's words.
 pub(crate) fn refuse_a_stream_the_stub_runtime_does_not_load(
-    stream_name: Option<&str>,
+    stream_name: &str,
 ) -> ::streamlib::sdk::error::Result<()> {
     match stream_name {
-        None | Some(STUB_STREAM_NAME) => Ok(()),
-        Some(other) => Err(::streamlib::sdk::error::Error::NotFound(format!(
+        STUB_STREAM_NAME => Ok(()),
+        other => Err(::streamlib::sdk::error::Error::NotFound(format!(
             "no stream named `{other}` is loaded in this runtime. Loaded: {STUB_STREAM_NAME}"
         ))),
     }
 }
 
+/// The refusal every stream action meets on a stub runtime, which loads its
+/// one stream and no other.
+pub(crate) fn the_stub_runtime_takes_no_stream_action(
+    action: &str,
+) -> ::streamlib::sdk::error::Error {
+    ::streamlib::sdk::error::Error::Runtime(format!(
+        "`{action}` was refused: the stub runtime loads `{STUB_STREAM_NAME}` and takes no stream \
+         action"
+    ))
+}
+
 /// Implement [`OperationsOnTheStreamsLoadedInThisRuntime`] for a stub
 /// `RuntimeOperations` type as a runtime that loads one stream, the stub:
-/// every call naming it, or naming none, reaches a clone of the stub (whose
-/// state is shared behind `Arc`s); the machine's shutdown request records its
-/// reason on a `recorded_shutdown_reasons` field; the exchange answers from an
-/// `exchange` [`StubSurfaceExchange`] field; the node catalog is the native
-/// registry's.
+/// every call naming it reaches a clone of the stub (whose state is shared
+/// behind `Arc`s); the exchange answers from an `exchange`
+/// [`StubSurfaceExchange`] field; the node catalog is the native registry's,
+/// and its interpreter described nothing; the stub stream's log holds no
+/// record; it lists as attached, and every stream action is refused.
 ///
 /// [`OperationsOnTheStreamsLoadedInThisRuntime`]: ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime
 macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
     ($stub_type:ty) => {
         impl ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime for $stub_type {
+            fn this_runtimes_name(&self) -> &str {
+                $crate::control_plane_stub_support::STUB_RUNTIME_NAME
+            }
             fn runtime_operations_of_the_stream_a_call_names(
                 &self,
-                stream_name: Option<&str>,
+                stream_name: &str,
             ) -> ::streamlib::sdk::error::Result<
                 ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
             > {
@@ -191,7 +212,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             }
             fn node_catalog_of_the_stream_a_call_names(
                 &self,
-                stream_name: Option<&str>,
+                stream_name: &str,
             ) -> ::streamlib::sdk::error::Result<
                 Vec<::streamlib::sdk::descriptors::ProcessorDescriptor>,
             > {
@@ -200,26 +221,99 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 )?;
                 Ok(::streamlib::sdk::processors::PROCESSOR_REGISTRY.list_registered())
             }
-            fn event_topic_of_the_stream_a_call_names(
+            fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
                 &self,
-                stream_name: Option<&str>,
-            ) -> ::streamlib::sdk::error::Result<String> {
+                stream_name: &str,
+            ) -> ::streamlib::sdk::error::Result<
+                Vec<::streamlib::sdk::descriptors::ProcessorDescriptor>,
+            > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
                     stream_name,
                 )?;
-                Ok($crate::control_plane_stub_support::STUB_STREAM_EVENT_TOPIC.to_string())
+                Ok(Vec::new())
             }
             fn names_of_the_loaded_streams(&self) -> Vec<String> {
                 vec![$crate::control_plane_stub_support::STUB_STREAM_NAME.to_string()]
             }
-            fn request_the_shutdown_of_every_loaded_stream(
+            fn log_records_of_the_stream_a_call_names(
                 &self,
-                reason: &str,
-            ) -> ::streamlib::sdk::error::Result<()> {
-                self.recorded_shutdown_reasons
-                    .lock()
-                    .push(reason.to_string());
-                Ok(())
+                stream_name: &str,
+                after: u64,
+                _max_count: usize,
+            ) -> ::streamlib::sdk::error::Result<
+                ::streamlib::sdk::runtime::LogRecordsPageOfOneLoadedStream,
+            > {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_name,
+                )?;
+                Ok(::streamlib::sdk::runtime::LogRecordsPageOfOneLoadedStream {
+                    stream_tag: $crate::control_plane_stub_support::the_stub_streams_tag(),
+                    records_page: ::streamlib::sdk::logging::LoadedStreamLogRecordsPage {
+                        records: Vec::new(),
+                        next_after: after,
+                        records_no_longer_held: 0,
+                    },
+                })
+            }
+            fn run_stream(
+                &self,
+                _request: ::streamlib::sdk::runtime::RunStreamRequest,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamRunOutcome> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "run_stream",
+                ))
+            }
+            fn stop_stream(
+                &self,
+                _stream_name: &str,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamStopOutcome> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "stop_stream",
+                ))
+            }
+            fn start_stream(
+                &self,
+                _stream_name: &str,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamStartOutcome> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "start_stream",
+                ))
+            }
+            fn remove_stream(
+                &self,
+                _stream_name: &str,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamRemoveOutcome> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "remove_stream",
+                ))
+            }
+            fn list_streams(&self) -> Vec<::streamlib::sdk::runtime::StreamListing> {
+                vec![::streamlib::sdk::runtime::StreamListing {
+                    name: $crate::control_plane_stub_support::STUB_STREAM_NAME.to_string(),
+                    state: ::streamlib::sdk::runtime::StreamListingState::Attached,
+                    project_directory: ::std::path::PathBuf::new(),
+                    node_count: None,
+                }]
+            }
+            fn expose_port(
+                &self,
+                _stream_name: &str,
+                _node: &str,
+                _port: &str,
+                _level: ::streamlib::sdk::graph::OutputPortExposureLevel,
+            ) -> ::streamlib::sdk::error::Result<
+                ::streamlib::sdk::runtime::OutputPortExposureOutcome,
+            > {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "expose_port",
+                ))
+            }
+            fn unload_the_attached_stream_if_still_the_same(
+                &self,
+                _stream_name: &str,
+                _stream_tag: ::streamlib::sdk::runtime::LoadedStreamTag,
+            ) -> bool {
+                false
             }
             fn exchange_published_surface_id_for_png_image_bytes_async(
                 &self,
@@ -254,7 +348,7 @@ pub(crate) type ArmedAddProcessorRefusal = ::std::sync::Arc<::parking_lot::Mutex
 /// test filled makes the add refuse instead, so a front end's handling of an
 /// engine refusal is testable without an engine. The blocking wrappers and the
 /// one stream's own shutdown request stay unreachable: a front end awaits, it
-/// never blocks a worker, and it asks for every stream's shutdown.
+/// never blocks a worker, and it asks no stream to shut down.
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
         fn add_processor_async(
@@ -375,7 +469,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             _reason: &str,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(
-                "the control plane asks for the shutdown of every loaded stream, never of one"
+                "the control plane never asks a stream to shut down; `stop_stream` unloads it"
             )
         }
     };
@@ -572,7 +666,7 @@ impl LocalApiServedOnAFreshSocket {
         >,
     ) -> Self {
         let socket_directory = ::tempfile::tempdir().expect("a temp directory");
-        let local_api_socket_path = socket_directory.path().join("local-api-Rtest.sock");
+        let local_api_socket_path = socket_directory.path().join("local-api.sock");
         Self {
             running_server: Some(serve_the_control_plane_router_at(
                 operations_on_the_loaded_streams,

@@ -440,7 +440,7 @@ fn read_from_the_client_until(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::isolated_node_registry::NOTHING_LISTENS_LOCAL_API_SOCKET_PATH;
+    use crate::stub_local_api_server::NOTHING_LISTENS_LOCAL_API_SOCKET_PATH;
     use crate::stub_local_api_server::{StubLocalApiServer, StubSurfaceImageAnswer};
     use streamlib_runtime_client_contract::local_api_wire_contract::{
         SURFACE_PIXEL_HEIGHT_HEADER_NAME, SURFACE_PIXEL_WIDTH_HEADER_NAME,
@@ -714,7 +714,7 @@ mod mcp_stdio_upgrade_tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
-    use crate::isolated_node_registry::NOTHING_LISTENS_LOCAL_API_SOCKET_PATH;
+    use crate::stub_local_api_server::NOTHING_LISTENS_LOCAL_API_SOCKET_PATH;
 
     const SCRIPTED_RUNTIME_READ_TIMEOUT: Duration = Duration::from_secs(10);
 

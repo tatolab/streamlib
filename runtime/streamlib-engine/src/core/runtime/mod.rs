@@ -9,6 +9,7 @@ mod helper_process_group_registry;
 mod loaded_stream;
 mod loaded_stream_output_port_exposure;
 mod local_processor_type_registration;
+mod machine_state_directory;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
@@ -21,6 +22,7 @@ mod runtime_shutdown_request;
 mod runtime_unique_id;
 mod stated_configuration_value;
 mod status;
+mod stream_actions_of_this_runtime;
 mod stream_environment;
 mod surface_image_exchange;
 mod tap;
@@ -50,10 +52,19 @@ pub(crate) use helper_process_group_registry::{
 };
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use loaded_stream_output_port_exposure::ExposedOutputPortReaderRegistration;
+pub use machine_state_directory::{
+    KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord, KeptStreamRecordReadFailure,
+    KeptStreamRecordsInTheStateDirectory, OwnerExposureRuling,
+};
+pub(crate) use machine_state_directory::{
+    OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
+};
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+pub use operations_on_the_streams_loaded_in_this_runtime::{
+    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
+};
 pub use runtime::{
-    OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
+    EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
     StreamLoadObservingMachineShutdownRequests,
 };
 pub use runtime_name::RuntimeName;
@@ -68,6 +79,11 @@ pub use runtime_shutdown_request::{
 };
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
+pub use stream_actions_of_this_runtime::{
+    KeptStreamReloadAtTheStart, LoadedStreamHolding, OutputPortExposureOutcome, RunStreamRequest,
+    StreamListing, StreamListingState, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome,
+    StreamStopOutcome,
+};
 pub use stream_environment::StreamEnvironment;
 pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;
 pub use tap::TapSubscription;

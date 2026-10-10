@@ -14,6 +14,11 @@ repository.workspace = true
 name = "streamlib_runtime_client_contract"
 path = "src/lib.rs"
 
+[features]
+# Test builds only, never a release: the runtime directory, the state directory and the machine
+# runtime lock all move under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
+machine-directories-under-a-test-root = []
+
 [dependencies]
 libc.workspace = true
 # The surface-image exchange route's surface-id segment.

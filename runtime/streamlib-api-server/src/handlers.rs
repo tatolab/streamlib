@@ -16,11 +16,16 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use streamlib::sdk::descriptors::ProcessorDescriptor;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
+use streamlib::sdk::json_schema::{
+    GraphResponse, MachineWideGraphResponse, MachineWideRegistryResponse,
+    NodeTypesDescribedInOneStreamOutput, ProcessorDescriptorOutput, RegistryResponse,
+};
+use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 use tokio_util::sync::CancellationToken;
@@ -35,10 +40,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     SURFACE_PIXEL_WIDTH_HEADER_NAME,
 };
 
-use crate::state::{
-    ApiDoc, AppState, ErrorResponse, RuntimeShutdownAcceptedResponse, RuntimeShutdownRequest,
-    StreamSelectionQuery,
-};
+use crate::state::{ApiDoc, AppState, ErrorResponse, OptionalStreamSelectionQuery};
 
 // ============================================================================
 // Router Construction
@@ -50,7 +52,6 @@ fn control_plane_rest_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(health))
         .routes(routes!(get_graph))
         .routes(routes!(get_registry))
-        .routes(routes!(request_the_shutdown_of_every_loaded_stream))
         .routes(routes!(exchange_published_surface_id_for_png_image))
 }
 
@@ -69,11 +70,10 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 
 /// Build the full router with shared state and trace layer attached.
 ///
-/// The route surface is observation-shaped: a node's graph is defined by its
-/// code, so nothing here creates, replaces, connects, or removes a processor.
-/// `POST /api/runtime/shutdown` is the one route that acts on the node rather
-/// than reporting on it. No route asks for a credential: whoever can open the
-/// local API socket may call every one. `local_api_stopping_token` is
+/// The REST surface is observation-shaped: a stream's graph is defined by its
+/// code, so no route creates, replaces, connects, or removes a processor. No
+/// route asks for a credential: whoever can open the local API socket may call
+/// every one. `local_api_stopping_token` is
 /// cancelled when the local API stops serving, ending every
 /// `subscriptions/listen` `/mcp` holds open and every stream `/mcp/stdio`
 /// upgraded.
@@ -138,8 +138,8 @@ pub(crate) async fn health() -> &'static str {
 }
 
 /// What a route answers when the stream it was asked about cannot be named:
-/// `404` for one not loaded, or an absent `stream` meeting none or several —
-/// the refusal names the loaded streams — and `500` for anything else.
+/// `404` for one not loaded — the refusal names the loaded streams — and `500`
+/// for anything else.
 fn stream_resolution_refusal_response(refusal: &Error) -> Response {
     let status = match refusal {
         Error::NotFound(_) => StatusCode::NOT_FOUND,
@@ -148,16 +148,94 @@ fn stream_resolution_refusal_response(refusal: &Error) -> Response {
     error_response(status, refusal)
 }
 
-/// The operations on the stream `stream` names — `None` names the only
-/// loaded stream — or the response refusing the call.
+/// The operations on the loaded stream `stream` names, or the response
+/// refusing the call.
 fn stream_operations_or_refusal(
     state: &AppState,
-    stream: Option<&str>,
+    stream: &str,
 ) -> std::result::Result<Arc<dyn RuntimeOperations>, Box<Response>> {
     state
         .operations_on_the_loaded_streams
         .runtime_operations_of_the_stream_a_call_names(stream)
         .map_err(|refusal| Box::new(stream_resolution_refusal_response(&refusal)))
+}
+
+/// What `GET /api/graph` answers: one stream's graph, or every loaded
+/// stream's under the runtime's name.
+#[derive(Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+#[expect(
+    dead_code,
+    reason = "documents the route's two answers; each is served as the engine renders it, with \
+              every live key the typed form would drop"
+)]
+pub(crate) enum GraphOfOneStreamOrOfEveryStream {
+    /// The graph of the stream `stream` named.
+    OneStream(GraphResponse),
+    /// Every loaded stream's graph, when no `stream` was named.
+    EveryStream(MachineWideGraphResponse),
+}
+
+/// What `GET /api/registry` answers: one stream's node catalog, or the native
+/// types and each loaded stream's own.
+#[derive(Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub(crate) enum NodeTypesOfOneStreamOrOfEveryStream {
+    /// The node types the stream `stream` named can add.
+    OneStream(RegistryResponse),
+    /// The native types and each loaded stream's Python types, when no
+    /// `stream` was named.
+    EveryStream(MachineWideRegistryResponse),
+}
+
+/// Every loaded stream's graph under the runtime's name: what `/api/graph`,
+/// the `graph` tool and the `streamlib://graph` resource answer when no
+/// stream is named. A stream unloaded while this renders is left out.
+pub(crate) async fn machine_wide_graph_json(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+) -> Result<Value> {
+    let mut stream_graphs = Vec::new();
+    for stream_name in operations_on_the_loaded_streams.names_of_the_loaded_streams() {
+        let stream_operations = match operations_on_the_loaded_streams
+            .runtime_operations_of_the_stream_a_call_names(&stream_name)
+        {
+            Ok(stream_operations) => stream_operations,
+            Err(Error::NotFound(_)) => continue,
+            Err(other) => return Err(other),
+        };
+        stream_graphs.push(stream_operations.to_json_async().await?);
+    }
+    Ok(json!({
+        "runtime_name": operations_on_the_loaded_streams.this_runtimes_name(),
+        "streams": stream_graphs,
+    }))
+}
+
+/// The native node types every stream can add, then each loaded stream's
+/// types described in its own interpreter: what `/api/registry` and the
+/// `streamlib://node-catalog` resource answer when no stream is named. A
+/// stream unloaded while this renders is left out.
+pub(crate) fn machine_wide_registry_response(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+) -> MachineWideRegistryResponse {
+    MachineWideRegistryResponse {
+        nodes: node_catalog_response(&PROCESSOR_REGISTRY.list_registered()).nodes,
+        streams: operations_on_the_loaded_streams
+            .names_of_the_loaded_streams()
+            .into_iter()
+            .filter_map(|stream_name| {
+                let described = operations_on_the_loaded_streams
+                    .node_types_described_in_the_interpreter_of_the_stream_a_call_names(
+                        &stream_name,
+                    )
+                    .ok()?;
+                Some(NodeTypesDescribedInOneStreamOutput {
+                    stream: stream_name,
+                    nodes: node_catalog_response(&described).nodes,
+                })
+            })
+            .collect(),
+    }
 }
 
 /// `status` with `error` as an [`ErrorResponse`] body.
@@ -176,60 +254,33 @@ fn error_response(status: StatusCode, error: &impl std::fmt::Display) -> Respons
     path = "/api/graph",
     tag = "graph",
     params(
-        ("stream" = Option<String>, Query, description = "The loaded stream whose graph to export; absent names the only loaded stream")
+        ("stream" = Option<String>, Query, description = "The loaded stream whose graph to export; absent exports every loaded stream's under the runtime's name")
     ),
     responses(
-        (status = 200, description = "The stream's current graph state as JSON"),
-        (status = 404, description = "The named stream is not loaded, or `stream` was absent while none or several are; the error names the loaded streams", body = ErrorResponse),
+        (status = 200, description = "With `stream`, that stream's current graph; without, `{runtime_name, streams}` holding every loaded stream's", body = GraphOfOneStreamOrOfEveryStream),
+        (status = 404, description = "The named stream is not loaded; the error names the loaded streams", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 pub(crate) async fn get_graph(
     State(state): State<AppState>,
-    Query(StreamSelectionQuery { stream }): Query<StreamSelectionQuery>,
+    Query(OptionalStreamSelectionQuery { stream }): Query<OptionalStreamSelectionQuery>,
 ) -> Response {
-    let stream_operations = match stream_operations_or_refusal(&state, stream.as_deref()) {
+    let Some(stream) = stream else {
+        return match machine_wide_graph_json(&state.operations_on_the_loaded_streams).await {
+            Ok(graphs) => Json(graphs).into_response(),
+            Err(export_failure) => {
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, &export_failure)
+            }
+        };
+    };
+    let stream_operations = match stream_operations_or_refusal(&state, &stream) {
         Ok(stream_operations) => stream_operations,
         Err(refusal) => return *refusal,
     };
     match stream_operations.to_json_async().await {
         Ok(graph) => Json(graph).into_response(),
         Err(export_failure) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &export_failure),
-    }
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/runtime/shutdown",
-    tag = "runtime",
-    request_body = RuntimeShutdownRequest,
-    responses(
-        (status = 202, description = "Shutdown of every loaded stream requested; teardown proceeds asynchronously and is NOT awaited by this response", body = RuntimeShutdownAcceptedResponse),
-        (status = 500, description = "The request could not be handed to the runtime", body = ErrorResponse)
-    )
-)]
-pub(crate) async fn request_the_shutdown_of_every_loaded_stream(
-    State(state): State<AppState>,
-    Json(body): Json<RuntimeShutdownRequest>,
-) -> axum::response::Response {
-    let reason = body.reason.unwrap_or_default();
-
-    // Never await teardown: the host stops serving this very socket once every
-    // stream has ended, so a handler that waited would be racing its own
-    // socket.
-    match state
-        .operations_on_the_loaded_streams
-        .request_the_shutdown_of_every_loaded_stream(&reason)
-    {
-        Ok(()) => (
-            StatusCode::ACCEPTED,
-            Json(RuntimeShutdownAcceptedResponse {
-                status: crate::state::RUNTIME_SHUTDOWN_REQUESTED_STATUS,
-                reason,
-            }),
-        )
-            .into_response(),
-        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &error),
     }
 }
 
@@ -340,22 +391,31 @@ fn surface_exchange_failure_response(failure: &Error) -> Response {
     path = "/api/registry",
     tag = "registry",
     params(
-        ("stream" = Option<String>, Query, description = "The loaded stream whose node catalog to list; absent names the only loaded stream")
+        ("stream" = Option<String>, Query, description = "The loaded stream whose node catalog to list; absent lists the native types and each loaded stream's own")
     ),
     responses(
-        (status = 200, description = "The node types the stream can add: the natively compiled ones, then the ones described in its own interpreter", body = RegistryResponse),
-        (status = 404, description = "The named stream is not loaded, or `stream` was absent while none or several are; the error names the loaded streams", body = ErrorResponse)
+        (status = 200, description = "With `stream`, the node types that stream can add: the natively compiled ones, then the ones described in its own interpreter. Without, `{nodes, streams}`: the native types, then each loaded stream's described types under that stream", body = NodeTypesOfOneStreamOrOfEveryStream),
+        (status = 404, description = "The named stream is not loaded; the error names the loaded streams", body = ErrorResponse)
     )
 )]
 pub(crate) async fn get_registry(
     State(state): State<AppState>,
-    Query(StreamSelectionQuery { stream }): Query<StreamSelectionQuery>,
+    Query(OptionalStreamSelectionQuery { stream }): Query<OptionalStreamSelectionQuery>,
 ) -> Response {
+    let Some(stream) = stream else {
+        return Json(NodeTypesOfOneStreamOrOfEveryStream::EveryStream(
+            machine_wide_registry_response(&state.operations_on_the_loaded_streams),
+        ))
+        .into_response();
+    };
     match state
         .operations_on_the_loaded_streams
-        .node_catalog_of_the_stream_a_call_names(stream.as_deref())
+        .node_catalog_of_the_stream_a_call_names(&stream)
     {
-        Ok(node_catalog) => Json(node_catalog_response(&node_catalog)).into_response(),
+        Ok(node_catalog) => Json(NodeTypesOfOneStreamOrOfEveryStream::OneStream(
+            node_catalog_response(&node_catalog),
+        ))
+        .into_response(),
         Err(refusal) => stream_resolution_refusal_response(&refusal),
     }
 }
@@ -457,8 +517,8 @@ impl EventListener for WebSocketEventForwarder {
 /// an optional bounded sample count.
 #[derive(Deserialize)]
 pub(crate) struct TapQuery {
-    /// The loaded stream the channel is in; absent names the only loaded one.
-    stream: Option<String>,
+    /// The loaded stream the channel is in.
+    stream: String,
     /// Stream exactly `count` bags then close; absent streams live until the
     /// client disconnects.
     count: Option<usize>,
@@ -477,11 +537,12 @@ pub(crate) struct TapQuery {
     tag = "events",
     params(
         ("channel" = String, Path, description = "The output port's address, `<runtime_name>/<node>/<port>`, percent-encoded as one path segment"),
-        ("stream" = Option<String>, Query, description = "The loaded stream the channel is in; absent names the only loaded stream"),
+        ("stream" = String, Query, description = "The loaded stream the channel is in"),
         ("count" = Option<usize>, Query, description = "Stream exactly this many bags then close; absent streams live until the client disconnects")
     ),
     responses(
-        (status = 404, description = "The named stream is not loaded, or `stream` was absent while none or several are; the error names the loaded streams", body = ErrorResponse),
+        (status = 400, description = "No `stream` was named; the plain-text body says which query parameter is missing"),
+        (status = 404, description = "The named stream is not loaded; the error names the loaded streams", body = ErrorResponse),
         (status = 101, description = "WebSocket upgraded. Read-only observability tap: each channel bag is forwarded verbatim (FrameHeader-framed) as a binary WS frame with no encode, containerize, or transcode — decoding is the client's concern. To observe a viewable video feed, tap an encoded (h264/h265/jpeg) or container (CMAF/fMP4) channel; a raw video channel carries zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels, and this is not a realtime-video transport (use the WebRTC/display processors).")
     )
 )]
@@ -491,7 +552,7 @@ pub(crate) async fn tap_websocket_handler(
     Path(channel): Path<String>,
     Query(query): Query<TapQuery>,
 ) -> Response {
-    let stream_operations = match stream_operations_or_refusal(&state, query.stream.as_deref()) {
+    let stream_operations = match stream_operations_or_refusal(&state, &query.stream) {
         Ok(stream_operations) => stream_operations,
         Err(refusal) => return *refusal,
     };
@@ -628,10 +689,7 @@ pub(crate) mod router_surface_tests {
     use streamlib_runtime_client_contract::local_api_wire_contract::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE;
     use tower::ServiceExt;
 
-    /// Stub runtime backing the router tests: it answers the observation ops
-    /// and records every shutdown reason it is handed, so a route test can
-    /// prove the request reached the runtime rather than merely producing a
-    /// 202.
+    /// Stub runtime backing the router tests: it answers the observation ops.
     ///
     /// Every graph-mutating op is `unreachable!`. `RuntimeOperations` still
     /// declares them — the runtime API is not what changed — but no route may
@@ -639,7 +697,6 @@ pub(crate) mod router_surface_tests {
     /// succeeding against a permissive stub.
     #[derive(Clone, Default)]
     struct ControlPlaneRouterStubRuntime {
-        recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         exchange: StubSurfaceExchange,
     }
 
@@ -698,10 +755,6 @@ pub(crate) mod router_surface_tests {
             .await
             .unwrap()
             .status()
-    }
-
-    fn runtime_shutdown_body() -> Body {
-        Body::from(serde_json::json!({ "reason": "operator asked" }).to_string())
     }
 
     async fn json_body_of(request: Request<Body>) -> serde_json::Value {
@@ -764,10 +817,11 @@ pub(crate) mod router_surface_tests {
         }
     }
 
-    /// A generated client names a stream through the `stream` query parameter
-    /// of every route that acts on one, so the spec must declare it optional.
+    /// A generated client names a stream through the `stream` query parameter:
+    /// optional where its absence reads every loaded stream, required on the
+    /// tap, whose channel lives in one.
     #[tokio::test]
-    async fn the_openapi_spec_declares_an_optional_stream_query_on_every_route_acting_on_one_stream()
+    async fn the_openapi_spec_declares_the_stream_query_optional_on_reads_of_every_stream_and_required_on_the_tap()
      {
         let request = Request::builder()
             .method("GET")
@@ -776,7 +830,11 @@ pub(crate) mod router_surface_tests {
             .unwrap();
         let spec = json_body_of(request).await;
 
-        for path in ["/api/graph", "/api/registry", "/ws/tap/{channel}"] {
+        for (path, stream_is_required) in [
+            ("/api/graph", false),
+            ("/api/registry", false),
+            ("/ws/tap/{channel}", true),
+        ] {
             let parameters = spec["paths"][path]["get"]["parameters"]
                 .as_array()
                 .unwrap_or_else(|| panic!("{path} must document its parameters: {spec}"));
@@ -788,12 +846,62 @@ pub(crate) mod router_surface_tests {
                 stream_parameter["in"], "query",
                 "{path}: {stream_parameter}"
             );
-            assert_ne!(
-                stream_parameter["required"],
-                serde_json::json!(true),
-                "{path} must keep `stream` optional: {stream_parameter}"
+            assert_eq!(
+                stream_parameter["required"] == serde_json::json!(true),
+                stream_is_required,
+                "{path}: {stream_parameter}"
             );
         }
+    }
+
+    /// The machine-wide answers are documented under the types the schema
+    /// generator writes, so a generated client parses both forms.
+    #[test]
+    fn the_openapi_spec_documents_both_forms_of_the_graph_and_registry_answers() {
+        let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();
+        let schemas = &spec["components"]["schemas"];
+        for (answer, one_stream, every_stream) in [
+            (
+                "GraphOfOneStreamOrOfEveryStream",
+                "GraphResponse",
+                "MachineWideGraphResponse",
+            ),
+            (
+                "NodeTypesOfOneStreamOrOfEveryStream",
+                "RegistryResponse",
+                "MachineWideRegistryResponse",
+            ),
+        ] {
+            let rendered = schemas[answer].to_string();
+            assert!(
+                rendered.contains(one_stream) && rendered.contains(every_stream),
+                "{answer}: {rendered}"
+            );
+            assert!(schemas[every_stream].is_object(), "{every_stream}: {spec}");
+        }
+    }
+
+    /// Without `stream`, `/api/graph` renders every loaded stream under the
+    /// runtime's name, in the shape the schema generator documents.
+    #[tokio::test]
+    async fn the_graph_route_without_a_stream_renders_every_loaded_stream_under_the_runtimes_name()
+    {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/graph")
+            .body(Body::empty())
+            .unwrap();
+        let every_stream = json_body_of(request).await;
+
+        assert_eq!(
+            every_stream["runtime_name"],
+            crate::control_plane_stub_support::STUB_RUNTIME_NAME
+        );
+        assert_eq!(
+            every_stream["streams"].as_array().map(Vec::len),
+            Some(1),
+            "{every_stream}"
+        );
     }
 
     /// The stub stream's node catalog is the process-global native registry,
@@ -828,20 +936,28 @@ pub(crate) mod router_surface_tests {
             )
             .expect("the probe's path is registered by this test alone");
 
-        let request = Request::builder()
-            .method("GET")
-            .uri("/api/registry")
-            .body(Body::empty())
-            .unwrap();
-        let served = json_body_of(request).await;
+        for uri in [
+            "/api/registry".to_string(),
+            format!(
+                "/api/registry?stream={}",
+                crate::control_plane_stub_support::STUB_STREAM_NAME
+            ),
+        ] {
+            let request = Request::builder()
+                .method("GET")
+                .uri(&uri)
+                .body(Body::empty())
+                .unwrap();
+            let served = json_body_of(request).await;
 
-        let probe = served["nodes"]
-            .as_array()
-            .expect("a node type list")
-            .iter()
-            .find(|entry| entry["type"] == class_import_path)
-            .expect("the probe the test registered");
-        assert_eq!(probe["config_schema"], config_schema);
+            let probe = served["nodes"]
+                .as_array()
+                .expect("a node type list")
+                .iter()
+                .find(|entry| entry["type"] == class_import_path)
+                .unwrap_or_else(|| panic!("{uri}: the probe the test registered"));
+            assert_eq!(probe["config_schema"], config_schema, "{uri}");
+        }
     }
 
     /// The spec a client is generated from and the spec the node serves must be
@@ -869,7 +985,9 @@ pub(crate) mod router_surface_tests {
         for uri in [
             "/health",
             "/api/graph",
+            "/api/graph?stream=stub-stream",
             "/api/registry",
+            "/api/registry?stream=stub-stream",
             "/api/openapi.json",
         ] {
             let request = Request::builder()
@@ -938,20 +1056,60 @@ pub(crate) mod router_surface_tests {
         assert!(head.starts_with("HTTP/1.1 404 "), "{head}");
     }
 
+    /// A tap names the stream its channel is in; one naming none is refused
+    /// before the upgrade, naming the parameter.
+    #[tokio::test]
+    async fn a_tap_naming_no_stream_is_refused_before_the_upgrade_naming_the_parameter() {
+        let served = crate::control_plane_stub_support::LocalApiServedOnAFreshSocket::over(
+            a_control_plane_router_stub_runtime(),
+        );
+        let mut connection = tokio::net::UnixStream::connect(&served.local_api_socket_path)
+            .await
+            .unwrap();
+        let head = crate::control_plane_stub_support::response_head_over_the_socket(
+            &mut connection,
+            "GET /ws/tap/stub-runtime%2Fnode%2Fport HTTP/1.1\r\n\
+             Host: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+        )
+        .await;
+        assert!(head.starts_with("HTTP/1.1 400 "), "{head}");
+
+        let body_length: usize = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().ok())?
+            })
+            .expect("the refusal states its length");
+        let mut body = vec![0u8; body_length];
+        tokio::io::AsyncReadExt::read_exact(&mut connection, &mut body)
+            .await
+            .unwrap();
+        let refusal = String::from_utf8_lossy(&body);
+        assert!(refusal.contains("`stream`"), "{refusal}");
+    }
+
     /// File permission on the local API socket is the whole gate, so a request
-    /// carrying no credential reaches every route — the one that acts on the
-    /// node included — rather than a 401 or 403. `/mcp` is reached the same
-    /// way by every MCP wire test's client.
+    /// carrying no credential reaches every route rather than a 401 or 403.
+    /// `/mcp` is reached the same way by every MCP wire test's client.
     #[tokio::test]
     async fn no_route_asks_for_a_credential() {
         let requests_carrying_no_credential = [
-            ("POST", "/api/runtime/shutdown".to_string(), "{}"),
             (
                 "GET",
                 exchange_uri(STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED),
                 "",
             ),
-            ("GET", "/ws/tap/some-channel".to_string(), ""),
+            (
+                "GET",
+                format!(
+                    "/ws/tap/some-channel?stream={}",
+                    crate::control_plane_stub_support::STUB_STREAM_NAME
+                ),
+                "",
+            ),
         ];
         for (method, uri, body) in requests_carrying_no_credential {
             let request = Request::builder()
@@ -973,56 +1131,117 @@ pub(crate) mod router_surface_tests {
         }
     }
 
-    /// The shutdown request must reach the runtime handle — a 202 alone would
-    /// also be produced by a handler that dropped the request on the floor —
-    /// and it must answer 202 (accepted), never 200, because teardown is not
-    /// awaited.
-    #[tokio::test]
-    async fn runtime_shutdown_is_202_and_reaches_the_runtime() {
-        let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
-        let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(runtime, CancellationToken::new());
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/runtime/shutdown")
-            .header(CONTENT_TYPE, "application/json")
-            .body(runtime_shutdown_body())
-            .unwrap();
+    /// The runtime stops as a service does, or by a signal in its terminal:
+    /// the spec documents reads alone, every operation a `GET`, and names no
+    /// type that stops it.
+    #[test]
+    fn no_documented_route_shuts_the_runtime_down() {
+        let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();
+        let mut documented_operations: Vec<(String, String)> = spec["paths"]
+            .as_object()
+            .expect("the spec documents its paths")
+            .iter()
+            .flat_map(|(path, path_item)| {
+                path_item
+                    .as_object()
+                    .expect("each path documents its operations")
+                    .keys()
+                    .filter(|key| {
+                        [
+                            "get", "put", "post", "delete", "patch", "options", "head", "trace",
+                        ]
+                        .contains(&key.as_str())
+                    })
+                    .map(move |method| (path.clone(), method.clone()))
+            })
+            .collect();
+        documented_operations.sort_unstable();
 
-        let response = router.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["status"], "RuntimeShutdownRequested");
-        assert_eq!(body["reason"], "operator asked");
         assert_eq!(
-            *recorded.lock(),
-            vec!["operator asked".to_string()],
-            "the route must hand the reason to the runtime's shutdown funnel"
+            documented_operations,
+            [
+                ("/api/graph", "get"),
+                ("/api/registry", "get"),
+                ("/api/surfaces/{surface_id}/image", "get"),
+                ("/health", "get"),
+                ("/ws/tap/{channel}", "get"),
+            ]
+            .map(|(path, method)| (path.to_owned(), method.to_owned()))
+        );
+        assert!(
+            !spec.to_string().contains("Shutdown"),
+            "the spec names no shutdown type"
         );
     }
 
-    /// An omitted `reason` is unspecified, not a 400 — the request is the
-    /// point, the attribution is a courtesy.
+    /// The router itself, not only its spec, serves nothing that changes the
+    /// runtime: every path it serves outside `/mcp` (whose tools
+    /// `tools_list_advertises_exactly_the_control_vocabulary` holds) answers
+    /// no mutating method with success, and nothing at all is served under
+    /// `/api/runtime`.
     #[tokio::test]
-    async fn runtime_shutdown_without_a_reason_is_accepted_as_unspecified() {
-        let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
-        let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(runtime, CancellationToken::new());
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/runtime/shutdown")
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from("{}"))
-            .unwrap();
+    async fn the_router_serves_no_mutating_method_and_nothing_under_api_runtime() {
+        let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();
+        let documented_paths = spec["paths"]
+            .as_object()
+            .expect("the spec documents its paths")
+            .keys()
+            .map(|path| {
+                format!(
+                    "{}?stream={}",
+                    path.replace(
+                        "{surface_id}",
+                        STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
+                    )
+                    .replace("{channel}", "some-channel"),
+                    crate::control_plane_stub_support::STUB_STREAM_NAME
+                )
+            });
+        let routes_outside_the_spec = [
+            "/ws/events",
+            "/api/openapi.json",
+            MCP_STDIO_UPGRADE_REQUEST_TARGET,
+        ]
+        .map(str::to_owned);
+        let served_paths: Vec<String> = documented_paths.chain(routes_outside_the_spec).collect();
+        for path in &served_paths {
+            for method in ["POST", "PUT", "PATCH", "DELETE"] {
+                let request = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap();
+                let status = status_of(request).await;
+                assert!(
+                    !status.is_success(),
+                    "{method} {path} must not be served; got {status}"
+                );
+            }
+        }
 
-        assert_eq!(
-            router.oneshot(request).await.unwrap().status(),
-            StatusCode::ACCEPTED
-        );
-        assert_eq!(*recorded.lock(), vec![String::new()]);
+        for path in [
+            "/api/runtime",
+            "/api/runtime/",
+            "/api/runtime/stop",
+            "/api/runtime/quit",
+            "/api/runtime/exit",
+            "/api/runtime/terminate",
+        ] {
+            for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
+                let request = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap();
+                assert_eq!(
+                    status_of(request).await,
+                    StatusCode::NOT_FOUND,
+                    "{method} {path} must not be served"
+                );
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1122,7 +1341,6 @@ pub(crate) mod router_surface_tests {
     async fn a_recycled_frame_id_is_gone_and_the_body_names_the_recycling() {
         let runtime = ControlPlaneRouterStubRuntime {
             exchange: StubSurfaceExchange::refusing_as_recycled(STUB_EXCHANGED_FRAME_SURFACE_ID),
-            ..ControlPlaneRouterStubRuntime::default()
         };
         let response = control_plane_router_over(runtime)
             .oneshot(exchange_request(&exchange_uri(

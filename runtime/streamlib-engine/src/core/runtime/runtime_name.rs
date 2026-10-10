@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The name a runtime's tap channels and node-registry row carry.
+//! The name a runtime's tap channels carry.
 //!
 //! It belongs to the runtime rather than to its control plane, is stable across
 //! runs of one app, and is one chunk of a port's address
@@ -38,7 +38,7 @@ const APP_DIRECTORY_NAME_FOR_A_PATH_WITH_NO_FINAL_COMPONENT: &str = "app";
 /// and 255 on Apple; POSIX allows a longer name to be truncated.
 const HOST_NAME_BUFFER_BYTES: usize = 256;
 
-/// The name a runtime's tap channels and node-registry row carry.
+/// The name a runtime's tap channels carry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeName(String);
 

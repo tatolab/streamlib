@@ -3,8 +3,8 @@
 
 """`tatolab.stream.SpeakerSink` — the playback built-in, built-in class to device callback.
 
-The load tests need no device: `tatolabd` loads the graph and is then refused
-at the GPU. The graph tests start the engine, which initializes a GPU context,
+The load tests need no device: `tatolabd` loads the graph and its start is
+then refused at the GPU. The graph tests start the engine, which initializes a GPU context,
 so they carry `requires_gpu` like every other graph test here.
 
 Deliberately arm-agnostic: the backend chain picks whichever arm the machine
@@ -22,16 +22,19 @@ from collections.abc import Callable
 
 import pytest
 
-import tatolab.stream
-from conftest import StreamGraphLoadOutcome
-from runtime_process_under_test import RuntimeProcessUnderTest
-from speaker_sink_probes import AudioBlockCountingProbe
-from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
+from block_wiring_streams import microphone_wired_straight_into_a_speaker
+from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
+from speaker_sink_streams import (
+    SPEAKER_NODE_NAME,
+    UNOPENABLE_DEVICE_ID,
+    microphone_into_a_speaker_and_a_block_counting_probe,
+    one_speaker_sink_left_unnamed,
+    speaker_sink_naming_an_unopenable_device,
+)
+from tatolab.stream import compile_stream_to_graph
 
-UNOPENABLE_DEVICE_ID = "not-a-real-audio-device"
 READINESS_TIMEOUT_SECONDS = 10.0
 PLAYBACK_READINESS_TIMEOUT_SECONDS = 20.0
-SPEAKER_NODE_NAME = "speakersink"
 
 PLAYED_BLOCKS = re.compile(r"played_blocks=(\d+)")
 UNDERRUN_BYTES = re.compile(r"underrun_bytes=(\d+)")
@@ -42,47 +45,6 @@ DROPPED_BLOCKS = re.compile(r"dropped_blocks=(\d+)")
 # stream running without a cushion loses one every few blocks, which over the
 # hundred blocks this waits for is an order of magnitude past this.
 UNDERRUN_BYTES_A_COLD_START_MAY_COST = 8 * 1024 * 2 * 4
-
-
-@stream
-def one_speaker_sink_left_unnamed(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.SpeakerSink)
-
-
-@stream
-def microphone_wired_straight_into_a_speaker(stream_builder: StreamBuilder) -> None:
-    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
-    speaker = stream_builder.add(tatolab.stream.SpeakerSink)
-    stream_builder.connect(microphone.output("audio"), speaker.input("audio"))
-
-
-@stream
-def microphone_into_a_speaker_and_a_block_counting_probe(stream_builder: StreamBuilder) -> None:
-    """A microphone wired straight to a speaker, with no Python in the sample path.
-
-    `stream_builder.add` with no `config` on either end records `{}`. The two
-    ends need not agree on rate, channels or dtype, and on a stock machine they
-    do not: the ALSA arm asks a capture device for mono and a playback device
-    for stereo. `SpeakerSink`'s input port declares `audio_window =
-    match_device`, so the engine converts every block into whatever format the
-    speaker's own device opened at.
-
-    The probe hangs off the same output the speaker reads, so the test has a
-    marker saying enough blocks have really flowed rather than a sleep guessing
-    that they have. It is a second consumer of the microphone's port, not a
-    stage between the two built-ins.
-    """
-    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
-    speaker = stream_builder.add(tatolab.stream.SpeakerSink, name=SPEAKER_NODE_NAME)
-    stream_builder.connect(microphone.output("audio"), speaker.input("audio"))
-
-    probe = stream_builder.add(AudioBlockCountingProbe)
-    stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
-
-
-@stream
-def speaker_sink_naming_an_unopenable_device(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})
 
 
 def the_speakers_settled_window_contract(graph: dict, speaker_node_name: str) -> object:
@@ -100,24 +62,24 @@ def the_speakers_settled_window_contract(graph: dict, speaker_node_name: str) ->
 
 
 def test_node_name_defaults_to_the_type_name(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     graph = compile_stream_to_graph(one_speaker_sink_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == [SPEAKER_NODE_NAME]
 
-    outcome = load_stream_graph_on_tatolabd(graph)
-    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.tatolab_run_stderr_text
 
 
 def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to(
-    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+    run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
     """The two audio built-ins have to compose without an adapter between them,
     which is what makes one `stream_builder.connect(microphone.output("audio"),
     speaker.input("audio"))` the whole of wiring audio through. The builder
     checks no port names, so the engine accepting the load is the proof."""
-    outcome = load_stream_graph_on_tatolabd(microphone_wired_straight_into_a_speaker)
-    assert outcome.loaded and outcome.loaded_node_count == 2, outcome.stderr_text
+    outcome = run_stream_on_tatolabd_with_no_vulkan_driver(microphone_wired_straight_into_a_speaker)
+    assert outcome.loaded and outcome.loaded_node_count == 2, outcome.tatolab_run_stderr_text
 
 
 # ---- the native block in a real graph (GPU) --------------------------------
@@ -128,7 +90,7 @@ def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to(
     reason="the default microphone wired straight to the default speaker feeds back without headphones"
 )
 def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The playback path end to end: built-in class → native registration → the
     probed backend's playback stream, fed over a real link by the capture
@@ -143,14 +105,17 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     match_device`, so the engine converts rather than refusing, and that
     disagreement is the case this asserts.
     """
-    tatolabd = start_tatolabd(microphone_into_a_speaker_and_a_block_counting_probe)
+    tatolabd = start_tatolabd_running_stream(microphone_into_a_speaker_and_a_block_counting_probe)
+    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
     local_api = tatolabd.local_api_client()
-    local_api.await_every_node_running(timeout=PLAYBACK_READINESS_TIMEOUT_SECONDS)
+    local_api.await_every_node_running(
+        stream=stream_name, timeout=PLAYBACK_READINESS_TIMEOUT_SECONDS
+    )
     # What the sentinel settled to, read back off the live graph: the values are
     # this machine's device format, which is the whole reason the port declares
     # `match_device` instead of five written values.
     rendered = the_speakers_settled_window_contract(
-        local_api.call_tool("graph"), SPEAKER_NODE_NAME
+        local_api.call_tool("graph", {"stream": stream_name}), SPEAKER_NODE_NAME
     )
 
     # Blocks really moving on the port the speaker reads, rather than a sleep
@@ -216,15 +181,16 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
 
 @pytest.mark.requires_gpu
 def test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """A machine with no audio is a supported environment; a wrong device id is
     a wiring error. Playing into a different speaker than the one named would be
     worse than failing, so the sink refuses and the processor never reaches
     Running."""
-    tatolabd = start_tatolabd(speaker_sink_naming_an_unopenable_device)
+    tatolabd = start_tatolabd_running_stream(speaker_sink_naming_an_unopenable_device)
+    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
     node_states = tatolabd.local_api_client().await_every_node_past_setup(
-        timeout=READINESS_TIMEOUT_SECONDS
+        stream=stream_name, timeout=READINESS_TIMEOUT_SECONDS
     )
     tatolabd.interrupt()
     tatolabd.await_clean_exit()

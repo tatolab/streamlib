@@ -4924,11 +4924,14 @@ version = "0.43.1"
 dependencies = [
  "clap",
  "libc",
+ "rmcp",
  "serde_json",
  "streamlib",
  "streamlib-api-server",
  "streamlib-media-builtins",
+ "streamlib-runtime-client-contract",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 

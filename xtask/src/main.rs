@@ -349,13 +349,25 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         (
-            "runtime client contract tests (home, runtime directory, node registry, JSONL log, local API wire names)",
+            "runtime client contract tests (home, runtime directory, machine lock, state directory, JSONL log, local API wire names)",
             "cargo",
             &[
                 "test",
                 "--locked",
                 "-p",
                 "streamlib-runtime-client-contract",
+            ],
+        ),
+        (
+            "runtime client contract tests under a test machine root (runtime directory, state directory, machine runtime lock)",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-runtime-client-contract",
+                "--features",
+                "machine-directories-under-a-test-root",
             ],
         ),
         (
@@ -449,20 +461,48 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             "cargo",
             &["test", "--locked", "-p", "streamlib-python-wheel", "--lib"],
         ),
+        // A shell, for the environment: a test build of the control plane refuses
+        // to run without its machine root.
         (
             "control-plane unit tests (REST routes + MCP tool dispatch)",
-            "cargo",
-            &["test", "--locked", "-p", "streamlib-api-server", "--lib"],
+            "bash",
+            &[
+                "-c",
+                "test_machine_root=\"$(mktemp -d /tmp/tl-XXXXXX)\" \
+                 && trap 'rm -rf \"$test_machine_root\"' EXIT \
+                 && TATOLAB_TEST_MACHINE_ROOT=\"$test_machine_root\" \
+                 cargo test --locked -p streamlib-api-server --lib \
+                 --features machine-directories-under-a-test-root",
+            ],
         ),
         (
-            "runtime-process tests (tatolabd's flags and refusals)",
+            "machine runtime tests (tatolabd's refusals, lock, socket and kept streams)",
             "cargo",
-            &["test", "--locked", "-p", "tatolabd"],
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "tatolabd",
+                "--features",
+                "machine-directories-under-a-test-root",
+            ],
         ),
         (
-            "CLI tests (tatolab new, and run/dev supervising tatolabd)",
+            "CLI tests as users build it (the socket resolved through an isolated XDG_RUNTIME_DIR)",
             "cargo",
             &["test", "--locked", "-p", "tatolab-cli"],
+        ),
+        (
+            "CLI tests (tatolab's verbs against a stub runtime at an isolated machine's socket)",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "tatolab-cli",
+                "--features",
+                "machine-directories-under-a-test-root",
+            ],
         ),
         // Mirrors `test.yml`'s named slice exactly. `streamlib-engine`'s lib
         // tests are not run wholesale anywhere, so this list *is* the set of
@@ -827,6 +867,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel",
                 "core::graph_snapshot",
+                "core::runtime::machine_state_directory",
+                "core::runtime::stream_actions_of_this_runtime",
                 "core::graph::output_port_exposure",
                 "core::graph::components::exposed_output_ports_component",
                 "core::graph::graph_tests::mutation_persistence::a_dropped_node_takes_its_exposures_and_their_readers_with_it",
@@ -863,10 +905,10 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::only_the_last_bytes_of_a_long_standard_error_are_kept",
                 "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_helper_that_died_writing_nothing_is_refused_saying_so",
                 "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_childs_python_path_is_the_lend_directory_then_the_project_exactly",
-                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::an_inherited_python_path_is_not_passed_to_the_child",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::every_inherited_python_variable_is_kept_from_a_stream_interpreter_and_its_python_path_is_the_lend_then_the_project",
                 "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_project_directory_holding_the_path_list_separator_is_refused_by_name",
                 "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_childs_working_directory_is_the_project",
-                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::an_inherited_python_home_is_not_passed_to_the_child",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::only_the_variables_whose_names_begin_with_python_are_removed",
                 "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_running_helper_is_not_reported_dead_and_the_same_helper_is_once_it_is",
                 "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_helper_still_in_a_callback_is_interrupted_with_a_real_signal",
                 "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_helper_that_leaves_on_its_own_is_never_signalled_at_all",
@@ -892,6 +934,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::processor_interpreter_describe::tests::the_describe_command_carries_the_stream_environment_and_no_processors_variables",
                 "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_started_describe_receives_its_arguments_working_directory_and_python_path",
                 "core::compiler::compiler_ops::processor_interpreter_describe::tests::only_a_module_and_qualname_that_names_no_built_in_is_described",
+                "core::compiler::compiler_ops::stream_function_compile_in_the_projects_interpreter",
                 "core::compiler::compiler_ops::python_processor_declaration::tests::a_described_node_type_reads_into_a_python_descriptor_and_its_execution",
                 "core::compiler::compiler_ops::python_processor_declaration::tests::a_described_node_type_naming_another_import_path_is_refused_naming_both",
                 "core::compiler::compiler_ops::python_processor_declaration::tests::an_unknown_execution_mode_is_refused_naming_it",
@@ -924,6 +967,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::runtime::tests::the_watchdog_on_one_streams_teardown_unloads_it_and_leaves_the_other_alive",
                 "core::runtime::runtime::tests::a_call_naming_a_stream_not_loaded_is_refused_naming_the_loaded_streams",
                 "core::runtime::runtime::tests::the_machines_shutdown_walks_every_loaded_stream_to_its_end",
+                "core::runtime::runtime::tests::a_stream_loaded_while_every_stream_is_awaited_is_among_the_streams_the_wait_returns",
                 "core::runtime::runtime::tests::a_load_while_the_machine_shuts_down_is_refused_by_name",
                 "core::runtime::runtime::tests::a_watched_load_the_machines_shutdown_reaches_while_it_builds_is_abandoned",
                 "core::runtime::runtime::tests::an_unloaded_stream_frees_its_name_and_leaves_the_other_loaded",
@@ -932,6 +976,13 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::runtime::tests::a_stream_loaded_under_the_name_of_one_that_left_has_its_own_topic",
                 "core::runtime::runtime::tests::two_streams_log_each_to_its_own_file_and_a_record_no_stream_emitted_to_neither",
                 "core::runtime::runtime::tests::a_second_runner_in_one_process_logs_to_its_own_stream_files",
+                "core::runtime::runtime::tests::a_streams_records_are_read_by_sequence_number_and_its_jsonl_file_carries_none",
+                "core::runtime::runtime::tests::the_records_no_stream_emitted_land_in_the_runtimes_own_log_and_a_streams_do_not",
+                "core::runtime::runtime::tests::the_wait_for_a_machine_shutdown_returns_once_one_is_requested_and_ends_every_stream",
+                "core::runtime::runtime::tests::the_wait_for_the_last_other_reference",
+                "core::runtime::runtime::tests::a_forced_machine_shutdown_forces_a_stream_an_unload_is_waiting_on",
+                "core::logging::loaded_stream_log_record_history",
+                "core::logging::loaded_stream_log_route::tests::the_runtimes_own_log_holds_no_record_in_memory_and_a_streams_does",
                 "core::logging::tests::a_closed_stream_log_holds_every_record_queued_before_the_close_and_none_after",
                 "core::runtime::processor_interpreter_launch_record::tests::a_load_refused_at_a_link_after_a_describe_adds_no_stream_and_leaves_nothing_running",
                 "core::logging::tests::a_closed_stream_log_holds_every_line_its_helpers_wrote_before_their_pipes_ended",
@@ -1311,6 +1362,12 @@ enum Commands {
         /// Build with optimizations, as a release is built.
         #[arg(long)]
         release: bool,
+        /// Build both binaries with the `machine-directories-under-a-test-root`
+        /// feature — the machine runtime lock, the state directory and the
+        /// runtime directory under `TATOLAB_TEST_MACHINE_ROOT` — and mark the
+        /// unit so, for the integration suite. Never for a release.
+        #[arg(long)]
+        machine_directories_under_a_test_root: bool,
     },
 
     /// The codec proof's scorer: PSNR of a decoded frame set against the
@@ -1408,9 +1465,15 @@ fn main() -> Result<()> {
         }
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
-        Commands::BuildRuntime { release } => build_runtime::run(
+        Commands::BuildRuntime {
+            release,
+            machine_directories_under_a_test_root,
+        } => build_runtime::run(
             &workspace_root()?,
             build_runtime::RuntimeUnitBuildProfile::from_release_flag(release),
+            build_runtime::RuntimeUnitMachineDirectories::from_machine_directories_under_a_test_root_flag(
+                machine_directories_under_a_test_root,
+            ),
         )?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::Mp4Inspect(inspect_command) => mp4_inspect::run(inspect_command)?,

@@ -45,10 +45,13 @@ STREAM_BY_SCENARIO = {
 }
 
 
-def run_probe(start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario: str) -> dict:
+def run_probe(
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
+    scenario: str,
+) -> dict:
     """One scenario, one observation dict — or a failure carrying the probe's
     own traceback, which names the cause better than a missing marker."""
-    tatolabd = start_tatolabd(STREAM_BY_SCENARIO[scenario])
+    tatolabd = start_tatolabd_running_stream(STREAM_BY_SCENARIO[scenario])
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -64,7 +67,7 @@ def run_probe(start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario
 
 
 def test_the_numpy_view_is_a_shared_window_with_the_allocations_row_pitch(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`(height, width, 4)` uint8, strides straight off the allocation.
 
@@ -72,7 +75,7 @@ def test_the_numpy_view_is_a_shared_window_with_the_allocations_row_pitch(
     numpy in bytes, so a producer that forgot the conversion would hand back an
     array that reads every fourth row as if it were adjacent.
     """
-    observation = run_probe(start_tatolabd, "NumpyViewProbe")
+    observation = run_probe(start_tatolabd_running_stream, "NumpyViewProbe")
     assert observation["shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["dtype"] == "uint8"
     assert observation["strides"] == [observation["bytes_per_row"], 4, 1]
@@ -85,7 +88,7 @@ def test_the_numpy_view_is_a_shared_window_with_the_allocations_row_pitch(
 # ---------------------------------------------------------------------------
 
 
-def test_a_read_only_lock_produces_a_read_only_view(start_tatolabd):
+def test_a_read_only_lock_produces_a_read_only_view(start_tatolabd_running_stream):
     """`read_only` is carried to the consumer, not just recorded locally.
 
     Only DLPack's versioned exchange shape has a flags field, so this is
@@ -93,12 +96,12 @@ def test_a_read_only_lock_produces_a_read_only_view(start_tatolabd):
     shape every tensor arrives read-only and the write lock would look
     broken.
     """
-    observation = run_probe(start_tatolabd, "LockModeProbe")
+    observation = run_probe(start_tatolabd_running_stream, "LockModeProbe")
     assert "read-only" in observation["write_under_a_read_lock"]
     assert observation["write_under_a_write_lock"] == "succeeded"
 
 
-def test_an_export_taken_without_a_lock_is_refused(start_tatolabd):
+def test_an_export_taken_without_a_lock_is_refused(start_tatolabd_running_stream):
     """The gate is access discipline, not synchronisation.
 
     It does not wait for anything — ordering against the producer comes from
@@ -108,7 +111,7 @@ def test_an_export_taken_without_a_lock_is_refused(start_tatolabd):
     and that `base_address` is None rather than a live pointer nobody
     declared a use for.
     """
-    observation = run_probe(start_tatolabd, "UnlockedExportProbe")
+    observation = run_probe(start_tatolabd_running_stream, "UnlockedExportProbe")
     assert "not locked" in observation["unlocked_dlpack"]
     assert observation["unlocked_base_address"] is None
     assert observation["locked_base_address_is_real"]
@@ -123,7 +126,7 @@ def test_an_export_taken_without_a_lock_is_refused(start_tatolabd):
 
 
 def test_a_write_through_the_view_is_visible_to_another_holder_of_the_surface(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Zero-copy means one buffer, not two that agree.
 
@@ -131,7 +134,7 @@ def test_a_write_through_the_view_is_visible_to_another_holder_of_the_surface(
     both views address the engine's allocation — here through two independent
     cross-process imports of the same DMA-BUF.
     """
-    observation = run_probe(start_tatolabd, "SharedMemoryProbe")
+    observation = run_probe(start_tatolabd_running_stream, "SharedMemoryProbe")
     assert observation["pixel_seen_by_the_reader"] == [11, 22, 33, 44]
     assert observation["an_untouched_pixel"] == [0, 0, 0, 0]
 
@@ -142,7 +145,7 @@ def test_a_write_through_the_view_is_visible_to_another_holder_of_the_surface(
 
 
 def test_a_tensor_outliving_its_surface_keeps_addressing_live_memory(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Use-after-free regression.
 
@@ -154,18 +157,18 @@ def test_a_tensor_outliving_its_surface_keeps_addressing_live_memory(
     Mental-revert: move the release back into `close()` — this test reads freed
     memory, and the failure is a segfault or garbage rather than an assertion.
     """
-    observation = run_probe(start_tatolabd, "TensorOutlivesTheSurfaceProbe")
+    observation = run_probe(start_tatolabd_running_stream, "TensorOutlivesTheSurfaceProbe")
     assert observation["still_readable"] == 7
     assert observation["sum_after_close"] == observation["expected_sum"]
 
 
-def test_a_held_tensor_is_not_overwritten_by_pool_reuse(start_tatolabd):
+def test_a_held_tensor_is_not_overwritten_by_pool_reuse(start_tatolabd_running_stream):
     """Ring-slot reuse is gated on the consumer being done.
 
     Churning the pool past its depth while a tensor is outstanding must not
     hand that tensor's slot to a new acquire — the held pixels stay as written.
     """
-    observation = run_probe(start_tatolabd, "PoolCycleProbe")
+    observation = run_probe(start_tatolabd_running_stream, "PoolCycleProbe")
     assert observation["churn_failures"] == []
     assert observation["held_values"] == [3], (
         f"the held tensor was overwritten by a later acquire: saw {observation['held_values']}"
@@ -177,8 +180,8 @@ def test_a_held_tensor_is_not_overwritten_by_pool_reuse(start_tatolabd):
 # ---------------------------------------------------------------------------
 
 
-def test_a_dlpack_consumer_sees_the_same_pixels(start_tatolabd):
-    observation = run_probe(start_tatolabd, "DlpackConsumerProbe")
+def test_a_dlpack_consumer_sees_the_same_pixels(start_tatolabd_running_stream):
+    observation = run_probe(start_tatolabd_running_stream, "DlpackConsumerProbe")
     assert observation["pixel"] == [1, 2, 3, 4]
     assert observation["shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
 
@@ -188,7 +191,7 @@ def test_a_dlpack_consumer_sees_the_same_pixels(start_tatolabd):
 # ---------------------------------------------------------------------------
 
 
-def test_a_processor_edits_a_synthetic_frames_pixels_in_place(start_tatolabd):
+def test_a_processor_edits_a_synthetic_frames_pixels_in_place(start_tatolabd_running_stream):
     """The user-facing story: source → effect → the pixels really changed.
 
     A native source produces frames the interpreter never touches; a Python
@@ -196,7 +199,7 @@ def test_a_processor_edits_a_synthetic_frames_pixels_in_place(start_tatolabd):
     the surface afterwards is what proves the edit went into the engine's
     memory rather than a copy handed to Python.
     """
-    observation = run_probe(start_tatolabd, "inverting_effect")
+    observation = run_probe(start_tatolabd_running_stream, "inverting_effect")
     assert observation["frame_size"] == [320, 180]
     # The pattern's leftmost SMPTE bar is white, written by the native fill
     # through the engine's own view of the allocation. Reading it back at a
@@ -216,10 +219,10 @@ def test_a_processor_edits_a_synthetic_frames_pixels_in_place(start_tatolabd):
 
 
 def run_cross_process_edit(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario: str
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]", scenario: str
 ) -> "tuple[dict, dict]":
     """The editor's and the verifier's observations of one frame."""
-    tatolabd = start_tatolabd(STREAM_BY_SCENARIO[scenario])
+    tatolabd = start_tatolabd_running_stream(STREAM_BY_SCENARIO[scenario])
     tatolabd.await_stderr_containing('"role": "verifier"')
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -235,7 +238,7 @@ def run_cross_process_edit(
 
 
 def test_an_edit_lands_in_the_engines_memory_where_another_process_reads_it(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The scaffold's story across three processes: `tatolabd`'s native source
     writes a frame, one child inverts it in place through a numpy view, and a
@@ -245,7 +248,7 @@ def test_an_edit_lands_in_the_engines_memory_where_another_process_reads_it(
     stride the two children derive differently, or a write that never reached
     the engine's memory each leave the verifier reading something else.
     """
-    editor, verifier = run_cross_process_edit(start_tatolabd, "cross_process_edit")
+    editor, verifier = run_cross_process_edit(start_tatolabd_running_stream, "cross_process_edit")
     assert editor["pid"] != verifier["pid"], "the verifier must read from its own process"
     assert verifier["surface_id"] == editor["surface_id"]
     assert verifier["observed_sha256"] == editor["expected_sha256"], (
@@ -254,11 +257,14 @@ def test_an_edit_lands_in_the_engines_memory_where_another_process_reads_it(
 
 
 def test_the_cross_process_check_fails_when_the_effect_skips_its_edit(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The negative control: an effect that reports the inverted digest but
     leaves the pixels alone must be caught, or the check above proves nothing."""
-    editor, verifier = run_cross_process_edit(start_tatolabd, "cross_process_edit_negative_control")
+    editor, verifier = run_cross_process_edit(
+        start_tatolabd_running_stream,
+        "cross_process_edit_negative_control",
+    )
     assert verifier["surface_id"] == editor["surface_id"]
     assert verifier["observed_sha256"] != editor["expected_sha256"], (
         "the verifier matched a frame nobody edited"
@@ -266,12 +272,12 @@ def test_the_cross_process_check_fails_when_the_effect_skips_its_edit(
 
 
 def test_a_multi_plane_format_is_refused_rather_than_exported_as_luma(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """NV12 is two planes and DLPack is one buffer.
 
     Exporting plane 0 would hand back a greyscale image that looks like a
     working colour frame until someone notices the chroma is missing.
     """
-    observation = run_probe(start_tatolabd, "UnsupportedFormatProbe")
+    observation = run_probe(start_tatolabd_running_stream, "UnsupportedFormatProbe")
     assert "one strided linear buffer" in observation["outcome"]

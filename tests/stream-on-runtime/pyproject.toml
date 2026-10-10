@@ -43,8 +43,8 @@ tatolab-stream = { path = "../../sdk/tatolab-stream", editable = true }
 
 [tool.pytest.ini_options]
 # The suite directory is on the import path, so a fixture stream's
-# `<module>:<Class>` node types import here and, as the `--project` `tatolabd`
-# is given, in every processor interpreter.
+# `<module>:<Class>` node types import here and, as the project directory the
+# compile document names, in every processor interpreter.
 pythonpath = ["."]
 testpaths = ["."]
 markers = [

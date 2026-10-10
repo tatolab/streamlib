@@ -150,8 +150,7 @@ pub trait RuntimeOperations: Send + Sync {
     // Identity
     // =========================================================================
 
-    /// The name the runtime this stream is loaded in gives its tap channels
-    /// and node-registry row.
+    /// The name the runtime this stream is loaded in gives its tap channels.
     fn this_runtimes_name(&self) -> &str;
 
     // =========================================================================

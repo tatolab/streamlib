@@ -22,7 +22,8 @@ sample-exact match, which no codec would give.
 
 The recorder reads `STREAMLIB_CAPTURED_WAVEFORM` (where to write the WAV) and
 `STREAMLIB_CAPTURED_WAVEFORM_SECONDS` (how much decoded audio to record) in its
-own helper process, which inherits `tatolabd`'s environment from `tatolab run`.
+own helper process, which inherits the environment of the `tatolabd` the
+fixture starts.
 `verify_opus_roundtrip.sh` records 3.0 s: the signal is 2.78 s and the source
 stops at 3.78 s, so that sits between them.
 """

@@ -7,14 +7,14 @@ The suite venv has no `tatolab.runtime` of its own: a processor interpreter
 started from it borrows the runtime through the runtime unit's lend, and
 `tatolabd` learns each node's ports by describing it there. What a load refuses
 — a module that raises, an unstamped class, an interpreter that cannot load
-the lent runtime — ends at the load, so only the running stream needs a GPU.
+the lent runtime — ends the `tatolab run` that asked for it, so only the
+running stream needs a GPU.
 `tatolabd` itself is native: every processor interpreter, describing or
 running, is a process beneath it, and no Python is mapped into its own.
 """
 
 from __future__ import annotations
 
-import os
 import platform
 import re
 import subprocess
@@ -25,29 +25,21 @@ from pathlib import Path
 
 import pytest
 
-from conftest import StreamGraphLoadOutcome, environment_reaching_no_vulkan_driver
+from conftest import (
+    StreamRunWithNoVulkanDriverOutcome,
+    TatolabdUnderTest,
+    environment_reaching_no_vulkan_driver,
+)
 from helper_process_observation import assert_runs_in_a_process_of_its_own_beneath
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
-from processor_interpreter_lend_probes import (
-    CountsBagsFromUpstreamSink,
-    ReportsItsInterpreterSource,
-)
-from runtime_process_under_test import RuntimeProcessUnderTest
-from runtime_unit_under_test import SUITE_VENV_INTERPRETER, RuntimeUnitUnderTest
-from tatolab.stream import StreamBuilder, stream
+from processor_interpreter_lend_streams import interpreter_reporting_source_into_counting_sink
+from runtime_unit_under_test import SUITE_VENV_INTERPRETER, SUITE_VENV_PREFIX, RuntimeUnitUnderTest
+from stream_runs_on_tatolabd import TatolabRunOfAProject
 
-LoadStreamGraphOnTatolabd = Callable[..., StreamGraphLoadOutcome]
+RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
 #: A mapped image that is CPython or a CPython extension module, on Linux or macOS.
 PYTHON_LIBRARY_IMAGE = re.compile(r"libpython|Python\.framework|\.abi3\.so$|\.cpython-[^/]*\.so$")
-
-
-@stream
-def interpreter_reporting_source_into_counting_sink(stream_builder: StreamBuilder) -> None:
-    """A source announcing its interpreter into a sink counting what it received."""
-    source = stream_builder.add(ReportsItsInterpreterSource)
-    sink = stream_builder.add(CountsBagsFromUpstreamSink)
-    stream_builder.connect(source.output("bags_to_downstream"), sink.input("bags_from_upstream"))
 
 
 def write_project_module(project_directory: Path, module_name: str, source: str) -> None:
@@ -58,22 +50,24 @@ def graph_naming_one_node_of_type(node_type: str) -> "dict[str, object]":
     return {"stream": "nodeundertest", "nodes": [{"name": "nodeundertest", "type": node_type, "config": {}}]}
 
 
-def refused_naming(load_outcome: StreamGraphLoadOutcome) -> str:
+def refused_naming(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> str:
     """A refused load's reason; fails if the graph loaded."""
-    assert not load_outcome.loaded, (
-        f"the graph loaded; it should have been refused:\n{load_outcome.stderr_text[-4000:]}"
+    assert not run_outcome.loaded, (
+        f"the graph loaded; it should have been refused:\n"
+        f"{run_outcome.tatolabd_stderr_text_during_the_run[-4000:]}"
     )
-    assert load_outcome.refusal is not None, load_outcome.stderr_text[-4000:]
-    return load_outcome.refusal
+    assert run_outcome.refusal is not None, run_outcome.tatolab_run_stderr_text
+    return run_outcome.refusal
 
 
-def loaded_with(load_outcome: StreamGraphLoadOutcome) -> int:
+def loaded_with(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> int:
     """How many of the stream's nodes a load that succeeded loaded; fails if it was refused."""
-    assert load_outcome.loaded, (
-        f"the graph was refused: {load_outcome.refusal}\n{load_outcome.stderr_text[-4000:]}"
+    assert run_outcome.loaded, (
+        f"the graph was refused: {run_outcome.refusal}\n"
+        f"{run_outcome.tatolabd_stderr_text_during_the_run[-4000:]}"
     )
-    assert load_outcome.loaded_node_count is not None
-    return load_outcome.loaded_node_count
+    assert run_outcome.loaded_node_count is not None
+    return run_outcome.loaded_node_count
 
 
 def images_mapped_into(process_id: int) -> "list[str]":
@@ -108,7 +102,7 @@ def assert_no_python_is_mapped_into(process_id: int) -> None:
 
 
 def test_a_type_whose_module_raises_at_import_is_refused_quoting_the_interpreters_stderr(
-    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd, tmp_path: Path
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, tmp_path: Path
 ):
     write_project_module(
         tmp_path,
@@ -119,7 +113,7 @@ def test_a_type_whose_module_raises_at_import_is_refused_quoting_the_interpreter
     )
 
     refusal = refused_naming(
-        load_stream_graph_on_tatolabd(
+        run_stream_on_tatolabd_with_no_vulkan_driver(
             graph_naming_one_node_of_type("lend_raising_nodes:NeverDeclared"),
             project_directory=tmp_path,
         )
@@ -131,7 +125,7 @@ def test_a_type_whose_module_raises_at_import_is_refused_quoting_the_interpreter
 
 
 def test_an_unstamped_class_is_refused_by_name(
-    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd, tmp_path: Path
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, tmp_path: Path
 ):
     write_project_module(
         tmp_path,
@@ -143,7 +137,7 @@ def test_an_unstamped_class_is_refused_by_name(
     )
 
     refusal = refused_naming(
-        load_stream_graph_on_tatolabd(
+        run_stream_on_tatolabd_with_no_vulkan_driver(
             graph_naming_one_node_of_type("lend_unstamped_nodes:NotANode"),
             project_directory=tmp_path,
         )
@@ -154,10 +148,12 @@ def test_an_unstamped_class_is_refused_by_name(
 
 
 def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what_it_is(
-    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd, tmp_path: Path
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, tmp_path: Path
 ):
-    """The wrapper drops the lend from `PYTHONPATH`, so the suite venv's
-    interpreter — which has no runtime of its own — cannot import it."""
+    """The project's interpreter execs a wrapper that drops the lend from
+    `PYTHONPATH`, so the suite venv's interpreter — which has no runtime of its
+    own — cannot import it. The refusal names the interpreter the runtime
+    started, and what the describing one reported it was."""
     project_directory = tmp_path / "project"
     project_directory.mkdir()
     write_project_module(
@@ -179,18 +175,15 @@ def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what
     )
     interpreter_without_the_lend.chmod(0o755)
 
-    refusal = refused_naming(
-        load_stream_graph_on_tatolabd(
-            graph_naming_one_node_of_type(
-                "lend_declared_nodes_for_a_refused_interpreter:DeclaredNode"
-            ),
-            project_directory=project_directory,
-            interpreter=interpreter_without_the_lend,
-        )
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
+        graph_naming_one_node_of_type("lend_declared_nodes_for_a_refused_interpreter:DeclaredNode"),
+        project_directory=project_directory,
+        processor_interpreter=interpreter_without_the_lend,
     )
+    refusal = refused_naming(run_outcome)
 
     assert "lend_declared_nodes_for_a_refused_interpreter:DeclaredNode" in refusal
-    assert str(interpreter_without_the_lend) in refusal
+    assert str(run_outcome.tatolab_run.working_directory / ".venv" / "bin" / "python") in refusal
     assert f"interpreter: {SUITE_VENV_INTERPRETER}" in refusal
     assert f"implementation: {platform.python_implementation()}" in refusal
     assert f"version: {platform.python_version()}" in refusal
@@ -200,7 +193,7 @@ def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what
 
 
 def test_a_type_that_describes_registers_without_its_module_entering_this_process(
-    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd, tmp_path: Path
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, tmp_path: Path
 ):
     write_project_module(
         tmp_path,
@@ -218,7 +211,7 @@ def test_a_type_that_describes_registers_without_its_module_entering_this_proces
         """,
     )
 
-    load_outcome = load_stream_graph_on_tatolabd(
+    load_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
         graph_naming_one_node_of_type("lend_described_nodes:DescribedSource"),
         project_directory=tmp_path,
     )
@@ -228,7 +221,7 @@ def test_a_type_that_describes_registers_without_its_module_entering_this_proces
 
 
 def test_a_type_described_against_the_lend_imports_the_runtime_the_runtime_unit_lends(
-    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd,
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
     runtime_unit: RuntimeUnitUnderTest,
     tmp_path: Path,
 ):
@@ -256,7 +249,7 @@ def test_a_type_described_against_the_lend_imports_the_runtime_the_runtime_unit_
         """,
     )
 
-    load_outcome = load_stream_graph_on_tatolabd(
+    load_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
         graph_naming_one_node_of_type(
             "runtime_unit_lend_described_nodes:DescribedAgainstTheLendSource"
         ),
@@ -270,14 +263,15 @@ def test_a_type_described_against_the_lend_imports_the_runtime_the_runtime_unit_
     ), lent_runtime_file_record.read_text()
 
 
-def test_a_relative_project_directory_and_interpreter_name_what_they_name_from_the_callers_directory(
-    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd, tmp_path: Path
+def test_a_relative_dir_names_the_project_from_the_callers_directory(
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, tmp_path: Path
 ):
-    """The interpreter starts in the project directory, so a relative path left
-    relative would be read from there rather than from the caller's directory."""
+    """The runtime compiles in the project directory, and is not in the caller's,
+    so `tatolab run --dir project` names the project from where it was typed."""
     callers_directory = tmp_path / "callers-directory"
     project_directory = callers_directory / "project"
     project_directory.mkdir(parents=True)
+    (project_directory / ".venv").symlink_to(SUITE_VENV_PREFIX, target_is_directory=True)
     write_project_module(
         project_directory,
         "relatively_loaded_nodes",
@@ -293,28 +287,39 @@ def test_a_relative_project_directory_and_interpreter_name_what_they_name_from_t
             def process(self, ctx) -> None: ...
         """,
     )
-    relative_interpreter = os.path.relpath(SUITE_VENV_INTERPRETER, callers_directory)
-    assert not (project_directory / relative_interpreter).exists()
+    write_project_module(
+        project_directory,
+        "stream",
+        """
+        from relatively_loaded_nodes import RelativelyLoadedSource
+        from tatolab.stream import StreamBuilder, stream
 
-    load_outcome = load_stream_graph_on_tatolabd(
-        graph_naming_one_node_of_type("relatively_loaded_nodes:RelativelyLoadedSource"),
-        project_directory="project",
-        interpreter=relative_interpreter,
-        working_directory=callers_directory,
+
+        @stream
+        def relatively_loaded(stream_builder: StreamBuilder) -> None:
+            stream_builder.add(RelativelyLoadedSource)
+        """,
+    )
+
+    load_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
+        TatolabRunOfAProject(
+            working_directory=callers_directory, tatolab_run_arguments=("--dir", "project")
+        )
     )
 
     assert loaded_with(load_outcome) == 1
+    assert load_outcome.loaded_stream_name == "relatively_loaded"
 
 
 def test_tatolabd_maps_no_python_while_a_processor_interpreter_describes_a_node_type(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
     held_node_module: NodeModuleWhoseDescribeHoldsTheLoad,
     tmp_path: Path,
 ):
     """Describe runs in a processor interpreter of its own, beneath `tatolabd`;
     `tatolabd`, mid-load with that interpreter parked at the node module's
     import, has no Python in it."""
-    tatolabd = start_tatolabd(
+    tatolabd = start_tatolabd_running_stream(
         graph_naming_one_node_of_type(f"{held_node_module.name}:LoadedFrameRelay"),
         project_directory=held_node_module.project_directory,
         extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
@@ -339,9 +344,10 @@ def test_tatolabd_maps_no_python_while_a_processor_interpreter_describes_a_node_
 
 @pytest.mark.requires_gpu
 def test_a_node_runs_in_a_processor_interpreter_started_from_a_venv_holding_only_tatolab_stream(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", runtime_unit: RuntimeUnitUnderTest
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+    runtime_unit: RuntimeUnitUnderTest,
 ):
-    tatolabd = start_tatolabd(interpreter_reporting_source_into_counting_sink)
+    tatolabd = start_tatolabd_running_stream(interpreter_reporting_source_into_counting_sink)
     reported = tatolabd.await_every_marker("PROCESSOR_INTERPRETER", "BAGS_PROCESSED")
     assert_runs_in_a_process_of_its_own_beneath(
         reported["PROCESSOR_INTERPRETER"]["processor_interpreter_process_id"], tatolabd.pid

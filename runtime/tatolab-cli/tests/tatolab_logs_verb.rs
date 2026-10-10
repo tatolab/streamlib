@@ -3,8 +3,9 @@
 
 //! `tatolab logs` run as a user runs it: its flags, the log directory it reads under
 //! `STREAMLIB_HOME`, what it prints on stdout and on stderr, how Ctrl-C ends a follow, and how it
-//! exits. Each reading scenario is the in-crate tests'. `--node` reads a registry isolated through
-//! `XDG_RUNTIME_DIR`, which only Linux honours, so that test is Linux-only.
+//! exits. Each reading scenario is the in-crate tests'. `--stream` reads a stub local API served
+//! at an isolated machine's fixed socket, which a build without the test feature can isolate on
+//! Linux alone.
 
 mod common;
 
@@ -151,11 +152,13 @@ fn the_logs_help_names_both_modes_and_every_flag() {
     for named in [
         "[RUNTIME_ID-STREAM]",
         "exactly as the runtime mirrored it",
-        "a running runtime's live event stream",
-        "Omit with --list or --node",
+        "as the runtime holds them",
+        "Omit with --list or --stream",
         "--list",
+        "--stream <STREAM>",
         "-f, --follow",
         "like `tail -F`",
+        "by sequence number",
         "--processor <ID>",
         "--pipeline <ID>",
         "--rhi",
@@ -164,9 +167,6 @@ fn the_logs_help_names_both_modes_and_every_flag() {
         "--source <SOURCE>",
         "[possible values: rust, python]",
         "--intercepted-only",
-        "--count <N>",
-        "(--node only)",
-        "--node <RUNTIME_NAME_OR_ID>",
     ] {
         assert!(help_text.contains(named), "{named}:\n{help_text}");
     }
@@ -369,41 +369,114 @@ fn follow_before_the_log_file_exists_waits_with_its_note_and_ctrl_c_ends_the_wai
     assert_eq!(still_waiting.interrupt_and_wait().code(), Some(0));
 }
 
-#[cfg(target_os = "linux")]
-mod against_an_isolated_registry {
+#[cfg(any(target_os = "linux", feature = "machine-directories-under-a-test-root"))]
+mod against_an_isolated_machine {
     use serde_json::json;
 
-    use super::common::isolated_node_registry::{IsolatedNodeRegistry, SCRIPTED_RUNTIME_NAME};
-    use super::common::stub_local_api_server::{
-        RecordedToolCall, StubLocalApiServer, StubToolAnswer,
-    };
-    use super::common::tatolab_binary_run::{
-        run_tatolab_with_xdg_runtime_dir, standard_error_text, standard_output_text,
-    };
+    use super::common::isolated_machine_directories::IsolatedMachineDirectories;
+    use super::common::runtime_log_line_fixtures::a_log_record;
+    use super::common::stub_local_api_server::{StubLocalApiScript, StubStreamLogRecords};
+    use super::common::tatolab_binary_run::{standard_error_text, standard_output_text};
+    use super::{FollowingTatolab, rendered_line};
+
+    fn records_saying(messages: &[&str]) -> Vec<serde_json::Value> {
+        messages
+            .iter()
+            .map(|message| a_log_record(json!({"message": message})))
+            .collect()
+    }
 
     #[test]
-    fn logs_with_a_runtime_target_reads_its_live_event_stream_through_the_local_api_socket() {
-        let stub_local_api_server = StubLocalApiServer::serve_answering_every_tool_call_with(
-            StubToolAnswer::tool_result(r#"[{"event":"started"}]"#),
-        );
-        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
-            &stub_local_api_server.local_api_socket_path,
-        );
+    fn logs_of_a_stream_reads_its_records_from_the_runtime_page_by_page_to_the_newest() {
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let stub_local_api_server =
+            isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+                stream_log_records: Some(StubStreamLogRecords {
+                    records: records_saying(&["started", "running", "slowing"]),
+                    page_size: 2,
+                }),
+                ..StubLocalApiScript::default()
+            });
 
-        let read = run_tatolab_with_xdg_runtime_dir(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["logs", "--node", SCRIPTED_RUNTIME_NAME, "--count", "4"],
-        );
+        let read = isolated_machine_directories.run_tatolab(&["logs", "--stream", "camera"]);
 
         assert!(read.status.success(), "{}", standard_error_text(&read));
-        assert_eq!(standard_output_text(&read), "[{\"event\":\"started\"}]\n");
+        assert_eq!(
+            standard_output_text(&read),
+            format!(
+                "{}\n{}\n{}\n",
+                rendered_line("started", " INFO"),
+                rendered_line("running", " INFO"),
+                rendered_line("slowing", " INFO")
+            )
+        );
         assert_eq!(standard_error_text(&read), "");
         assert_eq!(
-            stub_local_api_server.recorded_tool_calls(),
-            [RecordedToolCall {
-                tool_name: "logs".to_owned(),
-                tool_arguments: json!({"count": 4}),
-            }]
+            stub_local_api_server.recorded_arguments_of("logs"),
+            [
+                json!({"stream": "camera", "after": 0}),
+                json!({"stream": "camera", "after": 2}),
+                json!({"stream": "camera", "after": 3}),
+            ]
+        );
+    }
+
+    /// Ctrl-C out of `--follow` is how it ends, not a failure: exit 0, not 130.
+    #[test]
+    fn logs_of_a_stream_followed_reads_on_across_pages_by_sequence_number_until_ctrl_c() {
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let stub_local_api_server =
+            isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+                stream_log_records: Some(StubStreamLogRecords {
+                    records: records_saying(&["first", "second", "third"]),
+                    page_size: 2,
+                }),
+                ..StubLocalApiScript::default()
+            });
+        let following_tatolab = FollowingTatolab::spawn(
+            isolated_machine_directories.tatolab_command(&["logs", "--stream", "camera", "-f"]),
+        );
+        for message in ["first", "second", "third"] {
+            assert_eq!(
+                following_tatolab.next_standard_output_line(message),
+                rendered_line(message, " INFO")
+            );
+        }
+
+        stub_local_api_server.append_stream_log_records(records_saying(&["fourth", "fifth"]));
+        for message in ["fourth", "fifth"] {
+            assert_eq!(
+                following_tatolab.next_standard_output_line(message),
+                rendered_line(message, " INFO")
+            );
+        }
+
+        assert_eq!(following_tatolab.interrupt_and_wait().code(), Some(0));
+        let afters_asked_for: Vec<u64> = stub_local_api_server
+            .recorded_arguments_of("logs")
+            .iter()
+            .map(|logs_arguments| logs_arguments["after"].as_u64().unwrap())
+            .collect();
+        assert_eq!(afters_asked_for[..2], [0, 2]);
+        assert!(
+            afters_asked_for.windows(2).all(|pair| pair[0] <= pair[1]),
+            "a follow never reads back: {afters_asked_for:?}"
+        );
+        assert!(afters_asked_for.contains(&3) && afters_asked_for.contains(&5));
+    }
+
+    #[test]
+    fn logs_of_a_stream_refuses_a_file_name_or_list_beside_it() {
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+
+        let refused =
+            isolated_machine_directories.run_tatolab(&["logs", "Rabc", "--stream", "camera"]);
+
+        assert_eq!(refused.status.code(), Some(1));
+        assert_eq!(
+            standard_error_text(&refused),
+            "error: `--stream` reads a loaded stream's records from the runtime, which takes no \
+             RUNTIME_ID-STREAM. Drop `--stream` to read an on-disk log file instead.\n"
         );
     }
 }

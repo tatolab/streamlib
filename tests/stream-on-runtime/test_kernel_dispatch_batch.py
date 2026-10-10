@@ -38,11 +38,11 @@ PROBE_STREAMS = {
 
 
 def run_probe(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", probe_class_name: str
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]", probe_class_name: str
 ) -> dict:
     """One probe, one observation dict — or a failure carrying the probe's own
     traceback, which names the cause better than a missing marker."""
-    tatolabd = start_tatolabd(PROBE_STREAMS[probe_class_name])
+    tatolabd = start_tatolabd_running_stream(PROBE_STREAMS[probe_class_name])
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -52,10 +52,10 @@ def run_probe(
     return observation
 
 
-def test_a_two_pass_filter_runs_as_one_batch(start_tatolabd):
+def test_a_two_pass_filter_runs_as_one_batch(start_tatolabd_running_stream):
     """The change file's own demo, written the way a user writes it: two
     kernels, an intermediate surface, one scope."""
-    observed = run_probe(start_tatolabd, "TwoPassBatchProbe")
+    observed = run_probe(start_tatolabd_running_stream, "TwoPassBatchProbe")
 
     assert observed["first_scope_returned"] is True
 
@@ -73,41 +73,41 @@ def test_a_two_pass_filter_runs_as_one_batch(start_tatolabd):
 
 
 def test_a_batch_scope_leaves_the_engines_recorder_ready_for_the_next_one(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The engine's batch recorder is shared and long-lived, and `begin()`
     refuses while a recording is in progress. So a second scope over the same
     surfaces is what catches a first scope that failed to close one — the
     probe reports the refusal rather than raising, so a regression names it."""
-    observed = run_probe(start_tatolabd, "TwoPassBatchProbe")
+    observed = run_probe(start_tatolabd_running_stream, "TwoPassBatchProbe")
     assert observed["second_scope_error"] is None, (
         "the second batch must run; a 'recording is already in progress' here "
         f"means the first scope stranded the recorder: {observed['second_scope_error']}"
     )
 
 
-def test_a_raise_inside_a_batch_propagates_unsuppressed(start_tatolabd):
+def test_a_raise_inside_a_batch_propagates_unsuppressed(start_tatolabd_running_stream):
     """Discarding the batch is not swallowing the exception — `__exit__`
     returns False, so the raise reaches the author."""
-    observed = run_probe(start_tatolabd, "BatchExceptionProbe")
+    observed = run_probe(start_tatolabd_running_stream, "BatchExceptionProbe")
     assert observed["propagated"] == "the block did not finish", (
         "the exception that discarded the batch must reach the caller"
     )
 
 
-def test_a_batch_discarded_by_a_raise_leaves_the_engine_usable(start_tatolabd):
+def test_a_batch_discarded_by_a_raise_leaves_the_engine_usable(start_tatolabd_running_stream):
     """Nothing was submitted, and nothing was stranded: the probe runs a fresh
     batch after the discarded one and it completes."""
-    observed = run_probe(start_tatolabd, "BatchExceptionProbe")
+    observed = run_probe(start_tatolabd_running_stream, "BatchExceptionProbe")
     assert observed["dispatched_after_the_raise"] is True
 
 
 def test_a_binding_the_shader_does_not_declare_is_refused_at_the_dispatch_line(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Checked where it is written, not when the scope closes — a batch that
     only failed at `__exit__` would point at the wrong line."""
-    observed = run_probe(start_tatolabd, "BatchRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "BatchRefusalProbe")
 
     unknown = observed["unknown"]
     assert "sharpen_amount" in unknown, f"must name the unknown binding: {unknown}"
@@ -117,11 +117,11 @@ def test_a_binding_the_shader_does_not_declare_is_refused_at_the_dispatch_line(
 
 
 def test_dispatching_one_kernel_twice_in_a_batch_is_refused_saying_why(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """A kernel owns one descriptor set, so the second bind would hand the
     first dispatch these bindings — silently, since nothing has run yet."""
-    observed = run_probe(start_tatolabd, "BatchRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "BatchRefusalProbe")
 
     twice = observed["same_kernel_twice"]
     assert "descriptor set" in twice, (
@@ -131,12 +131,12 @@ def test_dispatching_one_kernel_twice_in_a_batch_is_refused_saying_why(
 
 
 def test_a_batch_that_has_already_run_refuses_a_further_dispatch(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The scope is the batch's whole life. Holding the object past the block
     and dispatching into it says so rather than quietly collecting work that
     will never run."""
-    observed = run_probe(start_tatolabd, "BatchRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "BatchRefusalProbe")
 
     after = observed["after_the_scope"]
     assert "already run" in after, f"must say the batch is spent: {after}"
@@ -146,13 +146,13 @@ def test_a_batch_that_has_already_run_refuses_a_further_dispatch(
 
 
 def test_a_batch_that_was_never_entered_refuses_rather_than_swallowing_the_work(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`__exit__` is the only thing that sends, so dispatching into a batch
     nobody entered would collect GPU work that silently never runs — the shape
     the ADR rejected an explicit `publish()` over. It refuses instead, naming
     the `with` form."""
-    observed = run_probe(start_tatolabd, "BatchRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "BatchRefusalProbe")
 
     never_entered = observed["never_entered"]
     assert "never entered" in never_entered, (

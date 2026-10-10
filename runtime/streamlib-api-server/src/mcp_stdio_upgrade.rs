@@ -10,7 +10,13 @@
 //! `rmcp`'s alone: concurrency, `notifications/cancelled`, the in-flight
 //! answers a closing stream still owes, and `subscriptions/listen`.
 //!
-//! `tatolab mcp` is the client: it sends the upgrade, then copies bytes.
+//! Each connection is the lifetime of the streams `run_stream` attached over
+//! it: when it closes — or the local API stops — each is unloaded, unless its
+//! name has since been taken by another load.
+//!
+//! `tatolab mcp` and `tatolab run` are the clients: each sends the upgrade.
+
+use std::sync::Arc;
 
 use axum::extract::Request;
 use axum::http::header::{CONNECTION, UPGRADE};
@@ -113,31 +119,41 @@ fn header_lists_token(
         .any(|token| token.trim().eq_ignore_ascii_case(expected_token))
 }
 
+/// Serve one upgraded connection until it closes or the local API stops, then
+/// unload every stream it attached.
 async fn serve_local_api_mcp_over_the_upgraded_stream(
     handler: LocalApiMcpServerHandler,
     upgraded_stream: TokioIo<hyper::upgrade::Upgraded>,
     local_api_stopping_token: CancellationToken,
 ) {
+    let operations_on_the_loaded_streams = Arc::clone(&handler.operations_on_the_loaded_streams);
+    let (handler_for_this_connection, streams_attached_to_this_connection) =
+        handler.for_one_mcp_stdio_connection();
     // Until its first request picks a lifecycle `rmcp` reads without a
     // cancellation token, so the local API stopping has to end that wait here.
     let running_service = tokio::select! {
-        served = handler.serve_with_ct(upgraded_stream, local_api_stopping_token.child_token()) => served,
-        () = local_api_stopping_token.cancelled() => return,
+        served = handler_for_this_connection
+            .serve_with_ct(upgraded_stream, local_api_stopping_token.child_token()) => Some(served),
+        () = local_api_stopping_token.cancelled() => None,
     };
     match running_service {
-        Ok(running_service) => {
+        Some(Ok(running_service)) => {
             if let Err(error) = running_service.waiting().await {
                 tracing::warn!(%error, "an MCP stdio stream's service task failed");
             }
         }
-        Err(error) => {
+        Some(Err(error)) => {
             tracing::debug!(%error, "an MCP stdio stream ended before serving a request");
         }
+        None => {}
     }
+    streams_attached_to_this_connection
+        .close_and_unload_every_attached_stream(&operations_on_the_loaded_streams)
+        .await;
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -153,7 +169,7 @@ mod tests {
     use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
     use crate::control_plane_stub_support::{
-        LocalApiServedOnAFreshSocket, response_head_over_the_socket,
+        LocalApiServedOnAFreshSocket, STUB_STREAM_NAME, response_head_over_the_socket,
     };
     use crate::mcp::tests::{
         ControlPlaneMcpDispatchStubRuntime, assert_names_exactly_the_control_vocabulary,
@@ -172,7 +188,9 @@ mod tests {
         ))
     }
 
-    async fn upgraded_mcp_stdio_stream(served: &LocalApiServedOnAFreshSocket) -> UnixStream {
+    pub(crate) async fn upgraded_mcp_stdio_stream(
+        served: &LocalApiServedOnAFreshSocket,
+    ) -> UnixStream {
         let mut stream = UnixStream::connect(&served.local_api_socket_path)
             .await
             .unwrap();
@@ -261,7 +279,8 @@ mod tests {
         }
     }
 
-    async fn rmcp_client_over_the_upgraded_stream(
+    /// An `rmcp` client over a fresh `/mcp/stdio` upgrade of `served`.
+    pub(crate) async fn rmcp_client_over_the_upgraded_stream(
         served: &LocalApiServedOnAFreshSocket,
     ) -> RunningService<RoleClient, ()> {
         ().serve_with_lifecycle(
@@ -336,7 +355,11 @@ mod tests {
         let mut lines = McpStdioLines::upgraded_on(&served).await;
 
         lines
-            .send_tool_call(1, "tap", json!({ "channel": "quiet", "count": 5 }))
+            .send_tool_call(
+                1,
+                "tap",
+                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet", "count": 5 }),
+            )
             .await;
         lines.send_tool_call(2, "graph", json!({})).await;
 
@@ -354,7 +377,11 @@ mod tests {
         let mut lines = McpStdioLines::upgraded_on(&served).await;
 
         lines
-            .send_tool_call(1, "tap", json!({ "channel": "quiet", "count": 5 }))
+            .send_tool_call(
+                1,
+                "tap",
+                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet", "count": 5 }),
+            )
             .await;
         lines
             .send(json!({
@@ -384,7 +411,11 @@ mod tests {
         let mut lines = McpStdioLines::upgraded_on(&served).await;
 
         lines
-            .send_tool_call(1, "tap", json!({ "channel": "quiet", "count": 5 }))
+            .send_tool_call(
+                1,
+                "tap",
+                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet", "count": 5 }),
+            )
             .await;
         lines.to_the_node.shutdown().await.unwrap();
 
