@@ -1039,8 +1039,6 @@ async fn how_the_graph_reads_one_link(
 // Result content
 // ============================================================================
 
-/// A successful tool result: the value as one pretty-JSON text block, the form
-/// every tool here states a result a caller parses in.
 /// `stop_stream`'s result: `not_recorded_because` is present only when a kept
 /// stream unloaded but could not be recorded stopped.
 fn stop_stream_tool_result(stopped: StreamStopOutcome) -> Value {
@@ -1071,6 +1069,8 @@ fn expose_port_tool_result(exposed: OutputPortExposureOutcome) -> Value {
     expose_port_result
 }
 
+/// A successful tool result: the value as one pretty-JSON text block, the form
+/// every tool here states a result a caller parses in.
 fn json_text_tool_result(value: &Value) -> CallToolResult {
     CallToolResult::success(vec![json_text_content_block(value)])
 }
