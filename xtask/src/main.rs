@@ -472,6 +472,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             &["test", "--locked", "-p", "tatolabd"],
         ),
         (
+            "CLI tests as users build it (the socket resolved through an isolated XDG_RUNTIME_DIR)",
+            "cargo",
+            &["test", "--locked", "-p", "tatolab-cli"],
+        ),
+        (
             "CLI tests (tatolab's verbs against a stub runtime at an isolated machine's socket)",
             "cargo",
             &[

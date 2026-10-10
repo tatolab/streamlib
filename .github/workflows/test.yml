@@ -832,9 +832,12 @@ jobs:
           # behind `hardware-tests` and run on the rig.
           cargo test --locked -p tatolabd
           # The CLI: `new`'s rendered files, and every verb against a stub local
-          # API served at the machine's fixed socket — the test feature moves the
-          # runtime directory, the state directory and the machine runtime lock
-          # under each test's own TATOLAB_TEST_MACHINE_ROOT.
+          # API served at the machine's fixed socket. Built as users run it, the
+          # socket resolves through XDG_RUNTIME_DIR, which each test isolates;
+          # the test feature moves the runtime directory, the state directory
+          # and the machine runtime lock under each test's own
+          # TATOLAB_TEST_MACHINE_ROOT instead.
+          cargo test --locked -p tatolab-cli
           cargo test --locked -p tatolab-cli \
             --features machine-directories-under-a-test-root
 
