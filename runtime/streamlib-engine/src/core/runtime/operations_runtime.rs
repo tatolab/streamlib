@@ -611,11 +611,10 @@ impl LoadedStreamInThisRuntime {
                 to,
             );
         }
-        let live_graph_change = self.live_graph_change();
         let source_stream = self
             .engine_resources_shared_by_every_stream()
             .loaded_stream_of_the_cast_name(source.stream_name());
-        if live_graph_change.live.is_some()
+        if self.has_started_and_is_not_shutting_down()
             && let Some(source_stream) = &source_stream
             && source_stream.has_started_and_is_not_shutting_down()
         {
@@ -630,7 +629,7 @@ impl LoadedStreamInThisRuntime {
             None => WhereTheSourceStreamOfALinkIsAsItIsAdded::NotLoadedOnThisMachine,
         };
         self.block_on_the_engines_tokio_runtime(connect_from_another_stream_impl(
-            live_graph_change,
+            self.live_graph_change(),
             source,
             to,
             where_the_source_stream_is,
@@ -1183,6 +1182,7 @@ mod connect_from_another_stream_tests {
     use crate::core::pubsub::LoadedStreamIdentity;
     use crate::core::runtime::{
         LoadedStreamInThisRuntime, LoadedStreamTag, OptionsForLoadingOneStream, Runner,
+        RuntimeStatus,
     };
     use crate::core::test_support::{
         MockInputOnlyProcessor, MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
@@ -1490,6 +1490,107 @@ mod connect_from_another_stream_tests {
             links_of_a[0]["source"],
             serde_json::json!({"node": "camera", "port": "out1"})
         );
+    }
+
+    /// A loaded stream read as started, without the GPU context a real start
+    /// takes, until the guard drops and puts back the status it found.
+    struct LoadedStreamReadAsStartedForATest<'stream> {
+        stream: &'stream LoadedStreamInThisRuntime,
+        status_it_had: RuntimeStatus,
+    }
+
+    impl<'stream> LoadedStreamReadAsStartedForATest<'stream> {
+        fn while_held(stream: &'stream LoadedStreamInThisRuntime) -> Self {
+            let status_it_had =
+                std::mem::replace(&mut *stream.status.lock(), RuntimeStatus::Started);
+            Self {
+                stream,
+                status_it_had,
+            }
+        }
+    }
+
+    impl Drop for LoadedStreamReadAsStartedForATest<'_> {
+        fn drop(&mut self) {
+            *self.stream.status.lock() = self.status_it_had;
+        }
+    }
+
+    /// Only while the reading stream runs and the source's stream has started
+    /// is a source refused up front: a port at `internal`, or a node or port
+    /// the source's stream does not hold, is refused naming it, with no link
+    /// added and no reader left on the port. While either has not started the
+    /// same source is added for its wiring to settle, and a `private` port is
+    /// added while both run.
+    #[test]
+    fn only_while_both_streams_run_is_a_source_its_level_does_not_allow_refused_up_front() {
+        let loaded = TwoLoadedStreams::load();
+        let links_of_b = || TwoLoadedStreams::links_of(&loaded.b).len();
+
+        for (a_runs, b_runs) in [(false, false), (true, false), (false, true)] {
+            let _a = a_runs.then(|| LoadedStreamReadAsStartedForATest::while_held(&loaded.a));
+            let _b = b_runs.then(|| LoadedStreamReadAsStartedForATest::while_held(&loaded.b));
+            let links_before = links_of_b();
+            loaded
+                .b
+                .connect_from_an_output_port_in_another_stream(
+                    camera_video_of_the_stream_a(),
+                    loaded.into_the_display(),
+                )
+                .unwrap_or_else(|refusal| {
+                    panic!("a runs: {a_runs}, b runs: {b_runs}; refused: {refusal}")
+                });
+            assert_eq!(links_of_b(), links_before + 1);
+        }
+
+        let _a = LoadedStreamReadAsStartedForATest::while_held(&loaded.a);
+        let _b = LoadedStreamReadAsStartedForATest::while_held(&loaded.b);
+        let links_before_both_run = links_of_b();
+        let refusal = loaded
+            .b
+            .connect_from_an_output_port_in_another_stream(
+                camera_video_of_the_stream_a(),
+                loaded.into_the_display(),
+            )
+            .expect_err("an internal port is refused while both streams run");
+        assert!(
+            matches!(&refusal, Error::OutputPortNotExposedToTheReader(refused)
+                if refused.stream == "a" && refused.node == "camera" && refused.port == "out1"
+                    && refused.level == "internal"),
+            "{refusal:?}"
+        );
+        for (node, port, named) in [
+            ("ghost", "out1", ["`a`", "\"ghost\"", "camera"]),
+            ("camera", "frames", ["`a`", "`frames`", "out1, out2"]),
+        ] {
+            let refusal = loaded
+                .b
+                .connect_from_an_output_port_in_another_stream(
+                    OutputPortInAnotherStreamOnThisMachine::new("a", node, port).unwrap(),
+                    loaded.into_the_display(),
+                )
+                .expect_err("a node or port the stream does not hold is refused")
+                .to_string();
+            for expected in named {
+                assert!(refusal.contains(expected), "{expected:?} not in: {refusal}");
+            }
+        }
+        assert_eq!(links_of_b(), links_before_both_run);
+        assert_eq!(loaded.readers_registered_against_the_camera(), 0);
+
+        loaded
+            .a
+            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Private)
+            .unwrap();
+        loaded
+            .b
+            .connect_from_an_output_port_in_another_stream(
+                camera_video_of_the_stream_a(),
+                loaded.into_the_display(),
+            )
+            .expect("a private port is read by another stream");
+        assert_eq!(links_of_b(), links_before_both_run + 1);
+        assert_eq!(loaded.readers_registered_against_the_camera(), 0);
     }
 
     /// While both streams run, a source port at `internal` — or a node or port
