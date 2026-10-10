@@ -25,6 +25,7 @@ import re
 import socket
 import stat
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -262,7 +263,7 @@ def test_an_attached_stream_loads_into_the_runtime_and_a_ctrl_c_unloads_it(
 
 
 def socket_inodes_held_by(pid: int) -> "set[str]":
-    """The inode of every socket `pid` holds a descriptor on."""
+    """The inode of every socket `pid` holds a descriptor on, off Linux's `/proc`."""
     held_socket_inodes: "set[str]" = set()
     for descriptor in Path(f"/proc/{pid}/fd").iterdir():
         try:
@@ -277,7 +278,7 @@ def socket_inodes_held_by(pid: int) -> "set[str]":
 
 
 def listening_tcp_socket_inodes_in_the_network_namespace_of(pid: int) -> "set[str]":
-    """The inode of every TCP socket in LISTEN, IPv4 and IPv6, that `pid` can see."""
+    """The inode of every TCP socket in LISTEN, IPv4 and IPv6, that `pid` can see, off Linux's `/proc`."""
     listening_tcp_socket_inodes: "set[str]" = set()
     for tcp_table_name in ("tcp", "tcp6"):
         tcp_table_path = Path(f"/proc/{pid}/net/{tcp_table_name}")
@@ -293,25 +294,55 @@ def listening_tcp_socket_inodes_in_the_network_namespace_of(pid: int) -> "set[st
     return listening_tcp_socket_inodes
 
 
+def socket_names_lsof_reports_held_by(pid: int, *socket_selection: str) -> "set[str]":
+    """The name `lsof` gives every socket `pid` holds that `socket_selection` selects."""
+    # `-a` ANDs the selections, so only `pid`'s own sockets are listed; `-F n`
+    # prints each one's name on a line of its own, prefixed `n`.
+    completed = subprocess.run(
+        ["lsof", "-nP", "-a", "-p", str(pid), *socket_selection, "-F", "n"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # lsof exits 1, printing nothing, when nothing matches the selection.
+    assert completed.returncode == 0 or (completed.returncode == 1 and not completed.stdout), (
+        f"`{' '.join(completed.args)}` exited {completed.returncode}:\n{completed.stderr}"
+    )
+    return {line[1:] for line in completed.stdout.splitlines() if line.startswith("n")}
+
+
+def listening_tcp_sockets_held_by(pid: int) -> "set[str]":
+    """Every TCP socket in LISTEN, IPv4 and IPv6, `pid` holds: by inode off
+    Linux's `/proc`, by local address off `lsof` on macOS."""
+    if sys.platform == "linux":
+        return socket_inodes_held_by(pid) & listening_tcp_socket_inodes_in_the_network_namespace_of(pid)
+    return socket_names_lsof_reports_held_by(pid, "-iTCP", "-sTCP:LISTEN")
+
+
+def listening_tcp_socket_as_the_scan_names_it(tcp_listener: socket.socket) -> str:
+    """`tcp_listener` as `listening_tcp_sockets_held_by` names it."""
+    if sys.platform == "linux":
+        return str(os.fstat(tcp_listener.fileno()).st_ino)
+    host, port = tcp_listener.getsockname()[:2]
+    return f"[{host}]:{port}" if tcp_listener.family == socket.AF_INET6 else f"{host}:{port}"
+
+
 def assert_the_tcp_listener_scan_sees_the_listeners_this_process_holds() -> None:
     """Bind loopback TCP listeners here and require the scan to find each one."""
     tcp_listeners = [socket.create_server(("127.0.0.1", 0))]
     try:
         tcp_listeners.append(socket.create_server(("::1", 0), family=socket.AF_INET6))
     except OSError:
-        # A host without IPv6 loopback has no `tcp6` row to check the scan against.
+        # A host without IPv6 loopback has no IPv6 listener to check the scan against.
         pass
     try:
-        this_pid = os.getpid()
-        listening_tcp_socket_inodes_this_process_holds = socket_inodes_held_by(
-            this_pid
-        ) & listening_tcp_socket_inodes_in_the_network_namespace_of(this_pid)
+        listening_tcp_sockets_this_process_holds = listening_tcp_sockets_held_by(os.getpid())
         for tcp_listener in tcp_listeners:
-            tcp_listener_inode = str(os.fstat(tcp_listener.fileno()).st_ino)
-            assert tcp_listener_inode in listening_tcp_socket_inodes_this_process_holds, (
+            tcp_listener_as_scanned = listening_tcp_socket_as_the_scan_names_it(tcp_listener)
+            assert tcp_listener_as_scanned in listening_tcp_sockets_this_process_holds, (
                 f"the TCP scan must see the listener this test holds at "
-                f"{tcp_listener.getsockname()} (inode {tcp_listener_inode}); it saw "
-                f"{sorted(listening_tcp_socket_inodes_this_process_holds)}"
+                f"{tcp_listener.getsockname()} ({tcp_listener_as_scanned}); it saw "
+                f"{sorted(listening_tcp_sockets_this_process_holds)}"
             )
     finally:
         for tcp_listener in tcp_listeners:
@@ -330,7 +361,25 @@ def unix_socket_listener_inode_at(pid: int, unix_socket_path: str) -> "str | Non
     return None
 
 
-@pytest.mark.linux_only_capability(reason="the scan reads Linux's /proc")
+def assert_the_scan_sees_the_unix_socket_listener_held_by(pid: int, unix_socket_path: str) -> None:
+    """Require the scan of `pid`'s descriptors to find the Unix socket it listens on at `unix_socket_path`."""
+    if sys.platform == "linux":
+        listener_inode = unix_socket_listener_inode_at(pid, unix_socket_path)
+        assert listener_inode is not None, (
+            f"no Unix socket listens at {unix_socket_path} in /proc/{pid}/net/unix"
+        )
+        held_socket_inodes = socket_inodes_held_by(pid)
+        assert listener_inode in held_socket_inodes, (
+            f"pid {pid}'s descriptors must include its listener at {unix_socket_path} (inode "
+            f"{listener_inode}); they hold sockets {sorted(held_socket_inodes)}"
+        )
+        return
+    unix_socket_names = socket_names_lsof_reports_held_by(pid, "-U")
+    assert unix_socket_path in unix_socket_names, (
+        f"lsof must see pid {pid}'s listener at {unix_socket_path}; it saw {sorted(unix_socket_names)}"
+    )
+
+
 def test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
@@ -339,37 +388,28 @@ def test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket(
     `tatolabd` nor the `tatolab` attached to it holds a TCP socket in LISTEN, on
     any address, loopback included.
 
-    The same scan, read off Linux's `/proc`, has to find the TCP listeners the
-    test itself holds and the local API socket's listener, and the runtime has
-    to answer over it, so an empty TCP answer is the runtime's own and not a
-    scan that saw nothing.
+    The same scan — Linux's `/proc`, macOS's `lsof` — has to find the TCP
+    listeners the test itself holds and the local API socket's listener, and
+    the runtime has to answer over it, so an empty TCP answer is the runtime's
+    own and not a scan that saw nothing.
     """
     app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
     tatolabd = start_tatolabd()
 
     attached = attach_the_projects_stream(tatolabd, app_directory)
     attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
-    local_api_socket_path = str(tatolabd.local_api_socket_path)
     graph = tatolabd.local_api_client().call_tool("graph", {"stream": STREAM_NAME})
     assert graph["stream"] == STREAM_NAME
 
     assert_the_tcp_listener_scan_sees_the_listeners_this_process_holds()
-    held_socket_inodes = socket_inodes_held_by(tatolabd.pid)
-    local_api_listener_inode = unix_socket_listener_inode_at(tatolabd.pid, local_api_socket_path)
-    assert local_api_listener_inode is not None, (
-        f"no Unix socket listens at {local_api_socket_path} in /proc/{tatolabd.pid}/net/unix"
-    )
-    assert local_api_listener_inode in held_socket_inodes, (
-        f"tatolabd's descriptors must include its local API listener (inode "
-        f"{local_api_listener_inode}); they hold sockets {sorted(held_socket_inodes)}"
+    assert_the_scan_sees_the_unix_socket_listener_held_by(
+        tatolabd.pid, str(tatolabd.local_api_socket_path)
     )
     for process_name, pid in (("tatolabd", tatolabd.pid), ("tatolab", attached.pid)):
-        listening_tcp_socket_inodes_it_holds = socket_inodes_held_by(
-            pid
-        ) & listening_tcp_socket_inodes_in_the_network_namespace_of(pid)
-        assert listening_tcp_socket_inodes_it_holds == set(), (
-            f"{process_name} holds TCP sockets in LISTEN (inodes "
-            f"{sorted(listening_tcp_socket_inodes_it_holds)}); standard error ended:\n"
+        listening_tcp_sockets_it_holds = listening_tcp_sockets_held_by(pid)
+        assert listening_tcp_sockets_it_holds == set(), (
+            f"{process_name} holds TCP sockets in LISTEN "
+            f"({sorted(listening_tcp_sockets_it_holds)}); standard error ended:\n"
             f"{tatolabd.recent_stderr()}"
         )
 
@@ -557,7 +597,6 @@ def the_first_streams_output(tatolabd: TatolabdUnderTest) -> str:
     return tatolabd.stderr_text.split(the_first_streams_stop, 1)[0] + the_first_streams_stop
 
 
-@pytest.mark.linux_only_capability(reason="a DisplayWindow on the rig's display")
 def test_the_scaffolded_app_reaches_a_running_graph(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
@@ -789,7 +828,6 @@ def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
     return edited
 
 
-@pytest.mark.linux_only_capability(reason="a DisplayWindow on the rig's display")
 def test_the_edit_loop_reports_a_bad_save_and_loads_the_next_good_one(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
