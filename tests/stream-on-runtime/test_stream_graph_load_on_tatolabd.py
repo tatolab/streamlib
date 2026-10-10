@@ -454,7 +454,7 @@ def test_a_graph_naming_an_unknown_type_is_refused(
     assert unknown_type in refusal
 
 
-# ---- links: a port no node has, and an end naming a runtime -----------------
+# ---- links: a port no node has, and an end naming a machine -----------------
 
 
 def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
@@ -468,18 +468,33 @@ def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
 
 
 @pytest.mark.parametrize("end", ["source", "target"])
-def test_a_link_end_naming_a_machine_is_refused_by_load_naming_the_key(
+def test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the_address_shape(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, end: str
 ):
-    """A link end is `{node, port}` in the stream that loads it, so an end
-    naming a machine is refused rather than read as a local end with its
-    machine dropped."""
+    """An end naming a machine names its stream too, so one naming a machine
+    alone is refused rather than read as a local end with its machine dropped."""
     graph = pattern_to_window_graph()
     graph["links"][0][end]["machine"] = "studio-display"
 
     refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
 
-    assert "`machine`" in refusal
+    assert "names the machine `studio-display` and no stream" in refusal, refusal
+    assert "`machine/stream/node/port`" in refusal, refusal
+
+
+@pytest.mark.parametrize("end", ["source", "target"])
+def test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machine(
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, end: str
+):
+    """Nothing links two machines until the sharing step, so an end on
+    another machine is refused by that machine's name."""
+    graph = pattern_to_window_graph()
+    graph["links"][0][end].update({"machine": "studio-display", "stream": graph["stream"]})
+
+    refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
+
+    assert "names the machine `studio-display`" in refusal, refusal
+    assert "which is where links between machines arrive" in refusal, refusal
 
 
 # ---- an interrupt during a load's describe ------------------------------------
