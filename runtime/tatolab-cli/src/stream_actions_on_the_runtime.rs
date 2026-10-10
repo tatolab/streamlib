@@ -463,6 +463,7 @@ mod tests {
     use std::path::PathBuf;
 
     use serde_json::json;
+    use streamlib_runtime_client_contract::local_api_wire_contract::LoadedStreamInstance;
 
     use super::*;
 
@@ -549,6 +550,7 @@ mod tests {
     fn run_stream_result_warning(compile_warnings: &[&str]) -> RunStreamToolResult {
         RunStreamToolResult {
             stream: "camera".to_owned(),
+            stream_instance: LoadedStreamInstance("4".to_owned()),
             kept: true,
             project_directory: PathBuf::from("/srv/project"),
             node_count: 3,
@@ -614,7 +616,7 @@ mod tests {
     fn a_run_stream_result_without_compile_warnings_is_not_a_run_stream_result() {
         assert!(
             serde_json::from_str::<RunStreamToolResult>(
-                r#"{"stream": "camera", "kept": true, "project_directory": "/srv/project", "node_count": 3, "replaced_the_kept_record": false}"#
+                r#"{"stream": "camera", "stream_instance": "4", "kept": true, "project_directory": "/srv/project", "node_count": 3, "replaced_the_kept_record": false}"#
             )
             .is_err(),
             "the runtime always answers `compile_warnings`, empty when the compile wrote nothing"

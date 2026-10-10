@@ -566,6 +566,116 @@ fn dev_runs_again_on_a_saved_edit_without_stopping_and_follows_on_after_a_refuse
     assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "stop_stream");
 }
 
+/// A save that compiles and whose load the runtime refuses leaves the previous graph loaded again
+/// as another instance, numbering its records from 1: `dev` follows that instance from its first
+/// record, not from where it had read the stream the save was to replace.
+#[test]
+fn dev_follows_the_stream_loaded_again_after_a_refused_save_that_compiled_from_its_first_record() {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let scratch_project = ScratchProject::new();
+    let stub_local_api_server = a_runtime_holding(
+        &isolated_machine_directories,
+        vec![
+            loaded_answer(&scratch_project.canonical_path()),
+            StubToolAnswer::tool_failure(
+                "the stream `cam` was not loaded: no output port `absent-port` on node `source`",
+            )
+            .re_loading_the_stream_as(
+                "2",
+                vec![a_log_record(json!({"message": "the re-load starts"}))],
+            ),
+        ],
+        vec![
+            a_log_record(json!({"message": "first"})),
+            a_log_record(json!({"message": "second"})),
+            a_log_record(json!({"message": "third"})),
+        ],
+    );
+    let mut running_tatolab =
+        RunningTatolab::spawn(isolated_machine_directories.tatolab_command(&[
+            "dev",
+            "--dir",
+            scratch_project.path_as_given(),
+        ]));
+    for message in ["first", "second", "third"] {
+        assert_eq!(
+            running_tatolab.next_standard_output_line(message),
+            rendered_line(message)
+        );
+    }
+
+    scratch_project.save_stream_py(
+        "# a save whose load is refused, longer than the first
+",
+    );
+    running_tatolab.wait_for_standard_error_line_containing(
+        "tatolab dev: run_stream failed: the stream `cam` was not loaded",
+    );
+    running_tatolab.wait_for_standard_error_line_containing(
+        "tatolab dev: cam was loaded again — following it from its first record",
+    );
+
+    assert_eq!(
+        running_tatolab.next_standard_output_line("the re-loaded stream's first record"),
+        rendered_line("the re-load starts"),
+        "the re-loaded stream's records are followed from its first"
+    );
+    running_tatolab.wait_for_standard_error_line_containing(
+        "tatolab dev: cam keeps running the last save that loaded — fix it and save again",
+    );
+    let (exit_status, standard_error_lines) =
+        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
+    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
+    assert_eq!(
+        tool_calls_besides_logs(&stub_local_api_server),
+        ["run_stream", "run_stream", "stop_stream"]
+    );
+}
+
+/// A `logs` page naming another instance of the followed stream than the one followed is a
+/// re-load: the follow sets that page aside and reads the new instance from its first record.
+#[test]
+fn run_follows_a_stream_loaded_again_mid_follow_from_its_first_record() {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let scratch_project = ScratchProject::new();
+    let stub_local_api_server = a_runtime_holding(
+        &isolated_machine_directories,
+        vec![loaded_answer(&scratch_project.canonical_path())],
+        vec![
+            a_log_record(json!({"message": "first"})),
+            a_log_record(json!({"message": "second"})),
+        ],
+    );
+    let mut running_tatolab =
+        RunningTatolab::spawn(isolated_machine_directories.tatolab_command(&[
+            "run",
+            "--dir",
+            scratch_project.path_as_given(),
+        ]));
+    for message in ["first", "second"] {
+        assert_eq!(
+            running_tatolab.next_standard_output_line(message),
+            rendered_line(message)
+        );
+    }
+
+    stub_local_api_server.re_load_the_stream_as(
+        "2",
+        vec![a_log_record(json!({"message": "after the re-load"}))],
+    );
+
+    running_tatolab.wait_for_standard_error_line_containing(
+        "tatolab: cam was loaded again — following it from its first record",
+    );
+    assert_eq!(
+        running_tatolab.next_standard_output_line("the re-loaded stream's first record"),
+        rendered_line("after the re-load")
+    );
+    let (exit_status, standard_error_lines) =
+        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
+    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
+}
+
 /// A one-node stream's loaded note counts one node.
 #[test]
 fn the_loaded_note_counts_a_single_node_in_the_singular() {

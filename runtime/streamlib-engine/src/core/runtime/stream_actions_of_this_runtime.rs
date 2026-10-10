@@ -74,8 +74,9 @@ pub struct RunStreamRequest {
     /// directory, or it is attached to what ran it.
     pub holding: LoadedStreamHolding,
     /// The tags of the streams the caller attached and still holds — a local
-    /// API connection's — so an attached run of a name one of them holds,
-    /// from the same project and stream function, replaces it.
+    /// API connection's — so an attached run from the same project, stream
+    /// function and requested name as one of them replaces it, under the
+    /// name it compiles to now.
     pub stream_tags_attached_to_the_caller: Vec<LoadedStreamTag>,
 }
 
@@ -85,6 +86,9 @@ pub struct RunStreamRequest {
 pub(crate) struct AttachedStreamRunSource {
     /// The stream function as the run spelled it.
     pub(crate) stream_function: Option<String>,
+    /// The name the run asked to load the stream as; `None` when it loaded
+    /// under the name its function compiled to.
+    pub(crate) stream_name_the_run_asked_for: Option<String>,
     /// The graph the compile printed.
     pub(crate) graph_json: serde_json::Value,
     /// Where its processor interpreters start.
@@ -307,8 +311,9 @@ impl Runner {
     /// is refused naming the project that holds it, except a load that
     /// replaces: a kept load of the record's own project and function
     /// replaces the record, and an attached load of the stream the caller
-    /// attached from the same project and function replaces that stream.
-    /// The running stream is unloaded only once the compile succeeded, so a
+    /// attached from the same project and function replaces that stream —
+    /// under the name the function compiles to now, when the run asks for no
+    /// name and neither did the run that loaded it. The running stream is unloaded only once the compile succeeded, so a
     /// compile that fails leaves it running; a refused load re-loads the
     /// previous one. A load refused only because the holder ran the same
     /// project's function under another spelling is refused naming it.
@@ -316,7 +321,7 @@ impl Runner {
         let RunStreamRequest {
             project_directory,
             stream_function,
-            stream_name,
+            stream_name: stream_name_the_run_asked_for,
             holding,
             stream_tags_attached_to_the_caller,
         } = request;
@@ -347,11 +352,11 @@ impl Runner {
         let compiled = compile_the_stream_function_in_the_projects_interpreter(
             &project_directory,
             stream_function.as_deref(),
-            stream_name.as_deref(),
+            stream_name_the_run_asked_for.as_deref(),
             lend_directory,
         )?;
         let stream_name = the_cast_name_of_the_stream_a_load_names(
-            stream_name.as_deref().or(compiled
+            stream_name_the_run_asked_for.as_deref().or(compiled
                 .graph_json
                 .get("stream")
                 .and_then(serde_json::Value::as_str)),
@@ -432,6 +437,7 @@ impl Runner {
                             previous_run_source,
                             AttachedStreamRunSource {
                                 stream_function,
+                                stream_name_the_run_asked_for,
                                 graph_json,
                                 stream_environment,
                                 re_loaded_in_place_of: Vec::new(),
@@ -458,6 +464,34 @@ impl Runner {
                 }
             }
             (None, None) => {
+                let the_callers_stream_run_from_the_same_request = (holding
+                    == LoadedStreamHolding::Attached)
+                    .then(|| {
+                        self.the_callers_attached_stream_run_from_the_same_request(
+                            &stream_environment.project_directory,
+                            stream_function.as_deref(),
+                            stream_name_the_run_asked_for.as_deref(),
+                            &stream_tags_attached_to_the_caller,
+                        )
+                    })
+                    .flatten();
+                if let Some((previously_loaded, previous_run_source)) =
+                    the_callers_stream_run_from_the_same_request
+                {
+                    return self.replace_an_attached_stream(
+                        &stream_name,
+                        previously_loaded,
+                        previous_run_source,
+                        AttachedStreamRunSource {
+                            stream_function,
+                            stream_name_the_run_asked_for,
+                            graph_json,
+                            stream_environment,
+                            re_loaded_in_place_of: Vec::new(),
+                        },
+                        compile_warnings,
+                    );
+                }
                 let stream = self.load_and_start_a_stream(
                     &stream_name,
                     &graph_json,
@@ -484,6 +518,7 @@ impl Runner {
                     None => {
                         stream.remember_the_attached_stream_run_source(AttachedStreamRunSource {
                             stream_function,
+                            stream_name_the_run_asked_for,
                             graph_json,
                             stream_environment: stream_environment.clone(),
                             re_loaded_in_place_of: Vec::new(),
@@ -1027,11 +1062,41 @@ impl Runner {
         }
     }
 
+    /// The loaded attached stream a caller holding `stream_tags_attached_to_the_caller`
+    /// ran from `project_directory`'s `stream_function`, asking for
+    /// `stream_name_the_run_asked_for`, and what that run compiled — whatever
+    /// name it loaded under.
+    fn the_callers_attached_stream_run_from_the_same_request(
+        &self,
+        project_directory: &Path,
+        stream_function: Option<&str>,
+        stream_name_the_run_asked_for: Option<&str>,
+        stream_tags_attached_to_the_caller: &[LoadedStreamTag],
+    ) -> Option<(Arc<LoadedStreamInThisRuntime>, AttachedStreamRunSource)> {
+        self.every_loaded_stream().into_iter().find_map(|loaded| {
+            let run_source = loaded
+                .attached_stream_run_source()
+                .filter(|run_source| {
+                    loaded.holding() == LoadedStreamHolding::Attached
+                        && loaded.project_directory() == project_directory
+                        && run_source.stream_function.as_deref() == stream_function
+                        && run_source.stream_name_the_run_asked_for.as_deref()
+                            == stream_name_the_run_asked_for
+                        && stream_tags_attached_to_the_caller
+                            .iter()
+                            .any(|stream_tag| loaded.is_held_by_the_attachment_of(*stream_tag))
+                })?
+                .clone();
+            Some((loaded, run_source))
+        })
+    }
+
     /// Replace the attached stream `previously_loaded`, which an attached run
-    /// compiled from `previous_run_source`, by `replacement`, whose compile
-    /// already succeeded writing `compile_warnings`: unload it, then load and
-    /// start the new graph attached. A refused load re-loads the previous
-    /// graph, held by what attached the stream it replaces.
+    /// compiled from `previous_run_source`, by `replacement` loaded as
+    /// `stream_name`, whose compile already succeeded writing
+    /// `compile_warnings`: unload it, then load and start the new graph
+    /// attached. A refused load re-loads the previous graph under its own
+    /// name, held by what attached the stream it replaces.
     fn replace_an_attached_stream(
         &self,
         stream_name: &str,
@@ -1064,7 +1129,7 @@ impl Runner {
                 })
             }
             Err(replace_refusal) => match self.load_and_start_a_stream(
-                stream_name,
+                previously_loaded.stream_name(),
                 &previous_run_source.graph_json,
                 &[],
                 previous_run_source.stream_environment.clone(),
@@ -2631,6 +2696,7 @@ mod tests {
         let stream = an_attached_stream_loaded_without_its_start(runner, project, stream_name);
         stream.remember_the_attached_stream_run_source(AttachedStreamRunSource {
             stream_function: None,
+            stream_name_the_run_asked_for: None,
             graph_json: run_source_graph,
             stream_environment: project.stream_environment(),
             re_loaded_in_place_of: Vec::new(),
@@ -2811,6 +2877,7 @@ mod tests {
         let re_loaded = an_attached_stream_loaded_without_its_start(&runner, &project, "camera");
         re_loaded.remember_the_attached_stream_run_source(AttachedStreamRunSource {
             stream_function: None,
+            stream_name_the_run_asked_for: None,
             graph_json: the_graph_of_a_function_named("camera", serde_json::json!([])),
             stream_environment: project.stream_environment(),
             re_loaded_in_place_of: vec![replaced_load_tag],
@@ -2820,6 +2887,154 @@ mod tests {
         assert!(re_loaded.is_held_by_the_attachment_of(replaced_load_tag));
         assert!(runner.unload_the_attached_stream_if_still_the_same("camera", replaced_load_tag));
         assert!(re_loaded.has_ended());
+    }
+
+    #[test]
+    #[serial]
+    fn a_renamed_attached_replace_whose_load_and_re_load_are_refused_unloads_it_and_reports_both() {
+        let runner = a_runner_keeping_its_streams_in(None);
+        let project = ProjectWithAStubCompile::compiling(
+            the_graph_of_a_function_exposing_a_port_its_node_lacks("studio"),
+        );
+        let previous = an_attached_run_loaded_without_its_start(
+            &runner,
+            &project,
+            "camera",
+            the_graph_of_a_function_named(
+                "camera",
+                serde_json::json!([{"node": "source", "port": "gone-port", "level": "public"}]),
+            ),
+        );
+
+        let refusal = refusal_of(runner.run_stream(
+            project.attached_run_request_of_the_caller_holding(&[previous.stream_tag()]),
+        ));
+
+        assert!(refusal.contains("absent-port"), "{refusal}");
+        assert!(refusal.contains("did not re-load"), "{refusal}");
+        assert!(refusal.contains("gone-port"), "{refusal}");
+        assert!(
+            previous.has_ended(),
+            "the caller's stream of the same project and function is replaced across the rename"
+        );
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_renamed_attached_run_onto_a_name_another_holds_is_refused_by_name_and_unloads_nothing() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "preview",
+            serde_json::json!([]),
+        ));
+        let callers = an_attached_run_loaded_without_its_start(
+            &runner,
+            &project,
+            "camera",
+            the_graph_of_a_function_named("camera", serde_json::json!([])),
+        );
+        let another_callers =
+            an_attached_stream_loaded_without_its_start(&runner, &project, "preview");
+
+        let loaded_refusal = refusal_of(runner.run_stream(
+            project.attached_run_request_of_the_caller_holding(&[callers.stream_tag()]),
+        ));
+        let kept = a_kept_record_of(&project, "microphone", serde_json::json!([]));
+        records_in(state_directory.path()).write(&kept).unwrap();
+        project.compile_to(the_graph_of_a_function_named(
+            "microphone",
+            serde_json::json!([]),
+        ));
+        let kept_refusal = refusal_of(runner.run_stream(
+            project.attached_run_request_of_the_caller_holding(&[callers.stream_tag()]),
+        ));
+
+        assert!(
+            loaded_refusal.contains("already loaded"),
+            "{loaded_refusal}"
+        );
+        assert!(loaded_refusal.contains("`preview`"), "{loaded_refusal}");
+        assert!(kept_refusal.contains("kept stream"), "{kept_refusal}");
+        assert!(kept_refusal.contains("`microphone`"), "{kept_refusal}");
+        assert!(!callers.has_ended());
+        assert!(!another_callers.has_ended());
+        assert_eq!(
+            runner.names_of_the_loaded_streams(),
+            ["camera".to_string(), "preview".to_string()]
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_renamed_run_replaces_no_kept_stream_no_other_callers_and_no_other_request_of_the_caller() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(
+            the_graph_of_a_function_exposing_a_port_its_node_lacks("studio"),
+        );
+        let attached = an_attached_run_loaded_without_its_start(
+            &runner,
+            &project,
+            "camera",
+            the_graph_of_a_function_named("camera", serde_json::json!([])),
+        );
+        let kept_record = a_kept_record_of(&project, "kept-camera", serde_json::json!([]));
+        let kept =
+            a_kept_stream_loaded_without_its_start(&runner, state_directory.path(), &kept_record);
+
+        for (run_request, what_the_run_is) in [
+            (
+                project.attached_run_request_of_the_caller_holding(&[]),
+                "another caller's attached run",
+            ),
+            (
+                RunStreamRequest {
+                    stream_tags_attached_to_the_caller: vec![
+                        attached.stream_tag(),
+                        kept.stream_tag(),
+                    ],
+                    ..project.run_request(LoadedStreamHolding::Kept)
+                },
+                "a kept run",
+            ),
+            (
+                project.attached_run_request_of_the_caller_holding(&[kept.stream_tag()]),
+                "an attached run by a caller naming the kept stream's tag",
+            ),
+            (
+                RunStreamRequest {
+                    stream_function: Some("stream.py:main".to_string()),
+                    ..project.attached_run_request_of_the_caller_holding(&[attached.stream_tag()])
+                },
+                "the caller's run of another spelling of the function",
+            ),
+            (
+                RunStreamRequest {
+                    stream_name: Some("studio".to_string()),
+                    ..project.attached_run_request_of_the_caller_holding(&[attached.stream_tag()])
+                },
+                "the caller's run asking for a name",
+            ),
+        ] {
+            let refusal = refusal_of(runner.run_stream(run_request));
+
+            assert!(
+                refusal.contains("absent-port"),
+                "{what_the_run_is}: {refusal}"
+            );
+            assert!(
+                !refusal.contains("did not re-load"),
+                "{what_the_run_is} replaced nothing: {refusal}"
+            );
+            assert!(!attached.has_ended(), "{what_the_run_is}");
+            assert!(!kept.has_ended(), "{what_the_run_is}");
+        }
+        assert_eq!(
+            runner.names_of_the_loaded_streams(),
+            ["camera".to_string(), "kept-camera".to_string()]
+        );
     }
 
     // The tests below start streams, which needs the engine's GPU context.
@@ -3312,5 +3527,100 @@ mod tests {
             "the first load's attachment holds the re-load, never the stream that replaced it"
         );
         assert!(!replacing.has_ended());
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn an_attached_run_of_the_callers_renamed_stream_function_replaces_it_under_the_new_name() {
+        let runner = a_runner_keeping_its_streams_in(None);
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let first = runner
+            .run_stream(project.run_request(LoadedStreamHolding::Attached))
+            .expect("the attached stream runs");
+        let first_stream = runner.loaded_stream_named("camera").unwrap();
+        project.compile_to(the_graph_of_a_function_named(
+            "studio",
+            serde_json::json!([]),
+        ));
+
+        let renamed = runner
+            .run_stream(project.attached_run_request_of_the_caller_holding(&[first.stream_tag]))
+            .expect("the renamed function's stream replaces the caller's");
+
+        assert_eq!(renamed.stream_name, "studio");
+        assert!(first_stream.has_ended());
+        assert_eq!(runner.names_of_the_loaded_streams(), ["studio".to_string()]);
+        let running = runner.loaded_stream_named("studio").unwrap();
+        assert_eq!(running.stream_tag(), renamed.stream_tag);
+        assert_eq!(running.holding(), LoadedStreamHolding::Attached);
+        assert_eq!(
+            running.status(),
+            crate::core::runtime::RuntimeStatus::Started
+        );
+        project.compile_to(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        runner
+            .run_stream(project.attached_run_request_of_the_caller_holding(&[
+                first.stream_tag,
+                renamed.stream_tag,
+            ]))
+            .expect("the caller's next run replaces the renamed stream in turn");
+        assert!(running.has_ended());
+        assert_eq!(runner.names_of_the_loaded_streams(), ["camera".to_string()]);
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn a_renamed_attached_replace_whose_load_is_refused_re_loads_the_previous_graph_under_its_name()
+    {
+        let runner = a_runner_keeping_its_streams_in(None);
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
+        ));
+        let first = runner
+            .run_stream(project.run_request(LoadedStreamHolding::Attached))
+            .unwrap();
+        project.compile_to(the_graph_of_a_function_exposing_a_port_its_node_lacks(
+            "studio",
+        ));
+
+        let refusal =
+            refusal_of(runner.run_stream(
+                project.attached_run_request_of_the_caller_holding(&[first.stream_tag]),
+            ));
+
+        assert!(refusal.contains("absent-port"), "{refusal}");
+        assert!(!refusal.contains("did not re-load"), "{refusal}");
+        assert_eq!(runner.names_of_the_loaded_streams(), ["camera".to_string()]);
+        let re_loaded = runner
+            .loaded_stream_named("camera")
+            .expect("the previous graph is loaded again under its own name");
+        assert_ne!(re_loaded.stream_tag(), first.stream_tag);
+        assert_eq!(
+            re_loaded.status(),
+            crate::core::runtime::RuntimeStatus::Started
+        );
+        assert_eq!(
+            the_exposures_graph_renders_for(&re_loaded),
+            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}])
+        );
+        assert!(
+            runner.unload_the_attached_stream_if_still_the_same("camera", first.stream_tag),
+            "the first load's attachment holds the re-load"
+        );
     }
 }

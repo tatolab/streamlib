@@ -589,6 +589,7 @@ mod tests {
                 .collect();
             Ok(serde_json::json!({
                 "stream": "camera",
+                "stream_instance": "4",
                 "next_after": after + page_records.len() as u64,
                 "records": page_records,
                 "records_no_longer_held": 0,

@@ -17,6 +17,17 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::OutputPortExposureLevel;
 use crate::core::logging::LoadedStreamLogRecordsPage;
 
+/// One page of a loaded stream's log records, and the tag of the load that
+/// numbered them: a re-load under the same name numbers its records from 1
+/// again under another tag.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogRecordsPageOfOneLoadedStream {
+    /// The tag of the load whose records the page holds.
+    pub stream_tag: LoadedStreamTag,
+    /// The records, numbered by that load.
+    pub records_page: LoadedStreamLogRecordsPage,
+}
+
 /// What the local API reaches a runtime through: the stream a call names, a
 /// stream's node catalog and log records, the stream actions and the surface
 /// exchange.
@@ -55,14 +66,15 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn names_of_the_loaded_streams(&self) -> Vec<String>;
 
     /// The log records of the loaded stream `stream_name` names, numbered
-    /// after `after`, at most `max_count` of them; refused naming the loaded
-    /// streams when it is not loaded.
+    /// after `after`, at most `max_count` of them, with the tag of the load
+    /// that numbered them; refused naming the loaded streams when it is not
+    /// loaded.
     fn log_records_of_the_stream_a_call_names(
         &self,
         stream_name: &str,
         after: u64,
         max_count: usize,
-    ) -> Result<LoadedStreamLogRecordsPage>;
+    ) -> Result<LogRecordsPageOfOneLoadedStream>;
 
     /// [`Runner::run_stream`].
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome>;
@@ -154,9 +166,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         stream_name: &str,
         after: u64,
         max_count: usize,
-    ) -> Result<LoadedStreamLogRecordsPage> {
+    ) -> Result<LogRecordsPageOfOneLoadedStream> {
         self.loaded_stream_named(stream_name)
-            .map(|stream| stream.log_records_after(after, max_count))
+            .map(|stream| LogRecordsPageOfOneLoadedStream {
+                stream_tag: stream.stream_tag(),
+                records_page: stream.log_records_after(after, max_count),
+            })
     }
 
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {

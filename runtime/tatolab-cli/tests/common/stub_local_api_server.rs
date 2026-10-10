@@ -51,6 +51,9 @@ pub const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str = "/nonexistent-tatolab-te
 /// The local API tool that pages a loaded stream's log records by sequence number.
 const LOGS_TOOL_NAME: &str = "logs";
 
+/// The instance the stub's stream is loaded as until a re-load names another.
+pub const STUB_FIRST_STREAM_INSTANCE: &str = "1";
+
 /// The local API tool that loads a stream, kept or attached.
 const RUN_STREAM_TOOL_NAME: &str = "run_stream";
 
@@ -74,11 +77,20 @@ impl Connected<IncomingStream<'_, tokio::net::UnixListener>> for StubAcceptedCon
     }
 }
 
-/// How the stub answers one `tools/call`: the tool's text, and whether the tool ran and failed.
+/// How the stub answers one `tools/call`: the tool's text, whether the tool ran and failed, and
+/// the re-load of the stream the runtime made before answering, if it made one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StubToolAnswer {
     pub text: String,
     pub is_error: bool,
+    pub re_loads_the_stream_as: Option<StubStreamReLoad>,
+}
+
+/// A re-load of the stub's stream: another instance, whose records `logs` pages from 1 again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StubStreamReLoad {
+    pub stream_instance: String,
+    pub records: Vec<serde_json::Value>,
 }
 
 impl StubToolAnswer {
@@ -87,6 +99,7 @@ impl StubToolAnswer {
         Self {
             text: text.to_owned(),
             is_error: false,
+            re_loads_the_stream_as: None,
         }
     }
 
@@ -95,6 +108,23 @@ impl StubToolAnswer {
         Self {
             text: text.to_owned(),
             is_error: true,
+            re_loads_the_stream_as: None,
+        }
+    }
+
+    /// This answer, given once the stream is loaded again as `stream_instance` holding
+    /// `records` — what a runtime does when a replace's load is refused after the compile.
+    pub fn re_loading_the_stream_as(
+        self,
+        stream_instance: &str,
+        records: Vec<serde_json::Value>,
+    ) -> Self {
+        Self {
+            re_loads_the_stream_as: Some(StubStreamReLoad {
+                stream_instance: stream_instance.to_owned(),
+                records,
+            }),
+            ..self
         }
     }
 }
@@ -285,6 +315,7 @@ impl StubLocalApiScript {
 struct StubLocalApiState {
     tool_answers_by_name: Mutex<HashMap<String, VecDeque<StubToolAnswer>>>,
     stream_log_records: Mutex<Vec<serde_json::Value>>,
+    stream_instance: Mutex<String>,
     stream_log_page_size: Option<usize>,
     mcp_stdio_connection_closing_generation: tokio::sync::watch::Sender<u64>,
     fixed_tool_answer: StubToolAnswer,
@@ -380,6 +411,9 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
         } else {
             self.stub_state.answer_for(&request)
         };
+        if let Some(stub_stream_re_load) = answer.re_loads_the_stream_as.clone() {
+            self.stub_state.re_load_the_stream_as(stub_stream_re_load);
+        }
         let content = vec![ContentBlock::text(answer.text)];
         Ok(if answer.is_error {
             CallToolResult::error(content)
@@ -391,6 +425,14 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
 }
 
 impl StubLocalApiState {
+    /// Load the stream again as `stub_stream_re_load` says, its records and instance replaced
+    /// under one lock so no `logs` page mixes the two loads.
+    fn re_load_the_stream_as(&self, stub_stream_re_load: StubStreamReLoad) {
+        let mut stream_log_records = self.stream_log_records.lock().unwrap();
+        *self.stream_instance.lock().unwrap() = stub_stream_re_load.stream_instance;
+        *stream_log_records = stub_stream_re_load.records;
+    }
+
     fn answer_for(&self, request: &CallToolRequestParams) -> StubToolAnswer {
         if let Some(answers_for_this_tool) = self
             .tool_answers_by_name
@@ -432,10 +474,9 @@ impl StubLocalApiState {
             .get("count")
             .and_then(serde_json::Value::as_u64)
             .map_or(usize::MAX, |count| count as usize);
-        let numbered_records: Vec<serde_json::Value> = self
-            .stream_log_records
-            .lock()
-            .unwrap()
+        let stream_log_records = self.stream_log_records.lock().unwrap();
+        let stream_instance = self.stream_instance.lock().unwrap().clone();
+        let numbered_records: Vec<serde_json::Value> = stream_log_records
             .iter()
             .enumerate()
             .map(|(record_index, record)| {
@@ -444,10 +485,12 @@ impl StubLocalApiState {
             .skip(after as usize)
             .take(stream_log_page_size.min(requested_count))
             .collect();
+        drop(stream_log_records);
         let next_after = after + numbered_records.len() as u64;
         StubToolAnswer::tool_result(
             &serde_json::json!({
                 "stream": arguments.get("stream").cloned().unwrap_or_default(),
+                "stream_instance": stream_instance,
                 "records": numbered_records,
                 "next_after": next_after,
                 "records_no_longer_held": 0,
@@ -709,6 +752,7 @@ impl StubLocalApiServer {
                     .map(|stream_log_records| stream_log_records.records)
                     .unwrap_or_default(),
             ),
+            stream_instance: Mutex::new(STUB_FIRST_STREAM_INSTANCE.to_owned()),
             mcp_stdio_connection_closing_generation: tokio::sync::watch::Sender::new(0),
             fixed_tool_answer: stub_local_api_script
                 .fixed_tool_answer
@@ -829,6 +873,15 @@ impl StubLocalApiServer {
             .extend(appended_records);
     }
 
+    /// Load the stream again as `stream_instance` holding `records`, as a runtime re-loading it
+    /// under the same name does.
+    pub fn re_load_the_stream_as(&self, stream_instance: &str, records: Vec<serde_json::Value>) {
+        self.stub_state.re_load_the_stream_as(StubStreamReLoad {
+            stream_instance: stream_instance.to_owned(),
+            records,
+        });
+    }
+
     /// Close every `/mcp/stdio` connection serving the stub's MCP server, as a runtime that
     /// crashed or was stopped does; the stub keeps accepting new ones.
     pub fn close_every_mcp_stdio_connection(&self) {
@@ -902,6 +955,7 @@ pub fn run_stream_tool_result_text(
 ) -> String {
     serde_json::json!({
         "stream": stream,
+        "stream_instance": STUB_FIRST_STREAM_INSTANCE,
         "kept": kept,
         "project_directory": project_directory,
         "node_count": node_count,

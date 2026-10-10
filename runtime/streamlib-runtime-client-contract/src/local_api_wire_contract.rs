@@ -107,11 +107,27 @@ pub struct TapToolResultBag {
     pub hex_truncated: bool,
 }
 
+/// Which load of a stream a `run_stream` result or a `logs` page is about: opaque, compared only
+/// for equality. A stream re-loaded under the same name is another instance, and numbers its log
+/// records from 1 again.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LoadedStreamInstance(pub String);
+
+impl std::fmt::Display for LoadedStreamInstance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// The `logs` tool's result: one loaded stream's records after the sequence number asked for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogsToolResult {
     /// The stream's cast name.
     pub stream: String,
+    /// The load whose records these are; a page naming another instance than the last numbers
+    /// its records afresh.
+    pub stream_instance: LoadedStreamInstance,
     /// The records after `after`, oldest first.
     pub records: Vec<LogsToolResultRecord>,
     /// The `after` the next call passes to read on from this page.
@@ -134,6 +150,8 @@ pub struct LogsToolResultRecord {
 pub struct RunStreamToolResult {
     /// The name the stream was loaded under.
     pub stream: String,
+    /// This load of it, as its `logs` pages name it.
+    pub stream_instance: LoadedStreamInstance,
     /// Whether the runtime keeps it; else it is attached to the connection that ran it.
     pub kept: bool,
     /// The project the compile ran in.
@@ -380,13 +398,14 @@ mod tests {
         assert_eq!(
             wire_text(&RunStreamToolResult {
                 stream: "camera".to_owned(),
+                stream_instance: LoadedStreamInstance("4".to_owned()),
                 kept: true,
                 project_directory: PathBuf::from("/srv/project"),
                 node_count: 3,
                 replaced_the_kept_record: false,
                 compile_warnings: vec!["tatolab: one warning".to_owned()],
             }),
-            r#"{"stream":"camera","kept":true,"project_directory":"/srv/project","node_count":3,"replaced_the_kept_record":false,"compile_warnings":["tatolab: one warning"]}"#
+            r#"{"stream":"camera","stream_instance":"4","kept":true,"project_directory":"/srv/project","node_count":3,"replaced_the_kept_record":false,"compile_warnings":["tatolab: one warning"]}"#
         );
         assert_eq!(
             wire_text(&StartStreamToolResult {
@@ -425,6 +444,7 @@ mod tests {
         assert_eq!(
             wire_text(&LogsToolResult {
                 stream: "camera".to_owned(),
+                stream_instance: LoadedStreamInstance("4".to_owned()),
                 records: vec![LogsToolResultRecord {
                     sequence: 7,
                     record: serde_json::json!({"message": "hello"}),
@@ -432,7 +452,7 @@ mod tests {
                 next_after: 7,
                 records_no_longer_held: 2,
             }),
-            r#"{"stream":"camera","records":[{"sequence":7,"record":{"message":"hello"}}],"next_after":7,"records_no_longer_held":2}"#
+            r#"{"stream":"camera","stream_instance":"4","records":[{"sequence":7,"record":{"message":"hello"}}],"next_after":7,"records_no_longer_held":2}"#
         );
     }
 

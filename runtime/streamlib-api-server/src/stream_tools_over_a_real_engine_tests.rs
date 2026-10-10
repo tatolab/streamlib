@@ -25,11 +25,10 @@ use streamlib::sdk::descriptors::ProcessorDescriptor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::OutputPortExposureLevel;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::logging::LoadedStreamLogRecordsPage;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
     BoxFuture, ExchangedPublishedSurfaceFramePngImage, KeptStreamRecord,
-    KeptStreamRecordsInTheStateDirectory, LoadedStreamTag,
+    KeptStreamRecordsInTheStateDirectory, LoadedStreamTag, LogRecordsPageOfOneLoadedStream,
     OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
     OutputPortExposureOutcome, RunStreamRequest, Runner, RuntimeOperations, StreamEnvironment,
     StreamListing, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
@@ -352,7 +351,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         stream_name: &str,
         after: u64,
         max_count: usize,
-    ) -> Result<LoadedStreamLogRecordsPage> {
+    ) -> Result<LogRecordsPageOfOneLoadedStream> {
         self.engine
             .log_records_of_the_stream_a_call_names(stream_name, after, max_count)
     }
@@ -609,6 +608,57 @@ async fn an_attached_stream_unloads_when_the_local_api_stops_serving() {
 // ============================================================================
 // logs
 // ============================================================================
+
+/// The instance a `run_stream` result and a `logs` page name is the load's:
+/// the same for every page of one load, and another once the name is loaded
+/// again, whose records are numbered from 1 again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_and_its_logs_pages_name_the_loads_instance_and_a_re_load_names_another() {
+    let runtime = Arc::new(AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt::new());
+    let engine = Arc::clone(&runtime.engine);
+    let served = LocalApiServedOnAFreshSocket::over(runtime);
+    let client = rmcp_client_over_the_upgraded_stream(&served).await;
+    let run_camera_and_read_its_logs = || async {
+        let run = tool_answer(
+            &tool_call_over_the_connection(
+                &client,
+                "run_stream",
+                a_run_request_naming("camera", false),
+            )
+            .await,
+        )
+        .expect("the attached run is answered");
+        let page = tool_answer(
+            &tool_call_over_the_connection(&client, "logs", json!({ "stream": "camera" })).await,
+        )
+        .expect("logs answers");
+        (run, page)
+    };
+
+    let (first_run, first_page) = run_camera_and_read_its_logs().await;
+    let first_instance = first_run["stream_instance"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the run names its instance: {first_run}"))
+        .to_string();
+    assert_eq!(
+        first_instance,
+        engine
+            .loaded_stream_named("camera")
+            .unwrap()
+            .stream_tag()
+            .to_string()
+    );
+    assert_eq!(first_page["stream_instance"], first_instance.as_str());
+    tool_answer(
+        &tool_call_over_the_connection(&client, "stop_stream", json!({ "stream": "camera" })).await,
+    )
+    .expect("the attached stream stops");
+
+    let (re_run, re_loaded_page) = run_camera_and_read_its_logs().await;
+
+    assert_ne!(re_run["stream_instance"], first_instance.as_str());
+    assert_eq!(re_loaded_page["stream_instance"], re_run["stream_instance"]);
+}
 
 /// `logs` reads a stream's records by sequence number: `after` skips what was
 /// read, `count` bounds the page, and `next_after` is where to read on from.
@@ -980,6 +1030,12 @@ async fn a_run_stream_end_to_end_attached_and_kept_through_stop_start_and_remove
         attached,
         json!({
             "stream": "attached",
+            "stream_instance": engine
+                .engine
+                .loaded_stream_named("attached")
+                .unwrap()
+                .stream_tag()
+                .to_string(),
             "kept": false,
             "project_directory": attached_project.path(),
             "node_count": 1,
@@ -1037,10 +1093,11 @@ async fn a_run_stream_end_to_end_attached_and_kept_through_stop_start_and_remove
 }
 
 /// `tatolab dev`'s reload: the connection that attached a stream runs it
-/// again and the engine replaces it, a run whose compile fails leaves the
-/// running stream loaded and attached, another connection's run of the name
-/// is refused, and closing the connection unloads the stream that replaced
-/// the first.
+/// again and the engine replaces it under another instance, a run whose
+/// compile fails leaves the running stream loaded and attached, another
+/// connection's run of the name is refused, a run whose function now compiles
+/// to another name replaces it under that name, and closing the connection
+/// unloads the stream that replaced the first.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
@@ -1097,10 +1154,28 @@ async fn an_attached_run_again_on_its_own_connection_replaces_its_stream_and_no_
     .expect("the attaching connection's run replaces its stream");
     assert_eq!(replaced["stream"], "camera");
     assert_ne!(stream_tag_loaded_as_camera(), first_load);
+    assert_eq!(
+        replaced["stream_instance"],
+        stream_tag_loaded_as_camera().to_string()
+    );
+    assert_ne!(replaced["stream_instance"], first_load.to_string());
+
+    project.compile_to_warning(the_graph_of_a_function_named("studio"), &[]);
+    let renamed = tool_answer(
+        &tool_call_over_the_connection(
+            &attaching_connection,
+            "run_stream",
+            json!({ "project_directory": project.path(), "keep": false }),
+        )
+        .await,
+    )
+    .expect("the attaching connection's run of the renamed function replaces its stream");
+    assert_eq!(renamed["stream"], "studio");
+    assert_eq!(engine.engine.names_of_the_loaded_streams(), ["studio"]);
 
     drop(other_connection);
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(engine.engine.names_of_the_loaded_streams(), ["camera"]);
+    assert_eq!(engine.engine.names_of_the_loaded_streams(), ["studio"]);
     drop(attaching_connection);
     wait_until_the_loaded_streams_are(&engine.engine, &[]).await;
 }

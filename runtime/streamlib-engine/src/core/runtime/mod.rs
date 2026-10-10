@@ -60,7 +60,9 @@ pub(crate) use machine_state_directory::{
     OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+pub use operations_on_the_streams_loaded_in_this_runtime::{
+    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
+};
 pub use runtime::{
     EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
     StreamLoadObservingMachineShutdownRequests,

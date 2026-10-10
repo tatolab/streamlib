@@ -77,6 +77,7 @@ mod tests {
         stream_log_records_page_from(
             &json!({
                 "stream": "camera",
+                "stream_instance": "4",
                 "records": records
                     .iter()
                     .enumerate()

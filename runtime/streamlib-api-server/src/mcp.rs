@@ -69,14 +69,14 @@ use streamlib::sdk::graph::{
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ExchangedPublishedSurfaceFramePngImage, LoadedStreamHolding, LoadedStreamTag,
-    OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest, RuntimeOperations,
-    StreamListingState, StreamRunOutcome,
+    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest,
+    RuntimeOperations, StreamListingState, StreamRunOutcome,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    ListedStreamState, LogsToolResult, LogsToolResultRecord, RemoveStreamToolResult,
-    RunStreamToolResult, StartStreamToolResult, StopStreamToolResult, TapToolResult,
-    TapToolResultBag, surface_image_exchange_route_path_for_surface_id,
+    ListedStreamState, LoadedStreamInstance, LogsToolResult, LogsToolResultRecord,
+    RemoveStreamToolResult, RunStreamToolResult, StartStreamToolResult, StopStreamToolResult,
+    TapToolResult, TapToolResultBag, surface_image_exchange_route_path_for_surface_id,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -641,7 +641,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Read one loaded stream's log records numbered after `after`, oldest first, each as its JSONL log file holds it beside its `sequence`. Pass the result's `next_after` back as `after` to read on; `records_no_longer_held` counts records after `after` the runtime no longer holds in memory, which the stream's JSONL log under its project's `.streamlib/` still has."
+        description = "Read one loaded stream's log records numbered after `after`, oldest first, each as its JSONL log file holds it beside its `sequence`. Pass the result's `next_after` back as `after` to read on; `stream_instance` names the load the records are from, and a page naming another instance than the last is a re-load numbering its records from 1 again, read from `after: 0`. `records_no_longer_held` counts records after `after` the runtime no longer holds in memory, which the stream's JSONL log under its project's `.streamlib/` still has."
     )]
     async fn logs(
         &self,
@@ -654,7 +654,10 @@ impl LocalApiMcpServerHandler {
         let max_count = count
             .unwrap_or(DEFAULT_LOGS_RECORD_COUNT)
             .clamp(1, MAX_LOGS_RECORD_COUNT) as usize;
-        let page = self
+        let LogRecordsPageOfOneLoadedStream {
+            stream_tag,
+            records_page: page,
+        } = self
             .operations_on_the_loaded_streams
             .log_records_of_the_stream_a_call_names(&stream, after.unwrap_or(0), max_count)
             .map_err(|refusal| format!("logs failed: {refusal}"))?;
@@ -662,6 +665,7 @@ impl LocalApiMcpServerHandler {
             "logs",
             &LogsToolResult {
                 stream: the_cast_name_of_a_stream_a_call_named(&stream),
+                stream_instance: the_instance_of_the_load_tagged(stream_tag),
                 records: page
                     .records
                     .into_iter()
@@ -796,7 +800,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the stream this connection attached, from the same project and function, replaces it. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
+        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the stream this connection attached, from the same project and function, replaces it — under the name the function compiles to now when neither run passed `name`. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `stream_instance` names this load, as its `logs` pages do. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
     )]
     async fn run_stream(
         &self,
@@ -853,6 +857,7 @@ impl LocalApiMcpServerHandler {
             "run_stream",
             &RunStreamToolResult {
                 stream: run.stream_name,
+                stream_instance: the_instance_of_the_load_tagged(run.stream_tag),
                 kept: keep,
                 project_directory: run.project_directory,
                 node_count: run.node_count,
@@ -1005,6 +1010,11 @@ fn expose_port_level_on_the_wire(level: OutputPortExposureLevel) -> ExposePortLe
 
 /// The cast name of the stream a call named, as the runtime lists it; the name
 /// as given when it casts to nothing.
+/// The instance a `run_stream` result and a `logs` page name the load tagged `stream_tag` by.
+fn the_instance_of_the_load_tagged(stream_tag: LoadedStreamTag) -> LoadedStreamInstance {
+    LoadedStreamInstance(stream_tag.to_string())
+}
+
 fn the_cast_name_of_a_stream_a_call_named(stream: &str) -> String {
     cast_exposed_name_to_url_safe(stream)
         .map(|stream_cast| stream_cast.into_owned())
@@ -2623,6 +2633,8 @@ pub(crate) mod tests {
             first_text_block_json(&body),
             json!({
                 "stream": STUB_STREAM_NAME,
+                "stream_instance": crate::control_plane_stub_support::the_stub_streams_tag()
+                    .to_string(),
                 "records": [],
                 "next_after": 7,
                 "records_no_longer_held": 0,

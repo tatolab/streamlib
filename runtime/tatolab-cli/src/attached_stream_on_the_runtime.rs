@@ -3,7 +3,8 @@
 
 //! `tatolab run` attached and `tatolab dev`: the stream loaded into the machine's runtime over a
 //! `/mcp/stdio` connection of this process's own, which the runtime ties the stream's life to,
-//! and its records followed by sequence number until a signal stops it. `dev` runs it again on
+//! and its records followed by sequence number — from the first again whenever a page names
+//! another load of it — until a signal stops it. `dev` runs it again on
 //! every settled save over the same connection — the runtime replaces the running stream once the
 //! save compiles, and keeps it when the save does not — and, when the runtime goes away, waits for
 //! it and loads again.
@@ -12,7 +13,9 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use streamlib_runtime_client_contract::local_api_wire_contract::RunStreamToolResult;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    LoadedStreamInstance, RunStreamToolResult,
+};
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -80,15 +83,24 @@ enum FinishedUnlessStopped<CallOutcome> {
     StopSignalDelivered,
 }
 
+/// The attached stream a session follows: its name, the load of it whose records it reads, and
+/// the record it has read up to.
+#[derive(Debug, Clone)]
+struct FollowedAttachedStreamPosition {
+    stream: String,
+    stream_instance: LoadedStreamInstance,
+    after: u64,
+}
+
 /// Where the session goes next.
 enum AttachedStreamSessionStep {
     /// Load the stream over the connection.
     Load,
-    /// `dev` after a save: run the stream again over the connection, which replaces `stream`,
-    /// followed after `after`, once the save compiles.
-    Reload { stream: String, after: u64 },
-    /// Follow the loaded stream's records after `after`.
-    Follow { stream: String, after: u64 },
+    /// `dev` after a save: run the stream again over the connection, which replaces the followed
+    /// stream once the save compiles.
+    Reload(FollowedAttachedStreamPosition),
+    /// Follow the loaded stream's records.
+    Follow(FollowedAttachedStreamPosition),
     /// `dev` with nothing loaded: wait for the next save.
     WaitForTheNextSave,
     /// `dev` without a connection: wait for the runtime's socket, then connect and load.
@@ -198,14 +210,12 @@ impl AttachedStreamSession {
                     Some(connected_client) => self.load(connected_client, None).await,
                     None => AttachedStreamSessionStep::Reconnect,
                 },
-                AttachedStreamSessionStep::Reload { stream, after } => match &connected_client {
-                    Some(connected_client) => {
-                        self.load(connected_client, Some((stream, after))).await
-                    }
+                AttachedStreamSessionStep::Reload(followed) => match &connected_client {
+                    Some(connected_client) => self.load(connected_client, Some(followed)).await,
                     None => AttachedStreamSessionStep::Reconnect,
                 },
-                AttachedStreamSessionStep::Follow { stream, after } => match &connected_client {
-                    Some(connected_client) => self.follow(connected_client, stream, after).await,
+                AttachedStreamSessionStep::Follow(followed) => match &connected_client {
+                    Some(connected_client) => self.follow(connected_client, followed).await,
                     None => AttachedStreamSessionStep::Reconnect,
                 },
             };
@@ -279,11 +289,11 @@ impl AttachedStreamSession {
     }
 
     /// Run the stream over the connection; `running` is the stream this connection already
-    /// attached and the record it was followed after, which the run replaces.
+    /// attached as it was followed, which the run replaces.
     async fn load(
         &mut self,
         connected_client: &LocalApiMcpToolClient,
-        running: Option<(String, u64)>,
+        running: Option<FollowedAttachedStreamPosition>,
     ) -> AttachedStreamSessionStep {
         self.project_sources_changed_during_a_call = false;
         let run_stream_arguments = self.stream_load_request.run_stream_tool_arguments(false);
@@ -318,13 +328,15 @@ impl AttachedStreamSession {
             counted(run_stream_result.node_count, "node"),
             run_stream_result.project_directory.display()
         ));
-        if self.project_sources_changed_during_a_call {
-            return self.reload_after_a_save(run_stream_result.stream, 0);
-        }
-        AttachedStreamSessionStep::Follow {
+        let loaded = FollowedAttachedStreamPosition {
             stream: run_stream_result.stream,
+            stream_instance: run_stream_result.stream_instance,
             after: 0,
+        };
+        if self.project_sources_changed_during_a_call {
+            return self.reload_after_a_save(loaded);
         }
+        AttachedStreamSessionStep::Follow(loaded)
     }
 
     /// Where the session goes after `failure` lost its connection: `run` exits naming the
@@ -358,12 +370,13 @@ impl AttachedStreamSession {
     }
 
     /// Where the session goes after a refused run: `run` exits; `dev` follows the stream the run
-    /// was to replace, which the runtime keeps when the save does not compile, or waits for a
-    /// save when nothing was running.
+    /// was to replace, which the runtime keeps when the save does not compile and loads again
+    /// when the save compiles and its load is refused, or waits for a save when nothing was
+    /// running.
     fn after_a_failed_load(
         &mut self,
         load_failure: LocalApiMcpToolClientFailure,
-        running: Option<(String, u64)>,
+        running: Option<FollowedAttachedStreamPosition>,
     ) -> AttachedStreamSessionStep {
         if let Some(after_a_lost_connection) = self.after_a_lost_connection(&load_failure) {
             return after_a_lost_connection;
@@ -373,12 +386,12 @@ impl AttachedStreamSession {
             AttachedStreamVerb::Dev => {
                 self.note(&load_failure.to_string());
                 match running {
-                    Some((stream, after)) if self.project_sources_changed_during_a_call => {
-                        AttachedStreamSessionStep::Reload { stream, after }
+                    Some(followed) if self.project_sources_changed_during_a_call => {
+                        AttachedStreamSessionStep::Reload(followed)
                     }
-                    Some((stream, after)) => {
+                    Some(followed) => {
                         self.a_refused_reload_left_its_stream_to_confirm = true;
-                        AttachedStreamSessionStep::Follow { stream, after }
+                        AttachedStreamSessionStep::Follow(followed)
                     }
                     None if self.project_sources_changed_during_a_call => {
                         AttachedStreamSessionStep::Load
@@ -392,13 +405,16 @@ impl AttachedStreamSession {
         }
     }
 
+    /// Follow `followed`'s records page by page; a page naming another load of the stream than
+    /// the one followed is set aside, and that load is read from its first record.
     async fn follow(
         &mut self,
         connected_client: &LocalApiMcpToolClient,
-        stream: String,
-        mut after: u64,
+        mut followed: FollowedAttachedStreamPosition,
     ) -> AttachedStreamSessionStep {
         loop {
+            let stream = followed.stream.clone();
+            let after = followed.after;
             let logs_outcome = match self
                 .finish_unless_stopped(
                     connected_client
@@ -422,6 +438,14 @@ impl AttachedStreamSession {
                         .await;
                 }
             };
+            if stream_log_records_page.stream_instance != followed.stream_instance {
+                self.note(&format!(
+                    "{stream} was loaded again — following it from its first record"
+                ));
+                followed.stream_instance = stream_log_records_page.stream_instance;
+                followed.after = 0;
+                continue;
+            }
             let rendered_records = render_stream_log_records_page(
                 &stream,
                 &stream_log_records_page,
@@ -440,9 +464,9 @@ impl AttachedStreamSession {
                 ));
             }
             let page_brought_nothing = stream_log_records_page.next_after == after;
-            after = stream_log_records_page.next_after;
+            followed.after = stream_log_records_page.next_after;
             if self.project_sources_changed_during_a_call {
-                return self.reload_after_a_save(stream, after);
+                return self.reload_after_a_save(followed);
             }
             if !page_brought_nothing {
                 continue;
@@ -534,10 +558,16 @@ impl AttachedStreamSession {
     }
 
     /// `dev` after a settled save: run the stream again over the same connection, which the
-    /// runtime answers by replacing `stream` once the save compiles.
-    fn reload_after_a_save(&self, stream: String, after: u64) -> AttachedStreamSessionStep {
-        self.note(&format!("a saved change — loading {stream} again"));
-        AttachedStreamSessionStep::Reload { stream, after }
+    /// runtime answers by replacing `followed` once the save compiles.
+    fn reload_after_a_save(
+        &self,
+        followed: FollowedAttachedStreamPosition,
+    ) -> AttachedStreamSessionStep {
+        self.note(&format!(
+            "a saved change — loading {} again",
+            followed.stream
+        ));
+        AttachedStreamSessionStep::Reload(followed)
     }
 
     async fn wait_for_the_next_save(&mut self) -> AttachedStreamSessionStep {

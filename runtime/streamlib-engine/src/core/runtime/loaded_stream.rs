@@ -49,7 +49,7 @@ pub struct LoadedStreamTag(NonZeroU32);
 impl LoadedStreamTag {
     /// A tag no stream of this process has carried; refused once every tag
     /// has been handed out, rather than reusing one.
-    pub(crate) fn next_in_this_process() -> Result<Self> {
+    pub fn next_in_this_process() -> Result<Self> {
         static NEXT_LOADED_STREAM_TAG: AtomicU32 = AtomicU32::new(1);
         NEXT_LOADED_STREAM_TAG
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |tag| {

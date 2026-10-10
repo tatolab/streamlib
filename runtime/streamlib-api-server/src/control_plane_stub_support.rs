@@ -150,6 +150,16 @@ pub(crate) const STUB_RUNTIME_NAME: &str = "stub-runtime";
 /// The one stream a stub runtime loads: the stub itself.
 pub(crate) const STUB_STREAM_NAME: &str = "stub-stream";
 
+/// The tag of the stub's one load, the same for every call in this process.
+pub(crate) fn the_stub_streams_tag() -> ::streamlib::sdk::runtime::LoadedStreamTag {
+    static STUB_STREAM_TAG: ::std::sync::OnceLock<::streamlib::sdk::runtime::LoadedStreamTag> =
+        ::std::sync::OnceLock::new();
+    *STUB_STREAM_TAG.get_or_init(|| {
+        ::streamlib::sdk::runtime::LoadedStreamTag::next_in_this_process()
+            .expect("a test process has a stream tag left")
+    })
+}
+
 /// Refuse a call naming a stream other than [`STUB_STREAM_NAME`], in the
 /// engine's words.
 pub(crate) fn refuse_a_stream_the_stub_runtime_does_not_load(
@@ -230,15 +240,19 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 stream_name: &str,
                 after: u64,
                 _max_count: usize,
-            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::logging::LoadedStreamLogRecordsPage>
-            {
+            ) -> ::streamlib::sdk::error::Result<
+                ::streamlib::sdk::runtime::LogRecordsPageOfOneLoadedStream,
+            > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
                     stream_name,
                 )?;
-                Ok(::streamlib::sdk::logging::LoadedStreamLogRecordsPage {
-                    records: Vec::new(),
-                    next_after: after,
-                    records_no_longer_held: 0,
+                Ok(::streamlib::sdk::runtime::LogRecordsPageOfOneLoadedStream {
+                    stream_tag: $crate::control_plane_stub_support::the_stub_streams_tag(),
+                    records_page: ::streamlib::sdk::logging::LoadedStreamLogRecordsPage {
+                        records: Vec::new(),
+                        next_after: after,
+                        records_no_longer_held: 0,
+                    },
                 })
             }
             fn run_stream(
