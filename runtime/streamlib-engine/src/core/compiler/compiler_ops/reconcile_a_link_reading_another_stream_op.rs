@@ -147,11 +147,6 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
         SourceSideOnTheSourceStream::NotYet(reason) => {
             return awaiting_its_source(reason);
         }
-        SourceSideOnTheSourceStream::ClosedToTheReadingStream(refusal) => {
-            return awaiting_its_source(format!(
-                "{refusal}; the link wires when the port is exposed private or public"
-            ));
-        }
         SourceSideOnTheSourceStream::Refused(reason) => {
             return refused(reason);
         }
@@ -259,9 +254,6 @@ fn begin_a_wiring_attempt(
 enum SourceSideOnTheSourceStream {
     Opened(Box<OpenedSourceSideOnTheSourceStream>),
     NotYet(String),
-    /// The source's port is at a level that does not allow the reading
-    /// stream, in the words of that refusal; the link waits for it to open.
-    ClosedToTheReadingStream(String),
     Refused(String),
 }
 
@@ -308,7 +300,9 @@ fn open_the_source_side_on_the_source_stream(
         Ok(registered) => registered,
         Err(refusal @ Error::OutputPortNotExposedToTheReader(_)) => {
             return (
-                SourceSideOnTheSourceStream::ClosedToTheReadingStream(refusal.to_string()),
+                SourceSideOnTheSourceStream::NotYet(format!(
+                    "{refusal}; the link wires when the port is exposed private or public"
+                )),
                 readers_to_drop,
             );
         }
