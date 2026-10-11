@@ -44,18 +44,14 @@ fn a_directory_holding_a_tailscale_cli_writing(
     directory
 }
 
-/// This machine's hostname, read the way the runtime reads it.
+/// This machine's hostname: the kernel's UTS node name, which `gethostname`
+/// returns on Linux.
+#[cfg(target_os = "linux")]
 fn this_hosts_name() -> String {
-    let mut buffer = [0u8; 256];
-    // SAFETY: the buffer is 256 bytes and that is the length passed.
-    let reported =
-        unsafe { libc::gethostname(buffer.as_mut_ptr() as *mut libc::c_char, buffer.len()) };
-    assert_eq!(reported, 0, "the test host reports a hostname");
-    let end = buffer
-        .iter()
-        .position(|&byte| byte == 0)
-        .unwrap_or(buffer.len());
-    String::from_utf8_lossy(&buffer[..end]).into_owned()
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .expect("the test host reports a hostname")
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 /// What `/api/graph` answers a `tatolabd` started with `path` as its `PATH`.
