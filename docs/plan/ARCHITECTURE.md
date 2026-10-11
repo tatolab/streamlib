@@ -21,8 +21,9 @@ fact about the shipped tree until the change that removes them ships and folds i
 direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, runtime-hosting)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-hosting)
 <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
   with the Tatolab runtime on their machine, installs `tatolab-stream` from PyPI into an
@@ -55,8 +56,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   refused naming `stream.py` and `-f`; nodes are Python classes written in the project or
   imported from pip-installed packages, and `stream_builder.add` takes the class; the
   builder is a `StreamBuilder`, its API `add`/`connect`/`expose`.
-  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567,
-  #2569; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
+  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2618,
+  #2655; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
   #2682]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_project_stream_compile_entry.py::test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag -->
@@ -112,8 +113,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   checkable; ruff runs over every render, pyright over the template tree, and the
   cross-floor check gates the output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
-  package-split-and-lend — SHIPPED #2693; amended by stream-graph: the entry file and the
-  nodes' directory re-spelled]
+  stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_depends_on_tatolab_stream_and_numpy_only -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
@@ -158,8 +158,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   or teams — owns the accelerator when one is
   present, serves the machine's local API, and schedules across streams. Every Python node
   keeps its own process, and agents keep changing live graphs. Owner, 2026-09-30.
-  [one-runtime-per-machine; stream-graph; amended by moq-on-the-tailnet: the runtime serves
-  the machine's MoQ endpoint, built at the sharing step]
+  [one-runtime-per-machine; stream-graph — SHIPPED #2612, #2618, #2655; amended by
+  moq-on-the-tailnet: the runtime serves the machine's MoQ endpoint, built at the sharing
+  step]
 - **DECIDED** — What Tatolab is for: a simple SDK for defining live streams as pipes and
   sharing them with people and agents. Tailscale users are the first customers, and Tatolab
   builds nothing Tailscale already does. Robotics and physical-machine systems are out of
@@ -212,12 +213,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `@stream def camera_rig(stream_builder: StreamBuilder)`, and a file or a package may define
   as many as it likes; the bare `setup(stream)` retires rather than living beside it, and a
   package may ship
-  both runnable streams and composable nodes (owner, 2026-09-30). Decided as stream-graph
-  decision 1 (owner, 2026-10-01): the name
-  defaults to the function's and its docstring is the description an agent reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
-  there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one. A
+  both runnable streams and composable nodes (owner, 2026-09-30). The name defaults to the
+  function's and its docstring is the description an agent reads; `run` with no argument
+  runs the sole `@stream` in `stream.py` and refuses by name when there are several
+  (owner, 2026-10-01); `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one. A
   package declaring its streams under an entry-point group is the packs OPEN's.
-  [one-runtime-per-machine; stream-graph — SHIPPED #2567; authoring-names — SHIPPED #2682]
+  [one-runtime-per-machine; stream-graph — SHIPPED #2618; authoring-names — SHIPPED #2682]
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
   stays flat and addresses stay `<machine>/<stream>/<node>/<port>`; no group label and no nested
@@ -784,7 +785,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ stream-graph, runtime-hosting)
+## Processor model & scheduling — IN-FLIGHT (→ runtime-hosting)
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -1058,7 +1060,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --test compile_fail_config_without_json_schema -->
   <!-- verify: cargo test -p streamlib-processor-schema the_document_is_2020_12_with_no_schema_key_and_no_definitions_keyword -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-13-agent-readable-processor-catalog.md -->
-- **DECIDED** — The Python half, as built. `@processor` reads `__init__` through
+- **DECIDED** — The Python half, as built. `@node` reads `__init__` through
   `typing.get_type_hints(..., include_extras=True)`: a `config` parameter annotated with
   a class names the config class; an `__init__` taking nothing beyond `self`, or none at
   all, declares no config; every other signature — a keyword parameter or several,
@@ -1369,7 +1371,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   with an error naming the fix (move the class to an importable module and import it
   from the entry file — one import line). The entry file itself may still run as
   `__main__`; only processor classes may not live there.
-  `@processor` declares execution, interval, scheduling
+  `@node` declares execution, interval, scheduling
   priority, and description only. Mechanically means at the authoring seam, never from a
   runtime reflection API: Rust captures the type path where the macro expands, because
   `std::any::type_name`'s output format is unspecified across compiler versions and must
@@ -1402,26 +1404,23 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   constructor together.
   [agent-readable-processor-catalog — SHIPPED #2228; package-split-and-lend — SHIPPED #2686,
   #2689]
-- **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
-  readable off the returned handle, and the prefix on its log records; it defaults to
-  the class's short name and the engine disambiguates duplicates within one graph. It is
-  also the processor's part of its port address `<runtime name>/<display name>/<port>`
-  (§Networking), so renaming a processor re-addresses its ports. Being part of that address
-  is what bounds it: `add`
-  refuses a requested display name that is empty, contains `/`, `*`, `$`, `#` or `?`, or
-  begins with `@`, naming the character and the fix, in Rust and in MCP
-  `add_processor` alike. Spaces and unicode stay legal, and a class's short name and the
-  engine's ` 2` suffix always pass, so no default display name is ever refused.
+- **DECIDED** — A node's name is the human-facing label — passed at `add`, readable off the
+  returned `NodeReference`, and the prefix on its log records; it defaults to the class's
+  short name. It is also the node's part of its port address (§Networking, the address), so
+  renaming a node re-addresses its ports. Being part of that address is what bounds it: a
+  name is cast to the address grammar, never refused for its spelling, and is unique in its
+  graph once cast. A defaulted duplicate takes the next unused `-2`, `-3` …; a duplicate the
+  author typed — two typed names casting alike — is refused by name and adds nothing, at the
+  builder's `add` naming both on the author's own line, and at the engine's live add. The
+  builder resolves every name before the graph is emitted, because only it knows a typed
+  name from a defaulted one; the engine applies the same cast, `-2` and refusal to a live add,
+  one rule at two seams proven on the same inputs.
   Identity is never derived from it — and neither is the default: a descriptor carries
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting would re-invent an identity grammar.
-  [processor-class-identity — SHIPPED #1838, #1841; runtime-mesh — SHIPPED #2282; reopened
-  by one-runtime-per-machine: whether addresses gain a stream level; amended by
-  one-runtime-per-machine: a duplicate the author typed is refused by name, and only a
-  defaulted duplicate is disambiguated — stream-graph builds it; amended by runtime-hosting
-  decision 3: a name is cast to the address grammar (§Networking, the address) and a
-  defaulted duplicate takes `-2`, replacing spaces, unicode, ` 2` and the character
-  refusals]
+  [processor-class-identity — SHIPPED #1838, #1841; runtime-mesh — SHIPPED #2282;
+  stream-graph — SHIPPED #2614, #2618; reopened by one-runtime-per-machine: whether
+  addresses gain a stream level]
   <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: cargo test -p streamlib-engine --test node_name_test a_typed_duplicate_is_refused_by_name_and_adds_nothing -->
@@ -1431,10 +1430,18 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   configuration dials. [execution-model]
 - **DECIDED** — A graph is data: a stream's `@stream` function compiles to the stream's graph, a
   serializable description a runtime runs — nodes by class import path with their config and
-  name, the links, and what the stream exposes. It is one shape with what `graph` renders: the
-  engine's existing round-trippable snapshot extended, rendered live with state and counters
-  beside the spec, never a second format (sentence 1; the one-shape reading follows engine
-  doctrine). [one-runtime-per-machine; stream-graph]
+  name, the links, and what the stream exposes. It is one shape with what `graph` renders,
+  never a second format: the spec keys are `stream`, `nodes` (each `name`, `type`, `config`),
+  `links` (each `source` and `target`, an end being `{node, port}` by the node's resolved
+  name) and `exposed` (each `node`, `port`, `level`), and `graph` renders exactly these with
+  its live keys — `id`, `ports`, link state, counters — beside them. A load reads the spec
+  keys and skips the live ones, so `graph`'s own output is a loadable graph; there is no
+  saver, because the render is the export. A load refuses by name a node name two nodes cast
+  to, a link end naming a node or port the graph does not hold, an unregistered `type`, and
+  an exposure naming a node or an output the graph does not hold.
+  [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2708]
+  <!-- verify: cargo test -p streamlib-engine --test graph_snapshot_round_trip_test -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::every_key_graph_renders_is_one_a_load_reads_or_skips -->
 - **DECIDED** — The graph is emitted, never authored. A stream's function produces it, the
   runtime exports the live one in the same shape, and nobody writes one by hand as the source
   of a stream — a stream's source is its Python, which keeps the retired manifest retired. On
@@ -1442,7 +1449,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   changes the live graph, and keeps the change only by changing the code (owner, 2026-09-30).
   "The function" is the graph it compiled to at its last load: a kept stream re-loads that
   recorded graph, and picking up a changed source is another `run -d` (§Product, how a
-  stream is loaded and kept). [one-runtime-per-machine; stream-graph]
+  stream is loaded and kept). The only writers of a graph are the builder and the render; a
+  load accepts a document because the render is one, and nothing documents hand-writing it.
+  [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618]
 - **DECIDED** — The runtime refuses by name what a graph holds that it does not understand,
   at load and before a frame flows. Every built-in's config takes
   `#[serde(deny_unknown_fields)]`, and the refusal names the node, its `type` and the setting;
@@ -2925,7 +2934,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   reaches a Python kernel through a DLPack landing copy and never by bare surface id,
   which is the camera's existing gap carried, not a new one.
   [python-codec-block-api — SHIPPED #2105; macos-capability-parity — SHIPPED #2413;
-  stream-graph — SHIPPED #2567; package-split-and-lend — SHIPPED #2684, #2693]
+  stream-graph — SHIPPED #2618; package-split-and-lend — SHIPPED #2684, #2693]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
   <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
@@ -3169,7 +3178,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `core/nal_unit_raw_byte_sequence_payload.rs`, re-exported through `streamlib::sdk`, so
   nothing it reads sits under the Vulkan Video tree.
   [opus-mp4-recording-rung — SHIPPED #2126, #2128; macos-capability-parity — SHIPPED #2414;
-  stream-graph — SHIPPED #2567; package-split-and-lend — SHIPPED #2684]
+  stream-graph — SHIPPED #2618; package-split-and-lend — SHIPPED #2684]
   <!-- verify: pytest tests/stream-on-runtime/test_opus_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest tests/stream-on-runtime/test_mp4_sink.py::test_two_encoders_wire_into_the_one_input_without_an_adapter -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
@@ -3245,7 +3254,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   prompt's exact wording under `SMAppService` is an acceptance check of the installer change.
   Owner, 2026-10-01, on #2560's research. [runtime-hosting; one-runtime-per-machine]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ stream-graph, runtime-hosting)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ runtime-hosting)
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -3304,11 +3314,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   tokio runtime and the rustls provider once, on first use, in whichever process the
   sessions run in. [networking-extension-wheels — SHIPPED #2150; package-split-and-lend —
   SHIPPED #2673, #2691]
-- **DECIDED** — `WhipPublisher`: `@processor`, one fan-in input `tracks` (`ordered`), the
+- **DECIDED** — `WhipPublisher`: `@node`, one fan-in input `tracks` (`ordered`), the
   `Mp4Sink` shape — each inbound link is one RTP track, video or audio by the bag's
   `codec`, the session's SDP built from the links `inbound_link_names` reports at
   `setup()`; config `url` and optional `bearer_token`. `WhepPlayer`:
-  `@processor(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
+  `@node(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
   `url` and optional `bearer_token`; `start()` hands `ctx.outputs` to a processor-owned
   thread that connects, drains the session and writes bag literals — extent from the SPS,
   `group_index` advancing on each IDR and `sequence_index` within it, `is_sync_point` from
@@ -3450,7 +3460,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting;
-  amended by moq-on-the-tailnet: a machine name is its tailnet name (the entry below)]
+  stream-graph — SHIPPED #2614, #2618, #2658; amended by moq-on-the-tailnet: a machine name is
+  its tailnet name (the entry below)]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_names_the_port_a_fixture_address_parses_to -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_refuses_a_fixture_address_naming_no_port_where_it_is_written -->
@@ -3471,7 +3482,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   door bypasses it, and a stream's own logs are how its insides are seen. Nothing leaves the
   machine until a port is public. The CLI and the app list every running stream with its
   private and public ports; an internal port may be listed and is never readable. Owner,
-  2026-10-04. [exposure-levels; one-runtime-per-machine; stream-graph; amended by
+  2026-10-04. [exposure-levels; one-runtime-per-machine; stream-graph — SHIPPED #2708; amended by
   moq-on-the-tailnet: off the machine a public port is read over MoQ on the tailnet, and at a
   relay once the machine has joined one; machines are listed from Tailscale's status and asked
   for their public ports]
@@ -3777,8 +3788,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   custom module system is needed. [one-runtime-per-machine; package-split-and-lend — SHIPPED
   #2673, #2697]
 
-## Control plane & observability — IN-FLIGHT (→ stream-graph, runtime-hosting)
+## Control plane & observability — IN-FLIGHT (→ runtime-hosting)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3848,10 +3860,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `node-catalog`, listing `nodes`, each under the `type` `add_node` takes; the instructions and
   the prompts say node — `insert_node_between_linked_nodes` among them. `runtime_name` stays
   until one runtime hosts several streams and the address gains its machine and stream. The
-  engine's Rust identifiers keep "processor" until the rename. It ships with the graph's one
-  shape. Owner, 2026-10-02. [local-api; stream-graph; zenoh-and-moq-wheel-removal — SHIPPED
-  #2643, #2645; amended by moq-on-the-tailnet: `tap`'s channel goes with `tap`, at the sharing
-  step]
+  engine's Rust identifiers keep "processor" until the rename. Owner, 2026-10-02. [local-api;
+  stream-graph — SHIPPED #2614; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; amended by
+  moq-on-the-tailnet: `tap`'s channel goes with `tap`, at the sharing step]
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_states_the_link_id_and_the_links_state -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_resolves_each_ends_node_by_its_cast_name -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_takes_its_stream_and_a_link_id_alone -->
