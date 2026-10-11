@@ -6,9 +6,8 @@
 //! abandoned by its teardown watchdog. Starts real streams, so these run on
 //! the rig only.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Condvar, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use serial_test::serial;
 
@@ -17,12 +16,17 @@ use crate::core::graph::{
     InputLinkPortRef, LinkUniqueId, OutputPortExposureLevel, OutputPortInAnotherStreamOnThisMachine,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
-use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
 use crate::core::test_support::a_temporary_directory_at_owner_only_mode;
 use crate::core::{Result, RuntimeContextLimitedAccess};
 
-/// How long a test waits for something the engine does on its own threads.
-const THE_ENGINE_ANSWERS_WITHIN: Duration = Duration::from_secs(20);
+use crate as the_engine_under_test;
+#[path = "../../../tests/support/links_between_streams_harness.rs"]
+mod links_between_streams_harness;
+use links_between_streams_harness::{
+    EveryEventOfOneStream, THE_ENGINE_ANSWERS_WITHIN, bags_tallied_as,
+    reads_awaiting_remote_because, reads_wired, start, tally_bags_read,
+    the_link_as_graph_renders_it, wait_until_tallied,
+};
 
 /// Publishes a bag on `video` every few milliseconds.
 #[crate::processor(execution = continuous(interval_ms = 2), output("video"))]
@@ -43,10 +47,6 @@ pub struct BagTallyingSinkOfALinkBetweenStreamsConfig {
     pub tally: String,
 }
 
-/// Every sink's tally by name, and the signal a sink raises on each bag.
-static BAG_TALLIES: LazyLock<(Mutex<HashMap<String, usize>>, Condvar)> =
-    LazyLock::new(|| (Mutex::default(), Condvar::new()));
-
 /// Counts every bag that reaches `video`.
 #[crate::processor(
     execution = reactive,
@@ -62,39 +62,10 @@ impl crate::core::ReactiveProcessor for BagTallyingSinkOfALinkBetweenStreams::Pr
             read += 1;
         }
         if read > 0 {
-            let (tallies, a_bag_arrived) = &*BAG_TALLIES;
-            *tallies
-                .lock()
-                .unwrap()
-                .entry(self.config.tally.clone())
-                .or_default() += read;
-            a_bag_arrived.notify_all();
+            tally_bags_read(&self.config.tally, read);
         }
         Ok(())
     }
-}
-
-fn bags_tallied_as(tally: &str) -> usize {
-    BAG_TALLIES
-        .0
-        .lock()
-        .unwrap()
-        .get(tally)
-        .copied()
-        .unwrap_or(0)
-}
-
-/// Wait until `tally` counts at least `at_least` bags, saying whether it did.
-fn wait_until_tallied(tally: &str, at_least: usize) -> bool {
-    let (tallies, a_bag_arrived) = &*BAG_TALLIES;
-    let (tallies, _) = a_bag_arrived
-        .wait_timeout_while(
-            tallies.lock().unwrap(),
-            THE_ENGINE_ANSWERS_WITHIN,
-            |tallies| tallies.get(tally).copied().unwrap_or(0) < at_least,
-        )
-        .unwrap();
-    tallies.get(tally).copied().unwrap_or(0) >= at_least
 }
 
 fn ensure_the_test_processors_are_registered() {
@@ -133,95 +104,8 @@ fn add_a_display_tallying_into(
     InputLinkPortRef::new(display.processor_id, "video")
 }
 
-fn start(stream: &Arc<LoadedStreamInThisRuntime>) {
-    stream.start().expect("the stream starts");
-    stream
-        .wait_until_every_processor_is_running(THE_ENGINE_ANSWERS_WITHIN)
-        .expect("every processor of the stream runs");
-}
-
 fn camera_video_of_the_stream_a() -> OutputPortInAnotherStreamOnThisMachine {
     OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "video").unwrap()
-}
-
-fn the_link_as_graph_renders_it(
-    stream: &LoadedStreamInThisRuntime,
-    link_id: &LinkUniqueId,
-) -> serde_json::Value {
-    stream.to_json().expect("the graph renders")["links"]
-        .as_array()
-        .and_then(|links| links.iter().find(|link| link["id"] == link_id.as_str()))
-        .cloned()
-        .unwrap_or(serde_json::Value::Null)
-}
-
-struct ForwardsEveryEvent(std::sync::mpsc::Sender<()>);
-
-impl EventListener for ForwardsEveryEvent {
-    fn on_event(&mut self, _event: &Event) -> Result<()> {
-        let _ = self.0.send(());
-        Ok(())
-    }
-}
-
-/// Every event on one stream's topic, as a signal to look at its graph again.
-struct EveryEventOfOneStream {
-    _listener: Arc<parking_lot::Mutex<dyn EventListener>>,
-    an_event_arrived: std::sync::mpsc::Receiver<()>,
-}
-
-impl EveryEventOfOneStream {
-    fn listen_to(stream: &LoadedStreamInThisRuntime) -> Self {
-        let (forward, an_event_arrived) = std::sync::mpsc::channel();
-        let listener: Arc<parking_lot::Mutex<dyn EventListener>> =
-            Arc::new(parking_lot::Mutex::new(ForwardsEveryEvent(forward)));
-        PUBSUB
-            .subscribe(
-                &topics::loaded_stream(stream.loaded_stream_identity()),
-                Arc::clone(&listener),
-            )
-            .expect("the listener subscribes");
-        Self {
-            _listener: listener,
-            an_event_arrived,
-        }
-    }
-
-    /// Wait, looking again at each event, until link `link_id` of `stream`
-    /// renders as `holds` wants it; the last rendering either way.
-    fn until_the_link(
-        &self,
-        stream: &LoadedStreamInThisRuntime,
-        link_id: &LinkUniqueId,
-        holds: impl Fn(&serde_json::Value) -> bool,
-    ) -> serde_json::Value {
-        let deadline = Instant::now() + THE_ENGINE_ANSWERS_WITHIN;
-        loop {
-            let rendered = the_link_as_graph_renders_it(stream, link_id);
-            if holds(&rendered) {
-                return rendered;
-            }
-            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
-                return rendered;
-            };
-            if self.an_event_arrived.recv_timeout(left).is_err() {
-                return the_link_as_graph_renders_it(stream, link_id);
-            }
-        }
-    }
-}
-
-fn reads_wired(link: &serde_json::Value) -> bool {
-    link["state"] == "wired"
-}
-
-fn reads_awaiting_remote_because(why: &'static str) -> impl Fn(&serde_json::Value) -> bool {
-    move |link| {
-        link["state"] == "awaiting_remote"
-            && link["awaiting_remote_reason"]
-                .as_str()
-                .is_some_and(|reason| reason.contains(why))
-    }
 }
 
 /// One engine, its streams' project directory, and the streams `a`, holding
