@@ -155,25 +155,21 @@ mod tests {
         );
     }
 
-    fn tatolabd_in_an_app_bundle(app_bundle_root: &Path) -> PathBuf {
-        let app_bundle_contents = app_bundle_root.join(APP_BUNDLE_CONTENTS_DIRECTORY_NAME);
-        for app_bundle_directory in [
-            APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME,
-            "Frameworks",
-            "Resources",
-        ] {
-            std::fs::create_dir_all(app_bundle_contents.join(app_bundle_directory)).unwrap();
-        }
-        app_bundle_contents
-            .join(APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME)
-            .join("tatolabd")
+    /// An app bundle's `Contents` under `parent_directory`, with `tatolabd`'s
+    /// directory made, and the path `tatolabd` would have in it.
+    fn tatolabd_in_an_app_bundle(parent_directory: &Path) -> (PathBuf, PathBuf) {
+        let app_bundle_contents = parent_directory
+            .join("Tatolab.app")
+            .join(APP_BUNDLE_CONTENTS_DIRECTORY_NAME);
+        let executable_directory = app_bundle_contents.join(APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME);
+        std::fs::create_dir_all(&executable_directory).unwrap();
+        (app_bundle_contents, executable_directory.join("tatolabd"))
     }
 
-    fn lend_the_app_bundle(app_bundle_root: &Path) {
-        let bootstrap =
-            processor_interpreter_bootstrap_path(&lend_directory_in_the_app_bundle_contents(
-                &app_bundle_root.join(APP_BUNDLE_CONTENTS_DIRECTORY_NAME),
-            ));
+    fn lend_the_app_bundle(app_bundle_contents: &Path) {
+        let bootstrap = processor_interpreter_bootstrap_path(
+            &lend_directory_in_the_app_bundle_contents(app_bundle_contents),
+        );
         std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
         std::fs::write(&bootstrap, "").unwrap();
     }
@@ -181,48 +177,35 @@ mod tests {
     #[test]
     fn the_lend_is_found_in_the_resources_of_the_app_bundle_holding_the_executable() {
         let temporary_directory = tempfile::TempDir::new().unwrap();
-        let app_bundle_root = temporary_directory
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("Tatolab.app");
-        let executable = tatolabd_in_an_app_bundle(&app_bundle_root);
-        lend_the_app_bundle(&app_bundle_root);
+        let (app_bundle_contents, executable) =
+            tatolabd_in_an_app_bundle(&temporary_directory.path().canonicalize().unwrap());
+        lend_the_app_bundle(&app_bundle_contents);
 
         assert_eq!(
             the_lend_beside_the_executable(&executable).unwrap(),
-            app_bundle_root
-                .join(APP_BUNDLE_CONTENTS_DIRECTORY_NAME)
-                .join(LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS)
+            app_bundle_contents.join(LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS)
         );
     }
 
     #[test]
     fn the_app_bundles_lend_is_preferred_over_a_runtime_unit_shaped_lend_in_contents() {
         let temporary_directory = tempfile::TempDir::new().unwrap();
-        let app_bundle_root = temporary_directory
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("Tatolab.app");
-        let executable = tatolabd_in_an_app_bundle(&app_bundle_root);
-        lend_the_app_bundle(&app_bundle_root);
-        a_runtime_unit_with_its_lend(&app_bundle_root.join(APP_BUNDLE_CONTENTS_DIRECTORY_NAME));
+        let (app_bundle_contents, executable) =
+            tatolabd_in_an_app_bundle(&temporary_directory.path().canonicalize().unwrap());
+        lend_the_app_bundle(&app_bundle_contents);
+        a_runtime_unit_with_its_lend(&app_bundle_contents);
 
         assert_eq!(
             the_lend_beside_the_executable(&executable).unwrap(),
-            lend_directory_in_the_app_bundle_contents(
-                &app_bundle_root.join(APP_BUNDLE_CONTENTS_DIRECTORY_NAME)
-            )
+            lend_directory_in_the_app_bundle_contents(&app_bundle_contents)
         );
     }
 
     #[test]
     fn an_app_bundle_with_no_lend_is_refused_naming_both_places_it_looked() {
         let temporary_directory = tempfile::TempDir::new().unwrap();
-        let app_bundle_root = temporary_directory.path().join("Tatolab.app");
-        let executable = tatolabd_in_an_app_bundle(&app_bundle_root);
-        let app_bundle_contents = app_bundle_root.join(APP_BUNDLE_CONTENTS_DIRECTORY_NAME);
+        let (app_bundle_contents, executable) =
+            tatolabd_in_an_app_bundle(temporary_directory.path());
 
         let refusal = the_lend_beside_the_executable(&executable).unwrap_err();
 
