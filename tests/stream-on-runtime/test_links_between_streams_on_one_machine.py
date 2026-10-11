@@ -463,7 +463,7 @@ def test_a_link_naming_another_machine_is_refused_by_name(
         ),
         (
             b_linking_into_another_streams_input,
-            ("A link is only pulled", "there is no `remote_input`"),
+            ("A link is only pulled", "no reference names another stream's input"),
         ),
     ],
     ids=["a-dot-chunk", "one-chunk", "five-chunks", "into-another-streams-input"],

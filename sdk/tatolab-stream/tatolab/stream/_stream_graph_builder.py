@@ -493,8 +493,8 @@ class StreamBuilder:
             f"connect's destination must name an input port of a node this stream added: "
             f"`stream_builder.add(...).input(port_name)`. Got {destination!r}, a port named "
             f"by its address. A link is only pulled — the stream that owns the input "
-            f"creates it — so no stream links into another's input, and there is no "
-            f"`remote_input`. Connect in the reading stream's function instead, its source "
+            f"creates it — so no stream links into another's input, and no reference names "
+            f"another stream's input. Connect in the reading stream's function instead, its source "
             f"`stream_builder.remote_output(\"{source_address_the_reading_stream_writes}\")`"
             f"{how_this_stream_offers_the_source}."
         )

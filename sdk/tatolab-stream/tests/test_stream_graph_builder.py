@@ -1029,7 +1029,7 @@ def test_connect_refuses_an_address_as_its_destination_because_a_link_is_only_pu
     message = str(refusal.value)
     assert message.startswith("connect's destination must name an input port")
     assert "A link is only pulled — the stream that owns the input creates it" in message
-    assert "there is no `remote_input`" in message
+    assert "no reference names another stream's input" in message
     assert (
         'its source `stream_builder.remote_output("rig/frameinverter/video_to_downstream")`, '
         "once this stream exposes that output with `stream_builder.expose(...)`."
@@ -1061,7 +1061,7 @@ def test_connect_refuses_addresses_at_both_ends_naming_the_source_as_the_reader_
         )
 
     message = str(refusal.value)
-    assert "there is no `remote_input`" in message
+    assert "no reference names another stream's input" in message
     assert message.endswith(fix_the_refusal_ends_with)
 
 
