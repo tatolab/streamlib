@@ -20,7 +20,8 @@ carries the stream key as a path segment, and argv is world-readable through
 `/proc`. Neither is logged, printed, or written to the output directory.
 
 `whip_whep_roundtrip.sh` runs it with `tatolab run`, which hands a stream no
-argv, so the devices arrive in the environment too: `STREAMLIB_CAMERA_DEVICE`
+argv, so the devices arrive in the environment too — the runtime's, which the
+compile inherits: `STREAMLIB_CAMERA_DEVICE`
 names the V4L2 node (else the first the engine finds), and
 `STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` the audio device to capture from — the
 driver passes the fixture sink's monitor, so the known signal played into that
