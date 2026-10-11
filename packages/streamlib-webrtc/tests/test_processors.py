@@ -143,7 +143,8 @@ ENGINE_VARIABLES_THE_RUNTIME_DOES_NOT_INHERIT = (
 #: Covers starting each Python node's interpreter to describe it, on a cold runner.
 LOAD_DEADLINE_SECONDS = 120.0
 SERVING_DEADLINE_SECONDS = 30.0
-UNLOAD_LINE_DEADLINE_SECONDS = 10.0
+LOCAL_API_PROBE_DEADLINE_SECONDS = 5.0
+LOAD_AND_UNLOAD_LINES_DEADLINE_SECONDS = 10.0
 STOP_DEADLINE_SECONDS = 30.0
 
 
@@ -157,15 +158,17 @@ def _runtime_unit_executable(executable: Path) -> Path:
 
 
 def _a_runtime_answers_at_the_local_api_socket() -> bool:
-    return (
-        subprocess.run(
+    try:
+        streams_probe = subprocess.run(
             [str(_runtime_unit_executable(TATOLAB_EXECUTABLE)), "streams"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-        ).returncode
-        == 0
-    )
+            timeout=LOCAL_API_PROBE_DEADLINE_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return streams_probe.returncode == 0
 
 
 class TatolabdWithNoVulkanDriver:
@@ -338,14 +341,16 @@ def node_names_loaded_by_tatolabd(
             f"tatolabd:\n{tatolabd.standard_error_text_since(standard_error_mark)[-8000:]}"
         )
 
-    start_began = None
-    unload = None
-    unload_line_deadline = time.monotonic() + UNLOAD_LINE_DEADLINE_SECONDS
+    # Both lines reach this process through the drain thread, which can trail
+    # `tatolab run`'s exit.
+    load_and_unload_lines_deadline = time.monotonic() + LOAD_AND_UNLOAD_LINES_DEADLINE_SECONDS
     while True:
         standard_error_text = tatolabd.standard_error_text_since(standard_error_mark)
         start_began = STREAM_START_BEGAN_LINE.search(standard_error_text)
         unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LINE.search(standard_error_text)
-        if start_began is None or unload is not None or time.monotonic() > unload_line_deadline:
+        if (start_began is not None and unload is not None) or (
+            time.monotonic() > load_and_unload_lines_deadline
+        ):
             break
         time.sleep(0.05)
 
