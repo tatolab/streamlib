@@ -353,7 +353,8 @@ fn this_machines_tailnet_dns_name_from_the_local_tailscale() -> std::result::Res
 }
 
 /// Run `tailscale_cli status --json --peers=false` and read what it writes,
-/// ending it once `timeout` passes without its status.
+/// ending it once `timeout` passes before it has written its status and
+/// ended.
 fn read_the_tailscale_status_of_this_machine_alone(
     tailscale_cli: &Path,
     timeout: Duration,
@@ -383,15 +384,22 @@ fn read_the_tailscale_status_of_this_machine_alone(
             "its standard output was not piped".to_string(),
         ));
     };
+    let tailscale_process_id = tailscale_process.id();
     let (status_bytes_sender, status_bytes_receiver) = mpsc::channel();
     let spawned_reader = std::thread::Builder::new()
         .name("tailscale-status-reader".to_string())
         .spawn(move || {
             let mut status_bytes = Vec::new();
-            let read = tailscale_standard_output
+            let read_and_ended = tailscale_standard_output
                 .read_to_end(&mut status_bytes)
-                .map(|_| status_bytes);
-            let _ = status_bytes_sender.send(read);
+                .map_err(|not_read| not_read.to_string())
+                .and_then(|_| {
+                    wait_until_the_child_ends_leaving_it_unreaped(tailscale_process_id).map_err(
+                        |not_awaited| format!("its end could not be awaited: {not_awaited}"),
+                    )
+                })
+                .map(|()| status_bytes);
+            let _ = status_bytes_sender.send(read_and_ended);
         });
     if let Err(not_spawned) = spawned_reader {
         end_the_tailscale_process(tailscale_process);
@@ -407,9 +415,7 @@ fn read_the_tailscale_status_of_this_machine_alone(
         },
         Ok(Err(not_read)) => {
             end_the_tailscale_process(tailscale_process);
-            Err(WhyTheTailscaleStatusWasNotRead::ReadFailed(
-                not_read.to_string(),
-            ))
+            Err(WhyTheTailscaleStatusWasNotRead::ReadFailed(not_read))
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             end_the_tailscale_process(tailscale_process);
@@ -420,6 +426,32 @@ fn read_the_tailscale_status_of_this_machine_alone(
             Err(WhyTheTailscaleStatusWasNotRead::ReadFailed(
                 "its reader ended without the status".to_string(),
             ))
+        }
+    }
+}
+
+/// Block until child process `process_id` of this process has ended, leaving
+/// it unreaped: the `Child` that owns it reaps it, so its id is never freed
+/// while that `Child` may still signal it.
+fn wait_until_the_child_ends_leaving_it_unreaped(process_id: u32) -> std::io::Result<()> {
+    loop {
+        // SAFETY: `waitid` writes at most one `siginfo_t` into `ended`, which
+        // lives across the call.
+        let mut ended: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let waited = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                process_id as libc::id_t,
+                &mut ended,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if waited == 0 {
+            return Ok(());
+        }
+        let not_awaited = std::io::Error::last_os_error();
+        if not_awaited.kind() != std::io::ErrorKind::Interrupted {
+            return Err(not_awaited);
         }
     }
 }
@@ -792,6 +824,33 @@ printf '{"BackendState":"Running","Self":{"DNSName":"desk.tail2950db.ts.net."}}'
         assert!(
             started.elapsed() < Duration::from_secs(60),
             "the read gave up at its timeout rather than waiting the CLI out"
+        );
+    }
+
+    /// A CLI that closes its standard output and then lingers is ended at the
+    /// timeout, whole status written or not.
+    ///
+    /// Fail-without-fix: bound only the read to the end of its output and the
+    /// read waits the lingering CLI out.
+    #[test]
+    fn a_cli_that_closes_its_output_and_lingers_is_ended_at_the_timeout() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let lingering = a_stub_tailscale_cli(
+            directory.path(),
+            r#"printf '{"BackendState":"Running","Self":{"DNSName":"desk.tail2950db.ts.net."}}'
+exec >&-
+exec sleep 600"#,
+        );
+        let started = std::time::Instant::now();
+        let read =
+            read_the_tailscale_status_of_this_machine_alone(&lingering, Duration::from_millis(200));
+        assert!(
+            matches!(read, Err(WhyTheTailscaleStatusWasNotRead::TimedOut(_))),
+            "{read:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the read waited the lingering CLI out"
         );
     }
 
