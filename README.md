@@ -610,9 +610,9 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
 - **`the machine runtime lock cannot be taken: /Library/Application Support/Tatolab … does not
   exist`** (macOS) — Tatolab.app creates the lock at first launch; without it, run the `sudo`
   commands the refusal names, once.
-- **`No display surface available: … neither does the systemd user manager's`** — the runtime runs
-  as a service and no desktop session is logged in to give it a display. Log in, then start the
-  stream again.
+- **`No display surface available: … this runtime named no display server when its GPU context was
+  created`** — the runtime started before a desktop session gave it a display, as at boot with
+  linger. Log in, then `systemctl --user restart tatolabd`.
 - **``… has no .venv/bin/python; run `uv sync` in …``** — the runtime compiles a stream in the
   `.venv` of its project directory: the working directory, or `--dir`. Create it with `uv sync`.
 - **``… cannot import `tatolab.stream`: add `tatolab-stream` to the project's dependencies``** —

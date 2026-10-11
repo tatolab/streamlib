@@ -11,14 +11,12 @@
 //! into it — before the GPU context is created, never after: NVIDIA's driver
 //! reads `DISPLAY` once, at `vkCreateInstance`, and an X11 swapchain made on an
 //! instance created without it jumps to a null pointer (595.99, measured
-//! 2026-10-11). A runtime whose GPU context was created naming no display is
-//! refused every window by name instead.
+//! 2026-10-11). A runtime whose GPU context was created naming no display
+//! says so in every window refusal instead.
 
 use std::sync::Mutex;
 
 use zbus::blocking::{Connection, Proxy};
-
-use crate::core::error::{Error, Result};
 
 const SYSTEMD_MANAGER_SERVICE: &str = "org.freedesktop.systemd1";
 const SYSTEMD_MANAGER_PATH: &str = "/org/freedesktop/systemd1";
@@ -141,20 +139,19 @@ pub fn take_the_display_server_from_the_user_manager_when_this_process_names_non
     );
 }
 
-/// Refuse a window by name when this process names no display server, which
-/// it can no longer take: its GPU context was created without one.
-pub fn ensure_this_process_names_a_display_server() -> Result<()> {
+/// Why this process names no display server, when it names none: its GPU
+/// context was created without one, so no later one can be taken.
+pub fn why_this_process_names_no_display_server() -> Option<&'static str> {
     if this_process_names_a_display_server() {
-        return Ok(());
+        return None;
     }
-    Err(Error::DisplaySurfaceUnavailable(
+    Some(
         "this runtime named no display server when its GPU context was created: neither \
          WAYLAND_DISPLAY nor DISPLAY was set in its environment or in the systemd user manager's. \
          A display a desktop session brings later cannot be presented to by this runtime; \
          restart it from inside the session (`systemctl --user restart tatolabd`, or `tatolabd` \
-         in a terminal of its own)"
-            .to_owned(),
-    ))
+         in a terminal of its own)",
+    )
 }
 
 #[cfg(test)]

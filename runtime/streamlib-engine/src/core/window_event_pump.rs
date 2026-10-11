@@ -261,11 +261,10 @@ impl ProcessWideWindowEventPump {
 
 /// The one pump for this process, started on first use.
 ///
-/// A Linux process naming no display server is refused by name before the
-/// loop is tried. Past that the outcome is cached either way: a process that
-/// cannot build an event loop — an unreachable display server, or a non-winit
-/// consumer already took the one slot — answers with the same error forever
-/// rather than retrying per caller and burning the slot on a race.
+/// The outcome is cached either way: a process that cannot build an event loop
+/// — no display server, or a non-winit consumer already took the one slot —
+/// answers with the same error forever rather than retrying per caller and
+/// burning the slot on a race.
 ///
 /// On Apple the pump can only be built on the process's first thread, so a
 /// first call from any other thread settles the answer as a refusal.
@@ -273,11 +272,6 @@ pub fn process_wide_window_event_pump() -> Result<&'static ProcessWideWindowEven
     static PROCESS_WIDE_WINDOW_EVENT_PUMP: OnceLock<
         std::result::Result<ProcessWideWindowEventPump, String>,
     > = OnceLock::new();
-
-    #[cfg(target_os = "linux")]
-    if PROCESS_WIDE_WINDOW_EVENT_PUMP.get().is_none() {
-        crate::linux::display_server_environment_from_the_user_manager::ensure_this_process_names_a_display_server()?;
-    }
 
     #[cfg(target_os = "linux")]
     let start_the_process_wide_window_event_pump = start_window_event_pump_thread;
@@ -377,9 +371,14 @@ fn build_the_processes_one_event_loop()
         // by a signal, never a menu.
         builder.with_default_menu(false);
     }
-    builder
-        .build()
-        .map_err(|e| format!("failed to build the window event loop: {e}"))
+    builder.build().map_err(|e| {
+        let refusal = format!("failed to build the window event loop: {e}");
+        #[cfg(target_os = "linux")]
+        if let Some(why_no_display_server) = crate::linux::display_server_environment_from_the_user_manager::why_this_process_names_no_display_server() {
+            return format!("{refusal} — {why_no_display_server}");
+        }
+        refusal
+    })
 }
 
 /// The process's one event loop and the pump it serves, kept on the first
