@@ -19,10 +19,7 @@ use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use crate::core::test_support::a_temporary_directory_at_owner_only_mode;
 use crate::core::{Result, RuntimeContextLimitedAccess};
 
-use crate as the_engine_under_test;
-#[path = "../../../tests/support/links_between_streams_harness.rs"]
-mod links_between_streams_harness;
-use links_between_streams_harness::{
+use crate::core::test_support::links_between_streams_harness::{
     EveryEventOfOneStream, THE_ENGINE_ANSWERS_WITHIN, bags_tallied_as,
     reads_awaiting_remote_because, reads_wired, start, tally_bags_read,
     the_link_as_graph_renders_it, wait_until_tallied,

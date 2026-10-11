@@ -707,33 +707,16 @@ mod already_wired_tests {
     #[test]
     fn a_link_queued_twice_in_one_batch_is_wired_once() {
         use crate::core::graph::OutputPortInAnotherStreamOnThisMachine;
-        use crate::core::processors::ProcessorSpec;
-        use crate::core::test_support::{
-            MockInputOnlyProcessor, MockOutputOnlyProcessor, ensure_test_mocks_registered,
-        };
+        use crate::core::test_support::{add_mock_input_only, add_mock_output_only};
 
-        ensure_test_mocks_registered();
         let mut graph = Graph::new();
-        let mut add_a_node = |processor_class_import_path| {
-            graph
-                .traversal_mut()
-                .add_v(ProcessorSpec::new(
-                    processor_class_import_path,
-                    serde_json::Value::Null,
-                ))
-                .expect("the node is named")
-                .first()
-                .expect("the node is added")
-                .id
-                .clone()
-        };
-        let source = add_a_node(MockOutputOnlyProcessor::processor_class_import_path());
-        let reader = add_a_node(MockInputOnlyProcessor::processor_class_import_path());
+        let source = add_mock_output_only(&mut graph);
+        let reader = add_mock_input_only(&mut graph);
         let link_in_this_stream = graph
             .traversal_mut()
             .add_e(
-                OutputLinkPortRef::new(source, "out1"),
-                InputLinkPortRef::new(reader.clone(), "in1"),
+                OutputLinkPortRef::new(source.as_str(), "out1"),
+                InputLinkPortRef::new(reader.as_str(), "in1"),
             )
             .first()
             .expect("the link in this stream is added")
@@ -743,7 +726,7 @@ mod already_wired_tests {
             .traversal_mut()
             .add_e_reading_another_stream(
                 OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "out1").unwrap(),
-                InputLinkPortRef::new(reader, "in1"),
+                InputLinkPortRef::new(reader.as_str(), "in1"),
             )
             .first()
             .expect("the link reading another stream is added")

@@ -1342,6 +1342,7 @@ mod tests {
     };
     use crate::core::test_support::{
         CapturedTracingWarnings, ReclaimedLink, RecordingOutOfProcessFarSideLinkDelivery,
+        add_mock_input_only, add_mock_output_only,
     };
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
@@ -2748,36 +2749,6 @@ mod tests {
                 "a {tag} destination must hold the listener its sources notify"
             );
         }
-    }
-
-    fn add_mock_output_only(graph: &mut Graph) -> String {
-        crate::core::test_support::ensure_test_mocks_registered();
-        graph
-            .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(),
-                serde_json::Value::Null,
-            ))
-            .expect("the node is named")
-            .first()
-            .expect("mock_output_only_processor must be in the registry")
-            .id
-            .to_string()
-    }
-
-    fn add_mock_input_only(graph: &mut Graph) -> String {
-        crate::core::test_support::ensure_test_mocks_registered();
-        graph
-            .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path(),
-                serde_json::Value::Null,
-            ))
-            .expect("the node is named")
-            .first()
-            .expect("mock_input_only_processor must be in the registry")
-            .id
-            .to_string()
     }
 
     fn add_mock_ordered_input_only(graph: &mut Graph) -> String {

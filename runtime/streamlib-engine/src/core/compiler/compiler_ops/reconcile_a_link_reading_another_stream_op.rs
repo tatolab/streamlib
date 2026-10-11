@@ -573,6 +573,7 @@ mod tests {
     use crate::core::runtime::{
         OptionsForLoadingOneStream, Runner, RuntimeOperations, RuntimeStatus,
     };
+    use crate::core::test_support::links_between_streams_harness::the_link_as_graph_renders_it;
     use crate::core::test_support::{
         MockInputOnlyProcessor, MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
         ensure_test_mocks_registered,
@@ -748,14 +749,6 @@ mod tests {
             link_id.expect("the link is added")
         }
 
-        fn the_link_as_graph_renders_it(&self, link_id: &LinkUniqueId) -> Value {
-            self.b.to_json().unwrap()["links"]
-                .as_array()
-                .and_then(|links| links.iter().find(|link| link["id"] == link_id.as_str()))
-                .cloned()
-                .unwrap_or(Value::Null)
-        }
-
         /// Take the camera out of `a` as a removal does, cutting every reader
         /// of its port naming that its node left, and wait for the cut to land
         /// on `b`.
@@ -857,7 +850,7 @@ mod tests {
             reconciled,
             HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)
         );
-        let rendered = streams.the_link_as_graph_renders_it(&link_id);
+        let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
         assert_eq!(rendered["state"], "wired", "{rendered}");
         assert!(
             rendered.get("awaiting_remote_reason").is_none(),
@@ -895,7 +888,7 @@ mod tests {
                 HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired),
                 "a source stream {status_of_the_source:?}"
             );
-            let rendered = streams.the_link_as_graph_renders_it(&link_id);
+            let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
             assert_eq!(rendered["state"], "wired", "{rendered}");
             streams
                 .camera_output
@@ -915,7 +908,7 @@ mod tests {
         let reason_of = |source: OutputPortInAnotherStreamOnThisMachine| {
             let link_id = streams.link_the_display_from(source);
             let reconciled = reconcile_a_link_reading_another_stream(&streams.b, &link_id);
-            let rendered = streams.the_link_as_graph_renders_it(&link_id);
+            let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
             assert_eq!(rendered["state"], "awaiting_remote", "{rendered}");
             let HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason) = reconciled
             else {
@@ -992,7 +985,7 @@ mod tests {
         for named in ["`a`", "`camera`", "`out1`", "internal"] {
             assert!(refusal.contains(named), "{named:?} not in: {refusal}");
         }
-        let rendered = streams.the_link_as_graph_renders_it(&link_id);
+        let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
         assert_eq!(rendered["state"], "error", "{rendered}");
         assert_eq!(rendered["error_reason"], refusal.as_str());
 
@@ -1108,7 +1101,7 @@ mod tests {
             for named in ["`a`", "`camera`", "`out1`", "internal"] {
                 assert!(refusal.contains(named), "{named:?} not in: {refusal}");
             }
-            let rendered = streams.the_link_as_graph_renders_it(&link_id);
+            let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
             assert_eq!(rendered["state"], "error", "{rendered}");
             assert_eq!(rendered["error_reason"], refusal.as_str());
             assert_eq!(
@@ -1182,7 +1175,7 @@ mod tests {
             links_wired.expect("a link that waits or is refused never fails the commit"),
             1
         );
-        let refused = streams.the_link_as_graph_renders_it(&refused);
+        let refused = the_link_as_graph_renders_it(&streams.b, &refused);
         assert_eq!(refused["state"], "error", "{refused}");
         assert!(
             refused["error_reason"]
@@ -1190,13 +1183,13 @@ mod tests {
                 .is_some_and(|reason| reason.contains("internal")),
             "{refused}"
         );
-        let awaiting = streams.the_link_as_graph_renders_it(&awaiting);
+        let awaiting = the_link_as_graph_renders_it(&streams.b, &awaiting);
         assert_eq!(awaiting["state"], "awaiting_remote", "{awaiting}");
         assert_eq!(
             awaiting["awaiting_remote_reason"],
             "the stream `nowhere` is not loaded on this machine; the link wires when it loads"
         );
-        let in_stream = streams.the_link_as_graph_renders_it(&in_stream);
+        let in_stream = the_link_as_graph_renders_it(&streams.b, &in_stream);
         assert_eq!(in_stream["state"], "wired", "{in_stream}");
         pattern_output
             .write_raw("out1", b"a bag of the reading stream's own", 0)
@@ -1402,7 +1395,7 @@ mod tests {
         for named in ["`a`", "`camera`", "`out1`", "internal"] {
             assert!(reason.contains(named), "{named:?} not in: {reason}");
         }
-        let rendered = streams.the_link_as_graph_renders_it(&link_id);
+        let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
         assert_eq!(rendered["state"], "awaiting_remote", "{rendered}");
         assert_eq!(rendered["awaiting_remote_reason"], reason.as_str());
         assert_eq!(

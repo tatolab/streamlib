@@ -17,7 +17,11 @@ use std::sync::{Arc, Mutex, Once};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
+use crate as the_engine_under_test;
 use crate::core::processors::PROCESSOR_REGISTRY;
+
+#[path = "../../tests/support/links_between_streams_harness.rs"]
+pub(crate) mod links_between_streams_harness;
 
 /// Mock processor with two input ports + two output ports.
 #[crate::processor(
@@ -262,6 +266,37 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockProcessorWithACamelCaseOutputPort::Processor>();
         PROCESSOR_REGISTRY.register::<MockSourceTakingOneSetting::Processor>();
     });
+}
+
+/// Add a [`MockOutputOnlyProcessor`] node to `graph`; its processor id.
+pub(crate) fn add_mock_output_only(graph: &mut crate::core::graph::Graph) -> String {
+    add_a_mock_node(
+        graph,
+        MockOutputOnlyProcessor::processor_class_import_path(),
+    )
+}
+
+/// Add a [`MockInputOnlyProcessor`] node to `graph`; its processor id.
+pub(crate) fn add_mock_input_only(graph: &mut crate::core::graph::Graph) -> String {
+    add_a_mock_node(graph, MockInputOnlyProcessor::processor_class_import_path())
+}
+
+fn add_a_mock_node(
+    graph: &mut crate::core::graph::Graph,
+    processor_class_import_path: crate::core::descriptors::ProcessorClassImportPath,
+) -> String {
+    ensure_test_mocks_registered();
+    graph
+        .traversal_mut()
+        .add_v(crate::core::processors::ProcessorSpec::new(
+            processor_class_import_path,
+            serde_json::Value::Null,
+        ))
+        .expect("the node is named")
+        .first()
+        .expect("the mock is in the registry")
+        .id
+        .to_string()
 }
 
 /// Every `WARN`-level tracing event raised while this is the default
