@@ -512,12 +512,10 @@ fn release_the_source_side_of_a_link_in_this_stream(
     link_id: &LinkUniqueId,
 ) {
     if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, source_proc_id) {
-        unwire_out_of_process_endpoint(
-            &source_link_wiring,
+        source_link_wiring.unwire_a_link_reporting_a_far_side_that_kept_its_port(
             crate::core::PortDirection::Output,
-            source_proc_id,
             source_port,
-            link_id,
+            link_id.as_str(),
         );
     } else if let Some(source_processor) = processor_to_reclaim_from(graph, source_proc_id) {
         let source_guard = source_processor.lock();
@@ -543,12 +541,10 @@ pub(crate) fn release_the_destination_side_of_a_link(
     link_id: &LinkUniqueId,
 ) {
     if let Some(dest_link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) {
-        unwire_out_of_process_endpoint(
-            &dest_link_wiring,
+        dest_link_wiring.unwire_a_link_reporting_a_far_side_that_kept_its_port(
             crate::core::PortDirection::Input,
-            dest_proc_id,
             dest_port,
-            link_id,
+            link_id.as_str(),
         );
     } else if let Some(dest_processor) = processor_to_reclaim_from(graph, dest_proc_id) {
         let dest_guard = dest_processor.lock();
@@ -957,43 +953,6 @@ fn out_of_process_link_wiring_of(
         .first()
         .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
         .map(|component| Arc::clone(&component.0))
-}
-
-/// Reclaim one link on an endpoint that owns its ports out of process: forget
-/// the wiring the far side would be set up with again, and ask a running far
-/// side to drop the port it opened from that wiring.
-///
-/// A failure is reported and swallowed, like every other reclaim failure here:
-/// the disconnect is already happening, the other endpoint still has ports to
-/// release, and refusing to stamp the link `Disconnected` over an unreachable
-/// far side would leave the graph claiming a link that no longer carries data.
-fn unwire_out_of_process_endpoint(
-    link_wiring: &OutOfProcessLinkWiringEnvelope,
-    port_direction: crate::core::PortDirection,
-    proc_id: &ProcessorUniqueId,
-    local_port_name: &str,
-    link_id: &LinkUniqueId,
-) {
-    match link_wiring.forget_a_link_and_tell_a_far_side_past_its_setup_command(
-        port_direction,
-        local_port_name,
-        link_id.as_str(),
-    ) {
-        Ok(()) => tracing::debug!(
-            proc_id = %proc_id,
-            port = %local_port_name,
-            port_direction = %port_direction,
-            "Asked an out-of-process endpoint to reclaim its ports for a disconnected link"
-        ),
-        Err(error) => tracing::warn!(
-            proc_id = %proc_id,
-            port = %local_port_name,
-            port_direction = %port_direction,
-            error = %error,
-            "close_iceoryx2_service: an out-of-process endpoint did not reclaim its ports; \
-             a reconnect of this link may exhaust its channel's notifier or subscriber slots"
-        ),
-    }
 }
 
 /// The processor whose ports one side of a disconnect must release, or `None`

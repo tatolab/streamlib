@@ -295,6 +295,37 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
+    /// Forget one link as [`Self::forget_a_link_and_tell_a_far_side_past_its_setup_command`]
+    /// does, logging a far side that could not be told rather than failing: the
+    /// link is going regardless, and only a later reconnect feels the port it keeps.
+    pub(crate) fn unwire_a_link_reporting_a_far_side_that_kept_its_port(
+        &self,
+        port_direction: crate::core::PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) {
+        match self.forget_a_link_and_tell_a_far_side_past_its_setup_command(
+            port_direction,
+            local_port_name,
+            link_id,
+        ) {
+            Ok(()) => tracing::debug!(
+                %link_id,
+                port = %local_port_name,
+                %port_direction,
+                "Asked an out-of-process endpoint to reclaim its port for an unwired link"
+            ),
+            Err(error) => tracing::warn!(
+                %link_id,
+                port = %local_port_name,
+                %port_direction,
+                %error,
+                "An out-of-process endpoint did not reclaim its port for an unwired link; a \
+                 reconnect of this link may exhaust its channel's notifier or subscriber slots"
+            ),
+        }
+    }
+
     /// Say the far side's setup has begun: a link recorded from now on waits to
     /// be handed over right behind the setup command, and reads `pending` until
     /// the far side answers, rather than riding a command whose `ports` may

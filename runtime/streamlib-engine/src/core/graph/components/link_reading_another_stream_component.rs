@@ -189,6 +189,7 @@ pub(crate) enum SourceSideOfALinkWiredOn {
 /// drop what it opened. Held through weak handles, so a source processor that
 /// is gone makes the release a no-op and is never kept alive by it.
 #[derive(Debug)]
+#[must_use = "dropping it releases the source's side of the link at once"]
 pub(crate) struct SourceSideOfALinkReadingAnotherStream {
     wired_on: WeakSourceSideOfALinkWiredOn,
     source_port: String,
@@ -248,21 +249,11 @@ impl Drop for SourceSideOfALinkReadingAnotherStream {
                 let Some(link_wiring) = link_wiring.upgrade() else {
                     return;
                 };
-                if let Err(error) = link_wiring
-                    .forget_a_link_and_tell_a_far_side_past_its_setup_command(
-                        crate::core::PortDirection::Output,
-                        &self.source_port,
-                        self.link_id.as_str(),
-                    )
-                {
-                    tracing::warn!(
-                        link_id = %self.link_id,
-                        port = %self.source_port,
-                        %error,
-                        "A helper source did not drop its side of a link reading another stream; \
-                         its channel keeps that link's notifier"
-                    );
-                }
+                link_wiring.unwire_a_link_reporting_a_far_side_that_kept_its_port(
+                    crate::core::PortDirection::Output,
+                    &self.source_port,
+                    self.link_id.as_str(),
+                );
             }
         }
     }
