@@ -498,6 +498,17 @@ jobs:
         working-directory: packages/${{ matrix.extension }}
         run: .venv/bin/python -m mypy.stubtest ${{ matrix.native_module }}
 
+      # The tests start the machine's `tatolabd`, which takes the root-owned
+      # lock file Tatolab.app creates at first launch; a runner has no app.
+      - name: The machine runtime lock the app would create
+        run: |
+          machine_runtime_lock_directory="/Library/Application Support/Tatolab"
+          sudo mkdir -p "$machine_runtime_lock_directory"
+          sudo touch "$machine_runtime_lock_directory/runtime.lock"
+          sudo chown root "$machine_runtime_lock_directory" "$machine_runtime_lock_directory/runtime.lock"
+          sudo chmod 0755 "$machine_runtime_lock_directory"
+          sudo chmod 0666 "$machine_runtime_lock_directory/runtime.lock"
+
       # Carries the clock-parity test against the engine's clock, and the
       # portability gate's Mach-O arm over the built `.so`. The tests that
       # import `tatolab.runtime` borrow it from the lend.
