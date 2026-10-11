@@ -5,9 +5,10 @@
 
 `stream_builder.add` with no adapter and no engine change is the whole claim of the
 extension model, so it is what these check — each stream compiled here and loaded
-by a real `tatolabd` from the runtime unit, which needs no device to load one. The
-load is the subject: on a machine with no GPU the start that follows it fails, and
-these accept that.
+with `tatolab run` on the machine's runtime, a real `tatolabd` from the runtime
+unit, which needs no device to load one. The load is the subject: the runtime
+reaches no Vulkan driver, so the start that follows every load is refused at the
+GPU, and these require exactly that refusal.
 
 The runtime unit is `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else the checkout's
 `target/tatolab-runtime` that `cargo xtask build-runtime` lays out. The helper-side
@@ -17,12 +18,13 @@ tests below import `tatolab.runtime` from its lend, on `PYTHONPATH`.
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -110,94 +112,257 @@ RUNTIME_UNIT_DIRECTORY = Path(
     or REPOSITORY_ROOT / "target" / "tatolab-runtime"
 )
 TATOLABD_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolabd"
+TATOLAB_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolab"
 
-#: The line `tatolabd` logs once the engine has loaded a stream's graph.
-STREAM_LOADED_LINE = re.compile(r"the stream (?:`[^`]*` )?loaded with (\d+) nodes")
+#: How the runtime starts a project's interpreter on the compile entry, ahead of its arguments.
+COMPILE_ENTRY_INVOCATION = ("-I", "-m", "tatolab.stream._project_stream_compile_entry")
+
+#: The line `tatolabd` logs as it begins starting a loaded stream.
+STREAM_START_BEGAN_LINE = re.compile(r"\[start\] Starting the stream `(?P<stream_name>[^`]+)`")
+
+#: The line `tatolabd` logs as a stream's unload removes the processors its load added.
+STREAM_UNLOAD_REMOVED_PROCESSORS_LINE = re.compile(
+    r"\[stop\] Queued removal of (?P<processor_count>\d+) processor\(s\)"
+)
+
+#: The Vulkan loader's variables naming the driver files to load. Pointed at a
+#: path that does not exist they leave it none, so every stream's start is
+#: refused at the GPU, before any device opens, on a machine with a GPU too.
+VULKAN_LOADER_DRIVER_FILE_VARIABLES = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "VK_ADD_DRIVER_FILES")
+
+#: The engine's refusal when the Vulkan loader finds no driver, on every platform.
+NO_VULKAN_DRIVER_REFUSAL = "No usable Vulkan driver (ICD) was found"
+
+#: Engine variables of this process a runtime must not inherit.
+ENGINE_VARIABLES_THE_RUNTIME_DOES_NOT_INHERIT = (
+    "STREAMLIB_QUIET",
+    "STREAMLIB_HOME",
+    "STREAMLIB_ICEORYX2_DOMAIN_ROOT",
+)
 
 #: Covers starting each Python node's interpreter to describe it, on a cold runner.
-LOAD_DEADLINE_SECONDS = 60.0
+LOAD_DEADLINE_SECONDS = 120.0
+SERVING_DEADLINE_SECONDS = 30.0
+LOCAL_API_PROBE_DEADLINE_SECONDS = 5.0
+LOAD_AND_UNLOAD_LINES_DEADLINE_SECONDS = 10.0
 STOP_DEADLINE_SECONDS = 30.0
 
 
-def _tatolabd_executable() -> Path:
-    if not os.access(TATOLABD_EXECUTABLE, os.X_OK):
+def _runtime_unit_executable(executable: Path) -> Path:
+    if not os.access(executable, os.X_OK):
         pytest.fail(
-            f"no tatolabd at {TATOLABD_EXECUTABLE} — build the runtime unit with "
+            f"no {executable.name} at {executable} — build the runtime unit with "
             "`cargo xtask build-runtime`, or name one with STREAMLIB_RUNTIME_UNIT_DIRECTORY"
         )
-    return TATOLABD_EXECUTABLE
+    return executable
+
+
+def _a_runtime_answers_at_the_local_api_socket() -> bool:
+    try:
+        streams_probe = subprocess.run(
+            [str(_runtime_unit_executable(TATOLAB_EXECUTABLE)), "streams"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=LOCAL_API_PROBE_DEADLINE_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return streams_probe.returncode == 0
+
+
+class TatolabdWithNoVulkanDriver:
+    """A `tatolabd` from the runtime unit whose every stream start is refused at the GPU."""
+
+    def __init__(self, process: "subprocess.Popen[str]") -> None:
+        self.process = process
+        self.standard_error_lines: "list[str]" = []
+        self._standard_error_drain = threading.Thread(
+            target=self._drain_standard_error, daemon=True
+        )
+        self._standard_error_drain.start()
+
+    def _drain_standard_error(self) -> None:
+        assert self.process.stderr is not None
+        for standard_error_line in self.process.stderr:
+            self.standard_error_lines.append(standard_error_line)
+
+    def standard_error_text_since(self, line_count: int) -> str:
+        return "".join(self.standard_error_lines[line_count:])
+
+    def recent_standard_error(self) -> str:
+        return "".join(self.standard_error_lines[-40:])
+
+    def stop(self) -> None:
+        if self.process.poll() is None:
+            self.process.send_signal(signal.SIGINT)
+            try:
+                self.process.wait(timeout=STOP_DEADLINE_SECONDS)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+        self._standard_error_drain.join(timeout=STOP_DEADLINE_SECONDS)
+
+
+@pytest.fixture(scope="module")
+def tatolabd_with_no_vulkan_driver(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> "Iterator[TatolabdWithNoVulkanDriver]":
+    """The machine's runtime for this module, started here and stopped after it.
+
+    It takes the machine's runtime lock and serves this user's local API socket,
+    so it is refused while another runtime holds the machine. Its state
+    directory is its own — `XDG_STATE_HOME`, and `HOME` on macOS — so it loads
+    none of this user's kept streams.
+    """
+    tatolabd_executable = _runtime_unit_executable(TATOLABD_EXECUTABLE)
+    if _a_runtime_answers_at_the_local_api_socket():
+        pytest.fail(
+            "a runtime already answers at this user's local API socket; stop it and run "
+            "these again — they start the machine's runtime themselves"
+        )
+    runtime_directory = tmp_path_factory.mktemp("tatolabd")
+    state_home = runtime_directory / "state"
+    state_home.mkdir()
+    no_such_driver_file = str(runtime_directory / "no-vulkan-driver-here.json")
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in ENGINE_VARIABLES_THE_RUNTIME_DOES_NOT_INHERIT
+    }
+    environment.update(
+        {variable: no_such_driver_file for variable in VULKAN_LOADER_DRIVER_FILE_VARIABLES}
+    )
+    environment["RUST_LOG"] = "info,rmcp=warn"
+    environment["XDG_STATE_HOME"] = str(state_home)
+    if sys.platform == "darwin":
+        environment["HOME"] = str(state_home)
+    tatolabd = TatolabdWithNoVulkanDriver(
+        subprocess.Popen(
+            [str(tatolabd_executable)],
+            cwd=runtime_directory,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+        )
+    )
+    try:
+        serving_deadline = time.monotonic() + SERVING_DEADLINE_SECONDS
+        while not _a_runtime_answers_at_the_local_api_socket():
+            if tatolabd.process.poll() is not None:
+                tatolabd.stop()
+                pytest.fail(
+                    f"tatolabd exited {tatolabd.process.returncode} before it served its "
+                    f"local API:\n{tatolabd.recent_standard_error()}"
+                )
+            if time.monotonic() > serving_deadline:
+                pytest.fail(
+                    f"tatolabd did not serve its local API within {SERVING_DEADLINE_SECONDS} s:"
+                    f"\n{tatolabd.recent_standard_error()}"
+                )
+            time.sleep(0.05)
+        yield tatolabd
+    finally:
+        tatolabd.stop()
+
+
+def write_a_project_whose_compile_prints(
+    project_directory: Path, graph: "dict[str, Any]"
+) -> None:
+    """A project whose `.venv/bin/python` hands the runtime `graph` as its compiled stream.
+
+    The compile entry's invocation prints `graph` in the compile document,
+    naming this tests directory as the project its Python nodes are described
+    and run from; every other invocation execs this test's interpreter, which
+    holds the extension.
+    """
+    compile_document_file = project_directory / "compile-document.json"
+    venv_interpreter = project_directory / ".venv" / "bin" / "python"
+    venv_interpreter.parent.mkdir(parents=True)
+    compile_document_file.write_text(
+        json.dumps(
+            {"stream_graph": graph, "project_directory": str(Path(__file__).resolve().parent)}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    first, second, third = (shlex.quote(argument) for argument in COMPILE_ENTRY_INVOCATION)
+    venv_interpreter.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" = {first} ] && [ "$2" = {second} ] && [ "$3" = {third} ]; then\n'
+        f"    exec cat {shlex.quote(str(compile_document_file))}\n"
+        "fi\n"
+        f'exec {shlex.quote(sys.executable)} "$@"\n',
+        encoding="utf-8",
+    )
+    venv_interpreter.chmod(0o755)
 
 
 def node_names_loaded_by_tatolabd(
-    stream_function: "Callable[[StreamBuilder], None]", working_directory: Path
+    stream_function: "Callable[[StreamBuilder], None]",
+    working_directory: Path,
+    tatolabd: TatolabdWithNoVulkanDriver,
 ) -> "list[str]":
-    """Compile `stream_function`, have `tatolabd` load it, and name the nodes it holds.
+    """Compile `stream_function`, load it on `tatolabd` with `tatolab run`, and name the nodes it held.
 
     The engine loads the compiled names unsuffixed, so they are the names it
-    holds. Fails naming `tatolabd`'s own refusal when the load is refused.
+    holds. Its start is then refused at the GPU, and its unload counts the
+    processors the load added. Fails naming the refusal when the load is refused.
     """
     graph = compile_stream_to_graph(stream_function)
-    stream_graph_file = working_directory / "stream_graph.json"
-    stream_graph_file.write_text(json.dumps(graph))
+    stream_name = stream_function.__name__
+    project_directory = working_directory / "project"
+    write_a_project_whose_compile_prints(project_directory, graph)
 
-    tatolabd = subprocess.Popen(
+    standard_error_mark = len(tatolabd.standard_error_lines)
+    tatolab_run = subprocess.run(
         [
-            str(_tatolabd_executable()),
-            "--stream-graph",
-            str(stream_graph_file),
-            "--project",
-            str(Path(__file__).resolve().parent),
-            "--interpreter",
-            sys.executable,
+            str(_runtime_unit_executable(TATOLAB_EXECUTABLE)),
+            "run",
+            "--dir",
+            str(project_directory),
+            "--name",
+            stream_name,
         ],
         cwd=working_directory,
-        env={**os.environ, "RUST_LOG": "warn,tatolabd=info"},
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
+        errors="replace",
+        timeout=LOAD_DEADLINE_SECONDS,
     )
-    standard_error_lines: "list[str]" = []
 
-    def drain_standard_error() -> None:
-        assert tatolabd.stderr is not None
-        for standard_error_line in tatolabd.stderr:
-            standard_error_lines.append(standard_error_line)
+    def what_the_run_and_the_runtime_said() -> str:
+        return (
+            f"`tatolab run` exited {tatolab_run.returncode}:\n{tatolab_run.stderr[-4000:]}\n"
+            f"tatolabd:\n{tatolabd.standard_error_text_since(standard_error_mark)[-8000:]}"
+        )
 
-    standard_error_drain = threading.Thread(target=drain_standard_error, daemon=True)
-    standard_error_drain.start()
-
-    def loaded_node_count_logged_so_far() -> "int | None":
-        for standard_error_line in list(standard_error_lines):
-            loaded_line = STREAM_LOADED_LINE.search(standard_error_line)
-            if loaded_line:
-                return int(loaded_line.group(1))
-        return None
-
-    loaded_node_count = None
-    load_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
-    while loaded_node_count is None and time.monotonic() < load_deadline:
-        loaded_node_count = loaded_node_count_logged_so_far()
-        if loaded_node_count is None and tatolabd.poll() is not None:
+    # Both lines reach this process through the drain thread, which can trail
+    # `tatolab run`'s exit.
+    load_and_unload_lines_deadline = time.monotonic() + LOAD_AND_UNLOAD_LINES_DEADLINE_SECONDS
+    while True:
+        standard_error_text = tatolabd.standard_error_text_since(standard_error_mark)
+        start_began = STREAM_START_BEGAN_LINE.search(standard_error_text)
+        unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LINE.search(standard_error_text)
+        if (start_began is not None and unload is not None) or (
+            time.monotonic() > load_and_unload_lines_deadline
+        ):
             break
         time.sleep(0.05)
 
-    if tatolabd.poll() is None:
-        tatolabd.send_signal(signal.SIGINT)
-        try:
-            tatolabd.wait(timeout=STOP_DEADLINE_SECONDS)
-        except subprocess.TimeoutExpired:
-            tatolabd.kill()
-            tatolabd.wait()
-    standard_error_drain.join(timeout=STOP_DEADLINE_SECONDS)
-    if loaded_node_count is None:
-        loaded_node_count = loaded_node_count_logged_so_far()
-
-    if loaded_node_count is None:
-        pytest.fail(
-            "tatolabd did not load the stream:\n" + "".join(standard_error_lines[-40:])
-        )
-    assert loaded_node_count == len(graph["nodes"])
+    if start_began is None:
+        pytest.fail("tatolabd did not load the stream:\n" + what_the_run_and_the_runtime_said())
+    assert start_began.group("stream_name") == stream_name, what_the_run_and_the_runtime_said()
+    assert tatolab_run.returncode == 1 and NO_VULKAN_DRIVER_REFUSAL in tatolab_run.stderr, (
+        "the loaded stream was to be refused at its start for the missing Vulkan driver; "
+        + what_the_run_and_the_runtime_said()
+    )
+    assert unload is not None, what_the_run_and_the_runtime_said()
+    assert int(unload.group("processor_count")) == len(graph["nodes"])
     return [loaded_node["name"] for loaded_node in graph["nodes"]]
 
 
@@ -206,26 +371,28 @@ def node_names_loaded_by_tatolabd(
     [(the_whip_publisher_alone, WhipPublisher), (the_whep_player_alone, WhepPlayer)],
 )
 def test_an_installed_extensions_processor_is_added_like_any_other(
-    tmp_path, stream_function, processor_class
+    tmp_path, tatolabd_with_no_vulkan_driver, stream_function, processor_class
 ):
-    assert node_names_loaded_by_tatolabd(stream_function, tmp_path) == [
+    assert node_names_loaded_by_tatolabd(
+        stream_function, tmp_path, tatolabd_with_no_vulkan_driver
+    ) == [
         processor_class.__name__.lower()
     ]
 
 
-def test_the_publisher_wires_to_both_encoders_without_an_adapter(tmp_path):
+def test_the_publisher_wires_to_both_encoders_without_an_adapter(tmp_path, tatolabd_with_no_vulkan_driver):
     """One fan-in port takes both encoders, which is what makes a WHIP session
     with video and audio a matter of wiring rather than of config."""
-    node_names_loaded_by_tatolabd(the_publisher_fed_by_both_encoders, tmp_path)
+    node_names_loaded_by_tatolabd(the_publisher_fed_by_both_encoders, tmp_path, tatolabd_with_no_vulkan_driver)
 
 
-def test_the_player_wires_to_both_decoders_without_an_adapter(tmp_path):
-    node_names_loaded_by_tatolabd(the_player_feeding_both_decoders, tmp_path)
+def test_the_player_wires_to_both_decoders_without_an_adapter(tmp_path, tatolabd_with_no_vulkan_driver):
+    node_names_loaded_by_tatolabd(the_player_feeding_both_decoders, tmp_path, tatolabd_with_no_vulkan_driver)
 
 
-def test_a_publish_and_play_round_trip_composes_as_published(tmp_path):
+def test_a_publish_and_play_round_trip_composes_as_published(tmp_path, tatolabd_with_no_vulkan_driver):
     """The shape the live proof drives: encode, publish, play back, decode."""
-    node_names_loaded_by_tatolabd(a_publish_and_play_round_trip, tmp_path)
+    node_names_loaded_by_tatolabd(a_publish_and_play_round_trip, tmp_path, tatolabd_with_no_vulkan_driver)
 
 
 def test_each_codec_names_the_track_it_belongs_on():

@@ -24,16 +24,22 @@
 #           signal identity across a network hop wants a looping source the
 #           engine does not have, and is `/verify-audio`'s shape.
 #
-# The stream (`whip_whep_roundtrip_stream.py`) runs on the runtime unit with
-# `tatolab run`, compiled in this package's own `.venv` — `tatolab-stream` and a
-# current `maturin develop` of this wheel, and no engine. The runtime unit is
-# `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else the checkout's `target/tatolab-runtime`
-# (`cargo xtask build-runtime`); the observation verbs are its `bin/tatolab`.
+# The stream (`whip_whep_roundtrip_stream.py`) is loaded with `tatolab run
+# --name`, compiled in this package's own `.venv` — `tatolab-stream` and a
+# current `maturin develop` of this wheel, and no engine — on a `tatolabd` this
+# script starts and stops itself, and is addressed by that name. The runtime
+# unit, its `tatolab` verbs and the runtime's start and stop are the engine
+# fixtures' `fixture_runtime_unit.sh`, so the same rules hold: the runtime takes
+# the machine's lock and serves this user's local API socket, so the run is
+# refused while another runtime holds the machine; and the stream's settings go
+# in the runtime's environment, which its compile and its processor
+# interpreters inherit, never `tatolab run`'s.
 #
 # CREDENTIALS. Cloudflare Stream carries the stream key as a path segment, so
 # each URL is itself a credential. Both are read from the environment, passed to
-# the stream through the environment (never argv, which `/proc` publishes), and
-# never printed, logged, or written into the output directory. `tatolab graph`
+# the stream through the runtime's environment (never argv, which `/proc`
+# publishes), and never printed, logged, or written into the output directory —
+# which the run checks, since the runtime's log is kept there. `tatolab graph`
 # renders every processor's config, so this script reads the graph in a pipe and
 # never persists it.
 #
@@ -93,21 +99,17 @@ compgen -G "/dev/dri/renderD*" >/dev/null \
     || cannot_run "no DRM render node, so no GPU-backed runtime can start here"
 [ -f "$BASELINE_TSV" ] || fail "no vivid baseline at $BASELINE_TSV"
 
-RUNTIME_UNIT_DIRECTORY="${STREAMLIB_RUNTIME_UNIT_DIRECTORY:-$REPO_ROOT/target/tatolab-runtime}"
-TATOLAB_EXECUTABLE="$RUNTIME_UNIT_DIRECTORY/bin/tatolab"
-RUNTIME_UNIT_LEND_DIRECTORY="$RUNTIME_UNIT_DIRECTORY/lib/tatolab/lend"
-[ -x "$TATOLAB_EXECUTABLE" ] && [ -x "$RUNTIME_UNIT_DIRECTORY/bin/tatolabd" ] \
-    && [ -d "$RUNTIME_UNIT_LEND_DIRECTORY/tatolab/runtime" ] || cannot_run \
-    "no runtime unit at $RUNTIME_UNIT_DIRECTORY — build it with \`cargo xtask build-runtime\`"
+# shellcheck source=../../../../runtime/streamlib-engine/tests/fixtures/fixture_runtime_unit.sh
+. "$ENGINE_FIXTURES/fixture_runtime_unit.sh"
+# The fixture venv reads the live graph's state, and the audio arm decodes bags in it.
+require_the_runtime_unit
+require_the_fixture_venv
+refuse_while_a_runtime_answers_at_the_local_api_socket \
+    || cannot_run "a runtime already holds this machine; this run starts its own"
 
 VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
 [ -x "$VENV_PYTHON" ] || cannot_run \
     "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and \`maturin develop\` this wheel into it"
-
-# The runtime unit's `tatolab` observation verbs.
-tatolab_observation_verb() {
-    "$TATOLAB_EXECUTABLE" "$@"
-}
 
 # This arm scores whatever `_native.so` that venv holds, so a stale extension
 # would be measured and reported as a PASS for code that is not in the tree.
@@ -154,7 +156,14 @@ done < <(v4l2-ctl --list-devices 2>/dev/null | awk '/vivid/{getline; print $1}')
 mkdir -p "$OUTPUT_DIR"
 EXCHANGED_DIR="$OUTPUT_DIR/exchanged"
 MEASURED_DIR="$OUTPUT_DIR/measured"
+# The runtime's output — the engine's log mirror, the stream's records among
+# it — with `tatolab run`'s beside it.
 LOG_FILE="$OUTPUT_DIR/pipeline.log"
+STREAM_RUN_LOG_FILE="$OUTPUT_DIR/stream_run.log"
+STREAM_NAME="whip_whep_roundtrip"
+# Outside the output directory and removed on exit: the runtime keeps what it
+# loaded there, and this stream's config holds both endpoint URLs.
+RUNTIME_STATE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/streamlib-webrtc-live-runtime-state-XXXXXX")"
 
 ORIGINAL_PATTERN="$(v4l2-ctl -d "$VIVID_DEVICE" -C test_pattern 2>/dev/null | awk '{print $2}')"
 [[ "$ORIGINAL_PATTERN" =~ ^[0-9]+$ ]] || ORIGINAL_PATTERN=0
@@ -169,7 +178,8 @@ stop_node() {
     if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
         # SIGTERM so the graph tears down the way a real stop does; a killed
         # node would hide a hung teardown — and a WHIP DELETE is part of it.
-        # `timeout` passes it on, and `tatolab run` forwards it to `tatolabd`.
+        # `timeout` passes it on; `tatolab run` stops its stream, which the
+        # runtime unloads before the run exits.
         kill -TERM "$NODE_PID" 2>/dev/null || true
         for _ in $(seq 1 50); do
             kill -0 "$NODE_PID" 2>/dev/null || break
@@ -183,10 +193,28 @@ stop_node() {
     fi
     NODE_PID=""
 }
+# The runtime holds every credential in its environment and the URLs in the
+# stream's config, and its log sits in the output directory — so it is scanned
+# however the run ends, a failed run's above all.
+refuse_a_credential_written_into_the_output_directory() {
+    local credential
+    for credential in "${STREAMLIB_WHIP_URL:-}" "${STREAMLIB_WHEP_URL:-}" \
+        "${STREAMLIB_WHIP_BEARER_TOKEN:-}" "${STREAMLIB_WHEP_BEARER_TOKEN:-}"; do
+        [ -n "$credential" ] || continue
+        if grep -rqF -- "$credential" "$OUTPUT_DIR"; then
+            echo "[webrtc-live] FAIL: an endpoint credential was written into $OUTPUT_DIR;" \
+                "delete the directory before sharing any of it" >&2
+            exit 1
+        fi
+    done
+}
 restore_and_stop() {
     stop_node
+    stop_the_fixture_runtime
+    rm -rf "$RUNTIME_STATE_HOME"
     stop_the_signal
     v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$ORIGINAL_PATTERN" >/dev/null 2>&1 || true
+    refuse_a_credential_written_into_the_output_directory
 }
 trap restore_and_stop EXIT
 
@@ -250,43 +278,32 @@ fi
 say "Publishing over WHIP and playing back over WHEP..."
 # The camera is named rather than left to enumeration, so a rig carrying both a
 # virtual and a real one never publishes the wrong one.
-DISPLAY="${DISPLAY:-:0}" \
-STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE" \
-STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$AUDIO_CAPTURE_DEVICE" \
-RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
-    timeout --kill-after=5 "$RUN_SECONDS" \
-        "$TATOLAB_EXECUTABLE" run --dir "$PACKAGE_DIR" \
-            --runtime-name whip-whep-roundtrip-node \
-            tests/live/whip_whep_roundtrip_stream.py \
-        > "$LOG_FILE" 2>&1 &
+if ! DISPLAY="${DISPLAY:-:0}" \
+    STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE" \
+    STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$AUDIO_CAPTURE_DEVICE" \
+    RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
+        start_the_fixture_runtime "$LOG_FILE" "$RUNTIME_STATE_HOME"; then
+    fail "could not start the runtime the stream runs on"
+fi
+timeout --kill-after=5 "$RUN_SECONDS" \
+    "$TATOLAB_EXECUTABLE" run --dir "$PACKAGE_DIR" \
+        --name "$STREAM_NAME" \
+        tests/live/whip_whep_roundtrip_stream.py \
+    > "$STREAM_RUN_LOG_FILE" 2>&1 &
 NODE_PID=$!
 
-# Matched by the launched pid and never by runtime name: a second run of this
-# fixture publishes the same name, and would otherwise be measured instead.
-RUNTIME_ID=""
-NODE_ANSWERED=0
-for _ in $(seq 1 120); do
-    kill -0 "$NODE_PID" 2>/dev/null || break
-    if [ -z "$RUNTIME_ID" ]; then
-        RUNTIME_ID="$(python3 "$ENGINE_FIXTURES/runtime_id_of_launched_node.py" \
-            "$TATOLAB_EXECUTABLE" "$NODE_PID" 2>/dev/null)" \
-            || RUNTIME_ID=""
-    fi
-    if [ -n "$RUNTIME_ID" ] && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
-        NODE_ANSWERED=1
-        break
-    fi
-    sleep 0.5
-done
-[ "$NODE_ANSWERED" = 1 ] \
-    || { tail -40 "$LOG_FILE" >&2; fail "the node never published a registry entry that answered \`tatolab graph\`"; }
-say "Runtime id:        $RUNTIME_ID"
+wait_until_the_stream_is_running "$STREAM_NAME" "$NODE_PID" 60 || {
+    tail -40 "$STREAM_RUN_LOG_FILE" >&2
+    tail -40 "$LOG_FILE" >&2
+    fail "the stream never ran — it never answered over the local API socket with every node Running"
+}
+say "Stream:            $STREAM_NAME"
 
-# A channel is the port's address, `<runtime_name>/<node>/<port>`. Derived from
-# the live graph, in a pipe: the graph renders every node's config, and this
-# graph's config holds both endpoint URLs.
+# A channel is the port's address on this machine, `<stream>/<node>/<port>`.
+# Derived from the live graph, in a pipe: the graph renders every node's config,
+# and this graph's config holds both endpoint URLs.
 channel_of() {
-    tatolab_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    tatolab_observation_verb graph --stream "$STREAM_NAME" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 wanted_node_name, wanted_port = sys.argv[1], sys.argv[2]
@@ -296,7 +313,7 @@ node = next(
 )
 if node is None:
     sys.exit(f"the running graph has no node named `{wanted_node_name}`")
-print(graph["runtime_name"] + "/" + node["name"] + "/" + wanted_port)
+print(graph["stream"] + "/" + node["name"] + "/" + wanted_port)
 ' "$1" "$2"
 }
 
@@ -318,7 +335,7 @@ say "Waiting for the first decoded frame (deadline ${MEDIA_DEADLINE_SECONDS}s)..
 # reports a channel that has produced nothing as ready, and the run then spends
 # the exchange budget before the far side has connected.
 tapped_bag_count() {
-    tatolab_observation_verb tap "$1" --count 1 --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    tatolab_observation_verb tap "$1" --count 1 --stream "$STREAM_NAME" 2>/dev/null | python3 -c '
 import json, sys
 try:
     print(json.load(sys.stdin).get("received", 0))
@@ -346,7 +363,7 @@ if ! tatolab_observation_verb exchange \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \
         --every "$SAMPLE_EVERY" \
-        --node "$RUNTIME_ID" \
+        --stream "$STREAM_NAME" \
         > "$OUTPUT_DIR/exchanged_paths.txt" 2> "$OUTPUT_DIR/exchange.log"; then
     cat "$OUTPUT_DIR/exchange.log" >&2
     tail -40 "$LOG_FILE" >&2
@@ -382,7 +399,7 @@ fi
 if [ "${PUBLISHED_AUDIO_BAGS:-0}" -eq 0 ] 2>/dev/null; then
     AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
 elif "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
-        --node "$RUNTIME_ID" --port audio --count 8 \
+        --stream "$STREAM_NAME" --port audio --count 8 \
         > "$OUTPUT_DIR/audio_channel.json" 2> "$OUTPUT_DIR/audio_channel.log"; then
     AUDIO_VERDICT="pass"
 else
@@ -393,6 +410,9 @@ say "Audio channel:     $AUDIO_VERDICT ($OUTPUT_DIR/audio_channel.json)"
 stop_node
 [ "$NODE_NEEDED_SIGKILL" -eq 0 ] \
     || fail "the node did not exit on SIGTERM and needed SIGKILL; a teardown that hangs is a finding, not a slow exit"
+stop_the_fixture_runtime 15
+the_fixture_runtime_stopped_cleanly \
+    || fail "the runtime did not stop cleanly once its stream was unloaded; a teardown that hangs is a finding, not a slow exit"
 
 # ── Measure ──────────────────────────────────────────────────────────
 echo ""
