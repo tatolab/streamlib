@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.45.0](https://github.com/tatolab/streamlib/compare/v0.44.1...v0.45.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** an address is <machine>/<stream>/<node>/<port>, and a stream reads another stream's exposed port on this machine ([#2715](https://github.com/tatolab/streamlib/issues/2715))
+
+### Features
+
+* **runtime:** an address is &lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;, and a stream reads another stream's exposed port on this machine ([#2715](https://github.com/tatolab/streamlib/issues/2715)) ([b20ecf5](https://github.com/tatolab/streamlib/commit/b20ecf59add500a440fb06f66321ca29c46ded7f))
+
 ## [0.44.1](https://github.com/tatolab/streamlib/compare/v0.44.0...v0.44.1) (2026-10-10)
 
 
