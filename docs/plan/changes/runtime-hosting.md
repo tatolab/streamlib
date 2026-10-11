@@ -113,7 +113,7 @@ runtime/tatolabd/, runtime/tatolab-cli/       the runtime process and the CLI
 runtime/streamlib-engine/src/core/runtime/    runtime.rs (Runner, the one engine), loaded_stream.rs
                                               (LoadedStreamInThisRuntime), machine_state_directory.rs,
                                               machine_name.rs (replaces runtime_name.rs)
-installer/                                    install.sh, tatolabd.service, homebrew/tatolab.rb (the cask)
+installer/                                    install.sh, tatolabd.service
 ```
 
 `Tatolab.app`, a menu-bar app carrying the runtime, lives in the private repository
@@ -225,9 +225,9 @@ installer/                                    install.sh, tatolabd.service, home
 - **macOS.** `Tatolab.app`, from a notarised `.dmg` on the release and `brew install --cask
   tatolab/tap/tatolab`. `tatolab/tatolab-app` checks this repository out at the release tag, builds
   the runtime unit, lays it into the bundle, signs, notarises, and attaches the `.dmg` to this
-  repository's release. The bundle holds `Contents/MacOS/tatolabd` and `tatolab`, an
-  `SMAppService.agent` (plist in `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit),
-  and the lend laid out by Apple's code rules — every Mach-O under
+  repository's release. The bundle holds `Contents/MacOS/tatolabd`, an `SMAppService.agent` (plist in `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit), the CLI as
+  `Contents/MacOS/tatolab-cli` (a default APFS volume folds case, so `tatolab` would be the app's
+  own `Tatolab`), and the lend laid out by Apple's code rules — every Mach-O under
   `Contents/Frameworks/tatolab-runtime/` at its path below `tatolab/runtime/`, the lend in
   `Contents/Resources/lend/` with each Mach-O a relative link into it, PyInstaller's layout;
   `tatolabd` finds the lend there from `Contents/MacOS/`, and `dladdr` is proved to find
@@ -300,7 +300,8 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 - **Machine settings apply at the next start**: a rename re-addresses everything, so never live.
 - **The app is Tauri**, in `tatolab/tatolab-app`, as control-tower's desktop app is, registering
   its agent through `objc2-service-management`; a native AppKit menu would be smaller, and switching rewrites the menu.
-  The cask's tap is `tatolab/homebrew-tap`, created by the owner, bumped per release.
+  The cask's tap is `tatolab/homebrew-tap`, created by the owner, its `Casks/tatolab.rb` bumped
+  per release by the app repository.
 
 ## Tickets, each deleting what it replaces, tests included
 
