@@ -363,3 +363,117 @@ fn a_compile_that_creates_a_source_and_then_fails_still_wakes_the_links_waiting_
     assert!(reads_wired(&rendered), "{rendered}");
     assert!(wait_until_tallied("woken-by-a-compile-that-failed", 5));
 }
+
+/// A paused reading stream still takes a cut at once: lowering the source
+/// port to `internal` takes the link out of its graph and releases the
+/// source's notifier before it resumes, and the link stays gone after.
+///
+/// Fail-without-fix: compile the cut only while the reading stream is started
+/// and the link stays wired in the paused stream's graph, its notifier on the
+/// source's port.
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[serial]
+fn a_paused_reading_stream_takes_a_cut_at_once() {
+    let streams = ACameraStreamReadByADisplayStream::start(
+        "a-paused-reader-cut",
+        super::ENGINE_TEARDOWN_WATCHDOG_BUDGET,
+    );
+    let camera_output = streams.the_cameras_output_writer();
+    assert_eq!(camera_output.channel_notifier_count("video"), 1);
+    streams.b.pause().expect("the stream `b` pauses");
+    let events_of_b = EveryEventOfOneStream::listen_to(&streams.b);
+
+    streams
+        .a
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Internal)
+        .unwrap();
+
+    let rendered = events_of_b.until_the_link(&streams.b, &streams.link_id, |link| link.is_null());
+    assert!(
+        rendered.is_null(),
+        "the paused stream kept the cut link: {rendered}"
+    );
+    assert_eq!(camera_output.channel_notifier_count("video"), 0);
+    streams.b.resume().expect("the stream `b` resumes");
+    assert!(
+        the_link_as_graph_renders_it(&streams.b, &streams.link_id).is_null(),
+        "the resumed stream holds the cut link again"
+    );
+    assert_eq!(camera_output.channel_notifier_count("video"), 0);
+}
+
+/// A re-plan that lands while the reading stream is paused waits for its
+/// resume, which compiles it: opening the source port while `b` is paused
+/// leaves the link awaiting, and resuming `b` wires it.
+///
+/// Fail-without-fix: resume without a commit and the re-plan logged while
+/// paused is never compiled, so the link waits on a port already open.
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[serial]
+fn resuming_a_reading_stream_compiles_the_re_plan_logged_while_it_was_paused() {
+    ensure_the_test_processors_are_registered();
+    let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+    let runner = Runner::new().expect("the engine builds");
+    let load = |stream_name: &str| {
+        runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named(stream_name),
+            )
+            .expect("the stream loads")
+    };
+    let a = load("a");
+    add_a_camera(&a);
+    start(&a);
+    let b = load("b");
+    let display = add_a_display_tallying_into(&b, "wired-once-b-resumes");
+    let link_id = b
+        .connect_from_an_output_port_in_another_stream(camera_video_of_the_stream_a(), display)
+        .expect("a link added before its stream starts is checked when it wires");
+    start(&b);
+    let events_of_b = EveryEventOfOneStream::listen_to(&b);
+    let rendered =
+        events_of_b.until_the_link(&b, &link_id, reads_awaiting_remote_because("internal"));
+    assert!(
+        reads_awaiting_remote_because("internal")(&rendered),
+        "{rendered}"
+    );
+    b.pause().expect("the stream `b` pauses");
+
+    a.set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+    let the_re_plan_is_logged =
+        || {
+            b.compiler
+            .logged_pending_operations()
+            .iter()
+            .any(|operation| matches!(
+                operation,
+                crate::core::compiler::PendingOperation::AddLink(logged) if *logged == link_id
+            ))
+        };
+    events_of_b.until_the_link(&b, &link_id, |_| the_re_plan_is_logged());
+    assert!(
+        the_re_plan_is_logged(),
+        "opening the port re-planned nothing"
+    );
+    let rendered = the_link_as_graph_renders_it(&b, &link_id);
+    assert!(
+        reads_awaiting_remote_because("internal")(&rendered),
+        "{rendered}"
+    );
+
+    b.resume().expect("the stream `b` resumes");
+
+    let rendered = the_link_as_graph_renders_it(&b, &link_id);
+    assert!(reads_wired(&rendered), "{rendered}");
+    assert!(wait_until_tallied("wired-once-b-resumes", 5));
+}

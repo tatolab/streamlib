@@ -210,24 +210,7 @@ fn begin_a_wiring_attempt(
         return Err(HowALinkReadingAnotherStreamWasReconciled::AlreadyWiredAgainstItsSourcesLoad);
     }
     let generation = component.begin_a_wiring_attempt();
-    if let Some(stale_wiring) = component.take_wiring() {
-        drop(stale_wiring);
-        link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
-        link.remove::<OutOfProcessLinkWireRepliesComponent>();
-        link.insert(LinkStateComponent(LinkState::Pending));
-        release_the_destination_side_of_a_link(
-            reading_graph,
-            to_port.processor_id(),
-            to_port.port_name(),
-            link_id,
-        );
-        tracing::info!(
-            %link_id,
-            source = %source,
-            "[WIRE] unwired a link reading another stream from `{}`, whose wiring no longer stands",
-            source.stream_name()
-        );
-    }
+    unwire_a_link_reading_another_stream_from_the_wiring_it_holds(reading_graph, link_id);
 
     match read_the_destination_of_a_link(reading_graph, &to_port, link_id) {
         Ok(destination) => Ok(BegunWiringAttempt {
@@ -248,6 +231,44 @@ fn begin_a_wiring_attempt(
             Err(HowALinkReadingAnotherStreamWasReconciled::Refused(refusal))
         }
     }
+}
+
+/// Unwire link `link_id` of `reading_graph`, reading another stream, from the
+/// wiring it holds: the reader leaves the source's port, the source's side and
+/// the destination's side are released — no lock of the source stream's graph
+/// taken — and the link reads `pending` until it is wired again. Whether it
+/// held a wiring.
+pub(crate) fn unwire_a_link_reading_another_stream_from_the_wiring_it_holds(
+    reading_graph: &mut Graph,
+    link_id: &LinkUniqueId,
+) -> bool {
+    let Some(link) = reading_graph.traversal_mut().e(link_id).first_mut() else {
+        return false;
+    };
+    let Some(wiring) = link
+        .get_mut::<LinkReadingAnotherStreamComponent>()
+        .and_then(LinkReadingAnotherStreamComponent::take_wiring)
+    else {
+        return false;
+    };
+    drop(wiring);
+    let source = link.source().to_string();
+    let to_port = link.to_port().clone();
+    link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
+    link.remove::<OutOfProcessLinkWireRepliesComponent>();
+    link.insert(LinkStateComponent(LinkState::Pending));
+    release_the_destination_side_of_a_link(
+        reading_graph,
+        to_port.processor_id(),
+        to_port.port_name(),
+        link_id,
+    );
+    tracing::info!(
+        %link_id,
+        %source,
+        "[WIRE] unwired a link reading another stream from `{source}`, whose wiring no longer stands"
+    );
+    true
 }
 
 /// What opening the source's side on the source stream's graph came to.
@@ -1406,6 +1427,82 @@ mod tests {
             TwoStreamsReadAsRunning::readers_registered_against_the_camera_of(&streams.a),
             0
         );
+    }
+
+    /// A cut releases the link's wiring at once on both streams, whatever the
+    /// reading stream's run state: the source's notifier and its reader on the
+    /// port go, and the display's subscriber with them.
+    ///
+    /// Fail-without-fix: leave the release to the compile, which a paused
+    /// reading stream defers, and the source keeps publishing into the
+    /// reader's ring past the cut.
+    #[test]
+    fn a_cut_releases_the_wiring_at_once_whatever_the_reading_streams_run_state() {
+        for status_of_the_reader in [
+            RuntimeStatus::Started,
+            RuntimeStatus::Pausing,
+            RuntimeStatus::Paused,
+        ] {
+            let streams = TwoStreamsReadAsRunning::load();
+            let link_id = streams.link_the_display_from(camera_out1_of("a"));
+            reconcile_a_link_reading_another_stream(&streams.b, &link_id);
+            assert_eq!(streams.camera_output.channel_notifier_count("out1"), 1);
+            *streams.b.status.lock() = status_of_the_reader;
+            let (_listener, disconnected) = listen_on(&streams.b, |event| {
+                matches!(event, RuntimeEvent::RuntimeDidDisconnect { .. })
+            });
+
+            streams
+                .a
+                .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Internal)
+                .unwrap();
+            disconnected
+                .recv_timeout(A_CUT_LANDS_WITHIN)
+                .expect("the cut disconnects the link");
+
+            assert_eq!(
+                streams.camera_output.channel_notifier_count("out1"),
+                0,
+                "a reading stream {status_of_the_reader:?}"
+            );
+            assert!(
+                streams.display_input.inbound_link_names("in1").is_empty(),
+                "a reading stream {status_of_the_reader:?}"
+            );
+            assert_eq!(
+                TwoStreamsReadAsRunning::readers_registered_against_the_camera_of(&streams.a),
+                0
+            );
+        }
+    }
+
+    /// A source node leaving its stream releases the link's wiring at once,
+    /// before any reconcile, on a paused reading stream too.
+    ///
+    /// Fail-without-fix: only mark the wiring stale for the next reconcile,
+    /// which a paused reading stream defers, and the source's notifier stays.
+    #[test]
+    fn a_source_node_leaving_its_stream_releases_the_wiring_at_once() {
+        for status_of_the_reader in [RuntimeStatus::Started, RuntimeStatus::Paused] {
+            let streams = TwoStreamsReadAsRunning::load();
+            let link_id = streams.link_the_display_from(camera_out1_of("a"));
+            reconcile_a_link_reading_another_stream(&streams.b, &link_id);
+            *streams.b.status.lock() = status_of_the_reader;
+
+            streams.remove_the_camera_cutting_its_readers();
+
+            assert_eq!(
+                streams.camera_output.channel_notifier_count("out1"),
+                0,
+                "a reading stream {status_of_the_reader:?}"
+            );
+            assert!(
+                streams.display_input.inbound_link_names("in1").is_empty(),
+                "a reading stream {status_of_the_reader:?}"
+            );
+            let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
+            assert_eq!(rendered["state"], "pending", "{rendered}");
+        }
     }
 
     /// A source node that left its stream cuts the link back to waiting: the

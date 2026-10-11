@@ -12,6 +12,9 @@ use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
+use crate::core::compiler::compiler_ops::{
+    close_iceoryx2_service, unwire_a_link_reading_another_stream_from_the_wiring_it_holds,
+};
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     CutOffAReaderOfAnExposedOutputPort, GraphEdgeWithComponents, GraphNodeWithComponents,
@@ -789,33 +792,48 @@ pub(crate) fn the_cut_of_a_link_reading_another_stream(
 
 impl LoadedStreamInThisRuntime {
     /// Let link `link_id`, reading another stream, go for `why`, when its
-    /// wiring attempt `wiring_generation` is still the latest: a level that no
-    /// longer allows it disconnects it, and a source node that left its stream
-    /// returns it to waiting, to be wired again when that node is back.
+    /// wiring attempt `wiring_generation` is still the latest: its wiring is
+    /// released at once, then a level that no longer allows it disconnects it,
+    /// and a source node that left its stream returns it to waiting, to be
+    /// wired again when that node is back. Compiled at once while this stream
+    /// is started, pausing or paused.
     pub(crate) async fn let_a_link_reading_another_stream_go(
         &self,
         link_id: LinkUniqueId,
         wiring_generation: u64,
         why: WhyAReaderOfAnExposedOutputPortIsCutOff,
     ) -> Result<()> {
+        let commit_at_once = self.commit_context_while_its_start_made_processors_stand();
         match why {
             WhyAReaderOfAnExposedOutputPortIsCutOff::TheLevelNoLongerAllowsIt { level } => {
-                let still_the_latest_attempt = self.compiler.scope(|graph, _tx| {
-                    graph.traversal().e(&link_id).first().is_some_and(|link| {
-                        a_link_reading_another_stream_is_still_on_wiring_attempt(
-                            link,
-                            wiring_generation,
-                        )
-                    })
+                let cut = self.compiler.scope(|graph, _tx| {
+                    let still_the_latest_attempt =
+                        graph.traversal().e(&link_id).first().is_some_and(|link| {
+                            a_link_reading_another_stream_is_still_on_wiring_attempt(
+                                link,
+                                wiring_generation,
+                            )
+                        });
+                    if still_the_latest_attempt
+                        && let Err(failure) = close_iceoryx2_service(graph, &link_id)
+                    {
+                        tracing::warn!(%link_id, "[exposure] closing link `{link_id}`: {failure}");
+                    }
+                    still_the_latest_attempt
                 });
-                if !still_the_latest_attempt {
+                if !cut {
                     return Ok(());
                 }
                 tracing::info!(
                     %link_id,
                     "[exposure] disconnecting link `{link_id}`: its source port is now {level}"
                 );
-                match disconnect_impl(self.live_graph_change(), link_id).await {
+                let graph_change = LiveGraphChangeOnOneStream {
+                    compiler: Arc::clone(&self.compiler),
+                    live: commit_at_once,
+                    stream: self.loaded_stream_identity().clone(),
+                };
+                match disconnect_impl(graph_change, link_id).await {
                     Ok(()) | Err(Error::NotFound(_)) => Ok(()),
                     Err(failure) => Err(failure),
                 }
@@ -836,10 +854,10 @@ impl LoadedStreamInThisRuntime {
                     else {
                         return false;
                     };
-                    component.note_its_source_let_go();
                     // Supersedes an attempt still in flight, which would
                     // otherwise hold a wiring against the node that left.
                     let _superseding_attempt = component.begin_a_wiring_attempt();
+                    unwire_a_link_reading_another_stream_from_the_wiring_it_holds(graph, &link_id);
                     tx.log(PendingOperation::AddLink(link_id.clone()));
                     true
                 });
@@ -850,11 +868,30 @@ impl LoadedStreamInThisRuntime {
                     %link_id,
                     "[WIRE] the node publishing link `{link_id}`'s source left its stream"
                 );
-                commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+                commit_live_graph_change(&self.compiler, commit_at_once).await?;
                 self.loaded_stream_identity()
                     .publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
                 Ok(())
             }
+        }
+    }
+
+    /// The context a change to a link reading another stream compiles against
+    /// at once: this stream's while it is started, pausing or paused — each of
+    /// which keeps the processors its start made — and `None` otherwise, or on
+    /// a processor's own execution thread.
+    fn commit_context_while_its_start_made_processors_stand(&self) -> LiveCommitContext {
+        if !this_thread_may_commit_inline() {
+            return None;
+        }
+        match *self.status.lock() {
+            RuntimeStatus::Started | RuntimeStatus::Pausing | RuntimeStatus::Paused => {
+                self.runtime_context.lock().clone()
+            }
+            RuntimeStatus::Initial
+            | RuntimeStatus::Starting
+            | RuntimeStatus::Stopping
+            | RuntimeStatus::Stopped => None,
         }
     }
 

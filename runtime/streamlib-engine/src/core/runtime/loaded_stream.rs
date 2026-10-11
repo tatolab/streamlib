@@ -984,7 +984,8 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
-    /// Resume every processor in this stream.
+    /// Resume every processor in this stream, then compile every graph change
+    /// logged while it was paused.
     pub fn resume(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         *self.status.lock() = RuntimeStatus::Starting;
@@ -1007,6 +1008,12 @@ impl LoadedStreamInThisRuntime {
         });
 
         *self.status.lock() = RuntimeStatus::Started;
+        let committed = match self.runtime_context.lock().clone() {
+            Some(this_streams_runtime_context) => {
+                self.compiler.commit(&this_streams_runtime_context)
+            }
+            None => Ok(()),
+        };
         if failures.is_empty() {
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResumed);
         } else {
@@ -1014,7 +1021,7 @@ impl LoadedStreamInThisRuntime {
                 error: format!("{} processor(s) rejected resume", failures.len()),
             });
         }
-        Ok(())
+        committed
     }
 
     // =========================================================================

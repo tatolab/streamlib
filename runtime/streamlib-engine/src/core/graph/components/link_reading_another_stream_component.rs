@@ -68,14 +68,6 @@ impl LinkReadingAnotherStreamComponent {
         self.wiring.as_ref()
     }
 
-    /// Note that the node publishing the link's source left its stream, so
-    /// the wiring it held is stale.
-    pub(crate) fn note_its_source_let_go(&mut self) {
-        if let Some(wiring) = &mut self.wiring {
-            wiring.source_let_go = true;
-        }
-    }
-
     /// Hold `wiring` as the link's, handing back the one it replaces.
     #[must_use = "the wiring handed back releases the source's side when dropped"]
     pub(crate) fn hold_wiring(
@@ -134,7 +126,6 @@ pub(crate) struct WiringOfALinkReadingAnotherStream {
     _exposure_registration: ExposedOutputPortReaderRegistration,
     _source_side: SourceSideOfALinkReadingAnotherStream,
     source_stream_tag: LoadedStreamTag,
-    source_let_go: bool,
 }
 
 impl WiringOfALinkReadingAnotherStream {
@@ -149,15 +140,13 @@ impl WiringOfALinkReadingAnotherStream {
             _exposure_registration: exposure_registration,
             _source_side: source_side,
             source_stream_tag,
-            source_let_go: false,
         }
     }
 
     /// Whether this wiring still stands against the load of the source's
-    /// stream tagged `loaded_source_stream_tag`: made against that load, and
-    /// its source's node has not left the stream.
+    /// stream tagged `loaded_source_stream_tag`: made against that load.
     pub(crate) fn still_stands_against(&self, loaded_source_stream_tag: LoadedStreamTag) -> bool {
-        !self.source_let_go && self.source_stream_tag == loaded_source_stream_tag
+        self.source_stream_tag == loaded_source_stream_tag
     }
 }
 
