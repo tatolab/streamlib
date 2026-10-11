@@ -3363,6 +3363,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_on_one_machine_both_construct_and_name_it_alike -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_machine_is_refused_naming_that_machine -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::no_tailscale_names_the_machine_by_its_hostname -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_status_that_names_no_tailnet_machine_leaves_the_hostname_saying_why -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket the_retired_verbs_and_flags_are_usage_errors -->
@@ -3524,6 +3527,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   machine. Owner, 2026-10-04. [moq-on-the-tailnet]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::no_tailscale_names_the_machine_by_its_hostname -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_status_that_names_no_tailnet_machine_leaves_the_hostname_saying_why -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_naming_another_machine_is_refused_by_name -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ, the `moq-net` and `moq-tokio`
