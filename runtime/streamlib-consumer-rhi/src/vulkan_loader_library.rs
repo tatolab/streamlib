@@ -7,6 +7,8 @@
 #[cfg(target_os = "macos")]
 use crate::runtime_unit_layout::{
     BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME, VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME,
+    app_bundle_contents_directory_holding_the_executable_directory,
+    bundled_vulkan_driver_directory_in_the_app_bundle_contents,
     bundled_vulkan_driver_directory_in_the_lend, lend_directory_in_the_runtime_unit,
 };
 use vulkanalia::loader::{LIBRARY, LibloadingLoader};
@@ -22,8 +24,9 @@ use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 /// loader to use, and the order is fixed.
 ///
 /// The runtime unit carries its own loader, which is what a stock machine
-/// opens: beside the wheel's `_engine`, or in the lend a binary linking the
-/// engine finds relative to its own directory. The Homebrew prefixes after it
+/// opens: beside the wheel's `_engine`, in the lend a binary linking the engine
+/// finds relative to its own directory, or in the `Frameworks/` of the app
+/// bundle whose `Contents/MacOS` holds that binary. The Homebrew prefixes after it
 /// are developer-machine fallbacks, and a package manager must never appear in
 /// anything a user reads.
 pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
@@ -32,12 +35,22 @@ pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString>
     candidate_paths
 }
 
-/// The macOS-only tail of the search list: the versioned soname, a LunarG SDK
-/// root if one is exported, the loader the wheel carries, the loader the lend
-/// beside a binary's directory carries, and the two prefixes dyld does not
-/// search itself.
 #[cfg(target_os = "macos")]
 fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+    macos_vulkan_loader_library_candidate_paths_for_the_image_in(
+        directory_of_the_image_this_code_is_in().as_deref(),
+    )
+}
+
+/// The macOS-only tail of the search list, for code in an image whose
+/// directory is `directory_of_the_image`: the versioned soname, a LunarG SDK
+/// root if one is exported, the loader the wheel carries, the loader the lend
+/// beside a binary's directory carries, the loader the app bundle holding the
+/// image carries, and the two prefixes dyld does not search itself.
+#[cfg(target_os = "macos")]
+fn macos_vulkan_loader_library_candidate_paths_for_the_image_in(
+    directory_of_the_image: Option<&std::path::Path>,
+) -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> =
         vec![VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME.into()];
     if let Some(sdk_root) = std::env::var_os("VULKAN_SDK") {
@@ -46,15 +59,22 @@ fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
         sdk_library_path.push(LIBRARY);
         candidate_paths.push(sdk_library_path.into_os_string());
     }
-    if let Some(directory_of_this_image) = directory_of_the_image_this_code_is_in() {
+    if let Some(directory_of_the_image) = directory_of_the_image {
         candidate_paths.push(
-            vulkan_loader_library_bundled_beside_the_image_in(&directory_of_this_image)
+            vulkan_loader_library_bundled_beside_the_image_in(directory_of_the_image)
                 .into_os_string(),
         );
         if let Some(lent_loader_path) =
-            vulkan_loader_library_in_the_lend_beside_the_binary_directory(&directory_of_this_image)
+            vulkan_loader_library_in_the_lend_beside_the_binary_directory(directory_of_the_image)
         {
             candidate_paths.push(lent_loader_path.into_os_string());
+        }
+        if let Some(app_bundle_loader_path) =
+            vulkan_loader_library_in_the_app_bundle_holding_the_image_directory(
+                directory_of_the_image,
+            )
+        {
+            candidate_paths.push(app_bundle_loader_path.into_os_string());
         }
     }
     candidate_paths.push("/opt/homebrew/lib/libvulkan.dylib".into());
@@ -89,6 +109,23 @@ fn vulkan_loader_library_in_the_lend_beside_the_binary_directory(
             runtime_unit_root,
         ))
         .join(VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME),
+    )
+}
+
+/// The loader the macOS app bundle carries among its `Frameworks/`, for an
+/// image in that bundle's `Contents/MacOS` — the bundle `tatolabd` finds its
+/// lend in. `None` for an image anywhere else.
+#[cfg(target_os = "macos")]
+fn vulkan_loader_library_in_the_app_bundle_holding_the_image_directory(
+    directory_of_the_image: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    app_bundle_contents_directory_holding_the_executable_directory(directory_of_the_image).map(
+        |app_bundle_contents_directory| {
+            bundled_vulkan_driver_directory_in_the_app_bundle_contents(
+                app_bundle_contents_directory,
+            )
+            .join(VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME)
+        },
     )
 }
 
@@ -305,6 +342,80 @@ mod tests {
             Some(&lent_loader_path),
             "the lend's loader must come right after the one beside the image: \
              {candidate_paths:?}"
+        );
+    }
+
+    /// `tatolabd` in an app bundle's `Contents/MacOS` finds the loader among the
+    /// bundle's `Frameworks/`, right after the runtime-unit lend's candidate and
+    /// before any Homebrew prefix.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_app_bundles_loader_is_looked_for_right_after_the_lent_loader_for_an_image_in_contents_macos()
+     {
+        let app_bundle_executable_directory =
+            std::path::Path::new("/Applications/Tatolab.app/Contents/MacOS");
+        let candidate_paths: Vec<std::path::PathBuf> =
+            macos_vulkan_loader_library_candidate_paths_for_the_image_in(Some(
+                app_bundle_executable_directory,
+            ))
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let app_bundle_loader_path = std::path::PathBuf::from(
+            "/Applications/Tatolab.app/Contents/Frameworks/tatolab-runtime/_vulkan_driver/\
+             libvulkan.1.dylib",
+        );
+        let lent_loader_path = vulkan_loader_library_in_the_lend_beside_the_binary_directory(
+            app_bundle_executable_directory,
+        )
+        .expect("Contents/MacOS has a parent");
+
+        let lent_loader_position = candidate_paths
+            .iter()
+            .position(|path| *path == lent_loader_path)
+            .unwrap_or_else(|| panic!("the lent loader is not searched: {candidate_paths:?}"));
+        assert_eq!(
+            candidate_paths.get(lent_loader_position + 1),
+            Some(&app_bundle_loader_path),
+            "the app bundle's loader must come right after the lend's: {candidate_paths:?}"
+        );
+        let first_homebrew_position = candidate_paths
+            .iter()
+            .position(|path| path.starts_with("/opt/homebrew/"))
+            .unwrap_or_else(|| panic!("no Homebrew prefix is searched: {candidate_paths:?}"));
+        assert!(
+            lent_loader_position + 1 < first_homebrew_position,
+            "the app bundle's loader must come before Homebrew's: {candidate_paths:?}"
+        );
+    }
+
+    /// An image outside an app bundle's `Contents/MacOS` adds no app bundle
+    /// candidate, so the search list of the wheel and of a runtime unit's
+    /// `bin/` is unchanged.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_image_outside_an_app_bundle_adds_no_app_bundle_loader_candidate() {
+        for directory_of_the_image in [
+            "/opt/tatolab-runtime/bin",
+            "/Users/someone/MacOS",
+            "/Applications/Tatolab.app/Contents/Resources",
+        ] {
+            assert_eq!(
+                vulkan_loader_library_in_the_app_bundle_holding_the_image_directory(
+                    std::path::Path::new(directory_of_the_image)
+                ),
+                None,
+                "{directory_of_the_image}"
+            );
+        }
+        let candidate_paths = macos_vulkan_loader_library_candidate_paths_for_the_image_in(Some(
+            std::path::Path::new("/opt/tatolab-runtime/bin"),
+        ));
+        assert!(
+            !candidate_paths
+                .iter()
+                .any(|path| path.to_string_lossy().contains("/Frameworks/")),
+            "{candidate_paths:?}"
         );
     }
 

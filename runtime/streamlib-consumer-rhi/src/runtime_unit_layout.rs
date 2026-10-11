@@ -3,7 +3,9 @@
 
 //! Where a runtime unit lays out what it carries: `bin/` beside the lend, and
 //! on macOS the bundled Vulkan driver beside `_engine` in the lent
-//! `tatolab/runtime/`.
+//! `tatolab/runtime/`. Also where the macOS app bundle lays the same unit out:
+//! binaries in `Contents/MacOS`, the lend in `Contents/Resources/lend`, and the
+//! lend's Mach-Os in `Contents/Frameworks/tatolab-runtime`.
 //!
 //! Standard library only: `xtask` includes this file by path to lay out the
 //! same unit `tatolabd` and the Vulkan loader search find their way around.
@@ -41,6 +43,21 @@ pub const BUNDLED_VULKAN_DRIVER_FILE_NAMES: [&str; 3] = [
     BUNDLED_ICD_MANIFEST_FILE_NAME,
 ];
 
+/// The directory name of a macOS app bundle's `Contents/`.
+pub const APP_BUNDLE_CONTENTS_DIRECTORY_NAME: &str = "Contents";
+
+/// The directory name of a macOS app bundle's executables, inside `Contents/`.
+pub const APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME: &str = "MacOS";
+
+/// The lend directory, relative to a macOS app bundle's `Contents/`.
+pub const LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS: &str = "Resources/lend";
+
+/// The directory holding every Mach-O of the lent `tatolab/runtime/`, at its
+/// path below that package, relative to a macOS app bundle's `Contents/`.
+/// Code signing admits no Mach-O under `Resources/`, so the lend links to these.
+pub const LENT_RUNTIME_PACKAGE_MACH_O_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS: &str =
+    "Frameworks/tatolab-runtime";
+
 /// The lend of the runtime unit rooted at `runtime_unit_root`.
 pub fn lend_directory_in_the_runtime_unit(runtime_unit_root: &Path) -> PathBuf {
     runtime_unit_root.join(LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT)
@@ -50,5 +67,34 @@ pub fn lend_directory_in_the_runtime_unit(runtime_unit_root: &Path) -> PathBuf {
 pub fn bundled_vulkan_driver_directory_in_the_lend(lend_directory: &Path) -> PathBuf {
     lend_directory
         .join(LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND)
+        .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
+}
+
+/// The app bundle's `Contents/` when `executable_directory` is its
+/// `Contents/MacOS`, else `None`.
+pub fn app_bundle_contents_directory_holding_the_executable_directory(
+    executable_directory: &Path,
+) -> Option<&Path> {
+    if executable_directory.file_name()? != APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME {
+        return None;
+    }
+    let app_bundle_contents_directory = executable_directory.parent()?;
+    (app_bundle_contents_directory.file_name()? == APP_BUNDLE_CONTENTS_DIRECTORY_NAME)
+        .then_some(app_bundle_contents_directory)
+}
+
+/// The lend of the app bundle whose `Contents/` is `app_bundle_contents_directory`.
+pub fn lend_directory_in_the_app_bundle_contents(app_bundle_contents_directory: &Path) -> PathBuf {
+    app_bundle_contents_directory.join(LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS)
+}
+
+/// The bundled Vulkan driver directory among the lent runtime package's
+/// Mach-Os in the app bundle whose `Contents/` is
+/// `app_bundle_contents_directory`.
+pub fn bundled_vulkan_driver_directory_in_the_app_bundle_contents(
+    app_bundle_contents_directory: &Path,
+) -> PathBuf {
+    app_bundle_contents_directory
+        .join(LENT_RUNTIME_PACKAGE_MACH_O_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS)
         .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
 }
