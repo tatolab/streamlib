@@ -433,6 +433,52 @@ fn a_link_loaded_before_its_source_stream_awaits_naming_it_then_wires_when_it_st
 )]
 #[test]
 #[serial]
+fn a_link_whose_source_stream_starts_with_the_port_internal_awaits_naming_it_then_wires_when_it_opens()
+ {
+    let machine = OneMachine::new();
+    let display_tally = a_name_for_this_test("display");
+    let b = machine.load("b");
+    let display = add_a_bag_sink(&b, "display", &display_tally);
+    let link_id = b
+        .connect_from_an_output_port_in_another_stream(
+            port_of_another_stream("a", "camera", "video"),
+            display,
+        )
+        .unwrap();
+    start(&b);
+    let events_of_b = EveryEventOfOneStream::listen_to(&b);
+
+    let a = machine.load_a_camera_stream("a", &a_name_for_this_test("camera"), &[]);
+    start(&a);
+
+    let awaits_its_port = |link: &serde_json::Value| {
+        reads_awaiting_remote_because("port `video` of node `camera` in stream `a` is internal")(
+            link,
+        ) && reads_awaiting_remote_because(
+            "the link wires when the port is exposed private or public",
+        )(link)
+    };
+    let rendered = events_of_b.until_the_link(&b, &link_id, awaits_its_port);
+    assert!(awaits_its_port(&rendered), "{rendered}");
+    assert_eq!(bags_tallied_as(&display_tally), 0);
+
+    a.set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+
+    let rendered = events_of_b.until_the_link(&b, &link_id, reads_wired);
+    assert!(reads_wired(&rendered), "{rendered}");
+    assert!(wait_until_tallied(
+        &display_tally,
+        ENOUGH_BAGS_TO_SAY_A_LINK_CARRIES
+    ));
+}
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib-engine/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[serial]
 fn unloading_the_source_stream_puts_the_link_back_to_awaiting_and_its_reload_rewires_it() {
     let machine = OneMachine::new();
     let display_tally = a_name_for_this_test("display");
@@ -625,7 +671,12 @@ fn a_re_added_source_node_still_internal_holds_the_link_awaiting_its_port_and_op
         "the re-added camera's link does not await its port: {rendered}"
     );
     let reason = rendered["awaiting_remote_reason"].as_str().unwrap();
-    for named in ["`a`", "`camera`", "`video`"] {
+    for named in [
+        "`a`",
+        "`camera`",
+        "`video`",
+        "the link wires when the port is exposed private or public",
+    ] {
         assert!(reason.contains(named), "{named:?} not in: {reason}");
     }
 

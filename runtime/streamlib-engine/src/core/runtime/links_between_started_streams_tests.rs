@@ -220,7 +220,7 @@ fn the_source_streams_watchdog_abandoning_it_returns_the_link_to_awaiting() {
 )]
 #[test]
 #[serial]
-fn an_awaiting_link_never_fails_the_commit() {
+fn awaiting_links_never_fail_the_commit_and_one_awaiting_its_port_wires_once_it_opens() {
     ensure_the_test_processors_are_registered();
     let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
     let runner = Runner::new().expect("the engine builds");
@@ -236,14 +236,14 @@ fn an_awaiting_link_never_fails_the_commit() {
     add_a_camera(&a);
     start(&a);
     let b = load("b");
-    let display = add_a_display_tallying_into(&b, "never-carries");
-    let refused = b
+    let display = add_a_display_tallying_into(&b, "carries-once-the-port-opens");
+    let awaiting_its_port = b
         .connect_from_an_output_port_in_another_stream(
             camera_video_of_the_stream_a(),
             display.clone(),
         )
         .expect("a link added before its stream starts is checked when it wires");
-    let awaiting = b
+    let awaiting_its_stream = b
         .connect_from_an_output_port_in_another_stream(
             OutputPortInAnotherStreamOnThisMachine::new("nowhere", "camera", "video").unwrap(),
             display,
@@ -251,24 +251,39 @@ fn an_awaiting_link_never_fails_the_commit() {
         .unwrap();
 
     b.start()
-        .expect("a link that waits or is refused never fails the stream's start");
+        .expect("a link that waits never fails the stream's start");
 
-    let refused = the_link_as_graph_renders_it(&b, &refused);
-    assert_eq!(refused["state"], "error", "{refused}");
+    let rendered = the_link_as_graph_renders_it(&b, &awaiting_its_port);
     assert!(
-        refused["error_reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("internal")),
-        "{refused}"
+        reads_awaiting_remote_because("port `video` of node `camera` in stream `a` is internal")(
+            &rendered
+        ),
+        "{rendered}"
     );
-    let awaiting = the_link_as_graph_renders_it(&b, &awaiting);
     assert!(
-        reads_awaiting_remote_because("the stream `nowhere` is not loaded")(&awaiting),
-        "{awaiting}"
+        reads_awaiting_remote_because("the link wires when the port is exposed private or public")(
+            &rendered
+        ),
+        "{rendered}"
+    );
+    let rendered = the_link_as_graph_renders_it(&b, &awaiting_its_stream);
+    assert!(
+        reads_awaiting_remote_because("the stream `nowhere` is not loaded")(&rendered),
+        "{rendered}"
     );
     b.wait_until_every_processor_is_running(THE_ENGINE_ANSWERS_WITHIN)
         .expect("the display runs beside its links that carry nothing");
-    assert_eq!(bags_tallied_as("never-carries"), 0);
+    assert_eq!(bags_tallied_as("carries-once-the-port-opens"), 0);
+
+    let events_of_b = EveryEventOfOneStream::listen_to(&b);
+    a.set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+    let rendered = events_of_b.until_the_link(&b, &awaiting_its_port, reads_wired);
+    assert!(reads_wired(&rendered), "{rendered}");
+    assert!(
+        wait_until_tallied("carries-once-the-port-opens", 5),
+        "opening the port wired the link, and nothing reached the display"
+    );
 }
 
 #[cfg_attr(

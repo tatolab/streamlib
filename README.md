@@ -179,9 +179,11 @@ def recorder(stream_builder: StreamBuilder) -> None:
 ```
 
 The link belongs to the stream that holds its input, which pulls it; no stream links into
-another's input. The port must be private or public: one left internal is refused naming the port
-and its level. A link whose source stream is not loaded or not started yet reads `awaiting_remote`
-in `graph`, naming the stream it waits for, and wires when that stream starts. Lowering the port to
+another's input. The port must be private or public: a live `connect` to one left internal is
+refused naming the port and its level. A link whose source stream is not loaded or not started yet
+reads `awaiting_remote` in `graph`, naming the stream it waits for, and wires when that stream
+starts. A link loaded while its source port is internal waits too, naming the port and its level,
+and wires the moment `tatolab expose` makes the port private or public. Lowering the port to
 internal with `tatolab expose --remove` removes the link at once, and nothing restarts. An address
 naming another machine is refused: links between machines arrive with sharing.
 

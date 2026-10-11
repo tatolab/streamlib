@@ -78,7 +78,6 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
         source,
         source_stream,
         destination,
-        wired_to_this_load_of_its_source_before,
     } = match begun {
         Ok(begun) => begun,
         Err(how_it_was_reconciled) => return how_it_was_reconciled,
@@ -148,17 +147,12 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
         SourceSideOnTheSourceStream::NotYet(reason) => {
             return awaiting_its_source(reason);
         }
-        SourceSideOnTheSourceStream::ClosedToTheReadingStream(refusal)
-            if wired_to_this_load_of_its_source_before =>
-        {
+        SourceSideOnTheSourceStream::ClosedToTheReadingStream(refusal) => {
             return awaiting_its_source(format!(
-                "{refusal}; the link was wired to this load of the stream `{}` before, so it \
-                     wires again when the port is opened to it",
-                source.stream_name()
+                "{refusal}; the link wires when the port is exposed private or public"
             ));
         }
-        SourceSideOnTheSourceStream::ClosedToTheReadingStream(reason)
-        | SourceSideOnTheSourceStream::Refused(reason) => {
+        SourceSideOnTheSourceStream::Refused(reason) => {
             return refused(reason);
         }
     };
@@ -182,7 +176,6 @@ struct BegunWiringAttempt {
     source: OutputPortInAnotherStreamOnThisMachine,
     source_stream: Option<Arc<LoadedStreamInThisRuntime>>,
     destination: DestinationOfALinkAsItsWiringReadsIt,
-    wired_to_this_load_of_its_source_before: bool,
 }
 
 /// Begin a wiring attempt on link `link_id` of `reading_graph`, unless the
@@ -222,10 +215,6 @@ fn begin_a_wiring_attempt(
         return Err(HowALinkReadingAnotherStreamWasReconciled::AlreadyWiredAgainstItsSourcesLoad);
     }
     let generation = component.begin_a_wiring_attempt();
-    let wired_to_this_load_of_its_source_before =
-        source_stream.as_ref().is_some_and(|source_stream| {
-            component.was_wired_to_this_load_of_its_source(source_stream.stream_tag())
-        });
     if let Some(stale_wiring) = component.take_wiring() {
         drop(stale_wiring);
         link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
@@ -251,7 +240,6 @@ fn begin_a_wiring_attempt(
             source,
             source_stream,
             destination,
-            wired_to_this_load_of_its_source_before,
         }),
         Err(refusal) => {
             let refusal = refusal.to_string();
@@ -272,7 +260,7 @@ enum SourceSideOnTheSourceStream {
     Opened(Box<OpenedSourceSideOnTheSourceStream>),
     NotYet(String),
     /// The source's port is at a level that does not allow the reading
-    /// stream, in the words of that refusal.
+    /// stream, in the words of that refusal; the link waits for it to open.
     ClosedToTheReadingStream(String),
     Refused(String),
 }
@@ -610,6 +598,31 @@ mod tests {
             .expect("the mock accepts its iceoryx2 resources");
         let output_writer = instance.iceoryx2_output_writer_inner();
         let input_mailboxes = instance.iceoryx2_input_mailboxes_inner();
+        attach_the_instance_to_the_node(stream, node_name, instance);
+        (output_writer, input_mailboxes)
+    }
+
+    /// Give node `node_name` of `stream` a live instance of `P` holding no
+    /// iceoryx2 resources, so it runs with no output writer.
+    fn run_the_node_holding_no_output_writer<P>(stream: &LoadedStreamInThisRuntime, node_name: &str)
+    where
+        P: crate::core::GeneratedProcessor
+            + crate::core::processors::DynGeneratedProcessor
+            + Send
+            + 'static,
+        P::Config: Default,
+    {
+        let instance = ProcessorInstance::new(Box::new(
+            P::from_config(Default::default()).expect("the mock constructs"),
+        ));
+        attach_the_instance_to_the_node(stream, node_name, instance);
+    }
+
+    fn attach_the_instance_to_the_node(
+        stream: &LoadedStreamInThisRuntime,
+        node_name: &str,
+        instance: ProcessorInstance,
+    ) {
         stream.compiler.scope(|graph, _tx| {
             let processor_id = graph
                 .traversal()
@@ -626,7 +639,6 @@ mod tests {
                     .expect("the node is in the stream"),
             );
         });
-        (output_writer, input_mailboxes)
     }
 
     fn read_as_running(stream: &LoadedStreamInThisRuntime) {
@@ -966,10 +978,13 @@ mod tests {
         );
     }
 
-    /// A port at `internal` refuses the link naming the port and its level,
-    /// and a refusal is final: raising the level later wires nothing.
+    /// A link to a port at `internal` waits, naming the port and its level,
+    /// and wires the moment the port is opened to other streams.
+    ///
+    /// Fail-without-fix: refuse the link for good and it reads `error`, so
+    /// opening the port re-plans nothing and it never wires.
     #[test]
-    fn a_link_to_an_internal_port_is_refused_and_stays_refused() {
+    fn a_link_to_an_internal_port_waits_naming_it_and_wires_once_the_port_opens() {
         let streams = TwoStreamsReadAsRunning::load();
         let link_id = streams.link_the_display_from(camera_out1_of("a"));
         streams
@@ -979,25 +994,74 @@ mod tests {
 
         let reconciled = reconcile_a_link_reading_another_stream(&streams.b, &link_id);
 
-        let HowALinkReadingAnotherStreamWasReconciled::Refused(refusal) = reconciled else {
-            panic!("an internal port is not refused: {reconciled:?}");
+        let HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason) = reconciled
+        else {
+            panic!("a link to an internal port does not wait: {reconciled:?}");
         };
-        for named in ["`a`", "`camera`", "`out1`", "internal"] {
-            assert!(refusal.contains(named), "{named:?} not in: {refusal}");
-        }
+        assert_waits_for_camera_out1_of_a_to_open(&reason);
         let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
-        assert_eq!(rendered["state"], "error", "{rendered}");
-        assert_eq!(rendered["error_reason"], refusal.as_str());
+        assert_eq!(rendered["state"], "awaiting_remote", "{rendered}");
+        assert_eq!(rendered["awaiting_remote_reason"], reason.as_str());
+        assert_eq!(streams.camera_output.channel_notifier_count("out1"), 0);
+        assert_eq!(
+            TwoStreamsReadAsRunning::readers_registered_against_the_camera_of(&streams.a),
+            0
+        );
 
-        streams
-            .a
-            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Private)
-            .unwrap();
+        opening_camera_out1_of_a_queues_the_link(&streams.a, &streams.b, &link_id);
         assert_eq!(
             reconcile_a_link_reading_another_stream(&streams.b, &link_id),
-            HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire
+            HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)
         );
-        assert_eq!(streams.camera_output.channel_notifier_count("out1"), 0);
+        streams
+            .camera_output
+            .write_raw("out1", b"a bag once the port opened", 0)
+            .unwrap();
+        streams.display_input.receive_pending();
+        assert_eq!(streams.display_input.drain("in1").len(), 1);
+    }
+
+    /// Assert `reason` names port `out1` of node `camera` of the stream `a`,
+    /// its level `internal`, and the levels that wire the link.
+    fn assert_waits_for_camera_out1_of_a_to_open(reason: &str) {
+        for named in [
+            "`a`",
+            "`camera`",
+            "`out1`",
+            "is internal",
+            "the link wires when the port is exposed private or public",
+        ] {
+            assert!(reason.contains(named), "{named:?} not in: {reason}");
+        }
+    }
+
+    /// Open port `out1` of `camera` in `source_stream` to other streams and
+    /// wait for the re-plan it spawns to queue `link_id` on `reading_stream`.
+    fn opening_camera_out1_of_a_queues_the_link(
+        source_stream: &LoadedStreamInThisRuntime,
+        reading_stream: &LoadedStreamInThisRuntime,
+        link_id: &LinkUniqueId,
+    ) {
+        let (_listener, changed) = listen_on(reading_stream, |event| {
+            matches!(event, RuntimeEvent::GraphDidChange)
+        });
+        source_stream
+            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Private)
+            .unwrap();
+        changed
+            .recv_timeout(A_CUT_LANDS_WITHIN)
+            .expect("opening the port re-plans the links reading its stream");
+        assert!(
+            reading_stream
+                .compiler
+                .logged_pending_operations()
+                .iter()
+                .any(|operation| matches!(
+                    operation,
+                    crate::core::compiler::PendingOperation::AddLink(added) if added == link_id
+                )),
+            "opening the port queues the waiting link to be wired"
+        );
     }
 
     /// A wiring made against a load of the source stream that is gone is
@@ -1056,15 +1120,12 @@ mod tests {
         assert_eq!(streams.display_input.drain("in1").len(), 1);
     }
 
-    /// A link wired to one load of its source stream is refused, naming the
-    /// port and its level, when the stream loads again with that port
-    /// `internal` — whether or not it was reconciled while the stream was
-    /// gone.
-    ///
-    /// Fail-without-fix: let any earlier wiring hold the link waiting and a
-    /// reload whose port is `internal` leaves it `awaiting_remote` for good.
+    /// A link wired to one load of its source stream waits, naming the port
+    /// and its level, when the stream loads again with that port `internal`
+    /// — whether or not it was reconciled while the stream was gone — and
+    /// wires to the new load once the port opens.
     #[test]
-    fn a_link_wired_before_is_refused_when_its_source_stream_reloads_internal() {
+    fn a_link_waits_when_its_source_stream_reloads_internal_and_wires_once_the_port_opens() {
         for reconciled_while_the_source_stream_was_unloaded in [true, false] {
             let streams = TwoStreamsReadAsRunning::load();
             let link_id = streams.link_the_display_from(camera_out1_of("a"));
@@ -1089,27 +1150,29 @@ mod tests {
             );
             let (reloaded_camera_output, _) =
                 run_the_node::<MockOutputOnlyProcessor::Processor>(&reloaded_a, "camera");
+            let reloaded_camera_output =
+                reloaded_camera_output.expect("an output-only mock holds an output writer");
             read_as_running(&reloaded_a);
             let reconciled = reconcile_a_link_reading_another_stream(&streams.b, &link_id);
 
-            let HowALinkReadingAnotherStreamWasReconciled::Refused(refusal) = reconciled else {
+            let HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason) = reconciled
+            else {
                 panic!(
-                    "a reload at internal is not refused (reconciled while unloaded: \
+                    "a reload at internal does not wait (reconciled while unloaded: \
                      {reconciled_while_the_source_stream_was_unloaded}): {reconciled:?}"
                 );
             };
-            for named in ["`a`", "`camera`", "`out1`", "internal"] {
-                assert!(refusal.contains(named), "{named:?} not in: {refusal}");
-            }
+            assert_waits_for_camera_out1_of_a_to_open(&reason);
             let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
-            assert_eq!(rendered["state"], "error", "{rendered}");
-            assert_eq!(rendered["error_reason"], refusal.as_str());
+            assert_eq!(rendered["state"], "awaiting_remote", "{rendered}");
+            assert_eq!(reloaded_camera_output.channel_notifier_count("out1"), 0);
+
+            opening_camera_out1_of_a_queues_the_link(&reloaded_a, &streams.b, &link_id);
             assert_eq!(
-                reloaded_camera_output
-                    .expect("an output-only mock holds an output writer")
-                    .channel_notifier_count("out1"),
-                0
+                reconcile_a_link_reading_another_stream(&streams.b, &link_id),
+                HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)
             );
+            assert_eq!(reloaded_camera_output.channel_notifier_count("out1"), 1);
         }
     }
 
@@ -1151,11 +1214,21 @@ mod tests {
         let (pattern_output, _) =
             run_the_node::<MockOutputOnlyProcessor::Processor>(&streams.b, "pattern");
         let pattern_output = pattern_output.expect("an output-only mock holds an output writer");
+        TwoStreamsReadAsRunning::add_a_node_to(
+            &streams.a,
+            MockOutputOnlyProcessor::processor_class_import_path(),
+            "silent",
+        );
+        run_the_node_holding_no_output_writer::<MockOutputOnlyProcessor::Processor>(
+            &streams.a, "silent",
+        );
         streams
             .a
-            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Internal)
+            .set_output_port_exposure_level("silent", "out1", OutputPortExposureLevel::Private)
             .unwrap();
-        let refused = streams.link_the_display_from(camera_out1_of("a"));
+        let refused = streams.link_the_display_from(
+            OutputPortInAnotherStreamOnThisMachine::new("a", "silent", "out1").unwrap(),
+        );
         let awaiting = streams.link_the_display_from(camera_out1_of("nowhere"));
         let display = streams.b.the_node_named("display").unwrap();
         let in_stream = streams
@@ -1180,7 +1253,7 @@ mod tests {
         assert!(
             refused["error_reason"]
                 .as_str()
-                .is_some_and(|reason| reason.contains("internal")),
+                .is_some_and(|reason| reason.contains("holds no output writer")),
             "{refused}"
         );
         let awaiting = the_link_as_graph_renders_it(&streams.b, &awaiting);
@@ -1366,9 +1439,8 @@ mod tests {
     /// naming the port and its level, rather than being refused, and opening
     /// the port re-plans it onto the new node's channel.
     ///
-    /// Fail-without-fix: map every `internal` port to a refusal and the
-    /// re-added node's link reads `error` for good; leave the level change
-    /// without a re-plan and the waiting link is never reconciled again.
+    /// Fail-without-fix: leave the level change without a re-plan and the
+    /// waiting link is never reconciled again.
     #[test]
     fn a_source_node_re_added_internal_holds_the_link_awaiting_its_port_until_it_opens() {
         let streams = TwoStreamsReadAsRunning::load();
@@ -1392,9 +1464,7 @@ mod tests {
         else {
             panic!("the link is not awaiting the re-added node's port: {reconciled:?}");
         };
-        for named in ["`a`", "`camera`", "`out1`", "internal"] {
-            assert!(reason.contains(named), "{named:?} not in: {reason}");
-        }
+        assert_waits_for_camera_out1_of_a_to_open(&reason);
         let rendered = the_link_as_graph_renders_it(&streams.b, &link_id);
         assert_eq!(rendered["state"], "awaiting_remote", "{rendered}");
         assert_eq!(rendered["awaiting_remote_reason"], reason.as_str());
@@ -1403,28 +1473,7 @@ mod tests {
             0
         );
 
-        let (_listener, changed) = listen_on(&streams.b, |event| {
-            matches!(event, RuntimeEvent::GraphDidChange)
-        });
-        streams
-            .a
-            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Private)
-            .unwrap();
-        changed
-            .recv_timeout(A_CUT_LANDS_WITHIN)
-            .expect("opening the port re-plans the links reading `a`");
-        assert!(
-            streams
-                .b
-                .compiler
-                .logged_pending_operations()
-                .iter()
-                .any(|operation| matches!(
-                    operation,
-                    crate::core::compiler::PendingOperation::AddLink(added) if *added == link_id
-                )),
-            "opening the port queues the waiting link to be wired"
-        );
+        opening_camera_out1_of_a_queues_the_link(&streams.a, &streams.b, &link_id);
 
         assert_eq!(
             reconcile_a_link_reading_another_stream(&streams.b, &link_id),

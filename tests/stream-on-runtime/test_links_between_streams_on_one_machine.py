@@ -97,6 +97,10 @@ INTERNAL_PATTERN_REFUSAL = (
     f"internal, and another stream or other code on this machine reads only a port that is "
     f"private or public"
 )
+#: Why a link loaded while `a`'s pattern is internal waits, naming the port and its level.
+INTERNAL_PATTERN_AWAITING_REASON = (
+    f"{INTERNAL_PATTERN_REFUSAL}; the link wires when the port is exposed private or public"
+)
 
 DISPLAY_WINDOW_FRAME_COUNT = re.compile(r"DisplayWindow: stopped \((\d+) frames\)")
 TAPPED_BAG_COUNT = 2
@@ -267,7 +271,7 @@ def test_a_reader_run_before_its_source_awaits_naming_it_then_wires_once_the_sou
 
 
 @pytest.mark.requires_gpu
-def test_a_link_to_an_internal_port_is_refused_naming_the_port_and_its_level_and_wires_once_it_is_private(
+def test_a_link_to_an_internal_port_awaits_naming_the_port_and_its_level_and_wires_once_it_is_exposed(
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     tmp_path: Path,
@@ -279,31 +283,32 @@ def test_a_link_to_an_internal_port_is_refused_naming_the_port_and_its_level_and
         tatolabd, b_reading_the_pattern_into_a_python_counter, READER_STREAM_NAME
     )
 
-    refused_at_its_load = local_api.await_link_reading(
+    awaiting_its_port = local_api.await_link_reading(
         PATTERN_IN_THE_SOURCE_STREAM,
-        "error",
+        "awaiting_remote",
         stream=READER_STREAM_NAME,
         timeout=LINK_WIRED_TIMEOUT_SECONDS,
     )
-    assert (refused_at_its_load["state"], refused_at_its_load.get("error_reason")) == (
-        "error",
-        INTERNAL_PATTERN_REFUSAL,
-    ), refused_at_its_load
-    local_api.call_tool(
-        "disconnect", {"stream": READER_STREAM_NAME, "link_id": refused_at_its_load["id"]}
-    )
+    assert (awaiting_its_port["state"], awaiting_its_port.get("awaiting_remote_reason")) == (
+        "awaiting_remote",
+        INTERNAL_PATTERN_AWAITING_REASON,
+    ), awaiting_its_port
+    assert "error_reason" not in awaiting_its_port, awaiting_its_port
 
-    connect_arguments = {
-        "stream": READER_STREAM_NAME,
-        "from_stream": SOURCE_STREAM_NAME,
-        "from_node": PATTERN_NODE,
-        "from_port": PATTERN_PORT,
-        "to_node": PATTERN_COUNTER_NODE,
-        "to_port": COUNTER_PORT,
-    }
-    refusal = local_api.connect_refusal(**connect_arguments)
+    refusal = local_api.connect_refusal(
+        stream=READER_STREAM_NAME,
+        from_stream=SOURCE_STREAM_NAME,
+        from_node=PATTERN_NODE,
+        from_port=PATTERN_PORT,
+        to_node=PATTERN_COUNTER_NODE,
+        to_port=COUNTER_PORT,
+    )
     assert INTERNAL_PATTERN_REFUSAL in refusal, refusal
-    assert local_api.links_reading(PATTERN_IN_THE_SOURCE_STREAM, stream=READER_STREAM_NAME) == []
+    assert [
+        link["id"]
+        for link in local_api.links_reading(PATTERN_IN_THE_SOURCE_STREAM, stream=READER_STREAM_NAME)
+    ] == [awaiting_its_port["id"]], "a live connect to an internal port adds no link"
+    reader_node_ids_before_the_expose = node_ids_of(local_api, READER_STREAM_NAME)
 
     exposed = assert_tatolab_succeeded(
         run_tatolab(
@@ -314,16 +319,23 @@ def test_a_link_to_an_internal_port_is_refused_naming_the_port_and_its_level_and
         f"{SOURCE_STREAM_NAME}/{PATTERN_NODE}/{PATTERN_PORT} is private (live only: an attached "
         f"stream keeps no record)\n"
     )
-    connected = local_api.connect(**connect_arguments)
     wired = local_api.await_link_reading(
         PATTERN_IN_THE_SOURCE_STREAM,
         "wired",
         stream=READER_STREAM_NAME,
         timeout=LINK_WIRED_TIMEOUT_SECONDS,
     )
-    assert (wired["id"], wired["state"]) == (connected["link_id"], "wired"), (connected, wired)
+    assert (wired["id"], wired["state"]) == (awaiting_its_port["id"], "wired"), wired
+    assert "awaiting_remote_reason" not in wired, wired
     counted = await_more_bags_counted(tatolabd, PATTERN_COUNTER_NODE)
     assert counted["bags_counted"] >= 10, counted
+
+    assert node_ids_of(local_api, READER_STREAM_NAME) == reader_node_ids_before_the_expose, (
+        "exposing the source port must never reload the reader"
+    )
+    assert tatolabd.stderr_text.count(stream_start_log_line(READER_STREAM_NAME)) == 1, (
+        f"`{READER_STREAM_NAME}` restarted:\n{tatolabd.recent_stderr()}"
+    )
     stop_tatolabd_cleanly(tatolabd)
 
 

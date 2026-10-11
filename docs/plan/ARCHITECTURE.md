@@ -3462,7 +3462,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   moq-on-the-tailnet: off the machine a public port is read over MoQ on the tailnet, and at a
   relay once the machine has joined one; machines are listed from Tailscale's status and asked
   for their public ports]
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_to_an_internal_port_is_refused_naming_the_port_and_its_level_and_wires_once_it_is_private -->
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_to_an_internal_port_awaits_naming_the_port_and_its_level_and_wires_once_it_is_exposed -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_lowering_the_source_to_internal_cuts_the_link_at_once_and_a_link_to_a_still_private_port_keeps_flowing -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test a_link_to_an_internal_port_of_another_stream_is_refused_naming_the_port_and_its_level -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test lowering_the_source_to_internal_disconnects_the_link_at_once_and_other_links_keep_carrying -->

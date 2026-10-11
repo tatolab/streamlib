@@ -676,6 +676,8 @@ fn the_instructions_say_a_link_is_made_in_its_inputs_stream_and_may_read_another
         "A link is made in the stream that holds its input",
         "`from_stream`, whose port must be `private` or `public`",
         "`awaiting_remote` with `awaiting_remote_reason`",
+        "A live `connect` to an `internal` one is refused naming the port and its level",
+        "wires when it arrives or when the port is exposed `private` or `public`",
         "Lowering the source port to `internal` removes the link at once",
         "`{stream, node, port}`",
     ] {

@@ -854,20 +854,17 @@ mod link_rendering_tests {
     fn a_refused_link_reading_another_stream_renders_its_reason_as_the_error_reason() {
         use crate::core::graph::LinkReadingAnotherStreamComponent;
 
+        let refusal = "node `camera` of the stream `a` holds no output writer, so its port \
+                       `video` publishes nothing";
         let mut link = a_link_reading_camera_video_of_the_stream_a();
         link.insert(LinkStateComponent(LinkState::Error));
         link.insert_component_without_rendering_it(
-            LinkReadingAnotherStreamComponent::carrying_nothing_because(
-                "port `video` of node `camera` in stream `a` is internal".to_string(),
-            ),
+            LinkReadingAnotherStreamComponent::carrying_nothing_because(refusal.to_string()),
         );
 
         let rendered = rendered_with_the_display_named(&link);
         assert_eq!(rendered["state"], "error");
-        assert_eq!(
-            rendered["error_reason"],
-            "port `video` of node `camera` in stream `a` is internal"
-        );
+        assert_eq!(rendered["error_reason"], refusal);
         assert!(
             rendered.get("awaiting_remote_reason").is_none(),
             "{rendered}"
