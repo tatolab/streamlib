@@ -289,10 +289,8 @@ class SplitScreenCompositor:
         split_screen_frame_texture = self.output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, width, height
         )
-        # Both upstream ids name textures acquired in other processes, and a
-        # dispatch binds them as they are: the engine resolves a kernel
-        # binding through the surface-share service exactly as it resolves one
-        # of this processor's own.
+        # Both upstream ids name textures other nodes wrote, and a dispatch
+        # binds them as they are, the same as this node's own.
         self.split_screen_kernel.dispatch(
             bindings={
                 RASTERIZED_FRAME_BINDING: self.newest_rasterized_frame["surface_id"],

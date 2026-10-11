@@ -678,8 +678,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   that venv. Undecided: the registry's owner and
   standards, a manager UI, and what the app's own catalog does. [one-runtime-per-machine]
 
-## Consumers — examples & packages — IN-FLIGHT (→ jpeg-after-the-robotics-cut, examples-show-streams-only)
+## Consumers — examples & packages — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-11-examples-show-streams-only.md -->
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
   current authoring idiom, converted gradually and never a contract source: engine
@@ -708,10 +709,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   PR. Every pre-pivot consumer neither deleted nor held below is conversion backlog under
   this doctrine, and that backlog is executed in full: `audio-mixer-demo`,
   `microphone-reverb-speaker`, `raytracing-showcase` and `fisheye-object-detection` are
-  Python, `camera-compute-kernel` and `camera-halftone` are kernel examples, and
-  `tokio-integration` is a plain cargo project. `examples/` stands at thirteen converted
-  beside two held. A showcase authored in the current idiom is an ordinary addition under
-  the convention below, not conversion backlog: `camera-codec-roundtrip` is the codec
+  Python, and `camera-compute-kernel` and `camera-halftone` are kernel examples.
+  `examples/` stands at twelve converted beside two held. A showcase authored in the
+  current idiom is an ordinary addition under the convention below, not conversion backlog: `camera-codec-roundtrip` is the codec
   blocks' showcase; `camera-audio-recorder` is the recording showcase — `CameraSource →
   H264Encoder → Mp4Sink` beside `MicrophoneSource → OpusEncoder → Mp4Sink`, the camera
   also fanned to a `DisplayWindow`, Ctrl-C stopping and closing the file;
@@ -726,6 +726,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   virtual-camera-sink — SHIPPED #2198]
   <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-codec-roundtrip examples/camera-virtual-camera -->
   <!-- verify: git ls-files examples/camera-audio-recorder/app.py examples/camera-audio-recorder/pyproject.toml -->
+- **DECIDED** — An example shows a person writing and running a stream: the scaffold's
+  idiom, built-ins, nodes, links and exposure. It never shows engine work. That means no
+  engine embedded in a host process, no driving the executor or its async runtime, and no
+  reaching into engine internals. Showing an engine to a stream author is irrelevant to
+  them and misleads them into thinking they have to do engine work, the way a Tailscale
+  user would be misled by an example of modifying Tailscale. An engine-facing example is
+  deleted, never converted. Engine contracts are proven by engine tests, as the first entry
+  in this section states. Owner, 2026-10-09. [examples-show-streams-only — SHIPPED #2718]
+  Rejected: porting `tokio-integration` to the new graph and tap shape (#2615): it keeps
+  alive an example of engine embedding that no stream author needs (owner, 2026-10-09).
 - **DECIDED** — The GPU examples run on the portable path: `camera-compute-kernel`,
   `camera-halftone`, `camera-virtual-camera` and `camera-python-effects` land frames with
   `copy_surface_to_surface` and carry no cupy; `camera-python-effects` decimates through

@@ -83,9 +83,8 @@ self.fisheye_rectify_kernel.dispatch(
 
 `frame.surface_id` is a texture another **helper process** wrote — the lens is
 a Python processor with its own interpreter, like this one — and a dispatch
-binding resolves it through the surface-share service exactly as it resolves a
-texture from this process's own ring. Nothing is copied and nothing crosses
-the host to make that work.
+binds it exactly as it binds a texture from this node's own ring. Nothing is
+copied and nothing crosses the host to make that work.
 
 That is the interesting half of the contrast with the app's first hop. There,
 `SyntheticFisheyeLens` reads `CameraSource` and *cannot* bind what it gets: a

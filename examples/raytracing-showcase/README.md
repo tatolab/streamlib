@@ -159,8 +159,7 @@ built once and what animates is the camera and the light — two floats of push
 constant. Moving geometry would mean rebuilding the top-level structure every
 frame, and a Python processor cannot reach that from `process()` at all: its
 limited context's `escalate` is a refusal, because the callback's one atomic
-privileged scope cannot cross the helper's process boundary. (A Rust processor
-in the app process can escalate, at the cost of a device-idle wait per frame.)
+privileged scope cannot cross the helper's process boundary.
 
 ### The two halves are the same instant, and that is not free
 
