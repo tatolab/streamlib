@@ -85,6 +85,7 @@ impl LoadedStreamInThisRuntime {
             self.engine_resources_shared_by_every_stream()
                 .spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
                     self.stream_name(),
+                    super::LinksReadingAStreamToRePlan::EveryOneStillToBeWired,
                 );
         }
         Ok(())
@@ -143,6 +144,27 @@ impl LoadedStreamInThisRuntime {
         location: OutputPortReaderOutsideItsStream,
     ) -> Result<()> {
         self.compiler.scope(|graph, _tx| {
+            refuse_a_reader_the_port_does_not_allow(
+                graph,
+                self.stream_name(),
+                node_name,
+                port_name,
+                location,
+            )
+        })
+    }
+
+    /// Refuse a reader as [`Self::refuse_a_reader_its_output_port_does_not_allow`]
+    /// does, waiting at most `bound` for this stream's graph lock; `None` when
+    /// it was not free within it.
+    pub(crate) fn refuse_a_reader_its_output_port_does_not_allow_within(
+        &self,
+        bound: std::time::Duration,
+        node_name: &str,
+        port_name: &str,
+        location: OutputPortReaderOutsideItsStream,
+    ) -> Option<Result<()>> {
+        self.compiler.scope_within(bound, |graph, _tx| {
             refuse_a_reader_the_port_does_not_allow(
                 graph,
                 self.stream_name(),

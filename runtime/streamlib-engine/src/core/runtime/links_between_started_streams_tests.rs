@@ -477,3 +477,74 @@ fn resuming_a_reading_stream_compiles_the_re_plan_logged_while_it_was_paused() {
     assert!(reads_wired(&rendered), "{rendered}");
     assert!(wait_until_tallied("wired-once-b-resumes", 5));
 }
+
+/// A live connect onto a source stream whose graph is held past the bound
+/// adds the link, which waits saying that stream did not answer, and wires on
+/// that stream's next compile — a config update that creates no processor.
+///
+/// Fail-without-fix: re-plan a link only when its source stream creates a
+/// processor, opens a port or is unloaded, and the link waits on a healthy
+/// source stream for good.
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[serial]
+fn a_link_its_source_stream_did_not_answer_wires_on_that_streams_next_compile() {
+    ensure_the_test_processors_are_registered();
+    let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+    let runner = Runner::new().expect("the engine builds");
+    let load = |stream_name: &str| {
+        runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named(stream_name),
+            )
+            .expect("the stream loads")
+    };
+    let a = load("a");
+    add_a_camera(&a);
+    let display_of_a = add_a_display_tallying_into(&a, "a-display-beside-a-busy-camera");
+    a.set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+    start(&a);
+    let b = load("b");
+    let display_of_b = add_a_display_tallying_into(&b, "wired-on-the-sources-next-compile");
+    start(&b);
+    let events_of_b = EveryEventOfOneStream::listen_to(&b);
+
+    let link_id = std::thread::scope(|scope| {
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let source_stream = &a;
+        scope.spawn(move || {
+            source_stream.compiler.scope(|_graph, _tx| {
+                let _ = held_tx.send(());
+                let _ = release_rx.recv_timeout(THE_ENGINE_ANSWERS_WITHIN);
+            })
+        });
+        held_rx.recv().expect("the source's graph is held");
+        let connected = b.connect_from_an_output_port_in_another_stream(
+            camera_video_of_the_stream_a(),
+            display_of_b,
+        );
+        let _ = release_tx.send(());
+        connected.expect("a source stream that does not answer the check still takes the link")
+    });
+    let rendered = the_link_as_graph_renders_it(&b, &link_id);
+    assert!(
+        reads_awaiting_remote_because("the stream `a` did not answer")(&rendered),
+        "{rendered}"
+    );
+
+    a.update_processor_config(
+        display_of_a.processor_id(),
+        serde_json::json!({ "tally": "a-display-beside-a-healthy-camera" }),
+    )
+    .expect("the display of `a` takes a new tally");
+
+    let rendered = events_of_b.until_the_link(&b, &link_id, reads_wired);
+    assert!(reads_wired(&rendered), "{rendered}");
+    assert!(wait_until_tallied("wired-on-the-sources-next-compile", 5));
+}

@@ -105,6 +105,15 @@ pub(crate) fn reconcile_a_link_reading_another_stream_announcing_its_wiring(
             reason,
         )
     };
+    let awaiting_its_source_streams_graph = |reason: String| {
+        carry_nothing_for(
+            reading_stream,
+            link_id,
+            generation,
+            WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSourceStreamsGraph,
+            reason,
+        )
+    };
     let refused = |reason: String| {
         carry_nothing_for(
             reading_stream,
@@ -147,9 +156,9 @@ pub(crate) fn reconcile_a_link_reading_another_stream_announcing_its_wiring(
             },
         )
     else {
-        return awaiting_its_source(format!(
-            "the stream `{}` did not answer within {}s; the link is tried again when that \
-                 stream starts or adds a node, opens a port to other streams, or is unloaded",
+        return awaiting_its_source_streams_graph(format!(
+            "the stream `{}` did not answer within {}s; the link is tried again once that \
+                 stream compiles its next change, opens a port to other streams, or is unloaded",
             source.stream_name(),
             HOW_LONG_A_LINK_READING_ANOTHER_STREAM_WAITS_FOR_ITS_SOURCES_GRAPH.as_secs_f64()
         ));
@@ -506,6 +515,9 @@ fn the_link_still_on_wiring_attempt<'graph>(
 enum WhyALinkReadingAnotherStreamCarriesNothing {
     /// It waits for its source, and reads `awaiting_remote`.
     AwaitingItsSource,
+    /// Its source stream's graph was not free within the bound; it reads
+    /// `awaiting_remote` until that stream's next compile re-plans it.
+    AwaitingItsSourceStreamsGraph,
     /// It was refused for good, and reads `error`.
     Refused,
 }
@@ -513,14 +525,16 @@ enum WhyALinkReadingAnotherStreamCarriesNothing {
 impl WhyALinkReadingAnotherStreamCarriesNothing {
     fn link_state(self) -> LinkState {
         match self {
-            Self::AwaitingItsSource => LinkState::AwaitingRemote,
+            Self::AwaitingItsSource | Self::AwaitingItsSourceStreamsGraph => {
+                LinkState::AwaitingRemote
+            }
             Self::Refused => LinkState::Error,
         }
     }
 
     fn how_it_was_reconciled(self, reason: String) -> HowALinkReadingAnotherStreamWasReconciled {
         match self {
-            Self::AwaitingItsSource => {
+            Self::AwaitingItsSource | Self::AwaitingItsSourceStreamsGraph => {
                 HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason)
             }
             Self::Refused => HowALinkReadingAnotherStreamWasReconciled::Refused(reason),
@@ -543,7 +557,15 @@ fn stamp_unless_the_attempt_was_overtaken(
     };
     link.insert(LinkStateComponent(why.link_state()));
     if let Some(component) = link.get_mut::<LinkReadingAnotherStreamComponent>() {
-        component.carry_nothing_because(reason);
+        match why {
+            WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSourceStreamsGraph => {
+                component.carry_nothing_until_its_source_streams_graph_answers(reason)
+            }
+            WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSource
+            | WhyALinkReadingAnotherStreamCarriesNothing::Refused => {
+                component.carry_nothing_because(reason)
+            }
+        }
     }
     true
 }
@@ -1369,20 +1391,8 @@ mod tests {
         let streams = TwoStreamsReadAsRunning::load();
         let link_id = streams.link_the_display_from(camera_out1_of("a"));
 
-        let reconciled = std::thread::scope(|scope| {
-            let (held_tx, held_rx) = std::sync::mpsc::channel();
-            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-            let source_stream = &streams.a;
-            scope.spawn(move || {
-                source_stream.compiler.scope(|_graph, _tx| {
-                    let _ = held_tx.send(());
-                    let _ = release_rx.recv();
-                })
-            });
-            held_rx.recv().expect("the source's graph is held");
-            let reconciled = reconcile_a_link_reading_another_stream(&streams.b, &link_id);
-            let _ = release_tx.send(());
-            reconciled
+        let (reconciled, _) = while_the_graph_of_the_stream_is_held(&streams.a, || {
+            reconcile_a_link_reading_another_stream(&streams.b, &link_id)
         });
 
         let HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason) = reconciled
@@ -1396,6 +1406,129 @@ mod tests {
         assert_eq!(
             TwoStreamsReadAsRunning::readers_registered_against_the_camera_of(&streams.a),
             0
+        );
+    }
+
+    /// Run `while_held` while another thread holds `stream`'s graph lock,
+    /// which it lets go once `while_held` returns or `A_CUT_LANDS_WITHIN` has
+    /// passed; whether `while_held` returned while the lock was still held.
+    fn while_the_graph_of_the_stream_is_held<T>(
+        stream: &LoadedStreamInThisRuntime,
+        while_held: impl FnOnce() -> T,
+    ) -> (T, bool) {
+        let let_go = std::sync::atomic::AtomicBool::new(false);
+        let let_go = &let_go;
+        std::thread::scope(|scope| {
+            let (held_tx, held_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            scope.spawn(move || {
+                stream.compiler.scope(|_graph, _tx| {
+                    let _ = held_tx.send(());
+                    let _ = release_rx.recv_timeout(A_CUT_LANDS_WITHIN);
+                    let_go.store(true, std::sync::atomic::Ordering::SeqCst);
+                })
+            });
+            held_rx.recv().expect("the stream's graph is held");
+            let returned = while_held();
+            let returned_while_held = !let_go.load(std::sync::atomic::Ordering::SeqCst);
+            let _ = release_tx.send(());
+            (returned, returned_while_held)
+        })
+    }
+
+    /// A link whose source stream did not answer is re-planned by the re-plan
+    /// that stream's next compile spawns, and then wires; a link already
+    /// wired against that stream is left alone.
+    ///
+    /// Fail-without-fix: re-plan only when the source stream creates a
+    /// processor, opens a port or is unloaded, and a link parked by a busy
+    /// source stream waits on a healthy one for good.
+    #[test]
+    fn the_source_streams_next_compile_re_plans_a_link_it_did_not_answer_and_no_other() {
+        let streams = TwoStreamsReadAsRunning::load();
+        let wired = streams.link_the_display_from(camera_out1_of("a"));
+        reconcile_a_link_reading_another_stream(&streams.b, &wired);
+        let parked = streams.link_the_display_from(camera_out1_of("a"));
+        let (reconciled, _) = while_the_graph_of_the_stream_is_held(&streams.a, || {
+            reconcile_a_link_reading_another_stream(&streams.b, &parked)
+        });
+        assert!(
+            matches!(
+                &reconciled,
+                HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason)
+                    if reason.contains("did not answer")
+            ),
+            "{reconciled:?}"
+        );
+        let logged_before = streams.b.compiler.logged_pending_operations().len();
+        let (_listener, changed) = listen_on(&streams.b, |event| {
+            matches!(event, RuntimeEvent::GraphDidChange)
+        });
+
+        streams
+            .a
+            .engine_resources_shared_by_every_stream()
+            .spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
+                "a",
+                crate::core::runtime::LinksReadingAStreamToRePlan::OnlyThoseItsGraphDidNotAnswer,
+            );
+        changed
+            .recv_timeout(A_CUT_LANDS_WITHIN)
+            .expect("the re-plan lands on the reading stream");
+
+        let re_planned: Vec<_> = streams.b.compiler.logged_pending_operations()[logged_before..]
+            .iter()
+            .map(|operation| match operation {
+                crate::core::compiler::PendingOperation::AddLink(link_id) => link_id.clone(),
+                other => panic!("the re-plan logged {other:?}"),
+            })
+            .collect();
+        assert_eq!(re_planned, [parked.clone()]);
+        assert_eq!(
+            reconcile_a_link_reading_another_stream(&streams.b, &parked),
+            HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)
+        );
+    }
+
+    /// A live connect whose source stream's graph is not free within the
+    /// reconcile's bound adds the link without the up-front check rather than
+    /// waiting on that stream.
+    ///
+    /// Fail-without-fix: take the source stream's graph lock unbounded and the
+    /// connect returns only once the lock is let go.
+    #[test]
+    fn a_live_connect_adds_the_link_when_its_source_stream_does_not_answer_the_check() {
+        let streams = TwoStreamsReadAsRunning::load();
+        let display = streams.b.the_node_named("display").unwrap();
+
+        let (connected, returned_while_held) =
+            while_the_graph_of_the_stream_is_held(&streams.a, || {
+                streams.b.connect_from_an_output_port_in_another_stream(
+                    camera_out1_of("a"),
+                    InputLinkPortRef::new(display.processor_id, "in1"),
+                )
+            });
+
+        assert!(
+            returned_while_held,
+            "the connect waited for the source stream's graph"
+        );
+        let link_id = connected.expect("the link is added");
+        assert!(
+            streams
+                .b
+                .compiler
+                .logged_pending_operations()
+                .iter()
+                .any(|operation| matches!(
+                    operation,
+                    crate::core::compiler::PendingOperation::AddLink(logged) if *logged == link_id
+                )),
+            "the connect logged no wiring of the link"
+        );
+        assert_eq!(
+            reconcile_a_link_reading_another_stream(&streams.b, &link_id),
+            HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)
         );
     }
 

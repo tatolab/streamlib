@@ -21,6 +21,7 @@ use crate::iceoryx2::OutputWriterInner;
 #[derive(Debug, Default)]
 pub struct LinkReadingAnotherStreamComponent {
     why_it_carries_nothing: Option<String>,
+    waits_for_its_source_streams_graph: bool,
     wiring_generation: u64,
     wiring: Option<WiringOfALinkReadingAnotherStream>,
 }
@@ -42,11 +43,26 @@ impl LinkReadingAnotherStreamComponent {
     /// Say the link carries nothing for `reason`.
     pub(crate) fn carry_nothing_because(&mut self, reason: String) {
         self.why_it_carries_nothing = Some(reason);
+        self.waits_for_its_source_streams_graph = false;
+    }
+
+    /// Say the link carries nothing for `reason`: its source stream's graph
+    /// was not free within the reconcile's bound.
+    pub(crate) fn carry_nothing_until_its_source_streams_graph_answers(&mut self, reason: String) {
+        self.why_it_carries_nothing = Some(reason);
+        self.waits_for_its_source_streams_graph = true;
+    }
+
+    /// Whether the link's last attempt found its source stream's graph not
+    /// free within the reconcile's bound.
+    pub(crate) fn waits_for_its_source_streams_graph(&self) -> bool {
+        self.waits_for_its_source_streams_graph
     }
 
     /// Say the link carries what its source publishes.
     pub(crate) fn carries_what_its_source_publishes(&mut self) {
         self.why_it_carries_nothing = None;
+        self.waits_for_its_source_streams_graph = false;
     }
 
     /// The latest wiring attempt, which every step of that attempt checks

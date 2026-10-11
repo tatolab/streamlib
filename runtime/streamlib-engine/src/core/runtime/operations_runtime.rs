@@ -13,7 +13,8 @@ use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
 use crate::core::compiler::compiler_ops::{
-    close_iceoryx2_service, unwire_a_link_reading_another_stream_from_the_wiring_it_holds,
+    HOW_LONG_A_LINK_READING_ANOTHER_STREAM_WAITS_FOR_ITS_SOURCES_GRAPH, close_iceoryx2_service,
+    unwire_a_link_reading_another_stream_from_the_wiring_it_holds,
 };
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
@@ -624,7 +625,10 @@ impl LoadedStreamInThisRuntime {
     /// A source naming this stream is linked as a port of it. While this
     /// stream runs and the source's stream is started or paused, a source port
     /// its level does not let another stream read — or a node or port that
-    /// stream does not hold — is refused by name, and no link is added.
+    /// stream does not hold — is refused by name, and no link is added. A
+    /// source stream whose graph is not free within the reconcile's bound is
+    /// not checked up front: the link is added and its reconcile says what it
+    /// waits for.
     pub fn connect_from_an_output_port_in_another_stream(
         &self,
         source: OutputPortInAnotherStreamOnThisMachine,
@@ -646,11 +650,20 @@ impl LoadedStreamInThisRuntime {
                 .why_a_link_from_another_stream_cannot_wire_to_it_now()
                 .is_none()
         {
-            source_stream.refuse_a_reader_its_output_port_does_not_allow(
+            match source_stream.refuse_a_reader_its_output_port_does_not_allow_within(
+                HOW_LONG_A_LINK_READING_ANOTHER_STREAM_WAITS_FOR_ITS_SOURCES_GRAPH,
                 source.node_name(),
                 source.port_name(),
                 OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            )?;
+            ) {
+                Some(refused_or_allowed) => refused_or_allowed?,
+                None => tracing::debug!(
+                    source = %source,
+                    "the stream `{}` did not answer the check of a link reading it; the link is \
+                     added and its reconcile says what it waits for",
+                    source.stream_name()
+                ),
+            }
         }
         let where_the_source_stream_is = match source_stream {
             Some(_) => WhereTheSourceStreamOfALinkIsAsItIsAdded::LoadedOnThisMachine,
@@ -895,13 +908,14 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// Queue every link of this stream reading the stream `source_stream_name`
-    /// — and neither refused nor on its way out — to be reconciled, and commit
-    /// them while this stream runs; a stream not started commits them at its
-    /// start.
-    pub(crate) async fn re_plan_every_link_reading_the_stream(
+    /// Queue the links of this stream reading the stream `source_stream_name`
+    /// that `which` picks to be reconciled, and commit them while this stream
+    /// runs; a stream not started commits them at its start, a paused one at
+    /// its resume.
+    pub(crate) async fn re_plan_the_links_reading_the_stream(
         &self,
         source_stream_name: &str,
+        which: LinksReadingAStreamToRePlan,
     ) -> Result<()> {
         let logged = self.compiler.scope(|graph, tx| {
             let links_reading_it: Vec<LinkUniqueId> = graph
@@ -913,6 +927,14 @@ impl LoadedStreamInThisRuntime {
                         .in_another_stream_on_this_machine()
                         .is_some_and(|source| source.stream_name() == source_stream_name)
                         && a_link_reading_another_stream_is_still_to_be_wired(link)
+                        && match which {
+                            LinksReadingAStreamToRePlan::EveryOneStillToBeWired => true,
+                            LinksReadingAStreamToRePlan::OnlyThoseItsGraphDidNotAnswer => link
+                                .get::<LinkReadingAnotherStreamComponent>()
+                                .is_some_and(
+                                    LinkReadingAnotherStreamComponent::waits_for_its_source_streams_graph,
+                                ),
+                        }
                 })
                 .map(|link| link.id.clone())
                 .collect();
@@ -933,6 +955,16 @@ impl LoadedStreamInThisRuntime {
             .publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())
     }
+}
+
+/// Which links reading a stream a re-plan queues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinksReadingAStreamToRePlan {
+    /// Every one neither refused nor on its way out.
+    EveryOneStillToBeWired,
+    /// Only those whose last attempt found the stream's graph not free within
+    /// the reconcile's bound.
+    OnlyThoseItsGraphDidNotAnswer,
 }
 
 // =============================================================================

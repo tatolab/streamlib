@@ -25,7 +25,7 @@ use crate::core::graph::{
 };
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
-use crate::core::runtime::LoadedStreamInThisRuntime;
+use crate::core::runtime::{LinksReadingAStreamToRePlan, LoadedStreamInThisRuntime};
 use crate::iceoryx2::Iceoryx2Node;
 
 /// Compiles graph changes into running processor state.
@@ -159,7 +159,8 @@ impl Compiler {
     }
 
     /// Compile `operations` against `graph_arc`, then wake the links in other
-    /// streams that read a processor it created.
+    /// streams that read a processor it created, or else those whose last
+    /// attempt found this stream's graph not free within the reconcile's bound.
     ///
     /// A removal whose thread outlived its budget still removes the processor
     /// and lets the rest of the batch compile; the call then fails naming it.
@@ -179,13 +180,17 @@ impl Compiler {
         );
         // Processors this compile created may be the sources links in other
         // streams wait on, and they run whether or not the rest of it failed.
-        if result.processors_created > 0
-            && let Some(this_stream) = runtime_ctx.this_stream()
-        {
+        if let Some(this_stream) = runtime_ctx.this_stream() {
+            let which = if result.processors_created > 0 {
+                LinksReadingAStreamToRePlan::EveryOneStillToBeWired
+            } else {
+                LinksReadingAStreamToRePlan::OnlyThoseItsGraphDidNotAnswer
+            };
             this_stream
                 .engine_resources_shared_by_every_stream()
                 .spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
                     this_stream.stream_name(),
+                    which,
                 );
         }
         compiled

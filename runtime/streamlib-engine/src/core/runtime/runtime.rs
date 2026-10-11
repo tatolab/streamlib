@@ -290,6 +290,7 @@ impl EngineResourcesSharedByEveryStream {
         if removed {
             self.spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
                 stream.stream_name(),
+                crate::core::runtime::LinksReadingAStreamToRePlan::EveryOneStillToBeWired,
             );
         }
     }
@@ -305,13 +306,15 @@ impl EngineResourcesSharedByEveryStream {
         }
     }
 
-    /// Re-plan, on every other loaded stream, every link reading the stream
-    /// `source_stream_name`: each stream's re-plan is spawned on the engine's
-    /// tokio runtime and commits on that stream's own compiler, never inline.
-    /// Nothing once the engine is shutting down, when every stream is.
+    /// Re-plan, on every other loaded stream, the links reading the stream
+    /// `source_stream_name` that `which` picks: each stream's re-plan is
+    /// spawned on the engine's tokio runtime and commits on that stream's own
+    /// compiler, never inline. Nothing once the engine is shutting down, when
+    /// every stream is.
     pub(crate) fn spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
         &self,
         source_stream_name: &str,
+        which: crate::core::runtime::LinksReadingAStreamToRePlan,
     ) {
         let engines_tokio_runtime = self.tokio_runtime_for_work_spawned_against_a_stream();
         if engines_tokio_runtime.the_engine_has_shut_down() {
@@ -328,7 +331,7 @@ impl EngineResourcesSharedByEveryStream {
                 "re-planning the links reading another stream",
                 move |reading_stream| async move {
                     reading_stream
-                        .re_plan_every_link_reading_the_stream(&source_stream_name)
+                        .re_plan_the_links_reading_the_stream(&source_stream_name, which)
                         .await
                 },
             );
