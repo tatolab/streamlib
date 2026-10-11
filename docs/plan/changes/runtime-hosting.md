@@ -114,8 +114,11 @@ runtime/streamlib-engine/src/core/runtime/    runtime.rs (Runner, the one engine
                                               (LoadedStreamInThisRuntime), machine_state_directory.rs,
                                               machine_name.rs (replaces runtime_name.rs)
 installer/                                    install.sh, tatolabd.service, homebrew/tatolab.rb (the cask)
-apps/tatolab-macos/                           Tatolab.app, a menu-bar app carrying the runtime
 ```
+
+`Tatolab.app`, a menu-bar app carrying the runtime, lives in the private repository
+`tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app private (owner,
+2026-10-11).
 
 ## ADDED: §Processor model — one engine, many streams
 
@@ -220,10 +223,14 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   and restarts the service; `--uninstall` removes the service and files, never the state directory.
   On macOS the script refuses, pointing at the app.
 - **macOS.** `Tatolab.app`, from a notarised `.dmg` on the release and `brew install --cask
-  tatolab/tap/tatolab`: `Contents/MacOS/tatolabd`, an `SMAppService.agent` (plist in
-  `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit), and the lend laid out by Apple's
-  code rules — native code under `Contents/Frameworks/`, the rest under `Contents/Resources/`,
-  linked into one `tatolab/runtime/` tree, PyInstaller's layout, `dladdr` proved to find
+  tatolab/tap/tatolab`. `tatolab/tatolab-app` checks this repository out at the release tag, builds
+  the runtime unit, lays it into the bundle, signs, notarises, and attaches the `.dmg` to this
+  repository's release. The bundle holds `Contents/MacOS/tatolabd` and `tatolab`, an
+  `SMAppService.agent` (plist in `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit),
+  and the lend laid out by Apple's code rules — every Mach-O under
+  `Contents/Frameworks/tatolab-runtime/` at its path below `tatolab/runtime/`, the lend in
+  `Contents/Resources/lend/` with each Mach-O a relative link into it, PyInstaller's layout;
+  `tatolabd` finds the lend there from `Contents/MacOS/`, and `dladdr` is proved to find
   `_vulkan_driver/` through the link. Registration is the login item, so one switch, "Run
   Tatolab", covers both; opening the app registers the agent unless the user turned the switch
   off, which it remembers, and on `.requiresApproval` opens Login Items for the user. The menu shows whether
@@ -233,7 +240,7 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   carries the camera, microphone, local-network and Documents, Desktop and Downloads usage
   strings; the app and `tatolabd` carry the hardened-runtime device entitlements; every Mach-O is
   signed with the Developer ID and the `.dmg` notarised and stapled, with control-tower's desktop
-  workflow steps and six `APPLE_*` secrets copied here. Discovery retries after a local-network
+  workflow steps and six `APPLE_*` secrets copied into `tatolab/tatolab-app`. Discovery retries after a local-network
   denial. The prompt's wording under `SMAppService` is §Media I/O's acceptance check.
 
 ## MODIFIED: in-flight change files
@@ -291,8 +298,8 @@ runtime's own log); the pivot ADR's steps 4 and 10.
   build has none — no second mode.
 - **A machine id per state directory**, not `/etc/machine-id`, so a container is its own machine.
 - **Machine settings apply at the next start**: a rename re-addresses everything, so never live.
-- **The app is Tauri**, as control-tower's desktop app is, registering its agent through
-  `objc2-service-management`; a native AppKit menu would be smaller, and switching rewrites the menu.
+- **The app is Tauri**, in `tatolab/tatolab-app`, as control-tower's desktop app is, registering
+  its agent through `objc2-service-management`; a native AppKit menu would be smaller, and switching rewrites the menu.
   The cask's tap is `tatolab/homebrew-tap`, created by the owner, bumped per release.
 
 ## Tickets, each deleting what it replaces, tests included
