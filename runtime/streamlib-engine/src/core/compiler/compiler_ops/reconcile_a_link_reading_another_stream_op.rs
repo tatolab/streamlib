@@ -1798,29 +1798,58 @@ mod tests {
     }
 
     /// Opening a port re-plans the links reading its stream only when the
-    /// port was closed to them: a port already open queues nothing.
+    /// port was closed to them: a port already open spawns no re-plan, and a
+    /// port opened from `internal` spawns one.
     #[test]
     fn opening_a_port_already_open_to_other_streams_re_plans_nothing() {
         let streams = TwoStreamsReadAsRunning::load();
         let link_id = streams.link_the_display_from(camera_out1_of("a"));
         reconcile_a_link_reading_another_stream(&streams.b, &link_id);
-        let logged_before = streams.b.compiler.logged_pending_operations().len();
-        let (_listener, changed) = listen_on(&streams.b, |event| {
-            matches!(event, RuntimeEvent::GraphDidChange)
-        });
 
-        streams
-            .a
-            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Public)
-            .unwrap();
-
-        assert!(
-            changed.recv_timeout(Duration::from_millis(500)).is_err(),
+        assert_eq!(
+            re_plans_on_b_spawned_by_putting_camera_out1_of_a_at(
+                &streams,
+                OutputPortExposureLevel::Public
+            ),
+            0,
             "a port already open re-planned the links reading its stream"
         );
+
+        let (_listener, disconnected) = listen_on(&streams.b, |event| {
+            matches!(event, RuntimeEvent::RuntimeDidDisconnect { .. })
+        });
+        streams
+            .a
+            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Internal)
+            .unwrap();
+        disconnected
+            .recv_timeout(A_CUT_LANDS_WITHIN)
+            .expect("the cut disconnects the link");
         assert_eq!(
-            streams.b.compiler.logged_pending_operations().len(),
-            logged_before
+            re_plans_on_b_spawned_by_putting_camera_out1_of_a_at(
+                &streams,
+                OutputPortExposureLevel::Private
+            ),
+            1,
+            "a port opened from internal re-planned nothing"
         );
+    }
+
+    /// How many re-plans on `b` putting `camera`'s `out1` of `a` at `level`
+    /// spawned. Each spawned re-plan holds `b` weakly until it has taken `b`'s
+    /// graph lock, which this holds across the change, so the count is read
+    /// with no wait.
+    fn re_plans_on_b_spawned_by_putting_camera_out1_of_a_at(
+        streams: &TwoStreamsReadAsRunning,
+        level: OutputPortExposureLevel,
+    ) -> usize {
+        streams.b.compiler.scope(|_graph, _tx| {
+            let held_weakly_before = Arc::weak_count(&streams.b);
+            streams
+                .a
+                .set_output_port_exposure_level("camera", "out1", level)
+                .unwrap();
+            Arc::weak_count(&streams.b) - held_weakly_before
+        })
     }
 }
