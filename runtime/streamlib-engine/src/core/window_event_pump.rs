@@ -371,14 +371,9 @@ fn build_the_processes_one_event_loop()
         // by a signal, never a menu.
         builder.with_default_menu(false);
     }
-    builder.build().map_err(|e| {
-        let refusal = format!("failed to build the window event loop: {e}");
-        #[cfg(target_os = "linux")]
-        if let Some(why_no_display_server) = crate::linux::display_server_environment_from_the_user_manager::why_this_process_names_no_display_server() {
-            return format!("{refusal} — {why_no_display_server}");
-        }
-        refusal
-    })
+    builder
+        .build()
+        .map_err(|e| format!("failed to build the window event loop: {e}"))
 }
 
 /// The process's one event loop and the pump it serves, kept on the first

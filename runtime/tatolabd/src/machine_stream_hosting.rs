@@ -24,6 +24,7 @@ use streamlib::sdk::runtime::{
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
+use crate::display_server_environment_from_the_user_manager::DisplayServerEnvironmentAtTheRuntimesStart;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
 
 /// How long the end of the run waits for a stream action the local API began —
@@ -45,6 +46,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     processor_interpreter_lend_directory: PathBuf,
     mut runtime_run_in_progress_record: RuntimeRunInProgressRecord,
     how_the_previous_run_ended: &HowThePreviousRuntimeRunEnded,
+    display_server_environment_at_the_runtimes_start: &DisplayServerEnvironmentAtTheRuntimesStart,
 ) -> ExitCode {
     let engine = match Runner::new_with_construction_options(RunnerConstructionOptions {
         pretty_log_mirror_stream: PrettyLogMirrorStandardStream::StandardError,
@@ -57,6 +59,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             ));
         }
     };
+    display_server_environment_at_the_runtimes_start.log_where_the_display_server_came_from();
     if let Err(lend_directory_refusal) =
         engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory)
     {

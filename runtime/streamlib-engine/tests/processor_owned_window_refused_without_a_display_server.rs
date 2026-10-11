@@ -36,19 +36,13 @@ fn a_process_with_no_display_server_answers_the_create_op_with_the_pumps_own_err
     // Before anything reads them, and before the pump — which is what makes
     // this a display-less process. Both backends' variables go: winit picks
     // X11 off `DISPLAY` and Wayland off `WAYLAND_DISPLAY`, and leaving either
-    // behind would leave the process able to get a window after all. The
-    // session bus goes too: a process naming no display takes one from the
-    // systemd user manager's environment, which a desktop session holds.
+    // behind would leave the process able to get a window after all.
     //
     // SAFETY: the test harness is running this test alone on this thread and
     // nothing else in this binary reads the environment concurrently.
     unsafe {
         std::env::remove_var("DISPLAY");
         std::env::remove_var("WAYLAND_DISPLAY");
-        std::env::set_var(
-            "DBUS_SESSION_BUS_ADDRESS",
-            "unix:path=/nonexistent/no-session-bus-for-a-display-less-test",
-        );
     }
 
     let Some(gpu_context) = GpuContext::init_for_platform_sync().ok() else {
