@@ -678,7 +678,66 @@ mod tests {
         std::fs::write(&stub, format!("#!/bin/sh\n{script_body}\n")).expect("write the stub");
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700))
             .expect("make the stub executable");
+        wait_until_no_forked_child_holds_the_stub_open_for_writing(&stub);
         stub
+    }
+
+    /// Returns once `stub` starts. A child another test thread forked while the
+    /// stub was open for writing holds that descriptor until its own exec, and
+    /// until then the kernel refuses to exec the stub with `ETXTBSY`; once one
+    /// start succeeds no copy is left, since the writer closed its own.
+    fn wait_until_no_forked_child_holds_the_stub_open_for_writing(stub: &Path) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match Command::new(stub)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(mut started_stub) => {
+                    let _ = started_stub.kill();
+                    let _ = started_stub.wait();
+                    return;
+                }
+                Err(not_started)
+                    if not_started.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(not_started) => panic!("the stub {} starts: {not_started}", stub.display()),
+            }
+        }
+    }
+
+    /// A stub still open for writing somewhere is waited out, not refused.
+    #[test]
+    fn a_stub_still_open_for_writing_is_started_once_it_is_closed() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let stub = directory.path().join("tailscale");
+        let mut still_open_for_writing = std::fs::File::create(&stub).expect("create the stub");
+        std::io::Write::write_all(&mut still_open_for_writing, b"#!/bin/sh\nexit 0\n")
+            .expect("write the stub");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700))
+            .expect("make the stub executable");
+        let refused_while_open = Command::new(&stub)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect_err("a stub open for writing does not start");
+        assert_eq!(
+            refused_while_open.kind(),
+            std::io::ErrorKind::ExecutableFileBusy
+        );
+
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(still_open_for_writing);
+        });
+        wait_until_no_forked_child_holds_the_stub_open_for_writing(&stub);
+        closer.join().expect("the closer ends");
     }
 
     /// The CLI is asked for this machine's status alone, and what it writes is

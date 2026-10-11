@@ -41,7 +41,37 @@ fn a_directory_holding_a_tailscale_cli_writing(
     )
     .unwrap();
     std::fs::set_permissions(&tailscale_cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+    wait_until_no_forked_child_holds_the_stub_open_for_writing(&tailscale_cli);
     directory
+}
+
+/// Returns once `stub` starts. A child another test thread forked while the
+/// stub was open for writing holds that descriptor until its own exec, and
+/// until then the kernel refuses to exec the stub with `ETXTBSY`; once one
+/// start succeeds no copy is left, since the writer closed its own.
+fn wait_until_no_forked_child_holds_the_stub_open_for_writing(stub: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match std::process::Command::new(stub)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut started_stub) => {
+                let _ = started_stub.kill();
+                let _ = started_stub.wait();
+                return;
+            }
+            Err(not_started)
+                if not_started.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(not_started) => panic!("the stub {} starts: {not_started}", stub.display()),
+        }
+    }
 }
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
