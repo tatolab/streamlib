@@ -527,6 +527,13 @@ jobs:
       contents: read
     uses: ./.github/workflows/macos-wheel.yml
 
+  # The x86_64 Linux runtime tarball exactly as the release builds it, in
+  # manylinux_2_28, gated at its glibc floor.
+  linux-runtime-tarball:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/linux-runtime-tarball.yml
+
   # The stream suite, on both floors. The division from the runtime's tests is
   # structural: this venv holds `tatolab-stream`, its test group and nothing of
   # the runtime, so a stream test that reaches for the runtime fails to import.

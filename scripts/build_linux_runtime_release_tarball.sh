@@ -8,8 +8,8 @@
 #
 # writes tatolab-runtime-<version>-x86_64-linux.tar.gz and its .sha256 there.
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
-# bin/tatolabd, bin/tatolab, lib/tatolab/lend/ — plus the systemd user unit at
-# lib/systemd/user/tatolabd.service, where install.sh takes it from.
+# bin/tatolabd, bin/tatolab, lib/tatolab/lend/ — plus the systemd user units in
+# lib/systemd/user/, where install.sh takes them from.
 #
 # Built inside manylinux_2_28, the glibc floor the engine wheel promises, so
 # every binary the tarball carries runs on glibc 2.28 and later, and the
@@ -89,7 +89,8 @@ cargo xtask build-runtime --release
 
 runtime_unit_root="$PWD/target/tatolab-runtime"
 mkdir -p "$runtime_unit_root/lib/systemd/user"
-cp installer/tatolabd.service "$runtime_unit_root/lib/systemd/user/tatolabd.service"
+cp installer/tatolabd.service installer/tatolabd-restart-for-a-display-at-login.service \
+	"$runtime_unit_root/lib/systemd/user/"
 
 uv build --wheel --out-dir /tmp/tatolab-stream-dist sdk/tatolab-stream
 uv venv --python 3.12 /tmp/runtime-unit-gate-venv

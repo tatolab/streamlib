@@ -26,6 +26,8 @@ TATOLAB_INSTALL_DIRECTORY="$HOME/.local/share/tatolab"
 TATOLAB_EXECUTABLE_LINK_DIRECTORY="$HOME/.local/bin"
 TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY="$HOME/.config/systemd/user"
 TATOLAB_SYSTEMD_USER_UNIT_NAME="tatolabd.service"
+TATOLAB_SYSTEMD_USER_LOGIN_UNIT_NAME="tatolabd-restart-for-a-display-at-login.service"
+TATOLAB_SYSTEMD_USER_UNIT_NAMES="$TATOLAB_SYSTEMD_USER_UNIT_NAME $TATOLAB_SYSTEMD_USER_LOGIN_UNIT_NAME"
 TATOLAB_RUNTIME_EXECUTABLE_NAMES="tatolab tatolabd"
 
 say() {
@@ -75,9 +77,9 @@ refuse_a_platform_without_a_linux_build() {
 	case "$operating_system" in
 	Linux) ;;
 	Darwin)
-		refuse "on macOS, Tatolab is the Tatolab app, which starts the runtime for you:" \
-			"\`brew install --cask tatolab/tap/tatolab\`, or the .dmg on" \
-			"https://github.com/tatolab/streamlib/releases/latest"
+		refuse "on macOS, Tatolab will be the Tatolab app, which starts the runtime for you; it has" \
+			"not shipped yet. Until it does, build the runtime from source:" \
+			"https://github.com/tatolab/streamlib#building-the-runtime-from-source"
 		;;
 	*) refuse "there is no Tatolab runtime for $operating_system" ;;
 	esac
@@ -126,7 +128,8 @@ unpack_the_release() {
 	rm -rf "$partial_release_directory"
 	mkdir "$partial_release_directory"
 	tar -xzf "$download_directory/$tarball_name" -C "$partial_release_directory"
-	for unpacked_member in bin/tatolabd bin/tatolab lib/tatolab/lend "lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME"; do
+	for unpacked_member in bin/tatolabd bin/tatolab lib/tatolab/lend \
+		"lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME" "lib/systemd/user/$TATOLAB_SYSTEMD_USER_LOGIN_UNIT_NAME"; do
 		[ -e "$partial_release_directory/$unpacked_member" ] || {
 			rm -rf "$partial_release_directory"
 			refuse "$tarball_name carries no $unpacked_member"
@@ -144,20 +147,19 @@ point_current_at() {
 			"$TATOLAB_EXECUTABLE_LINK_DIRECTORY/$executable_name"
 	done
 	mkdir -p "$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY"
-	cp "$TATOLAB_INSTALL_DIRECTORY/current/lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME" \
-		"$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY/$TATOLAB_SYSTEMD_USER_UNIT_NAME"
+	for unit_name in $TATOLAB_SYSTEMD_USER_UNIT_NAMES; do
+		cp "$TATOLAB_INSTALL_DIRECTORY/current/lib/systemd/user/$unit_name" \
+			"$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY/$unit_name"
+	done
 }
 
+# Each step chained, because a function called where its status is tested
+# runs with `set -e` suspended.
 start_the_service() {
-	if ! the_user_systemd_manager_answers; then
-		warn "no systemd user manager answers here, so the runtime is installed but not registered" \
-			"as a service. Start it with \`tatolabd\` in a terminal of its own."
-		return 1
-	fi
-	systemctl --user daemon-reload
-	systemctl --user enable --quiet "$TATOLAB_SYSTEMD_USER_UNIT_NAME"
-	systemctl --user restart "$TATOLAB_SYSTEMD_USER_UNIT_NAME"
-	say "tatolabd is running as the systemd user service $TATOLAB_SYSTEMD_USER_UNIT_NAME"
+	# shellcheck disable=SC2086 # the unit names are words by construction
+	systemctl --user daemon-reload &&
+		systemctl --user enable --quiet $TATOLAB_SYSTEMD_USER_UNIT_NAMES &&
+		systemctl --user restart "$TATOLAB_SYSTEMD_USER_UNIT_NAME"
 }
 
 remove_every_release_but() {
@@ -206,9 +208,16 @@ install_tatolab() {
 	release_version="$(release_version_to_install)"
 	unpack_the_release "$release_version"
 	point_current_at "$release_version"
-	if start_the_service; then
+	if the_user_systemd_manager_answers; then
+		start_the_service ||
+			refuse "the runtime is unpacked, but its service did not start; the release before it is" \
+				"kept. See \`systemctl --user status $TATOLAB_SYSTEMD_USER_UNIT_NAME\`."
+		say "tatolabd is running as the systemd user service $TATOLAB_SYSTEMD_USER_UNIT_NAME"
 		remove_every_release_but "$release_version"
 		offer_to_keep_the_runtime_running_without_a_login
+	else
+		warn "no systemd user manager answers here, so the runtime is installed but not registered" \
+			"as a service. Start it with \`tatolabd\` in a terminal of its own."
 	fi
 	say_where_the_executables_are
 	say "Tatolab $release_version is installed. Start a stream with:"
@@ -217,9 +226,13 @@ install_tatolab() {
 
 uninstall_tatolab() {
 	if the_user_systemd_manager_answers; then
-		systemctl --user disable --now --quiet "$TATOLAB_SYSTEMD_USER_UNIT_NAME" 2>/dev/null || true
+		for unit_name in $TATOLAB_SYSTEMD_USER_UNIT_NAMES; do
+			systemctl --user disable --now --quiet "$unit_name" 2>/dev/null || true
+		done
 	fi
-	rm -f "$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY/$TATOLAB_SYSTEMD_USER_UNIT_NAME"
+	for unit_name in $TATOLAB_SYSTEMD_USER_UNIT_NAMES; do
+		rm -f "$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY/$unit_name"
+	done
 	if the_user_systemd_manager_answers; then
 		systemctl --user daemon-reload
 	fi

@@ -2,10 +2,10 @@ name: Linux Runtime Tarball
 
 # The tarball install.sh installs: the runtime unit built in manylinux_2_28 by
 # `scripts/build_linux_runtime_release_tarball.sh`, which also runs the
-# portability gate over it at the 2.28 glibc floor. Called by release-wheel.yml,
-# where a failure here withholds the whole release, and run on any PR that
-# changes how the tarball is built or what it carries, so a broken build fails
-# there rather than on release day.
+# portability gate over it at the 2.28 glibc floor. Called by python-wheel.yml
+# on every PR — a change needing a newer glibc symbol, or a system library
+# manylinux lacks, must fail on the PR that makes it, not on release day — and
+# by release-wheel.yml, where a failure here withholds the whole release.
 on:
   workflow_call:
     inputs:
@@ -14,17 +14,6 @@ on:
         type: string
         required: false
         default: ""
-  pull_request:
-    branches: [main]
-    paths:
-      - 'scripts/build_linux_runtime_release_tarball.sh'
-      - 'installer/tatolabd.service'
-      - 'sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/**'
-      - '.github/workflows/linux-runtime-tarball.yml'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-linux-runtime-tarball:

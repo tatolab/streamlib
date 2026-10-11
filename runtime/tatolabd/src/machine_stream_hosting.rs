@@ -60,6 +60,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         }
     };
     display_server_environment_at_the_runtimes_start.log_where_the_display_server_came_from();
+    display_server_environment_at_the_runtimes_start
+        .mark_in_the_runtime_directory_whether_the_runtime_started_with_no_display_server();
     if let Err(lend_directory_refusal) =
         engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory)
     {

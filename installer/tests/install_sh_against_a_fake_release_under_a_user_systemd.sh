@@ -41,7 +41,9 @@ EOF
 	printf '#!/bin/sh\necho "tatolab %s"\n' "$release_version" >"$release_contents/bin/tatolab"
 	chmod +x "$release_contents/bin/tatolabd" "$release_contents/bin/tatolab"
 	touch "$release_contents/lib/tatolab/lend/tatolab/runtime/__init__.py"
-	cp "$installer_directory/tatolabd.service" "$release_contents/lib/systemd/user/"
+	cp "$installer_directory/tatolabd.service" \
+		"$installer_directory/tatolabd-restart-for-a-display-at-login.service" \
+		"$release_contents/lib/systemd/user/"
 
 	local release_directory="$release_server_root/releases/$release_version"
 	local tarball_name="tatolab-runtime-$release_version-x86_64-linux.tar.gz"
@@ -125,10 +127,12 @@ for executable_name in tatolab tatolabd; do
 done
 [ -d "$test_user_home/.local/share/tatolab/1.0.0/lib/tatolab/lend" ] ||
 	fail "lib/ is not a sibling of bin/ in the release"
-cmp -s "$installer_directory/tatolabd.service" "$test_user_home/.config/systemd/user/tatolabd.service" ||
-	fail "the unit written is not the release's"
-[ "$(as_the_test_user systemctl --user is-enabled tatolabd.service)" = "enabled" ] ||
-	fail "tatolabd.service is not enabled"
+for unit_name in tatolabd.service tatolabd-restart-for-a-display-at-login.service; do
+	cmp -s "$installer_directory/$unit_name" "$test_user_home/.config/systemd/user/$unit_name" ||
+		fail "the $unit_name written is not the release's"
+	[ "$(as_the_test_user systemctl --user is-enabled "$unit_name")" = "enabled" ] ||
+		fail "$unit_name is not enabled"
+done
 [ "$(as_the_test_user systemctl --user is-active tatolabd.service)" = "active" ] ||
 	fail "tatolabd.service is not active"
 [ "$(as_the_test_user tatolab)" = "tatolab 1.0.0" ] || fail "tatolab on PATH is not the release's"
@@ -149,6 +153,25 @@ fi
 [ "$(as_the_test_user systemctl --user is-active tatolabd.service)" = "active" ] ||
 	fail "tatolabd.service is not active after its restart"
 pass "a tatolabd killed with -9 is restarted within 10 s"
+
+# --- a login restarts a runtime that started with no display, and only that one
+
+no_display_marker="/run/user/$test_user_uid/streamlib/tatolabd-started-with-no-display-server"
+pid_before_a_login="$(the_service_main_pid)"
+as_the_test_user systemctl --user start tatolabd-restart-for-a-display-at-login.service
+[ "$(the_service_main_pid)" = "$pid_before_a_login" ] ||
+	fail "a login restarted a runtime that had started with a display"
+as_the_test_user mkdir -p "$(dirname "$no_display_marker")"
+as_the_test_user touch "$no_display_marker"
+as_the_test_user systemctl --user start tatolabd-restart-for-a-display-at-login.service
+for _ in $(seq 1 100); do
+	[ "$(the_service_main_pid)" != "$pid_before_a_login" ] && [ "$(the_service_main_pid)" != "0" ] && break
+	sleep 0.1
+done
+[ "$(the_service_main_pid)" != "$pid_before_a_login" ] ||
+	fail "a login did not restart a runtime that had started with no display"
+as_the_test_user rm -f "$no_display_marker"
+pass "a login restarts the runtime only when it started with no display server"
 
 # --- re-running upgrades in place and restarts -----------------------------
 
@@ -178,6 +201,30 @@ fi
 [ ! -e "$test_user_home/.local/share/tatolab/1.0.2" ] || fail "a refused download was unpacked"
 pass "a tarball that does not match its published sha256 is refused and changes nothing"
 
+# --- a service that fails to restart keeps the release before it ----------
+
+make_release 1.0.3
+publish_as_latest 1.0.3
+failing_restart_directory="$(mktemp -d)"
+cat >"$failing_restart_directory/systemctl" <<'EOF_SYSTEMCTL'
+#!/bin/sh
+for argument in "$@"; do
+	[ "$argument" = restart ] && exit 1
+done
+exec /usr/bin/systemctl "$@"
+EOF_SYSTEMCTL
+chmod 755 "$failing_restart_directory" "$failing_restart_directory/systemctl"
+if as_the_test_user env PATH="$failing_restart_directory:/usr/bin:/bin" \
+	sh "$installer_directory/install.sh" </dev/null 2>/dev/null; then
+	fail "an install whose service did not restart reported success"
+fi
+[ -d "$test_user_home/.local/share/tatolab/1.0.1" ] ||
+	fail "an install whose service did not restart removed the release before it"
+run_the_installer
+wait_until_the_running_release_is 1.0.3
+[ ! -e "$test_user_home/.local/share/tatolab/1.0.1" ] || fail "the next good install left 1.0.1 behind"
+pass "a service that fails to restart fails the install and keeps the release before it"
+
 # --- macOS is pointed at the app -------------------------------------------
 
 macos_uname_directory="$(mktemp -d)"
@@ -189,7 +236,7 @@ if macos_refusal="$(as_the_test_user env PATH="$macos_uname_directory:/usr/bin:/
 	fail "install.sh did not refuse macOS"
 fi
 case "$macos_refusal" in
-*"Tatolab app"*) ;;
+*"Tatolab app"*"from source"*) ;;
 *) fail "the macOS refusal does not point at the app: $macos_refusal" ;;
 esac
 pass "on macOS the installer refuses, pointing at the app"
@@ -201,7 +248,9 @@ as_the_test_user touch "$test_user_home/.local/state/tatolab/streams/a-kept-stre
 run_the_installer --uninstall
 [ "$(as_the_test_user systemctl --user is-active tatolabd.service || true)" != "active" ] ||
 	fail "tatolabd.service still runs after --uninstall"
-[ ! -e "$test_user_home/.config/systemd/user/tatolabd.service" ] || fail "--uninstall left the unit"
+for unit_name in tatolabd.service tatolabd-restart-for-a-display-at-login.service; do
+	[ ! -e "$test_user_home/.config/systemd/user/$unit_name" ] || fail "--uninstall left $unit_name"
+done
 [ ! -e "$test_user_home/.local/share/tatolab" ] || fail "--uninstall left the installed releases"
 for executable_name in tatolab tatolabd; do
 	[ ! -L "$test_user_home/.local/bin/$executable_name" ] || fail "--uninstall left $test_user_home/.local/bin/$executable_name"

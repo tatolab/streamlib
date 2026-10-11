@@ -11,9 +11,15 @@
 //! the start, before any thread or Vulkan instance exists: NVIDIA's driver
 //! reads `DISPLAY` once, at `vkCreateInstance`, and an X11 swapchain made on an
 //! instance created without it jumps to a null pointer (driver 595.99), so a
-//! display taken any later could never be presented to.
+//! display taken any later could never be presented to. A runtime that found
+//! none leaves a marker in its runtime directory, by which the login unit
+//! beside `tatolabd.service` restarts it once a desktop session brings one.
+
+// macOS has no display server environment; only the start's outcome is built there.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::ffi::OsString;
+use std::path::Path;
 
 /// The variables winit picks a backend from, Wayland's first as winit tries it.
 const DISPLAY_SERVER_ENVIRONMENT_VARIABLES: [&str; 2] = ["WAYLAND_DISPLAY", "DISPLAY"];
@@ -50,8 +56,9 @@ impl DisplayServerEnvironmentAtTheRuntimesStart {
     /// window is refused until the runtime restarts inside a desktop session.
     pub(crate) fn log_where_the_display_server_came_from(&self) {
         const RESTART_INSIDE_A_DESKTOP_SESSION: &str = "every window this runtime is asked for \
-             is refused until it restarts inside a desktop session (`systemctl --user restart \
-             tatolabd`, or `tatolabd` in a terminal of its own)";
+             is refused until it restarts inside a desktop session, which a login does for the \
+             installed service (or `systemctl --user restart tatolabd`, or `tatolabd` in a \
+             terminal of its own)";
         match self {
             Self::NamedByThisProcess => {}
             #[cfg(not(target_os = "linux"))]
@@ -75,7 +82,52 @@ impl DisplayServerEnvironmentAtTheRuntimesStart {
     }
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl DisplayServerEnvironmentAtTheRuntimesStart {
+    fn started_with_no_display_server(&self) -> bool {
+        matches!(
+            self,
+            Self::NamedByNeitherThisProcessNorTheUserManager | Self::UserManagerUnreadable(_)
+        )
+    }
+
+    /// Leave the marker in this user's runtime directory exactly when this
+    /// runtime started with no display server; a failure is logged, never fatal.
+    pub(crate) fn mark_in_the_runtime_directory_whether_the_runtime_started_with_no_display_server(
+        &self,
+    ) {
+        let marked = streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory::resolve()
+            .map_err(|refusal| refusal.to_string())
+            .and_then(|runtime_directory| {
+                self.mark_whether_the_runtime_started_with_no_display_server(
+                    &runtime_directory.runtime_started_with_no_display_server_marker_path(),
+                )
+                .map_err(|io_failure| io_failure.to_string())
+            });
+        if let Err(reason) = marked {
+            tracing::warn!(
+                %reason,
+                "the marker by which a login restarts a runtime that started with no display \
+                 server could not be updated"
+            );
+        }
+    }
+
+    /// Leave the marker at `marker_path` exactly when this runtime started with
+    /// no display server, and none from a previous run otherwise.
+    pub(crate) fn mark_whether_the_runtime_started_with_no_display_server(
+        &self,
+        marker_path: &Path,
+    ) -> std::io::Result<()> {
+        if self.started_with_no_display_server() {
+            return std::fs::write(marker_path, b"");
+        }
+        match std::fs::remove_file(marker_path) {
+            Err(absent) if absent.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            removed => removed,
+        }
+    }
+}
+
 fn is_set_and_non_empty(value: Option<&str>) -> bool {
     value.is_some_and(|value| !value.is_empty())
 }
@@ -86,7 +138,6 @@ fn is_set_and_non_empty(value: Option<&str>) -> bool {
 /// `XAUTHORITY` beside them, never one the process already sets. Empty when the
 /// manager names no display server. A value systemd had to quote is skipped,
 /// never unquoted.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn display_server_variables_to_take_from_the_user_manager(
     user_manager_environment: &str,
     this_process_variable: impl Fn(&str) -> Option<OsString>,
@@ -276,6 +327,27 @@ mod tests {
             a_process_holding(&[]),
         );
         assert!(taken.is_empty(), "{taken:?}");
+    }
+
+    #[test]
+    fn the_marker_is_left_exactly_when_the_runtime_started_with_no_display_server() {
+        let runtime_directory = tempfile::tempdir().expect("a temporary runtime directory");
+        let marker_path = runtime_directory.path().join("marker");
+        DisplayServerEnvironmentAtTheRuntimesStart::NamedByNeitherThisProcessNorTheUserManager
+            .mark_whether_the_runtime_started_with_no_display_server(&marker_path)
+            .expect("the marker is written");
+        assert!(marker_path.exists());
+        DisplayServerEnvironmentAtTheRuntimesStart::TakenFromTheUserManager(vec!["DISPLAY"])
+            .mark_whether_the_runtime_started_with_no_display_server(&marker_path)
+            .expect("the marker is removed");
+        assert!(!marker_path.exists());
+        DisplayServerEnvironmentAtTheRuntimesStart::NamedByThisProcess
+            .mark_whether_the_runtime_started_with_no_display_server(&marker_path)
+            .expect("an absent marker is no failure");
+        DisplayServerEnvironmentAtTheRuntimesStart::UserManagerUnreadable("no bus".to_owned())
+            .mark_whether_the_runtime_started_with_no_display_server(&marker_path)
+            .expect("the marker is written");
+        assert!(marker_path.exists());
     }
 
     #[test]

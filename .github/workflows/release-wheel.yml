@@ -7,12 +7,16 @@ name: Release to PyPI
 # from the runtime unit's lend, so no stream's venv installs it.
 #
 # The runtime itself ships as the Linux runtime tarball, attached to the GitHub
-# release and served with install.sh from get.tatolab.com, after PyPI holds the
-# `tatolab-stream` a stream it scaffolds will lock.
+# release and served with install.sh from get.tatolab.com.
 #
 # Every distribution carries the repository's one version and releases on its
-# one tag, and the upload waits for every one of them and for the macOS proof of
-# the runtime unit, so a release publishes all of them or none.
+# one tag, and the PyPI upload waits for every one of them, for the macOS proof
+# of the runtime unit, for the Linux runtime tarball and for the credentials
+# that publish it, so PyPI takes all of them or none. The Linux runtime
+# publishes after PyPI, because a stream it scaffolds locks the
+# `tatolab-stream` PyPI holds; a failed Linux publish is recovered by re-running
+# the original run's failed publish-linux-runtime job, which uploads the
+# tarball that run built again and overwrites a partial upload.
 #
 # Called from release-please.yml rather than triggered by `on: release`:
 # release-please runs on the default GITHUB_TOKEN, and GitHub does not start
@@ -232,13 +236,40 @@ jobs:
     with:
       ref: ${{ inputs.tag_name }}
 
+  # Before PyPI takes anything: an upload whose Linux runtime could not then be
+  # published would leave the release half out.
+  check-the-linux-runtime-can-be-published:
+    name: The Linux runtime's upload credentials reach this repository
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every credential the get.tatolab.com upload uses is set
+        env:
+          CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          for required_secret in CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID \
+            CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!required_secret}" ]; then
+              echo "::error::$required_secret does not reach this repository — add it to Infisical's prod environment, which syncs it to the organization's secrets"
+              exit 1
+            fi
+          done
+
   publish-to-pypi:
     name: Publish to PyPI
+    # A dry run skips the credentials check, and runs this regardless.
+    if: ${{ !cancelled() && !failure() }}
     needs:
       - build-tatolab-stream-distribution
       - build-tatolab-webrtc-distribution
       - prove-the-runtime-unit-on-macos
       - build-linux-runtime-tarball
+      - check-the-linux-runtime-can-be-published
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions: {}
@@ -390,12 +421,6 @@ jobs:
           TARBALL_VERSION: ${{ steps.tarball.outputs.version }}
         run: |
           set -euo pipefail
-          for required_secret in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY CLOUDFLARE_ACCOUNT_ID; do
-            if [ -z "${!required_secret}" ]; then
-              echo "::error::$required_secret is empty — the get.tatolab.com bucket's secrets are not reaching this repository"
-              exit 1
-            fi
-          done
           r2_endpoint="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
           put_object() {
             aws s3 cp --endpoint-url "$r2_endpoint" --only-show-errors \
