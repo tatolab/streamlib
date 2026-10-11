@@ -209,8 +209,10 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 ## ADDED: §Distribution — the Linux installer and the Mac app
 
 - **Linux.** Each release attaches `tatolab-runtime-<version>-x86_64-linux.tar.gz` (built in
-  `manylinux_2_28`; the portability gate runs over it). `curl -fsSL
-  https://tatolab.github.io/streamlib/install.sh | sh` unpacks it to
+  `manylinux_2_28`; the portability gate runs over it), which carries the user unit at
+  `lib/systemd/user/tatolabd.service`, and serves it, `install.sh` and a `latest` naming the
+  version from `get.tatolab.com`, an R2 bucket (owner, 2026-10-11, #2608). `curl -fsSL
+  https://get.tatolab.com/install.sh | sh` checks its sha256 and unpacks it to
   `~/.local/share/tatolab/<version>/`, points `current` at it, links `tatolab` and `tatolabd` into
   `~/.local/bin`, and writes `~/.config/systemd/user/tatolabd.service` (`Restart=on-failure`,
   `WantedBy=default.target`, `After=graphical-session.target`) — always on, across logouts with

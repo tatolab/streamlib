@@ -38,8 +38,8 @@ in a few lines; a native runtime runs it on your machine, and you and your agent
 - **A fast edit loop.** `tatolab dev` restarts the stream on every saved edit, and keeps the running
   one when an edit fails to compile.
 
-> **Alpha.** APIs will change. The runtime has no installer yet — you build it from a checkout of
-> this repository — and one runtime per machine runs every stream on it. See
+> **Alpha.** APIs will change. On Linux one command installs the runtime; on macOS you build it
+> from a checkout of this repository for now. One runtime per machine runs every stream on it. See
 > [what ships today](#what-ships-today).
 
 ## Built for
@@ -68,10 +68,30 @@ where you need one, it is a node you write against the library or binding you al
 
 ## Install
 
-There are two halves, and they install separately.
+```bash
+curl -fsSL https://get.tatolab.com/install.sh | sh
+```
 
-**The runtime** — `tatolabd`, the native program that hosts this machine's streams, and `tatolab`,
-the CLI that loads, manages and inspects them — has no installer yet. Build it from a checkout of
+On Linux x86_64 that installs **the runtime** — `tatolabd`, the native program that hosts this
+machine's streams, and `tatolab`, the CLI that loads, manages and inspects them — into
+`~/.local/share/tatolab/`, links both into `~/.local/bin`, and runs `tatolabd` as the systemd user
+service `tatolabd.service`, restarted if it fails. Re-run it to upgrade. `sh -s -- --uninstall` in
+place of `sh` removes it and leaves your kept streams and logs.
+
+**Your stream** is an ordinary Python project. Its venv holds `tatolab-stream` — the Python API,
+`import tatolab.stream` — and whatever your nodes import, and never the runtime. `tatolab-stream` is
+on PyPI:
+
+```bash
+uv add tatolab-stream
+```
+
+`tatolab new` writes a `pyproject.toml` that depends on `tatolab-stream>=0.41` and `numpy>=2.1`, so
+`uv sync` is the whole setup. Nothing is generated, compiled or downloaded at run time.
+
+### Building the runtime from source
+
+On macOS, until the app ships, and for working on the runtime itself, build it from a checkout of
 this repository:
 
 ```bash
@@ -94,18 +114,11 @@ sudo apt install pkg-config protobuf-compiler libclang-dev libvulkan-dev glslc p
 On macOS it is `glslc` (from shaderc), CMake and Ninja, and the build first stages a Vulkan loader
 and MoltenVK into the lend, so the Mac that runs the result needs no Vulkan SDK.
 
-**Your stream** is an ordinary Python project. Its venv holds `tatolab-stream` — the Python API,
-`import tatolab.stream` — and whatever your nodes import, and never the runtime. `tatolab-stream` is
-on PyPI:
-
-```bash
-uv add tatolab-stream
-```
-
-`tatolab new` writes a `pyproject.toml` that depends on `tatolab-stream>=0.41` and `numpy>=2.1`, so
-`uv sync` is the whole setup. Nothing is generated, compiled or downloaded at run time.
+A runtime built from source has no service: start it with `tatolabd` in a terminal of its own.
 
 ## Quickstart
+
+The installer already started this machine's runtime. Built from source, start it first:
 
 ```bash
 tatolabd                    # in a terminal of its own: this machine's runtime
@@ -584,18 +597,22 @@ model-input tensor kernel, node-owned windows, and the monotonic clock every nod
 
 A stream's venv runs CPython 3.10 to 3.13, GIL-enabled builds; the scaffold pins 3.12.
 
-Not built yet: an installer, serving an exposed port off the machine, and Windows.
+Not built yet: the macOS app, serving an exposed port off the machine, and Windows.
 
 ## Troubleshooting
 
-- **`error: no runtime is running on this machine: nothing answers at …`** — start `tatolabd` in a
-  terminal of its own. When another user's `tatolabd` holds the machine, the refusal names it: it
+- **`error: no runtime is running on this machine: nothing answers at …`** — installed on Linux,
+  `systemctl --user status tatolabd` says why the service is down and `systemctl --user start
+  tatolabd` starts it; built from source, start `tatolabd` in a terminal of its own. When another user's `tatolabd` holds the machine, the refusal names it: it
   serves that user's socket, not yours.
 - **`another runtime holds this machine: …`** — `tatolabd` is already running; the refusal names
   its user, pid and executable.
 - **`the machine runtime lock cannot be taken: /Library/Application Support/Tatolab … does not
   exist`** (macOS) — Tatolab.app creates the lock at first launch; without it, run the `sudo`
   commands the refusal names, once.
+- **`No display surface available: … neither does the systemd user manager's`** — the runtime runs
+  as a service and no desktop session is logged in to give it a display. Log in, then start the
+  stream again.
 - **``… has no .venv/bin/python; run `uv sync` in …``** — the runtime compiles a stream in the
   `.venv` of its project directory: the working directory, or `--dir`. Create it with `uv sync`.
 - **``… cannot import `tatolab.stream`: add `tatolab-stream` to the project's dependencies``** —
