@@ -603,7 +603,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<T> {
         let operation = self.in_this_streams_log_route(operation);
         match self.tokio_runtime_variant() {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(operation),
+            TokioRuntimeVariant::TokioRuntimeTheRunnerOwns(handle) => handle.block_on(operation),
             TokioRuntimeVariant::ExternalTokioHandle(handle) => {
                 let (tx, rx) = std::sync::mpsc::channel();
                 handle.spawn(async move {
@@ -710,10 +710,9 @@ impl LoadedStreamInThisRuntime {
 /// The engine's tokio runtime as work spawned against a stream reaches it.
 #[derive(Clone)]
 pub(crate) struct EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
-    pub(crate) tokio: tokio::runtime::Handle,
+    pub(crate) engines_tokio_runtime_handle: tokio::runtime::Handle,
     /// Set once the engine shuts down: past it nothing is spawned, and a task
-    /// spawned before it never upgrades its stream, so no tokio worker holds
-    /// the engine as its teardown drops it.
+    /// spawned before it that has not yet upgraded its stream does nothing.
     pub(crate) set_once_the_engine_shuts_down: Arc<AtomicBool>,
 }
 
@@ -728,7 +727,7 @@ impl EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
 /// log route, once the stream is upgraded; nothing when it has gone or the
 /// engine has shut down. A failure is logged naming `what_it_does`.
 pub(crate) fn spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly<Act, ActFuture>(
-    tokio: &EnginesTokioRuntimeForWorkSpawnedAgainstAStream,
+    engines_tokio_runtime: &EnginesTokioRuntimeForWorkSpawnedAgainstAStream,
     stream: Weak<LoadedStreamInThisRuntime>,
     what_it_does: &'static str,
     act: Act,
@@ -736,29 +735,32 @@ pub(crate) fn spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly<Ac
     Act: FnOnce(Arc<LoadedStreamInThisRuntime>) -> ActFuture + Send + 'static,
     ActFuture: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    if tokio.the_engine_has_shut_down() {
+    if engines_tokio_runtime.the_engine_has_shut_down() {
         return;
     }
-    let set_once_the_engine_shuts_down = Arc::clone(&tokio.set_once_the_engine_shuts_down);
-    tokio.tokio.spawn(async move {
-        if set_once_the_engine_shuts_down.load(Ordering::SeqCst) {
-            return;
-        }
-        let Some(stream) = stream.upgrade() else {
-            return;
-        };
-        let log_route = Arc::clone(stream.log_route());
-        let stream_name = stream.stream_name().to_string();
-        polled_in_a_loaded_stream_log_route(log_route, async move {
-            if let Err(failure) = act(stream).await {
-                tracing::warn!(
-                    stream = %stream_name,
-                    "{what_it_does} on the stream `{stream_name}` failed: {failure}"
-                );
+    let set_once_the_engine_shuts_down =
+        Arc::clone(&engines_tokio_runtime.set_once_the_engine_shuts_down);
+    engines_tokio_runtime
+        .engines_tokio_runtime_handle
+        .spawn(async move {
+            if set_once_the_engine_shuts_down.load(Ordering::SeqCst) {
+                return;
             }
-        })
-        .await;
-    });
+            let Some(stream) = stream.upgrade() else {
+                return;
+            };
+            let log_route = Arc::clone(stream.log_route());
+            let stream_name = stream.stream_name().to_string();
+            polled_in_a_loaded_stream_log_route(log_route, async move {
+                if let Err(failure) = act(stream).await {
+                    tracing::warn!(
+                        stream = %stream_name,
+                        "{what_it_does} on the stream `{stream_name}` failed: {failure}"
+                    );
+                }
+            })
+            .await;
+        });
 }
 
 /// The cut of the reader a link reading another stream registers against its
@@ -769,11 +771,11 @@ pub(crate) fn the_cut_of_a_link_reading_another_stream(
     reading_stream: Weak<LoadedStreamInThisRuntime>,
     link_id: LinkUniqueId,
     wiring_generation: u64,
-    tokio: EnginesTokioRuntimeForWorkSpawnedAgainstAStream,
+    engines_tokio_runtime: EnginesTokioRuntimeForWorkSpawnedAgainstAStream,
 ) -> CutOffAReaderOfAnExposedOutputPort {
     Box::new(move |why| {
         spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
-            &tokio,
+            &engines_tokio_runtime,
             reading_stream,
             "letting a link reading another stream go",
             move |reading_stream| async move {
@@ -1938,13 +1940,13 @@ mod connect_from_another_stream_tests {
     /// tokio worker is left holding the stream and, through it, the engine.
     #[test]
     fn work_spawned_against_a_stream_after_the_engine_shut_down_is_never_spawned() {
-        let tokio = tokio::runtime::Builder::new_current_thread()
+        let a_tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("a tokio runtime builds");
         let held_by_the_work = Arc::new(());
         let held_by_the_spawned_work = Arc::clone(&held_by_the_work);
         let after_the_engine_shut_down = EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
-            tokio: tokio.handle().clone(),
+            engines_tokio_runtime_handle: a_tokio_runtime.handle().clone(),
             set_once_the_engine_shuts_down: Arc::new(AtomicBool::new(true)),
         };
 
@@ -1959,5 +1961,48 @@ mod connect_from_another_stream_tests {
         );
 
         assert_eq!(Arc::strong_count(&held_by_the_work), 1);
+    }
+
+    /// A task still holding its stream as the `Runner` drops never holds the
+    /// engine past it: the runtime the `Runner` owns goes first, taking the
+    /// task with it, so the engine's last drop is the `Runner`'s own and never
+    /// lands on one of that runtime's workers.
+    #[test]
+    fn a_task_holding_its_stream_as_the_runner_drops_never_holds_the_engine_past_it() {
+        ensure_test_mocks_registered();
+        let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+        let runner = Runner::new().expect("the engine builds");
+        let stream = runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("held"),
+            )
+            .expect("the stream loads");
+        let the_engine = Arc::downgrade(stream.engine_resources_shared_by_every_stream());
+        let (the_task_holds_its_stream, the_task_holds_its_stream_now) = std::sync::mpsc::channel();
+
+        spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
+            &stream
+                .engine_resources_shared_by_every_stream()
+                .tokio_runtime_for_work_spawned_against_a_stream(),
+            Arc::downgrade(&stream),
+            "work the test holds open",
+            move |held_stream| async move {
+                let _ = the_task_holds_its_stream.send(());
+                std::future::pending::<()>().await;
+                drop(held_stream);
+                Ok(())
+            },
+        );
+        the_task_holds_its_stream_now
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the task holds its stream");
+        drop(stream);
+        drop(runner);
+
+        assert!(
+            the_engine.upgrade().is_none(),
+            "the engine outlived the Runner, held by a task on the runtime's workers"
+        );
     }
 }

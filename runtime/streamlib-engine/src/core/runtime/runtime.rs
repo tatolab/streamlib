@@ -26,13 +26,14 @@ use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
-/// Storage variant for tokio runtime in Runner.
+/// The tokio runtime the engine runs on, as every stream reaches it.
 ///
 /// Enables Runner to work both standalone (owning its runtime) and
 /// integrated into existing tokio applications (using the current handle).
 pub(crate) enum TokioRuntimeVariant {
-    /// Runner owns the tokio Runtime (created when NOT in tokio context).
-    OwnedTokioRuntime(TokioRuntimeShutDownWithinItsBudget),
+    /// The runtime the [`Runner`] owns (created when NOT in tokio context),
+    /// reached by its handle.
+    TokioRuntimeTheRunnerOwns(tokio::runtime::Handle),
     /// Runner uses an external tokio Handle (auto-detected when called from tokio context).
     ExternalTokioHandle(tokio::runtime::Handle),
 }
@@ -41,8 +42,8 @@ impl TokioRuntimeVariant {
     /// Get a tokio Handle from either variant.
     pub(crate) fn handle(&self) -> tokio::runtime::Handle {
         match self {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.handle().clone(),
-            TokioRuntimeVariant::ExternalTokioHandle(h) => h.clone(),
+            TokioRuntimeVariant::TokioRuntimeTheRunnerOwns(handle)
+            | TokioRuntimeVariant::ExternalTokioHandle(handle) => handle.clone(),
         }
     }
 }
@@ -66,10 +67,6 @@ impl TokioRuntimeShutDownWithinItsBudget {
 
     pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
         self.0.handle()
-    }
-
-    pub(crate) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
-        self.0.block_on(future)
     }
 }
 
@@ -147,7 +144,7 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) runtime_directory: StreamlibRuntimeDirectory,
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     pub(crate) iceoryx2_node: Iceoryx2Node,
-    /// Tokio runtime storage - either owned or external handle.
+    /// The engine's tokio runtime by handle: the `Runner`'s own, or an external one.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
     /// The runtime's own log, when the host asked for one; closed before the
     /// hold on the logging pathway lets go.
@@ -303,7 +300,7 @@ impl EngineResourcesSharedByEveryStream {
         &self,
     ) -> EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
         EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
-            tokio: self.tokio_runtime_variant.handle(),
+            engines_tokio_runtime_handle: self.tokio_runtime_variant.handle(),
             set_once_the_engine_shuts_down: Arc::clone(&self.shut_down),
         }
     }
@@ -316,8 +313,8 @@ impl EngineResourcesSharedByEveryStream {
         &self,
         source_stream_name: &str,
     ) {
-        let tokio = self.tokio_runtime_for_work_spawned_against_a_stream();
-        if tokio.the_engine_has_shut_down() {
+        let engines_tokio_runtime = self.tokio_runtime_for_work_spawned_against_a_stream();
+        if engines_tokio_runtime.the_engine_has_shut_down() {
             return;
         }
         for reading_stream in self.every_loaded_stream() {
@@ -326,7 +323,7 @@ impl EngineResourcesSharedByEveryStream {
             }
             let source_stream_name = source_stream_name.to_string();
             crate::core::runtime::spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
-                &tokio,
+                &engines_tokio_runtime,
                 Arc::downgrade(&reading_stream),
                 "re-planning the links reading another stream",
                 move |reading_stream| async move {
@@ -374,6 +371,9 @@ enum SetupHooksOfTheEngine {
 /// Every graph operation is a stream's: load a stream, then use the
 /// [`LoadedStreamInThisRuntime`] it hands back.
 pub struct Runner {
+    // Declared first so it drops before the engine resources: a task spawned against a stream
+    // may hold them, and their last drop must never land on one of this runtime's workers.
+    tokio_runtime_the_runner_owns: Option<TokioRuntimeShutDownWithinItsBudget>,
     pub(super) engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
     /// Where this runtime keeps its streams, and the lock its stream actions
     /// take one at a time.
@@ -503,20 +503,23 @@ impl Runner {
         }
 
         // Auto-detect tokio context FIRST — telemetry exporters need a Tokio handle.
-        let tokio_runtime_variant = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => TokioRuntimeVariant::ExternalTokioHandle(handle),
-            Err(_) => {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| {
-                        Error::Runtime(format!("Failed to create tokio runtime: {}", e))
-                    })?;
-                TokioRuntimeVariant::OwnedTokioRuntime(TokioRuntimeShutDownWithinItsBudget::owning(
-                    rt,
-                ))
-            }
-        };
+        let (tokio_runtime_variant, tokio_runtime_the_runner_owns) =
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => (TokioRuntimeVariant::ExternalTokioHandle(handle), None),
+                Err(_) => {
+                    let rt = tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| {
+                            Error::Runtime(format!("Failed to create tokio runtime: {}", e))
+                        })?;
+                    let owned = TokioRuntimeShutDownWithinItsBudget::owning(rt);
+                    (
+                        TokioRuntimeVariant::TokioRuntimeTheRunnerOwns(owned.handle().clone()),
+                        Some(owned),
+                    )
+                }
+            };
 
         // Load a local .env if present (RUST_LOG and other dev overrides).
         let _ = dotenvy::dotenv();
@@ -588,6 +591,7 @@ impl Runner {
         tracing::info!("[new] iceoryx2 Node created");
 
         Ok(Arc::new(Self {
+            tokio_runtime_the_runner_owns,
             engine_resources_shared_by_every_stream: Arc::new(EngineResourcesSharedByEveryStream {
                 runtime_id,
                 machine_name,
@@ -1697,8 +1701,9 @@ mod tests {
             runtime
                 .engine_resources_shared_by_every_stream
                 .tokio_runtime_variant,
-            TokioRuntimeVariant::OwnedTokioRuntime(_)
+            TokioRuntimeVariant::TokioRuntimeTheRunnerOwns(_)
         ));
+        assert!(runtime.tokio_runtime_the_runner_owns.is_some());
     }
 
     /// Fail-without-fix: a plain drop of the runtime waits for the blocking task
