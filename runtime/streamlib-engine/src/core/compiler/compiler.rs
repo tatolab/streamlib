@@ -427,17 +427,24 @@ fn wire_every_link_a_plan_adds(
             )
         };
 
-        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-            RuntimeEvent::CompilerWillWireLink {
-                link_id: link_id.to_string(),
-                from_port: from_port.clone(),
-                to_port: to_port.clone(),
-            },
-        );
+        let publish_that_the_link_will_be_wired = || {
+            the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                RuntimeEvent::CompilerWillWireLink {
+                    link_id: link_id.to_string(),
+                    from_port: from_port.clone(),
+                    to_port: to_port.clone(),
+                },
+            );
+        };
 
         let wired = if reads_another_stream {
-            wire_a_link_reading_another_stream(reading_stream, link_id)
+            wire_a_link_reading_another_stream(
+                reading_stream,
+                link_id,
+                publish_that_the_link_will_be_wired,
+            )
         } else {
+            publish_that_the_link_will_be_wired();
             tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
             super::compiler_ops::open_iceoryx2_service(
                 &mut graph_arc.write(),
@@ -464,12 +471,14 @@ fn wire_every_link_a_plan_adds(
 }
 
 /// Reconcile link `link_id` of `reading_stream`, which reads another stream,
-/// against that stream; whether it is wired now or handed to its
+/// against that stream, calling `before_it_opens_the_channel` only once the
+/// reconcile goes on to wire it; whether it is wired now or handed to its
 /// out-of-process ends. A link that waits or was refused says so in its own
 /// state and never fails the commit.
 fn wire_a_link_reading_another_stream(
     reading_stream: Option<&Arc<LoadedStreamInThisRuntime>>,
     link_id: &LinkUniqueId,
+    before_it_opens_the_channel: impl FnOnce(),
 ) -> bool {
     use super::compiler_ops::HowALinkReadingAnotherStreamWasReconciled;
 
@@ -482,7 +491,11 @@ fn wire_a_link_reading_another_stream(
         return false;
     };
     let how_it_was_reconciled =
-        super::compiler_ops::reconcile_a_link_reading_another_stream(reading_stream, link_id);
+        super::compiler_ops::reconcile_a_link_reading_another_stream_announcing_its_wiring(
+            reading_stream,
+            link_id,
+            before_it_opens_the_channel,
+        );
     tracing::info!(
         "[{}] {} reads another stream: {:?}",
         CompilePhase::Wire,

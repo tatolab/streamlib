@@ -25,7 +25,8 @@ pub(crate) use open_iceoryx2_service_op::{
 pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_processor_op::prepare_processor;
 pub(crate) use reconcile_a_link_reading_another_stream_op::{
-    HowALinkReadingAnotherStreamWasReconciled, reconcile_a_link_reading_another_stream,
+    HowALinkReadingAnotherStreamWasReconciled,
+    reconcile_a_link_reading_another_stream_announcing_its_wiring,
     unwire_a_link_reading_another_stream_from_the_wiring_it_holds,
 };
 pub(crate) use spawn_processor_op::spawn_processor;

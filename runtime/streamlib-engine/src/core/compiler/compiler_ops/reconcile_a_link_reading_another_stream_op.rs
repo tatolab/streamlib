@@ -59,12 +59,26 @@ pub(crate) enum HowALinkReadingAnotherStreamWasReconciled {
 }
 
 /// Reconcile link `link_id` of `reading_stream` against the stream its source
-/// is in: wire it when that stream runs and its port allows the reading
-/// stream, unwire a wiring made against a load of that stream that is gone,
-/// and otherwise say what the link waits for or why it was refused.
+/// is in, announcing nothing.
+#[cfg(test)]
 pub(crate) fn reconcile_a_link_reading_another_stream(
     reading_stream: &Arc<LoadedStreamInThisRuntime>,
     link_id: &LinkUniqueId,
+) -> HowALinkReadingAnotherStreamWasReconciled {
+    reconcile_a_link_reading_another_stream_announcing_its_wiring(reading_stream, link_id, || {})
+}
+
+/// Reconcile link `link_id` of `reading_stream` against the stream its source
+/// is in: wire it when that stream runs and its port allows the reading
+/// stream, unwire a wiring made against a load of that stream that is gone,
+/// and otherwise say what the link waits for or why it was refused.
+/// `before_it_opens_the_channel` runs, with no graph lock held, once the
+/// source's side is open and the destination's side is next — never for a
+/// link that waits, was refused at its source, or is already wired.
+pub(crate) fn reconcile_a_link_reading_another_stream_announcing_its_wiring(
+    reading_stream: &Arc<LoadedStreamInThisRuntime>,
+    link_id: &LinkUniqueId,
+    before_it_opens_the_channel: impl FnOnce(),
 ) -> HowALinkReadingAnotherStreamWasReconciled {
     let engine = Arc::clone(reading_stream.engine_resources_shared_by_every_stream());
 
@@ -152,6 +166,7 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
         }
     };
 
+    before_it_opens_the_channel();
     reading_stream.compiler.scope(|graph, _tx| {
         open_the_destination_side_and_hold_the_wiring(
             graph,
@@ -1426,6 +1441,77 @@ mod tests {
         assert_eq!(
             TwoStreamsReadAsRunning::readers_registered_against_the_camera_of(&streams.a),
             0
+        );
+    }
+
+    /// Every event on `stream`'s topic `forwarded` passed on before a marker
+    /// published on that topic now, in order — the topic delivers in order,
+    /// so the marker closes what was published before it.
+    fn every_event_forwarded_before_a_marker(
+        stream: &LoadedStreamInThisRuntime,
+        forwarded: &std::sync::mpsc::Receiver<RuntimeEvent>,
+    ) -> Vec<RuntimeEvent> {
+        stream
+            .loaded_stream_identity()
+            .publish_on_this_streams_topic(RuntimeEvent::GraphWillChange);
+        let mut before_the_marker = Vec::new();
+        loop {
+            match forwarded
+                .recv_timeout(A_CUT_LANDS_WITHIN)
+                .expect("the marker reaches the listener")
+            {
+                RuntimeEvent::GraphWillChange => return before_the_marker,
+                event => before_the_marker.push(event),
+            }
+        }
+    }
+
+    /// The WIRE phase says it will wire a link reading another stream only
+    /// when it goes on to wire it: the link it wires is announced once, and
+    /// pairs its will with its did; a link that waits, and a link already
+    /// wired, announce nothing.
+    ///
+    /// Fail-without-fix: announce every planned link before its reconcile and
+    /// the waiting link and the second pass each leave a will with no did.
+    #[test]
+    fn the_wire_phase_announces_a_link_reading_another_stream_only_when_it_wires_it() {
+        let streams = TwoStreamsReadAsRunning::load();
+        let wired = streams.link_the_display_from(camera_out1_of("a"));
+        let awaiting = streams.link_the_display_from(
+            OutputPortInAnotherStreamOnThisMachine::new("nowhere", "camera", "out1").unwrap(),
+        );
+        let (_listener, forwarded) = listen_on(&streams.b, |event| {
+            matches!(
+                event,
+                RuntimeEvent::CompilerWillWireLink { .. }
+                    | RuntimeEvent::CompilerDidWireLink { .. }
+                    | RuntimeEvent::GraphWillChange
+            )
+        });
+
+        for _ in 0..2 {
+            streams
+                .b
+                .compiler
+                .wire_every_link_a_plan_adds_for_a_test(
+                    &[wired.clone(), awaiting.clone()],
+                    &streams.b,
+                )
+                .unwrap();
+        }
+
+        let announced: Vec<(&str, String)> =
+            every_event_forwarded_before_a_marker(&streams.b, &forwarded)
+                .into_iter()
+                .map(|event| match event {
+                    RuntimeEvent::CompilerWillWireLink { link_id, .. } => ("will", link_id),
+                    RuntimeEvent::CompilerDidWireLink { link_id, .. } => ("did", link_id),
+                    other => panic!("an event the listener does not forward: {other:?}"),
+                })
+                .collect();
+        assert_eq!(
+            announced,
+            [("will", wired.to_string()), ("did", wired.to_string())]
         );
     }
 
