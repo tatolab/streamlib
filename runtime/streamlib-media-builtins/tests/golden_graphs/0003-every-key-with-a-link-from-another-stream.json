@@ -387,7 +387,7 @@
       },
       "capacity": 16,
       "state": "error",
-      "error_reason": "port `video` of node `camerasource` in stream `camera-rig` is internal, and another stream or other code on this machine reads only a port that is private or public",
+      "error_reason": "Invalid configuration: output port 'goldencamerarig01.video' would feed 33 destinations, and a channel carries at most 32",
       "components": {
         "state": "Error"
       }

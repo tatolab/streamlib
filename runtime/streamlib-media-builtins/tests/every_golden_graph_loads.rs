@@ -30,7 +30,7 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     ),
     (
         "0003-every-key-with-a-link-from-another-stream.json",
-        "eb6a5c21ecfd4ee43a8914afcc852449f7c910a95e2b90b5347d0543e3ce53ec",
+        "22680df859ce1526220b6ccad37975e65508bca663e8dd02b24b6f041041dd98",
     ),
 ];
 
@@ -219,6 +219,44 @@ fn a_link_from_another_stream_loads_awaiting_that_stream() {
             "{link}"
         );
         assert!(link.get("error_reason").is_none(), "{link}");
+    }
+}
+
+/// A link from another stream that golden 0003 records in `error` carries a
+/// wiring refusal the engine still makes: a source port closed to other
+/// streams leaves its reader `awaiting_remote`, so its exposure refusal is
+/// never a link's `error_reason`.
+#[test]
+fn golden_0003_records_no_link_from_another_stream_in_error_for_a_closed_port() {
+    let path = golden_graph_paths()
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "0003-every-key-with-a-link-from-another-stream.json")
+        })
+        .expect("golden 0003 is checked in");
+    let graph_document = golden_graph_document(&path);
+    let error_reasons_of_links_from_another_stream: Vec<&str> = graph_document["links"]
+        .as_array()
+        .expect("a graph holds links")
+        .iter()
+        .filter(|link| link["source"]["stream"].is_string() && link["state"] == "error")
+        .map(|link| {
+            link["error_reason"]
+                .as_str()
+                .expect("a link in error says why")
+        })
+        .collect();
+
+    assert!(
+        !error_reasons_of_links_from_another_stream.is_empty(),
+        "golden 0003 records a link from another stream in error"
+    );
+    for error_reason in error_reasons_of_links_from_another_stream {
+        assert!(
+            !error_reason.contains("reads only a port that is private or public"),
+            "{error_reason}"
+        );
     }
 }
 
