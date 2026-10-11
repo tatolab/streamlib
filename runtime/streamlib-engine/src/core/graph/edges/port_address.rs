@@ -18,13 +18,6 @@ use crate::core::runtime::{MachineName, what_one_address_chunk_may_be};
 /// The separator between the parts of an address.
 const PORT_ADDRESS_PART_SEPARATOR: char = '/';
 
-/// The parts an address is spelled in, right-anchored: the last two always,
-/// the leading ones only when they name somewhere other than here.
-const PORT_ADDRESS_PARTS_FROM_THE_LEFT: [&str; 4] = ["machine", "stream", "node", "port"];
-
-/// The fewest parts an address is spelled in: `node/port`.
-const FEWEST_PARTS_OF_A_PORT_ADDRESS: usize = 2;
-
 /// A port, addressed `[<machine>/][<stream>/]<node>/<port>`, every part cast.
 ///
 /// Carries no processor id: whatever owns the port resolves the node's name to
@@ -43,40 +36,22 @@ impl PortAddress {
     /// any other count of parts or a part that casts to nothing.
     pub fn parse(address: &str) -> Result<Self> {
         let written_parts: Vec<&str> = address.split(PORT_ADDRESS_PART_SEPARATOR).collect();
-        let part_count = written_parts.len();
-        let refused_for_its_part_count = || {
-            Error::InvalidPortAddress(format!(
-                "`{address}` is spelled in {part_count} part{}, and an address is `node/port`, \
-                 `stream/node/port` or `machine/stream/node/port`. {}",
-                if part_count == 1 { "" } else { "s" },
-                what_one_address_chunk_may_be()
-            ))
-        };
-        let part_names = PORT_ADDRESS_PARTS_FROM_THE_LEFT
-            .len()
-            .checked_sub(part_count)
-            .filter(|_| part_count >= FEWEST_PARTS_OF_A_PORT_ADDRESS)
-            .map(|first_part_written| &PORT_ADDRESS_PARTS_FROM_THE_LEFT[first_part_written..])
-            .ok_or_else(refused_for_its_part_count)?;
-        let cast_parts = written_parts
-            .iter()
-            .zip(part_names)
-            .map(|(written_part, part_name)| {
-                one_part_of_an_address_cast(written_part, part_name, address)
-            })
-            .collect::<Result<Vec<String>>>()?;
-        let (machine, stream, node, port) = match cast_parts.as_slice() {
-            [node, port] => (None, None, node, port),
-            [stream, node, port] => (None, Some(stream), node, port),
-            [machine, stream, node, port] => (Some(machine), Some(stream), node, port),
-            _ => return Err(refused_for_its_part_count()),
-        };
-        Ok(Self {
-            machine: machine.cloned(),
-            stream: stream.cloned(),
-            node: node.clone(),
-            port: port.clone(),
-        })
+        match written_parts.as_slice() {
+            [node, port] => Self::from_its_parts(None, None, node, port),
+            [stream, node, port] => Self::from_its_parts(None, Some(stream), node, port),
+            [machine, stream, node, port] => {
+                Self::from_its_parts(Some(machine), Some(stream), node, port)
+            }
+            _ => {
+                let part_count = written_parts.len();
+                Err(Error::InvalidPortAddress(format!(
+                    "`{address}` is spelled in {part_count} part{}, and an address is \
+                     `node/port`, `stream/node/port` or `machine/stream/node/port`. {}",
+                    if part_count == 1 { "" } else { "s" },
+                    what_one_address_chunk_may_be()
+                )))
+            }
+        }
     }
 
     /// The address a graph's link end writes in parts — machine and stream
