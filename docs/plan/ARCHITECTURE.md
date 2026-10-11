@@ -710,8 +710,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   this doctrine, and that backlog is executed in full: `audio-mixer-demo`,
   `microphone-reverb-speaker`, `raytracing-showcase` and `fisheye-object-detection` are
   Python, and `camera-compute-kernel` and `camera-halftone` are kernel examples.
-  `examples/` stands at twelve converted beside two held. A showcase authored in the current idiom is an ordinary addition under
-  the convention below, not conversion backlog: `camera-codec-roundtrip` is the codec
+  `examples/` stands at twelve converted beside two held. A showcase authored in the
+  current idiom is an ordinary addition under the convention below, not conversion backlog: `camera-codec-roundtrip` is the codec
   blocks' showcase; `camera-audio-recorder` is the recording showcase — `CameraSource →
   H264Encoder → Mp4Sink` beside `MicrophoneSource → OpusEncoder → Mp4Sink`, the camera
   also fanned to a `DisplayWindow`, Ctrl-C stopping and closing the file;
