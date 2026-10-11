@@ -280,7 +280,7 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 
 | Not here | Because | Lands with |
 |---|---|---|
-| The app's stream views, in-place updates, the remaining Rust names | the app | step 10 |
+| The app's stream actions and the rest of its GUI beyond the proof of concept's live stream list, graph and logs (owner, 2026-10-11), in-place updates, the remaining Rust names | the app | step 10 |
 | Starting with no GPU | accelerators OPEN | step 5 |
 | `run <url-or-zip>`, registries | packs OPEN | step 7 |
 | `machines`, router mode, dialing relays, the relay role, the URL forms | their OPENs | steps 8, 9 |
