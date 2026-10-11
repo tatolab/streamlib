@@ -309,7 +309,7 @@ tatolab enable-virtual-camera [--print]
   node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
   one stream's graph alone, in the shape a load takes. The machine's name is its tailnet name, read
   from the local Tailscale's status when `tatolabd` starts, or its hostname when it has no tailnet,
-  cast to lowercase URL-safe.
+  less a trailing mDNS `.local`, cast to lowercase URL-safe.
 - **`tap`** samples the raw bags one output port carries. The channel is the port's address,
   `<stream>/<node>/<port>` as `graph` names them — `<node>/<port>` with `--stream`, or
   `<machine>/<stream>/<node>/<port>` naming this machine. The sample is bounded and never

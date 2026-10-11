@@ -45,6 +45,9 @@ const TAILSCALE_BACKEND_STATE_RUNNING: &str = "Running";
 /// The separator between the labels of a DNS name.
 const DNS_LABEL_SEPARATOR: char = '.';
 
+/// The mDNS domain macOS appends to a hostname, matched case-insensitively.
+const MDNS_LOCAL_DOMAIN_SUFFIX: &str = ".local";
+
 /// What names a machine whose host reports no usable name.
 const MACHINE_NAME_FOR_A_HOST_REPORTING_NO_USABLE_NAME: &str = "unnamed-machine";
 
@@ -77,10 +80,12 @@ impl MachineName {
         })
     }
 
-    /// A machine with no tailnet, named by its hostname, cast.
+    /// A machine with no tailnet, named by its hostname cast, with a trailing
+    /// mDNS `.local` dropped first.
     pub fn from_a_hostname(hostname: &str) -> Result<Self> {
         Ok(Self {
-            name: cast_exposed_name_to_url_safe(hostname)?.into_owned(),
+            name: cast_exposed_name_to_url_safe(hostname_without_the_mdns_local_domain(hostname))?
+                .into_owned(),
             tailnet_full_name: None,
         })
     }
@@ -118,6 +123,20 @@ impl fmt::Display for MachineName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.name)
     }
+}
+
+/// `hostname` with its trailing mDNS `.local`, in any case, dropped; every
+/// other hostname as it is.
+fn hostname_without_the_mdns_local_domain(hostname: &str) -> &str {
+    hostname
+        .len()
+        .checked_sub(MDNS_LOCAL_DOMAIN_SUFFIX.len())
+        .filter(|suffix_start| {
+            hostname
+                .get(*suffix_start..)
+                .is_some_and(|suffix| suffix.eq_ignore_ascii_case(MDNS_LOCAL_DOMAIN_SUFFIX))
+        })
+        .map_or(hostname, |suffix_start| &hostname[..suffix_start])
 }
 
 /// How this machine came by its name, for the one line that says so.
@@ -550,6 +569,46 @@ mod tests {
         assert_eq!(
             resolved.machine_name,
             MachineName::from_a_hostname("rig").unwrap()
+        );
+    }
+
+    /// A hostname's trailing mDNS `.local`, in any case, is dropped before the
+    /// cast; every other dotted hostname keeps its dots.
+    #[test]
+    fn a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot() {
+        for (hostname, machine_name) in [
+            ("Jonathans-MacBook.local", "jonathans-macbook"),
+            ("rig.LOCAL", "rig"),
+            ("rig.Local", "rig"),
+            ("rig.local.lan", "rig.local.lan"),
+            ("build.example.com", "build.example.com"),
+            ("rig.localhost", "rig.localhost"),
+            ("local", "local"),
+            ("rig", "rig"),
+        ] {
+            assert_eq!(
+                MachineName::from_a_hostname(hostname)
+                    .expect("the hostname names a machine")
+                    .name(),
+                machine_name,
+                "{hostname}"
+            );
+        }
+        assert!(
+            MachineName::from_a_hostname(".local").is_err(),
+            "a hostname that is the mDNS domain alone names nothing"
+        );
+
+        let resolved = resolve_the_machine_name(
+            Err("no Tailscale CLI is installed".to_string()),
+            Some("Jonathans-MacBook.local".to_string()),
+        );
+        assert_eq!(resolved.machine_name.name(), "jonathans-macbook");
+        assert_eq!(
+            resolved.how_it_was_named,
+            HowThisMachineWasNamed::FromItsHostname {
+                why_tailscale_named_no_machine: "no Tailscale CLI is installed".to_string()
+            }
         );
     }
 

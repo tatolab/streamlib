@@ -99,9 +99,10 @@ fn with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_ca
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let the_hostname_cast =
-        streamlib::sdk::graph::cast_exposed_name_to_url_safe(&this_hosts_name())
+        streamlib::sdk::runtime::MachineName::from_a_hostname(&this_hosts_name())
             .expect("the test host's hostname names something")
-            .into_owned();
+            .name()
+            .to_string();
     let stopped = a_directory_holding_a_tailscale_cli_writing(
         &machine_root,
         &serde_json::json!({
