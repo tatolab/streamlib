@@ -19,10 +19,9 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    ExposedOutputPortsComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
-    LinkReadingAnotherStreamComponent, LinkUniqueId, ProcessorUniqueId, ShutdownChannelComponent,
-    StateComponent, ThreadHandleComponent, WhyAReaderOfAnExposedOutputPortIsCutOff,
-    cut_off_every_reader_each_under_its_own_unwind_guard,
+    ExposedOutputPortsComponent, Graph, GraphNodeWithComponents, ProcessorUniqueId,
+    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
+    WhyAReaderOfAnExposedOutputPortIsCutOff, cut_off_every_reader_each_under_its_own_unwind_guard,
 };
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -204,7 +203,6 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
     let mut first_node_left_behind = None;
     for processor_id in processor_ids {
         let mut exposures_of_the_removed_node;
-        let links_reading_another_stream_into_the_removed_node;
         {
             let mut graph = graph_arc.write();
             exposures_of_the_removed_node = graph
@@ -217,28 +215,16 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
                     }
                     node.remove::<ExposedOutputPortsComponent>()
                 });
-            links_reading_another_stream_into_the_removed_node =
-                take_every_link_reading_another_stream_off_the_inbound_links_of(
-                    &mut graph,
-                    processor_id,
-                );
             if graph.traversal_mut().v(processor_id).drop().exists() {
                 if let Some(node) = graph.traversal_mut().v(processor_id).first_mut()
                     && let Some(exposures) = exposures_of_the_removed_node.take()
                 {
                     node.insert_component_without_rendering_it(exposures);
                 }
-                put_every_link_reading_another_stream_back_on_its_link(
-                    &mut graph,
-                    links_reading_another_stream_into_the_removed_node,
-                );
                 first_node_left_behind.get_or_insert_with(|| processor_id.clone());
                 continue;
             }
         }
-        // Each releases its source's side in another stream, so it is dropped
-        // only once the graph lock is released, like the readers' cuts below.
-        drop(links_reading_another_stream_into_the_removed_node);
         // Its readers' cuts may own anything, so they run only once the graph lock is released.
         if let Some(exposures) = exposures_of_the_removed_node {
             cut_off_every_reader_each_under_its_own_unwind_guard(
@@ -261,48 +247,6 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
     }
 
     Ok(abandoned_processors)
-}
-
-/// Take the component off every link reading another stream into
-/// `processor_id`, whose edge the node's removal drops with it, each beside
-/// the link it came off.
-fn take_every_link_reading_another_stream_off_the_inbound_links_of(
-    graph: &mut Graph,
-    processor_id: &ProcessorUniqueId,
-) -> Vec<(LinkUniqueId, LinkReadingAnotherStreamComponent)> {
-    let inbound_links: Vec<LinkUniqueId> = graph
-        .traversal_mut()
-        .v(processor_id)
-        .in_e()
-        .iter()
-        .filter(|link| link.source_in_this_stream().is_none())
-        .map(|link| link.id.clone())
-        .collect();
-    inbound_links
-        .iter()
-        .filter_map(|link_id| {
-            graph
-                .traversal_mut()
-                .e(link_id)
-                .first_mut()
-                .and_then(|link| link.remove::<LinkReadingAnotherStreamComponent>())
-                .map(|component| (link_id.clone(), component))
-        })
-        .collect()
-}
-
-/// Put each component taken off a link reading another stream back on that
-/// link, for a node the removal left in the graph: its link still holds the
-/// wiring, the reason and the attempt count the component carries.
-fn put_every_link_reading_another_stream_back_on_its_link(
-    graph: &mut Graph,
-    taken: Vec<(LinkUniqueId, LinkReadingAnotherStreamComponent)>,
-) {
-    for (link_id, component) in taken {
-        if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
-            link.insert_component_without_rendering_it(component);
-        }
-    }
 }
 
 /// Wait on every signalled thread at once, each within its own budget, and hand
@@ -650,91 +594,6 @@ mod tests {
                 WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream,
                 Some(true)
             )]
-        );
-    }
-
-    /// The links reading another stream into a node being removed give up
-    /// what they hold on the source's stream before the node's removal drops
-    /// their edges, so it is let go once the graph's lock is released; for a
-    /// node the removal leaves behind, each is put back on its link as it
-    /// was.
-    ///
-    /// Fail-without-fix: leave the component on the link and the node's
-    /// removal drops it with the edge, under the graph's lock; drop what was
-    /// taken off a link left behind and the link loses its wiring, its reason
-    /// and its attempt count, so the next attempt restarts at a count a cut
-    /// still in flight may hold.
-    #[test]
-    fn a_removed_nodes_links_reading_another_stream_are_taken_off_before_its_edges_drop() {
-        use crate::core::graph::{
-            InputLinkPortRef, LinkReadingAnotherStreamComponent,
-            OutputPortInAnotherStreamOnThisMachine,
-        };
-
-        ensure_test_mocks_registered();
-        let mut graph = Graph::new();
-        let processor_id = a_processor_node_running_a_thread(
-            &mut graph,
-            "Display",
-            ThreadOnceToldToStop::ReturnsAfter(Duration::ZERO),
-            ProcessorThreadKind::HelperProcessHost,
-            &WhenEachThreadWasToldToStop::default(),
-        );
-        let link_id = graph
-            .traversal_mut()
-            .add_e_reading_another_stream(
-                OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "video").unwrap(),
-                InputLinkPortRef::new(processor_id.clone(), "in1"),
-            )
-            .first()
-            .expect("the link is added")
-            .id
-            .clone();
-        graph
-            .traversal_mut()
-            .e(&link_id)
-            .first_mut()
-            .expect("the link is in the graph")
-            .insert_component_without_rendering_it({
-                let mut component = LinkReadingAnotherStreamComponent::carrying_nothing_because(
-                    "the stream `a` has not started".to_string(),
-                );
-                component.begin_a_wiring_attempt();
-                component.begin_a_wiring_attempt();
-                component
-            });
-
-        let taken = take_every_link_reading_another_stream_off_the_inbound_links_of(
-            &mut graph,
-            &processor_id,
-        );
-
-        assert_eq!(taken.len(), 1);
-        assert_eq!(taken[0].0, link_id);
-        assert!(
-            !graph
-                .traversal()
-                .e(&link_id)
-                .first()
-                .expect("the link is still in the graph")
-                .has::<LinkReadingAnotherStreamComponent>(),
-            "the component is off the link before the node's removal drops the edge"
-        );
-
-        put_every_link_reading_another_stream_back_on_its_link(&mut graph, taken);
-
-        let link = graph
-            .traversal()
-            .e(&link_id)
-            .first()
-            .expect("the link is still in the graph");
-        let put_back = link
-            .get::<LinkReadingAnotherStreamComponent>()
-            .expect("the component is back on the link");
-        assert_eq!(put_back.wiring_generation(), 2);
-        assert_eq!(
-            put_back.why_it_carries_nothing(),
-            Some("the stream `a` has not started")
         );
     }
 

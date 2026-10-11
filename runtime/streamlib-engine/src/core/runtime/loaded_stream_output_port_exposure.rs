@@ -286,18 +286,18 @@ fn the_output_port_named_on_this_graph<'graph>(
     let named = node_named_or_refused(graph, stream_name, node_name)?;
     let port_cast = cast_exposed_name_to_url_safe(port_name)?.into_owned();
     if !named.has_output(&port_cast) {
-        return Err(Error::GraphError(format!(
-            "node `{}` in stream `{stream_name}` has no output port `{port_name}`. Its output \
-             ports are: {}",
-            named.display_name,
-            port_names_listed_for_a_refusal(
+        return Err(Error::NodeInAStreamHasNoOutputPortNamed {
+            stream: stream_name.to_string(),
+            node: named.display_name.clone(),
+            port: port_name.to_string(),
+            output_ports_the_node_has: port_names_listed_for_a_refusal(
                 named
                     .ports
                     .outputs
                     .iter()
-                    .map(|output| output.name.as_str())
-            )
-        )));
+                    .map(|output| output.name.as_str()),
+            ),
+        });
     }
     let processor_id = named.id.clone();
     graph

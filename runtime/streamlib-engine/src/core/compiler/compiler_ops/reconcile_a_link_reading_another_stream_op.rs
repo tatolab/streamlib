@@ -68,18 +68,17 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
 ) -> HowALinkReadingAnotherStreamWasReconciled {
     let engine = Arc::clone(reading_stream.engine_resources_shared_by_every_stream());
 
-    let (begun, stale_wiring) = reading_stream.compiler.scope(|graph, _tx| {
+    let begun = reading_stream.compiler.scope(|graph, _tx| {
         begin_a_wiring_attempt(graph, link_id, |source_stream_name| {
             engine.loaded_stream_of_the_cast_name(source_stream_name)
         })
     });
-    drop(stale_wiring);
     let BegunWiringAttempt {
         generation,
         source,
         source_stream,
         destination,
-        wired_to_its_source_before,
+        wired_to_this_load_of_its_source_before,
     } = match begun {
         Ok(begun) => begun,
         Err(how_it_was_reconciled) => return how_it_was_reconciled,
@@ -154,7 +153,7 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
             );
         }
         SourceSideOnTheSourceStream::ClosedToTheReadingStream(refusal)
-            if wired_to_its_source_before =>
+            if wired_to_this_load_of_its_source_before =>
         {
             return carry_nothing_for(
                 reading_stream,
@@ -162,8 +161,9 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
                 generation,
                 WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSource,
                 format!(
-                    "{refusal}; the link was wired to it before, so it wires again when the \
-                     port is opened to it"
+                    "{refusal}; the link was wired to this load of the stream `{}` before, so it \
+                     wires again when the port is opened to it",
+                    source.stream_name()
                 ),
             );
         }
@@ -179,19 +179,16 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
         }
     };
 
-    let (how_it_was_reconciled, pieces_no_link_took) =
-        reading_stream.compiler.scope(|graph, _tx| {
-            open_the_destination_side_and_hold_the_wiring(
-                graph,
-                link_id,
-                generation,
-                *opened,
-                destination,
-                source_stream.stream_tag(),
-            )
-        });
-    drop(pieces_no_link_took);
-    how_it_was_reconciled
+    reading_stream.compiler.scope(|graph, _tx| {
+        open_the_destination_side_and_hold_the_wiring(
+            graph,
+            link_id,
+            generation,
+            *opened,
+            destination,
+            source_stream.stream_tag(),
+        )
+    })
 }
 
 /// What a wiring attempt read off the reading stream's graph before it reaches
@@ -201,29 +198,21 @@ struct BegunWiringAttempt {
     source: OutputPortInAnotherStreamOnThisMachine,
     source_stream: Option<Arc<LoadedStreamInThisRuntime>>,
     destination: DestinationOfALinkAsItsWiringReadsIt,
-    wired_to_its_source_before: bool,
+    wired_to_this_load_of_its_source_before: bool,
 }
 
 /// Begin a wiring attempt on link `link_id` of `reading_graph`, unless the
 /// link is not this reconcile's to wire or still wired against the source
 /// stream's current load: the attempt supersedes every earlier one, a wiring
-/// against a load that is gone is unwired on this side and handed back to be
-/// dropped once the lock is released, and the destination is read — a
-/// destination that cannot take the link refuses it.
+/// that no longer stands is unwired and released, and the destination is read
+/// — a destination that cannot take the link refuses it.
 fn begin_a_wiring_attempt(
     reading_graph: &mut Graph,
     link_id: &LinkUniqueId,
     loaded_stream_of_the_cast_name: impl FnOnce(&str) -> Option<Arc<LoadedStreamInThisRuntime>>,
-) -> (
-    Result<BegunWiringAttempt, HowALinkReadingAnotherStreamWasReconciled>,
-    Option<WiringOfALinkReadingAnotherStream>,
-) {
-    let not_this_reconciles = || {
-        (
-            Err(HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire),
-            None,
-        )
-    };
+) -> Result<BegunWiringAttempt, HowALinkReadingAnotherStreamWasReconciled> {
+    let not_this_reconciles =
+        || Err(HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire);
     let Some(link) = reading_graph
         .traversal_mut()
         .e(link_id)
@@ -246,15 +235,15 @@ fn begin_a_wiring_attempt(
     if let (Some(wiring), Some(source_stream)) = (component.wiring(), &source_stream)
         && wiring.still_stands_against(source_stream.stream_tag())
     {
-        return (
-            Err(HowALinkReadingAnotherStreamWasReconciled::AlreadyWiredAgainstItsSourcesLoad),
-            None,
-        );
+        return Err(HowALinkReadingAnotherStreamWasReconciled::AlreadyWiredAgainstItsSourcesLoad);
     }
     let generation = component.begin_a_wiring_attempt();
-    let wired_to_its_source_before = component.was_wired_to_its_source_before();
-    let stale_wiring = component.take_wiring();
-    if stale_wiring.is_some() {
+    let wired_to_this_load_of_its_source_before =
+        source_stream.as_ref().is_some_and(|source_stream| {
+            component.was_wired_to_this_load_of_its_source(source_stream.stream_tag())
+        });
+    if let Some(stale_wiring) = component.take_wiring() {
+        drop(stale_wiring);
         link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
         link.remove::<OutOfProcessLinkWireRepliesComponent>();
         link.insert(LinkStateComponent(LinkState::Pending));
@@ -267,22 +256,19 @@ fn begin_a_wiring_attempt(
         tracing::info!(
             %link_id,
             source = %source,
-            "[WIRE] unwired a link reading another stream from a load of `{}` that is gone",
+            "[WIRE] unwired a link reading another stream from `{}`, whose wiring no longer stands",
             source.stream_name()
         );
     }
 
     match read_the_destination_of_a_link(reading_graph, &to_port, link_id) {
-        Ok(destination) => (
-            Ok(BegunWiringAttempt {
-                generation,
-                source,
-                source_stream,
-                destination,
-                wired_to_its_source_before,
-            }),
-            stale_wiring,
-        ),
+        Ok(destination) => Ok(BegunWiringAttempt {
+            generation,
+            source,
+            source_stream,
+            destination,
+            wired_to_this_load_of_its_source_before,
+        }),
         Err(refusal) => {
             let refusal = refusal.to_string();
             stamp_unless_the_attempt_was_overtaken(
@@ -292,10 +278,7 @@ fn begin_a_wiring_attempt(
                 WhyALinkReadingAnotherStreamCarriesNothing::Refused,
                 refusal.clone(),
             );
-            (
-                Err(HowALinkReadingAnotherStreamWasReconciled::Refused(refusal)),
-                stale_wiring,
-            )
+            Err(HowALinkReadingAnotherStreamWasReconciled::Refused(refusal))
         }
     }
 }
@@ -355,7 +338,10 @@ fn open_the_source_side_on_the_source_stream(
                 readers_to_drop,
             );
         }
-        Err(refusal @ (Error::ProcessorNotFound(_) | Error::GraphError(_))) => {
+        Err(
+            refusal @ (Error::ProcessorNotFound(_)
+            | Error::NodeInAStreamHasNoOutputPortNamed { .. }),
+        ) => {
             return (
                 SourceSideOnTheSourceStream::NotYet(format!(
                     "{refusal}; the link wires when the stream `{}` holds it",
@@ -436,9 +422,8 @@ fn open_the_source_side_on_the_source_stream(
 
 /// On `reading_graph`, open the destination's side of link `link_id` and hold
 /// the wiring on the link — unless the link went, is on its way out, or a
-/// later attempt overtook `generation`. Hands back, beside how it was
-/// reconciled, whatever no link took, for the caller to drop once it has let
-/// go of the lock.
+/// later attempt overtook `generation`, when the opened source side is
+/// released.
 fn open_the_destination_side_and_hold_the_wiring(
     reading_graph: &mut Graph,
     link_id: &LinkUniqueId,
@@ -446,24 +431,15 @@ fn open_the_destination_side_and_hold_the_wiring(
     opened: OpenedSourceSideOnTheSourceStream,
     destination: DestinationOfALinkAsItsWiringReadsIt,
     source_stream_tag: LoadedStreamTag,
-) -> (
-    HowALinkReadingAnotherStreamWasReconciled,
-    WiringPiecesNoLinkTook,
-) {
+) -> HowALinkReadingAnotherStreamWasReconciled {
     let OpenedSourceSideOnTheSourceStream {
         opened_source_side,
         exposure_registration,
         source_side,
     } = opened;
     if the_link_still_on_wiring_attempt(reading_graph, link_id, generation).is_none() {
-        return (
-            HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire,
-            WiringPiecesNoLinkTook::nothing_held(
-                exposure_registration,
-                source_side,
-                Some(opened_source_side),
-            ),
-        );
+        release_the_pieces_no_link_took(exposure_registration, source_side, opened_source_side);
+        return HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire;
     }
     let wire_reply_awaited_from_the_destination = match open_the_destination_side_of_a_link(
         reading_graph,
@@ -481,84 +457,52 @@ fn open_the_destination_side_and_hold_the_wiring(
                 WhyALinkReadingAnotherStreamCarriesNothing::Refused,
                 refusal.clone(),
             );
-            return (
-                HowALinkReadingAnotherStreamWasReconciled::Refused(refusal),
-                WiringPiecesNoLinkTook::nothing_held(
-                    exposure_registration,
-                    source_side,
-                    Some(opened_source_side),
-                ),
-            );
+            release_the_pieces_no_link_took(exposure_registration, source_side, opened_source_side);
+            return HowALinkReadingAnotherStreamWasReconciled::Refused(refusal);
         }
     };
 
     let Some(link) = the_link_still_on_wiring_attempt(reading_graph, link_id, generation) else {
-        return (
-            HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire,
-            WiringPiecesNoLinkTook::nothing_held(
-                exposure_registration,
-                source_side,
-                Some(opened_source_side),
-            ),
-        );
+        release_the_pieces_no_link_took(exposure_registration, source_side, opened_source_side);
+        return HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire;
     };
-    let replaced_wiring = match link.get_mut::<LinkReadingAnotherStreamComponent>() {
-        Some(component) => {
-            component.carries_what_its_source_publishes();
-            component.hold_wiring(WiringOfALinkReadingAnotherStream::new(
-                exposure_registration,
-                source_side,
-                source_stream_tag,
-            ))
-        }
-        None => {
-            return (
-                HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire,
-                WiringPiecesNoLinkTook::nothing_held(
-                    exposure_registration,
-                    source_side,
-                    Some(opened_source_side),
-                ),
-            );
-        }
+    let Some(component) = link.get_mut::<LinkReadingAnotherStreamComponent>() else {
+        release_the_pieces_no_link_took(exposure_registration, source_side, opened_source_side);
+        return HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire;
     };
+    component.carries_what_its_source_publishes();
+    drop(
+        component.hold_wiring(WiringOfALinkReadingAnotherStream::new(
+            exposure_registration,
+            source_side,
+            source_stream_tag,
+        )),
+    );
     let how_it_stands = opened_source_side
         .hold_its_services_on_the_link_and_stamp_it(link, wire_reply_awaited_from_the_destination);
-    (
-        HowALinkReadingAnotherStreamWasReconciled::WiredNow(how_it_stands),
-        WiringPiecesNoLinkTook {
-            _exposure_registration: None,
-            _source_side: None,
-            _opened_source_side: None,
-            _replaced_wiring: replaced_wiring,
-        },
-    )
+    HowALinkReadingAnotherStreamWasReconciled::WiredNow(how_it_stands)
 }
 
 /// The pieces of a wiring attempt no link took. Fields drop in declaration
 /// order: the reader comes off the source's port, then the source's side is
 /// released, then the services go.
 struct WiringPiecesNoLinkTook {
-    _exposure_registration: Option<ExposedOutputPortReaderRegistration>,
-    _source_side: Option<SourceSideOfALinkReadingAnotherStream>,
-    _opened_source_side: Option<OpenedSourceSideOfALink>,
-    _replaced_wiring: Option<WiringOfALinkReadingAnotherStream>,
+    _exposure_registration: ExposedOutputPortReaderRegistration,
+    _source_side: SourceSideOfALinkReadingAnotherStream,
+    _opened_source_side: OpenedSourceSideOfALink,
 }
 
-impl WiringPiecesNoLinkTook {
-    /// Every piece of an attempt no link took.
-    fn nothing_held(
-        exposure_registration: ExposedOutputPortReaderRegistration,
-        source_side: SourceSideOfALinkReadingAnotherStream,
-        opened_source_side: Option<OpenedSourceSideOfALink>,
-    ) -> Self {
-        Self {
-            _exposure_registration: Some(exposure_registration),
-            _source_side: Some(source_side),
-            _opened_source_side: opened_source_side,
-            _replaced_wiring: None,
-        }
-    }
+/// Release the pieces of a wiring attempt no link took, in field order.
+fn release_the_pieces_no_link_took(
+    exposure_registration: ExposedOutputPortReaderRegistration,
+    source_side: SourceSideOfALinkReadingAnotherStream,
+    opened_source_side: OpenedSourceSideOfALink,
+) {
+    drop(WiringPiecesNoLinkTook {
+        _exposure_registration: exposure_registration,
+        _source_side: source_side,
+        _opened_source_side: opened_source_side,
+    });
 }
 
 /// Link `link_id` of `reading_graph`, while wiring attempt `generation` is
@@ -1153,6 +1097,84 @@ mod tests {
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
+    }
+
+    /// A link wired to one load of its source stream is refused, naming the
+    /// port and its level, when the stream loads again with that port
+    /// `internal` — whether or not it was reconciled while the stream was
+    /// gone.
+    ///
+    /// Fail-without-fix: let any earlier wiring hold the link waiting and a
+    /// reload whose port is `internal` leaves it `awaiting_remote` for good.
+    #[test]
+    fn a_link_wired_before_is_refused_when_its_source_stream_reloads_internal() {
+        for reconciled_while_the_source_stream_was_unloaded in [true, false] {
+            let streams = TwoStreamsReadAsRunning::load();
+            let link_id = streams.link_the_display_from(camera_out1_of("a"));
+            assert_eq!(
+                reconcile_a_link_reading_another_stream(&streams.b, &link_id),
+                HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)
+            );
+            streams
+                .runner
+                .unload_stream("a")
+                .expect("the stream unloads");
+            if reconciled_while_the_source_stream_was_unloaded {
+                reconcile_a_link_reading_another_stream(&streams.b, &link_id);
+            }
+
+            let reloaded_a = TwoStreamsReadAsRunning::load_a_stream_holding(
+                &streams.runner,
+                &streams.project_directory,
+                "a",
+                MockOutputOnlyProcessor::processor_class_import_path(),
+                "camera",
+            );
+            let (reloaded_camera_output, _) =
+                run_the_node::<MockOutputOnlyProcessor::Processor>(&reloaded_a, "camera");
+            read_as_running(&reloaded_a);
+            let reconciled = reconcile_a_link_reading_another_stream(&streams.b, &link_id);
+
+            let HowALinkReadingAnotherStreamWasReconciled::Refused(refusal) = reconciled else {
+                panic!(
+                    "a reload at internal is not refused (reconciled while unloaded: \
+                     {reconciled_while_the_source_stream_was_unloaded}): {reconciled:?}"
+                );
+            };
+            for named in ["`a`", "`camera`", "`out1`", "internal"] {
+                assert!(refusal.contains(named), "{named:?} not in: {refusal}");
+            }
+            let rendered = streams.the_link_as_graph_renders_it(&link_id);
+            assert_eq!(rendered["state"], "error", "{rendered}");
+            assert_eq!(rendered["error_reason"], refusal.as_str());
+            assert_eq!(
+                reloaded_camera_output
+                    .expect("an output-only mock holds an output writer")
+                    .channel_notifier_count("out1"),
+                0
+            );
+        }
+    }
+
+    /// A link naming an output port its source node does not have waits for
+    /// the stream to hold it, its reason naming the port and the node's
+    /// output ports.
+    #[test]
+    fn a_link_naming_an_output_port_its_source_node_lacks_waits_naming_it() {
+        let streams = TwoStreamsReadAsRunning::load();
+        let link_id = streams.link_the_display_from(
+            OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "out9").unwrap(),
+        );
+
+        let reconciled = reconcile_a_link_reading_another_stream(&streams.b, &link_id);
+
+        let HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason) = reconciled
+        else {
+            panic!("a missing output port is not waited for: {reconciled:?}");
+        };
+        for named in ["`a`", "`camera`", "no output port `out9`", "out1"] {
+            assert!(reason.contains(named), "{named:?} not in: {reason}");
+        }
     }
 
     /// A commit's WIRE phase over a link that waits, a link that is refused

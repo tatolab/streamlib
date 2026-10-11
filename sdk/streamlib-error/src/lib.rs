@@ -202,6 +202,22 @@ pub enum Error {
         port_name: String,
     },
 
+    /// A node named in a stream has no output port of the name given.
+    #[error(
+        "node `{node}` in stream `{stream}` has no output port `{port}`. Its output ports are: \
+         {output_ports_the_node_has}"
+    )]
+    NodeInAStreamHasNoOutputPortNamed {
+        /// The stream that holds the node.
+        stream: String,
+        /// The node's name.
+        node: String,
+        /// The output port name as it was given.
+        port: String,
+        /// The node's output ports, comma-joined, or `none`.
+        output_ports_the_node_has: String,
+    },
+
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
     ProcessorPortNotFound {
         processor_id: String,

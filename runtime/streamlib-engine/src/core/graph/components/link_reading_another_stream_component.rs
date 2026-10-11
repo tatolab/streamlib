@@ -14,8 +14,8 @@ use crate::iceoryx2::OutputWriterInner;
 /// What a link reading another stream on this machine holds beside its state:
 /// why it carries nothing, read by `graph` as the link's
 /// `awaiting_remote_reason` or `error_reason`, which wiring attempt is the
-/// latest, the wiring that attempt left on the source's stream, and whether
-/// the link was ever wired to its source.
+/// latest, the wiring that attempt left on the source's stream, and the load
+/// of the source's stream the link was last wired to.
 ///
 /// Stored but never rendered under the link's `components`: `graph` renders
 /// its reason at the top level of the link.
@@ -24,7 +24,7 @@ pub struct LinkReadingAnotherStreamComponent {
     why_it_carries_nothing: Option<String>,
     wiring_generation: u64,
     wiring: Option<WiringOfALinkReadingAnotherStream>,
-    wired_to_its_source_before: bool,
+    load_of_its_source_last_wired_to: Option<LoadedStreamTag>,
 }
 
 impl LinkReadingAnotherStreamComponent {
@@ -84,19 +84,22 @@ impl LinkReadingAnotherStreamComponent {
         &mut self,
         wiring: WiringOfALinkReadingAnotherStream,
     ) -> Option<WiringOfALinkReadingAnotherStream> {
-        self.wired_to_its_source_before = true;
+        self.load_of_its_source_last_wired_to = Some(wiring.source_stream_tag);
         self.wiring.replace(wiring)
     }
 
-    /// Whether the link was wired to its source at some point, so a source
-    /// port found closed to it later is one that has not been opened again
-    /// yet rather than one that refused it.
-    pub(crate) fn was_wired_to_its_source_before(&self) -> bool {
-        self.wired_to_its_source_before
+    /// Whether the link was wired to the load of its source's stream tagged
+    /// `loaded_source_stream_tag`, so that load's port found closed to it
+    /// later is one a re-added node has not opened again yet rather than one
+    /// that refused it.
+    pub(crate) fn was_wired_to_this_load_of_its_source(
+        &self,
+        loaded_source_stream_tag: LoadedStreamTag,
+    ) -> bool {
+        self.load_of_its_source_last_wired_to == Some(loaded_source_stream_tag)
     }
 
-    /// Take the link's wiring off it, for the caller to drop once it has let
-    /// go of the graph.
+    /// Take the link's wiring off it.
     #[must_use = "the wiring handed back releases the source's side when dropped"]
     pub(crate) fn take_wiring(&mut self) -> Option<WiringOfALinkReadingAnotherStream> {
         self.wiring.take()
@@ -136,8 +139,8 @@ pub(crate) fn why_a_link_awaits_a_source_stream_not_loaded(source_stream_name: &
 
 /// What one wiring of a link reading another stream holds on the source's
 /// stream. Dropping it takes the reader off the source's port, then releases
-/// the source's side of the channel; neither takes the source stream's graph
-/// lock.
+/// the source's side of the channel; neither takes a graph lock, so it is
+/// dropped in place under either stream's.
 #[derive(Debug)]
 pub(crate) struct WiringOfALinkReadingAnotherStream {
     // Fields drop in declaration order: the registration goes first, so a cut
