@@ -1,0 +1,42 @@
+name: Installer
+
+# install.sh against releases its test makes, on a machine booting systemd, so
+# the service it registers runs under a real user manager: install, a kill -9
+# restarted, an upgrade in place, a download refused on its sha256, macOS
+# pointed at the app, and an uninstall that leaves the state directory.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'installer/**'
+      - '.github/workflows/installer.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'installer/**'
+      - '.github/workflows/installer.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  install-sh-under-a-user-systemd:
+    name: install.sh under a user systemd
+    runs-on: ubuntu-latest
+    # The image build is an apt install inside docker, outside the bounded-apt
+    # action's reach; this bound is what stops a slow mirror holding the job.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: shellcheck
+        run: shellcheck -s sh installer/install.sh && shellcheck installer/tests/*.sh
+
+      - name: install.sh against a fake release under a user systemd
+        run: bash installer/tests/run_install_sh_test_in_a_systemd_container.sh
