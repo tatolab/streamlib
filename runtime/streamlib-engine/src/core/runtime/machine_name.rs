@@ -716,8 +716,9 @@ mod tests {
 
     /// Returns once `stub` starts. A child another test thread forked while the
     /// stub was open for writing holds that descriptor until its own exec, and
-    /// until then the kernel refuses to exec the stub with `ETXTBSY`; once one
-    /// start succeeds no copy is left, since the writer closed its own.
+    /// until then Linux refuses to exec the stub with `ETXTBSY`; once one start
+    /// succeeds no copy is left, since the writer closed its own. macOS execs a
+    /// file open for writing, so there the first start succeeds.
     fn wait_until_no_forked_child_holds_the_stub_open_for_writing(stub: &Path) {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
@@ -744,6 +745,7 @@ mod tests {
     }
 
     /// A stub still open for writing somewhere is waited out, not refused.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_stub_still_open_for_writing_is_started_once_it_is_closed() {
         let directory = tempfile::tempdir().expect("tempdir");
