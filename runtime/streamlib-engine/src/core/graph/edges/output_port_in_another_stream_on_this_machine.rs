@@ -12,10 +12,34 @@ use crate::core::graph::{OutputLinkPortRef, cast_exposed_name_to_url_safe};
 /// Held by name, never by processor id: the other stream's ids change on
 /// every load of it and every re-add of the node.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "OutputPortInAnotherStreamOnThisMachineAsWritten")]
 pub struct OutputPortInAnotherStreamOnThisMachine {
     stream_name: String,
     node_name: String,
     port_name: String,
+}
+
+/// The names of an [`OutputPortInAnotherStreamOnThisMachine`] as a wire
+/// writes them, each cast through [`OutputPortInAnotherStreamOnThisMachine::new`].
+#[derive(Deserialize)]
+struct OutputPortInAnotherStreamOnThisMachineAsWritten {
+    stream_name: String,
+    node_name: String,
+    port_name: String,
+}
+
+impl TryFrom<OutputPortInAnotherStreamOnThisMachineAsWritten>
+    for OutputPortInAnotherStreamOnThisMachine
+{
+    type Error = crate::core::error::Error;
+
+    fn try_from(as_written: OutputPortInAnotherStreamOnThisMachineAsWritten) -> Result<Self> {
+        Self::new(
+            &as_written.stream_name,
+            &as_written.node_name,
+            &as_written.port_name,
+        )
+    }
 }
 
 impl OutputPortInAnotherStreamOnThisMachine {
@@ -163,5 +187,30 @@ mod tests {
             "camera-rig/camera/video"
         );
         assert!(OutputPortInAnotherStreamOnThisMachine::new("!!!", "camera", "video").is_err());
+    }
+
+    /// A port read off the wire is cast as one built by name is, and one whose
+    /// name casts to nothing is refused rather than held uncast.
+    #[test]
+    fn a_port_in_another_stream_read_off_the_wire_is_cast_or_refused() {
+        let read: OutputPortInAnotherStreamOnThisMachine =
+            serde_json::from_value(serde_json::json!({
+                "stream_name": "Camera Rig",
+                "node_name": "Camera",
+                "port_name": "Video"
+            }))
+            .expect("every name casts");
+        assert_eq!(
+            read,
+            OutputPortInAnotherStreamOnThisMachine::new("camera-rig", "camera", "video").unwrap()
+        );
+        assert!(
+            serde_json::from_value::<OutputPortInAnotherStreamOnThisMachine>(serde_json::json!({
+                "stream_name": "!!!",
+                "node_name": "camera",
+                "port_name": "video"
+            }))
+            .is_err()
+        );
     }
 }
