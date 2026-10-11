@@ -193,12 +193,28 @@ stop_node() {
     fi
     NODE_PID=""
 }
+# The runtime holds every credential in its environment and the URLs in the
+# stream's config, and its log sits in the output directory — so it is scanned
+# however the run ends, a failed run's above all.
+refuse_a_credential_written_into_the_output_directory() {
+    local credential
+    for credential in "${STREAMLIB_WHIP_URL:-}" "${STREAMLIB_WHEP_URL:-}" \
+        "${STREAMLIB_WHIP_BEARER_TOKEN:-}" "${STREAMLIB_WHEP_BEARER_TOKEN:-}"; do
+        [ -n "$credential" ] || continue
+        if grep -rqF -- "$credential" "$OUTPUT_DIR"; then
+            echo "[webrtc-live] FAIL: an endpoint credential was written into $OUTPUT_DIR;" \
+                "delete the directory before sharing any of it" >&2
+            exit 1
+        fi
+    done
+}
 restore_and_stop() {
     stop_node
     stop_the_fixture_runtime
     rm -rf "$RUNTIME_STATE_HOME"
     stop_the_signal
     v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$ORIGINAL_PATTERN" >/dev/null 2>&1 || true
+    refuse_a_credential_written_into_the_output_directory
 }
 trap restore_and_stop EXIT
 
@@ -397,14 +413,6 @@ stop_node
 stop_the_fixture_runtime 15
 the_fixture_runtime_stopped_cleanly \
     || fail "the runtime did not stop cleanly once its stream was unloaded; a teardown that hangs is a finding, not a slow exit"
-
-# The runtime held both URLs in its environment and in the stream's config, and
-# its log sits in the output directory.
-for credential in "$STREAMLIB_WHIP_URL" "$STREAMLIB_WHEP_URL"; do
-    if grep -rqF -- "$credential" "$OUTPUT_DIR"; then
-        fail "an endpoint URL was written into $OUTPUT_DIR; delete the directory — the URL is the stream key"
-    fi
-done
 
 # ── Measure ──────────────────────────────────────────────────────────
 echo ""
