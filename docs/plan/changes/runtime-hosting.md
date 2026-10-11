@@ -225,9 +225,10 @@ installer/                                    install.sh, tatolabd.service
 - **macOS.** `Tatolab.app`, from a notarised `.dmg` on the release and `brew install --cask
   tatolab/tap/tatolab`. `tatolab/tatolab-app` checks this repository out at the release tag, builds
   the runtime unit, lays it into the bundle, signs, notarises, and attaches the `.dmg` to this
-  repository's release. The bundle holds `Contents/MacOS/tatolabd`, an `SMAppService.agent` (plist in `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit), the CLI as
-  `Contents/MacOS/tatolab-cli` (a default APFS volume folds case, so `tatolab` would be the app's
-  own `Tatolab`), and the lend laid out by Apple's code rules — every Mach-O under
+  repository's release. The bundle holds `Contents/MacOS/tatolabd`, an `SMAppService.agent` (plist in `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit), the CLI under a
+  name that does not case-fold onto the app's own executable — a default APFS volume folds case,
+  so `tatolab` would overwrite `Tatolab` — `Contents/MacOS/tatolab-cli` today, which
+  `/usr/local/bin/tatolab` links to, and the lend laid out by Apple's code rules — every Mach-O under
   `Contents/Frameworks/tatolab-runtime/` at its path below `tatolab/runtime/`, the lend in
   `Contents/Resources/lend/` with each Mach-O a relative link into it, PyInstaller's layout;
   `tatolabd` finds the lend there from `Contents/MacOS/`, and `dladdr` is proved to find
@@ -240,8 +241,9 @@ installer/                                    install.sh, tatolabd.service
   carries the camera, microphone, local-network and Documents, Desktop and Downloads usage
   strings; the app and `tatolabd` carry the hardened-runtime device entitlements; every Mach-O is
   signed with the Developer ID and the `.dmg` notarised and stapled, with control-tower's desktop
-  workflow steps and six `APPLE_*` secrets copied into `tatolab/tatolab-app`. Discovery retries after a local-network
-  denial. The prompt's wording under `SMAppService` is §Media I/O's acceptance check.
+  workflow steps and the seven `APPLE_*` secrets, synced from Infisical (project Tatolab) into
+  `tatolab/tatolab-app`. The local-network usage string ships now; nothing discovers on the LAN
+  since the mesh removal, so the retry after a local-network denial lands with the sharing step. The prompt's wording under `SMAppService` is §Media I/O's acceptance check.
 
 ## MODIFIED: in-flight change files
 
