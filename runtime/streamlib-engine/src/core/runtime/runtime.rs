@@ -13,7 +13,9 @@ use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRun
 
 use super::MachineName;
 use super::RuntimeUniqueId;
-use super::loaded_stream::LoadedStreamInThisRuntime;
+use super::loaded_stream::{
+    LoadedStreamInThisRuntime, LoadedStreamOutOfTheTableUntilItsEndIsRecorded,
+};
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
 use super::{
@@ -96,6 +98,10 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     /// The streams loaded in this runtime, keyed by their URL-safe cast name.
     pub(crate) streams_loaded_in_this_runtime:
         Mutex<BTreeMap<String, Arc<LoadedStreamInThisRuntime>>>,
+    /// Every stream taken out of the table whose end may not be recorded yet,
+    /// locked only inside the table's lock.
+    streams_out_of_the_table_until_their_end_is_recorded:
+        Mutex<Vec<LoadedStreamOutOfTheTableUntilItsEndIsRecorded>>,
     /// The one GPU context, created by the first stream that starts.
     gpu_context_created_by_the_first_stream_start: Mutex<Option<GpuContext>>,
     /// Hooks run once, when the GPU context is created, before any
@@ -275,7 +281,9 @@ impl EngineResourcesSharedByEveryStream {
     }
 
     /// Take `stream` out of the table, unless another stream has taken its
-    /// name since, then re-plan every link reading it.
+    /// name since, into the streams whose end is not yet recorded — under the
+    /// table's lock, so a wait always finds it in one or the other — then
+    /// re-plan every link reading it.
     pub(crate) fn remove_from_the_stream_table(&self, stream: &Arc<LoadedStreamInThisRuntime>) {
         let removed = {
             let mut streams = self.streams_loaded_in_this_runtime.lock();
@@ -284,6 +292,13 @@ impl EngineResourcesSharedByEveryStream {
                 .is_some_and(|loaded| Arc::ptr_eq(loaded, stream));
             if it_is_this_stream {
                 streams.remove(stream.stream_name());
+                let mut streams_out_of_the_table = self
+                    .streams_out_of_the_table_until_their_end_is_recorded
+                    .lock();
+                streams_out_of_the_table.retain(|left| !left.has_its_end_recorded());
+                streams_out_of_the_table.push(
+                    LoadedStreamOutOfTheTableUntilItsEndIsRecorded::leaving_the_table(stream),
+                );
             }
             it_is_this_stream
         };
@@ -345,6 +360,27 @@ impl EngineResourcesSharedByEveryStream {
             .lock()
             .values()
             .cloned()
+            .collect()
+    }
+
+    /// Every loaded stream, then every stream out of the table whose end is
+    /// not yet recorded that anything still holds, read under the table's lock.
+    fn every_stream_still_held_whose_end_is_not_yet_recorded(
+        &self,
+    ) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+        let streams = self.streams_loaded_in_this_runtime.lock();
+        let streams_out_of_the_table = self
+            .streams_out_of_the_table_until_their_end_is_recorded
+            .lock();
+        streams
+            .values()
+            .cloned()
+            .chain(
+                streams_out_of_the_table
+                    .iter()
+                    .filter(|left| !left.has_its_end_recorded())
+                    .filter_map(|left| left.stream_while_anything_still_holds_it()),
+            )
             .collect()
     }
 }
@@ -461,8 +497,8 @@ pub enum StreamLoadObservingMachineShutdownRequests {
 /// What [`Runner::wait_until_every_stream_has_ended`] saw once every stream had
 /// ended.
 pub struct EveryStreamEndedDuringTheWait {
-    /// Every stream loaded at any point of the wait, in the order it was first
-    /// seen.
+    /// Every stream loaded, or out of the table with its end not yet recorded,
+    /// at any point of the wait, in the order it was first seen.
     pub streams_seen_during_the_wait: Vec<Arc<LoadedStreamInThisRuntime>>,
     /// How the first of them to end with a failure ended, or `Ok` when none did.
     pub how_the_first_failed_stream_ended: Result<()>,
@@ -590,6 +626,7 @@ impl Runner {
                 runtime_id,
                 machine_name,
                 streams_loaded_in_this_runtime: Mutex::new(BTreeMap::new()),
+                streams_out_of_the_table_until_their_end_is_recorded: Mutex::new(Vec::new()),
                 gpu_context_created_by_the_first_stream_start: Mutex::new(None),
                 setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
                 processor_interpreter_lend_directory:
@@ -987,17 +1024,16 @@ impl Runner {
     }
 
     /// Block until every loaded stream has ended, including each loaded while
-    /// the wait runs, returning every stream it saw and the first that ended
-    /// with a failure.
+    /// the wait runs and each already out of the table whose end is not yet
+    /// recorded, returning every stream it saw and the first that ended with a
+    /// failure.
     pub fn wait_until_every_stream_has_ended(&self) -> EveryStreamEndedDuringTheWait {
+        let engine = &self.engine_resources_shared_by_every_stream;
         let streams_seen_during_the_wait: Mutex<Vec<Arc<LoadedStreamInThisRuntime>>> =
             Mutex::new(Vec::new());
         self.block_until(&|| {
             let mut streams_seen = streams_seen_during_the_wait.lock();
-            for stream in self
-                .engine_resources_shared_by_every_stream
-                .every_loaded_stream()
-            {
+            for stream in engine.every_stream_still_held_whose_end_is_not_yet_recorded() {
                 if !streams_seen.iter().any(|seen| Arc::ptr_eq(seen, &stream)) {
                     streams_seen.push(stream);
                 }
@@ -1111,14 +1147,14 @@ impl Runner {
 
     /// Ask every loaded stream for its shutdown at once — each on its own
     /// thread, under its own watchdog — and wait until each has ended,
+    /// including each already out of the table whose end is not yet recorded,
     /// reporting the first that ended with a failure.
     fn shut_every_loaded_stream_down_and_wait_until_each_has_ended(
         &self,
         reason: &str,
     ) -> Result<()> {
-        let every_stream = self
-            .engine_resources_shared_by_every_stream
-            .every_loaded_stream();
+        let engine = &self.engine_resources_shared_by_every_stream;
+        let every_stream = engine.every_stream_still_held_whose_end_is_not_yet_recorded();
         for stream in &every_stream {
             stream.ask_for_this_streams_shutdown(reason);
         }
@@ -2775,6 +2811,92 @@ mod tests {
             loaded_during_the_wait.how_this_stream_ended(),
             Some(HowALoadedStreamEnded::Stopped)
         );
+    }
+
+    /// A stream out of the table whose end is not yet recorded — where its
+    /// shutdown thread leaves it between the two — is waited for and returned
+    /// with the others.
+    ///
+    /// The wait holds every stream it has seen, so the stream's reference
+    /// count rising says the wait has looked; the stream is only asked to end
+    /// after that, so a wait that returns first has returned past it.
+    #[test]
+    #[serial]
+    fn the_wait_for_every_stream_returns_a_stream_out_of_the_table_once_its_end_is_recorded() {
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let leaving = an_empty_stream_loaded_into(&runner, project_directory.path(), "leaving");
+        runner
+            .engine_resources_shared_by_every_stream
+            .remove_from_the_stream_table(&leaving);
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert_eq!(leaving.how_this_stream_ended(), None);
+
+        let (the_wait_returned, the_wait_has_returned) = std::sync::mpsc::channel();
+        let waiting_runner = Arc::clone(&runner);
+        let leaving_as_the_waiter_reads_it = Arc::clone(&leaving);
+        let references_before_the_wait_looked = Arc::strong_count(&leaving);
+        std::thread::spawn(move || {
+            let every_stream_ended_during_the_wait =
+                waiting_runner.wait_until_every_stream_has_ended();
+            let _ = the_wait_returned.send((
+                leaving_as_the_waiter_reads_it.how_this_stream_ended(),
+                every_stream_ended_during_the_wait
+                    .streams_seen_during_the_wait
+                    .iter()
+                    .any(|seen| Arc::ptr_eq(seen, &leaving_as_the_waiter_reads_it)),
+            ));
+        });
+        let deadline = Instant::now() + A_STREAM_ENDS_WITHIN;
+        while Arc::strong_count(&leaving) == references_before_the_wait_looked {
+            if let Ok((how_it_ended_as_the_wait_returned, _)) = the_wait_has_returned.try_recv() {
+                panic!(
+                    "the wait returned while a stream out of the table had no end recorded \
+                     ({how_it_ended_as_the_wait_returned:?})"
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the wait never looked at the stream out of the table"
+            );
+            std::thread::yield_now();
+        }
+        leaving.ask_for_this_streams_shutdown("the test ends the stream out of the table");
+
+        let (how_it_ended_as_the_wait_returned, the_wait_saw_it) = the_wait_has_returned
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never returned once the stream had ended");
+        assert_eq!(
+            how_it_ended_as_the_wait_returned,
+            Some(HowALoadedStreamEnded::Stopped)
+        );
+        assert!(the_wait_saw_it, "the wait returned no `leaving`");
+    }
+
+    /// The engine's shutdown ends a stream out of the table whose end is not
+    /// yet recorded, and returns only once it is.
+    #[test]
+    #[serial]
+    fn the_engines_shutdown_returns_only_once_a_stream_out_of_the_table_has_its_end_recorded() {
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let leaving = an_empty_stream_loaded_into(&runner, project_directory.path(), "leaving");
+        let loaded = an_empty_stream_loaded_into(&runner, project_directory.path(), "loaded");
+        runner
+            .engine_resources_shared_by_every_stream
+            .remove_from_the_stream_table(&leaving);
+        assert_eq!(leaving.how_this_stream_ended(), None);
+
+        runner.shut_down().expect("the engine shuts down cleanly");
+
+        for stream in [&leaving, &loaded] {
+            assert_eq!(
+                stream.how_this_stream_ended(),
+                Some(HowALoadedStreamEnded::Stopped),
+                "`{}`",
+                stream.stream_name()
+            );
+        }
     }
 
     /// The wait `tatolabd` blocks on returns only once the machine's shutdown

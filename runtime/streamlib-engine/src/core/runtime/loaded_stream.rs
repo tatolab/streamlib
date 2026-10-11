@@ -142,6 +142,41 @@ impl TheEndOfOneLoadedStream {
         *self.how_it_ended.lock() = Some(how_it_ended);
         self.has_ended.notify_all();
     }
+
+    fn is_recorded(&self) -> bool {
+        self.how_it_ended.lock().is_some()
+    }
+}
+
+/// A stream taken out of the stream table, kept by the engine until its end is
+/// recorded so a wait for every stream's end sees the stream between the two.
+/// The stream is held weakly: the thread ending it still lets go of it before
+/// it records the end.
+pub(crate) struct LoadedStreamOutOfTheTableUntilItsEndIsRecorded {
+    stream: Weak<LoadedStreamInThisRuntime>,
+    the_end_of_this_stream: Arc<TheEndOfOneLoadedStream>,
+}
+
+impl LoadedStreamOutOfTheTableUntilItsEndIsRecorded {
+    /// `stream`, as it leaves the stream table.
+    pub(crate) fn leaving_the_table(stream: &Arc<LoadedStreamInThisRuntime>) -> Self {
+        Self {
+            stream: Arc::downgrade(stream),
+            the_end_of_this_stream: Arc::clone(&stream.the_end_of_this_stream),
+        }
+    }
+
+    /// Whether the stream's end is recorded.
+    pub(crate) fn has_its_end_recorded(&self) -> bool {
+        self.the_end_of_this_stream.is_recorded()
+    }
+
+    /// The stream, while anything still holds it.
+    pub(crate) fn stream_while_anything_still_holds_it(
+        &self,
+    ) -> Option<Arc<LoadedStreamInThisRuntime>> {
+        self.stream.upgrade()
+    }
 }
 
 /// How a loaded stream ended.
@@ -690,7 +725,7 @@ impl LoadedStreamInThisRuntime {
 
     /// Whether this stream has ended: shut down and out of the stream table.
     pub fn has_ended(&self) -> bool {
-        self.the_end_of_this_stream.how_it_ended.lock().is_some()
+        self.the_end_of_this_stream.is_recorded()
     }
 
     /// Block for at most `budget` until this stream has ended, saying whether
