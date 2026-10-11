@@ -15,7 +15,7 @@ use super::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
 use crate::core::graph::{
     InputLinkPortRef, LinkUniqueId, OutputPortExposureLevel, OutputPortInAnotherStreamOnThisMachine,
 };
-use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 use crate::core::test_support::a_temporary_directory_at_owner_only_mode;
 use crate::core::{Result, RuntimeContextLimitedAccess};
 
@@ -404,6 +404,75 @@ fn a_paused_reading_stream_takes_a_cut_at_once() {
         "the resumed stream holds the cut link again"
     );
     assert_eq!(camera_output.channel_notifier_count("video"), 0);
+}
+
+/// A processor added to a paused reading stream, which the commit of a cut
+/// compiles, starts paused and stays paused until the stream resumes.
+///
+/// Fail-without-fix: open every pause gate at prepare, and the cut's commit
+/// spawns the processor running while its stream still reads paused.
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[serial]
+fn a_processor_a_cut_compiles_on_a_paused_stream_stays_paused_until_it_resumes() {
+    let streams = ACameraStreamReadByADisplayStream::start(
+        "a-paused-reader-compiles-a-new-node",
+        super::ENGINE_TEARDOWN_WATCHDOG_BUDGET,
+    );
+    streams.b.pause().expect("the stream `b` pauses");
+    let second_camera = streams
+        .b
+        .add_processor_reporting_its_name(
+            ProcessorSpec::new(
+                BagSourceOfALinkBetweenStreams::processor_class_import_path(),
+                serde_json::Value::Null,
+            )
+            .with_display_name("second-camera".to_string()),
+        )
+        .expect("a paused stream takes a node")
+        .processor_id;
+    let events_of_b = EveryEventOfOneStream::listen_to(&streams.b);
+
+    streams
+        .a
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Internal)
+        .unwrap();
+    events_of_b.until_the_link(&streams.b, &streams.link_id, |link| link.is_null());
+
+    let state_of_the_second_camera = streams.b.compiler.scope(|graph, _tx| {
+        use crate::core::graph::{GraphNodeWithComponents, StateComponent};
+        graph
+            .traversal()
+            .v(&second_camera)
+            .first()
+            .and_then(|node| node.get::<StateComponent>())
+            .expect("the second camera holds a state")
+            .clone_inner()
+    });
+    assert_eq!(
+        state_of_the_second_camera
+            .wait_until_setup_resolved(std::time::Instant::now() + THE_ENGINE_ANSWERS_WITHIN),
+        ProcessorState::Paused,
+        "the cut's commit compiled the second camera running"
+    );
+    assert!(
+        streams
+            .b
+            .is_processor_paused(&second_camera)
+            .expect("the cut's commit compiled the second camera")
+    );
+    assert_eq!(streams.b.status(), super::RuntimeStatus::Paused);
+
+    streams.b.resume().expect("the stream `b` resumes");
+
+    assert!(!streams.b.is_processor_paused(&second_camera).unwrap());
+    assert_eq!(
+        state_of_the_second_camera.current(),
+        ProcessorState::Running
+    );
 }
 
 /// A re-plan that lands while the reading stream is paused waits for its

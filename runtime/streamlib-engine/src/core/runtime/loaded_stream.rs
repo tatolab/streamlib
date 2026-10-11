@@ -852,8 +852,9 @@ impl LoadedStreamInThisRuntime {
                 .clone_inner()
                 .store(true, std::sync::atomic::Ordering::Release);
 
+            // One still in setup takes the gate's state when its setup returns.
             if let Some(state) = node.get::<StateComponent>() {
-                state.transition_to(ProcessorState::Paused);
+                state.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused);
             }
 
             let event = Event::processor(processor_id, ProcessorEvent::Paused);
@@ -890,7 +891,7 @@ impl LoadedStreamInThisRuntime {
                 .store(false, std::sync::atomic::Ordering::Release);
 
             if let Some(state) = node.get::<StateComponent>() {
-                state.transition_to(ProcessorState::Running);
+                state.transition_to_only_from(ProcessorState::Paused, ProcessorState::Running);
             }
 
             let event = Event::processor(processor_id, ProcessorEvent::Resumed);
@@ -951,15 +952,15 @@ impl LoadedStreamInThisRuntime {
     // Whole-stream pause/resume
     // =========================================================================
 
-    /// Pause every processor in this stream.
+    /// Pause every processor in this stream; one a compile prepares while it
+    /// is paused starts paused.
     pub fn pause(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         *self.status.lock() = RuntimeStatus::Pausing;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimePausing);
 
-        let processor_ids: Vec<ProcessorUniqueId> = self
-            .compiler
-            .scope(|graph, _tx| graph.traversal().v(()).ids());
+        let processor_ids =
+            self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Paused);
 
         let mut failures = Vec::new();
         for processor_id in &processor_ids {
@@ -968,10 +969,6 @@ impl LoadedStreamInThisRuntime {
                 failures.push((processor_id.clone(), e));
             }
         }
-
-        self.compiler.scope(|graph, _tx| {
-            graph.set_state(GraphState::Paused);
-        });
 
         *self.status.lock() = RuntimeStatus::Paused;
         if failures.is_empty() {
@@ -984,6 +981,26 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
+    /// Set this stream's graph state to `graph_state` and take the id of every
+    /// processor a compile prepared, under one graph lock: a processor prepared
+    /// after it takes its pause gate from `graph_state`, and one prepared
+    /// before it is in the ids.
+    fn set_the_graph_state_and_take_every_prepared_processor_id(
+        &self,
+        graph_state: GraphState,
+    ) -> Vec<ProcessorUniqueId> {
+        self.compiler.scope(|graph, _tx| {
+            graph.set_state(graph_state);
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .filter(|node| node.has::<ProcessorPauseGateComponent>())
+                .map(|node| node.id.clone())
+                .collect()
+        })
+    }
+
     /// Resume every processor in this stream, then compile every graph change
     /// logged while it was paused.
     pub fn resume(&self) -> Result<()> {
@@ -991,9 +1008,8 @@ impl LoadedStreamInThisRuntime {
         *self.status.lock() = RuntimeStatus::Starting;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResuming);
 
-        let processor_ids: Vec<ProcessorUniqueId> = self
-            .compiler
-            .scope(|graph, _tx| graph.traversal().v(()).ids());
+        let processor_ids =
+            self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Running);
 
         let mut failures = Vec::new();
         for processor_id in &processor_ids {
@@ -1002,10 +1018,6 @@ impl LoadedStreamInThisRuntime {
                 failures.push((processor_id.clone(), e));
             }
         }
-
-        self.compiler.scope(|graph, _tx| {
-            graph.set_state(GraphState::Running);
-        });
 
         *self.status.lock() = RuntimeStatus::Started;
         let committed = match self.runtime_context.lock().clone() {
