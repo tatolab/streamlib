@@ -496,8 +496,9 @@ impl LinkOutput {
         // alone it would contradict the top-level state a reader was told to
         // check — the same disagreement the top-level state reads the component
         // to avoid, in the other direction.
+        let (state, error_reason, awaiting_remote_reason) = rendered.into_state_and_its_reason();
         if let Some(rendered_state) = components.get_mut("state") {
-            *rendered_state = serde_json::json!(format!("{:?}", rendered.state));
+            *rendered_state = serde_json::json!(format!("{state:?}"));
         }
         Self {
             id: link.id.to_string(),
@@ -508,9 +509,9 @@ impl LinkOutput {
                 node_names,
             ),
             capacity: link.capacity.get(),
-            state: rendered.state,
-            error_reason: rendered.error_reason,
-            awaiting_remote_reason: rendered.awaiting_remote_reason,
+            state,
+            error_reason,
+            awaiting_remote_reason,
             components,
         }
     }
@@ -518,10 +519,10 @@ impl LinkOutput {
 
 /// What a link reports as its state, and why where that is `error` or
 /// `awaiting_remote`.
-struct RenderedLinkState {
-    state: LinkStateOutput,
-    error_reason: Option<String>,
-    awaiting_remote_reason: Option<String>,
+enum RenderedLinkState {
+    WithoutAReason(LinkStateOutput),
+    ErrorBecause(String),
+    AwaitingRemoteBecause(String),
 }
 
 impl RenderedLinkState {
@@ -550,47 +551,44 @@ impl RenderedLinkState {
         match stamped {
             crate::core::graph::LinkState::Pending => {}
             crate::core::graph::LinkState::AwaitingRemote => {
-                return Self {
-                    state: LinkStateOutput::AwaitingRemote,
-                    error_reason: None,
-                    awaiting_remote_reason: why_a_link_reading_another_stream_carries_nothing,
-                };
+                return why_a_link_reading_another_stream_carries_nothing.map_or(
+                    Self::WithoutAReason(LinkStateOutput::AwaitingRemote),
+                    Self::AwaitingRemoteBecause,
+                );
             }
-            crate::core::graph::LinkState::Error
-                if why_a_link_reading_another_stream_carries_nothing.is_some() =>
-            {
-                return Self {
-                    state: LinkStateOutput::Error,
-                    error_reason: why_a_link_reading_another_stream_carries_nothing,
-                    awaiting_remote_reason: None,
-                };
+            crate::core::graph::LinkState::Error => {
+                return why_a_link_reading_another_stream_carries_nothing.map_or(
+                    Self::WithoutAReason(LinkStateOutput::Error),
+                    Self::ErrorBecause,
+                );
             }
-            other => return Self::plain(LinkStateOutput::from(other)),
+            other => return Self::WithoutAReason(LinkStateOutput::from(other)),
         }
         let Some(replies) = link.get::<crate::core::graph::OutOfProcessLinkWireRepliesComponent>()
         else {
-            return Self::plain(LinkStateOutput::from(stamped));
+            return Self::WithoutAReason(LinkStateOutput::from(stamped));
         };
         match replies.what_its_out_of_process_ends_have_answered() {
             crate::core::graph::OutOfProcessLinkWireProgress::AnEndHasNotAnsweredYet => {
-                Self::plain(LinkStateOutput::Pending)
+                Self::WithoutAReason(LinkStateOutput::Pending)
             }
             crate::core::graph::OutOfProcessLinkWireProgress::EveryEndOpenedItsPort => {
-                Self::plain(LinkStateOutput::Wired)
+                Self::WithoutAReason(LinkStateOutput::Wired)
             }
-            crate::core::graph::OutOfProcessLinkWireProgress::AnEndRefused { reason } => Self {
-                state: LinkStateOutput::Error,
-                error_reason: Some(reason),
-                awaiting_remote_reason: None,
-            },
+            crate::core::graph::OutOfProcessLinkWireProgress::AnEndRefused { reason } => {
+                Self::ErrorBecause(reason)
+            }
         }
     }
 
-    fn plain(state: LinkStateOutput) -> Self {
-        Self {
-            state,
-            error_reason: None,
-            awaiting_remote_reason: None,
+    /// The state, then its `error_reason` and its `awaiting_remote_reason`.
+    fn into_state_and_its_reason(self) -> (LinkStateOutput, Option<String>, Option<String>) {
+        match self {
+            Self::WithoutAReason(state) => (state, None, None),
+            Self::ErrorBecause(reason) => (LinkStateOutput::Error, Some(reason), None),
+            Self::AwaitingRemoteBecause(reason) => {
+                (LinkStateOutput::AwaitingRemote, None, Some(reason))
+            }
         }
     }
 }
