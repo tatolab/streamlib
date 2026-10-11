@@ -261,13 +261,11 @@ impl ProcessWideWindowEventPump {
 
 /// The one pump for this process, started on first use.
 ///
-/// A Linux process naming no display server takes one from the systemd user
-/// manager's environment first, and is refused uncached when that names none,
-/// so a window asked for after a later login still gets one. Past that the
-/// outcome is cached either way: a process that cannot build an event loop —
-/// an unreachable display server, or a non-winit consumer already took the one
-/// slot — answers with the same error forever rather than retrying per caller
-/// and burning the slot on a race.
+/// A Linux process naming no display server is refused by name before the
+/// loop is tried. Past that the outcome is cached either way: a process that
+/// cannot build an event loop — an unreachable display server, or a non-winit
+/// consumer already took the one slot — answers with the same error forever
+/// rather than retrying per caller and burning the slot on a race.
 ///
 /// On Apple the pump can only be built on the process's first thread, so a
 /// first call from any other thread settles the answer as a refusal.

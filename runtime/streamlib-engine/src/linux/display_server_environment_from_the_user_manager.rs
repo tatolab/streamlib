@@ -5,11 +5,14 @@
 //! from the systemd user manager's, which a desktop session imports at login.
 //!
 //! A user service inherits the manager's environment as it stood when the
-//! service started, so a runtime started at boot, or by linger before anyone
-//! logged in, never sees the display a later login brought. winit reads the
-//! display from the process environment and offers no other way to name one,
-//! so what the manager holds is copied into it before the window event loop
-//! is built.
+//! service started, so a runtime started before its desktop session imported a
+//! display never sees it. winit reads the display from the process environment
+//! and offers no other way to name one, so what the manager holds is copied
+//! into it — before the GPU context is created, never after: NVIDIA's driver
+//! reads `DISPLAY` once, at `vkCreateInstance`, and an X11 swapchain made on an
+//! instance created without it jumps to a null pointer (595.99, measured
+//! 2026-10-11). A runtime whose GPU context was created naming no display is
+//! refused every window by name instead.
 
 use std::sync::Mutex;
 
@@ -29,7 +32,7 @@ const DISPLAY_SERVER_ENVIRONMENT_VARIABLES: [&str; 2] = ["WAYLAND_DISPLAY", "DIS
 /// clients by the cookie file this names, which is rarely `~/.Xauthority`.
 const X11_AUTHORITY_FILE_ENVIRONMENT_VARIABLE: &str = "XAUTHORITY";
 
-/// Serialises the copy, so two windows requested at once copy it once.
+/// Serialises the copy, so two GPU contexts created at once copy it once.
 static COPY_OF_THE_DISPLAY_SERVER_ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 /// Whether a variable is set to something winit would act on.
@@ -86,44 +89,49 @@ fn read_the_user_managers_environment() -> zbus::Result<Vec<String>> {
     systemd_manager.get_property::<Vec<String>>(SYSTEMD_MANAGER_ENVIRONMENT_PROPERTY)
 }
 
-/// Make this process name a display server, copying one from the systemd user
-/// manager's environment when it names none, or refuse naming both places.
-pub fn ensure_this_process_names_a_display_server() -> Result<()> {
+/// Copy the display server from the systemd user manager's environment into
+/// this process's when it names none. Called before the GPU context's Vulkan
+/// instance is created; a manager naming none, or none reachable, leaves the
+/// process headless, which a GPU context needs nothing more than.
+pub fn take_the_display_server_from_the_user_manager_when_this_process_names_none() {
     if this_process_names_a_display_server() {
-        return Ok(());
+        return;
     }
     let _copy_in_progress = COPY_OF_THE_DISPLAY_SERVER_ENVIRONMENT
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if this_process_names_a_display_server() {
-        return Ok(());
+        return;
     }
 
-    let user_manager_environment = read_the_user_managers_environment().map_err(|reason| {
-        Error::DisplaySurfaceUnavailable(format!(
-            "this runtime's environment names no display server (neither WAYLAND_DISPLAY nor \
-             DISPLAY is set), and the systemd user manager's environment could not be read for \
-             one: {reason}"
-        ))
-    })?;
+    let user_manager_environment = match read_the_user_managers_environment() {
+        Ok(user_manager_environment) => user_manager_environment,
+        Err(reason) => {
+            tracing::debug!(
+                %reason,
+                "this runtime's environment names no display server, and the systemd user \
+                 manager's could not be read for one; it runs headless"
+            );
+            return;
+        }
+    };
     let variables_to_take =
         display_server_variables_to_take_from_the_user_manager(&user_manager_environment, |name| {
             std::env::var(name).ok()
         });
     if variables_to_take.is_empty() {
-        return Err(Error::DisplaySurfaceUnavailable(
+        tracing::debug!(
             "this runtime's environment names no display server, and neither does the systemd \
-             user manager's: neither WAYLAND_DISPLAY nor DISPLAY is set in either. A desktop \
-             session imports them into the user manager at login; log in to one, or start \
-             tatolabd from a terminal inside it"
-                .to_owned(),
-        ));
+             user manager's; it runs headless"
+        );
+        return;
     }
     for (name, value) in &variables_to_take {
         // SAFETY: std serialises this against every `std::env` reader in the
-        // process. The foreign readers of these variables — winit and its
-        // X11 and Wayland clients — run on the window event pump's thread,
-        // which is started only after this returns.
+        // process. The foreign readers of these variables — the Vulkan driver,
+        // winit and its X11 and Wayland clients — first read them when the GPU
+        // context this precedes is created, on this thread, and the window
+        // event pump that winit runs on is started only after that.
         unsafe { std::env::set_var(name, value) };
     }
     tracing::info!(
@@ -131,7 +139,22 @@ pub fn ensure_this_process_names_a_display_server() -> Result<()> {
         "this runtime's environment named no display server; took it from the systemd user \
          manager's"
     );
-    Ok(())
+}
+
+/// Refuse a window by name when this process names no display server, which
+/// it can no longer take: its GPU context was created without one.
+pub fn ensure_this_process_names_a_display_server() -> Result<()> {
+    if this_process_names_a_display_server() {
+        return Ok(());
+    }
+    Err(Error::DisplaySurfaceUnavailable(
+        "this runtime named no display server when its GPU context was created: neither \
+         WAYLAND_DISPLAY nor DISPLAY was set in its environment or in the systemd user manager's. \
+         A display a desktop session brings later cannot be presented to by this runtime; \
+         restart it from inside the session (`systemctl --user restart tatolabd`, or `tatolabd` \
+         in a terminal of its own)"
+            .to_owned(),
+    ))
 }
 
 #[cfg(test)]

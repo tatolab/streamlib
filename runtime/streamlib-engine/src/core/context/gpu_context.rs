@@ -2803,6 +2803,9 @@ impl GpuContext {
 
     /// Initialize GPU context for the current platform.
     pub fn init_for_platform() -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        crate::linux::display_server_environment_from_the_user_manager::take_the_display_server_from_the_user_manager_when_this_process_names_none();
+
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let device = GpuDevice::new()?;
