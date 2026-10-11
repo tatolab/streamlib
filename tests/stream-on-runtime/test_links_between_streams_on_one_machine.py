@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from conftest import AttachedTatolabRun, StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
+from helper_process_observation import HELPER_PROCESS_STARTED_LOG_LINE_TEXT, helper_process_ids_started_in
 from links_between_streams_probes import bags_counted_marker_of
 from links_between_streams_streams import (
     ADDRESS_OF_FIVE_CHUNKS,
@@ -309,6 +310,11 @@ def test_a_link_to_an_internal_port_awaits_naming_the_port_and_its_level_and_wir
         for link in local_api.links_reading(PATTERN_IN_THE_SOURCE_STREAM, stream=READER_STREAM_NAME)
     ] == [awaiting_its_port["id"]], "a live connect to an internal port adds no link"
     reader_node_ids_before_the_expose = node_ids_of(local_api, READER_STREAM_NAME)
+    tatolabd.await_stderr_containing(HELPER_PROCESS_STARTED_LOG_LINE_TEXT)
+    helper_pids_before_the_expose = helper_process_ids_started_in(tatolabd.stderr_text)
+    assert len(helper_pids_before_the_expose) == 1, (
+        f"the reader's counter is the one helper:\n{tatolabd.recent_stderr()}"
+    )
 
     exposed = assert_tatolab_succeeded(
         run_tatolab(
@@ -335,6 +341,10 @@ def test_a_link_to_an_internal_port_awaits_naming_the_port_and_its_level_and_wir
     )
     assert tatolabd.stderr_text.count(stream_start_log_line(READER_STREAM_NAME)) == 1, (
         f"`{READER_STREAM_NAME}` restarted:\n{tatolabd.recent_stderr()}"
+    )
+    assert counted["pid"] in helper_pids_before_the_expose, (counted, helper_pids_before_the_expose)
+    assert helper_process_ids_started_in(tatolabd.stderr_text) == helper_pids_before_the_expose, (
+        "exposing the source port must never start a helper process"
     )
     stop_tatolabd_cleanly(tatolabd)
 

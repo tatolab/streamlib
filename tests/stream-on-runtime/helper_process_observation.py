@@ -17,8 +17,10 @@ import subprocess
 import time
 from pathlib import Path
 
+#: The text of `tatolabd`'s line for each helper process it starts, ahead of its pid.
+HELPER_PROCESS_STARTED_LOG_LINE_TEXT = "helper process started: pid="
 #: `tatolabd`'s line for each helper process it starts.
-HELPER_PROCESS_STARTED_LOG_LINE_PATTERN = re.compile(r"helper process started: pid=(\d+)")
+HELPER_PROCESS_STARTED_LOG_LINE_PATTERN = re.compile(re.escape(HELPER_PROCESS_STARTED_LOG_LINE_TEXT) + r"(\d+)")
 
 #: The file every processor interpreter runs, by path, from the lend.
 PROCESSOR_INTERPRETER_BOOTSTRAP_FILE_NAME = b"_processor_interpreter_bootstrap.py"
