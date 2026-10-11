@@ -243,7 +243,9 @@ installer/                                    install.sh, tatolabd.service
   signed with the Developer ID and the `.dmg` notarised and stapled, with control-tower's desktop
   workflow steps and the seven `APPLE_*` secrets, synced from Infisical (project Tatolab) into
   `tatolab/tatolab-app`. The local-network usage string ships now; nothing discovers on the LAN
-  since the mesh removal, so the retry after a local-network denial lands with the sharing step. The prompt's wording under `SMAppService` is §Media I/O's acceptance check.
+  since the mesh removal, so the retry after a local-network denial lands with the sharing step. Uninstalling removes the service and the files, never the state directory, as `--uninstall`
+  does on Linux: the app's "Uninstall Tatolab…" and `brew uninstall --cask` alike (owner,
+  2026-10-11). The prompt's wording under `SMAppService` is §Media I/O's acceptance check.
 
 ## MODIFIED: in-flight change files
 
