@@ -31,8 +31,8 @@ use crate::core::graph::{
     why_a_link_awaits_a_source_stream_not_loaded,
 };
 use crate::core::runtime::{
-    ExposedOutputPortReaderRegistration, LoadedStreamInThisRuntime, LoadedStreamTag,
-    ReaderRegisteredOnAGraph, register_a_reader_on_this_graph,
+    ExposedOutputPortReaderRegistration, LinksReadingAStreamToRePlan, LoadedStreamInThisRuntime,
+    LoadedStreamTag, ReaderRegisteredOnAGraph, register_a_reader_on_this_graph,
     the_cut_of_a_link_reading_another_stream,
 };
 use crate::iceoryx2::Iceoryx2Node;
@@ -86,13 +86,25 @@ pub(crate) fn reconcile_a_link_reading_another_stream_announcing_its_wiring(
         begin_a_wiring_attempt(graph, link_id, |source_stream_name| {
             engine.loaded_stream_of_the_cast_name(source_stream_name)
         })
+        .map(|begun| {
+            let compiles_of_the_source_stream_before_the_attempt =
+                begun.source_stream.as_ref().map(|source_stream| {
+                    source_stream
+                        .compiler
+                        .how_many_compiles_of_this_graph_finished()
+                });
+            (begun, compiles_of_the_source_stream_before_the_attempt)
+        })
     });
-    let BegunWiringAttempt {
-        generation,
-        source,
-        source_stream,
-        destination,
-    } = match begun {
+    let (
+        BegunWiringAttempt {
+            generation,
+            source,
+            source_stream,
+            destination,
+        },
+        compiles_of_the_source_stream_before_the_attempt,
+    ) = match begun {
         Ok(begun) => begun,
         Err(how_it_was_reconciled) => return how_it_was_reconciled,
     };
@@ -156,12 +168,34 @@ pub(crate) fn reconcile_a_link_reading_another_stream_announcing_its_wiring(
             },
         )
     else {
-        return awaiting_its_source_streams_graph(format!(
+        let how_it_was_reconciled = awaiting_its_source_streams_graph(format!(
             "the stream `{}` did not answer within {}s; the link is tried again once that \
                  stream compiles its next change, opens a port to other streams, or is unloaded",
             source.stream_name(),
             HOW_LONG_A_LINK_READING_ANOTHER_STREAM_WAITS_FOR_ITS_SOURCES_GRAPH.as_secs_f64()
         ));
+        // A compile of the source stream that finished since the attempt began
+        // may have woken this stream's waiting links before this one was
+        // stamped among them.
+        let the_source_stream_compiled_since_the_attempt_began =
+            compiles_of_the_source_stream_before_the_attempt
+                != Some(
+                    source_stream
+                        .compiler
+                        .how_many_compiles_of_this_graph_finished(),
+                );
+        if the_source_stream_compiled_since_the_attempt_began
+            && matches!(
+                how_it_was_reconciled,
+                HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(_)
+            )
+        {
+            reading_stream.spawn_a_re_plan_of_its_links_reading_the_stream(
+                source.stream_name(),
+                LinksReadingAStreamToRePlan::OnlyThoseItsGraphDidNotAnswer,
+            );
+        }
+        return how_it_was_reconciled;
     };
     // A reader's cut may own anything, so it is dropped only once the graph lock is released.
     drop(readers_to_drop_once_the_lock_is_released);
@@ -1484,6 +1518,105 @@ mod tests {
             })
             .collect();
         assert_eq!(re_planned, [parked.clone()]);
+        assert_eq!(
+            reconcile_a_link_reading_another_stream(&streams.b, &parked),
+            HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)
+        );
+    }
+
+    /// The latest wiring attempt on link `link_id` of `stream`.
+    fn the_wiring_attempt_of_the_link(
+        stream: &LoadedStreamInThisRuntime,
+        link_id: &LinkUniqueId,
+    ) -> u64 {
+        stream.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .e(link_id)
+                .first()
+                .and_then(|link| link.get::<LinkReadingAnotherStreamComponent>())
+                .map_or(0, LinkReadingAnotherStreamComponent::wiring_generation)
+        })
+    }
+
+    /// How many wirings of link `link_id` `stream` has logged and not committed.
+    fn the_wirings_of_the_link_logged(
+        stream: &LoadedStreamInThisRuntime,
+        link_id: &LinkUniqueId,
+    ) -> usize {
+        stream
+            .compiler
+            .logged_pending_operations()
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    operation,
+                    crate::core::compiler::PendingOperation::AddLink(logged) if logged == link_id
+                )
+            })
+            .count()
+    }
+
+    /// A compile of the source stream that finishes while a reconcile waits on
+    /// its graph, and wakes the waiting links before the reconcile stamps this
+    /// one among them, still has the link re-planned.
+    ///
+    /// Fail-without-fix: stamp the link and leave its re-plan to the source
+    /// stream's next compile, and a link that compile's wake missed waits on a
+    /// healthy stream for good.
+    #[test]
+    fn a_link_stamped_after_its_source_streams_compile_woke_the_waiting_links_is_re_planned() {
+        let streams = TwoStreamsReadAsRunning::load();
+        let parked = streams.link_the_display_from(camera_out1_of("a"));
+        let attempt_before = the_wiring_attempt_of_the_link(&streams.b, &parked);
+        let (_listener, changed) = listen_on(&streams.b, |event| {
+            matches!(event, RuntimeEvent::GraphDidChange)
+        });
+        let wirings_logged_before = the_wirings_of_the_link_logged(&streams.b, &parked);
+
+        let (reconciled, _) = while_the_graph_of_the_stream_is_held(&streams.a, || {
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let deadline = std::time::Instant::now() + A_CUT_LANDS_WITHIN;
+                    while the_wiring_attempt_of_the_link(&streams.b, &parked) == attempt_before {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "the reconcile never began its attempt"
+                        );
+                        std::thread::yield_now();
+                    }
+                    streams
+                        .a
+                        .compiler
+                        .count_a_compile_of_this_graph_as_finished_for_a_test();
+                    tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .expect("current-thread runtime")
+                        .block_on(streams.b.re_plan_the_links_reading_the_stream(
+                            "a",
+                            crate::core::runtime::LinksReadingAStreamToRePlan::OnlyThoseItsGraphDidNotAnswer,
+                        ))
+                        .expect("the early wake finds nothing to re-plan");
+                });
+                reconcile_a_link_reading_another_stream(&streams.b, &parked)
+            })
+        });
+        assert!(
+            matches!(
+                &reconciled,
+                HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason)
+                    if reason.contains("did not answer")
+            ),
+            "{reconciled:?}"
+        );
+
+        let deadline = std::time::Instant::now() + A_CUT_LANDS_WITHIN;
+        while the_wirings_of_the_link_logged(&streams.b, &parked) == wirings_logged_before {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            changed
+                .recv_timeout(left)
+                .expect("the link the early wake missed is re-planned");
+        }
         assert_eq!(
             reconcile_a_link_reading_another_stream(&streams.b, &parked),
             HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::{Mutex, RwLock};
 
@@ -40,6 +41,9 @@ pub struct Compiler {
     /// Processor threads a removal abandoned. Each holds the engine alive
     /// beneath it until it returns, so teardown asks which still run.
     abandoned_processor_threads: Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+    /// Counted after each compile lets go of the graph and before it wakes
+    /// the links in other streams waiting on it.
+    compiles_of_this_graph_finished: AtomicU64,
 }
 
 impl Default for Compiler {
@@ -65,6 +69,7 @@ impl Compiler {
             transaction: Arc::new(Mutex::new(Vec::new())),
             one_commit_at_a_time: Mutex::new(()),
             abandoned_processor_threads: Mutex::new(Vec::new()),
+            compiles_of_this_graph_finished: AtomicU64::new(0),
         }
     }
 
@@ -77,6 +82,19 @@ impl Compiler {
             .iter()
             .map(|thread| thread.processor.clone())
             .collect()
+    }
+
+    /// How many compiles of this graph have finished.
+    pub(crate) fn how_many_compiles_of_this_graph_finished(&self) -> u64 {
+        self.compiles_of_this_graph_finished.load(Ordering::SeqCst)
+    }
+
+    /// Count a compile of this graph as finished, as a compile does before it
+    /// wakes the links waiting on it.
+    #[cfg(test)]
+    pub(crate) fn count_a_compile_of_this_graph_as_finished_for_a_test(&self) {
+        self.compiles_of_this_graph_finished
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     // =========================================================================
@@ -155,6 +173,7 @@ impl Compiler {
             operations,
             runtime_ctx,
             &self.abandoned_processor_threads,
+            &self.compiles_of_this_graph_finished,
         )
     }
 
@@ -169,6 +188,7 @@ impl Compiler {
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
         abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+        compiles_of_this_graph_finished: &AtomicU64,
     ) -> Result<()> {
         let mut result = CompileResult::default();
         let compiled = Self::compile_counting_into(
@@ -178,6 +198,7 @@ impl Compiler {
             abandoned_processor_threads,
             &mut result,
         );
+        compiles_of_this_graph_finished.fetch_add(1, Ordering::SeqCst);
         // Processors this compile created may be the sources links in other
         // streams wait on, and they run whether or not the rest of it failed.
         if let Some(this_stream) = runtime_ctx.this_stream() {

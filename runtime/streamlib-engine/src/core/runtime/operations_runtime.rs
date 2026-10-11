@@ -908,6 +908,32 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
+    /// Re-plan, on the engine's tokio runtime, the links of this stream
+    /// reading the stream `source_stream_name` that `which` picks.
+    pub(crate) fn spawn_a_re_plan_of_its_links_reading_the_stream(
+        self: &Arc<Self>,
+        source_stream_name: &str,
+        which: LinksReadingAStreamToRePlan,
+    ) {
+        let engines_tokio_runtime = self
+            .engine_resources_shared_by_every_stream()
+            .tokio_runtime_for_work_spawned_against_a_stream();
+        if engines_tokio_runtime.the_engine_has_shut_down() {
+            return;
+        }
+        let source_stream_name = source_stream_name.to_string();
+        spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
+            &engines_tokio_runtime,
+            Arc::downgrade(self),
+            "re-planning the links reading another stream",
+            move |reading_stream| async move {
+                reading_stream
+                    .re_plan_the_links_reading_the_stream(&source_stream_name, which)
+                    .await
+            },
+        );
+    }
+
     /// Queue the links of this stream reading the stream `source_stream_name`
     /// that `which` picks to be reconciled, and commit them while this stream
     /// runs; a stream not started commits them at its start, a paused one at

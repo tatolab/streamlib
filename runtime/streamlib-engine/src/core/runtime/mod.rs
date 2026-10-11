@@ -19,9 +19,7 @@ mod operations_runtime;
 mod processor_interpreter_launch_record;
 pub(crate) use operations_runtime::{
     EnginesTokioRuntimeForWorkSpawnedAgainstAStream, LinksReadingAStreamToRePlan,
-    mark_this_thread_as_a_processor_execution_thread,
-    spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly,
-    the_cut_of_a_link_reading_another_stream,
+    mark_this_thread_as_a_processor_execution_thread, the_cut_of_a_link_reading_another_stream,
 };
 #[allow(clippy::module_inception)]
 mod runtime;

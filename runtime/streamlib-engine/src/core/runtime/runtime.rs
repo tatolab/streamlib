@@ -324,17 +324,8 @@ impl EngineResourcesSharedByEveryStream {
             if reading_stream.stream_name() == source_stream_name {
                 continue;
             }
-            let source_stream_name = source_stream_name.to_string();
-            crate::core::runtime::spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
-                &engines_tokio_runtime,
-                Arc::downgrade(&reading_stream),
-                "re-planning the links reading another stream",
-                move |reading_stream| async move {
-                    reading_stream
-                        .re_plan_the_links_reading_the_stream(&source_stream_name, which)
-                        .await
-                },
-            );
+            reading_stream
+                .spawn_a_re_plan_of_its_links_reading_the_stream(source_stream_name, which);
         }
     }
 
