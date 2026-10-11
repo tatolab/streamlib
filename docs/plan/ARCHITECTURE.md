@@ -733,7 +733,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   them and misleads them into thinking they have to do engine work, the way a Tailscale
   user would be misled by an example of modifying Tailscale. An engine-facing example is
   deleted, never converted. Engine contracts are proven by engine tests, as the first entry
-  in this section states. Owner, 2026-10-09. [examples-show-streams-only — SHIPPED #PRNUM]
+  in this section states. Owner, 2026-10-09. [examples-show-streams-only — SHIPPED #2718]
   Rejected: porting `tokio-integration` to the new graph and tap shape (#2615): it keeps
   alive an example of engine embedding that no stream author needs (owner, 2026-10-09).
 - **DECIDED** — The GPU examples run on the portable path: `camera-compute-kernel`,
