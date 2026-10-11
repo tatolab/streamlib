@@ -1432,13 +1432,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   serializable description a runtime runs — nodes by class import path with their config and
   name, the links, and what the stream exposes. It is one shape with what `graph` renders,
   never a second format: the spec keys are `stream`, `nodes` (each `name`, `type`, `config`),
-  `links` (each `source` and `target`, an end being `{node, port}` by the node's resolved
-  name) and `exposed` (each `node`, `port`, `level`), and `graph` renders exactly these with
-  its live keys — `id`, `ports`, link state, counters — beside them. A load reads the spec
-  keys and skips the live ones, so `graph`'s own output is a loadable graph; there is no
-  saver, because the render is the export. A load refuses by name a node name two nodes cast
-  to, a link end naming a node or port the graph does not hold, an unregistered `type`, and
-  an exposure naming a node or an output the graph does not hold.
+  `links` (each `source` and `target`, an end in this stream being `{node, port}` by the
+  node's resolved name, and a source in another stream on the machine naming that stream too)
+  and `exposed` (each `node`, `port`, `level`), and `graph` renders exactly these with its
+  live keys — `id`, `ports`, link state, counters — beside them. A load reads the spec keys
+  and skips the live ones, so `graph`'s own output is a loadable graph; there is no saver,
+  because the render is the export. A load refuses by name a node name two nodes cast to, an
+  unregistered `type`, an end in this stream naming a node or port the graph does not hold,
+  and an exposure naming a node or an output the graph does not hold; a source in another
+  stream is that stream's to hold and is not looked up here.
   [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2708]
   <!-- verify: cargo test -p streamlib-engine --test graph_snapshot_round_trip_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::every_key_graph_renders_is_one_a_load_reads_or_skips -->
