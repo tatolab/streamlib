@@ -12,9 +12,11 @@ use super::LoadedStreamInThisRuntime;
 use crate::core::error::OutputPortNotExposedToTheReader;
 use crate::core::graph::{
     CutOffAReaderOfAnExposedOutputPort, ExposedOutputPortsComponent, Graph,
-    GraphNodeWithComponents, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
-    ProcessorNode, ReaderOfAnExposedOutputPort, cast_exposed_name_to_url_safe,
-    node_named_or_refused, port_names_listed_for_a_refusal,
+    GraphNodeWithComponents, OutputPortExposureLevel, OutputPortReaderLocation,
+    OutputPortReaderOutsideItsStream, ProcessorNode, ProcessorUniqueId,
+    ReaderOfAnExposedOutputPort, WhyAReaderOfAnExposedOutputPortIsCutOff,
+    cast_exposed_name_to_url_safe, cut_off_every_reader_each_under_its_own_unwind_guard,
+    node_named_or_refused, output_port_exposure_allows_the_reader, port_names_listed_for_a_refusal,
 };
 use crate::core::{Error, Result};
 
@@ -37,17 +39,20 @@ impl Drop for ExposedOutputPortReaderRegistration {
 impl LoadedStreamInThisRuntime {
     /// Put output port `port_name` of node `node_name` at `level` while the
     /// stream runs, cutting off at once every reader from outside the stream
-    /// the new level no longer allows. Nothing restarts.
+    /// the new level no longer allows, and re-planning every link in another
+    /// stream reading this one when the port is newly open to them. Nothing
+    /// restarts.
     pub fn set_output_port_exposure_level(
         &self,
         node_name: &str,
         port_name: &str,
         level: OutputPortExposureLevel,
     ) -> Result<()> {
-        let (port_address, readers_leaving_the_port) =
+        let (port_address, level_before, readers_leaving_the_port) =
             self.compiler.scope(|graph, _tx| -> Result<_> {
                 let (node, port_cast) = self.the_output_port_named(graph, node_name, port_name)?;
                 let port_address = format!("{}/{port_cast}", node.display_name);
+                let level_before = exposure_level_of_output_port(node, &port_cast);
                 if level != OutputPortExposureLevel::Internal
                     && !node.has::<ExposedOutputPortsComponent>()
                 {
@@ -59,7 +64,7 @@ impl LoadedStreamInThisRuntime {
                     .get_mut::<ExposedOutputPortsComponent>()
                     .map(|exposed_ports| exposed_ports.set_level(&port_cast, level))
                     .unwrap_or_default();
-                Ok((port_address, readers_leaving_the_port))
+                Ok((port_address, level_before, readers_leaving_the_port))
             })?;
         tracing::debug!(
             stream = %self.stream_name(),
@@ -67,28 +72,21 @@ impl LoadedStreamInThisRuntime {
             %level,
             "[exposure] port `{port_address}` is now {level}"
         );
-        for reader in readers_leaving_the_port {
-            if !reader.is_still_registered() {
-                continue;
-            }
-            tracing::info!(
-                stream = %self.stream_name(),
-                port = %port_address,
-                reader = %reader.location(),
-                "[exposure] cutting off {} reading `{port_address}`, now {level}",
-                reader.location()
-            );
-            let cut_off = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                reader.cut_off_unless_its_registration_was_dropped()
-            }));
-            if cut_off.is_err() {
-                tracing::error!(
-                    stream = %self.stream_name(),
-                    port = %port_address,
-                    "[exposure] a reader's cut off `{port_address}` panicked; the readers after \
-                     it are still cut off"
+        cut_off_every_reader_each_under_its_own_unwind_guard(
+            readers_leaving_the_port,
+            WhyAReaderOfAnExposedOutputPortIsCutOff::TheLevelNoLongerAllowsIt { level },
+            self.stream_name(),
+            &format_args!("`{port_address}`"),
+        );
+        let another_stream_on_this_machine = OutputPortReaderLocation::ElsewhereOnThisMachine;
+        if !output_port_exposure_allows_the_reader(level_before, another_stream_on_this_machine)
+            && output_port_exposure_allows_the_reader(level, another_stream_on_this_machine)
+        {
+            self.engine_resources_shared_by_every_stream()
+                .spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
+                    self.stream_name(),
+                    super::LinksReadingAStreamToRePlan::EveryOneStillToBeWired,
                 );
-            }
         }
         Ok(())
     }
@@ -102,11 +100,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<OutputPortExposureLevel> {
         self.compiler.scope(|graph, _tx| {
             let (node, port_cast) = self.the_output_port_named(graph, node_name, port_name)?;
-            Ok(node
-                .get::<ExposedOutputPortsComponent>()
-                .map_or(OutputPortExposureLevel::Internal, |exposed_ports| {
-                    exposed_ports.level_of(&port_cast)
-                }))
+            Ok(exposure_level_of_output_port(node, &port_cast))
         })
     }
 
@@ -124,42 +118,61 @@ impl LoadedStreamInThisRuntime {
         location: OutputPortReaderOutsideItsStream,
         cut_off: CutOffAReaderOfAnExposedOutputPort,
     ) -> Result<ExposedOutputPortReaderRegistration> {
-        let still_registered = Arc::new(AtomicBool::new(true));
-        let reader =
-            ReaderOfAnExposedOutputPort::new(Arc::clone(&still_registered), location, cut_off);
         let (registered, readers_to_drop_outside_the_graph_lock) =
             self.compiler.scope(|graph, _tx| {
-                let (node, port_cast) =
-                    match self.the_output_port_named(graph, node_name, port_name) {
-                        Ok(found) => found,
-                        Err(refusal) => return (Err(refusal), vec![reader]),
-                    };
-                let outcome = match node.get_mut::<ExposedOutputPortsComponent>() {
-                    Some(exposed_ports) => exposed_ports.register_reader(&port_cast, reader),
-                    None => Err((reader, OutputPortExposureLevel::Internal)),
-                };
-                match outcome {
-                    Ok(registration_dropped) => (Ok(()), registration_dropped),
-                    Err((refused_reader, level)) => (
-                        Err(Error::OutputPortNotExposedToTheReader(Box::new(
-                            OutputPortNotExposedToTheReader {
-                                stream: self.stream_name().to_string(),
-                                node: node.display_name.clone(),
-                                port: port_cast,
-                                level: level.to_string(),
-                                reader: location.to_string(),
-                                levels_the_reader_may_read: location
-                                    .location()
-                                    .levels_a_reader_here_may_read(),
-                            },
-                        ))),
-                        vec![refused_reader],
-                    ),
-                }
+                register_a_reader_on_this_graph(
+                    graph,
+                    self.stream_name(),
+                    node_name,
+                    port_name,
+                    location,
+                    cut_off,
+                )
             });
         // A reader's cut may own anything, so it is dropped only once the graph lock is released.
         drop(readers_to_drop_outside_the_graph_lock);
-        registered.map(|()| ExposedOutputPortReaderRegistration { still_registered })
+        registered.map(|registered| registered.registration)
+    }
+
+    /// Refuse a reader from `location` of output port `port_name` of node
+    /// `node_name`, in the words registering it would be refused in, without
+    /// registering anything.
+    pub fn refuse_a_reader_its_output_port_does_not_allow(
+        &self,
+        node_name: &str,
+        port_name: &str,
+        location: OutputPortReaderOutsideItsStream,
+    ) -> Result<()> {
+        self.compiler.scope(|graph, _tx| {
+            refuse_a_reader_the_port_does_not_allow(
+                graph,
+                self.stream_name(),
+                node_name,
+                port_name,
+                location,
+            )
+        })
+    }
+
+    /// Refuse a reader as [`Self::refuse_a_reader_its_output_port_does_not_allow`]
+    /// does, waiting at most `bound` for this stream's graph lock; `None` when
+    /// it was not free within it.
+    pub(crate) fn refuse_a_reader_its_output_port_does_not_allow_within(
+        &self,
+        bound: std::time::Duration,
+        node_name: &str,
+        port_name: &str,
+        location: OutputPortReaderOutsideItsStream,
+    ) -> Option<Result<()>> {
+        self.compiler.scope_within(bound, |graph, _tx| {
+            refuse_a_reader_the_port_does_not_allow(
+                graph,
+                self.stream_name(),
+                node_name,
+                port_name,
+                location,
+            )
+        })
     }
 
     /// The node `node_name` names in `graph` and the cast name of its output
@@ -170,29 +183,149 @@ impl LoadedStreamInThisRuntime {
         node_name: &str,
         port_name: &str,
     ) -> Result<(&'graph mut ProcessorNode, String)> {
-        let named = node_named_or_refused(graph, node_name)?;
-        let port_cast = cast_exposed_name_to_url_safe(port_name)?.into_owned();
-        if !named.has_output(&port_cast) {
-            return Err(Error::GraphError(format!(
-                "node `{}` in stream `{}` has no output port `{port_name}`. Its output \
-                 ports are: {}",
-                named.display_name,
-                self.stream_name(),
-                port_names_listed_for_a_refusal(
-                    named
-                        .ports
-                        .outputs
-                        .iter()
-                        .map(|output| output.name.as_str())
-                )
-            )));
-        }
-        let processor_id = named.id.clone();
-        graph
-            .traversal_mut()
-            .v(&processor_id)
-            .first_mut()
-            .map(|node| (node, port_cast))
-            .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))
+        the_output_port_named_on_this_graph(graph, self.stream_name(), node_name, port_name)
     }
+}
+
+/// A reader registered against an output port on a graph: its registration,
+/// and the processor and cast port name it reads.
+pub(crate) struct ReaderRegisteredOnAGraph {
+    pub(crate) registration: ExposedOutputPortReaderRegistration,
+    pub(crate) processor_id: ProcessorUniqueId,
+    pub(crate) port_cast: String,
+}
+
+/// Register a reader from `location` against output port `port_name` of node
+/// `node_name` on `graph`, the graph of the stream `stream_name`, as
+/// [`LoadedStreamInThisRuntime::register_a_reader_of_an_exposed_output_port`]
+/// does, for a caller already holding that graph's lock. Hands back, beside
+/// the outcome, the readers the caller drops once it has let go of the lock.
+pub(crate) fn register_a_reader_on_this_graph(
+    graph: &mut Graph,
+    stream_name: &str,
+    node_name: &str,
+    port_name: &str,
+    location: OutputPortReaderOutsideItsStream,
+    cut_off: CutOffAReaderOfAnExposedOutputPort,
+) -> (
+    Result<ReaderRegisteredOnAGraph>,
+    Vec<ReaderOfAnExposedOutputPort>,
+) {
+    let still_registered = Arc::new(AtomicBool::new(true));
+    let reader = ReaderOfAnExposedOutputPort::new(Arc::clone(&still_registered), location, cut_off);
+    let (node, port_cast) =
+        match the_output_port_named_on_this_graph(graph, stream_name, node_name, port_name) {
+            Ok(found) => found,
+            Err(refusal) => return (Err(refusal), vec![reader]),
+        };
+    let outcome = match node.get_mut::<ExposedOutputPortsComponent>() {
+        Some(exposed_ports) => exposed_ports.register_reader(&port_cast, reader),
+        None => Err((reader, OutputPortExposureLevel::Internal)),
+    };
+    match outcome {
+        Ok(registration_dropped) => (
+            Ok(ReaderRegisteredOnAGraph {
+                registration: ExposedOutputPortReaderRegistration { still_registered },
+                processor_id: node.id.clone(),
+                port_cast,
+            }),
+            registration_dropped,
+        ),
+        Err((refused_reader, level)) => (
+            Err(a_reader_the_port_does_not_allow(
+                stream_name,
+                &node.display_name,
+                port_cast,
+                level,
+                location,
+            )),
+            vec![refused_reader],
+        ),
+    }
+}
+
+/// Refuse a reader from `location` of output port `port_name` of node
+/// `node_name` on `graph`, the graph of the stream `stream_name`, exactly as
+/// [`register_a_reader_on_this_graph`] would, leaving no reader behind.
+pub(crate) fn refuse_a_reader_the_port_does_not_allow(
+    graph: &mut Graph,
+    stream_name: &str,
+    node_name: &str,
+    port_name: &str,
+    location: OutputPortReaderOutsideItsStream,
+) -> Result<()> {
+    let (node, port_cast) =
+        the_output_port_named_on_this_graph(graph, stream_name, node_name, port_name)?;
+    let level = exposure_level_of_output_port(node, &port_cast);
+    if output_port_exposure_allows_the_reader(level, location.location()) {
+        return Ok(());
+    }
+    Err(a_reader_the_port_does_not_allow(
+        stream_name,
+        &node.display_name,
+        port_cast,
+        level,
+        location,
+    ))
+}
+
+/// The level output port `port_cast` of `node` is at: internal unless the
+/// node exposes it.
+fn exposure_level_of_output_port(node: &ProcessorNode, port_cast: &str) -> OutputPortExposureLevel {
+    node.get::<ExposedOutputPortsComponent>()
+        .map_or(OutputPortExposureLevel::Internal, |exposed_ports| {
+            exposed_ports.level_of(port_cast)
+        })
+}
+
+/// The one refusal of a reader an output port's level does not allow.
+fn a_reader_the_port_does_not_allow(
+    stream_name: &str,
+    node_display_name: &str,
+    port_cast: String,
+    level: OutputPortExposureLevel,
+    location: OutputPortReaderOutsideItsStream,
+) -> Error {
+    Error::OutputPortNotExposedToTheReader(Box::new(OutputPortNotExposedToTheReader {
+        stream: stream_name.to_string(),
+        node: node_display_name.to_string(),
+        port: port_cast,
+        level: level.to_string(),
+        reader: location.to_string(),
+        levels_the_reader_may_read: location.location().levels_a_reader_here_may_read(),
+    }))
+}
+
+/// The node `node_name` names in `graph`, the graph of the stream
+/// `stream_name`, and the cast name of its output port `port_name`, each
+/// refused by name — listing what the stream holds — when it is not there.
+fn the_output_port_named_on_this_graph<'graph>(
+    graph: &'graph mut Graph,
+    stream_name: &str,
+    node_name: &str,
+    port_name: &str,
+) -> Result<(&'graph mut ProcessorNode, String)> {
+    let named = node_named_or_refused(graph, stream_name, node_name)?;
+    let port_cast = cast_exposed_name_to_url_safe(port_name)?.into_owned();
+    if !named.has_output(&port_cast) {
+        return Err(Error::NodeInAStreamHasNoOutputPortNamed {
+            stream: stream_name.to_string(),
+            node: named.display_name.clone(),
+            port: port_name.to_string(),
+            output_ports_the_node_has: port_names_listed_for_a_refusal(
+                named
+                    .ports
+                    .outputs
+                    .iter()
+                    .map(|output| output.name.as_str()),
+            ),
+        });
+    }
+    let processor_id = named.id.clone();
+    graph
+        .traversal_mut()
+        .v(&processor_id)
+        .first_mut()
+        .map(|node| (node, port_cast))
+        .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))
 }

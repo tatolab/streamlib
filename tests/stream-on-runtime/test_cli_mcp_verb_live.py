@@ -137,7 +137,7 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
     assert answered["protocol_version"] == LATEST_PROTOCOL_VERSION
     assert answered["tool_names"] == CONTROL_TOOL_NAMES
     assert answered["stream_graph"]["stream"] == STREAM_NAME
-    assert answered["machine_graph"]["runtime_name"], answered["machine_graph"]
+    assert answered["machine_graph"]["machine"], answered["machine_graph"]
     for uri, contents in answered["resources"].items():
         (document,) = contents
         assert isinstance(document, TextResourceContents), (uri, document)

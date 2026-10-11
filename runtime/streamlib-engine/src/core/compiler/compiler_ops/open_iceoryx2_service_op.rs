@@ -20,11 +20,12 @@ use crate::core::ProcessorUniqueId;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
-    GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, Link, LinkState,
-    LinkStateComponent, LinkUniqueId, LossCountsOfPortsInThisProcess,
-    OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent, OutputLinkPortRef,
-    ProcessorInstanceComponent, ProcessorLossCounts, ProcessorMetrics,
+    DeviceMatchedAudioWindowContractsComponent, ExposedOutputPortsComponent, Graph,
+    GraphEdgeWithComponents, GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent,
+    InputLinkPortRef, Link, LinkReadingAnotherStreamComponent, LinkState, LinkStateComponent,
+    LinkUniqueId, LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
+    OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
+    ProcessorLossCounts, ProcessorMetrics, SourceSideOfALinkWiredOn,
 };
 use crate::core::processors::{
     OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
@@ -69,39 +70,66 @@ pub fn open_iceoryx2_service(
             graph.traversal_mut().e(link_id).first().ok_or_else(|| {
                 Error::LinkNotFound(format!("Link '{}' not found in graph", link_id))
             })?;
-        (link.from_port().clone(), link.to_port().clone())
+        let from_port = link.source_in_this_stream().cloned().ok_or_else(|| {
+            Error::InvalidLink(format!(
+                "link '{link_id}' reads `{}` in another stream, whose output port this stream's \
+                 graph does not hold",
+                link.source()
+            ))
+        })?;
+        (from_port, link.to_port().clone())
     };
 
-    let source_proc_id = from_port.processor_id().clone();
-    let source_port = from_port.port_name();
-    let channel_service_name = channel_service_name(&from_port)?;
+    let destination = read_the_destination_of_a_link(graph, &to_port, link_id)?;
+    let opened_source_side =
+        open_the_source_side_of_a_link(graph, &from_port, link_id, &destination, iceoryx2_node)?;
+    let wire_reply_awaited_from_the_destination =
+        open_the_destination_side_of_a_link(graph, link_id, &opened_source_side, destination)?;
+
+    let link = graph
+        .traversal_mut()
+        .e(link_id)
+        .first_mut()
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+    opened_source_side
+        .hold_its_services_on_the_link_and_stamp_it(link, wire_reply_awaited_from_the_destination);
+    Ok(())
+}
+
+/// What the wiring of a link reads off its destination's graph: the input
+/// port, how that port reads, whether its ports live out of process, and the
+/// destination's notify service.
+pub(crate) struct DestinationOfALinkAsItsWiringReadsIt {
+    dest_proc_id: ProcessorUniqueId,
+    dest_port: String,
+    link_wiring_of_a_destination_out_of_process: Option<Arc<OutOfProcessLinkWiringEnvelope>>,
+    audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
+    input_port_delivery: DeliveryResolution,
+    notify_service_name: String,
+    max_notifiers: usize,
+}
+
+/// Read what wiring link `link_id` into `to_port` needs of its destination,
+/// off the destination's graph, refusing a second inbound link into a port
+/// that windows and a destination past its notifier cap.
+///
+/// A `match_device` sentinel is not refused here: the compiler wires every
+/// link before it releases any processor into `setup()`, which is where the
+/// only format that can settle one comes from.
+pub(crate) fn read_the_destination_of_a_link(
+    dest_graph: &mut Graph,
+    to_port: &InputLinkPortRef,
+    link_id: &LinkUniqueId,
+) -> Result<DestinationOfALinkAsItsWiringReadsIt> {
     let dest_proc_id = to_port.processor_id().clone();
     let dest_port = to_port.port_name().to_string();
-
-    let source_link_wiring = out_of_process_link_wiring_of(graph, &source_proc_id);
-    let dest_link_wiring = out_of_process_link_wiring_of(graph, &dest_proc_id);
-    let source_is_subprocess = source_link_wiring.is_some();
-    let dest_is_subprocess = dest_link_wiring.is_some();
-
-    // A windowed destination is read and refused before any service is opened:
-    // a second link into a port that windows, or one onto a channel too shallow
-    // for its ring, must not leave half-wired iceoryx2 ports behind. A
-    // `match_device` sentinel is not refused here — the compiler wires every
-    // link before it releases any processor into `setup()`, which is where the
-    // only format that can settle one comes from.
-    let dest_audio_windowing =
-        audio_windowing_declared_by_input_port_of(graph, &dest_proc_id, &dest_port)?;
-    if dest_audio_windowing.is_some() {
+    let link_wiring_of_a_destination_out_of_process =
+        out_of_process_link_wiring_of(dest_graph, &dest_proc_id);
+    let audio_windowing =
+        audio_windowing_declared_by_input_port_of(dest_graph, &dest_proc_id, &dest_port)?;
+    if audio_windowing.is_some() {
         refuse_a_second_inbound_link_into_a_windowed_port(
-            graph,
-            &dest_proc_id,
-            &dest_port,
-            link_id,
-        )?;
-        refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
-            graph,
-            iceoryx2_node,
-            &from_port,
+            dest_graph,
             &dest_proc_id,
             &dest_port,
             link_id,
@@ -109,34 +137,163 @@ pub fn open_iceoryx2_service(
         tracing::debug!(
             dest = %dest_proc_id,
             port = %dest_port,
-            windowing = ?dest_audio_windowing,
+            windowing = ?audio_windowing,
             "Destination input port declares a window contract; its reads run through the stage"
         );
     }
-
+    let input_port_delivery =
+        delivery_resolution_of_input_port(dest_graph, &dest_proc_id, &dest_port)?;
+    let max_notifiers = destination_max_notifiers(dest_graph, &dest_proc_id)?;
     // Every destination is notified whatever mode it runs in. One that never
     // drains its listener costs its sources a counter increment per frame:
     // iceoryx2 counts repeat notifications in shared memory and sends no
     // further wakeup until the listener drains.
-    let notify_service_name_for_the_destination = notify_service_name_for(&dest_proc_id);
+    let notify_service_name = notify_service_name_for(&dest_proc_id);
+    Ok(DestinationOfALinkAsItsWiringReadsIt {
+        dest_proc_id,
+        dest_port,
+        link_wiring_of_a_destination_out_of_process,
+        audio_windowing,
+        input_port_delivery,
+        notify_service_name,
+        max_notifiers,
+    })
+}
+
+/// The source's side of one link once opened: the services the link holds,
+/// and where the source's end was wired.
+pub(crate) struct OpenedSourceSideOfALink {
+    channel_service_name: String,
+    channel_sizing: ChannelSizing,
+    channel_data_service: Iceoryx2Service,
+    destination_notify_service: Iceoryx2NotifyService,
+    wire_reply_awaited_from_the_source: Option<Arc<OutOfProcessLinkWireReply>>,
+    wired_on: Option<SourceSideOfALinkWiredOn>,
+}
+
+/// How a link stands once both its sides are opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HowAnOpenedLinkStands {
+    /// Wholly wired: nothing out of process has to answer for it.
+    Wired,
+    /// Handed to an out-of-process end that has not answered yet.
+    PendingItsOutOfProcessEndsAnswers,
+}
+
+impl OpenedSourceSideOfALink {
+    /// Where the source's end of the link was wired, when the engine holds
+    /// it.
+    pub(crate) fn wired_on(&self) -> Option<&SourceSideOfALinkWiredOn> {
+        self.wired_on.as_ref()
+    }
+
+    /// Hold the link's services on `link` and stamp it `Wired`, or `Pending`
+    /// with the cells its out-of-process ends answer into — the source's, then
+    /// the destination's.
+    pub(crate) fn hold_its_services_on_the_link_and_stamp_it(
+        self,
+        link: &mut Link,
+        wire_reply_awaited_from_the_destination: Option<Arc<OutOfProcessLinkWireReply>>,
+    ) -> HowAnOpenedLinkStands {
+        let link_id = link.id.clone();
+        link.insert_component_without_rendering_it(Iceoryx2ServicesHeldOpenForLinkComponent {
+            channel_data_service: self.channel_data_service,
+            destination_notify_service: self.destination_notify_service,
+        });
+
+        // Every out-of-process end this link was handed to and has not answered
+        // for. Empty is a link wholly in the app process, or one carried in a far
+        // side's startup envelope — either way wired the moment this returns.
+        let wire_replies_awaited_from_its_out_of_process_ends: Vec<_> = self
+            .wire_reply_awaited_from_the_source
+            .into_iter()
+            .chain(wire_reply_awaited_from_the_destination)
+            .collect();
+
+        // A link an out-of-process end has not answered for is `Pending`, not
+        // `Wired`: the engine has sent the wiring, and only that end opening its
+        // own port makes the link carry anything. `graph` reads the answers off
+        // the component below, which the end fills from its bridge's reader
+        // thread. `docs/plan/ARCHITECTURE.md` §Processor model, the
+        // `[local-transport-hardening]` entry.
+        if wire_replies_awaited_from_its_out_of_process_ends.is_empty() {
+            link.insert(LinkStateComponent(LinkState::Wired));
+            tracing::info!(
+                channel = %self.channel_service_name,
+                "Opened iceoryx2 channel: [{}] (state: Wired)",
+                link_id
+            );
+            HowAnOpenedLinkStands::Wired
+        } else {
+            link.insert(LinkStateComponent(LinkState::Pending));
+            link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(
+                wire_replies_awaited_from_its_out_of_process_ends,
+            ));
+            tracing::info!(
+                channel = %self.channel_service_name,
+                "Opened iceoryx2 channel: [{}] (state: Pending, awaiting its helper's answer)",
+                link_id
+            );
+            HowAnOpenedLinkStands::PendingItsOutOfProcessEndsAnswers
+        }
+    }
+}
+
+/// Open the source's side of link `link_id` from output port `source` of
+/// `source_graph` into `destination`: the channel the source publishes to and
+/// the destination's notify service, then the source's single publisher (the
+/// first link out of the port installs it) and this link's notifier on it.
+///
+/// A windowed destination onto a live channel shallower than its ring, and a
+/// port past its destination cap — counting readers registered from other
+/// streams — are refused before any service is opened.
+pub(crate) fn open_the_source_side_of_a_link(
+    source_graph: &mut Graph,
+    source: &OutputLinkPortRef,
+    link_id: &LinkUniqueId,
+    destination: &DestinationOfALinkAsItsWiringReadsIt,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<OpenedSourceSideOfALink> {
+    let source_proc_id = source.processor_id().clone();
+    let source_port = source.port_name();
+    let channel_service_name = channel_service_name(source)?;
+    let link_wiring_of_a_source_out_of_process =
+        out_of_process_link_wiring_of(source_graph, &source_proc_id);
+    let destination_windows_its_reads = destination.audio_windowing.is_some();
+    if destination_windows_its_reads {
+        refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
+            source_graph,
+            iceoryx2_node,
+            source,
+            &destination.dest_proc_id,
+            &destination.dest_port,
+            link_id,
+        )?;
+    }
 
     tracing::info!(
         channel = %channel_service_name,
-        notify = %notify_service_name_for_the_destination,
+        notify = %destination.notify_service_name,
         "Opening iceoryx2 channel: {} -> ({}:{}) [{}] (source_subprocess={}, dest_subprocess={})",
-        from_port,
-        dest_proc_id,
-        dest_port,
+        source,
+        destination.dest_proc_id,
+        destination.dest_port,
         link_id,
-        source_is_subprocess,
-        dest_is_subprocess,
+        link_wiring_of_a_source_out_of_process.is_some(),
+        destination
+            .link_wiring_of_a_destination_out_of_process
+            .is_some(),
     );
 
     // A channel touching a subprocess on either end crosses a trust boundary and
     // gets the tighter untrusted-session ceiling; a host-to-host channel is
     // trusted. The ceiling is the graceful, observable layer in front of the
     // subprocess cgroup `memory.max` hard backstop.
-    let trust_tier = if source_is_subprocess || dest_is_subprocess {
+    let trust_tier = if link_wiring_of_a_source_out_of_process.is_some()
+        || destination
+            .link_wiring_of_a_destination_out_of_process
+            .is_some()
+    {
         ChannelTrustTier::UntrustedSession
     } else {
         ChannelTrustTier::Trusted
@@ -144,126 +301,126 @@ pub fn open_iceoryx2_service(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_chunk_ceiling_bytes(trust_tier);
-    let channel_sizing = resolve_channel_sizing(graph, iceoryx2_node, &from_port)?;
-    let dest_input_port_delivery =
-        delivery_resolution_of_input_port(graph, &dest_proc_id, &dest_port)?;
-    let max_notifiers = destination_max_notifiers(graph, &dest_proc_id)?;
+    let windowed_destination_outside_the_sources_graph = if destination_windows_its_reads
+        && !source_graph
+            .traversal()
+            .v(&destination.dest_proc_id)
+            .exists()
+    {
+        WindowedDestinationOutsideTheSourcesGraph::Present
+    } else {
+        WindowedDestinationOutsideTheSourcesGraph::Absent
+    };
+    let channel_sizing = resolve_channel_sizing(
+        source_graph,
+        iceoryx2_node,
+        source,
+        windowed_destination_outside_the_sources_graph,
+    )?;
 
-    let service = iceoryx2_node.open_or_create_service(
+    let channel_data_service = iceoryx2_node.open_or_create_service(
         &channel_service_name,
         channel_sizing.max_subscribers,
         channel_sizing.channel_service_creation_depth,
     )?;
-    let notify_service_for_the_destination = iceoryx2_node
-        .open_or_create_notify_service(&notify_service_name_for_the_destination, max_notifiers)?;
+    let destination_notify_service = iceoryx2_node.open_or_create_notify_service(
+        &destination.notify_service_name,
+        destination.max_notifiers,
+    )?;
 
-    // Every out-of-process end this link was handed to and has not answered
-    // for. Empty is a link wholly in the app process, or one carried in a far
-    // side's startup envelope — either way wired the moment this op returns.
-    let mut wire_replies_awaited_from_its_out_of_process_ends = Vec::new();
+    let (wire_reply_awaited_from_the_source, wired_on) =
+        if let Some(source_link_wiring) = link_wiring_of_a_source_out_of_process {
+            let wire_reply = wire_subprocess_source(
+                source_graph,
+                &source_link_wiring,
+                &source_proc_id,
+                source_port,
+                &channel_service_name,
+                &destination.notify_service_name,
+                DEFAULT_EXPECTED_PAYLOAD_BYTES,
+                channel_ceiling_bytes,
+                channel_sizing,
+                destination.max_notifiers,
+                link_id,
+            )?;
+            (
+                wire_reply,
+                Some(SourceSideOfALinkWiredOn::AHelperProcessesLinkWiring(
+                    source_link_wiring,
+                )),
+            )
+        } else {
+            let source_processor = get_single_processor(source_graph, &source_proc_id)?;
+            let output_writer = wire_rust_source(
+                source_graph,
+                &source_proc_id,
+                &source_processor,
+                source_port,
+                link_id,
+                &channel_data_service,
+                &destination_notify_service,
+                ChannelEgressConfig {
+                    service_name: channel_service_name.clone(),
+                    trust_tier,
+                    expected_payload_bytes: DEFAULT_EXPECTED_PAYLOAD_BYTES,
+                    chunk_ceiling_bytes: channel_ceiling_bytes,
+                },
+            )?;
+            (
+                None,
+                output_writer.map(SourceSideOfALinkWiredOn::ANativeProcessorsOutputWriter),
+            )
+        };
 
-    // Source side: install the single channel publisher (first link out of this
-    // port) and append this link's destination notifier.
-    if let Some(source_link_wiring) = &source_link_wiring {
-        wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_source(
-            graph,
-            source_link_wiring,
-            &source_proc_id,
-            source_port,
-            &channel_service_name,
-            &notify_service_name_for_the_destination,
-            DEFAULT_EXPECTED_PAYLOAD_BYTES,
-            channel_ceiling_bytes,
-            channel_sizing,
-            max_notifiers,
-            link_id,
-        )?);
-    } else {
-        let source_processor = get_single_processor(graph, &source_proc_id)?;
-        wire_rust_source(
-            graph,
-            &source_proc_id,
-            &source_processor,
-            source_port,
-            link_id,
-            &service,
-            &notify_service_for_the_destination,
-            ChannelEgressConfig {
-                service_name: channel_service_name.clone(),
-                trust_tier,
-                expected_payload_bytes: DEFAULT_EXPECTED_PAYLOAD_BYTES,
-                chunk_ceiling_bytes: channel_ceiling_bytes,
-            },
-        )?;
-    }
+    Ok(OpenedSourceSideOfALink {
+        channel_service_name,
+        channel_sizing,
+        channel_data_service,
+        destination_notify_service,
+        wire_reply_awaited_from_the_source,
+        wired_on,
+    })
+}
 
-    // Destination side: subscribe to the channel bound to this local input port,
-    // and ensure the destination's single listener exists.
-    if let Some(dest_link_wiring) = &dest_link_wiring {
-        wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_dest(
-            graph,
+/// Open the destination's side of link `link_id` on `dest_graph`: subscribe
+/// the destination's input port to the channel `opened_source_side` opened,
+/// and make sure its single listener exists. Hands back the cell a destination
+/// out of process answers into.
+pub(crate) fn open_the_destination_side_of_a_link(
+    dest_graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    opened_source_side: &OpenedSourceSideOfALink,
+    destination: DestinationOfALinkAsItsWiringReadsIt,
+) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
+    if let Some(dest_link_wiring) = &destination.link_wiring_of_a_destination_out_of_process {
+        return wire_subprocess_dest(
+            dest_graph,
             dest_link_wiring,
-            &dest_proc_id,
-            &dest_port,
-            &channel_service_name,
-            &notify_service_name_for_the_destination,
-            dest_input_port_delivery,
-            channel_sizing,
-            max_notifiers,
+            &destination.dest_proc_id,
+            &destination.dest_port,
+            &opened_source_side.channel_service_name,
+            &destination.notify_service_name,
+            destination.input_port_delivery,
+            opened_source_side.channel_sizing,
+            destination.max_notifiers,
             link_id,
-            dest_audio_windowing,
-        )?);
-    } else {
-        let dest_processor = get_single_processor(graph, &dest_proc_id)?;
-        wire_rust_dest(
-            graph,
-            &dest_proc_id,
-            &dest_processor,
-            &dest_port,
-            link_id,
-            &channel_service_name,
-            dest_input_port_delivery,
-            &service,
-            &notify_service_for_the_destination,
-            dest_audio_windowing,
-        )?;
-    }
-
-    let link = graph
-        .traversal_mut()
-        .e(link_id)
-        .first_mut()
-        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
-    link.insert_component_without_rendering_it(Iceoryx2ServicesHeldOpenForLinkComponent {
-        channel_data_service: service,
-        destination_notify_service: notify_service_for_the_destination,
-    });
-
-    // A link an out-of-process end has not answered for is `Pending`, not
-    // `Wired`: the engine has sent the wiring, and only that end opening its
-    // own port makes the link carry anything. `graph` reads the answers off
-    // the component below, which the end fills from its bridge's reader
-    // thread. `docs/plan/ARCHITECTURE.md` §Processor model, the
-    // `[local-transport-hardening]` entry.
-    if wire_replies_awaited_from_its_out_of_process_ends.is_empty() {
-        link.insert(LinkStateComponent(LinkState::Wired));
-        tracing::info!(
-            channel = %channel_service_name,
-            "Opened iceoryx2 channel: [{}] (state: Wired)",
-            link_id
-        );
-    } else {
-        link.insert(LinkStateComponent(LinkState::Pending));
-        link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(
-            wire_replies_awaited_from_its_out_of_process_ends,
-        ));
-        tracing::info!(
-            channel = %channel_service_name,
-            "Opened iceoryx2 channel: [{}] (state: Pending, awaiting its helper's answer)",
-            link_id
+            destination.audio_windowing,
         );
     }
-    Ok(())
+    let dest_processor = get_single_processor(dest_graph, &destination.dest_proc_id)?;
+    wire_rust_dest(
+        dest_graph,
+        &destination.dest_proc_id,
+        &dest_processor,
+        &destination.dest_port,
+        link_id,
+        &opened_source_side.channel_service_name,
+        destination.input_port_delivery,
+        &opened_source_side.channel_data_service,
+        &opened_source_side.destination_notify_service,
+        destination.audio_windowing,
+    )?;
+    Ok(None)
 }
 
 /// Reclaim one `connect()` link's iceoryx2 ports on `disconnect`.
@@ -278,6 +435,9 @@ pub fn open_iceoryx2_service(
 /// reclaimed through its wiring envelope — which forgets the entry a reconnect
 /// would otherwise be set up with twice and asks a running far side to drop its
 /// port — without taking that processor's lock.
+///
+/// A link reading another stream releases the source's side through the
+/// wiring it holds, never through the source stream's graph.
 #[tracing::instrument(
     name = "compiler.close_iceoryx2_service",
     skip(graph),
@@ -286,11 +446,15 @@ pub fn open_iceoryx2_service(
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 
-    let Some((source_proc_id, source_port, dest_proc_id, dest_port)) =
+    let Some((source_in_this_stream, dest_proc_id, dest_port)) =
         graph.traversal_mut().e(link_id).first().map(|link| {
             (
-                link.from_port().processor_id().clone(),
-                link.from_port().port_name().to_string(),
+                link.source_in_this_stream().map(|source| {
+                    (
+                        source.processor_id().clone(),
+                        source.port_name().to_string(),
+                    )
+                }),
                 link.to_port().processor_id().clone(),
                 link.to_port().port_name().to_string(),
             )
@@ -305,47 +469,27 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
     // Source side: drop this link's destination notifier (and the channel
     // publisher when this was the source port's last outbound link).
-    if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, &source_proc_id) {
-        unwire_out_of_process_endpoint(
-            &source_link_wiring,
-            crate::core::PortDirection::Output,
-            &source_proc_id,
-            &source_port,
-            link_id,
-        );
-    } else if let Some(source_processor) = processor_to_reclaim_from(graph, &source_proc_id) {
-        let source_guard = source_processor.lock();
-        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
-            let channel_released = output_inner.remove_channel_link(&source_port, link_id.as_str());
-            tracing::debug!(
-                source = %source_proc_id,
-                port = %source_port,
-                channel_released,
-                "Reclaimed source-side egress for disconnected link"
+    match &source_in_this_stream {
+        Some((source_proc_id, source_port)) => {
+            release_the_source_side_of_a_link_in_this_stream(
+                graph,
+                source_proc_id,
+                source_port,
+                link_id,
             );
+        }
+        None => {
+            let wiring_of_a_link_reading_another_stream = graph
+                .traversal_mut()
+                .e(link_id)
+                .first_mut()
+                .and_then(|link| link.get_mut::<LinkReadingAnotherStreamComponent>())
+                .and_then(LinkReadingAnotherStreamComponent::take_wiring);
+            drop(wiring_of_a_link_reading_another_stream);
         }
     }
 
-    // Destination side: drop this link's channel subscriber (and the port
-    // mailbox / shared listener when their last inbound link went away).
-    if let Some(dest_link_wiring) = out_of_process_link_wiring_of(graph, &dest_proc_id) {
-        unwire_out_of_process_endpoint(
-            &dest_link_wiring,
-            crate::core::PortDirection::Input,
-            &dest_proc_id,
-            &dest_port,
-            link_id,
-        );
-    } else if let Some(dest_processor) = processor_to_reclaim_from(graph, &dest_proc_id) {
-        let dest_guard = dest_processor.lock();
-        if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
-            input_inner.remove_channel_link(link_id.as_str());
-            tracing::debug!(
-                dest = %dest_proc_id,
-                "Reclaimed destination-side ports for disconnected link"
-            );
-        }
-    }
+    release_the_destination_side_of_a_link(graph, &dest_proc_id, &dest_port, link_id);
 
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
         link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
@@ -356,6 +500,62 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
     }
     tracing::info!("Closed iceoryx2 service: {} (state: Disconnected)", link_id);
     Ok(())
+}
+
+/// Drop link `link_id`'s notifier off output port `source_port` of
+/// `source_proc_id` in this graph, and the port's publisher when the link was
+/// its last.
+fn release_the_source_side_of_a_link_in_this_stream(
+    graph: &mut Graph,
+    source_proc_id: &ProcessorUniqueId,
+    source_port: &str,
+    link_id: &LinkUniqueId,
+) {
+    if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, source_proc_id) {
+        source_link_wiring.unwire_a_link_reporting_a_far_side_that_kept_its_port(
+            crate::core::PortDirection::Output,
+            source_port,
+            link_id.as_str(),
+        );
+    } else if let Some(source_processor) = processor_to_reclaim_from(graph, source_proc_id) {
+        let source_guard = source_processor.lock();
+        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+            let channel_released = output_inner.remove_channel_link(source_port, link_id.as_str());
+            tracing::debug!(
+                source = %source_proc_id,
+                port = %source_port,
+                channel_released,
+                "Reclaimed source-side egress for disconnected link"
+            );
+        }
+    }
+}
+
+/// Drop link `link_id`'s channel subscriber off input port `dest_port` of
+/// `dest_proc_id` (and the port mailbox / shared listener when their last
+/// inbound link went away).
+pub(crate) fn release_the_destination_side_of_a_link(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    dest_port: &str,
+    link_id: &LinkUniqueId,
+) {
+    if let Some(dest_link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) {
+        dest_link_wiring.unwire_a_link_reporting_a_far_side_that_kept_its_port(
+            crate::core::PortDirection::Input,
+            dest_port,
+            link_id.as_str(),
+        );
+    } else if let Some(dest_processor) = processor_to_reclaim_from(graph, dest_proc_id) {
+        let dest_guard = dest_processor.lock();
+        if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
+            input_inner.remove_channel_link(link_id.as_str());
+            tracing::debug!(
+                dest = %dest_proc_id,
+                "Reclaimed destination-side ports for disconnected link"
+            );
+        }
+    }
 }
 
 // ============================================================================
@@ -400,13 +600,22 @@ fn every_link_carrying_from<'a>(
         .traversal()
         .e(())
         .iter()
-        .filter(move |link| link.from_port() == source)
+        .filter(move |link| link.source_in_this_stream() == Some(source))
 }
 
-/// How many `connect()` links carry from `source` — the destinations its
-/// channel feeds.
+/// How many destinations the channel `source` publishes to feeds: the
+/// `connect()` links carrying from it in this graph, and the readers from other
+/// streams registered against it.
 fn channel_destination_count(graph: &Graph, source: &OutputLinkPortRef) -> usize {
-    every_link_carrying_from(graph, source).count()
+    let readers_from_other_streams = graph
+        .traversal()
+        .v(source.processor_id())
+        .first()
+        .and_then(|node| node.get::<ExposedOutputPortsComponent>())
+        .map_or(0, |exposed_ports| {
+            exposed_ports.readers_registered_against(source.port_name())
+        });
+    every_link_carrying_from(graph, source).count() + readers_from_other_streams
 }
 
 /// The `max_subscribers` every channel data service is created with:
@@ -428,6 +637,15 @@ fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef) -> Result<
     Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL)
 }
 
+/// Whether a destination being wired from a source, held in a graph other
+/// than the source's, windows its reads — a reader the source's graph cannot
+/// see when it sizes the channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowedDestinationOutsideTheSourcesGraph {
+    Present,
+    Absent,
+}
+
 /// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
 /// source_port)` — the single derivation both the service-open compiler op and
 /// the `tap` op share, refusing a source port past the destination cap.
@@ -435,6 +653,7 @@ pub(crate) fn resolve_channel_sizing(
     graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
+    windowed_destination_outside_the_sources_graph: WindowedDestinationOutsideTheSourcesGraph,
 ) -> Result<ChannelSizing> {
     Ok(ChannelSizing {
         max_subscribers: channel_max_subscribers(graph, source)?,
@@ -442,6 +661,7 @@ pub(crate) fn resolve_channel_sizing(
             graph,
             iceoryx2_node,
             source,
+            windowed_destination_outside_the_sources_graph,
         )?,
     })
 }
@@ -453,18 +673,24 @@ pub(crate) fn resolve_channel_sizing(
 /// opener can ask for. A channel yet to be created is deep enough for a consumer
 /// of any delivery profile, whichever connects first, and
 /// [`WINDOWED_PORT_SUBSCRIBER_RING_DEPTH`] deep when any of its destinations
-/// windows. Each subscriber then takes its own port's ring inside it, and a
-/// shallower ring saves nothing — iceoryx2 sizes the sample pool from the
-/// service's depth and subscriber count.
+/// windows, in this graph or outside it. Each subscriber then takes its own
+/// port's ring inside it, and a shallower ring saves nothing — iceoryx2 sizes
+/// the sample pool from the service's depth and subscriber count.
 fn channel_service_creation_depth(
     graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
+    windowed_destination_outside_the_sources_graph: WindowedDestinationOutsideTheSourcesGraph,
 ) -> Result<usize> {
     if let Some(live_creation_depth) =
         creation_depth_of_the_live_channel(graph, iceoryx2_node, source)?
     {
         return Ok(live_creation_depth);
+    }
+    if windowed_destination_outside_the_sources_graph
+        == WindowedDestinationOutsideTheSourcesGraph::Present
+    {
+        return Ok(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH);
     }
     for link in every_link_carrying_from(graph, source)
         .filter(|link| link_still_counts_toward_its_ports(link))
@@ -520,37 +746,41 @@ fn subscriber_ring_depth_of_input_port(
     }
 }
 
-/// Resolve the address a caller names a port by — `<runtime name>/<node>/<port>`
-/// — to the port on this runtime a link carries from.
+/// Resolve the address a caller names a port by — `[<machine>/][<stream>/]<node>/<port>`
+/// — to the port in the stream `this_stream` on `this_machine` that a link
+/// carries from.
 ///
-/// An address naming another runtime is refused naming that runtime: a channel
-/// is tapped on the runtime that publishes it. A channel's iceoryx2 data service
-/// only exists once a `connect()` has wired its source, so an address no link
-/// carries from is genuinely untappable and answers
-/// [`Error::TapChannelNotFound`], as does an address that does not parse.
+/// An address that does not parse is refused as [`Error::InvalidPortAddress`];
+/// one naming another machine as [`Error::PortAddressNamesAnotherMachine`];
+/// one naming another stream as [`Error::InvalidPortAddress`] naming both, since
+/// a stream taps its own ports. A channel's iceoryx2 data service only exists
+/// once a link has wired its source, so an address that neither a link of this
+/// stream nor a reader from another stream reads is genuinely untappable and
+/// answers [`Error::TapChannelNotFound`].
 pub(crate) fn find_the_source_a_caller_named(
     graph: &Graph,
-    this_runtimes_name: &str,
+    this_machine: &crate::core::runtime::MachineName,
+    this_stream: &str,
     port_address: &str,
 ) -> Result<OutputLinkPortRef> {
     let not_found = || Error::TapChannelNotFound(port_address.to_string());
-    let address = crate::core::graph::PortAddress::parse(port_address).map_err(|_| not_found())?;
-    if !address.names_the_runtime(this_runtimes_name) {
+    let address = crate::core::graph::PortAddress::parse(port_address)?;
+    address.refuse_when_it_names_another_machine(this_machine)?;
+    if let Some(stream) = address.the_stream_it_names_other_than(this_stream) {
         return Err(Error::InvalidPortAddress(format!(
-            "'{port_address}' names the runtime `{}`, and a tap reads a channel on this \
-             runtime, `{this_runtimes_name}`",
-            address.runtime_name()
+            "`{port_address}` names a port in the stream `{stream}`, and this tap reads the \
+             stream `{this_stream}`; tap `{stream}` to read its ports"
         )));
     }
     let processor_id = graph
         .traversal()
-        .v_with_node_name(address.processor_display_name())
+        .v_with_node_name(address.node_name())
         .first()
         .ok_or_else(not_found)?
         .id
         .clone();
     let source = OutputLinkPortRef::new(processor_id, address.port_name());
-    if every_link_carrying_from(graph, &source).next().is_some() {
+    if channel_destination_count(graph, &source) > 0 {
         Ok(source)
     } else {
         Err(not_found())
@@ -723,43 +953,6 @@ fn out_of_process_link_wiring_of(
         .map(|component| Arc::clone(&component.0))
 }
 
-/// Reclaim one link on an endpoint that owns its ports out of process: forget
-/// the wiring the far side would be set up with again, and ask a running far
-/// side to drop the port it opened from that wiring.
-///
-/// A failure is reported and swallowed, like every other reclaim failure here:
-/// the disconnect is already happening, the other endpoint still has ports to
-/// release, and refusing to stamp the link `Disconnected` over an unreachable
-/// far side would leave the graph claiming a link that no longer carries data.
-fn unwire_out_of_process_endpoint(
-    link_wiring: &OutOfProcessLinkWiringEnvelope,
-    port_direction: crate::core::PortDirection,
-    proc_id: &ProcessorUniqueId,
-    local_port_name: &str,
-    link_id: &LinkUniqueId,
-) {
-    match link_wiring.forget_a_link_and_tell_a_far_side_past_its_setup_command(
-        port_direction,
-        local_port_name,
-        link_id.as_str(),
-    ) {
-        Ok(()) => tracing::debug!(
-            proc_id = %proc_id,
-            port = %local_port_name,
-            port_direction = %port_direction,
-            "Asked an out-of-process endpoint to reclaim its ports for a disconnected link"
-        ),
-        Err(error) => tracing::warn!(
-            proc_id = %proc_id,
-            port = %local_port_name,
-            port_direction = %port_direction,
-            error = %error,
-            "close_iceoryx2_service: an out-of-process endpoint did not reclaim its ports; \
-             a reconnect of this link may exhaust its channel's notifier or subscriber slots"
-        ),
-    }
-}
-
 /// The processor whose ports one side of a disconnect must release, or `None`
 /// with the reason said out loud.
 ///
@@ -798,7 +991,10 @@ fn get_single_processor(
 
 /// Install (once) the source's single channel publisher, append this link's
 /// destination notifier onto the Rust source's [`OutputWriterInner`], and
-/// publish its loss counts onto its graph node.
+/// publish its loss counts onto its graph node. Hands back that output writer,
+/// or `None` for a processor that holds none.
+///
+/// [`OutputWriterInner`]: crate::iceoryx2::OutputWriterInner
 #[allow(clippy::too_many_arguments)]
 fn wire_rust_source(
     graph: &mut Graph,
@@ -809,10 +1005,10 @@ fn wire_rust_source(
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
     egress_config: ChannelEgressConfig,
-) -> Result<()> {
+) -> Result<Option<Arc<crate::iceoryx2::OutputWriterInner>>> {
     let source_guard = source_processor.lock();
     let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() else {
-        return Ok(());
+        return Ok(None);
     };
 
     if !output_inner.has_channel_publisher(source_port) {
@@ -827,7 +1023,7 @@ fn wire_rust_source(
     let notifier = notify_service.create_notifier()?;
     output_inner.add_channel_link(source_port, link_id.as_str(), notifier);
     publish_loss_counts_on_processor_node(graph, source_proc_id, &source_guard);
-    Ok(())
+    Ok(Some(output_inner))
 }
 
 /// Subscribe the Rust destination to the channel bound to its local input port,
@@ -1144,6 +1340,7 @@ mod tests {
     };
     use crate::core::test_support::{
         CapturedTracingWarnings, ReclaimedLink, RecordingOutOfProcessFarSideLinkDelivery,
+        add_mock_input_only, add_mock_output_only,
     };
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
@@ -2552,36 +2749,6 @@ mod tests {
         }
     }
 
-    fn add_mock_output_only(graph: &mut Graph) -> String {
-        crate::core::test_support::ensure_test_mocks_registered();
-        graph
-            .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(),
-                serde_json::Value::Null,
-            ))
-            .expect("the node is named")
-            .first()
-            .expect("mock_output_only_processor must be in the registry")
-            .id
-            .to_string()
-    }
-
-    fn add_mock_input_only(graph: &mut Graph) -> String {
-        crate::core::test_support::ensure_test_mocks_registered();
-        graph
-            .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path(),
-                serde_json::Value::Null,
-            ))
-            .expect("the node is named")
-            .first()
-            .expect("mock_input_only_processor must be in the registry")
-            .id
-            .to_string()
-    }
-
     fn add_mock_ordered_input_only(graph: &mut Graph) -> String {
         crate::core::test_support::ensure_test_mocks_registered();
         graph
@@ -3171,6 +3338,97 @@ mod tests {
             DeliveryProfile::NEWEST_DEPTH,
             "nothing may still hold the channel of a link that is gone"
         );
+    }
+
+    /// A link reading another stream is removed the way the compiler removes
+    /// any link: it is closed without a warning and its edge leaves the graph,
+    /// while its reader's other links — one into the same input from a source
+    /// in this stream, one out of the reader's own output — stay wired, the
+    /// reader's output keeping its publisher and that link's notifier.
+    ///
+    /// Fail-without-fix: close the edge's two graph endpoints, which for this
+    /// link are both the reader, and the reader's own links are unwired.
+    #[test]
+    fn removing_a_link_reading_another_stream_takes_its_edge_and_leaves_its_readers_other_links_wired()
+     {
+        use crate::core::compiler::compiler::unwire_and_remove_a_link;
+        use crate::core::graph::OutputPortInAnotherStreamOnThisMachine;
+        use crate::core::pubsub::LoadedStreamIdentity;
+        use crate::core::runtime::LoadedStreamTag;
+        use crate::core::test_support::{
+            MockInputOnlyProcessor, MockOutputOnlyProcessor, MockProcessor,
+        };
+
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let reader_id = graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                MockProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .expect("the node is named")
+            .first()
+            .expect("the reader is added")
+            .id
+            .to_string();
+        let (_, reader_output, reader_input) =
+            attach_mock_instance::<MockProcessor::Processor>(&mut graph, &reader_id);
+        let reader_output = reader_output.expect("the reader holds an output writer");
+        let reader_input = reader_input.expect("the reader holds input mailboxes");
+        let downstream_id = add_mock_input_only(&mut graph);
+        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &downstream_id);
+
+        let link_into_the_reader = add_link_from_out1_to_in1(&mut graph, &source_id, &reader_id);
+        let link_out_of_the_reader =
+            add_link_from_out1_to_in1(&mut graph, &reader_id, &downstream_id);
+        for link_id in [&link_into_the_reader, &link_out_of_the_reader] {
+            open_iceoryx2_service(&mut graph, link_id, &node).expect("a link in this stream wires");
+        }
+        let link_reading_another_stream = graph
+            .traversal_mut()
+            .add_e_reading_another_stream(
+                OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "out1").unwrap(),
+                InputLinkPortRef::new(reader_id.as_str(), "in1"),
+            )
+            .first()
+            .expect("the link reading another stream is added")
+            .id
+            .clone();
+
+        let graph = parking_lot::RwLock::new(graph);
+        let the_stream = LoadedStreamIdentity {
+            runtime_id: "Rremoval".to_string(),
+            stream_name: "b".to_string(),
+            stream_tag: LoadedStreamTag::numbered_for_a_test(1),
+        };
+        let (unwired, warnings) = CapturedTracingWarnings::captured_while(|| {
+            unwire_and_remove_a_link(&graph, &link_reading_another_stream, &the_stream)
+        });
+
+        assert!(unwired.expect("the link is removed"));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let graph = graph.read();
+        assert!(!graph.traversal().e(&link_reading_another_stream).exists());
+        for link_id in [&link_into_the_reader, &link_out_of_the_reader] {
+            assert!(
+                matches!(
+                    graph
+                        .traversal()
+                        .e(link_id)
+                        .first()
+                        .and_then(|link| link.get::<LinkStateComponent>())
+                        .map(|state| state.0),
+                    Some(LinkState::Wired)
+                ),
+                "{link_id} stays wired"
+            );
+        }
+        assert_eq!(reader_input.inbound_link_names("in1").len(), 1);
+        assert!(reader_output.has_channel_publisher("out1"));
+        assert_eq!(reader_output.channel_notifier_count("out1"), 1);
     }
 
     fn add_mock_reactive_input_only(graph: &mut Graph) -> String {
@@ -4024,6 +4282,7 @@ mod tests {
             &graph,
             &Iceoryx2Node::for_this_test_process(),
             &OutputLinkPortRef::new(src_uid.clone(), "out1"),
+            WindowedDestinationOutsideTheSourcesGraph::Absent,
         )
         .expect("sizing resolves for a wired channel");
         assert_eq!(
@@ -4035,12 +4294,17 @@ mod tests {
         );
     }
 
-    /// A port on this runtime is named by `<this runtime>/<node>/<port>` and
-    /// resolves to the exact source a link carries from; its iceoryx2 channel
-    /// name, an address naming no node, and a port no link carries from all
-    /// answer `TapChannelNotFound`.
+    fn the_machine_these_tests_run_on() -> crate::core::runtime::MachineName {
+        crate::core::runtime::MachineName::from_a_tailnet_dns_name("desk.tail2950db.ts.net.")
+            .expect("a tailnet name names a machine")
+    }
+
+    /// A port in this stream is named by its address with or without this
+    /// stream and this machine in front, and resolves to the exact source a
+    /// link carries from; its iceoryx2 channel name, an address naming no
+    /// node, and a port no link carries from all answer `TapChannelNotFound`.
     #[test]
-    fn a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel() {
+    fn a_port_in_this_stream_is_named_by_its_address_and_not_by_its_channel() {
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
         let dest_id = add_mock_input_only(&mut graph);
@@ -4055,26 +4319,30 @@ mod tests {
             .expect("the source node is in the graph")
             .display_name
             .clone();
+        let this_machine = the_machine_these_tests_run_on();
 
-        let resolved = find_the_source_a_caller_named(
-            &graph,
-            "bench-cam-a1b2",
-            &format!("bench-cam-a1b2/{source_node_name}/out1"),
-        )
-        .expect("a wired port on this runtime resolves by its address");
-        assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
-        assert_eq!(resolved.port_name(), "out1");
+        for address in [
+            format!("{source_node_name}/out1"),
+            format!("main/{source_node_name}/out1"),
+            format!("desk/main/{source_node_name}/out1"),
+            format!("desk.tail2950db.ts.net/main/{source_node_name}/out1"),
+        ] {
+            let resolved = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
+                .unwrap_or_else(|refusal| panic!("{address}: {refusal}"));
+            assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
+            assert_eq!(resolved.port_name(), "out1");
+        }
 
         let its_channel = crate::iceoryx2::source_channel_name(&src_id, "out1")
             .expect("source port derives a channel name");
         for unresolvable in [
             its_channel.as_str().to_string(),
-            "bench-cam-a1b2/nosuchnode/out1".to_string(),
-            format!("bench-cam-a1b2/{source_node_name}/out2"),
+            "main/nosuchnode/out1".to_string(),
+            format!("main/{source_node_name}/out2"),
         ] {
             assert!(
                 matches!(
-                    find_the_source_a_caller_named(&graph, "bench-cam-a1b2", &unresolvable),
+                    find_the_source_a_caller_named(&graph, &this_machine, "main", &unresolvable),
                     Err(Error::TapChannelNotFound(_))
                 ),
                 "{unresolvable:?} must not resolve to any source port",
@@ -4082,27 +4350,129 @@ mod tests {
         }
     }
 
-    /// A tap reads a channel on this runtime, so an address naming another
-    /// runtime is refused naming that runtime rather than reported as a channel
-    /// nobody publishes.
+    /// A tap reads a port on this machine, so an address naming another
+    /// machine is refused naming it rather than reported as a channel nobody
+    /// publishes.
     #[test]
-    fn a_tap_naming_another_runtime_is_refused_naming_that_runtime() {
-        let graph = Graph::new();
-
+    fn a_tap_naming_another_machine_is_refused_naming_that_machine() {
         let refused = find_the_source_a_caller_named(
-            &graph,
-            "studio-display",
-            "bench-cam-a1b2/camera-source/video",
+            &Graph::new(),
+            &the_machine_these_tests_run_on(),
+            "main",
+            "rig/main/camera-source/video",
         )
-        .expect_err("a channel on another runtime is nothing this runtime taps");
+        .expect_err("a channel on another machine is nothing this machine taps");
 
+        assert!(
+            matches!(refused, Error::PortAddressNamesAnotherMachine { ref machine, .. } if machine == "rig"),
+            "refused as an address naming another machine, got {refused:?}"
+        );
+        assert!(refused.to_string().contains("`rig`"), "{refused}");
+    }
+
+    /// A stream taps its own ports, so an address naming another stream is
+    /// refused naming both streams, and one that does not parse is refused as
+    /// an address.
+    #[test]
+    fn a_tap_naming_another_stream_or_no_address_is_refused_by_name() {
+        let refused = find_the_source_a_caller_named(
+            &Graph::new(),
+            &the_machine_these_tests_run_on(),
+            "main",
+            "studio/camera-source/video",
+        )
+        .expect_err("a port in another stream is not this stream's to tap");
         assert!(
             matches!(refused, Error::InvalidPortAddress(_)),
-            "refused as an address this runtime cannot tap, got {refused:?}"
+            "{refused:?}"
         );
+        let refused = refused.to_string();
         assert!(
-            refused.to_string().contains("`bench-cam-a1b2`"),
-            "the refusal names the runtime: {refused}"
+            refused.contains("`studio`") && refused.contains("`main`"),
+            "{refused}"
+        );
+
+        let refused = find_the_source_a_caller_named(
+            &Graph::new(),
+            &the_machine_these_tests_run_on(),
+            "main",
+            "video",
+        )
+        .expect_err("one part is no address");
+        assert!(
+            matches!(refused, Error::InvalidPortAddress(_)),
+            "{refused:?}"
+        );
+    }
+
+    /// A port whose only readers are links in other streams is tapped by its
+    /// address, since those links installed its publisher; once their
+    /// registrations are dropped it answers `TapChannelNotFound` again.
+    ///
+    /// Fail-without-fix: count the links of this stream alone and the tap is
+    /// refused a channel another stream's link keeps live.
+    #[test]
+    fn a_port_read_only_from_other_streams_is_named_by_its_address() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::core::graph::{
+            OutputPortExposureLevel, OutputPortReaderOutsideItsStream, ReaderOfAnExposedOutputPort,
+        };
+
+        let mut graph = Graph::new();
+        let src_id = add_mock_output_only(&mut graph);
+        let source_node_name = graph
+            .traversal()
+            .v(src_id.as_str())
+            .first()
+            .expect("the source node is in the graph")
+            .display_name
+            .clone();
+        let address = format!("main/{source_node_name}/out1");
+        let this_machine = the_machine_these_tests_run_on();
+        assert!(
+            matches!(
+                find_the_source_a_caller_named(&graph, &this_machine, "main", &address),
+                Err(Error::TapChannelNotFound(_))
+            ),
+            "a port nothing reads has no channel to tap"
+        );
+
+        let still_registered = Arc::new(AtomicBool::new(true));
+        let mut exposed_ports = ExposedOutputPortsComponent::default();
+        let _ = exposed_ports.set_level("out1", OutputPortExposureLevel::Private);
+        assert!(
+            exposed_ports
+                .register_reader(
+                    "out1",
+                    ReaderOfAnExposedOutputPort::new(
+                        Arc::clone(&still_registered),
+                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+                        Box::new(|_why| {}),
+                    ),
+                )
+                .is_ok()
+        );
+        graph
+            .traversal_mut()
+            .v(src_id.as_str())
+            .first_mut()
+            .expect("the source is in its graph")
+            .insert_component_without_rendering_it(exposed_ports);
+
+        let resolved = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
+            .expect("a port another stream's link reads is tapped by its address");
+        assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
+        assert_eq!(resolved.port_name(), "out1");
+
+        still_registered.store(false, Ordering::Release);
+        assert!(
+            matches!(
+                find_the_source_a_caller_named(&graph, &this_machine, "main", &address),
+                Err(Error::TapChannelNotFound(_))
+            ),
+            "a reader whose registration was dropped keeps no channel tappable"
         );
     }
 
@@ -4205,5 +4575,461 @@ mod tests {
             dest_input.inbound_link_names("in1"),
             vec![InboundLinkName::from("psource/out1")]
         );
+    }
+
+    /// The two halves of the wiring op run on two graphs, the way a link
+    /// reading another stream is wired: the source's side on the source
+    /// stream's graph, the destination's side on the reading stream's, where
+    /// the link alone lives.
+    mod wiring_across_two_graphs {
+        use std::sync::atomic::AtomicBool;
+
+        use super::*;
+        use crate::core::graph::{
+            OutputPortExposureLevel, OutputPortInAnotherStreamOnThisMachine,
+            OutputPortReaderOutsideItsStream, ReaderOfAnExposedOutputPort,
+            SourceSideOfALinkReadingAnotherStream,
+        };
+        use crate::core::json_schema::LinkStateOutput;
+        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+
+        /// A link added to `reading_graph` reading `out1` of a node in another
+        /// stream into `in1` of `dest_id`, as an edge from that node to itself.
+        fn a_link_reading_another_graph_into(
+            reading_graph: &mut Graph,
+            dest_id: &str,
+        ) -> LinkUniqueId {
+            reading_graph
+                .traversal_mut()
+                .add_e_reading_another_stream(
+                    OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "out1").unwrap(),
+                    InputLinkPortRef::new(dest_id, "in1"),
+                )
+                .first()
+                .expect("the link reading another graph is added")
+                .id
+                .clone()
+        }
+
+        /// Wire link `link_id` of `reading_graph` from `out1` of `source_id`
+        /// in `source_graph`, through the two halves a reconcile runs, and
+        /// hold the link's services on it.
+        fn wire_across(
+            source_graph: &mut Graph,
+            source_id: &str,
+            reading_graph: &mut Graph,
+            link_id: &LinkUniqueId,
+        ) -> Result<(HowAnOpenedLinkStands, Option<SourceSideOfALinkWiredOn>)> {
+            let to_port = reading_graph
+                .traversal()
+                .e(link_id)
+                .first()
+                .expect("the link is in the reading graph")
+                .to_port()
+                .clone();
+            let destination = read_the_destination_of_a_link(reading_graph, &to_port, link_id)?;
+            let opened_source_side = open_the_source_side_of_a_link(
+                source_graph,
+                &OutputLinkPortRef::new(source_id, "out1"),
+                link_id,
+                &destination,
+                &Iceoryx2Node::for_this_test_process(),
+            )?;
+            let wire_reply_awaited_from_the_destination = open_the_destination_side_of_a_link(
+                reading_graph,
+                link_id,
+                &opened_source_side,
+                destination,
+            )?;
+            let wired_on = opened_source_side.wired_on().cloned();
+            let link = reading_graph
+                .traversal_mut()
+                .e(link_id)
+                .first_mut()
+                .expect("the link is in the reading graph");
+            let how_it_stands = opened_source_side.hold_its_services_on_the_link_and_stamp_it(
+                link,
+                wire_reply_awaited_from_the_destination,
+            );
+            Ok((how_it_stands, wired_on))
+        }
+
+        /// A native source in one graph and a native reader in another, and
+        /// the link reading the source into the reader, not yet wired.
+        struct NativeSourceAndReaderInTwoGraphs {
+            source_graph: Graph,
+            source_id: String,
+            source_output: Arc<crate::iceoryx2::OutputWriterInner>,
+            reading_graph: Graph,
+            dest_input: Arc<crate::iceoryx2::InputMailboxesInner>,
+            link_id: LinkUniqueId,
+        }
+
+        impl NativeSourceAndReaderInTwoGraphs {
+            fn new() -> Self {
+                let mut source_graph = Graph::new();
+                let source_id = add_mock_output_only(&mut source_graph);
+                let (_, source_output, _) = attach_mock_instance::<
+                    MockOutputOnlyProcessor::Processor,
+                >(&mut source_graph, &source_id);
+                let mut reading_graph = Graph::new();
+                let dest_id = add_mock_input_only(&mut reading_graph);
+                let (_, _, dest_input) = attach_mock_instance::<MockInputOnlyProcessor::Processor>(
+                    &mut reading_graph,
+                    &dest_id,
+                );
+                let link_id = a_link_reading_another_graph_into(&mut reading_graph, &dest_id);
+                Self {
+                    source_graph,
+                    source_id,
+                    source_output: source_output
+                        .expect("an output-only mock holds an output writer"),
+                    reading_graph,
+                    dest_input: dest_input.expect("an input-only mock holds input mailboxes"),
+                    link_id,
+                }
+            }
+
+            fn wire(
+                &mut self,
+            ) -> Result<(HowAnOpenedLinkStands, Option<SourceSideOfALinkWiredOn>)> {
+                wire_across(
+                    &mut self.source_graph,
+                    &self.source_id,
+                    &mut self.reading_graph,
+                    &self.link_id,
+                )
+            }
+        }
+
+        /// A windowed destination the source's graph does not hold creates
+        /// the channel as deep as its ring, as one in the source's own graph
+        /// does.
+        ///
+        /// Fail-without-fix: size the channel off the source's graph alone and
+        /// it is created at the ordered depth, shallower than the ring.
+        #[test]
+        fn a_windowed_destination_in_another_graph_creates_the_channel_as_deep_as_its_ring() {
+            let mut source_graph = Graph::new();
+            let source_id = add_mock_output_only(&mut source_graph);
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(
+                &mut source_graph,
+                &source_id,
+            );
+            let mut reading_graph = Graph::new();
+            let dest_id = add_mock_windowed_audio_consumer(&mut reading_graph);
+            let link_id = reading_graph
+                .traversal_mut()
+                .add_e_reading_another_stream(
+                    OutputPortInAnotherStreamOnThisMachine::new("a", "microphone", "out1").unwrap(),
+                    InputLinkPortRef::new(&dest_id, "audio"),
+                )
+                .first()
+                .expect("the link reading another graph is added")
+                .id
+                .clone();
+            let destination = read_the_destination_of_a_link(
+                &mut reading_graph,
+                &InputLinkPortRef::new(&dest_id, "audio"),
+                &link_id,
+            )
+            .expect("the windowed destination is read");
+
+            let _opened_source_side = open_the_source_side_of_a_link(
+                &mut source_graph,
+                &OutputLinkPortRef::new(&source_id, "out1"),
+                &link_id,
+                &destination,
+                &Iceoryx2Node::for_this_test_process(),
+            )
+            .expect("the source's side opens");
+
+            assert_eq!(
+                creation_depth_a_helper_opening_out1_finds(&source_id),
+                WINDOWED_PORT_SUBSCRIBER_RING_DEPTH
+            );
+        }
+
+        /// Fail-without-fix: open both halves on the reading graph, as the
+        /// in-stream op does, and the source is not found there.
+        #[test]
+        fn bags_written_in_one_graph_reach_a_destination_wired_from_another_graph() {
+            let mut two_graphs = NativeSourceAndReaderInTwoGraphs::new();
+
+            let (how_it_stands, _) = two_graphs.wire().expect("the link wires across two graphs");
+
+            assert_eq!(how_it_stands, HowAnOpenedLinkStands::Wired);
+            assert!(
+                two_graphs
+                    .source_graph
+                    .traversal()
+                    .e(())
+                    .iter()
+                    .next()
+                    .is_none(),
+                "the source's graph holds no edge for a link another stream holds"
+            );
+            for bag in 0..3 {
+                two_graphs
+                    .source_output
+                    .write_raw("out1", b"a bag read from another stream", bag)
+                    .expect("the source publishes onto the channel the other graph wired");
+            }
+            two_graphs.dest_input.receive_pending();
+            assert_eq!(two_graphs.dest_input.drain("in1").len(), 3);
+            assert_eq!(
+                link_state_in_graph(&two_graphs.reading_graph, &two_graphs.link_id),
+                (LinkStateOutput::Wired, None)
+            );
+        }
+
+        /// The first reader of a port nothing in its own stream reads
+        /// installs the port's publisher, and releasing that reader's side
+        /// takes the publisher away again.
+        #[test]
+        fn the_first_reader_from_another_stream_installs_the_publisher_and_its_release_drops_it() {
+            let mut two_graphs = NativeSourceAndReaderInTwoGraphs::new();
+            assert!(!two_graphs.source_output.has_channel_publisher("out1"));
+
+            let (_, wired_on) = two_graphs.wire().expect("the link wires across two graphs");
+
+            assert!(two_graphs.source_output.has_channel_publisher("out1"));
+            assert_eq!(two_graphs.source_output.channel_notifier_count("out1"), 1);
+            let source_side = SourceSideOfALinkReadingAnotherStream::released_when_dropped(
+                wired_on
+                    .as_ref()
+                    .expect("a native source's side is its output writer"),
+                "out1",
+                &two_graphs.link_id,
+            );
+            drop(source_side);
+            assert_eq!(two_graphs.source_output.channel_notifier_count("out1"), 0);
+            assert!(
+                !two_graphs.source_output.has_channel_publisher("out1"),
+                "the last link out of the port takes its publisher with it"
+            );
+        }
+
+        /// Readers from other streams registered against a port count toward
+        /// its channel's destination cap, in its own stream's wiring too.
+        ///
+        /// Fail-without-fix: count the links in the source's graph alone and
+        /// the 33rd destination is wired past a channel created for 32.
+        #[test]
+        fn a_reader_from_another_stream_counts_toward_the_channels_destination_cap() {
+            let mut source_graph = Graph::new();
+            let source_id = add_mock_output_only(&mut source_graph);
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(
+                &mut source_graph,
+                &source_id,
+            );
+            let mut exposed_ports = ExposedOutputPortsComponent::default();
+            let _ = exposed_ports.set_level("out1", OutputPortExposureLevel::Private);
+            let registrations: Vec<Arc<AtomicBool>> = (0..MAX_DESTINATIONS_PER_CHANNEL)
+                .map(|_| {
+                    let still_registered = Arc::new(AtomicBool::new(true));
+                    assert!(
+                        exposed_ports
+                            .register_reader(
+                                "out1",
+                                ReaderOfAnExposedOutputPort::new(
+                                    Arc::clone(&still_registered),
+                                    OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+                                    Box::new(|_why| {}),
+                                ),
+                            )
+                            .is_ok()
+                    );
+                    still_registered
+                })
+                .collect();
+            source_graph
+                .traversal_mut()
+                .v(source_id.as_str())
+                .first_mut()
+                .expect("the source is in its graph")
+                .insert_component_without_rendering_it(exposed_ports);
+            let dest_id = add_mock_input_only(&mut source_graph);
+            attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut source_graph, &dest_id);
+            let link_in_its_own_stream =
+                add_link_from_out1_to_in1(&mut source_graph, &source_id, &dest_id);
+
+            let refusal = open_iceoryx2_service(
+                &mut source_graph,
+                &link_in_its_own_stream,
+                &Iceoryx2Node::for_this_test_process(),
+            )
+            .expect_err("a 33rd destination is refused");
+            assert!(
+                refusal.to_string().contains(&format!(
+                    "would feed {} destinations",
+                    MAX_DESTINATIONS_PER_CHANNEL + 1
+                )),
+                "{refusal}"
+            );
+
+            registrations[0].store(false, std::sync::atomic::Ordering::Release);
+            open_iceoryx2_service(
+                &mut source_graph,
+                &link_in_its_own_stream,
+                &Iceoryx2Node::for_this_test_process(),
+            )
+            .expect("a reader whose registration was dropped frees its slot");
+        }
+
+        /// A helper-placed source in one graph is handed a link whose
+        /// destination is in another, notifying that destination's service.
+        #[test]
+        fn a_helper_source_in_one_graph_is_handed_a_link_into_another_graphs_destination() {
+            let mut source_graph = Graph::new();
+            let source_id = add_mock_output_only(&mut source_graph);
+            let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+            attach_processor_instance(
+                &mut source_graph,
+                &source_id,
+                ProcessorInstance::new(Box::new(
+                    OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        far_side.clone(),
+                        ProcessExecution::Reactive,
+                    ),
+                )),
+            );
+            let mut reading_graph = Graph::new();
+            let dest_id = add_mock_input_only(&mut reading_graph);
+            attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut reading_graph, &dest_id);
+            let link_id = a_link_reading_another_graph_into(&mut reading_graph, &dest_id);
+
+            let (how_it_stands, wired_on) =
+                wire_across(&mut source_graph, &source_id, &mut reading_graph, &link_id)
+                    .expect("the link wires across two graphs");
+
+            assert_eq!(
+                how_it_stands,
+                HowAnOpenedLinkStands::PendingItsOutOfProcessEndsAnswers
+            );
+            assert!(matches!(
+                wired_on,
+                Some(SourceSideOfALinkWiredOn::AHelperProcessesLinkWiring(_))
+            ));
+            let handed_over = far_side.late_wired_links.lock();
+            let [(crate::core::PortDirection::Output, entry)] = &handed_over[..] else {
+                panic!("the helper source is handed the link's output end alone: {handed_over:?}");
+            };
+            assert_eq!(entry["link_id"], serde_json::json!(link_id.as_str()));
+            assert_eq!(
+                entry["dest_notify_service_name"],
+                serde_json::json!(format!("streamlib/{dest_id}/notify"))
+            );
+        }
+
+        /// A link between helpers in two graphs waits on both helpers'
+        /// answers, read off the cells its reading graph holds.
+        #[test]
+        fn a_link_from_another_stream_waits_on_both_helpers_answers() {
+            let answers_owed: Arc<Mutex<Vec<Arc<OutOfProcessLinkWireReply>>>> = Arc::default();
+            let a_helper_stub = || {
+                ProcessorInstance::new(Box::new(
+                    OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        RecordingOutOfProcessFarSideLinkDelivery {
+                            wire_answers_owed: answers_owed.clone(),
+                            ..Default::default()
+                        },
+                        ProcessExecution::Reactive,
+                    ),
+                ))
+            };
+            let mut source_graph = Graph::new();
+            let source_id = add_mock_output_only(&mut source_graph);
+            attach_processor_instance(&mut source_graph, &source_id, a_helper_stub());
+            let mut reading_graph = Graph::new();
+            let dest_id = add_mock_input_only(&mut reading_graph);
+            attach_processor_instance(&mut reading_graph, &dest_id, a_helper_stub());
+            let link_id = a_link_reading_another_graph_into(&mut reading_graph, &dest_id);
+
+            wire_across(&mut source_graph, &source_id, &mut reading_graph, &link_id)
+                .expect("the link wires across two graphs");
+
+            let answers_owed = answers_owed.lock().clone();
+            assert_eq!(answers_owed.len(), 2, "each helper owes its own answer");
+            assert_eq!(
+                link_state_in_graph(&reading_graph, &link_id),
+                (LinkStateOutput::Pending, None)
+            );
+            answers_owed[0]
+                .note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+            assert_eq!(
+                link_state_in_graph(&reading_graph, &link_id),
+                (LinkStateOutput::Pending, None),
+                "the source's helper opening does not wire a link its reader never opened"
+            );
+            answers_owed[1]
+                .note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+            assert_eq!(
+                link_state_in_graph(&reading_graph, &link_id),
+                (LinkStateOutput::Wired, None)
+            );
+        }
+
+        /// A source processor that is gone makes releasing its side a no-op,
+        /// and the release never kept it alive; one still there is told.
+        #[test]
+        fn a_dead_source_processor_makes_release_a_no_op() {
+            for source_processor_still_there in [true, false] {
+                let mut source_graph = Graph::new();
+                let source_id = add_mock_output_only(&mut source_graph);
+                let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+                let source_instance = attach_processor_instance(
+                    &mut source_graph,
+                    &source_id,
+                    ProcessorInstance::new(Box::new(
+                        OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
+                            far_side.clone(),
+                            ProcessExecution::Reactive,
+                        ),
+                    )),
+                );
+                let mut reading_graph = Graph::new();
+                let dest_id = add_mock_input_only(&mut reading_graph);
+                attach_mock_instance::<MockInputOnlyProcessor::Processor>(
+                    &mut reading_graph,
+                    &dest_id,
+                );
+                let link_id = a_link_reading_another_graph_into(&mut reading_graph, &dest_id);
+                let (_, wired_on) =
+                    wire_across(&mut source_graph, &source_id, &mut reading_graph, &link_id)
+                        .expect("the link wires across two graphs");
+                let source_side = SourceSideOfALinkReadingAnotherStream::released_when_dropped(
+                    wired_on
+                        .as_ref()
+                        .expect("a helper source's side is its link wiring"),
+                    "out1",
+                    &link_id,
+                );
+                drop(wired_on);
+                if !source_processor_still_there {
+                    drop(source_instance);
+                    drop(source_graph);
+                    drop(source_side);
+                    assert!(
+                        far_side.reclaimed_links.lock().is_empty(),
+                        "a source processor that is gone is told nothing"
+                    );
+                    continue;
+                }
+
+                drop(source_side);
+                assert_eq!(
+                    far_side
+                        .reclaimed_links
+                        .lock()
+                        .iter()
+                        .map(|reclaimed| reclaimed.link_id.clone())
+                        .collect::<Vec<_>>(),
+                    vec![link_id.to_string()],
+                    "a source processor still there is told to drop its side"
+                );
+                drop(source_instance);
+            }
+        }
     }
 }

@@ -1175,7 +1175,7 @@ def test_a_config_at_the_deepest_a_graph_carries_compiles_to_a_document_serde_js
 
 @pytest.mark.parametrize(
     "arguments",
-    [[], ["--verb", "new"], ["--verb", "run", "--runtime-name", "desk"]],
+    [[], ["--verb", "new"], ["--verb", "run", "--no-such-flag", "desk"]],
     ids=["no-verb", "a-verb-it-does-not-serve", "an-unknown-flag"],
 )
 def test_a_usage_error_exits_two(anchor_directory: Path, arguments: "list[str]"):

@@ -38,18 +38,12 @@ pub fn four_base36_characters_of(mut hash: u64) -> String {
         .collect()
 }
 
-/// The short id naming whatever `bytes` identify — the two steps above, joined.
-pub fn stable_short_id_over(bytes: &[u8]) -> String {
-    four_base36_characters_of(fnv1a_64_hash_of(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// The recipe is pinned: these values are what every caller's ids are built
-    /// from, so a change here renames every unnamed virtual camera and every
-    /// unnamed runtime.
+    /// from, so a change here renames every unnamed virtual camera.
     #[test]
     fn the_hash_is_the_published_fnv1a_64_of_the_bytes() {
         assert_eq!(fnv1a_64_hash_of(b""), FNV1A_64_OFFSET_BASIS);
@@ -60,10 +54,11 @@ mod tests {
     /// The same bytes render the same id, and different bytes differ.
     #[test]
     fn the_same_bytes_render_the_same_four_characters_every_time() {
-        let one = stable_short_id_over(b"/home/someone/apps/desk");
+        let short_id_over = |bytes: &[u8]| four_base36_characters_of(fnv1a_64_hash_of(bytes));
+        let one = short_id_over(b"/home/someone/apps/desk");
         assert_eq!(one.chars().count(), RENDERED_ID_CHARACTERS);
-        assert_eq!(one, stable_short_id_over(b"/home/someone/apps/desk"));
-        assert_ne!(one, stable_short_id_over(b"/home/someone/apps/lab"));
+        assert_eq!(one, short_id_over(b"/home/someone/apps/desk"));
+        assert_ne!(one, short_id_over(b"/home/someone/apps/lab"));
     }
 
     /// Every rendered character is drawn from the base-36 alphabet.

@@ -75,7 +75,8 @@ pub const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::f
 /// The `tap` tool's result: a bounded sample of the bags one channel carried.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TapToolResult {
-    /// The tapped output port's address, `<runtime_name>/<node>/<port>`.
+    /// The tapped output port's address as the call named it,
+    /// `[<machine>/][<stream>/]<node>/<port>`.
     pub channel: String,
     /// Bags the sample asked for, after the runtime bounded the caller's count.
     pub requested: usize,

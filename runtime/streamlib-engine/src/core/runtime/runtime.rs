@@ -11,12 +11,16 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
-use super::RuntimeName;
+use super::MachineName;
 use super::RuntimeUniqueId;
-use super::loaded_stream::LoadedStreamInThisRuntime;
+use super::loaded_stream::{
+    LoadedStreamInThisRuntime, LoadedStreamOutOfTheTableUntilItsEndIsRecorded,
+};
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
-use super::{RuntimeShutdownEscalation, StreamEnvironment};
+use super::{
+    EnginesTokioRuntimeForWorkSpawnedAgainstAStream, RuntimeShutdownEscalation, StreamEnvironment,
+};
 use crate::core::context::GpuContext;
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
@@ -24,13 +28,14 @@ use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
-/// Storage variant for tokio runtime in Runner.
+/// The tokio runtime the engine runs on, as every stream reaches it.
 ///
 /// Enables Runner to work both standalone (owning its runtime) and
 /// integrated into existing tokio applications (using the current handle).
 pub(crate) enum TokioRuntimeVariant {
-    /// Runner owns the tokio Runtime (created when NOT in tokio context).
-    OwnedTokioRuntime(TokioRuntimeShutDownWithinItsBudget),
+    /// The runtime the [`Runner`] owns (created when NOT in tokio context),
+    /// reached by its handle.
+    TokioRuntimeTheRunnerOwns(tokio::runtime::Handle),
     /// Runner uses an external tokio Handle (auto-detected when called from tokio context).
     ExternalTokioHandle(tokio::runtime::Handle),
 }
@@ -39,8 +44,8 @@ impl TokioRuntimeVariant {
     /// Get a tokio Handle from either variant.
     pub(crate) fn handle(&self) -> tokio::runtime::Handle {
         match self {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.handle().clone(),
-            TokioRuntimeVariant::ExternalTokioHandle(h) => h.clone(),
+            TokioRuntimeVariant::TokioRuntimeTheRunnerOwns(handle)
+            | TokioRuntimeVariant::ExternalTokioHandle(handle) => handle.clone(),
         }
     }
 }
@@ -65,10 +70,6 @@ impl TokioRuntimeShutDownWithinItsBudget {
     pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
         self.0.handle()
     }
-
-    pub(crate) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
-        self.0.block_on(future)
-    }
 }
 
 impl Drop for TokioRuntimeShutDownWithinItsBudget {
@@ -92,11 +93,15 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
 pub(crate) struct EngineResourcesSharedByEveryStream {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
-    /// The name this runtime's tap channels carry.
-    pub(crate) runtime_name: Arc<RuntimeName>,
+    /// The name this machine is addressed by, read once as the runtime starts.
+    pub(crate) machine_name: Arc<MachineName>,
     /// The streams loaded in this runtime, keyed by their URL-safe cast name.
     pub(crate) streams_loaded_in_this_runtime:
         Mutex<BTreeMap<String, Arc<LoadedStreamInThisRuntime>>>,
+    /// Every stream taken out of the table whose end may not be recorded yet,
+    /// locked only inside the table's lock.
+    streams_out_of_the_table_until_their_end_is_recorded:
+        Mutex<Vec<LoadedStreamOutOfTheTableUntilItsEndIsRecorded>>,
     /// The one GPU context, created by the first stream that starts.
     gpu_context_created_by_the_first_stream_start: Mutex<Option<GpuContext>>,
     /// Hooks run once, when the GPU context is created, before any
@@ -104,8 +109,9 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     setup_hooks: Mutex<SetupHooksOfTheEngine>,
     /// The lend directory the host handed this runtime.
     pub(crate) processor_interpreter_lend_directory: ProcessorInterpreterLendDirectoryOfTheEngine,
-    /// Whether [`Runner::shut_down`] has run.
-    shut_down: AtomicBool,
+    /// Whether [`Runner::shut_down`] has run; shared with the work spawned
+    /// against a stream, which does nothing past it.
+    shut_down: Arc<AtomicBool>,
     /// Whether this engine holds the machine's shutdown signals now, and so
     /// walks every loaded stream to the machine's shutdown level as it waits.
     owns_the_machine_shutdown_signals: AtomicBool,
@@ -144,7 +150,7 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) runtime_directory: StreamlibRuntimeDirectory,
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     pub(crate) iceoryx2_node: Iceoryx2Node,
-    /// Tokio runtime storage - either owned or external handle.
+    /// The engine's tokio runtime by handle: the `Runner`'s own, or an external one.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
     /// The runtime's own log, when the host asked for one; closed before the
     /// hold on the logging pathway lets go.
@@ -275,15 +281,78 @@ impl EngineResourcesSharedByEveryStream {
     }
 
     /// Take `stream` out of the table, unless another stream has taken its
-    /// name since.
+    /// name since, into the streams whose end is not yet recorded — under the
+    /// table's lock, so a wait always finds it in one or the other — then
+    /// re-plan every link reading it.
     pub(crate) fn remove_from_the_stream_table(&self, stream: &Arc<LoadedStreamInThisRuntime>) {
-        let mut streams = self.streams_loaded_in_this_runtime.lock();
-        if streams
-            .get(stream.stream_name())
-            .is_some_and(|loaded| Arc::ptr_eq(loaded, stream))
-        {
-            streams.remove(stream.stream_name());
+        let removed = {
+            let mut streams = self.streams_loaded_in_this_runtime.lock();
+            let it_is_this_stream = streams
+                .get(stream.stream_name())
+                .is_some_and(|loaded| Arc::ptr_eq(loaded, stream));
+            if it_is_this_stream {
+                streams.remove(stream.stream_name());
+                let mut streams_out_of_the_table = self
+                    .streams_out_of_the_table_until_their_end_is_recorded
+                    .lock();
+                streams_out_of_the_table.retain(|left| !left.has_its_end_recorded());
+                streams_out_of_the_table.push(
+                    LoadedStreamOutOfTheTableUntilItsEndIsRecorded::leaving_the_table(stream),
+                );
+            }
+            it_is_this_stream
+        };
+        if removed {
+            self.spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
+                stream.stream_name(),
+                crate::core::runtime::LinksReadingAStreamToRePlan::EveryOneStillToBeWired,
+            );
         }
+    }
+
+    /// The engine's tokio runtime as work spawned against a stream reaches
+    /// it, with the flag that stops that work once the engine shuts down.
+    pub(crate) fn tokio_runtime_for_work_spawned_against_a_stream(
+        &self,
+    ) -> EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
+        EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
+            engines_tokio_runtime_handle: self.tokio_runtime_variant.handle(),
+            set_once_the_engine_shuts_down: Arc::clone(&self.shut_down),
+        }
+    }
+
+    /// Re-plan, on every other loaded stream, the links reading the stream
+    /// `source_stream_name` that `which` picks: each stream's re-plan is
+    /// spawned on the engine's tokio runtime and commits on that stream's own
+    /// compiler, never inline. Nothing once the engine is shutting down, when
+    /// every stream is.
+    pub(crate) fn spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
+        &self,
+        source_stream_name: &str,
+        which: crate::core::runtime::LinksReadingAStreamToRePlan,
+    ) {
+        let engines_tokio_runtime = self.tokio_runtime_for_work_spawned_against_a_stream();
+        if engines_tokio_runtime.the_engine_has_shut_down() {
+            return;
+        }
+        for reading_stream in self.every_loaded_stream() {
+            if reading_stream.stream_name() == source_stream_name {
+                continue;
+            }
+            reading_stream
+                .spawn_a_re_plan_of_its_links_reading_the_stream(source_stream_name, which);
+        }
+    }
+
+    /// The loaded stream `stream_cast`, already cast, names.
+    pub(crate) fn loaded_stream_of_the_cast_name(
+        &self,
+        stream_cast: &str,
+    ) -> Option<Arc<LoadedStreamInThisRuntime>> {
+        self.streams_loaded_in_this_runtime
+            .lock()
+            .get(stream_cast)
+            .cloned()
     }
 
     fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
@@ -291,6 +360,27 @@ impl EngineResourcesSharedByEveryStream {
             .lock()
             .values()
             .cloned()
+            .collect()
+    }
+
+    /// Every loaded stream, then every stream out of the table whose end is
+    /// not yet recorded that anything still holds, read under the table's lock.
+    fn every_stream_still_held_whose_end_is_not_yet_recorded(
+        &self,
+    ) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+        let streams = self.streams_loaded_in_this_runtime.lock();
+        let streams_out_of_the_table = self
+            .streams_out_of_the_table_until_their_end_is_recorded
+            .lock();
+        streams
+            .values()
+            .cloned()
+            .chain(
+                streams_out_of_the_table
+                    .iter()
+                    .filter(|left| !left.has_its_end_recorded())
+                    .filter_map(|left| left.stream_while_anything_still_holds_it()),
+            )
             .collect()
     }
 }
@@ -311,6 +401,9 @@ enum SetupHooksOfTheEngine {
 /// Every graph operation is a stream's: load a stream, then use the
 /// [`LoadedStreamInThisRuntime`] it hands back.
 pub struct Runner {
+    // Declared first so it drops before the engine resources: a task spawned against a stream
+    // may hold them, and their last drop must never land on one of this runtime's workers.
+    _tokio_runtime_the_runner_owns: Option<TokioRuntimeShutDownWithinItsBudget>,
     pub(super) engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
     /// Where this runtime keeps its streams, and the lock its stream actions
     /// take one at a time.
@@ -320,9 +413,6 @@ pub struct Runner {
 /// What a host chooses as it constructs a [`Runner`].
 #[derive(Debug, Clone, Default)]
 pub struct RunnerConstructionOptions {
-    /// The runtime's name; else `STREAMLIB_RUNTIME_NAME`, else
-    /// `<host name>-<app directory name>-<id>`.
-    pub runtime_name: Option<String>,
     /// The standard stream the pretty log mirror writes to, when this runtime
     /// is the first in its process to install the process's logging pathway.
     pub pretty_log_mirror_stream: crate::core::logging::PrettyLogMirrorStandardStream,
@@ -407,15 +497,15 @@ pub enum StreamLoadObservingMachineShutdownRequests {
 /// What [`Runner::wait_until_every_stream_has_ended`] saw once every stream had
 /// ended.
 pub struct EveryStreamEndedDuringTheWait {
-    /// Every stream loaded at any point of the wait, in the order it was first
-    /// seen.
+    /// Every stream loaded, or out of the table with its end not yet recorded,
+    /// at any point of the wait, in the order it was first seen.
     pub streams_seen_during_the_wait: Vec<Arc<LoadedStreamInThisRuntime>>,
     /// How the first of them to end with a failure ended, or `Ok` when none did.
     pub how_the_first_failed_stream_ended: Result<()>,
 }
 
 impl Runner {
-    /// Build a runtime named from `STREAMLIB_RUNTIME_NAME` or the default.
+    /// Build a runtime with the default construction options.
     pub fn new() -> Result<Arc<Self>> {
         Self::new_with_construction_options(RunnerConstructionOptions::default())
     }
@@ -425,7 +515,6 @@ impl Runner {
         construction_options: RunnerConstructionOptions,
     ) -> Result<Arc<Self>> {
         let RunnerConstructionOptions {
-            runtime_name,
             pretty_log_mirror_stream,
             runtime_own_log_directory,
         } = construction_options;
@@ -444,20 +533,23 @@ impl Runner {
         }
 
         // Auto-detect tokio context FIRST — telemetry exporters need a Tokio handle.
-        let tokio_runtime_variant = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => TokioRuntimeVariant::ExternalTokioHandle(handle),
-            Err(_) => {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| {
-                        Error::Runtime(format!("Failed to create tokio runtime: {}", e))
-                    })?;
-                TokioRuntimeVariant::OwnedTokioRuntime(TokioRuntimeShutDownWithinItsBudget::owning(
-                    rt,
-                ))
-            }
-        };
+        let (tokio_runtime_variant, _tokio_runtime_the_runner_owns) =
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => (TokioRuntimeVariant::ExternalTokioHandle(handle), None),
+                Err(_) => {
+                    let rt = tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| {
+                            Error::Runtime(format!("Failed to create tokio runtime: {}", e))
+                        })?;
+                    let owned = TokioRuntimeShutDownWithinItsBudget::owning(rt);
+                    (
+                        TokioRuntimeVariant::TokioRuntimeTheRunnerOwns(owned.handle().clone()),
+                        Some(owned),
+                    )
+                }
+            };
 
         // Load a local .env if present (RUST_LOG and other dev overrides).
         let _ = dotenvy::dotenv();
@@ -465,11 +557,6 @@ impl Runner {
         // The id names every stream's log file, so a pinned one is refused
         // before the runtime writes anything.
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
-
-        // A name the caller cannot use in a port address is a wiring error,
-        // and refusing it here costs nothing that has to be undone.
-        let resolved_runtime_name =
-            RuntimeName::from_configuration_environment_or_default(runtime_name)?;
 
         // See `docs/logging-schema.md` for the schema.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
@@ -486,11 +573,8 @@ impl Runner {
                 directory,
             )
         });
-        let runtime_name = Arc::new(
-            resolved_runtime_name
-                .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(),
-        );
-        tracing::info!("Creating Runner named {runtime_name} with ID: {runtime_id}");
+        tracing::info!("Creating Runner with ID: {runtime_id}");
+        let machine_name = Arc::new(MachineName::of_this_machine());
 
         let runtime_directory = StreamlibRuntimeDirectory::resolve()
             .map_err(|refusal| Error::Runtime(refusal.to_string()))?;
@@ -537,15 +621,17 @@ impl Runner {
         tracing::info!("[new] iceoryx2 Node created");
 
         Ok(Arc::new(Self {
+            _tokio_runtime_the_runner_owns,
             engine_resources_shared_by_every_stream: Arc::new(EngineResourcesSharedByEveryStream {
                 runtime_id,
-                runtime_name,
+                machine_name,
                 streams_loaded_in_this_runtime: Mutex::new(BTreeMap::new()),
+                streams_out_of_the_table_until_their_end_is_recorded: Mutex::new(Vec::new()),
                 gpu_context_created_by_the_first_stream_start: Mutex::new(None),
                 setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
                 processor_interpreter_lend_directory:
                     ProcessorInterpreterLendDirectoryOfTheEngine::default(),
-                shut_down: AtomicBool::new(false),
+                shut_down: Arc::new(AtomicBool::new(false)),
                 owns_the_machine_shutdown_signals: AtomicBool::new(false),
                 #[cfg(target_os = "linux")]
                 surface_service: Mutex::new(Some(surface_service)),
@@ -623,9 +709,10 @@ impl Runner {
         &self.engine_resources_shared_by_every_stream.runtime_id
     }
 
-    /// The name this runtime's tap channels carry.
-    pub fn runtime_name(&self) -> &RuntimeName {
-        &self.engine_resources_shared_by_every_stream.runtime_name
+    /// The name this machine is addressed by, the first part of
+    /// `<machine>/<stream>/<node>/<port>`.
+    pub fn machine_name(&self) -> &MachineName {
+        &self.engine_resources_shared_by_every_stream.machine_name
     }
 
     /// The active segment of the runtime's own log, `None` when it keeps none.
@@ -865,10 +952,7 @@ impl Runner {
         stream_cast: &str,
     ) -> Option<Arc<LoadedStreamInThisRuntime>> {
         self.engine_resources_shared_by_every_stream
-            .streams_loaded_in_this_runtime
-            .lock()
-            .get(stream_cast)
-            .cloned()
+            .loaded_stream_of_the_cast_name(stream_cast)
     }
 
     /// Every loaded stream, read under one lock of the stream table.
@@ -940,17 +1024,16 @@ impl Runner {
     }
 
     /// Block until every loaded stream has ended, including each loaded while
-    /// the wait runs, returning every stream it saw and the first that ended
-    /// with a failure.
+    /// the wait runs and each already out of the table whose end is not yet
+    /// recorded, returning every stream it saw and the first that ended with a
+    /// failure.
     pub fn wait_until_every_stream_has_ended(&self) -> EveryStreamEndedDuringTheWait {
+        let engine = &self.engine_resources_shared_by_every_stream;
         let streams_seen_during_the_wait: Mutex<Vec<Arc<LoadedStreamInThisRuntime>>> =
             Mutex::new(Vec::new());
         self.block_until(&|| {
             let mut streams_seen = streams_seen_during_the_wait.lock();
-            for stream in self
-                .engine_resources_shared_by_every_stream
-                .every_loaded_stream()
-            {
+            for stream in engine.every_stream_still_held_whose_end_is_not_yet_recorded() {
                 if !streams_seen.iter().any(|seen| Arc::ptr_eq(seen, &stream)) {
                     streams_seen.push(stream);
                 }
@@ -1064,14 +1147,14 @@ impl Runner {
 
     /// Ask every loaded stream for its shutdown at once — each on its own
     /// thread, under its own watchdog — and wait until each has ended,
+    /// including each already out of the table whose end is not yet recorded,
     /// reporting the first that ended with a failure.
     fn shut_every_loaded_stream_down_and_wait_until_each_has_ended(
         &self,
         reason: &str,
     ) -> Result<()> {
-        let every_stream = self
-            .engine_resources_shared_by_every_stream
-            .every_loaded_stream();
+        let engine = &self.engine_resources_shared_by_every_stream;
+        let every_stream = engine.every_stream_still_held_whose_end_is_not_yet_recorded();
         for stream in &every_stream {
             stream.ask_for_this_streams_shutdown(reason);
         }
@@ -1602,39 +1685,23 @@ mod tests {
         );
     }
 
-    /// Nothing refuses a runtime name another live runtime already carries:
-    /// two runners named alike both construct, both stay up together, and each
-    /// reports the name it was given wherever the name is read.
+    /// Nothing is claimed for a machine's name: two runners on one machine
+    /// both construct, both stay up together, and each names the machine the
+    /// same way wherever the name is read.
     #[test]
     #[serial]
-    fn two_runners_given_one_runtime_name_both_construct() {
-        let shared_runtime_name = "one-name-two-runners";
-
+    fn two_runners_on_one_machine_both_construct_and_name_it_alike() {
         let project_directory = a_project_directory_this_test_owns();
-        let first = Runner::new_with_construction_options(RunnerConstructionOptions {
-            runtime_name: Some(shared_runtime_name.to_string()),
-            ..RunnerConstructionOptions::default()
-        })
-        .expect("the first runner constructs");
-        let second = Runner::new_with_construction_options(RunnerConstructionOptions {
-            runtime_name: Some(shared_runtime_name.to_string()),
-            ..RunnerConstructionOptions::default()
-        })
-        .expect("a second runner given the same name constructs beside the first");
+        let first = Runner::new().expect("the first runner constructs");
+        let second = Runner::new().expect("a second runner on the same machine constructs");
 
         assert_ne!(first.runtime_id(), second.runtime_id());
+        assert_eq!(first.machine_name(), second.machine_name());
         for runner in [&first, &second] {
-            assert_eq!(runner.runtime_name().as_str(), shared_runtime_name);
             let stream = an_empty_stream_loaded_into(runner, project_directory.path(), "main");
             assert_eq!(
-                <LoadedStreamInThisRuntime as crate::core::runtime::RuntimeOperations>::this_runtimes_name(
-                    &stream
-                ),
-                shared_runtime_name
-            );
-            assert_eq!(
-                stream.to_json().expect("the graph serializes")["runtime_name"],
-                shared_runtime_name
+                stream.to_json().expect("the graph serializes")["machine"],
+                runner.machine_name().name()
             );
         }
     }
@@ -1664,8 +1731,9 @@ mod tests {
             runtime
                 .engine_resources_shared_by_every_stream
                 .tokio_runtime_variant,
-            TokioRuntimeVariant::OwnedTokioRuntime(_)
+            TokioRuntimeVariant::TokioRuntimeTheRunnerOwns(_)
         ));
+        assert!(runtime._tokio_runtime_the_runner_owns.is_some());
     }
 
     /// Fail-without-fix: a plain drop of the runtime waits for the blocking task
@@ -2743,6 +2811,92 @@ mod tests {
             loaded_during_the_wait.how_this_stream_ended(),
             Some(HowALoadedStreamEnded::Stopped)
         );
+    }
+
+    /// A stream out of the table whose end is not yet recorded — where its
+    /// shutdown thread leaves it between the two — is waited for and returned
+    /// with the others.
+    ///
+    /// The wait holds every stream it has seen, so the stream's reference
+    /// count rising says the wait has looked; the stream is only asked to end
+    /// after that, so a wait that returns first has returned past it.
+    #[test]
+    #[serial]
+    fn the_wait_for_every_stream_returns_a_stream_out_of_the_table_once_its_end_is_recorded() {
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let leaving = an_empty_stream_loaded_into(&runner, project_directory.path(), "leaving");
+        runner
+            .engine_resources_shared_by_every_stream
+            .remove_from_the_stream_table(&leaving);
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert_eq!(leaving.how_this_stream_ended(), None);
+
+        let (the_wait_returned, the_wait_has_returned) = std::sync::mpsc::channel();
+        let waiting_runner = Arc::clone(&runner);
+        let leaving_as_the_waiter_reads_it = Arc::clone(&leaving);
+        let references_before_the_wait_looked = Arc::strong_count(&leaving);
+        std::thread::spawn(move || {
+            let every_stream_ended_during_the_wait =
+                waiting_runner.wait_until_every_stream_has_ended();
+            let _ = the_wait_returned.send((
+                leaving_as_the_waiter_reads_it.how_this_stream_ended(),
+                every_stream_ended_during_the_wait
+                    .streams_seen_during_the_wait
+                    .iter()
+                    .any(|seen| Arc::ptr_eq(seen, &leaving_as_the_waiter_reads_it)),
+            ));
+        });
+        let deadline = Instant::now() + A_STREAM_ENDS_WITHIN;
+        while Arc::strong_count(&leaving) == references_before_the_wait_looked {
+            if let Ok((how_it_ended_as_the_wait_returned, _)) = the_wait_has_returned.try_recv() {
+                panic!(
+                    "the wait returned while a stream out of the table had no end recorded \
+                     ({how_it_ended_as_the_wait_returned:?})"
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the wait never looked at the stream out of the table"
+            );
+            std::thread::yield_now();
+        }
+        leaving.ask_for_this_streams_shutdown("the test ends the stream out of the table");
+
+        let (how_it_ended_as_the_wait_returned, the_wait_saw_it) = the_wait_has_returned
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never returned once the stream had ended");
+        assert_eq!(
+            how_it_ended_as_the_wait_returned,
+            Some(HowALoadedStreamEnded::Stopped)
+        );
+        assert!(the_wait_saw_it, "the wait returned no `leaving`");
+    }
+
+    /// The engine's shutdown ends a stream out of the table whose end is not
+    /// yet recorded, and returns only once it is.
+    #[test]
+    #[serial]
+    fn the_engines_shutdown_returns_only_once_a_stream_out_of_the_table_has_its_end_recorded() {
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let leaving = an_empty_stream_loaded_into(&runner, project_directory.path(), "leaving");
+        let loaded = an_empty_stream_loaded_into(&runner, project_directory.path(), "loaded");
+        runner
+            .engine_resources_shared_by_every_stream
+            .remove_from_the_stream_table(&leaving);
+        assert_eq!(leaving.how_this_stream_ended(), None);
+
+        runner.shut_down().expect("the engine shuts down cleanly");
+
+        for stream in [&leaving, &loaded] {
+            assert_eq!(
+                stream.how_this_stream_ended(),
+                Some(HowALoadedStreamEnded::Stopped),
+                "`{}`",
+                stream.stream_name()
+            );
+        }
     }
 
     /// The wait `tatolabd` blocks on returns only once the machine's shutdown

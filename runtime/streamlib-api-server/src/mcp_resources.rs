@@ -35,7 +35,7 @@ pub(crate) fn resources_list_result() -> ListResourcesResult {
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
         Resource::new(LIVE_GRAPH_RESOURCE_URI, "graph")
             .with_title("Live graph")
-            .with_description("Every loaded stream's running graph as the `graph` tool returns it without `stream`: `runtime_name`, and under `streams` each stream's nodes by name with their types, ports, config and state, its links with their state, and the ports it exposes.")
+            .with_description("Every loaded stream's running graph as the `graph` tool returns it without `stream`: `machine`, this machine's name, and under `streams` each stream's nodes by name with their types, ports, config and state, its links with their state, and the ports it exposes.")
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
     ])
 }

@@ -6,22 +6,26 @@ mod end_the_process_at_once;
 mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
+#[cfg(test)]
+mod links_between_started_streams_tests;
 mod loaded_stream;
 mod loaded_stream_output_port_exposure;
 mod local_processor_type_registration;
+mod machine_name;
 mod machine_state_directory;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
 mod processor_interpreter_launch_record;
-pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
+pub(crate) use operations_runtime::{
+    EnginesTokioRuntimeForWorkSpawnedAgainstAStream, LinksReadingAStreamToRePlan,
+    mark_this_thread_as_a_processor_execution_thread, the_cut_of_a_link_reading_another_stream,
+};
 #[allow(clippy::module_inception)]
 mod runtime;
 mod runtime_crash_pinned_on_a_stream;
-pub(crate) mod runtime_name;
 mod runtime_shutdown_request;
 mod runtime_unique_id;
-mod stated_configuration_value;
 mod status;
 mod stream_actions_of_this_runtime;
 mod stream_environment;
@@ -53,6 +57,10 @@ pub(crate) use helper_process_group_registry::{
 };
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use loaded_stream_output_port_exposure::ExposedOutputPortReaderRegistration;
+pub(crate) use loaded_stream_output_port_exposure::{
+    ReaderRegisteredOnAGraph, register_a_reader_on_this_graph,
+};
+pub use machine_name::MachineName;
 pub use machine_state_directory::{
     KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord, KeptStreamRecordReadFailure,
     KeptStreamRecordsInTheStateDirectory, OwnerExposureRuling,
@@ -77,7 +85,6 @@ pub(crate) use runtime_crash_pinned_on_a_stream::{
     mark_this_thread_as_working_for, pin_the_runtimes_crash_on_each_stream,
     pin_the_runtimes_crash_on_no_stream,
 };
-pub use runtime_name::RuntimeName;
 #[cfg(test)]
 pub(crate) use runtime_shutdown_request::TheMachinesShutdownEscalationClearedOnDrop;
 pub(crate) use runtime_shutdown_request::escalate_the_machines_shutdown_for_a_delivered_signal;

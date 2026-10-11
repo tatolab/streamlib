@@ -35,14 +35,6 @@ fn the_retired_verbs_and_flags_are_usage_errors() {
             "unexpected argument '--node'",
         ),
         (
-            &["run", "--runtime-name", "rig"][..],
-            "unexpected argument '--runtime-name'",
-        ),
-        (
-            &["dev", "--runtime-name", "rig"][..],
-            "unexpected argument '--runtime-name'",
-        ),
-        (
             &["logs", "Rabc", "--count", "4"][..],
             "unexpected argument '--count'",
         ),

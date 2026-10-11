@@ -8,7 +8,7 @@ Nothing here imports `tatolab.runtime`: the plain HTTP routes (`/health`,
 socket, and MCP is the official MCP Python SDK's streamable-HTTP client over the
 same socket. One runtime holds every stream loaded into it, so a route or wait
 about one stream's graph names that stream; `/api/graph` without one answers
-`{"runtime_name", "streams": [...]}`. A graph's nodes carry their state at
+`{"machine", "streams": [...]}`. A graph's nodes carry their state at
 `components["state"]`, its links at `state`.
 """
 
@@ -105,7 +105,7 @@ class LocalApiClient:
 
     def graph(self, stream: "str | None" = None) -> "dict[str, Any]":
         """`GET /api/graph`: the stream's live graph — its nodes, links, exposures
-        and the runtime's name — or, with no stream, `{"runtime_name", "streams"}`."""
+        and the machine's name — or, with no stream, `{"machine", "streams"}`."""
         if stream is None:
             return self.get_json("/api/graph")
         return self.get_json(f"/api/graph?stream={urllib.parse.quote(stream, safe='')}")
@@ -253,3 +253,68 @@ class LocalApiClient:
                 )
             time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
         return f"still {link['state'] if link else 'absent'} after {timeout}s"
+
+    def links_reading(self, source: "dict[str, str]", *, stream: str) -> "list[dict[str, Any]]":
+        """The links of `stream` whose source renders as `source`: `{node, port}`
+        in the stream, `{stream, node, port}` in another stream on this machine."""
+        return [link for link in self.graph(stream)["links"] if link["source"] == source]
+
+    def await_link_reading(
+        self,
+        source: "dict[str, str]",
+        wanted_state: str,
+        *,
+        stream: str,
+        timeout: float = LINK_STATE_TIMEOUT_SECONDS,
+    ) -> "dict[str, Any]":
+        """Poll `stream`'s graph until its one link reading `source` is in
+        `wanted_state`, and return that link.
+
+        A link that reaches `error` instead is returned as it stands, so the
+        caller's assertion carries its `error_reason`; past the timeout raises
+        naming what the stream's links read last.
+        """
+        deadline = time.monotonic() + timeout
+        links_reading_the_source: "list[dict[str, Any]]" = []
+        while True:
+            links_reading_the_source = self.links_reading(source, stream=stream)
+            if len(links_reading_the_source) == 1 and links_reading_the_source[0]["state"] in (
+                wanted_state,
+                LINK_ERROR_STATE,
+            ):
+                return links_reading_the_source[0]
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"no one link of `{stream}` reading {source} was {wanted_state} within "
+                    f"{timeout}s: {links_reading_the_source}"
+                )
+            time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
+
+    def await_link_gone(
+        self, link_id: str, *, stream: str, timeout: float = LINK_STATE_TIMEOUT_SECONDS
+    ) -> float:
+        """Poll `stream`'s graph until it no longer holds `link_id`, and return
+        the seconds that took; past the timeout raises naming the link as it stands."""
+        started = time.monotonic()
+        while True:
+            link = next(
+                (each for each in self.graph(stream)["links"] if each["id"] == link_id), None
+            )
+            waited = time.monotonic() - started
+            if link is None:
+                return waited
+            if waited >= timeout:
+                raise AssertionError(
+                    f"`{stream}` still held the link {link_id} {timeout}s on: {link}"
+                )
+            time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
+
+    def connect(self, **connect_tool_arguments: str) -> "dict[str, Any]":
+        """MCP `connect`, named by the tool's own arguments — `stream`, `from_node`,
+        `from_port`, `to_node`, `to_port`, and `from_stream` for a source in another
+        stream on this machine; returns `{link_id, state}` and any reason it carries."""
+        return self.call_tool("connect", connect_tool_arguments)
+
+    def connect_refusal(self, **connect_tool_arguments: str) -> str:
+        """MCP `connect` that must be refused, named as `connect` is; returns why."""
+        return self.call_tool_refusal("connect", connect_tool_arguments)

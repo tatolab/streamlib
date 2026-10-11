@@ -39,7 +39,8 @@ in a few lines; a native runtime runs it on your machine, and you and your agent
   one when an edit fails to compile.
 
 > **Alpha.** APIs will change. The runtime has no installer yet — you build it from a checkout of
-> this repository — and one runtime runs one stream. See [what ships today](#what-ships-today).
+> this repository — and one runtime per machine runs every stream on it. See
+> [what ships today](#what-ships-today).
 
 ## Built for
 
@@ -163,8 +164,28 @@ after its class, lowercased (`invertingeffect`), unless you pass `name=`. A buil
 a `TypedDict` — `CameraSourceConfig`, `DisplayWindowConfig` — so a type checker catches a
 misspelled key. `expose` makes an output private, readable by other streams and code on this
 machine; `expose(output, Exposure.PUBLIC)`, with `Exposure` imported from `tatolab.stream`, makes
-it public, readable off the machine too. Reading an exposed port from outside its stream is not
-built yet.
+it public, readable off the machine too.
+
+Another stream on this machine reads that output by its address, `<stream>/<node>/<port>`:
+
+```python
+@stream
+def recorder(stream_builder: StreamBuilder) -> None:
+    window = stream_builder.add(DisplayWindow)
+    stream_builder.connect(
+        stream_builder.remote_output("main/invertingeffect/video_to_downstream"),
+        window.input("video"),
+    )
+```
+
+The link belongs to the stream that holds its input, which pulls it; no stream links into
+another's input. The port must be private or public: a live `connect` to one left internal is
+refused naming the port and its level. A link whose source stream is not loaded or not started yet
+reads `awaiting_remote` in `graph`, naming the stream it waits for, and wires when that stream
+starts. A link loaded while its source port is internal waits too, naming the port and its level,
+and wires the moment `tatolab expose` makes the port private or public. Lowering the port to
+internal with `tatolab expose --remove` removes the link at once, and nothing restarts. An address
+naming another machine is refused: links between machines arrive with sharing.
 
 Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
 
@@ -249,12 +270,12 @@ tatolab rm STREAM
 tatolab expose STREAM NODE PORT [--public | --remove]
 
 tatolab graph [--stream STREAM]
-tatolab tap CHANNEL --stream STREAM [--count N] [--max-bag-bytes BYTES]
+tatolab tap CHANNEL [--stream STREAM] [--count N] [--max-bag-bytes BYTES]
 tatolab logs (--stream STREAM | RUNTIME_ID-STREAM) [-f | --follow] [--processor ID] [--pipeline ID]
              [--rhi] [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
 tatolab logs --list
 tatolab exchange SURFACE_ID --out DIR
-tatolab exchange --channel CHANNEL --stream STREAM [--count N] [--every N] [--field NAME] --out DIR
+tatolab exchange --channel CHANNEL [--stream STREAM] [--count N] [--every N] [--field NAME] --out DIR
 tatolab mcp
 
 tatolab enable-virtual-camera [--print]
@@ -285,12 +306,13 @@ tatolab enable-virtual-camera [--print]
   its stream). A reader the new level no longer allows is cut at once. On a kept stream the level
   is recorded and wins over what the stream function exposes, across restarts.
 - **`graph`** prints every loaded stream's nodes, ports, links and exposed ports as JSON, with each
-  node's and link's state and counters, under the runtime's name as `runtime_name`; `--stream`
-  prints one stream's graph alone, in the shape a load takes. The runtime's name defaults to
-  `<host>-<the directory tatolabd started in>-<id>`; `STREAMLIB_RUNTIME_NAME` in `tatolabd`'s
-  environment sets it.
-- **`tap`** samples the raw bags one output port of `--stream` carries. The channel is
-  `<runtime_name>/<node>/<port>`, spelled as `graph` names them. The sample is bounded and never
+  node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
+  one stream's graph alone, in the shape a load takes. The machine's name is its tailnet name, read
+  from the local Tailscale's status when `tatolabd` starts, or its hostname when it has no tailnet,
+  less a trailing mDNS `.local`, cast to lowercase URL-safe.
+- **`tap`** samples the raw bags one output port carries. The channel is the port's address,
+  `<stream>/<node>/<port>` as `graph` names them — `<node>/<port>` with `--stream`, or
+  `<machine>/<stream>/<node>/<port>` naming this machine. The sample is bounded and never
   blocks the producer: a quiet port returns a partial sample rather than hanging, and
   `--max-bag-bytes` raises the per-bag cap when a bag comes back flagged as truncated.
 - **`logs --stream`** reads a loaded stream's records from the runtime, rendered the way the runtime
@@ -300,7 +322,7 @@ tatolab enable-virtual-camera [--print]
   `RUNTIME_ID-STREAM` renders one. The other flags filter what either shows.
 - **`exchange`** turns a published surface id (`<slot>#<generation>`, as a bag carries it) into that
   frame's exact, full-resolution PNG in `--out`, and prints each written path on stdout. With
-  `--channel` and `--stream` it taps the port, reads the id from each sampled bag (the `surface_id`
+  `--channel` it taps the port, reads the id from each sampled bag (the `surface_id`
   field unless `--field` names another) and exchanges `--count` frames, every `--every`th bag — no
   window in the graph and no display server in the path.
 - **`mcp`** connects an MCP host to the runtime over its own stdin and stdout; see below.
@@ -320,12 +342,12 @@ Run these on the machine the stream runs on. They reach the runtime through its 
 Unix socket only your user can open — so control is reachable only on that machine.
 
 ```console
-$ tatolab graph | jq -r .runtime_name
-desk-home-8kq3
+$ tatolab graph | jq -r .machine
+desk
 
-$ tatolab tap desk-home-8kq3/invertingeffect/video_to_downstream --stream main --count 3
+$ tatolab tap main/invertingeffect/video_to_downstream --count 3
 {
-  "channel": "desk-home-8kq3/invertingeffect/video_to_downstream",
+  "channel": "main/invertingeffect/video_to_downstream",
   "requested": 3,
   "received": 3,
   "window_ms": 500,
@@ -339,7 +361,7 @@ $ tatolab tap desk-home-8kq3/invertingeffect/video_to_downstream --stream main -
 ```
 
 `tap` returns what the link really carried.
-`tatolab exchange --channel <that channel> --stream main --count 2 --out frames/` writes two of those frames as
+`tatolab exchange --channel <that channel> --count 2 --out frames/` writes two of those frames as
 PNGs and prints their paths, so you see the pixels of a mid-graph port without adding a window to
 the graph. `logs` reads what every node logged, Rust and Python alike.
 
@@ -362,7 +384,8 @@ host's connection.
 The tools are `graph`, `tap`, `logs` and `exchange` to observe; `add_node`, `connect`, `disconnect`
 and `remove_node` to change a running graph; and `run_stream`, `stop_stream`, `start_stream`,
 `remove_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds. Every tool
-about one stream names it with `stream`. Beside them the runtime serves the node catalog — every
+about one stream names it with `stream`; `connect` makes a link in the stream that holds its input,
+and takes its source from another stream on this machine with `from_stream`. Beside them the runtime serves the node catalog — every
 node type it can add, with its description, config schema and ports — and the live graph as
 resources, and four prompts whose every step is a tool call. An agent can write a
 node class into a module beside `stream.py`, or `uv add` a package that ships one, then add it by

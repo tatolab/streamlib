@@ -319,8 +319,8 @@ impl AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt {
 impl OperationsOnTheStreamsLoadedInThisRuntime
     for AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt
 {
-    fn this_runtimes_name(&self) -> &str {
-        self.engine.this_runtimes_name()
+    fn this_machines_name(&self) -> &streamlib::sdk::runtime::MachineName {
+        self.engine.this_machines_name()
     }
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
@@ -416,6 +416,19 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             self.engine.as_ref(),
             stream_name,
             stream_tag,
+        )
+    }
+    fn connect_from_another_stream(
+        &self,
+        stream_name: &str,
+        source: streamlib::sdk::graph::OutputPortInAnotherStreamOnThisMachine,
+        to: streamlib::sdk::graph::InputLinkPortRef,
+    ) -> Result<streamlib::sdk::graph::LinkUniqueId> {
+        OperationsOnTheStreamsLoadedInThisRuntime::connect_from_another_stream(
+            self.engine.as_ref(),
+            stream_name,
+            source,
+            to,
         )
     }
     fn exchange_published_surface_id_for_png_image_bytes_async(

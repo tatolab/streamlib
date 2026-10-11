@@ -358,7 +358,7 @@ pub(crate) mod tests {
             .send_tool_call(
                 1,
                 "tap",
-                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet", "count": 5 }),
+                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet/video", "count": 5 }),
             )
             .await;
         lines.send_tool_call(2, "graph", json!({})).await;
@@ -380,7 +380,7 @@ pub(crate) mod tests {
             .send_tool_call(
                 1,
                 "tap",
-                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet", "count": 5 }),
+                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet/video", "count": 5 }),
             )
             .await;
         lines
@@ -414,7 +414,7 @@ pub(crate) mod tests {
             .send_tool_call(
                 1,
                 "tap",
-                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet", "count": 5 }),
+                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet/video", "count": 5 }),
             )
             .await;
         lines.to_the_node.shutdown().await.unwrap();

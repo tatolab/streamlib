@@ -407,8 +407,18 @@ fn spawn_dedicated_thread(
                 tracing::info!("[{}] Setup completed successfully", proc_id_clone);
             }
 
-            // Update state to Running
-            state_arc.transition_to(ProcessorState::Running);
+            {
+                // Read under the graph lock that a pause or a resume of this
+                // processor holds while it flips the gate and its state.
+                let _no_pause_or_resume_between_the_gate_and_the_state = graph_arc_clone.read();
+                state_arc.transition_to(
+                    if pause_gate_inner.load(std::sync::atomic::Ordering::Acquire) {
+                        ProcessorState::Paused
+                    } else {
+                        ProcessorState::Running
+                    },
+                );
+            }
 
             // === PHASE 5: Process loop ===
             tracing::trace!(

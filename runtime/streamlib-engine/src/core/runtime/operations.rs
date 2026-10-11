@@ -83,16 +83,17 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Attach a read-only tap to a named channel, streaming its raw bags.
     ///
-    /// `channel` is the port's address, `<runtime name>/<node>/<port>` — this
-    /// runtime's own name for a port on one of its nodes; `count` bounds the tap to that
+    /// `channel` is the port's address, `[<machine>/][<stream>/]<node>/<port>`,
+    /// naming a port of this stream on this machine; `count` bounds the tap to that
     /// many bags then ends, `None` streams live until the returned
     /// [`TapSubscription`] is dropped. The tap takes a subscriber slot on the
     /// channel with no publisher re-open; the channel reserves one slot beyond
     /// its destination cap, but iceoryx2 counts slots rather than naming them,
     /// so an attach fails with [`Error::TapSlotOccupied`] only once every slot
     /// is held. An unwired / unknown channel fails with
-    /// [`Error::TapChannelNotFound`], and an address naming another runtime
-    /// with [`Error::InvalidPortAddress`].
+    /// [`Error::TapChannelNotFound`], an address naming another machine with
+    /// [`Error::PortAddressNamesAnotherMachine`], and one naming another stream
+    /// or not parsing with [`Error::InvalidPortAddress`].
     ///
     /// There is no sync variant: a tap yields a live streaming handle, not a
     /// one-shot result, so blocking on it is never the intent. Host-side only —
@@ -103,6 +104,7 @@ pub trait RuntimeOperations: Send + Sync {
     /// [`Error::TapSlotOccupied`]: crate::core::error::Error::TapSlotOccupied
     /// [`Error::TapChannelNotFound`]: crate::core::error::Error::TapChannelNotFound
     /// [`Error::InvalidPortAddress`]: crate::core::error::Error::InvalidPortAddress
+    /// [`Error::PortAddressNamesAnotherMachine`]: crate::core::error::Error::PortAddressNamesAnotherMachine
     /// [`Error::NotSupported`]: crate::core::error::Error::NotSupported
     fn tap_async(
         &self,
@@ -145,13 +147,6 @@ pub trait RuntimeOperations: Send + Sync {
     /// This is a blocking wrapper around [`disconnect_async`]. Do not call
     /// from within a tokio task - use the async variant instead.
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()>;
-
-    // =========================================================================
-    // Identity
-    // =========================================================================
-
-    /// The name the runtime this stream is loaded in gives its tap channels.
-    fn this_runtimes_name(&self) -> &str;
 
     // =========================================================================
     // Lifecycle

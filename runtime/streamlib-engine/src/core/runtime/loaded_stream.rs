@@ -29,7 +29,8 @@ use crate::core::context::{
 };
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
-    ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
+    OutputPortInAnotherStreamOnThisMachine, ProcessorPauseGateComponent, ProcessorUniqueId,
+    StateComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::logging::{LoadedStreamLogRecordsPage, LoadedStreamLogRoute};
@@ -141,6 +142,41 @@ impl TheEndOfOneLoadedStream {
         *self.how_it_ended.lock() = Some(how_it_ended);
         self.has_ended.notify_all();
     }
+
+    fn is_recorded(&self) -> bool {
+        self.how_it_ended.lock().is_some()
+    }
+}
+
+/// A stream taken out of the stream table, kept by the engine until its end is
+/// recorded so a wait for every stream's end sees the stream between the two.
+/// The stream is held weakly: the thread ending it still lets go of it before
+/// it records the end.
+pub(crate) struct LoadedStreamOutOfTheTableUntilItsEndIsRecorded {
+    stream: Weak<LoadedStreamInThisRuntime>,
+    the_end_of_this_stream: Arc<TheEndOfOneLoadedStream>,
+}
+
+impl LoadedStreamOutOfTheTableUntilItsEndIsRecorded {
+    /// `stream`, as it leaves the stream table.
+    pub(crate) fn leaving_the_table(stream: &Arc<LoadedStreamInThisRuntime>) -> Self {
+        Self {
+            stream: Arc::downgrade(stream),
+            the_end_of_this_stream: Arc::clone(&stream.the_end_of_this_stream),
+        }
+    }
+
+    /// Whether the stream's end is recorded.
+    pub(crate) fn has_its_end_recorded(&self) -> bool {
+        self.the_end_of_this_stream.is_recorded()
+    }
+
+    /// The stream, while anything still holds it.
+    pub(crate) fn stream_while_anything_still_holds_it(
+        &self,
+    ) -> Option<Arc<LoadedStreamInThisRuntime>> {
+        self.stream.upgrade()
+    }
 }
 
 /// How a loaded stream ended.
@@ -205,14 +241,15 @@ impl LoadedStreamInThisRuntime {
         );
 
         let shutdown_escalation = ShutdownEscalationOfOneStream::default();
-        let this_streams_identity_and_handles = Arc::new(LoadedStreamARuntimeContextBelongsTo {
-            identity: loaded_stream_identity.clone(),
-            project_directory: Arc::from(project_directory.as_path()),
-            shutdown_escalation: shutdown_escalation.clone(),
-            teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
-            log_route: Arc::clone(&log_route),
-        });
         Ok(Arc::new_cyclic(|this_stream| Self {
+            this_streams_identity_and_handles: Arc::new(LoadedStreamARuntimeContextBelongsTo {
+                identity: loaded_stream_identity.clone(),
+                project_directory: Arc::from(project_directory.as_path()),
+                shutdown_escalation: shutdown_escalation.clone(),
+                teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
+                log_route: Arc::clone(&log_route),
+                this_stream: this_stream.clone(),
+            }),
             processor_interpreter_launch_record: Arc::new(
                 ProcessorInterpreterLaunchRecordOfOneStream::new(
                     loaded_stream_identity.clone(),
@@ -225,7 +262,6 @@ impl LoadedStreamInThisRuntime {
                 ),
             ),
             node_types_this_stream_resolves,
-            this_streams_identity_and_handles,
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
@@ -403,7 +439,6 @@ impl LoadedStreamInThisRuntime {
             gpu,
             time,
             Arc::clone(&engine.runtime_id),
-            Arc::clone(&engine.runtime_name),
             this_stream_as_its_runtime_operations,
             engine.tokio_runtime_variant.handle(),
             engine.iceoryx2_node.clone(),
@@ -690,7 +725,7 @@ impl LoadedStreamInThisRuntime {
 
     /// Whether this stream has ended: shut down and out of the stream table.
     pub fn has_ended(&self) -> bool {
-        self.the_end_of_this_stream.how_it_ended.lock().is_some()
+        self.the_end_of_this_stream.is_recorded()
     }
 
     /// Block for at most `budget` until this stream has ended, saying whether
@@ -812,13 +847,13 @@ impl LoadedStreamInThisRuntime {
     /// Export this stream's graph as JSON: topology, processor states,
     /// metrics and buffer levels.
     pub fn to_json(&self) -> Result<serde_json::Value> {
-        let runtime_name = self
+        let machine_name = self
             .engine_resources_shared_by_every_stream
-            .runtime_name
-            .as_str()
+            .machine_name
+            .name()
             .to_string();
         self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(graph.to_graph_response(runtime_name))
+            serde_json::to_value(graph.to_graph_response(machine_name))
                 .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }
@@ -852,8 +887,9 @@ impl LoadedStreamInThisRuntime {
                 .clone_inner()
                 .store(true, std::sync::atomic::Ordering::Release);
 
+            // One still in setup takes the gate's state when its setup returns.
             if let Some(state) = node.get::<StateComponent>() {
-                state.transition_to(ProcessorState::Paused);
+                state.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused);
             }
 
             let event = Event::processor(processor_id, ProcessorEvent::Paused);
@@ -890,7 +926,7 @@ impl LoadedStreamInThisRuntime {
                 .store(false, std::sync::atomic::Ordering::Release);
 
             if let Some(state) = node.get::<StateComponent>() {
-                state.transition_to(ProcessorState::Running);
+                state.transition_to_only_from(ProcessorState::Paused, ProcessorState::Running);
             }
 
             let event = Event::processor(processor_id, ProcessorEvent::Resumed);
@@ -951,15 +987,15 @@ impl LoadedStreamInThisRuntime {
     // Whole-stream pause/resume
     // =========================================================================
 
-    /// Pause every processor in this stream.
+    /// Pause every processor in this stream; one a compile prepares while it
+    /// is paused starts paused.
     pub fn pause(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         *self.status.lock() = RuntimeStatus::Pausing;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimePausing);
 
-        let processor_ids: Vec<ProcessorUniqueId> = self
-            .compiler
-            .scope(|graph, _tx| graph.traversal().v(()).ids());
+        let processor_ids =
+            self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Paused);
 
         let mut failures = Vec::new();
         for processor_id in &processor_ids {
@@ -968,10 +1004,6 @@ impl LoadedStreamInThisRuntime {
                 failures.push((processor_id.clone(), e));
             }
         }
-
-        self.compiler.scope(|graph, _tx| {
-            graph.set_state(GraphState::Paused);
-        });
 
         *self.status.lock() = RuntimeStatus::Paused;
         if failures.is_empty() {
@@ -984,15 +1016,35 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
-    /// Resume every processor in this stream.
+    /// Set this stream's graph state to `graph_state` and take the id of every
+    /// processor a compile prepared, under one graph lock: a processor prepared
+    /// after it takes its pause gate from `graph_state`, and one prepared
+    /// before it is in the ids.
+    fn set_the_graph_state_and_take_every_prepared_processor_id(
+        &self,
+        graph_state: GraphState,
+    ) -> Vec<ProcessorUniqueId> {
+        self.compiler.scope(|graph, _tx| {
+            graph.set_state(graph_state);
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .filter(|node| node.has::<ProcessorPauseGateComponent>())
+                .map(|node| node.id.clone())
+                .collect()
+        })
+    }
+
+    /// Resume every processor in this stream, then compile every graph change
+    /// logged while it was paused.
     pub fn resume(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         *self.status.lock() = RuntimeStatus::Starting;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResuming);
 
-        let processor_ids: Vec<ProcessorUniqueId> = self
-            .compiler
-            .scope(|graph, _tx| graph.traversal().v(()).ids());
+        let processor_ids =
+            self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Running);
 
         let mut failures = Vec::new();
         for processor_id in &processor_ids {
@@ -1002,11 +1054,13 @@ impl LoadedStreamInThisRuntime {
             }
         }
 
-        self.compiler.scope(|graph, _tx| {
-            graph.set_state(GraphState::Running);
-        });
-
         *self.status.lock() = RuntimeStatus::Started;
+        let committed = match self.runtime_context.lock().clone() {
+            Some(this_streams_runtime_context) => {
+                self.compiler.commit(&this_streams_runtime_context)
+            }
+            None => Ok(()),
+        };
         if failures.is_empty() {
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResumed);
         } else {
@@ -1014,7 +1068,7 @@ impl LoadedStreamInThisRuntime {
                 error: format!("{} processor(s) rejected resume", failures.len()),
             });
         }
-        Ok(())
+        committed
     }
 
     // =========================================================================
@@ -1024,8 +1078,10 @@ impl LoadedStreamInThisRuntime {
     /// Load `graph` into this stream, which is not in the stream table yet:
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
-    /// resolves, each node added under its name, each link connected by name,
-    /// and each exposure put at its level in the stream's live exposure map.
+    /// resolves, each node added under its name, each link connected by name —
+    /// one whose source is in another stream on this machine by that stream's
+    /// name too — and each exposure put at its level in the stream's live
+    /// exposure map.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
@@ -1037,7 +1093,11 @@ impl LoadedStreamInThisRuntime {
                 graph.nodes.iter().map(|node| &node.processor_type),
                 lend_directory,
             )?;
-        graph.validate(&self.node_types_this_stream_resolves)?;
+        graph.validate(
+            &self.node_types_this_stream_resolves,
+            self.stream_name(),
+            &self.engine_resources_shared_by_every_stream.machine_name,
+        )?;
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
@@ -1056,10 +1116,30 @@ impl LoadedStreamInThisRuntime {
         };
 
         for link in &graph.links {
-            self.connect(
-                OutputLinkPortRef::new(processor_id_of(&link.source.node)?, &link.source.port),
-                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port),
-            )?;
+            let target =
+                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port);
+            let source = link.source.the_port_address_it_names()?;
+            match source.the_stream_it_names_other_than(self.stream_name()) {
+                Some(source_stream) => {
+                    self.connect_from_an_output_port_in_another_stream(
+                        OutputPortInAnotherStreamOnThisMachine::new(
+                            source_stream,
+                            source.node_name(),
+                            source.port_name(),
+                        )?,
+                        target,
+                    )?;
+                }
+                None => {
+                    self.connect(
+                        OutputLinkPortRef::new(
+                            processor_id_of(source.node_name())?,
+                            source.port_name(),
+                        ),
+                        target,
+                    )?;
+                }
+            }
         }
 
         for exposed in &graph.exposed {

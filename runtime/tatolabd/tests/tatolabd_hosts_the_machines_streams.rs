@@ -19,29 +19,137 @@ use common::{
     call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_mode_of,
 };
 
-/// `STREAMLIB_RUNTIME_NAME` names the runtime until the machine is named, and
-/// `graph` with no stream renders it over every loaded stream — none here.
+/// A `tailscale` standing in for the Tailscale CLI, alone in a directory a
+/// test puts on `PATH`, writing `status_json` for any arguments with the
+/// shell's own `printf`, since nothing else is on that `PATH`.
+fn a_directory_holding_a_tailscale_cli_writing(
+    machine_root: &TatolabTestMachineRoot,
+    status_json: &serde_json::Value,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let status_json = status_json.to_string();
+    assert!(
+        !status_json.contains('\''),
+        "the stub quotes the status in single quotes"
+    );
+    let directory = machine_root.path().join("path-with-a-stub-tailscale");
+    std::fs::create_dir_all(&directory).unwrap();
+    let tailscale_cli = directory.join("tailscale");
+    std::fs::write(
+        &tailscale_cli,
+        format!("#!/bin/sh\nprintf '%s' '{status_json}'\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&tailscale_cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+    wait_until_no_forked_child_holds_the_stub_open_for_writing(&tailscale_cli);
+    directory
+}
+
+/// Returns once `stub` starts. A child another test thread forked while the
+/// stub was open for writing holds that descriptor until its own exec, and
+/// until then the kernel refuses to exec the stub with `ETXTBSY`; once one
+/// start succeeds no copy is left, since the writer closed its own.
+fn wait_until_no_forked_child_holds_the_stub_open_for_writing(stub: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match std::process::Command::new(stub)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut started_stub) => {
+                let _ = started_stub.kill();
+                let _ = started_stub.wait();
+                return;
+            }
+            Err(not_started)
+                if not_started.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(not_started) => panic!("the stub {} starts: {not_started}", stub.display()),
+        }
+    }
+}
+
+/// This machine's hostname: the kernel's UTS node name, which `gethostname`
+/// returns on Linux.
+#[cfg(target_os = "linux")]
+fn this_hosts_name() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .expect("the test host reports a hostname")
+        .trim_end_matches('\n')
+        .to_string()
+}
+
+/// What `/api/graph` answers a `tatolabd` started with `path` as its `PATH`.
+fn the_machine_wide_graph_with_path(
+    machine_root: &TatolabTestMachineRoot,
+    runtime_unit: &TemporaryRuntimeUnit,
+    path: &std::path::Path,
+) -> serde_json::Value {
+    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
+    tatolabd_command.env("PATH", path);
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
+    let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
+    runtime.interrupt_and_expect_a_clean_exit();
+    graph
+}
+
+/// On a tailnet the machine is named by its tailnet name, and `graph` with no
+/// stream renders it over every loaded stream — none here.
 #[test]
-fn the_local_api_at_the_fixed_socket_answers_graph_with_the_runtime_name_and_no_streams() {
+fn on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
-    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
-    tatolabd_command.env(
-        "STREAMLIB_RUNTIME_NAME",
-        "tatolabd-named-from-the-environment",
+    let path = a_directory_holding_a_tailscale_cli_writing(
+        &machine_root,
+        &serde_json::json!({
+            "BackendState": "Running",
+            "Self": { "HostName": "Desk", "DNSName": "desk.tail2950db.ts.net." },
+        }),
     );
-    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
-
-    let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
 
     assert_eq!(
-        graph,
-        serde_json::json!({
-            "runtime_name": "tatolabd-named-from-the-environment",
-            "streams": [],
-        })
+        the_machine_wide_graph_with_path(&machine_root, &runtime_unit, &path),
+        serde_json::json!({ "machine": "desk", "streams": [] })
     );
-    runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// With Tailscale stopped, or with no Tailscale at all, the machine is named
+/// by its hostname, cast.
+///
+/// Linux only: on macOS the runtime also reads the Tailscale app's own CLI,
+/// which is found whatever `PATH` says.
+#[cfg(target_os = "linux")]
+#[test]
+fn with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let the_hostname_cast =
+        streamlib::sdk::runtime::MachineName::from_a_hostname(&this_hosts_name())
+            .expect("the test host's hostname names something")
+            .name()
+            .to_string();
+    let stopped = a_directory_holding_a_tailscale_cli_writing(
+        &machine_root,
+        &serde_json::json!({
+            "BackendState": "Stopped",
+            "Self": { "DNSName": "desk.tail2950db.ts.net." },
+        }),
+    );
+    let holding_no_tailscale = machine_root.path().join("path-with-no-tailscale");
+    std::fs::create_dir_all(&holding_no_tailscale).unwrap();
+
+    for path in [stopped, holding_no_tailscale] {
+        assert_eq!(
+            the_machine_wide_graph_with_path(&machine_root, &runtime_unit, &path),
+            serde_json::json!({ "machine": the_hostname_cast, "streams": [] }),
+            "PATH {path:?}"
+        );
+    }
 }
 
 #[test]

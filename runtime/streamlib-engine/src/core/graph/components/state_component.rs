@@ -76,6 +76,22 @@ impl ObservableProcessorState {
         self.changed.notify_all();
     }
 
+    /// Move the processor to `state` only while it is in `only_from`, and wake
+    /// everything waiting on it; whether it moved.
+    pub fn transition_to_only_from(
+        &self,
+        only_from: ProcessorState,
+        state: ProcessorState,
+    ) -> bool {
+        let mut current = self.current.lock();
+        if *current != only_from {
+            return false;
+        }
+        *current = state;
+        self.changed.notify_all();
+        true
+    }
+
     /// Block until the processor's `setup` has resolved, one way or the other,
     /// giving up at `deadline`. Returns the state it settled on.
     ///
@@ -116,6 +132,16 @@ impl StateComponent {
     /// Move the processor to `Error` with the reason kept for whoever asks.
     pub fn fail_with(&self, reason: impl Into<String>) {
         self.0.fail_with(reason);
+    }
+
+    /// Move the processor to `state` only while it is in `only_from`; whether
+    /// it moved.
+    pub fn transition_to_only_from(
+        &self,
+        only_from: ProcessorState,
+        state: ProcessorState,
+    ) -> bool {
+        self.0.transition_to_only_from(only_from, state)
     }
 
     /// Share the state with a thread that will drive or observe it.
@@ -240,6 +266,27 @@ mod tests {
         let clean = ObservableProcessorState::new(ProcessorState::Running);
         clean.transition_to_unless_already_failed(ProcessorState::Stopped);
         assert_eq!(clean.current(), ProcessorState::Stopped);
+    }
+
+    /// A pause or a resume moves only a processor whose setup ran: one still
+    /// in setup, or one that failed, keeps the state it is in.
+    #[test]
+    fn a_transition_only_from_a_state_leaves_every_other_state_alone() {
+        let running = ObservableProcessorState::new(ProcessorState::Running);
+        assert!(running.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused));
+        assert_eq!(running.current(), ProcessorState::Paused);
+
+        for kept in [
+            ProcessorState::Idle,
+            ProcessorState::Error,
+            ProcessorState::Stopping,
+        ] {
+            let state = ObservableProcessorState::new(kept);
+            assert!(
+                !state.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused)
+            );
+            assert_eq!(state.current(), kept);
+        }
     }
 
     /// A processor that never starts gives the caller back the state it is

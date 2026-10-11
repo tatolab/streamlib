@@ -87,6 +87,12 @@ impl Graph {
         TraversalSource::new(&self.digraph)
     }
 
+    /// The petgraph digraph itself, for a test of what reads it whole.
+    #[cfg(test)]
+    pub(crate) fn petgraph_digraph_for_a_test(&self) -> &DiGraph<ProcessorNode, Link> {
+        &self.digraph
+    }
+
     /// Start a mutable traversal on the graph.
     pub fn traversal_mut(&mut self) -> TraversalSourceMut<'_> {
         TraversalSourceMut::new(&mut self.digraph, &self.node_types_this_stream_resolves)
@@ -160,8 +166,9 @@ impl std::fmt::Display for Graph {
 }
 
 impl Graph {
-    /// Render this graph as the `/api/graph` payload.
-    pub(crate) fn to_graph_response(&self, runtime_name: String) -> GraphResponse {
+    /// Render this graph as the `/api/graph` payload, on the machine named
+    /// `machine`.
+    pub(crate) fn to_graph_response(&self, machine: String) -> GraphResponse {
         let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
         GraphResponse {
             stream: self.loaded_stream_name.clone(),
@@ -190,15 +197,17 @@ impl Graph {
                         })
                 })
                 .collect(),
-            runtime_name,
+            machine,
         }
     }
 }
 
-/// The node `node_name` names once cast, refused by name — listing the nodes
-/// `graph` holds — when there is none.
+/// The node `node_name` names once cast in `graph`, the graph of the stream
+/// `stream_name`, refused by name — listing the nodes it holds — when there is
+/// none.
 pub(crate) fn node_named_or_refused<'graph>(
     graph: &'graph Graph,
+    stream_name: &str,
     node_name: &str,
 ) -> crate::core::Result<&'graph crate::core::graph::ProcessorNode> {
     graph
@@ -207,7 +216,8 @@ pub(crate) fn node_named_or_refused<'graph>(
         .first()
         .ok_or_else(|| {
             crate::core::Error::ProcessorNotFound(format!(
-                "no node in this stream is named {node_name:?}. This stream holds: {}",
+                "no node in the stream `{stream_name}` is named {node_name:?}. The stream \
+                 `{stream_name}` holds: {}",
                 node_names_listed_for_a_refusal(
                     graph
                         .traversal()

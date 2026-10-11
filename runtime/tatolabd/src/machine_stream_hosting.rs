@@ -47,7 +47,6 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     how_the_previous_run_ended: &HowThePreviousRuntimeRunEnded,
 ) -> ExitCode {
     let engine = match Runner::new_with_construction_options(RunnerConstructionOptions {
-        runtime_name: None,
         pretty_log_mirror_stream: PrettyLogMirrorStandardStream::StandardError,
         runtime_own_log_directory: Some(tatolab_state_directory.runtime_log_directory()),
     }) {

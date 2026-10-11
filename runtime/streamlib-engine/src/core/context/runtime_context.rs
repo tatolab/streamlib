@@ -15,8 +15,8 @@ use crate::core::graph::ProcessorUniqueId;
 use crate::core::logging::LoadedStreamLogRoute;
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::runtime::{
-    LoadedStreamTag, RuntimeName, RuntimeOperations, RuntimeUniqueId,
-    ShutdownEscalationOfOneStream, TeardownProgressNoteOfOneStream,
+    LoadedStreamTag, RuntimeOperations, RuntimeUniqueId, ShutdownEscalationOfOneStream,
+    TeardownProgressNoteOfOneStream,
 };
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -35,6 +35,9 @@ pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
     pub(crate) teardown_progress_note: TeardownProgressNoteOfOneStream,
     /// Where the records the stream's threads emit go.
     pub(crate) log_route: Arc<LoadedStreamLogRoute>,
+    /// The stream itself, held weakly so the context is never part of the
+    /// cycle its stop breaks.
+    pub(crate) this_stream: std::sync::Weak<crate::core::runtime::LoadedStreamInThisRuntime>,
 }
 
 #[derive(Clone)]
@@ -49,8 +52,6 @@ pub struct RuntimeContext {
     pub time: Arc<TimeContext>,
     /// Unique identifier for this runtime instance.
     runtime_id: Arc<RuntimeUniqueId>,
-    /// The name this runtime's tap channels carry.
-    runtime_name: Arc<RuntimeName>,
     /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
     /// The node's name — the one string `stream_builder.add`'s `NodeReference` and the
@@ -92,7 +93,6 @@ impl RuntimeContext {
         gpu: GpuContext,
         time: Arc<TimeContext>,
         runtime_id: Arc<RuntimeUniqueId>,
-        runtime_name: Arc<RuntimeName>,
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
         iceoryx2_node: Iceoryx2Node,
@@ -107,7 +107,6 @@ impl RuntimeContext {
             gpu,
             time,
             runtime_id,
-            runtime_name,
             processor_id: None,
             processor_display_name: None,
             pause_gate: None,
@@ -161,11 +160,6 @@ impl RuntimeContext {
         &self.runtime_id
     }
 
-    /// The name this runtime's tap channels carry.
-    pub fn runtime_name(&self) -> &RuntimeName {
-        &self.runtime_name
-    }
-
     /// The runtime directory this runtime resolved as it started.
     pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
         &self.runtime_directory
@@ -184,6 +178,13 @@ impl RuntimeContext {
     /// The process-unique tag of the stream this context serves.
     pub fn stream_tag(&self) -> LoadedStreamTag {
         self.loaded_stream.identity.stream_tag
+    }
+
+    /// The loaded stream this context serves, while it lives.
+    pub(crate) fn this_stream(
+        &self,
+    ) -> Option<Arc<crate::core::runtime::LoadedStreamInThisRuntime>> {
+        self.loaded_stream.this_stream.upgrade()
     }
 
     /// The runtime id and stream name this context's stream publishes its events under.
@@ -279,7 +280,6 @@ impl RuntimeContext {
             gpu: self.gpu.clone(),
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
-            runtime_name: Arc::clone(&self.runtime_name),
             processor_id: Some(processor_id),
             processor_display_name: self.processor_display_name.clone(),
             pause_gate: self.pause_gate.clone(),
@@ -304,7 +304,6 @@ impl RuntimeContext {
             gpu: self.gpu.clone(),
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
-            runtime_name: Arc::clone(&self.runtime_name),
             processor_id: self.processor_id.clone(),
             processor_display_name: self.processor_display_name.clone(),
             pause_gate: Some(pause_gate),
@@ -880,12 +879,6 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// iceoryx2 domain root.
     pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
         self.host_base().runtime_directory()
-    }
-
-    /// The name this runtime's tap channels carry — what
-    /// a control plane publishes and what a port address begins with.
-    pub fn runtime_name(&self) -> &RuntimeName {
-        self.host_base().runtime_name()
     }
 
     /// The URL-safe cast name of the stream this processor runs in.

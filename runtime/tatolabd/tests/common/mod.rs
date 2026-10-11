@@ -165,9 +165,7 @@ impl TatolabTestMachineRoot {
             .current_dir(self.path())
             .env("TATOLAB_TEST_MACHINE_ROOT", self.path())
             .env("STREAMLIB_HOME", self.path().join("home"))
-            .env_remove("STREAMLIB_RUNTIME_NAME")
             .env_remove("STREAMLIB_RUNTIME_ID")
-            .env_remove("STREAMLIB_APP_DIRECTORY")
             .env_remove("STREAMLIB_QUIET")
             .env_remove("STREAMLIB_DANGEROUSLY_DEFER_LOGGING_TO_HOST")
             .stdin(Stdio::null());

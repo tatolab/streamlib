@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::{Mutex, RwLock};
 
@@ -20,10 +21,13 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
-    OutOfProcessLinkWireRepliesComponent, ProcessorReadyBarrierHandle, ProcessorUniqueId,
+    LinkUniqueId, OutOfProcessLinkWireRepliesComponent, ProcessorReadyBarrierHandle,
+    ProcessorUniqueId,
 };
 use crate::core::processors::NodeTypesOneStreamResolves;
-use crate::core::pubsub::RuntimeEvent;
+use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
+use crate::core::runtime::{LinksReadingAStreamToRePlan, LoadedStreamInThisRuntime};
+use crate::iceoryx2::Iceoryx2Node;
 
 /// Compiles graph changes into running processor state.
 pub struct Compiler {
@@ -37,6 +41,9 @@ pub struct Compiler {
     /// Processor threads a removal abandoned. Each holds the engine alive
     /// beneath it until it returns, so teardown asks which still run.
     abandoned_processor_threads: Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+    /// Counted after each compile lets go of the graph and before it wakes
+    /// the links in other streams waiting on it.
+    compiles_of_this_graph_finished: AtomicU64,
 }
 
 impl Default for Compiler {
@@ -62,6 +69,7 @@ impl Compiler {
             transaction: Arc::new(Mutex::new(Vec::new())),
             one_commit_at_a_time: Mutex::new(()),
             abandoned_processor_threads: Mutex::new(Vec::new()),
+            compiles_of_this_graph_finished: AtomicU64::new(0),
         }
     }
 
@@ -76,6 +84,19 @@ impl Compiler {
             .collect()
     }
 
+    /// How many compiles of this graph have finished.
+    pub(crate) fn how_many_compiles_of_this_graph_finished(&self) -> u64 {
+        self.compiles_of_this_graph_finished.load(Ordering::SeqCst)
+    }
+
+    /// Count a compile of this graph as finished, as a compile does before it
+    /// wakes the links waiting on it.
+    #[cfg(test)]
+    pub(crate) fn count_a_compile_of_this_graph_as_finished_for_a_test(&self) {
+        self.compiles_of_this_graph_finished
+            .fetch_add(1, Ordering::SeqCst);
+    }
+
     // =========================================================================
     // Transaction API
     // =========================================================================
@@ -88,6 +109,37 @@ impl Compiler {
         let mut graph = self.graph.write();
         let tx = CompilerTransactionHandle::new(Arc::clone(&self.transaction));
         f(&mut graph, &tx)
+    }
+
+    /// Access graph and transaction for mutations, waiting at most `bound` for
+    /// the graph's lock; `None` when it was not free within it.
+    pub(crate) fn scope_within<F, R>(&self, bound: std::time::Duration, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Graph, &CompilerTransactionHandle) -> R,
+    {
+        let mut graph = self.graph.try_write_for(bound)?;
+        let tx = CompilerTransactionHandle::new(Arc::clone(&self.transaction));
+        Some(f(&mut graph, &tx))
+    }
+
+    /// Run a commit's WIRE phase over `links_to_add` of this compiler's graph
+    /// as `reading_stream`, without the processors a start leaves running;
+    /// how many it wired.
+    #[cfg(test)]
+    pub(crate) fn wire_every_link_a_plan_adds_for_a_test(
+        &self,
+        links_to_add: &[LinkUniqueId],
+        reading_stream: &Arc<LoadedStreamInThisRuntime>,
+    ) -> Result<usize> {
+        wire_every_link_a_plan_adds(
+            &self.graph,
+            links_to_add,
+            Some(reading_stream),
+            &reading_stream
+                .engine_resources_shared_by_every_stream()
+                .iceoryx2_node,
+            reading_stream.loaded_stream_identity(),
+        )
     }
 
     /// The operations logged and not yet committed, in the order they were
@@ -121,15 +173,13 @@ impl Compiler {
             operations,
             runtime_ctx,
             &self.abandoned_processor_threads,
+            &self.compiles_of_this_graph_finished,
         )
     }
 
-    // =========================================================================
-    // Compilation - ONE method, ALL logic inlined
-    // =========================================================================
-
-    /// Single compile method - ALL orchestration logic here, no helper methods.
-    /// Calls compiler_ops::* for actual operations.
+    /// Compile `operations` against `graph_arc`, then wake the links in other
+    /// streams that read a processor it created, or else those whose last
+    /// attempt found this stream's graph not free within the reconcile's bound.
     ///
     /// A removal whose thread outlived its budget still removes the processor
     /// and lets the rest of the batch compile; the call then fails naming it.
@@ -138,83 +188,50 @@ impl Compiler {
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
         abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+        compiles_of_this_graph_finished: &AtomicU64,
     ) -> Result<()> {
-        use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
-
         let mut result = CompileResult::default();
+        let compiled = Self::compile_counting_into(
+            graph_arc,
+            operations,
+            runtime_ctx,
+            abandoned_processor_threads,
+            &mut result,
+        );
+        compiles_of_this_graph_finished.fetch_add(1, Ordering::SeqCst);
+        // Processors this compile created may be the sources links in other
+        // streams wait on, and they run whether or not the rest of it failed.
+        if let Some(this_stream) = runtime_ctx.this_stream() {
+            let which = if result.processors_created > 0 {
+                LinksReadingAStreamToRePlan::EveryOneStillToBeWired
+            } else {
+                LinksReadingAStreamToRePlan::OnlyThoseItsGraphDidNotAnswer
+            };
+            this_stream
+                .engine_resources_shared_by_every_stream()
+                .spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
+                    this_stream.stream_name(),
+                    which,
+                );
+        }
+        compiled
+    }
+
+    /// Compile `operations` against `graph_arc`, counting what it did into
+    /// `result` as it goes, so a compile that fails part-way still says what
+    /// it created.
+    fn compile_counting_into(
+        graph_arc: Arc<RwLock<Graph>>,
+        operations: Vec<PendingOperation>,
+        runtime_ctx: &Arc<RuntimeContext>,
+        abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+        result: &mut CompileResult,
+    ) -> Result<()> {
         let the_stream_the_compile_belongs_to = runtime_ctx.loaded_stream_identity();
         // =====================================================================
         // 1. Validate and categorize operations
         // =====================================================================
-        let mut plan = CompilationPlan::default();
-
-        for op in operations {
-            match op {
-                PendingOperation::AddProcessor(id) => {
-                    let graph = graph_arc.read();
-                    let exists = graph.traversal().v(&id).exists();
-                    let running = graph
-                        .traversal()
-                        .v(&id)
-                        .first()
-                        .map(|n| n.has::<ProcessorInstanceComponent>())
-                        .unwrap_or(false);
-                    let pending_deletion = graph
-                        .traversal()
-                        .v(&id)
-                        .first()
-                        .map(|n| n.has::<PendingDeletionComponent>())
-                        .unwrap_or(false);
-                    drop(graph);
-
-                    if pending_deletion {
-                        tracing::debug!("AddProcessor({}): pending deletion, skipping add", id);
-                    } else if exists && !running {
-                        plan.processors_to_add.push(id);
-                    } else if !exists {
-                        tracing::warn!("AddProcessor({}): not in graph, skipping", id);
-                    } else {
-                        tracing::debug!("AddProcessor({}): already running, skipping", id);
-                    }
-                }
-                PendingOperation::RemoveProcessor(id) => {
-                    plan.processors_to_remove.push(id);
-                }
-                PendingOperation::AddLink(id) => {
-                    let graph = graph_arc.read();
-                    let link = graph.traversal().e(&id).first();
-                    let exists = link.is_some();
-                    let already_wired_or_awaiting_an_answer =
-                        link.is_some_and(this_link_is_already_wired_or_awaiting_its_helpers_answer);
-                    let pending_deletion = link
-                        .map(|l| l.has::<PendingDeletionComponent>())
-                        .unwrap_or(false);
-                    drop(graph);
-
-                    if pending_deletion {
-                        tracing::debug!("AddLink({}): pending deletion, skipping add", id);
-                    } else if exists && !already_wired_or_awaiting_an_answer {
-                        plan.links_to_add.push(id);
-                    } else if !exists {
-                        tracing::warn!("AddLink({}): not in graph, skipping", id);
-                    } else {
-                        tracing::debug!(
-                            "AddLink({}): already wired or awaiting its helper's answer, skipping",
-                            id
-                        );
-                    }
-                }
-                PendingOperation::RemoveLink(id) => {
-                    plan.links_to_remove.push(id);
-                }
-                PendingOperation::UpdateProcessorConfig {
-                    processor_id,
-                    config_to_apply,
-                } => {
-                    plan.config_updates.push((processor_id, config_to_apply));
-                }
-            }
-        }
+        let mut plan = the_plan_these_operations_make(&graph_arc, operations);
 
         // A processor removal cascades its incident links out of the graph
         // (petgraph `remove_node`), so a link queued for wiring against a
@@ -249,75 +266,40 @@ impl Compiler {
         // =====================================================================
         // 2. Handle removals FIRST (before adding new processors)
         // =====================================================================
-        let abandoned_in_this_compile: Vec<ProcessorDisplayNameAndId> =
-            if !plan.links_to_remove.is_empty() || !plan.processors_to_remove.is_empty() {
-                tracing::debug!(
-                    "[commit] Removing {} processors, {} links",
-                    plan.processors_to_remove.len(),
-                    plan.links_to_remove.len()
-                );
+        let abandoned_in_this_compile: Vec<ProcessorDisplayNameAndId> = if !plan
+            .links_to_remove
+            .is_empty()
+            || !plan.processors_to_remove.is_empty()
+        {
+            tracing::debug!(
+                "[commit] Removing {} processors, {} links",
+                plan.processors_to_remove.len(),
+                plan.links_to_remove.len()
+            );
 
-                // Unwire links first (before removing processors)
-                for link_id in &plan.links_to_remove {
-                    let mut graph = graph_arc.write();
-                    if let Some(link) = graph
-                        .traversal()
-                        .e(())
-                        .filter(|link| link.id == *link_id)
-                        .first()
-                    {
-                        let from_port = link.from_port().to_string();
-                        let to_port = link.to_port().to_string();
-
-                        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                            RuntimeEvent::CompilerWillUnwireLink {
-                                link_id: link_id.to_string(),
-                                from_port: from_port.clone(),
-                                to_port: to_port.clone(),
-                            },
-                        );
-
-                        tracing::info!("[CLOSE SERVICE] {}", link_id);
-                        if let Err(e) =
-                            super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
-                        {
-                            tracing::warn!("Failed to close service {}: {}", link_id, e);
-                        }
-
-                        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                            RuntimeEvent::CompilerDidUnwireLink {
-                                link_id: link_id.to_string(),
-                                from_port,
-                                to_port,
-                            },
-                        );
-
-                        result.links_unwired += 1;
-                    }
-                    drop(graph);
-
-                    // Clean up graph after unwiring
-                    let mut graph = graph_arc.write();
-                    if graph.traversal_mut().e(link_id).drop().exists() {
-                        return Err(Error::GraphError("value was not dropped".into()));
-                    }
+            // Unwire links first (before removing processors)
+            for link_id in &plan.links_to_remove {
+                if unwire_and_remove_a_link(&graph_arc, link_id, the_stream_the_compile_belongs_to)?
+                {
+                    result.links_unwired += 1;
                 }
+            }
 
-                let abandoned_by_this_removal =
-                    remove_processors_signalling_every_thread_before_joining_any(
-                        &graph_arc,
-                        the_stream_the_compile_belongs_to,
-                        &plan.processors_to_remove,
-                        ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
-                        || runtime_ctx.this_streams_shutdown_escalation().is_forced(),
-                        runtime_ctx.this_streams_teardown_progress_note(),
-                        abandoned_processor_threads,
-                    )?;
-                result.processors_removed += plan.processors_to_remove.len();
-                abandoned_by_this_removal
-            } else {
-                Vec::new()
-            };
+            let abandoned_by_this_removal =
+                remove_processors_signalling_every_thread_before_joining_any(
+                    &graph_arc,
+                    the_stream_the_compile_belongs_to,
+                    &plan.processors_to_remove,
+                    ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
+                    || runtime_ctx.this_streams_shutdown_escalation().is_forced(),
+                    runtime_ctx.this_streams_teardown_progress_note(),
+                    abandoned_processor_threads,
+                )?;
+            result.processors_removed += plan.processors_to_remove.len();
+            abandoned_by_this_removal
+        } else {
+            Vec::new()
+        };
 
         // =====================================================================
         // 3. Phase 1: PREPARE - Attach infrastructure components
@@ -385,41 +367,13 @@ impl Compiler {
         // =====================================================================
         if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);
-            for link_id in &plan.links_to_add {
-                let mut graph = graph_arc.write();
-                let (from_port, to_port) = {
-                    let link = graph.traversal().e(link_id).first().ok_or_else(|| {
-                        Error::LinkNotFound(format!("Link '{}' not found", link_id))
-                    })?;
-                    (link.from_port().to_string(), link.to_port().to_string())
-                };
-
-                the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                    RuntimeEvent::CompilerWillWireLink {
-                        link_id: link_id.to_string(),
-                        from_port: from_port.clone(),
-                        to_port: to_port.clone(),
-                    },
-                );
-
-                tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
-
-                super::compiler_ops::open_iceoryx2_service(
-                    &mut graph,
-                    link_id,
-                    runtime_ctx.iceoryx2_node(),
-                )?;
-
-                the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                    RuntimeEvent::CompilerDidWireLink {
-                        link_id: link_id.to_string(),
-                        from_port,
-                        to_port,
-                    },
-                );
-
-                result.links_wired += 1;
-            }
+            result.links_wired += wire_every_link_a_plan_adds(
+                &graph_arc,
+                &plan.links_to_add,
+                runtime_ctx.this_stream().as_ref(),
+                runtime_ctx.iceoryx2_node(),
+                the_stream_the_compile_belongs_to,
+            )?;
             tracing::debug!("[{}] Completed", CompilePhase::Wire);
         }
 
@@ -469,6 +423,257 @@ impl Compiler {
         }
         Ok(())
     }
+}
+
+/// Wire each of `links_to_add` in `graph_arc`, telling the stream's topic
+/// before and after; how many were wired. A link in this stream that cannot be
+/// wired fails the phase; a link reading another stream is reconciled against
+/// that stream through `reading_stream`, and one that waits or was refused
+/// says so in its own state and never fails it.
+fn wire_every_link_a_plan_adds(
+    graph_arc: &RwLock<Graph>,
+    links_to_add: &[LinkUniqueId],
+    reading_stream: Option<&Arc<LoadedStreamInThisRuntime>>,
+    iceoryx2_node: &Iceoryx2Node,
+    the_stream_the_compile_belongs_to: &LoadedStreamIdentity,
+) -> Result<usize> {
+    let mut links_wired = 0;
+    for link_id in links_to_add {
+        let (from_port, to_port, reads_another_stream) = {
+            let graph = graph_arc.read();
+            let link = graph
+                .traversal()
+                .e(link_id)
+                .first()
+                .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found", link_id)))?;
+            (
+                link.source().to_string(),
+                link.to_port().to_string(),
+                link.source_in_this_stream().is_none(),
+            )
+        };
+
+        let publish_that_the_link_will_be_wired = || {
+            the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                RuntimeEvent::CompilerWillWireLink {
+                    link_id: link_id.to_string(),
+                    from_port: from_port.clone(),
+                    to_port: to_port.clone(),
+                },
+            );
+        };
+
+        let wired = if reads_another_stream {
+            wire_a_link_reading_another_stream(
+                reading_stream,
+                link_id,
+                publish_that_the_link_will_be_wired,
+            )
+        } else {
+            publish_that_the_link_will_be_wired();
+            tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
+            super::compiler_ops::open_iceoryx2_service(
+                &mut graph_arc.write(),
+                link_id,
+                iceoryx2_node,
+            )?;
+            true
+        };
+        if !wired {
+            continue;
+        }
+
+        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+            RuntimeEvent::CompilerDidWireLink {
+                link_id: link_id.to_string(),
+                from_port,
+                to_port,
+            },
+        );
+
+        links_wired += 1;
+    }
+    Ok(links_wired)
+}
+
+/// Reconcile link `link_id` of `reading_stream`, which reads another stream,
+/// against that stream, calling `before_it_opens_the_channel` only once the
+/// reconcile goes on to wire it; whether it is wired now or handed to its
+/// out-of-process ends. A link that waits or was refused says so in its own
+/// state and never fails the commit.
+fn wire_a_link_reading_another_stream(
+    reading_stream: Option<&Arc<LoadedStreamInThisRuntime>>,
+    link_id: &LinkUniqueId,
+    before_it_opens_the_channel: impl FnOnce(),
+) -> bool {
+    use super::compiler_ops::HowALinkReadingAnotherStreamWasReconciled;
+
+    let Some(reading_stream) = reading_stream else {
+        tracing::warn!(
+            "[{}] {} reads another stream, and the stream compiling it is gone; not wired",
+            CompilePhase::Wire,
+            link_id
+        );
+        return false;
+    };
+    let how_it_was_reconciled =
+        super::compiler_ops::reconcile_a_link_reading_another_stream_announcing_its_wiring(
+            reading_stream,
+            link_id,
+            before_it_opens_the_channel,
+        );
+    tracing::info!(
+        "[{}] {} reads another stream: {:?}",
+        CompilePhase::Wire,
+        link_id,
+        how_it_was_reconciled
+    );
+    matches!(
+        how_it_was_reconciled,
+        HowALinkReadingAnotherStreamWasReconciled::WiredNow(_)
+    )
+}
+
+/// Unwire link `link_id` while the graph holds it, telling the stream's topic
+/// before and after, then take its edge out of the graph; whether it was there
+/// to unwire. A link this stream cannot close is still taken out, with a
+/// warning naming it.
+pub(super) fn unwire_and_remove_a_link(
+    graph_arc: &RwLock<Graph>,
+    link_id: &LinkUniqueId,
+    the_stream_the_compile_belongs_to: &LoadedStreamIdentity,
+) -> Result<bool> {
+    let mut graph = graph_arc.write();
+    let unwired = if let Some(link) = graph
+        .traversal()
+        .e(())
+        .filter(|link| link.id == *link_id)
+        .first()
+    {
+        let from_port = link.source().to_string();
+        let to_port = link.to_port().to_string();
+
+        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+            RuntimeEvent::CompilerWillUnwireLink {
+                link_id: link_id.to_string(),
+                from_port: from_port.clone(),
+                to_port: to_port.clone(),
+            },
+        );
+
+        tracing::info!("[CLOSE SERVICE] {}", link_id);
+        if let Err(e) = super::compiler_ops::close_iceoryx2_service(&mut graph, link_id) {
+            tracing::warn!("Failed to close service {}: {}", link_id, e);
+        }
+
+        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+            RuntimeEvent::CompilerDidUnwireLink {
+                link_id: link_id.to_string(),
+                from_port,
+                to_port,
+            },
+        );
+        true
+    } else {
+        false
+    };
+    drop(graph);
+
+    let mut graph = graph_arc.write();
+    if graph.traversal_mut().e(link_id).drop().exists() {
+        return Err(Error::GraphError("value was not dropped".into()));
+    }
+    Ok(unwired)
+}
+
+/// The plan `operations` make against `graph_arc`: each add the graph still
+/// holds and has not built or wired, queued once however often it was
+/// logged, and each removal and config update as logged.
+fn the_plan_these_operations_make(
+    graph_arc: &RwLock<Graph>,
+    operations: Vec<PendingOperation>,
+) -> CompilationPlan {
+    use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
+
+    let mut plan = CompilationPlan::default();
+    let mut links_queued_in_this_batch = std::collections::HashSet::new();
+
+    for op in operations {
+        match op {
+            PendingOperation::AddProcessor(id) => {
+                let graph = graph_arc.read();
+                let exists = graph.traversal().v(&id).exists();
+                let running = graph
+                    .traversal()
+                    .v(&id)
+                    .first()
+                    .map(|n| n.has::<ProcessorInstanceComponent>())
+                    .unwrap_or(false);
+                let pending_deletion = graph
+                    .traversal()
+                    .v(&id)
+                    .first()
+                    .map(|n| n.has::<PendingDeletionComponent>())
+                    .unwrap_or(false);
+                drop(graph);
+
+                if pending_deletion {
+                    tracing::debug!("AddProcessor({}): pending deletion, skipping add", id);
+                } else if exists && !running {
+                    plan.processors_to_add.push(id);
+                } else if !exists {
+                    tracing::warn!("AddProcessor({}): not in graph, skipping", id);
+                } else {
+                    tracing::debug!("AddProcessor({}): already running, skipping", id);
+                }
+            }
+            PendingOperation::RemoveProcessor(id) => {
+                plan.processors_to_remove.push(id);
+            }
+            PendingOperation::AddLink(id) => {
+                let graph = graph_arc.read();
+                let link = graph.traversal().e(&id).first();
+                let exists = link.is_some();
+                // A link reading another stream is reconciled on every add:
+                // the reconcile alone knows whether its wiring still stands
+                // against the source stream's load.
+                let already_wired_or_awaiting_an_answer = link.is_some_and(|link| {
+                    link.source_in_this_stream().is_some()
+                        && this_link_is_already_wired_or_awaiting_its_helpers_answer(link)
+                });
+                let pending_deletion = link
+                    .map(|l| l.has::<PendingDeletionComponent>())
+                    .unwrap_or(false);
+                drop(graph);
+
+                if pending_deletion {
+                    tracing::debug!("AddLink({}): pending deletion, skipping add", id);
+                } else if links_queued_in_this_batch.contains(&id) {
+                    tracing::debug!("AddLink({}): already queued in this batch, skipping", id);
+                } else if exists && !already_wired_or_awaiting_an_answer {
+                    links_queued_in_this_batch.insert(id.clone());
+                    plan.links_to_add.push(id);
+                } else if !exists {
+                    tracing::warn!("AddLink({}): not in graph, skipping", id);
+                } else {
+                    tracing::debug!(
+                        "AddLink({}): already wired or awaiting its helper's answer, skipping",
+                        id
+                    );
+                }
+            }
+            PendingOperation::RemoveLink(id) => {
+                plan.links_to_remove.push(id);
+            }
+            PendingOperation::UpdateProcessorConfig {
+                processor_id,
+                config_to_apply,
+            } => {
+                plan.config_updates.push((processor_id, config_to_apply));
+            }
+        }
+    }
+    plan
 }
 
 /// Whether an `AddLink` names a link this graph has already wired — or handed
@@ -531,5 +736,57 @@ mod already_wired_tests {
         assert!(this_link_is_already_wired_or_awaiting_its_helpers_answer(
             &link
         ));
+    }
+
+    /// A link a batch logs twice — a live connect and the start that commits
+    /// it, or two re-plans of a link reading another stream — is planned
+    /// once, in the order it was first logged.
+    ///
+    /// Fail-without-fix: queue each `AddLink` as logged and both links are
+    /// planned twice, so the WIRE phase opens a second subscriber and notifier
+    /// for one link.
+    #[test]
+    fn a_link_queued_twice_in_one_batch_is_wired_once() {
+        use crate::core::graph::OutputPortInAnotherStreamOnThisMachine;
+        use crate::core::test_support::{add_mock_input_only, add_mock_output_only};
+
+        let mut graph = Graph::new();
+        let source = add_mock_output_only(&mut graph);
+        let reader = add_mock_input_only(&mut graph);
+        let link_in_this_stream = graph
+            .traversal_mut()
+            .add_e(
+                OutputLinkPortRef::new(source.as_str(), "out1"),
+                InputLinkPortRef::new(reader.as_str(), "in1"),
+            )
+            .first()
+            .expect("the link in this stream is added")
+            .id
+            .clone();
+        let link_reading_another_stream = graph
+            .traversal_mut()
+            .add_e_reading_another_stream(
+                OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "out1").unwrap(),
+                InputLinkPortRef::new(reader.as_str(), "in1"),
+            )
+            .first()
+            .expect("the link reading another stream is added")
+            .id
+            .clone();
+
+        let plan = the_plan_these_operations_make(
+            &RwLock::new(graph),
+            vec![
+                PendingOperation::AddLink(link_in_this_stream.clone()),
+                PendingOperation::AddLink(link_reading_another_stream.clone()),
+                PendingOperation::AddLink(link_in_this_stream.clone()),
+                PendingOperation::AddLink(link_reading_another_stream.clone()),
+            ],
+        );
+
+        assert_eq!(
+            plan.links_to_add,
+            vec![link_in_this_stream, link_reading_another_stream]
+        );
     }
 }

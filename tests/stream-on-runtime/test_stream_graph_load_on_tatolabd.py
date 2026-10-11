@@ -88,8 +88,6 @@ DESCRIBED_NODE_TYPE = f"{DESCRIBED_NODE_MODULE}:LoadedFrameRelay"
 COMPILE_DOCUMENT_NESTED_PAST_THE_MAXIMUM = "recursion limit exceeded"
 NOT_THE_COMPILE_DOCUMENT = "standard output is not the compile document"
 
-SERVED_GRAPH_RUNTIME_NAME = f"runtime-load-served-graph-{os.getpid()}"
-
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
 
@@ -456,7 +454,7 @@ def test_a_graph_naming_an_unknown_type_is_refused(
     assert unknown_type in refusal
 
 
-# ---- links: a port no node has, and an end naming a runtime -----------------
+# ---- links: a port no node has, and an end naming a machine -----------------
 
 
 def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
@@ -470,17 +468,33 @@ def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
 
 
 @pytest.mark.parametrize("end", ["source", "target"])
-def test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it(
+def test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the_address_shape(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, end: str
 ):
-    """Both ends of a link are on the runtime that loads it, so an end naming a
-    runtime is refused rather than read as a local end with its runtime dropped."""
+    """An end naming a machine names its stream too, so one naming a machine
+    alone is refused rather than read as a local end with its machine dropped."""
     graph = pattern_to_window_graph()
-    graph["links"][0][end]["runtime_name"] = "studio-display-9f3c"
+    graph["links"][0][end]["machine"] = "studio-display"
 
     refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
 
-    assert "studio-display-9f3c" in refusal
+    assert "names the machine `studio-display` and no stream" in refusal, refusal
+    assert "`machine/stream/node/port`" in refusal, refusal
+
+
+@pytest.mark.parametrize("end", ["source", "target"])
+def test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machine(
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, end: str
+):
+    """Nothing links two machines until the sharing step, so an end on
+    another machine is refused by that machine's name."""
+    graph = pattern_to_window_graph()
+    graph["links"][0][end].update({"machine": "studio-display", "stream": graph["stream"]})
+
+    refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
+
+    assert "names the machine `studio-display`" in refusal, refusal
+    assert "which is where links between machines arrive" in refusal, refusal
 
 
 # ---- an interrupt during a load's describe ------------------------------------
@@ -525,21 +539,20 @@ def test_a_ctrl_c_during_a_loads_describe_ends_tatolabd_at_once(
 def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_local_api(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
-    tatolabd = start_tatolabd_running_stream(
-        named_pattern_into_a_named_sink,
-        extra_environment={"STREAMLIB_RUNTIME_NAME": SERVED_GRAPH_RUNTIME_NAME},
-    )
+    tatolabd = start_tatolabd_running_stream(named_pattern_into_a_named_sink)
     stream_name = tatolabd.attached_stream_runs[-1].await_loaded()["stream_name"]
     local_api = tatolabd.local_api_client()
     local_api.await_every_node_running(
         stream=stream_name, expected_node_names=["loaded-pattern", "loaded-sink"]
     )
     served_graph = local_api.call_tool("graph", {"stream": stream_name})
+    machine_wide_graph = local_api.graph()
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
     assert served_graph["stream"] == "named_pattern_into_a_named_sink"
-    assert served_graph["runtime_name"] == SERVED_GRAPH_RUNTIME_NAME
+    assert served_graph["machine"], served_graph
+    assert served_graph["machine"] == machine_wide_graph["machine"], machine_wide_graph
     served_node_names = [served_node["name"] for served_node in served_graph["nodes"]]
     assert "loaded-pattern" in served_node_names, served_node_names
     assert "loaded-sink" in served_node_names, served_node_names

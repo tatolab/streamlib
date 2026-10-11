@@ -81,16 +81,46 @@ pub enum Error {
     #[error("Invalid port address: {0}")]
     InvalidPortAddress(String),
 
-    #[error("channel name is empty")]
-    EmptyChannelName,
-
+    /// An address names a machine other than this one.
     #[error(
-        "channel `{name}` contains invalid character `{character}` (allowed: a-z, 0-9, hyphen, underscore, must start with a-z)"
+        "the address `{address}` names the machine `{machine}`, and this machine is \
+         `{this_machine}`: an address names a port on this machine until the sharing step, \
+         which is where links between machines arrive"
     )]
-    InvalidChannelNameCharacter { name: String, character: char },
+    PortAddressNamesAnotherMachine {
+        /// The address as it was written.
+        address: String,
+        /// The machine its machine part names, cast.
+        machine: String,
+        /// This machine's name.
+        this_machine: String,
+    },
 
-    #[error("channel `{0}` must start with a-z")]
-    ChannelNameMustStartWithLowercase(String),
+    /// A link was made in a stream other than the one that holds its input.
+    #[error(
+        "a link is made in the stream that holds its input, and this link's input is in the \
+         stream `{input_stream}` while it was made in the stream `{acting_stream}`: make it in \
+         `{input_stream}`, naming the stream its source is in when that is another one"
+    )]
+    LinkMadeOutsideTheStreamOfItsInput {
+        /// The stream the link was made in.
+        acting_stream: String,
+        /// The stream that holds the link's input.
+        input_stream: String,
+    },
+
+    /// A chunk of a channel name is not one address chunk.
+    #[error(
+        "channel `{channel}` has the chunk `{chunk}`, which is not one address chunk: {reason}"
+    )]
+    ChannelNameChunkIsNotOneAddressChunk {
+        /// The channel name as it was given.
+        channel: String,
+        /// The chunk the address grammar refuses.
+        chunk: String,
+        /// Why it is not one, with the grammar it breaks.
+        reason: String,
+    },
 
     #[error("channel `{name}` is {len} bytes, exceeding the {max}-byte wire capacity")]
     ChannelNameTooLong {
@@ -170,6 +200,22 @@ pub enum Error {
     DescriptorPortNameDeclaredTwice {
         processor_class_import_path: ProcessorClassImportPath,
         port_name: String,
+    },
+
+    /// A node named in a stream has no output port of the name given.
+    #[error(
+        "node `{node}` in stream `{stream}` has no output port `{port}`. Its output ports are: \
+         {output_ports_the_node_has}"
+    )]
+    NodeInAStreamHasNoOutputPortNamed {
+        /// The stream that holds the node.
+        stream: String,
+        /// The node's name.
+        node: String,
+        /// The output port name as it was given.
+        port: String,
+        /// The node's output ports, comma-joined, or `none`.
+        output_ports_the_node_has: String,
     },
 
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
