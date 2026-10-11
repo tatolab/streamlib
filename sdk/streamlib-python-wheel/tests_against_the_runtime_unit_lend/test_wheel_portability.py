@@ -6,7 +6,11 @@
 Read from the lend `cargo xtask build-runtime` lays out at
 `target/tatolab-runtime/lib/tatolab/lend`, with that directory first on
 `PYTHONPATH` — the same files a processor interpreter borrows and the wheel
-carries. Imported from anywhere else, the tests that read binaries fail.
+carries — and from `tatolabd` and `tatolab` in the unit's `bin/` beside it.
+Imported from anywhere else, the tests that read binaries fail.
+
+With `TATOLAB_RUNTIME_UNIT_GLIBC_FLOOR` set, as the release's Linux tarball
+build sets it, no ELF in the unit may need a newer glibc than that floor.
 
 The wheel carries a C++ GLSL compiler so a kernel author needs no shader
 toolchain. "Carries" has to mean statically linked: a `libshaderc.so` on the
@@ -27,6 +31,7 @@ them. A binary this cannot parse fails the test; it is never skipped.
 """
 
 import importlib
+import os
 import re
 import shutil
 import struct
@@ -65,6 +70,8 @@ MACOS_PATH_PREFIXES_THE_HOST_MAY_SUPPLY = ("/usr/lib/", "/System/")
 SHADER_COMPILER_LIBRARY_STEMS = ("shaderc", "glslang", "SPIRV", "spirv")
 
 ELF_MAGIC = b"\x7fELF"
+DT_VERNEED = 0x6FFFFFFE
+DT_VERNEEDNUM = 0x6FFFFFFF
 MACH_O_64_LITTLE_ENDIAN_MAGIC = 0xFEEDFACF
 MACH_O_FAT_MAGICS = (0xCAFEBABE, 0xCAFEBABF)
 MACH_O_CPU_TYPE_ARM64 = 0x0100000C
@@ -93,6 +100,15 @@ MACH_O_LINKING_LOAD_COMMANDS = frozenset(
 )
 
 MacOSVersion = tuple[int, int, int]
+
+# The oldest glibc every ELF in the runtime unit must run on; unset, the floor
+# goes unchecked, because only a manylinux build can meet one.
+RUNTIME_UNIT_GLIBC_FLOOR_ENVIRONMENT_VARIABLE = "TATOLAB_RUNTIME_UNIT_GLIBC_FLOOR"
+
+# The runtime unit's own executables, in its `bin/`.
+RUNTIME_UNIT_EXECUTABLE_NAMES = ("tatolabd", "tatolab")
+
+GlibcVersion = tuple[int, ...]
 
 # Where `cargo xtask build-runtime` lays the lend out, below the workspace's `target/`.
 RUNTIME_UNIT_LEND_DIRECTORY_TRAILING_PARTS = ("tatolab-runtime", "lib", "tatolab", "lend")
@@ -125,8 +141,18 @@ class NativeBinaryUnreadable(Exception):
     """A file shaped like a native binary that this module cannot parse."""
 
 
-def _dynamic_libraries_needed_by_elf(data: bytes, elf_path: Path) -> list[str]:
-    """The `DT_NEEDED` names in an ELF64 little-endian shared object.
+@dataclass(frozen=True)
+class ElfDynamicSectionSummary:
+    """What the portability policy reads out of one ELF64 little-endian object."""
+
+    needed_libraries: list[str]
+    # Every `GLIBC_x.y` its version-needs entries name, whichever library they
+    # are against — what decides the oldest glibc it loads on.
+    glibc_versions_needed: list[GlibcVersion]
+
+
+def _read_elf_dynamic_section(data: bytes, elf_path: Path) -> ElfDynamicSectionSummary:
+    """The `DT_NEEDED` names and the glibc versions an ELF64 little-endian object needs.
 
     Walks program headers rather than sections: `PT_DYNAMIC` is what the
     loader itself reads, and a stripped object can lose its section table
@@ -157,8 +183,9 @@ def _dynamic_libraries_needed_by_elf(data: bytes, elf_path: Path) -> list[str]:
                 return p_offset + (virtual_address - p_vaddr)
         raise AssertionError(f"address {virtual_address:#x} is in no PT_LOAD segment")
 
-    # DT_STRTAB holds the names DT_NEEDED indexes into, so both passes of the
-    # dynamic array are needed before any name can be read.
+    # DT_STRTAB holds the names DT_NEEDED and the version-needs entries index
+    # into, so both passes of the dynamic array are needed before any name can
+    # be read.
     dynamic_offset, dynamic_size = dynamic_segment
     entries = []
     for entry in range(dynamic_offset, dynamic_offset + dynamic_size, 16):
@@ -170,13 +197,43 @@ def _dynamic_libraries_needed_by_elf(data: bytes, elf_path: Path) -> list[str]:
     string_table = next(d_val for d_tag, d_val in entries if d_tag == 5)  # DT_STRTAB
     string_table_offset = file_offset_of(string_table)
 
-    needed = []
-    for d_tag, d_val in entries:
-        if d_tag != 1:  # DT_NEEDED
-            continue
-        start = string_table_offset + d_val
-        needed.append(data[start : data.index(b"\x00", start)].decode())
-    return needed
+    def string_at(string_table_index: int) -> str:
+        start = string_table_offset + string_table_index
+        return data[start : data.index(b"\x00", start)].decode()
+
+    needed = [string_at(d_val) for d_tag, d_val in entries if d_tag == 1]  # DT_NEEDED
+
+    glibc_versions_needed = []
+    version_needs = dict(
+        (d_tag, d_val) for d_tag, d_val in entries if d_tag in (DT_VERNEED, DT_VERNEEDNUM)
+    )
+    if DT_VERNEED in version_needs:
+        version_need_offset = file_offset_of(version_needs[DT_VERNEED])
+        for _ in range(version_needs.get(DT_VERNEEDNUM, 0)):
+            # Elf64_Verneed: vn_version, vn_cnt, vn_file, vn_aux, vn_next.
+            _vn_version, vn_cnt, _vn_file, vn_aux, vn_next = struct.unpack_from(
+                "<HHIII", data, version_need_offset
+            )
+            version_need_auxiliary_offset = version_need_offset + vn_aux
+            for _ in range(vn_cnt):
+                # Elf64_Vernaux: vna_hash, vna_flags, vna_other, vna_name, vna_next.
+                _vna_hash, _vna_flags, _vna_other, vna_name, vna_next = struct.unpack_from(
+                    "<IHHII", data, version_need_auxiliary_offset
+                )
+                if glibc_version := re.fullmatch(r"GLIBC_(\d+(?:\.\d+)*)", string_at(vna_name)):
+                    glibc_versions_needed.append(
+                        tuple(int(part) for part in glibc_version.group(1).split("."))
+                    )
+                version_need_auxiliary_offset += vna_next
+            version_need_offset += vn_next
+    return ElfDynamicSectionSummary(
+        needed_libraries=needed, glibc_versions_needed=glibc_versions_needed
+    )
+
+
+def _dynamic_libraries_needed_by_elf(data: bytes, elf_path: Path) -> list[str]:
+    """The `DT_NEEDED` names in an ELF64 little-endian shared object."""
+    return _read_elf_dynamic_section(data, elf_path).needed_libraries
 
 
 @dataclass(frozen=True)
@@ -270,6 +327,17 @@ def _libraries_linked_by(binary_path: Path) -> list[str]:
     if _is_mach_o(data):
         return _read_mach_o_load_commands(data, binary_path).linked_library_paths
     raise NativeBinaryUnreadable(f"{binary_path} is neither ELF nor Mach-O")
+
+
+def glibc_versions_newer_than_the_floor(
+    elf_summary: ElfDynamicSectionSummary, glibc_floor: GlibcVersion
+) -> list[GlibcVersion]:
+    """Each glibc version an ELF needs that a machine at the floor does not have."""
+    return sorted({version for version in elf_summary.glibc_versions_needed if version > glibc_floor})
+
+
+def _glibc_version_from_text(glibc_version_text: str) -> GlibcVersion:
+    return tuple(int(part) for part in glibc_version_text.split("."))
 
 
 def mach_o_portability_violations(
@@ -374,6 +442,18 @@ def mach_o_binaries_the_lend_carries(native_binaries_the_lend_carries) -> list[P
 
 
 @pytest.fixture(scope="module")
+def runtime_unit_executables(lend_directory: Path) -> list[Path]:
+    """`tatolabd` and `tatolab`, from the `bin/` beside the lend's `lib/`."""
+    runtime_unit_root = lend_directory.parents[2]
+    executables = [
+        runtime_unit_root / "bin" / executable_name for executable_name in RUNTIME_UNIT_EXECUTABLE_NAMES
+    ]
+    missing_executables = [str(executable) for executable in executables if not executable.is_file()]
+    assert not missing_executables, f"the runtime unit carries no {missing_executables}"
+    return executables
+
+
+@pytest.fixture(scope="module")
 def wheel_minimum_macos_version(lend_directory: Path) -> Optional[MacOSVersion]:
     """The macOS floor the lend's wheel tag admits, if it has one."""
     wheel_metadata = (runtime_unit_dist_info_directory(lend_directory) / "WHEEL").read_text()
@@ -453,6 +533,138 @@ def test_every_native_binary_the_lend_carries_parses(
     assert native_extension_path in native_binaries_the_lend_carries
     for binary in native_binaries_the_lend_carries:
         _libraries_linked_by(binary)
+
+
+def test_the_runtime_units_executables_link_nothing_the_host_may_not_supply(
+    runtime_unit_executables,
+):
+    """`tatolabd` and `tatolab` reach machines this project never sees, as the wheel does."""
+    outside_the_policy_per_executable = {}
+    for executable in runtime_unit_executables:
+        linked_libraries = _libraries_linked_by(executable)
+        if executable.read_bytes()[:4] == ELF_MAGIC:
+            outside_the_policy = sorted(set(linked_libraries) - LIBRARIES_THE_HOST_MAY_SUPPLY)
+        else:
+            outside_the_policy = sorted(
+                library
+                for library in linked_libraries
+                if not library.startswith(MACOS_PATH_PREFIXES_THE_HOST_MAY_SUPPLY)
+            )
+        if outside_the_policy:
+            outside_the_policy_per_executable[str(executable)] = outside_the_policy
+    assert not outside_the_policy_per_executable, (
+        f"the runtime unit's executables need libraries the host is not promised to have: "
+        f"{outside_the_policy_per_executable}"
+    )
+
+
+def test_no_elf_in_the_runtime_unit_needs_a_newer_glibc_than_its_floor(
+    runtime_unit_executables, native_binaries_the_lend_carries
+):
+    """What a manylinux build promises, held over the executables too, which no wheel audit reads."""
+    glibc_floor_text = os.environ.get(RUNTIME_UNIT_GLIBC_FLOOR_ENVIRONMENT_VARIABLE, "")
+    if not glibc_floor_text:
+        pytest.skip(
+            f"{RUNTIME_UNIT_GLIBC_FLOOR_ENVIRONMENT_VARIABLE} is unset: only the release's "
+            "manylinux build promises a glibc floor"
+        )
+    glibc_floor = _glibc_version_from_text(glibc_floor_text)
+    elf_binaries = [
+        binary
+        for binary in [*runtime_unit_executables, *native_binaries_the_lend_carries]
+        if binary.read_bytes()[:4] == ELF_MAGIC
+    ]
+    assert elf_binaries, "the runtime unit carries no ELF to hold to a glibc floor"
+    newer_than_the_floor_per_binary = {}
+    for binary in elf_binaries:
+        newer_than_the_floor = glibc_versions_newer_than_the_floor(
+            _read_elf_dynamic_section(binary.read_bytes(), binary), glibc_floor
+        )
+        if newer_than_the_floor:
+            newer_than_the_floor_per_binary[str(binary)] = [
+                ".".join(map(str, version)) for version in newer_than_the_floor
+            ]
+    assert not newer_than_the_floor_per_binary, (
+        f"binaries needing a newer glibc than the {glibc_floor_text} floor: "
+        f"{newer_than_the_floor_per_binary}"
+    )
+
+
+def _synthetic_elf(needed_libraries: list[str], glibc_versions_needed: list[str]) -> bytes:
+    """A shared object with one PT_LOAD mapping it whole, at address 0, and a PT_DYNAMIC."""
+    string_table = bytearray(b"\x00")
+
+    def add_string(text: str) -> int:
+        index = len(string_table)
+        string_table.extend(text.encode() + b"\x00")
+        return index
+
+    needed_library_names = [add_string(library) for library in needed_libraries]
+    version_need_file_name = add_string("libc.so.6")
+    glibc_version_names = [add_string(f"GLIBC_{version}") for version in glibc_versions_needed]
+
+    elf_header_size, program_header_size = 64, 56
+    string_table_offset = elf_header_size + 2 * program_header_size
+    version_need_offset = (string_table_offset + len(string_table) + 7) // 8 * 8
+    version_need_auxiliaries = b"".join(
+        struct.pack("<IHHII", 0, 0, 0, name, 16 if position + 1 < len(glibc_version_names) else 0)
+        for position, name in enumerate(glibc_version_names)
+    )
+    version_need = (
+        struct.pack("<HHIII", 1, len(glibc_version_names), version_need_file_name, 16, 0)
+        + version_need_auxiliaries
+    )
+    dynamic_offset = version_need_offset + len(version_need)
+    dynamic_entries = [(1, name) for name in needed_library_names] + [
+        (5, string_table_offset),
+        (DT_VERNEED, version_need_offset),
+        (DT_VERNEEDNUM, 1),
+        (0, 0),
+    ]
+    dynamic = b"".join(struct.pack("<qQ", d_tag, d_val) for d_tag, d_val in dynamic_entries)
+    total_size = dynamic_offset + len(dynamic)
+
+    elf_header = struct.pack(
+        "<16sHHIQQQIHHHHHH",
+        ELF_MAGIC + bytes([2, 1, 1]) + bytes(9),
+        3,  # ET_DYN
+        0x3E,  # EM_X86_64
+        1,
+        0,
+        elf_header_size,
+        0,
+        0,
+        elf_header_size,
+        program_header_size,
+        2,
+        0,
+        0,
+        0,
+    )
+    loadable_segment = struct.pack("<IIQQQQQQ", 1, 5, 0, 0, 0, total_size, total_size, 0x1000)
+    dynamic_segment = struct.pack(
+        "<IIQQQQQQ", 2, 6, dynamic_offset, dynamic_offset, dynamic_offset, len(dynamic), len(dynamic), 8
+    )
+    synthetic_elf = bytearray(elf_header + loadable_segment + dynamic_segment + string_table)
+    synthetic_elf.extend(bytes(version_need_offset - len(synthetic_elf)))
+    synthetic_elf.extend(version_need + dynamic)
+    return bytes(synthetic_elf)
+
+
+def test_an_elf_needing_a_newer_glibc_than_the_floor_is_caught():
+    summary = _read_elf_dynamic_section(
+        _synthetic_elf(["libc.so.6"], ["2.2.5", "2.28", "2.34"]), Path("synthetic.so")
+    )
+    assert summary.needed_libraries == ["libc.so.6"]
+    assert glibc_versions_newer_than_the_floor(summary, (2, 28)) == [(2, 34)]
+
+
+def test_an_elf_at_the_glibc_floor_passes():
+    summary = _read_elf_dynamic_section(
+        _synthetic_elf(["libc.so.6", "libm.so.6"], ["2.2.5", "2.17", "2.28"]), Path("synthetic.so")
+    )
+    assert summary.glibc_versions_needed == [(2, 2, 5), (2, 17), (2, 28)]
+    assert glibc_versions_newer_than_the_floor(summary, (2, 28)) == []
 
 
 def _synthetic_dylib_load_command(command: int, library_path: str) -> bytes:
