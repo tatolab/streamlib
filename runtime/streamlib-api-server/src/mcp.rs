@@ -792,16 +792,17 @@ impl LocalApiMcpServerHandler {
             to_node,
             to_port,
         } = arguments;
+        fn connect_failed(refusal: impl std::fmt::Display) -> String {
+            format!("connect failed: {refusal}")
+        }
         let stream_operations = self.the_stream_a_tool_call_names("connect", &stream)?;
-        let stream_cast =
-            cast_exposed_name_to_url_safe(&stream).map_err(|e| format!("connect failed: {e}"))?;
+        let stream_cast = cast_exposed_name_to_url_safe(&stream).map_err(connect_failed)?;
         let named_stream_unless_it_is_this_one =
             |named: Option<&str>| -> Result<Option<String>, String> {
                 let Some(named) = named else {
                     return Ok(None);
                 };
-                let named_cast = cast_exposed_name_to_url_safe(named)
-                    .map_err(|e| format!("connect failed: {e}"))?;
+                let named_cast = cast_exposed_name_to_url_safe(named).map_err(connect_failed)?;
                 Ok((named_cast != stream_cast).then(|| named_cast.into_owned()))
             };
         let source_stream = named_stream_unless_it_is_this_one(from_stream.as_deref())?;
@@ -819,18 +820,18 @@ impl LocalApiMcpServerHandler {
         let to = stream_operations
             .the_node_named(&to_node)
             .map(|node| InputLinkPortRef::new(node.processor_id, to_port))
-            .map_err(|e| format!("connect failed: {e}"))?;
+            .map_err(connect_failed)?;
 
         let link_id = match source_stream {
             None => {
                 let from = stream_operations
                     .the_node_named(&from_node)
                     .map(|node| OutputLinkPortRef::new(node.processor_id, from_port))
-                    .map_err(|e| format!("connect failed: {e}"))?;
+                    .map_err(connect_failed)?;
                 stream_operations
                     .connect_async(from, to)
                     .await
-                    .map_err(|e| format!("connect failed: {e}"))?
+                    .map_err(connect_failed)?
             }
             Some(source_stream) => {
                 let source = OutputPortInAnotherStreamOnThisMachine::new(
@@ -838,7 +839,7 @@ impl LocalApiMcpServerHandler {
                     &from_node,
                     &from_port,
                 )
-                .map_err(|e| format!("connect failed: {e}"))?;
+                .map_err(connect_failed)?;
                 self.a_stream_action_off_the_async_runtime(
                     move |operations_on_the_loaded_streams| {
                         operations_on_the_loaded_streams
@@ -846,7 +847,7 @@ impl LocalApiMcpServerHandler {
                     },
                 )
                 .await
-                .map_err(|refusal| format!("connect failed: {refusal}"))?
+                .map_err(connect_failed)?
             }
         };
         let how_the_graph_reads_it =
