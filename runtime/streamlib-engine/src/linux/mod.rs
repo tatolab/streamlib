@@ -5,6 +5,7 @@
 
 pub mod alsa_audio_device_backend;
 pub mod audio_clock;
+pub mod display_server_environment_from_the_user_manager;
 pub mod pipewire_audio_device_backend;
 pub mod pipewire_runtime_library;
 pub mod pipewire_video_source;
