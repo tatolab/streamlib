@@ -32,7 +32,7 @@ use crate::core::graph::{
     OutputPortInAnotherStreamOnThisMachine, ProcessorPauseGateComponent, ProcessorUniqueId,
     StateComponent, cast_exposed_name_to_url_safe,
 };
-use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink};
+use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::logging::{LoadedStreamLogRecordsPage, LoadedStreamLogRoute};
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{
@@ -1064,7 +1064,7 @@ impl LoadedStreamInThisRuntime {
         for link in &graph.links {
             let target =
                 InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port);
-            let source = GraphSnapshotLink::the_address_a_link_end_names(&link.source)?;
+            let source = link.source.the_port_address_it_names()?;
             match source
                 .stream()
                 .filter(|source_stream| *source_stream != self.stream_name())

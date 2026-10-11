@@ -184,7 +184,9 @@ impl Compiler {
         {
             this_stream
                 .engine_resources_shared_by_every_stream()
-                .re_plan_every_link_reading_the_stream(this_stream.stream_name());
+                .spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
+                    this_stream.stream_name(),
+                );
         }
         compiled
     }

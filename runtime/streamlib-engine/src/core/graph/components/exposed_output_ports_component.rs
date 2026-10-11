@@ -48,6 +48,48 @@ pub enum WhyAReaderOfAnExposedOutputPortIsCutOff {
     ItsPortsNodeLeftItsStream,
 }
 
+impl std::fmt::Display for WhyAReaderOfAnExposedOutputPortIsCutOff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TheLevelNoLongerAllowsIt { level } => write!(f, "the port is now {level}"),
+            Self::ItsPortsNodeLeftItsStream => f.write_str("the port's node left its stream"),
+        }
+    }
+}
+
+/// Cut each of `readers` still registered off what it reads for `why`, each
+/// under its own unwind guard so one panicking cut still lets the rest run.
+/// `what_the_readers_read` names the port or node in the log lines, on the
+/// stream `stream_name`.
+pub(crate) fn cut_off_every_reader_each_under_its_own_unwind_guard(
+    readers: impl IntoIterator<Item = ReaderOfAnExposedOutputPort>,
+    why: WhyAReaderOfAnExposedOutputPortIsCutOff,
+    stream_name: &str,
+    what_the_readers_read: &dyn std::fmt::Display,
+) {
+    for reader in readers {
+        if !reader.is_still_registered() {
+            continue;
+        }
+        tracing::info!(
+            stream = %stream_name,
+            reader = %reader.location(),
+            "[exposure] cutting off {} reading {what_the_readers_read}: {why}",
+            reader.location()
+        );
+        let cut_off = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reader.cut_off_unless_its_registration_was_dropped(why)
+        }));
+        if cut_off.is_err() {
+            tracing::error!(
+                stream = %stream_name,
+                "[exposure] a reader's cut off {what_the_readers_read} panicked; the readers \
+                 after it are still cut off"
+            );
+        }
+    }
+}
+
 /// One reader from outside a port's stream, registered against the port.
 pub struct ReaderOfAnExposedOutputPort {
     still_registered: Arc<AtomicBool>,

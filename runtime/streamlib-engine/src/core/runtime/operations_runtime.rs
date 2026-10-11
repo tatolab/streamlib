@@ -16,9 +16,12 @@ use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     CutOffAReaderOfAnExposedOutputPort, GraphEdgeWithComponents, GraphNodeWithComponents,
     LinkReadingAnotherStreamComponent, LinkState, LinkStateComponent, LinkUniqueId,
-    OutputPortInAnotherStreamOnThisMachine, OutputPortReaderOutsideItsStream,
-    PendingDeletionComponent, ProcessorUniqueId, StateComponent,
-    WhyAReaderOfAnExposedOutputPortIsCutOff, node_named_or_refused,
+    OutputPortALinkCarriesFrom, OutputPortInAnotherStreamOnThisMachine,
+    OutputPortReaderOutsideItsStream, PendingDeletionComponent, ProcessorUniqueId, StateComponent,
+    WhyAReaderOfAnExposedOutputPortIsCutOff,
+    a_link_reading_another_stream_is_still_on_wiring_attempt,
+    a_link_reading_another_stream_is_still_to_be_wired, node_named_or_refused,
+    why_a_link_awaits_a_source_stream_not_loaded,
 };
 use crate::core::logging::{
     carrying_this_threads_loaded_stream_log_route, polled_in_a_loaded_stream_log_route,
@@ -267,26 +270,44 @@ async fn connect_impl(
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
+    let from = from.with_its_port_name_cast()?;
+    connect_and_announce_the_link(
+        live_graph_change,
+        from.clone().into(),
+        to,
+        |compiler, to| apply_a_link(compiler, from, to),
+    )
+    .await
+}
+
+/// Connect a link from `from` into `to` on one stream, announcing it on that
+/// stream's topic before and after: `apply` adds it to the graph and queues
+/// it, then the change commits.
+async fn connect_and_announce_the_link(
+    live_graph_change: LiveGraphChangeOnOneStream,
+    from: OutputPortALinkCarriesFrom,
+    to: InputLinkPortRef,
+    apply: impl FnOnce(&Arc<Compiler>, InputLinkPortRef) -> Result<LinkUniqueId>,
+) -> Result<LinkUniqueId> {
     let LiveGraphChangeOnOneStream {
         compiler,
         live,
         stream,
     } = live_graph_change;
-    let from = from.with_its_port_name_cast()?;
     let to = to.with_its_port_name_cast()?;
 
     stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
-        from: from.clone().into(),
+        from: from.clone(),
         to: to.clone(),
     });
 
-    let link_id = apply_a_link(&compiler, from.clone(), to.clone())?;
+    let link_id = apply(&compiler, to.clone())?;
 
     commit_live_graph_change(&compiler, live).await?;
 
     stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
         link_id: link_id.to_string(),
-        from: from.into(),
+        from,
         to,
     });
     stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
@@ -319,23 +340,31 @@ async fn connect_from_another_stream_impl(
     to: InputLinkPortRef,
     where_the_source_stream_is: WhereTheSourceStreamOfALinkIsAsItIsAdded,
 ) -> Result<LinkUniqueId> {
-    let LiveGraphChangeOnOneStream {
-        compiler,
-        live,
-        stream,
-    } = live_graph_change;
-    let to = to.with_its_port_name_cast()?;
+    connect_and_announce_the_link(
+        live_graph_change,
+        source.clone().into(),
+        to,
+        |compiler, to| {
+            apply_a_link_reading_another_stream(compiler, source, to, where_the_source_stream_is)
+        },
+    )
+    .await
+}
 
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
-        from: source.clone().into(),
-        to: to.clone(),
-    });
-
-    let link_id = compiler.scope(|graph, tx| -> Result<LinkUniqueId> {
+/// Add the link reading output port `source` of another stream on this
+/// machine into `to` to the graph and queue it for wiring.
+fn apply_a_link_reading_another_stream(
+    compiler: &Arc<Compiler>,
+    source: OutputPortInAnotherStreamOnThisMachine,
+    to: InputLinkPortRef,
+    where_the_source_stream_is: WhereTheSourceStreamOfALinkIsAsItIsAdded,
+) -> Result<LinkUniqueId> {
+    compiler.scope(|graph, tx| -> Result<LinkUniqueId> {
         refuse_a_destination_this_graph_cannot_take(graph, &to)?;
+        let source_stream_name = source.stream_name().to_string();
         let link = graph
             .traversal_mut()
-            .add_e_reading_another_stream(source.clone(), to.clone())
+            .add_e_reading_another_stream(source, to)
             .first_mut()
             .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
         match where_the_source_stream_is {
@@ -347,29 +376,16 @@ async fn connect_from_another_stream_impl(
             WhereTheSourceStreamOfALinkIsAsItIsAdded::NotLoadedOnThisMachine => {
                 link.insert(LinkStateComponent(LinkState::AwaitingRemote));
                 link.insert_component_without_rendering_it(
-                    LinkReadingAnotherStreamComponent::carrying_nothing_because(format!(
-                        "the stream `{}` is not loaded on this machine; the link wires when it \
-                         loads",
-                        source.stream_name()
-                    )),
+                    LinkReadingAnotherStreamComponent::carrying_nothing_because(
+                        why_a_link_awaits_a_source_stream_not_loaded(&source_stream_name),
+                    ),
                 );
             }
         }
         let link_id = link.id.clone();
         tx.log(PendingOperation::AddLink(link_id.clone()));
         Ok(link_id)
-    })?;
-
-    commit_live_graph_change(&compiler, live).await?;
-
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
-        link_id: link_id.to_string(),
-        from: source.into(),
-        to,
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-
-    Ok(link_id)
+    })
 }
 
 /// The node `node_name` names once cast in the stream `stream_name`, whose
@@ -783,12 +799,12 @@ impl LoadedStreamInThisRuntime {
         match why {
             WhyAReaderOfAnExposedOutputPortIsCutOff::TheLevelNoLongerAllowsIt { level } => {
                 let still_the_latest_attempt = self.compiler.scope(|graph, _tx| {
-                    graph
-                        .traversal()
-                        .e(&link_id)
-                        .first()
-                        .and_then(|link| link.get::<LinkReadingAnotherStreamComponent>())
-                        .is_some_and(|component| component.wiring_generation() == wiring_generation)
+                    graph.traversal().e(&link_id).first().is_some_and(|link| {
+                        a_link_reading_another_stream_is_still_on_wiring_attempt(
+                            link,
+                            wiring_generation,
+                        )
+                    })
                 });
                 if !still_the_latest_attempt {
                     return Ok(());
@@ -804,19 +820,20 @@ impl LoadedStreamInThisRuntime {
             }
             WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream => {
                 let logged = self.compiler.scope(|graph, tx| {
-                    let Some(link) = graph.traversal_mut().e(&link_id).first_mut() else {
-                        return false;
-                    };
-                    if link.has::<PendingDeletionComponent>() {
-                        return false;
-                    }
-                    let Some(component) = link.get_mut::<LinkReadingAnotherStreamComponent>()
+                    let Some(component) = graph
+                        .traversal_mut()
+                        .e(&link_id)
+                        .first_mut()
+                        .filter(|link| {
+                            a_link_reading_another_stream_is_still_on_wiring_attempt(
+                                link,
+                                wiring_generation,
+                            )
+                        })
+                        .and_then(|link| link.get_mut::<LinkReadingAnotherStreamComponent>())
                     else {
                         return false;
                     };
-                    if component.wiring_generation() != wiring_generation {
-                        return false;
-                    }
                     component.note_its_source_let_go();
                     // Supersedes an attempt still in flight, which would
                     // otherwise hold a wiring against the node that left.
@@ -856,10 +873,7 @@ impl LoadedStreamInThisRuntime {
                     link.source()
                         .in_another_stream_on_this_machine()
                         .is_some_and(|source| source.stream_name() == source_stream_name)
-                        && !link.has::<PendingDeletionComponent>()
-                        && !link
-                            .get::<LinkStateComponent>()
-                            .is_some_and(|state| state.0 == LinkState::Error)
+                        && a_link_reading_another_stream_is_still_to_be_wired(link)
                 })
                 .map(|link| link.id.clone())
                 .collect();
@@ -947,7 +961,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                     graph,
                     iceoryx2_node,
                     &source,
-                    false,
+                    crate::core::compiler::compiler_ops::WindowedDestinationOutsideTheSourcesGraph::Absent,
                 )?;
                 let channel_service_name =
                     crate::core::compiler::compiler_ops::channel_service_name(&source)?;

@@ -3,7 +3,10 @@
 
 use std::sync::{Arc, Weak};
 
-use crate::core::graph::LinkUniqueId;
+use crate::core::graph::{
+    GraphEdgeWithComponents, Link, LinkState, LinkStateComponent, LinkUniqueId,
+    PendingDeletionComponent,
+};
 use crate::core::processors::OutOfProcessLinkWiringEnvelope;
 use crate::core::runtime::{ExposedOutputPortReaderRegistration, LoadedStreamTag};
 use crate::iceoryx2::OutputWriterInner;
@@ -100,6 +103,37 @@ impl LinkReadingAnotherStreamComponent {
     }
 }
 
+/// Whether `link`, reading another stream, is still to be wired: neither
+/// refused nor on its way out.
+pub(crate) fn a_link_reading_another_stream_is_still_to_be_wired(link: &Link) -> bool {
+    !link.has::<PendingDeletionComponent>()
+        && !link
+            .get::<LinkStateComponent>()
+            .is_some_and(|state| state.0 == LinkState::Error)
+}
+
+/// Whether wiring attempt `generation` is still the latest on `link`, reading
+/// another stream, and the link is not on its way out — the check every step
+/// of an attempt makes before it touches the link.
+pub(crate) fn a_link_reading_another_stream_is_still_on_wiring_attempt(
+    link: &Link,
+    generation: u64,
+) -> bool {
+    !link.has::<PendingDeletionComponent>()
+        && link
+            .get::<LinkReadingAnotherStreamComponent>()
+            .is_some_and(|component| component.wiring_generation() == generation)
+}
+
+/// Why a link reading the stream `source_stream_name` carries nothing while
+/// that stream is not loaded on this machine.
+pub(crate) fn why_a_link_awaits_a_source_stream_not_loaded(source_stream_name: &str) -> String {
+    format!(
+        "the stream `{source_stream_name}` is not loaded on this machine; the link wires when it \
+         loads"
+    )
+}
+
 /// What one wiring of a link reading another stream holds on the source's
 /// stream. Dropping it takes the reader off the source's port, then releases
 /// the source's side of the channel; neither takes the source stream's graph
@@ -140,6 +174,7 @@ impl WiringOfALinkReadingAnotherStream {
 
 /// Where the source's side of a link was wired: the output writer of a
 /// processor the engine runs, or the link wiring of a helper process.
+#[derive(Clone)]
 pub(crate) enum SourceSideOfALinkWiredOn {
     ANativeProcessorsOutputWriter(Arc<OutputWriterInner>),
     AHelperProcessesLinkWiring(Arc<OutOfProcessLinkWiringEnvelope>),

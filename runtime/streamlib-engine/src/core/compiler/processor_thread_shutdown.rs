@@ -22,6 +22,7 @@ use crate::core::graph::{
     ExposedOutputPortsComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
     LinkReadingAnotherStreamComponent, LinkUniqueId, ProcessorUniqueId, ShutdownChannelComponent,
     StateComponent, ThreadHandleComponent, WhyAReaderOfAnExposedOutputPortIsCutOff,
+    cut_off_every_reader_each_under_its_own_unwind_guard,
 };
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -240,10 +241,11 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
         drop(links_reading_another_stream_into_the_removed_node);
         // Its readers' cuts may own anything, so they run only once the graph lock is released.
         if let Some(exposures) = exposures_of_the_removed_node {
-            cut_off_every_reader_of_a_node_that_left_its_stream(
-                exposures,
-                the_stream_the_processors_belong_to,
-                processor_id,
+            cut_off_every_reader_each_under_its_own_unwind_guard(
+                exposures.into_every_reader(),
+                WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream,
+                &the_stream_the_processors_belong_to.stream_name,
+                &format_args!("a port of '{processor_id}'"),
             );
         }
         the_stream_the_processors_belong_to.publish_on_this_streams_topic(
@@ -299,41 +301,6 @@ fn put_every_link_reading_another_stream_back_on_its_link(
     for (link_id, component) in taken {
         if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
             link.insert_component_without_rendering_it(component);
-        }
-    }
-}
-
-/// Cut every reader from outside the stream off the ports of
-/// `processor_id`, which left its stream, each under its own unwind guard so
-/// one panicking cut still lets the rest run.
-fn cut_off_every_reader_of_a_node_that_left_its_stream(
-    exposures: ExposedOutputPortsComponent,
-    the_stream_the_processor_belonged_to: &LoadedStreamIdentity,
-    processor_id: &ProcessorUniqueId,
-) {
-    for reader in exposures.into_every_reader() {
-        if !reader.is_still_registered() {
-            continue;
-        }
-        tracing::info!(
-            stream = %the_stream_the_processor_belonged_to.stream_name,
-            processor_id = %processor_id,
-            reader = %reader.location(),
-            "[exposure] cutting off {} reading a port of '{processor_id}', which left its stream",
-            reader.location()
-        );
-        let cut_off = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            reader.cut_off_unless_its_registration_was_dropped(
-                WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream,
-            )
-        }));
-        if cut_off.is_err() {
-            tracing::error!(
-                stream = %the_stream_the_processor_belonged_to.stream_name,
-                processor_id = %processor_id,
-                "[exposure] a reader's cut off a port of '{processor_id}' panicked; the readers \
-                 after it are still cut off"
-            );
         }
     }
 }

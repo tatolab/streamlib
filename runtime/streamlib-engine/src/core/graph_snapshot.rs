@@ -145,14 +145,14 @@ pub struct GraphSnapshotLink {
     pub target: LinkPortRefOutput,
 }
 
-impl GraphSnapshotLink {
-    /// The address the link end `end` names, every part cast.
-    pub(crate) fn the_address_a_link_end_names(end: &LinkPortRefOutput) -> Result<PortAddress> {
+impl LinkPortRefOutput {
+    /// The address this link end names, every part cast.
+    pub(crate) fn the_port_address_it_names(&self) -> Result<PortAddress> {
         PortAddress::from_its_parts(
-            end.machine.as_deref(),
-            end.stream.as_deref(),
-            &end.node,
-            &end.port,
+            self.machine.as_deref(),
+            self.stream.as_deref(),
+            &self.node,
+            &self.port,
         )
     }
 }
@@ -236,8 +236,8 @@ impl GraphSnapshot {
             || node_names_listed_for_a_refusal(nodes_by_cast_name.keys().map(String::as_str));
 
         for link in &self.links {
-            let source_address = GraphSnapshotLink::the_address_a_link_end_names(&link.source)?;
-            let target_address = GraphSnapshotLink::the_address_a_link_end_names(&link.target)?;
+            let source_address = link.source.the_port_address_it_names()?;
+            let target_address = link.target.the_port_address_it_names()?;
             for address in [&source_address, &target_address] {
                 address.refuse_when_it_names_another_machine(this_machine)?;
             }
@@ -1269,7 +1269,7 @@ mod tests {
     /// carrying the `runtime_name` a retired render wrote is refused, naming
     /// the keys a link end is written with.
     #[test]
-    fn a_link_end_carrying_a_key_no_address_chunk_is_is_refused_naming_the_keys_of_a_link_end() {
+    fn a_link_end_carrying_a_key_no_address_chunk_is_refused_naming_the_keys_of_a_link_end() {
         let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
             "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
             "links": [{"source": {"runtime_name": "rig", "stream": "a", "node": "camera",

@@ -291,7 +291,9 @@ impl EngineResourcesSharedByEveryStream {
             it_is_this_stream
         };
         if removed {
-            self.re_plan_every_link_reading_the_stream(stream.stream_name());
+            self.spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
+                stream.stream_name(),
+            );
         }
     }
 
@@ -310,7 +312,10 @@ impl EngineResourcesSharedByEveryStream {
     /// `source_stream_name`: each stream's re-plan is spawned on the engine's
     /// tokio runtime and commits on that stream's own compiler, never inline.
     /// Nothing once the engine is shutting down, when every stream is.
-    pub(crate) fn re_plan_every_link_reading_the_stream(&self, source_stream_name: &str) {
+    pub(crate) fn spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
+        &self,
+        source_stream_name: &str,
+    ) {
         let tokio = self.tokio_runtime_for_work_spawned_against_a_stream();
         if tokio.the_engine_has_shut_down() {
             return;

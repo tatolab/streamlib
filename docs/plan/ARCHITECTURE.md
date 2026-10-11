@@ -3375,7 +3375,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   that would work. The engine reads no bag key to carry a link. Linking to another machine is the
   sharing step's (the moq-on-the-tailnet entries below).
   [zenoh-and-moq-wheel-removal — SHIPPED #2643]
-  <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_key_this_runtime_does_not_read_is_refused_naming_it_and_where_it_sits -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_carrying_a_key_no_address_chunk_is_refused_naming_the_keys_of_a_link_end -->
   <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the_address_shape -->
   <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machine -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_an_input_as_its_source_naming_the_fix -->

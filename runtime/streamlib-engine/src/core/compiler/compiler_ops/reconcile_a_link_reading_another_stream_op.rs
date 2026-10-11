@@ -21,12 +21,14 @@ use super::open_iceoryx2_service_op::{
 use crate::core::error::Error;
 use crate::core::graph::{
     CutOffAReaderOfAnExposedOutputPort, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
-    Iceoryx2ServicesHeldOpenForLinkComponent, LinkReadingAnotherStreamComponent, LinkState,
+    Iceoryx2ServicesHeldOpenForLinkComponent, Link, LinkReadingAnotherStreamComponent, LinkState,
     LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent,
     OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortInAnotherStreamOnThisMachine,
     OutputPortReaderOutsideItsStream, PendingDeletionComponent, ProcessorInstanceComponent,
     ReaderOfAnExposedOutputPort, SourceSideOfALinkReadingAnotherStream,
-    WiringOfALinkReadingAnotherStream,
+    WiringOfALinkReadingAnotherStream, a_link_reading_another_stream_is_still_on_wiring_attempt,
+    a_link_reading_another_stream_is_still_to_be_wired,
+    why_a_link_awaits_a_source_stream_not_loaded,
 };
 use crate::core::runtime::{
     ExposedOutputPortReaderRegistration, LoadedStreamInThisRuntime, LoadedStreamTag,
@@ -88,11 +90,8 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
             reading_stream,
             link_id,
             generation,
-            LinkState::AwaitingRemote,
-            format!(
-                "the stream `{}` is not loaded on this machine; the link wires when it loads",
-                source.stream_name()
-            ),
+            WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSource,
+            why_a_link_awaits_a_source_stream_not_loaded(source.stream_name()),
         );
     };
     if let Some(why_the_source_stream_cannot_be_wired_to) =
@@ -102,7 +101,7 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
             reading_stream,
             link_id,
             generation,
-            LinkState::AwaitingRemote,
+            WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSource,
             why_the_source_stream_cannot_be_wired_to,
         );
     }
@@ -132,7 +131,7 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
             reading_stream,
             link_id,
             generation,
-            LinkState::AwaitingRemote,
+            WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSource,
             format!(
                 "the stream `{}` did not answer within {}s; the link wires at the next change \
                  to either stream",
@@ -150,7 +149,7 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
                 reading_stream,
                 link_id,
                 generation,
-                LinkState::AwaitingRemote,
+                WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSource,
                 reason,
             );
         }
@@ -161,7 +160,7 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
                 reading_stream,
                 link_id,
                 generation,
-                LinkState::AwaitingRemote,
+                WhyALinkReadingAnotherStreamCarriesNothing::AwaitingItsSource,
                 format!(
                     "{refusal}; the link was wired to it before, so it wires again when the \
                      port is opened to it"
@@ -174,7 +173,7 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
                 reading_stream,
                 link_id,
                 generation,
-                LinkState::Error,
+                WhyALinkReadingAnotherStreamCarriesNothing::Refused,
                 reason,
             );
         }
@@ -225,15 +224,14 @@ fn begin_a_wiring_attempt(
             None,
         )
     };
-    let Some(link) = reading_graph.traversal_mut().e(link_id).first_mut() else {
+    let Some(link) = reading_graph
+        .traversal_mut()
+        .e(link_id)
+        .first_mut()
+        .filter(|link| a_link_reading_another_stream_is_still_to_be_wired(link))
+    else {
         return not_this_reconciles();
     };
-    let refused_before = link
-        .get::<LinkStateComponent>()
-        .is_some_and(|state| state.0 == LinkState::Error);
-    if refused_before || link.has::<PendingDeletionComponent>() {
-        return not_this_reconciles();
-    }
     let Some(source) = link.source().in_another_stream_on_this_machine().cloned() else {
         return not_this_reconciles();
     };
@@ -291,8 +289,8 @@ fn begin_a_wiring_attempt(
                 reading_graph,
                 link_id,
                 generation,
-                LinkState::Error,
-                Some(refusal.clone()),
+                WhyALinkReadingAnotherStreamCarriesNothing::Refused,
+                refusal.clone(),
             );
             (
                 Err(HowALinkReadingAnotherStreamWasReconciled::Refused(refusal)),
@@ -457,7 +455,7 @@ fn open_the_destination_side_and_hold_the_wiring(
         exposure_registration,
         source_side,
     } = opened;
-    if !the_attempt_still_stands(reading_graph, link_id, generation) {
+    if the_link_still_on_wiring_attempt(reading_graph, link_id, generation).is_none() {
         return (
             HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire,
             WiringPiecesNoLinkTook::nothing_held(
@@ -480,8 +478,8 @@ fn open_the_destination_side_and_hold_the_wiring(
                 reading_graph,
                 link_id,
                 generation,
-                LinkState::Error,
-                Some(refusal.clone()),
+                WhyALinkReadingAnotherStreamCarriesNothing::Refused,
+                refusal.clone(),
             );
             return (
                 HowALinkReadingAnotherStreamWasReconciled::Refused(refusal),
@@ -494,7 +492,7 @@ fn open_the_destination_side_and_hold_the_wiring(
         }
     };
 
-    let Some(link) = reading_graph.traversal_mut().e(link_id).first_mut() else {
+    let Some(link) = the_link_still_on_wiring_attempt(reading_graph, link_id, generation) else {
         return (
             HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire,
             WiringPiecesNoLinkTook::nothing_held(
@@ -504,20 +502,28 @@ fn open_the_destination_side_and_hold_the_wiring(
             ),
         );
     };
-    let (how_it_stands, _) = opened_source_side
-        .hold_its_services_on_the_link_and_stamp_it(link, wire_reply_awaited_from_the_destination);
-    let Some(component) = link.get_mut::<LinkReadingAnotherStreamComponent>() else {
-        return (
-            HowALinkReadingAnotherStreamWasReconciled::WiredNow(how_it_stands),
-            WiringPiecesNoLinkTook::nothing_held(exposure_registration, source_side, None),
-        );
+    let replaced_wiring = match link.get_mut::<LinkReadingAnotherStreamComponent>() {
+        Some(component) => {
+            component.carries_what_its_source_publishes();
+            component.hold_wiring(WiringOfALinkReadingAnotherStream::new(
+                exposure_registration,
+                source_side,
+                source_stream_tag,
+            ))
+        }
+        None => {
+            return (
+                HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire,
+                WiringPiecesNoLinkTook::nothing_held(
+                    exposure_registration,
+                    source_side,
+                    Some(opened_source_side),
+                ),
+            );
+        }
     };
-    component.carries_what_its_source_publishes();
-    let replaced_wiring = component.hold_wiring(WiringOfALinkReadingAnotherStream::new(
-        exposure_registration,
-        source_side,
-        source_stream_tag,
-    ));
+    let how_it_stands = opened_source_side
+        .hold_its_services_on_the_link_and_stamp_it(link, wire_reply_awaited_from_the_destination);
     (
         HowALinkReadingAnotherStreamWasReconciled::WiredNow(how_it_stands),
         WiringPiecesNoLinkTook {
@@ -555,73 +561,86 @@ impl WiringPiecesNoLinkTook {
     }
 }
 
-/// Whether the attempt numbered `generation` is still the latest on link
-/// `link_id`, and the link is still to be wired.
-fn the_attempt_still_stands(
-    reading_graph: &Graph,
+/// Link `link_id` of `reading_graph`, while wiring attempt `generation` is
+/// still the latest on it and it is not on its way out.
+fn the_link_still_on_wiring_attempt<'graph>(
+    reading_graph: &'graph mut Graph,
     link_id: &LinkUniqueId,
     generation: u64,
-) -> bool {
+) -> Option<&'graph mut Link> {
     reading_graph
-        .traversal()
+        .traversal_mut()
         .e(link_id)
-        .first()
-        .is_some_and(|link| {
-            !link.has::<PendingDeletionComponent>()
-                && link
-                    .get::<LinkReadingAnotherStreamComponent>()
-                    .is_some_and(|component| component.wiring_generation() == generation)
-        })
+        .first_mut()
+        .filter(|link| a_link_reading_another_stream_is_still_on_wiring_attempt(link, generation))
 }
 
-/// Stamp link `link_id` `state`, carrying nothing for `reason`, unless a later
-/// attempt overtook `generation` or the link is on its way out.
+/// Why a reconcile leaves a link reading another stream carrying nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhyALinkReadingAnotherStreamCarriesNothing {
+    /// It waits for its source, and reads `awaiting_remote`.
+    AwaitingItsSource,
+    /// It was refused for good, and reads `error`.
+    Refused,
+}
+
+impl WhyALinkReadingAnotherStreamCarriesNothing {
+    fn link_state(self) -> LinkState {
+        match self {
+            Self::AwaitingItsSource => LinkState::AwaitingRemote,
+            Self::Refused => LinkState::Error,
+        }
+    }
+
+    fn how_it_was_reconciled(self, reason: String) -> HowALinkReadingAnotherStreamWasReconciled {
+        match self {
+            Self::AwaitingItsSource => {
+                HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason)
+            }
+            Self::Refused => HowALinkReadingAnotherStreamWasReconciled::Refused(reason),
+        }
+    }
+}
+
+/// Stamp link `link_id` as carrying nothing for `why`, in the words of
+/// `reason`, unless a later attempt overtook `generation` or the link is on its
+/// way out; say whether it was stamped.
 fn stamp_unless_the_attempt_was_overtaken(
     reading_graph: &mut Graph,
     link_id: &LinkUniqueId,
     generation: u64,
-    state: LinkState,
-    reason: Option<String>,
+    why: WhyALinkReadingAnotherStreamCarriesNothing,
+    reason: String,
 ) -> bool {
-    if !the_attempt_still_stands(reading_graph, link_id, generation) {
-        return false;
-    }
-    let Some(link) = reading_graph.traversal_mut().e(link_id).first_mut() else {
+    let Some(link) = the_link_still_on_wiring_attempt(reading_graph, link_id, generation) else {
         return false;
     };
-    link.insert(LinkStateComponent(state));
+    link.insert(LinkStateComponent(why.link_state()));
     if let Some(component) = link.get_mut::<LinkReadingAnotherStreamComponent>() {
-        match reason {
-            Some(reason) => component.carry_nothing_because(reason),
-            None => component.carries_what_its_source_publishes(),
-        }
+        component.carry_nothing_because(reason);
     }
     true
 }
 
-/// Stamp link `link_id` of `reading_stream` `state` for `reason`, unless a
-/// later attempt overtook `generation`, and say how it was reconciled.
+/// Stamp link `link_id` of `reading_stream` as carrying nothing for `why`, in
+/// the words of `reason`, unless a later attempt overtook `generation`, and
+/// say how it was reconciled.
 fn carry_nothing_for(
     reading_stream: &LoadedStreamInThisRuntime,
     link_id: &LinkUniqueId,
     generation: u64,
-    state: LinkState,
+    why: WhyALinkReadingAnotherStreamCarriesNothing,
     reason: String,
 ) -> HowALinkReadingAnotherStreamWasReconciled {
+    let state = why.link_state();
     tracing::info!(%link_id, %state, "[WIRE] a link reading another stream: {reason}");
     let stamped = reading_stream.compiler.scope(|graph, _tx| {
-        stamp_unless_the_attempt_was_overtaken(
-            graph,
-            link_id,
-            generation,
-            state,
-            Some(reason.clone()),
-        )
+        stamp_unless_the_attempt_was_overtaken(graph, link_id, generation, why, reason.clone())
     });
-    match (stamped, state) {
-        (false, _) => HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire,
-        (true, LinkState::Error) => HowALinkReadingAnotherStreamWasReconciled::Refused(reason),
-        (true, _) => HowALinkReadingAnotherStreamWasReconciled::AwaitingItsSource(reason),
+    if stamped {
+        why.how_it_was_reconciled(reason)
+    } else {
+        HowALinkReadingAnotherStreamWasReconciled::NotThisReconcilesToWire
     }
 }
 

@@ -194,7 +194,7 @@ impl OpenedSourceSideOfALink {
         self,
         link: &mut Link,
         wire_reply_awaited_from_the_destination: Option<Arc<OutOfProcessLinkWireReply>>,
-    ) -> (HowAnOpenedLinkStands, Option<SourceSideOfALinkWiredOn>) {
+    ) -> HowAnOpenedLinkStands {
         let link_id = link.id.clone();
         link.insert_component_without_rendering_it(Iceoryx2ServicesHeldOpenForLinkComponent {
             channel_data_service: self.channel_data_service,
@@ -216,7 +216,7 @@ impl OpenedSourceSideOfALink {
         // the component below, which the end fills from its bridge's reader
         // thread. `docs/plan/ARCHITECTURE.md` §Processor model, the
         // `[local-transport-hardening]` entry.
-        let how_it_stands = if wire_replies_awaited_from_its_out_of_process_ends.is_empty() {
+        if wire_replies_awaited_from_its_out_of_process_ends.is_empty() {
             link.insert(LinkStateComponent(LinkState::Wired));
             tracing::info!(
                 channel = %self.channel_service_name,
@@ -235,8 +235,7 @@ impl OpenedSourceSideOfALink {
                 link_id
             );
             HowAnOpenedLinkStands::PendingItsOutOfProcessEndsAnswers
-        };
-        (how_it_stands, self.wired_on)
+        }
     }
 }
 
@@ -302,11 +301,21 @@ pub(crate) fn open_the_source_side_of_a_link(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_chunk_ceiling_bytes(trust_tier);
+    let windowed_destination_outside_the_sources_graph = if destination_windows_its_reads
+        && !source_graph
+            .traversal()
+            .v(&destination.dest_proc_id)
+            .exists()
+    {
+        WindowedDestinationOutsideTheSourcesGraph::Present
+    } else {
+        WindowedDestinationOutsideTheSourcesGraph::Absent
+    };
     let channel_sizing = resolve_channel_sizing(
         source_graph,
         iceoryx2_node,
         source,
-        destination_windows_its_reads,
+        windowed_destination_outside_the_sources_graph,
     )?;
 
     let channel_data_service = iceoryx2_node.open_or_create_service(
@@ -632,16 +641,23 @@ fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef) -> Result<
     Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL)
 }
 
+/// Whether a destination being wired from a source, held in a graph other
+/// than the source's, windows its reads — a reader the source's graph cannot
+/// see when it sizes the channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowedDestinationOutsideTheSourcesGraph {
+    Present,
+    Absent,
+}
+
 /// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
 /// source_port)` — the single derivation both the service-open compiler op and
 /// the `tap` op share, refusing a source port past the destination cap.
-/// `a_windowed_reader_outside_the_graph` says a destination this graph does
-/// not hold windows its reads.
 pub(crate) fn resolve_channel_sizing(
     graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
-    a_windowed_reader_outside_the_graph: bool,
+    windowed_destination_outside_the_sources_graph: WindowedDestinationOutsideTheSourcesGraph,
 ) -> Result<ChannelSizing> {
     Ok(ChannelSizing {
         max_subscribers: channel_max_subscribers(graph, source)?,
@@ -649,7 +665,7 @@ pub(crate) fn resolve_channel_sizing(
             graph,
             iceoryx2_node,
             source,
-            a_windowed_reader_outside_the_graph,
+            windowed_destination_outside_the_sources_graph,
         )?,
     })
 }
@@ -668,14 +684,16 @@ fn channel_service_creation_depth(
     graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
-    a_windowed_reader_outside_the_graph: bool,
+    windowed_destination_outside_the_sources_graph: WindowedDestinationOutsideTheSourcesGraph,
 ) -> Result<usize> {
     if let Some(live_creation_depth) =
         creation_depth_of_the_live_channel(graph, iceoryx2_node, source)?
     {
         return Ok(live_creation_depth);
     }
-    if a_windowed_reader_outside_the_graph {
+    if windowed_destination_outside_the_sources_graph
+        == WindowedDestinationOutsideTheSourcesGraph::Present
+    {
         return Ok(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH);
     }
     for link in every_link_carrying_from(graph, source)
@@ -4336,7 +4354,7 @@ mod tests {
             &graph,
             &Iceoryx2Node::for_this_test_process(),
             &OutputLinkPortRef::new(src_uid.clone(), "out1"),
-            false,
+            WindowedDestinationOutsideTheSourcesGraph::Absent,
         )
         .expect("sizing resolves for a wired channel");
         assert_eq!(
@@ -4695,17 +4713,17 @@ mod tests {
                 &opened_source_side,
                 destination,
             )?;
+            let wired_on = opened_source_side.wired_on().cloned();
             let link = reading_graph
                 .traversal_mut()
                 .e(link_id)
                 .first_mut()
                 .expect("the link is in the reading graph");
-            Ok(
-                opened_source_side.hold_its_services_on_the_link_and_stamp_it(
-                    link,
-                    wire_reply_awaited_from_the_destination,
-                ),
-            )
+            let how_it_stands = opened_source_side.hold_its_services_on_the_link_and_stamp_it(
+                link,
+                wire_reply_awaited_from_the_destination,
+            );
+            Ok((how_it_stands, wired_on))
         }
 
         /// A native source in one graph and a native reader in another, and
@@ -4754,6 +4772,54 @@ mod tests {
                     &self.link_id,
                 )
             }
+        }
+
+        /// A windowed destination the source's graph does not hold creates
+        /// the channel as deep as its ring, as one in the source's own graph
+        /// does.
+        ///
+        /// Fail-without-fix: size the channel off the source's graph alone and
+        /// it is created at the ordered depth, shallower than the ring.
+        #[test]
+        fn a_windowed_destination_in_another_graph_creates_the_channel_as_deep_as_its_ring() {
+            let mut source_graph = Graph::new();
+            let source_id = add_mock_output_only(&mut source_graph);
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(
+                &mut source_graph,
+                &source_id,
+            );
+            let mut reading_graph = Graph::new();
+            let dest_id = add_mock_windowed_audio_consumer(&mut reading_graph);
+            let link_id = reading_graph
+                .traversal_mut()
+                .add_e_reading_another_stream(
+                    OutputPortInAnotherStreamOnThisMachine::new("a", "microphone", "out1").unwrap(),
+                    InputLinkPortRef::new(&dest_id, "audio"),
+                )
+                .first()
+                .expect("the link reading another graph is added")
+                .id
+                .clone();
+            let destination = read_the_destination_of_a_link(
+                &mut reading_graph,
+                &InputLinkPortRef::new(&dest_id, "audio"),
+                &link_id,
+            )
+            .expect("the windowed destination is read");
+
+            let _opened_source_side = open_the_source_side_of_a_link(
+                &mut source_graph,
+                &OutputLinkPortRef::new(&source_id, "out1"),
+                &link_id,
+                &destination,
+                &Iceoryx2Node::for_this_test_process(),
+            )
+            .expect("the source's side opens");
+
+            assert_eq!(
+                creation_depth_a_helper_opening_out1_finds(&source_id),
+                WINDOWED_PORT_SUBSCRIBER_RING_DEPTH
+            );
         }
 
         /// Fail-without-fix: open both halves on the reading graph, as the
