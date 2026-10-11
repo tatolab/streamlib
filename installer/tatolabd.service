@@ -1,0 +1,20 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# This machine's Tatolab runtime, as a systemd user service. install.sh copies
+# it to ~/.config/systemd/user/ from the release it installs.
+
+[Unit]
+Description=Tatolab runtime — this machine's streams
+Documentation=https://github.com/tatolab/streamlib
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/share/tatolab/current/bin/tatolabd
+Restart=on-failure
+# tatolabd ends its own Python processors on SIGTERM; the rest of the unit is
+# killed only if anything outlives it.
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
