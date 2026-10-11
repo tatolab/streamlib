@@ -147,13 +147,13 @@ pub fn validate_channel_name(s: &str) -> Result<()> {
 /// [`Error::ChannelNameTooLong`].
 pub fn source_channel_name(source_processor: &str, source_output: &str) -> Result<ChannelName> {
     let processor = source_processor.to_ascii_lowercase();
-    validate_channel_chunk(source_output, source_output)?;
+    let name_before_any_shortening = format!("{processor}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
+    validate_channel_chunk(&name_before_any_shortening, source_output)?;
 
     let sep_len = CHANNEL_CHUNK_SEPARATOR.len_utf8();
-    if processor.len() + sep_len + source_output.len() <= MAX_CHANNEL_NAME_BYTES {
-        let name = format!("{processor}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
-        validate_channel_chunk(&name, &processor)?;
-        return Ok(ChannelName(name));
+    if name_before_any_shortening.len() <= MAX_CHANNEL_NAME_BYTES {
+        validate_channel_chunk(&name_before_any_shortening, &processor)?;
+        return Ok(ChannelName(name_before_any_shortening));
     }
 
     // Overflow: hash-legalize ONLY the machine-generated processor chunk, never
@@ -442,7 +442,8 @@ mod tests {
             assert!(
                 matches!(
                     source_channel_name("cam", port),
-                    Err(Error::ChannelNameChunkIsNotOneAddressChunk { ref chunk, .. }) if chunk == port
+                    Err(Error::ChannelNameChunkIsNotOneAddressChunk { ref channel, ref chunk, .. })
+                        if chunk == port && *channel == format!("cam/{port}")
                 ),
                 "{port:?} is refused as the port chunk"
             );

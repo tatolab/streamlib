@@ -1065,10 +1065,7 @@ impl LoadedStreamInThisRuntime {
             let target =
                 InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port);
             let source = link.source.the_port_address_it_names()?;
-            match source
-                .stream()
-                .filter(|source_stream| *source_stream != self.stream_name())
-            {
+            match source.the_stream_it_names_other_than(self.stream_name()) {
                 Some(source_stream) => {
                     self.connect_from_an_output_port_in_another_stream(
                         OutputPortInAnotherStreamOnThisMachine::new(

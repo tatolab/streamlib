@@ -557,6 +557,7 @@ fn the_plan_these_operations_make(
     use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
 
     let mut plan = CompilationPlan::default();
+    let mut links_queued_in_this_batch = std::collections::HashSet::new();
 
     for op in operations {
         match op {
@@ -608,9 +609,10 @@ fn the_plan_these_operations_make(
 
                 if pending_deletion {
                     tracing::debug!("AddLink({}): pending deletion, skipping add", id);
-                } else if plan.links_to_add.contains(&id) {
+                } else if links_queued_in_this_batch.contains(&id) {
                     tracing::debug!("AddLink({}): already queued in this batch, skipping", id);
                 } else if exists && !already_wired_or_awaiting_an_answer {
+                    links_queued_in_this_batch.insert(id.clone());
                     plan.links_to_add.push(id);
                 } else if !exists {
                     tracing::warn!("AddLink({}): not in graph, skipping", id);

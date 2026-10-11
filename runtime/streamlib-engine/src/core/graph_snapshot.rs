@@ -241,9 +241,8 @@ impl GraphSnapshot {
             for address in [&source_address, &target_address] {
                 address.refuse_when_it_names_another_machine(this_machine)?;
             }
-            if let Some(input_stream) = target_address
-                .stream()
-                .filter(|input_stream| *input_stream != loaded_stream_name)
+            if let Some(input_stream) =
+                target_address.the_stream_it_names_other_than(loaded_stream_name)
             {
                 return Err(Error::LinkMadeOutsideTheStreamOfItsInput {
                     acting_stream: loaded_stream_name.to_string(),
@@ -251,8 +250,8 @@ impl GraphSnapshot {
                 });
             }
             let source_is_in_this_stream = source_address
-                .stream()
-                .is_none_or(|source_stream| source_stream == loaded_stream_name);
+                .the_stream_it_names_other_than(loaded_stream_name)
+                .is_none();
             let ends_in_this_stream = [
                 (&link.source, PortDirection::Output),
                 (&link.target, PortDirection::Input),

@@ -97,6 +97,11 @@ impl PortAddress {
         self.stream.as_deref()
     }
 
+    /// The stream the address names, when it names one other than `this_stream`.
+    pub fn the_stream_it_names_other_than(&self, this_stream: &str) -> Option<&str> {
+        self.stream().filter(|stream| *stream != this_stream)
+    }
+
     /// The name of the node that owns the port.
     pub fn node_name(&self) -> &str {
         &self.node

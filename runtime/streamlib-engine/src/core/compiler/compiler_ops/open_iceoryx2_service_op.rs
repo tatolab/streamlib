@@ -766,9 +766,7 @@ pub(crate) fn find_the_source_a_caller_named(
     let not_found = || Error::TapChannelNotFound(port_address.to_string());
     let address = crate::core::graph::PortAddress::parse(port_address)?;
     address.refuse_when_it_names_another_machine(this_machine)?;
-    if let Some(stream) = address.stream()
-        && stream != this_stream
-    {
+    if let Some(stream) = address.the_stream_it_names_other_than(this_stream) {
         return Err(Error::InvalidPortAddress(format!(
             "`{port_address}` names a port in the stream `{stream}`, and this tap reads the \
              stream `{this_stream}`; tap `{stream}` to read its ports"
