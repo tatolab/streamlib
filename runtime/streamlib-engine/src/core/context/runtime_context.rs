@@ -635,10 +635,11 @@ impl RuntimeContext {
 
     /// Ensure the platform is ready for runtime operations.
     ///
-    /// On macOS this builds the process's one window event pump when called on
-    /// the process's first thread, the only thread AppKit lets drive it, before
-    /// any processor can ask it for a window. Called anywhere else, the pump
-    /// settles as unavailable and every window request says why.
+    /// On macOS this builds the process's one window event pump, before any
+    /// processor can ask it for a window, unless something built it first — a
+    /// run entered on the first thread does. Only that thread can build it: a
+    /// first call from anywhere else settles the pump as unavailable, and every
+    /// window request says why.
     #[cfg(target_os = "macos")]
     pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
         crate::core::window_event_pump::build_the_process_wide_window_event_pump_or_log_why_no_window_can_be_created();
