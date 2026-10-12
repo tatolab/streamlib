@@ -350,3 +350,11 @@ Each dispatch path fence-waits its own submission before it returns:
   scope; a prior read needs only the execution dependency. Sync validation on an M1 Max reported the write-after-read in a
   real graphics producer → `DisplayWindow` run in 3 of 3 runs without the fix and 0 of 3 with
   it; the evidence is on the issue.
+- #2730 took all four ops off the escalate scope (option D's shape) once the owner ruled the
+  per-frame escalate a bug: the starter test-pattern stream escalated on every frame
+  (`escalations_last_second=31`). Each op still waits on its own fence before replying.
+  Compute is serialized by its recorder lock. Graphics and ray tracing each keep one cached
+  input-transition recorder whose lock is held across binding, submit and fence wait, so they
+  create nothing per frame. A storage image is barriered on every run. Not done: the Path-2
+  re-import now runs off the gate (the surface copy already did), and the layout-cell race
+  (job 6) is wider.
