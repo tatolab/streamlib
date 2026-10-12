@@ -1,0 +1,29 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Holds the bare `tatolab` name on PyPI (docs/decisions/tatolab-names.md). Not
+# part of the release: bump the version and `uv publish` it by hand whenever
+# the README's package list or install commands change.
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tatolab"
+version = "0.0.1"
+description = "Placeholder that installs nothing. Tatolab installs as an app: see tatolab.com/docs/install"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "BUSL-1.1"
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = ["Development Status :: 7 - Inactive"]
+
+[project.urls]
+Homepage = "https://tatolab.com"
+Documentation = "https://tatolab.com/docs"
+Install = "https://tatolab.com/docs/install"
+"Python SDK" = "https://pypi.org/project/tatolab-stream/"
+Source = "https://github.com/tatolab/streamlib"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true

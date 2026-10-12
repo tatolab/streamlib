@@ -24,8 +24,9 @@ streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP
   by the owner). The bare name means the whole product everywhere else — the app, brew, the CLI —
   so a pip `tatolab` holding only the stream-building part reads as the product and is not; the
   spelled `tatolab-stream` matches every extension (`tatolab-moq`). The bare PyPI name is
-  held by a placeholder that installs nothing (`tatolab` 0.0.0, published 2026-10-02), so a
-  guessed `pip install tatolab` meets a pointer instead of a stranger's package.
+  held by a placeholder that installs nothing (`tatolab` 0.0.0, published 2026-10-02; 0.0.1,
+  2026-10-12, built from `sdk/tatolab-pypi-placeholder/`), so a guessed `pip install tatolab`
+  meets a pointer to the app and the real packages instead of a stranger's package.
 - **`tatolab-streams` (plural).** Reads as a collection of streams, which is what a pack is.
 - **One `tatolab` package owning `tatolab/__init__.py`.** A regular package shadows every
   namespace portion on the path (PEP 420), hiding the runtime's lent portion and every extension
