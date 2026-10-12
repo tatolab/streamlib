@@ -31,9 +31,10 @@ skill runs it and sends what it wrote.
    measured as though it were the change. The stream compiles in the fixtures directory's `.venv`,
    which the fixture makes with uv the first time (`fixture_runtime_unit.sh`).
 
-   Three phases, each failing on its own terms: `recording_stream.py` runs on `tatolab run` until
-   the file holds enough video, then `tatolab run` takes SIGTERM and forwards it to `tatolabd` (a
-   run needing SIGKILL is a hard fail — teardown is what closes the last fragment); `cargo xtask mp4-inspect` reads the written file; and
+   Three phases, each failing on its own terms: the fixture starts its own `tatolabd` and
+   `recording_stream.py` runs attached to `tatolab run` until the file holds enough video, then
+   `tatolab run` takes SIGTERM and the runtime unloads the stream (a run needing SIGKILL is a hard
+   fail — teardown is what closes the last fragment) before the fixture stops its runtime; `cargo xtask mp4-inspect` reads the written file; and
    `codec_roundtrip_rig --source mp4:<file>` replays the video track back through our decoder,
    locked to the per-codec vivid baseline within ±0.05.
 

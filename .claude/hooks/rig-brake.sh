@@ -252,7 +252,7 @@ if [ "$outcome" = ask ]; then
 fi
 
 system_message="${config_problems}rig-brake: ${first_rule} noted, not a prompt. Silence it: ${HELPER} rule ${first_rule} off  or  ${HELPER} allow '${suggested_glob}'"
-context="rig-brake note, advisory only, nothing was blocked: this command matched rule ${rules_text}. It drives the rig. That is fine when the owner asked for this eval. In an unattended or sandboxed firing it dies at exit 144, so park it for /verify-live instead. Control-plane reads (tatolab nodes, graph, tap, logs, exchange) never trigger this note. Owner preferences: ${preferences:-none recorded}. The owner can silence this for good with \`${HELPER} rule ${first_rule} off\` or \`${HELPER} allow '${suggested_glob}'\`; offer that if they say the command is fine, and never add an exception yourself."
+context="rig-brake note, advisory only, nothing was blocked: this command matched rule ${rules_text}. It drives the rig. That is fine when the owner asked for this eval. In an unattended or sandboxed firing it dies at exit 144, so park it for /verify-live instead. Control-plane verbs (tatolab streams, graph, tap, logs, exchange, stop, rm) never trigger this note. Owner preferences: ${preferences:-none recorded}. The owner can silence this for good with \`${HELPER} rule ${first_rule} off\` or \`${HELPER} allow '${suggested_glob}'\`; offer that if they say the command is fine, and never add an exception yourself."
 jq -n --arg message "$system_message" --arg context "$context" \
   '{systemMessage: $message, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $context}}'
 exit 0

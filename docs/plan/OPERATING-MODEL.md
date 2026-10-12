@@ -183,8 +183,8 @@ ends with a say-back loop, and none of them commits work:
 
 ### Kept, consolidated, retired
 
-- **Kept unchanged:** the nine live-ops CLI skills (`discover-running-nodes` …
-  `teardown-running-node`) — already perfectly shaped (one skill = one CLI verb);
+- **Kept unchanged:** the nine live-ops CLI skills (`list-running-streams` …
+  `stop-running-stream`) — already perfectly shaped (one skill = one CLI verb);
   `gh-stack`; `local-ci-runner`; `rust-craftsmanship-reviewer`; the three domain experts —
   `gpu-vulkan-expert`, `linux-media-expert`, and `polyglot-ipc-expert`, re-scoped to
   helper-process IPC.
