@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.4](https://github.com/tatolab/streamlib/compare/v0.45.3...v0.45.4) (2026-10-12)
+
+
+### Bug Fixes
+
+* **runtime:** a helper's per-frame dispatch, draw and trace stop taking the escalate gate ([#2731](https://github.com/tatolab/streamlib/issues/2731)) ([666c57e](https://github.com/tatolab/streamlib/commit/666c57e86f098609095852c4c64dfaffd62f1451))
+
 ## [0.45.3](https://github.com/tatolab/streamlib/compare/v0.45.2...v0.45.3) (2026-10-12)
 
 
