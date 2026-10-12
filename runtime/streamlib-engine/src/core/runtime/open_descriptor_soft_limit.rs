@@ -58,9 +58,9 @@ impl fmt::Display for OpenDescriptorSoftLimitRaise {
 /// Raise this process's soft open-descriptor limit to the highest value it
 /// may take.
 ///
-/// The first call records the limit the process started with, which
-/// [`start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with`]
-/// hands every interpreter; a later call never changes that record.
+/// The first call records the limit the process started with, which every
+/// interpreter a stream starts afterwards runs at; a later call never changes
+/// that record.
 #[must_use]
 pub fn raise_the_open_descriptor_soft_limit_to_its_ceiling() -> OpenDescriptorSoftLimitRaise {
     let current = match the_open_descriptor_limit() {
