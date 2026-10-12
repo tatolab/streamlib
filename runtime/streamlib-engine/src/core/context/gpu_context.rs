@@ -849,9 +849,9 @@ pub struct GpuContext {
     /// One recorder, not one per recording: its command pool, primary command
     /// buffer and completion fence are exactly what a recording reuses, and
     /// allocating them per frame would spend the submission the batch op
-    /// exists to save. Serial use is what the recorder requires and what it
-    /// gets — both dispatch ops run inside the escalate gate, which
-    /// serializes runtime-wide.
+    /// exists to save. Serial use is what the recorder requires, and this lock
+    /// is what gives it: a dispatch holds it from recording through the fence
+    /// wait, and the escalate dispatch ops take no other lock.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     batched_compute_dispatch_recorder:
         Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
@@ -873,6 +873,17 @@ pub struct GpuContext {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     ray_tracing_kernel_cache:
         Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanRayTracingKernel>>>>,
+    /// Held across one escalate draw's staged bindings, submit and fence wait.
+    ///
+    /// A graphics kernel stages its bindings on itself, and the cache hands one
+    /// kernel to every helper registering the same shaders, so two draws
+    /// interleaving would render with each other's bindings.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    graphics_kernel_staged_bindings_draw_lock: Arc<parking_lot::Mutex<()>>,
+    /// Held across one escalate trace's staged bindings, submit and fence
+    /// wait, for the reason `graphics_kernel_staged_bindings_draw_lock` is.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    ray_tracing_kernel_staged_bindings_trace_lock: Arc<parking_lot::Mutex<()>>,
     /// Acceleration structures built for the
     /// `register_acceleration_structure_blas` / `_tlas` escalate ops.
     ///
@@ -931,6 +942,10 @@ impl GpuContext {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
+            graphics_kernel_staged_bindings_draw_lock: Arc::new(parking_lot::Mutex::new(())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            ray_tracing_kernel_staged_bindings_trace_lock: Arc::new(parking_lot::Mutex::new(())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             acceleration_structure_registry: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -979,6 +994,10 @@ impl GpuContext {
             graphics_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            graphics_kernel_staged_bindings_draw_lock: Arc::new(parking_lot::Mutex::new(())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            ray_tracing_kernel_staged_bindings_trace_lock: Arc::new(parking_lot::Mutex::new(())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             acceleration_structure_registry: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -3174,6 +3193,15 @@ impl GpuContext {
             .map(Arc::clone)
     }
 
+    /// Serialize one escalate draw against every other, from its first staged
+    /// binding through its fence wait.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn hold_graphics_kernel_staged_bindings_for_one_draw(
+        &self,
+    ) -> parking_lot::MutexGuard<'_, ()> {
+        self.graphics_kernel_staged_bindings_draw_lock.lock()
+    }
+
     /// Build a ray-tracing kernel for the `register_ray_tracing_kernel`
     /// escalate op, or hand back one an identical earlier registration already
     /// built.
@@ -3278,6 +3306,15 @@ impl GpuContext {
             .unwrap()
             .get(kernel_id)
             .map(Arc::clone)
+    }
+
+    /// Serialize one escalate trace against every other, from its first staged
+    /// binding through its fence wait.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn hold_ray_tracing_kernel_staged_bindings_for_one_trace(
+        &self,
+    ) -> parking_lot::MutexGuard<'_, ()> {
+        self.ray_tracing_kernel_staged_bindings_trace_lock.lock()
     }
 
     /// Take ownership of a freshly built acceleration structure and return the

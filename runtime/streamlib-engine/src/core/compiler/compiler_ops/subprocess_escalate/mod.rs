@@ -322,3 +322,31 @@ pub(crate) fn parse_op_for_tests(value: &serde_json::Value) -> Result<EscalateRe
         .ok_or_else(|| Error::Runtime("not an escalate_request".to_string()))?
         .map_err(|e| Error::Runtime(e.message))
 }
+
+/// Run `frame_count` frames of `run_one_frame` with the escalate gate held on
+/// this thread, failing the test by name if any frame enters the gate: a frame
+/// that does panics as a re-entry rather than blocking.
+#[cfg(test)]
+pub(super) fn run_frames_with_the_escalate_gate_held<FrameResult>(
+    sandbox: &GpuContextLimitedAccess,
+    frame_count: usize,
+    run_one_frame: impl FnMut(usize) -> FrameResult,
+) -> Vec<FrameResult> {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let escalate_gate = sandbox.host_inner().escalate_gate();
+    escalate_gate.enter();
+    let frames_under_the_held_gate = catch_unwind(AssertUnwindSafe(|| {
+        (0..frame_count).map(run_one_frame).collect::<Vec<_>>()
+    }));
+    escalate_gate.exit();
+
+    frames_under_the_held_gate.unwrap_or_else(|gate_reentry_panic| {
+        let message = gate_reentry_panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| gate_reentry_panic.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        panic!("a per-frame op entered the escalate gate: {message}")
+    })
+}

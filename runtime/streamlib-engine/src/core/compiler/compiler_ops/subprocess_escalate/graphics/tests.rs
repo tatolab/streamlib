@@ -1588,3 +1588,64 @@ fn a_draw_binding_its_own_colour_target_is_refused() {
     );
     drop(held);
 }
+
+/// A frame's draw is per-frame work: it takes neither the process-wide escalate
+/// gate nor the whole-device idle wait that comes with it (#2730).
+#[test]
+fn a_draw_every_frame_never_enters_the_escalate_gate() {
+    const FRAMES_AT_A_FIXED_EXTENT: usize = 30;
+
+    let Some(sandbox) = make_gpu_sandbox_if_available() else {
+        println!("a_draw_every_frame_never_enters_the_escalate_gate: no GPU — skipping");
+        return;
+    };
+    let registry = EscalateHandleRegistry::new();
+    let kernel_id = register_graphics_kernel_or_panic(
+        &sandbox,
+        &registry,
+        register_from_glsl("reg-gateless-draw", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+    )
+    .handle_id;
+    let held = sandbox
+        .escalate(|full| {
+            let source = full.acquire_texture(
+                &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
+                    .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
+            )?;
+            let target = full.acquire_texture(
+                &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
+                    .with_usage(TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC),
+            )?;
+            full.register_texture("gateless-draw-source", source.texture().clone());
+            full.register_texture("gateless-draw-target", target.texture().clone());
+            Ok((source, target))
+        })
+        .expect("a source and a colour target");
+
+    let responses = super::super::run_frames_with_the_escalate_gate_held(
+        &sandbox,
+        FRAMES_AT_A_FIXED_EXTENT,
+        |frame_index| {
+            let mut run = make_run_req(
+                &format!("frame-{frame_index}"),
+                &kernel_id,
+                "gateless-draw-target",
+            );
+            run.bindings = vec![EscalateRequestRunGraphicsDrawBinding {
+                kind: EscalateGraphicsBindingKind::SampledTexture,
+                name: "source_image".to_string(),
+                surface_uuid: "gateless-draw-source".to_string(),
+            }];
+            run.extent_width = 64;
+            run.extent_height = 64;
+            handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
+                .expect("must produce a response")
+        },
+    );
+    for (frame_index, response) in responses.into_iter().enumerate() {
+        if let EscalateResponse::Err(refusal) = response {
+            panic!("frame {frame_index}'s draw was refused: {}", refusal.message);
+        }
+    }
+    drop(held);
+}

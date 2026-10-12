@@ -1318,3 +1318,25 @@ fn a_trace_refuses_a_storage_buffer_binding_by_name() {
         "must name the binding and its kind, got: {message}"
     );
 }
+
+/// A frame's trace is per-frame work: it takes neither the process-wide
+/// escalate gate nor the whole-device idle wait that comes with it (#2730).
+#[test]
+fn a_trace_every_frame_never_enters_the_escalate_gate() {
+    const FRAMES_AT_A_FIXED_EXTENT: usize = 30;
+
+    let Some(scene) = make_ray_traced_scene_if_available() else {
+        println!("a_trace_every_frame_never_enters_the_escalate_gate: no ray tracing — skipping");
+        return;
+    };
+    let responses = super::super::run_frames_with_the_escalate_gate_held(
+        &scene.sandbox,
+        FRAMES_AT_A_FIXED_EXTENT,
+        |frame_index| scene.trace(scene.run_req(&format!("frame-{frame_index}"))),
+    );
+    for (frame_index, response) in responses.into_iter().enumerate() {
+        if let EscalateResponse::Err(refusal) = response {
+            panic!("frame {frame_index}'s trace was refused: {}", refusal.message);
+        }
+    }
+}

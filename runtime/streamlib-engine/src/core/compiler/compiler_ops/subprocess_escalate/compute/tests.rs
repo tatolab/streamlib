@@ -11,6 +11,7 @@
 //! array is the only place it can be tested at all.
 
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
+use super::super::run_frames_with_the_escalate_gate_held;
 use super::linux_and_macos::{
     handle_register_compute_kernel, handle_run_compute_kernel, handle_run_compute_kernel_batch,
     plan_supplied_compute_bindings,
@@ -697,6 +698,124 @@ fn a_dispatch_reads_one_surface_and_writes_another() {
                      `source_image` and wrote `output_image`, by name"
         );
     }
+    drop(held);
+}
+
+/// Frames a gate-held test runs at one fixed extent: a second of the starter
+/// stream's 30 fps.
+const FRAMES_AT_A_FIXED_EXTENT: usize = 30;
+
+/// A frame's dispatch is per-frame work: it takes neither the process-wide
+/// escalate gate nor the whole-device idle wait that comes with it (#2730).
+#[test]
+fn a_dispatch_every_frame_never_enters_the_escalate_gate() {
+    let Some(sandbox) = make_gpu_sandbox_if_available() else {
+        println!("a_dispatch_every_frame_never_enters_the_escalate_gate: no GPU — skipping");
+        return;
+    };
+    let kernel_id = register_read_one_write_another(&sandbox).handle_id;
+    let held = seeded_chain_textures(
+        &sandbox,
+        ["gateless-dispatch-source", "gateless-dispatch-output"],
+    );
+
+    let responses = run_frames_with_the_escalate_gate_held(
+        &sandbox,
+        FRAMES_AT_A_FIXED_EXTENT,
+        |frame_index| {
+            handle_run_compute_kernel(
+                &sandbox,
+                format!("frame-{frame_index}"),
+                EscalateRequestRunComputeKernel {
+                    bindings: vec![
+                        EscalateRequestRunComputeKernelBinding {
+                            kind: EscalateComputeBindingKind::SampledTexture,
+                            name: "source_image".to_string(),
+                            target_id: "gateless-dispatch-source".to_string(),
+                        },
+                        EscalateRequestRunComputeKernelBinding {
+                            kind: EscalateComputeBindingKind::StorageImage,
+                            name: "output_image".to_string(),
+                            target_id: "gateless-dispatch-output".to_string(),
+                        },
+                    ],
+                    group_count_x: 8,
+                    group_count_y: 8,
+                    group_count_z: 1,
+                    kernel_id: kernel_id.clone(),
+                    push_constants_hex: "00000000".to_string(),
+                    request_id: format!("frame-{frame_index}"),
+                },
+            )
+        },
+    );
+    for (frame_index, response) in responses.into_iter().enumerate() {
+        if let EscalateResponse::Err(refusal) = response {
+            panic!("frame {frame_index}'s dispatch was refused: {}", refusal.message);
+        }
+    }
+    drop(held);
+}
+
+/// A batch is a frame's multi-pass dispatch, so it stays off the escalate gate
+/// as a single dispatch does (#2730).
+#[test]
+fn a_batch_every_frame_never_enters_the_escalate_gate() {
+    let Some(sandbox) = make_gpu_sandbox_if_available() else {
+        println!("a_batch_every_frame_never_enters_the_escalate_gate: no GPU — skipping");
+        return;
+    };
+    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+    let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
+    let held = seeded_chain_textures(
+        &sandbox,
+        [
+            "gateless-batch-seed",
+            "gateless-batch-brightened",
+            "gateless-batch-doubled",
+        ],
+    );
+
+    let responses = run_frames_with_the_escalate_gate_held(
+        &sandbox,
+        FRAMES_AT_A_FIXED_EXTENT,
+        |frame_index| {
+            handle_run_compute_kernel_batch(
+                &sandbox,
+                format!("frame-{frame_index}"),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![
+                        batched_dispatch(
+                            &brighten,
+                            ("unbrightened_image", "gateless-batch-seed"),
+                            ("brightened_image", "gateless-batch-brightened"),
+                        ),
+                        batched_dispatch(
+                            &double,
+                            ("brightened_image", "gateless-batch-brightened"),
+                            ("doubled_image", "gateless-batch-doubled"),
+                        ),
+                    ],
+                    request_id: format!("frame-{frame_index}"),
+                },
+            )
+        },
+    );
+    for (frame_index, response) in responses.into_iter().enumerate() {
+        if let EscalateResponse::Err(refusal) = response {
+            panic!("frame {frame_index}'s batch was refused: {}", refusal.message);
+        }
+    }
+    assert_every_pixel_is(
+        &read_back_rgba8(
+            &sandbox,
+            "gateless-batch-doubled",
+            held[2].texture(),
+            "gateless-batch-readback",
+        ),
+        CHAIN_DOUBLED_RGBA,
+        "the last frame's output — each pass still retires before the next reads it",
+    );
     drop(held);
 }
 
