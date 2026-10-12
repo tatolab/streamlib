@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.45.3](https://github.com/tatolab/streamlib/compare/v0.45.2...v0.45.3) (2026-10-12)
+
+
+### Features
+
+* **runtime:** tatolabd runs from inside Tatolab.app — the lend and Vulkan loader are found in the bundle ([#2721](https://github.com/tatolab/streamlib/issues/2721)) ([d983cbe](https://github.com/tatolab/streamlib/commit/d983cbecefb9570c9194269c5416634b7f2651ec))
+
+
+### Bug Fixes
+
+* **runtime:** a starting runtime removes the surface-share sockets dead runtimes left behind ([#2728](https://github.com/tatolab/streamlib/issues/2728)) ([858b855](https://github.com/tatolab/streamlib/commit/858b855aec9ff24134575a0cf79db61f6076098d))
+
 ## [0.45.2](https://github.com/tatolab/streamlib/compare/v0.45.1...v0.45.2) (2026-10-12)
 
 
