@@ -186,8 +186,7 @@ pub(in super::super) fn handle_register_compute_kernel(
 /// before returning — so by the time this emits an `Ok`, the GPU work has
 /// retired and the writes are visible to any later submission on the same
 /// device. The subprocess can advance its surface-share timeline on receipt.
-/// It is per-frame work, so it takes neither the escalate gate nor a
-/// device-idle wait: the batch recorder's lock is what serializes dispatches.
+/// The batch recorder's lock is what serializes dispatches.
 ///
 /// Every binding error raises here, before anything is submitted, and names the
 /// shader's own bindings so the caller can see what it should have supplied.
@@ -418,7 +417,10 @@ pub(super) fn dispatch_compute_recording_and_publish_bound_surface_layouts(
     bound_surfaces: &[(String, TextureRegistration)],
 ) -> crate::core::error::Result<()> {
     host_gpu_context.dispatch_compute_kernel_batch(recording)?;
-    publish_bound_surface_layouts_to_surface_share(host_gpu_context.surface_store(), bound_surfaces);
+    publish_bound_surface_layouts_to_surface_share(
+        host_gpu_context.surface_store(),
+        bound_surfaces,
+    );
     Ok(())
 }
 
@@ -535,8 +537,9 @@ pub(super) fn bind_and_dispatch_compute_kernel_batch(
                     dispatch.kernel_id
                 ))
             })?;
-        let resolved = resolve_supplied_compute_bindings(host_gpu_context, &dispatch.bindings, &kernel)
-            .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
+        let resolved =
+            resolve_supplied_compute_bindings(host_gpu_context, &dispatch.bindings, &kernel)
+                .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
         bound_surfaces_across_the_batch
             .extend(compute_bound_surface_layout_publish_pairs(&resolved));
         let bindings = resolved

@@ -23,7 +23,9 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::{GpuContextLimitedAccess, SurfaceBoundKernelBindingResource};
+use crate::core::context::{
+    GpuContextLimitedAccess, RayTracingKernelHeldForOneTrace, SurfaceBoundKernelBindingResource,
+};
 use crate::core::rhi::SurfaceBoundKernelBindingKind;
 
 /// The RHI binding kind a ray-tracing wire enum names.
@@ -534,15 +536,20 @@ pub(in super::super) fn handle_run_ray_tracing_kernel(
 
     let host_gpu_context = sandbox.host_inner();
     let traced = host_gpu_context
-        .ray_tracing_kernel_by_id(&req.kernel_id)
+        .ray_tracing_kernel_by_id_held_for_one_trace(&req.kernel_id)
         .ok_or_else(|| {
             crate::core::error::Error::GpuError(format!(
                 "run_ray_tracing_kernel: no kernel registered under id {:?}",
                 req.kernel_id
             ))
         })
-        .and_then(|kernel| {
-            bind_and_trace_ray_tracing_kernel(host_gpu_context, &kernel, &req, &push_constants)
+        .and_then(|mut held_kernel| {
+            bind_and_trace_ray_tracing_kernel(
+                host_gpu_context,
+                &mut held_kernel,
+                &req,
+                &push_constants,
+            )
         });
 
     match traced {
@@ -565,11 +572,11 @@ pub(in super::super) fn handle_run_ray_tracing_kernel(
 /// The plan is total and every target is resolved before the first `set_*`
 /// call, so a refused trace never leaves the kernel holding a mix of this
 /// trace's bindings and the last one's. The kernel's staged bindings are
-/// shared across every caller of the cache, so the whole trace holds the
-/// context's trace lock.
+/// shared across every caller of the cache, so the whole trace runs under the
+/// held trace lock.
 pub(super) fn bind_and_trace_ray_tracing_kernel(
     host_gpu_context: &crate::core::context::GpuContext,
-    kernel: &crate::vulkan::rhi::VulkanRayTracingKernel,
+    held_kernel: &mut RayTracingKernelHeldForOneTrace<'_>,
     req: &EscalateRequestRunRayTracingKernel,
     push_constants: &[u8],
 ) -> crate::core::error::Result<()> {
@@ -577,9 +584,7 @@ pub(super) fn bind_and_trace_ray_tracing_kernel(
     use crate::core::rhi::RayTracingBindingKind;
     use crate::vulkan::rhi::{AccelerationStructureKind, VulkanStage};
 
-    let _staged_bindings_held_for_this_trace =
-        host_gpu_context.hold_ray_tracing_kernel_staged_bindings_for_one_trace();
-
+    let kernel = Arc::clone(held_kernel.kernel());
     let declared_specs = kernel.bindings();
 
     // Checked over the whole array before it is split, so a name supplied twice
@@ -682,6 +687,7 @@ pub(super) fn bind_and_trace_ray_tracing_kernel(
     let bound_inputs = resolve_planned_surface_bound_kernel_bindings(host_gpu_context, planned)?;
     transition_bound_kernel_inputs_into_descriptor_layouts(
         host_gpu_context,
+        held_kernel.input_transition_recorder_slot(),
         "escalate_ray_tracing_trace_input_layouts",
         VulkanStage::ALL_COMMANDS,
         &bound_inputs,

@@ -5,8 +5,11 @@
 //! processors. The subprocess can only see a `GpuContextLimitedAccess`
 //! sandbox; when it needs the privileged `GpuContextFullAccess` surface it
 //! sends an [`EscalateRequest`] to the host over its stdout, the host
-//! executes the operation inside [`GpuContextLimitedAccess::escalate`], and
-//! replies with an [`EscalateResponse`] on the subprocess's stdin.
+//! executes the operation, and replies with an [`EscalateResponse`] on the
+//! subprocess's stdin. Ops that create resources — registrations, a pool's
+//! growth — run inside [`GpuContextLimitedAccess::escalate`]; per-frame ops —
+//! a dispatch, a batch, a draw, a trace, a surface copy, a pool slot's reuse —
+//! run against the host context under their own locks.
 //!
 //! Wire format is the existing length-prefixed JSON stdio bridge used for
 //! lifecycle commands (see `SubprocessBridge`). Requests and responses are
@@ -323,30 +326,50 @@ pub(crate) fn parse_op_for_tests(value: &serde_json::Value) -> Result<EscalateRe
         .map_err(|e| Error::Runtime(e.message))
 }
 
-/// Run `frame_count` frames of `run_one_frame` with the escalate gate held on
-/// this thread, failing the test by name if any frame enters the gate: a frame
-/// that does panics as a re-entry rather than blocking.
+/// Frames a gate-held test runs at one fixed extent: a second of the starter
+/// stream's 30 fps.
 #[cfg(test)]
-pub(super) fn run_frames_with_the_escalate_gate_held<FrameResult>(
+pub(super) const FRAMES_AT_A_FIXED_EXTENT: usize = 30;
+
+/// Run [`FRAMES_AT_A_FIXED_EXTENT`] frames of one per-frame op with the escalate
+/// gate held on this thread, failing the test if a frame enters the gate — it
+/// panics as a re-entry rather than blocking — or is refused.
+#[cfg(test)]
+pub(super) fn run_frames_with_the_escalate_gate_held(
     sandbox: &GpuContextLimitedAccess,
-    frame_count: usize,
-    run_one_frame: impl FnMut(usize) -> FrameResult,
-) -> Vec<FrameResult> {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    per_frame_op_name: &str,
+    mut run_one_frame: impl FnMut(usize) -> EscalateResponse,
+) {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-    let escalate_gate = sandbox.host_inner().escalate_gate();
-    escalate_gate.enter();
-    let frames_under_the_held_gate = catch_unwind(AssertUnwindSafe(|| {
-        (0..frame_count).map(run_one_frame).collect::<Vec<_>>()
-    }));
-    escalate_gate.exit();
+    const ESCALATE_GATE_REENTRY_PANIC: &str = "EscalateGate::enter() called twice";
 
-    frames_under_the_held_gate.unwrap_or_else(|gate_reentry_panic| {
-        let message = gate_reentry_panic
+    let frames_under_the_held_gate = {
+        let _escalate_gate_held_on_this_thread =
+            sandbox.host_inner().escalate_gate().enter_scoped();
+        catch_unwind(AssertUnwindSafe(|| {
+            (0..FRAMES_AT_A_FIXED_EXTENT)
+                .map(&mut run_one_frame)
+                .collect::<Vec<_>>()
+        }))
+    };
+    let responses = frames_under_the_held_gate.unwrap_or_else(|panic_payload| {
+        let panic_message = panic_payload
             .downcast_ref::<String>()
             .map(String::as_str)
-            .or_else(|| gate_reentry_panic.downcast_ref::<&str>().copied())
+            .or_else(|| panic_payload.downcast_ref::<&str>().copied())
             .unwrap_or_default();
-        panic!("a per-frame op entered the escalate gate: {message}")
-    })
+        if panic_message.contains(ESCALATE_GATE_REENTRY_PANIC) {
+            panic!("a per-frame {per_frame_op_name} entered the escalate gate: {panic_message}");
+        }
+        resume_unwind(panic_payload)
+    });
+    for (frame_index, response) in responses.into_iter().enumerate() {
+        if let EscalateResponse::Err(refusal) = response {
+            panic!(
+                "frame {frame_index}'s {per_frame_op_name} was refused: {}",
+                refusal.message
+            );
+        }
+    }
 }

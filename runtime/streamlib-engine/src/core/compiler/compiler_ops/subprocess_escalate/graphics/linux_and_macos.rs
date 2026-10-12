@@ -33,7 +33,9 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::{GpuContextLimitedAccess, SurfaceBoundKernelBindingResource};
+use crate::core::context::{
+    GpuContextLimitedAccess, GraphicsKernelHeldForOneDraw, SurfaceBoundKernelBindingResource,
+};
 use crate::core::rhi::{GlslCompilationTargetStage, SurfaceBoundKernelBindingKind};
 use crate::host_rhi::HostTextureExt as _;
 
@@ -341,15 +343,20 @@ pub(in super::super) fn handle_run_graphics_draw(
 
     let host_gpu_context = sandbox.host_inner();
     let drawn = host_gpu_context
-        .graphics_kernel_by_id(&req.kernel_id)
+        .graphics_kernel_by_id_held_for_one_draw(&req.kernel_id)
         .ok_or_else(|| {
             crate::core::error::Error::GpuError(format!(
                 "run_graphics_draw: no kernel registered under id {:?}",
                 req.kernel_id
             ))
         })
-        .and_then(|kernel| {
-            bind_and_render_graphics_kernel(host_gpu_context, &kernel, &req, &push_constants)
+        .and_then(|mut held_kernel| {
+            bind_and_render_graphics_kernel(
+                host_gpu_context,
+                &mut held_kernel,
+                &req,
+                &push_constants,
+            )
         });
 
     match drawn {
@@ -373,20 +380,18 @@ pub(in super::super) fn handle_run_graphics_draw(
 /// The plan is total and every surface is resolved before the first `set_*`
 /// call, so a refused draw never leaves the kernel holding a mix of this draw's
 /// bindings and the last one's. The kernel's staged bindings are shared across
-/// every caller of the cache, so the whole draw holds the context's draw lock.
+/// every caller of the cache, so the whole draw runs under the held draw lock.
 pub(super) fn bind_and_render_graphics_kernel(
     host_gpu_context: &crate::core::context::GpuContext,
-    kernel: &crate::vulkan::rhi::VulkanGraphicsKernel,
+    held_kernel: &mut GraphicsKernelHeldForOneDraw<'_>,
     req: &EscalateRequestRunGraphicsDraw,
     push_constants: &[u8],
 ) -> crate::core::error::Result<()> {
     use crate::core::error::Error;
-
-    let _staged_bindings_held_for_this_draw =
-        host_gpu_context.hold_graphics_kernel_staged_bindings_for_one_draw();
     use crate::core::rhi::{DrawCall, ScissorRect, Viewport, VulkanLayout};
     use crate::vulkan::rhi::{OffscreenColorTarget, OffscreenDraw, VulkanStage};
 
+    let kernel = Arc::clone(held_kernel.kernel());
     let declared_specs = kernel.bindings();
     let declared: Vec<DeclaredKernelBindingUnderPlanning<'_>> = declared_specs
         .iter()
@@ -414,6 +419,7 @@ pub(super) fn bind_and_render_graphics_kernel(
     let bound_inputs = resolve_planned_surface_bound_kernel_bindings(host_gpu_context, planned)?;
     transition_bound_kernel_inputs_into_descriptor_layouts(
         host_gpu_context,
+        held_kernel.input_transition_recorder_slot(),
         "escalate_graphics_draw_input_layouts",
         VulkanStage::ALL_GRAPHICS,
         &bound_inputs,
@@ -538,7 +544,10 @@ pub(super) fn bind_and_render_graphics_kernel(
                 .cloned()
                 .zip(color_targets.iter().cloned()),
         );
-        publish_bound_surface_layouts_to_surface_share(host_gpu_context.surface_store(), &bound_surfaces);
+        publish_bound_surface_layouts_to_surface_share(
+            host_gpu_context.surface_store(),
+            &bound_surfaces,
+        );
     }
     drop(color_targets);
     drop(bound_inputs);

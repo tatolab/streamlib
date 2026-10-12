@@ -206,7 +206,8 @@ pub(super) fn resolve_surface_bound_kernel_binding_resource(
         // the surface-share service. The pixel-buffer fallback is the one path
         // that consults the extent, and it refuses a zero one — a pixel buffer
         // is not something a kernel can bind as an image.
-        host_gpu_context.resolve_texture_registration_by_surface_id(surface_id, None, 0, 0)
+        host_gpu_context
+            .resolve_texture_registration_by_surface_id(surface_id, None, 0, 0)
             .map_err(|e| {
                 Error::GpuError(format!(
                     "binding `{binding_name}` names surface {surface_id:?}, which this graph \
@@ -350,18 +351,60 @@ pub(super) fn refuse_one_image_bound_as_two_kinds(
 /// descriptor its layout does not satisfy, and its registration
 /// would keep claiming a layout the run has left behind. A run whose sampled
 /// textures already sit in the right layout and that binds no storage image
-/// and no buffer records nothing and mints no command buffer.
+/// and no buffer records nothing. The recorder is the family's own, built on
+/// first use, so a run creates no command pool or fence.
 pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
     host_gpu_context: &crate::core::context::GpuContext,
+    input_transition_recorder_slot: &mut Option<crate::vulkan::rhi::RhiCommandRecorder>,
     recorder_label: &str,
     consuming_stage: crate::vulkan::rhi::VulkanStage,
     bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
 ) -> crate::core::error::Result<()> {
-    let bound_textures: Vec<(&TextureRegistration, crate::core::rhi::VulkanLayout)> = bound_inputs
+    let textures_to_barrier = bound_textures_a_run_must_barrier(bound_inputs);
+    let bound_storage_buffers: Vec<&StorageBuffer> = bound_inputs
+        .iter()
+        .filter_map(|binding| binding.surface_bound_resource.storage_buffer())
+        .collect();
+    if textures_to_barrier.is_empty() && bound_storage_buffers.is_empty() {
+        return Ok(());
+    }
+
+    let recorder = match input_transition_recorder_slot.as_mut() {
+        Some(recorder) => recorder,
+        None => input_transition_recorder_slot
+            .insert(host_gpu_context.create_command_recorder(recorder_label)?),
+    };
+    recorder.begin()?;
+    if let Err(e) = record_bound_input_barriers(
+        recorder,
+        &textures_to_barrier,
+        &bound_storage_buffers,
+        consuming_stage,
+    ) {
+        recorder.abort_recording();
+        return Err(e);
+    }
+    recorder.submit_and_wait()?;
+    // Published for every binding, not just the ones that were barriered: a
+    // cross-process import synthesizes a fresh registration per resolve, so two
+    // slots naming one surface hold two layout cells for the one image.
+    for (registration, required_layout) in bound_inputs
         .iter()
         .filter_map(|binding| binding.surface_bound_resource.texture_and_required_layout())
-        .collect();
+    {
+        registration.update_layout(required_layout);
+    }
+    Ok(())
+}
 
+/// The bound textures a run barriers before it starts: each one not already in
+/// the layout its descriptor requires, and every storage image, once per image.
+pub(super) fn bound_textures_a_run_must_barrier<'binding>(
+    bound_inputs: &'binding [ResolvedSurfaceBoundKernelBinding<'_>],
+) -> Vec<(
+    &'binding TextureRegistration,
+    crate::core::rhi::VulkanLayout,
+)> {
     let mut images_already_barriered = Vec::new();
     let mut textures_to_barrier = Vec::new();
     for binding in bound_inputs {
@@ -391,33 +434,7 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
         images_already_barriered.push(image);
         textures_to_barrier.push((registration, required_layout));
     }
-    let bound_storage_buffers: Vec<&StorageBuffer> = bound_inputs
-        .iter()
-        .filter_map(|binding| binding.surface_bound_resource.storage_buffer())
-        .collect();
-    if textures_to_barrier.is_empty() && bound_storage_buffers.is_empty() {
-        return Ok(());
-    }
-
-    let mut recorder = host_gpu_context.create_command_recorder(recorder_label)?;
-    recorder.begin()?;
-    if let Err(e) = record_bound_input_barriers(
-        &mut recorder,
-        &textures_to_barrier,
-        &bound_storage_buffers,
-        consuming_stage,
-    ) {
-        recorder.abort_recording();
-        return Err(e);
-    }
-    recorder.submit_and_wait()?;
-    // Published for every binding, not just the ones that were barriered: a
-    // cross-process import synthesizes a fresh registration per resolve, so two
-    // slots naming one surface hold two layout cells for the one image.
-    for (registration, required_layout) in &bound_textures {
-        registration.update_layout(*required_layout);
-    }
-    Ok(())
+    textures_to_barrier
 }
 
 /// Record the pre-run barriers: each texture from its tracked layout into the

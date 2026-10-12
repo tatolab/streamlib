@@ -55,6 +55,7 @@ pub(crate) use gpu_context::StorageBufferAllocationFlavour;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::{
     BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding,
+    GraphicsKernelHeldForOneDraw, RayTracingKernelHeldForOneTrace,
     SurfaceBoundKernelBindingResource,
 };
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};

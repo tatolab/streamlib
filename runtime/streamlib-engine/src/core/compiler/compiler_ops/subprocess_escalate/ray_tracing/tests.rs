@@ -864,8 +864,10 @@ fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_ow
     let held = sandbox
         .escalate(|full| {
             Ok((
-                full.ray_tracing_kernel_by_id(&first),
-                full.ray_tracing_kernel_by_id(&second),
+                full.ray_tracing_kernel_by_id_held_for_one_trace(&first)
+                    .map(|held_kernel| std::sync::Arc::clone(held_kernel.kernel())),
+                full.ray_tracing_kernel_by_id_held_for_one_trace(&second)
+                    .map(|held_kernel| std::sync::Arc::clone(held_kernel.kernel())),
             ))
         })
         .expect("the cache answers inside an escalate scope");
@@ -1323,20 +1325,55 @@ fn a_trace_refuses_a_storage_buffer_binding_by_name() {
 /// escalate gate nor the whole-device idle wait that comes with it (#2730).
 #[test]
 fn a_trace_every_frame_never_enters_the_escalate_gate() {
-    const FRAMES_AT_A_FIXED_EXTENT: usize = 30;
-
     let Some(scene) = make_ray_traced_scene_if_available() else {
         println!("a_trace_every_frame_never_enters_the_escalate_gate: no ray tracing — skipping");
         return;
     };
-    let responses = super::super::run_frames_with_the_escalate_gate_held(
-        &scene.sandbox,
-        FRAMES_AT_A_FIXED_EXTENT,
-        |frame_index| scene.trace(scene.run_req(&format!("frame-{frame_index}"))),
-    );
-    for (frame_index, response) in responses.into_iter().enumerate() {
-        if let EscalateResponse::Err(refusal) = response {
-            panic!("frame {frame_index}'s trace was refused: {}", refusal.message);
-        }
-    }
+    super::super::run_frames_with_the_escalate_gate_held(&scene.sandbox, "trace", |frame_index| {
+        scene.trace(scene.run_req(&format!("frame-{frame_index}")))
+    });
+}
+
+/// With the escalate gate gone from a trace, the held kernel is what keeps a
+/// second trace off a cached kernel whose bindings another holder is staging:
+/// the trace waits until that holder lets go, then runs.
+#[test]
+fn a_trace_waits_while_another_holder_stages_bindings_on_its_kernel() {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    use std::time::Duration;
+
+    let Some(scene) = make_ray_traced_scene_if_available() else {
+        println!("a_trace_waits_while_another_holder_stages_bindings: no ray tracing — skipping");
+        return;
+    };
+    let held_kernel = scene
+        .sandbox
+        .host_inner()
+        .ray_tracing_kernel_by_id_held_for_one_trace(&scene.kernel_id)
+        .expect("the registered kernel is cached");
+    let (trace_reply_sender, trace_reply_receiver) = channel();
+    std::thread::scope(|scope| {
+        let scene = &scene;
+        scope.spawn(move || {
+            trace_reply_sender
+                .send(scene.trace(scene.run_req("held-trace")))
+                .expect("the test thread is waiting");
+        });
+
+        assert!(
+            matches!(
+                trace_reply_receiver.recv_timeout(Duration::from_millis(300)),
+                Err(RecvTimeoutError::Timeout)
+            ),
+            "a trace must wait while another holder has its kernel"
+        );
+        drop(held_kernel);
+        let reply = trace_reply_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the trace runs once the kernel is let go");
+        assert!(
+            matches!(reply, EscalateResponse::Ok(_)),
+            "the trace that waited must then succeed: {reply:?}"
+        );
+    });
 }
