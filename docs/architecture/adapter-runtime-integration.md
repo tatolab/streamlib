@@ -346,8 +346,8 @@ Linux-only: the kernel and acceleration-structure methods are
 `#[cfg(target_os = "linux")]`, and every op in it answers `… is only available
 on Linux` off it. The methods are `create_or_reuse_compute_kernel` /
 `compute_kernel_by_id`, `create_or_reuse_graphics_kernel` /
-`graphics_kernel_by_id`, `create_or_reuse_ray_tracing_kernel` /
-`ray_tracing_kernel_by_id` and `register_acceleration_structure` /
+`graphics_kernel_by_id_held_for_one_draw`, `create_or_reuse_ray_tracing_kernel` /
+`ray_tracing_kernel_by_id_held_for_one_trace` and `register_acceleration_structure` /
 `acceleration_structure_by_id`. CPU readback has no `GpuContext` method of its
 own name — `run_cpu_readback_copy` and `open_cpu_readback_staging` are escalate
 ops, and they land on `GpuContextLimitedAccess`'s

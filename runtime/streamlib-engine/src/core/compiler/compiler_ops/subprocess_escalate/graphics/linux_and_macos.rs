@@ -391,7 +391,8 @@ pub(super) fn bind_and_render_graphics_kernel(
     use crate::core::rhi::{DrawCall, ScissorRect, Viewport, VulkanLayout};
     use crate::vulkan::rhi::{OffscreenColorTarget, OffscreenDraw, VulkanStage};
 
-    let kernel = Arc::clone(held_kernel.kernel());
+    let (kernel, input_transition_recorder_slot) =
+        held_kernel.kernel_and_input_transition_recorder_slot();
     let declared_specs = kernel.bindings();
     let declared: Vec<DeclaredKernelBindingUnderPlanning<'_>> = declared_specs
         .iter()
@@ -419,7 +420,7 @@ pub(super) fn bind_and_render_graphics_kernel(
     let bound_inputs = resolve_planned_surface_bound_kernel_bindings(host_gpu_context, planned)?;
     transition_bound_kernel_inputs_into_descriptor_layouts(
         host_gpu_context,
-        held_kernel.input_transition_recorder_slot(),
+        input_transition_recorder_slot,
         "escalate_graphics_draw_input_layouts",
         VulkanStage::ALL_GRAPHICS,
         &bound_inputs,

@@ -1219,15 +1219,25 @@ fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_ow
         .escalate(|full| {
             Ok((
                 full.graphics_kernel_by_id_held_for_one_draw(&first)
-                    .map(|held_kernel| std::sync::Arc::clone(held_kernel.kernel())),
+                    .map(|held_kernel| {
+                        std::ptr::from_ref::<crate::vulkan::rhi::VulkanGraphicsKernel>(
+                            held_kernel.kernel(),
+                        )
+                    }),
                 full.graphics_kernel_by_id_held_for_one_draw(&second)
-                    .map(|held_kernel| std::sync::Arc::clone(held_kernel.kernel())),
+                    .map(|held_kernel| {
+                        std::ptr::from_ref::<crate::vulkan::rhi::VulkanGraphicsKernel>(
+                            held_kernel.kernel(),
+                        )
+                    }),
             ))
         })
         .expect("the cache answers inside an escalate scope");
+    // Compared by address once each lock is let go: a cached kernel lives as
+    // long as the context, so the address still names it.
     let (a, b) = (held.0.expect("cached"), held.1.expect("cached"));
     assert!(
-        std::sync::Arc::ptr_eq(&a, &b),
+        std::ptr::eq(a, b),
         "the second registration must reuse the first kernel, not build another"
     );
 }
@@ -1674,9 +1684,6 @@ fn a_draw_every_frame_never_enters_the_escalate_gate() {
 /// the draw waits until that holder lets go, then runs.
 #[test]
 fn a_draw_waits_while_another_holder_stages_bindings_on_its_kernel() {
-    use std::sync::mpsc::{RecvTimeoutError, channel};
-    use std::time::Duration;
-
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
         println!("a_draw_waits_while_another_holder_stages_bindings: no GPU — skipping");
         return;
@@ -1695,40 +1702,20 @@ fn a_draw_waits_while_another_holder_stages_bindings_on_its_kernel() {
         .host_inner()
         .graphics_kernel_by_id_held_for_one_draw(&kernel_id)
         .expect("the registered kernel is cached");
-    let (draw_reply_sender, draw_reply_receiver) = channel();
-    std::thread::scope(|scope| {
-        let (sandbox, registry, kernel_id) = (&sandbox, &registry, &kernel_id);
-        scope.spawn(move || {
+    super::super::assert_a_per_frame_op_waits_for_its_held_kernel_then_succeeds(
+        "draw",
+        held_kernel,
+        || {
             let run = inverting_draw_req(
                 "held-draw",
-                kernel_id,
+                &kernel_id,
                 "held-draw-source",
                 "held-draw-target",
             );
-            let reply =
-                handle_escalate_op(sandbox, registry, EscalateRequest::RunGraphicsDraw(run))
-                    .expect("must produce a response");
-            draw_reply_sender
-                .send(reply)
-                .expect("the test thread is waiting");
-        });
-
-        assert!(
-            matches!(
-                draw_reply_receiver.recv_timeout(Duration::from_millis(300)),
-                Err(RecvTimeoutError::Timeout)
-            ),
-            "a draw must wait while another holder has its kernel"
-        );
-        drop(held_kernel);
-        let reply = draw_reply_receiver
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the draw runs once the kernel is let go");
-        assert!(
-            matches!(reply, EscalateResponse::Ok(_)),
-            "the draw that waited must then succeed: {reply:?}"
-        );
-    });
+            handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
+                .expect("must produce a response")
+        },
+    );
     drop(held_textures);
 }
 

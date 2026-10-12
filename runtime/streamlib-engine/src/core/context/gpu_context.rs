@@ -583,16 +583,21 @@ pub struct GraphicsKernelHeldForOneDraw<'context> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl GraphicsKernelHeldForOneDraw<'_> {
-    /// The kernel whose bindings this draw stages.
-    pub fn kernel(&self) -> &Arc<crate::vulkan::rhi::VulkanGraphicsKernel> {
+    /// The kernel whose bindings this draw stages, borrowed no longer than
+    /// the lock is held.
+    pub fn kernel(&self) -> &crate::vulkan::rhi::VulkanGraphicsKernel {
         &self.kernel
     }
 
-    /// The draw family's input-transition recorder, `None` until first built.
-    pub(crate) fn input_transition_recorder_slot(
+    /// The kernel, with the draw family's input-transition recorder — `None`
+    /// until first built — borrowed alongside it.
+    pub(crate) fn kernel_and_input_transition_recorder_slot(
         &mut self,
-    ) -> &mut Option<crate::vulkan::rhi::RhiCommandRecorder> {
-        &mut self.input_transition_recorder_slot
+    ) -> (
+        &crate::vulkan::rhi::VulkanGraphicsKernel,
+        &mut Option<crate::vulkan::rhi::RhiCommandRecorder>,
+    ) {
+        (&self.kernel, &mut self.input_transition_recorder_slot)
     }
 }
 
@@ -607,16 +612,21 @@ pub struct RayTracingKernelHeldForOneTrace<'context> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl RayTracingKernelHeldForOneTrace<'_> {
-    /// The kernel whose bindings this trace stages.
-    pub fn kernel(&self) -> &Arc<crate::vulkan::rhi::VulkanRayTracingKernel> {
+    /// The kernel whose bindings this trace stages, borrowed no longer than
+    /// the lock is held.
+    pub fn kernel(&self) -> &crate::vulkan::rhi::VulkanRayTracingKernel {
         &self.kernel
     }
 
-    /// The trace family's input-transition recorder, `None` until first built.
-    pub(crate) fn input_transition_recorder_slot(
+    /// The kernel, with the trace family's input-transition recorder — `None`
+    /// until first built — borrowed alongside it.
+    pub(crate) fn kernel_and_input_transition_recorder_slot(
         &mut self,
-    ) -> &mut Option<crate::vulkan::rhi::RhiCommandRecorder> {
-        &mut self.input_transition_recorder_slot
+    ) -> (
+        &crate::vulkan::rhi::VulkanRayTracingKernel,
+        &mut Option<crate::vulkan::rhi::RhiCommandRecorder>,
+    ) {
+        (&self.kernel, &mut self.input_transition_recorder_slot)
     }
 }
 

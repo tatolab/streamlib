@@ -355,6 +355,6 @@ Each dispatch path fence-waits its own submission before it returns:
   (`escalations_last_second=31`). Each op still waits on its own fence before replying.
   Compute is serialized by its recorder lock. Graphics and ray tracing each keep one cached
   input-transition recorder whose lock is held across binding, submit and fence wait, so they
-  create nothing per frame. A storage image is barriered on every run. Not done: the Path-2
-  re-import now runs off the gate (the surface copy already did), and the layout-cell race
-  (job 6) is wider.
+  create nothing per frame. A storage image is barriered on every run. What it widened: the
+  Path-2 re-import now runs off the gate (the surface copy already did), and the layout-cell
+  race (job 6) has more consumers.

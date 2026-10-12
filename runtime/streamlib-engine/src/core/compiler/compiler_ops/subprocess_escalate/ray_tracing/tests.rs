@@ -865,15 +865,25 @@ fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_ow
         .escalate(|full| {
             Ok((
                 full.ray_tracing_kernel_by_id_held_for_one_trace(&first)
-                    .map(|held_kernel| std::sync::Arc::clone(held_kernel.kernel())),
+                    .map(|held_kernel| {
+                        std::ptr::from_ref::<crate::vulkan::rhi::VulkanRayTracingKernel>(
+                            held_kernel.kernel(),
+                        )
+                    }),
                 full.ray_tracing_kernel_by_id_held_for_one_trace(&second)
-                    .map(|held_kernel| std::sync::Arc::clone(held_kernel.kernel())),
+                    .map(|held_kernel| {
+                        std::ptr::from_ref::<crate::vulkan::rhi::VulkanRayTracingKernel>(
+                            held_kernel.kernel(),
+                        )
+                    }),
             ))
         })
         .expect("the cache answers inside an escalate scope");
+    // Compared by address once each lock is let go: a cached kernel lives as
+    // long as the context, so the address still names it.
     let (a, b) = (held.0.expect("cached"), held.1.expect("cached"));
     assert!(
-        std::sync::Arc::ptr_eq(&a, &b),
+        std::ptr::eq(a, b),
         "the second registration must reuse the first kernel, not build another"
     );
 }
@@ -1339,9 +1349,6 @@ fn a_trace_every_frame_never_enters_the_escalate_gate() {
 /// the trace waits until that holder lets go, then runs.
 #[test]
 fn a_trace_waits_while_another_holder_stages_bindings_on_its_kernel() {
-    use std::sync::mpsc::{RecvTimeoutError, channel};
-    use std::time::Duration;
-
     let Some(scene) = make_ray_traced_scene_if_available() else {
         println!("a_trace_waits_while_another_holder_stages_bindings: no ray tracing — skipping");
         return;
@@ -1351,29 +1358,9 @@ fn a_trace_waits_while_another_holder_stages_bindings_on_its_kernel() {
         .host_inner()
         .ray_tracing_kernel_by_id_held_for_one_trace(&scene.kernel_id)
         .expect("the registered kernel is cached");
-    let (trace_reply_sender, trace_reply_receiver) = channel();
-    std::thread::scope(|scope| {
-        let scene = &scene;
-        scope.spawn(move || {
-            trace_reply_sender
-                .send(scene.trace(scene.run_req("held-trace")))
-                .expect("the test thread is waiting");
-        });
-
-        assert!(
-            matches!(
-                trace_reply_receiver.recv_timeout(Duration::from_millis(300)),
-                Err(RecvTimeoutError::Timeout)
-            ),
-            "a trace must wait while another holder has its kernel"
-        );
-        drop(held_kernel);
-        let reply = trace_reply_receiver
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the trace runs once the kernel is let go");
-        assert!(
-            matches!(reply, EscalateResponse::Ok(_)),
-            "the trace that waited must then succeed: {reply:?}"
-        );
-    });
+    super::super::assert_a_per_frame_op_waits_for_its_held_kernel_then_succeeds(
+        "trace",
+        held_kernel,
+        || scene.trace(scene.run_req("held-trace")),
+    );
 }

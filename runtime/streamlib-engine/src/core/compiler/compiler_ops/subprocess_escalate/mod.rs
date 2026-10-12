@@ -373,3 +373,47 @@ pub(super) fn run_frames_with_the_escalate_gate_held(
         }
     }
 }
+
+/// Assert a per-frame op waits while another holder has its kernel, then runs
+/// and succeeds once `held_kernel` is let go.
+#[cfg(test)]
+pub(super) fn assert_a_per_frame_op_waits_for_its_held_kernel_then_succeeds<HeldKernel>(
+    per_frame_op_name: &str,
+    held_kernel: HeldKernel,
+    run_the_op: impl FnOnce() -> EscalateResponse + Send,
+) {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    use std::time::Duration;
+
+    const AN_UNBLOCKED_OP_REPLIES_WITHIN: Duration = Duration::from_millis(300);
+    const A_RELEASED_OP_REPLIES_WITHIN: Duration = Duration::from_secs(10);
+
+    let (op_reply_sender, op_reply_receiver) = channel();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            // Fails only once the test thread has stopped listening.
+            let _ = op_reply_sender.send(run_the_op());
+        });
+        match op_reply_receiver.recv_timeout(AN_UNBLOCKED_OP_REPLIES_WITHIN) {
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(reply) => {
+                panic!("the {per_frame_op_name} ran while another holder had its kernel: {reply:?}")
+            }
+            // The op panicked; the scope re-raises that panic when it joins.
+            Err(RecvTimeoutError::Disconnected) => {
+                drop(held_kernel);
+                return;
+            }
+        }
+        drop(held_kernel);
+        let reply = op_reply_receiver
+            .recv_timeout(A_RELEASED_OP_REPLIES_WITHIN)
+            .unwrap_or_else(|_| {
+                panic!("the {per_frame_op_name} never ran once its kernel was let go")
+            });
+        assert!(
+            matches!(reply, EscalateResponse::Ok(_)),
+            "the {per_frame_op_name} that waited must then succeed: {reply:?}"
+        );
+    });
+}
