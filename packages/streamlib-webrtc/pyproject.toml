@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "tatolab-webrtc"
 version = "0.45.1"
-description = "WHIP publish and WHEP play for StreamLib."
+description = "WHIP publish and WHEP play nodes for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BUSL-1.1" }
@@ -31,6 +31,12 @@ classifiers = [
 # starts it. A minimum, never an exact pin, as a third party's package
 # depends on it.
 dependencies = ["tatolab-stream>=0.39.0"]
+
+[project.urls]
+Homepage = "https://tatolab.com"
+Documentation = "https://tatolab.com/docs/build/webrtc"
+Install = "https://tatolab.com/docs/install"
+Source = "https://github.com/tatolab/streamlib"
 
 [tool.maturin]
 python-source = "python"
