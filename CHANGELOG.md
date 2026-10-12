@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.2](https://github.com/tatolab/streamlib/compare/v0.45.1...v0.45.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **pypi:** give tatolab-stream and tatolab-webrtc real PyPI pages ([#2724](https://github.com/tatolab/streamlib/issues/2724)) ([3d9f70d](https://github.com/tatolab/streamlib/commit/3d9f70dfdffc8214137032ce9053ccf8a5fa32d2))
+
 ## [0.45.1](https://github.com/tatolab/streamlib/compare/v0.45.0...v0.45.1) (2026-10-12)
 
 
