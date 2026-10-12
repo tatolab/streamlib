@@ -31,9 +31,9 @@ An attached stream's row is gone; a kept one shows `stopped` with `-` nodes; aft
 ### 3. End a runtime the session started (only that one)
 Never stop the machine's runtime — it is the owner's, and other streams live in it. A runtime the session started for itself (`drive-running-stream`, the test-only build) ends by a signal, and must end cleanly:
 ```bash
-kill -INT <tatolabd pid>
+kill -INT "$(cat "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.pid")"
 ```
-Wait for it to exit (up to ~15 s) and read its exit status: `0` is a clean stop; `124` means its watchdog abandoned a stream's teardown; a runtime that needs `kill -9` is a finding, not a flake. Then delete its `TATOLAB_TEST_MACHINE_ROOT`.
+Wait up to ~15 s for `$TATOLAB_TEST_MACHINE_ROOT/tatolabd.exit` to appear and read the exit status it holds: `0` is a clean stop; `124` means its watchdog abandoned a stream's teardown; a runtime that needs `kill -9` is a finding, not a flake. Then delete its `TATOLAB_TEST_MACHINE_ROOT`.
 
 ## Notes
 - One camera consumer per `/dev/videoN` — unloading the stream that opened it is what frees the device.

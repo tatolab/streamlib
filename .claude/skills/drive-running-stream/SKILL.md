@@ -33,8 +33,11 @@ The machine's runtime belongs to the owner: its kept streams, its state director
 ```bash
 cargo xtask build-runtime --machine-directories-under-a-test-root
 export TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)"
-target/tatolab-runtime/bin/tatolabd > "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.log" 2>&1 &
+( target/tatolab-runtime/bin/tatolabd > "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.log" 2>&1 &
+  echo $! > "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.pid"
+  wait $!; echo $? > "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.exit" ) &
 ```
+The pid and, once it ends, the exit status land in files, because a later Bash call cannot `wait` on a process an earlier one started.
 
 - The test-only build moves the machine lock, the state directory and the runtime directory — the local API socket among them — under `TATOLAB_TEST_MACHINE_ROOT`, so it runs beside the machine's runtime and re-loads none of its kept streams. Keep the root short, under `/tmp`: socket paths must stay under 104 bytes.
 - Drive it with its own `tatolab`, `target/tatolab-runtime/bin/tatolab` — an installed `tatolab` on PATH is a release build and reaches the machine's runtime instead. It refuses to run without `TATOLAB_TEST_MACHINE_ROOT`, and only reaches this runtime with the same value. Shell state does not persist between Bash calls, so set it on every call that runs a verb.
