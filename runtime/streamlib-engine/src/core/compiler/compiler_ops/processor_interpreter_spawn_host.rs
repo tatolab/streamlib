@@ -40,6 +40,7 @@ use crate::core::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvel
 use crate::core::runtime::{
     LoadedStreamTag, ShutdownEscalationOfOneStream, StreamEnvironment,
     start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
+    the_open_descriptor_limit,
 };
 use crate::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
@@ -1195,19 +1196,14 @@ pub(super) fn give_the_child_no_descriptor_beyond_stdio(command: &mut Command) {
 /// How far the per-descriptor fallback walks in this process, read before the
 /// fork so the child never has to ask.
 fn highest_descriptor_the_fallback_walks() -> libc::c_uint {
-    // SAFETY: a zeroed `rlimit` is a valid buffer for `getrlimit` to fill.
-    let mut descriptor_limit: libc::rlimit = unsafe { std::mem::zeroed() };
-    // SAFETY: `descriptor_limit` is a valid, live `rlimit` for the duration.
-    let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut descriptor_limit) };
-    let limit = if read == 0 {
-        // Clamped in the wide type: `rlim_cur` is 64-bit and `RLIM_INFINITY`
-        // is its maximum, so narrowing first would wrap a large real limit
-        // down to a small one and stop the sweep short.
-        (descriptor_limit.rlim_cur as u64).min(DESCRIPTOR_SWEEP_FALLBACK_CEILING)
-    } else {
-        DESCRIPTOR_SWEEP_FALLBACK_CEILING
-    };
-    limit as libc::c_uint
+    // Clamped in the wide type: `rlim_cur` is 64-bit and `RLIM_INFINITY` is its
+    // maximum, so narrowing first would wrap a large real limit down to a small
+    // one and stop the sweep short.
+    the_open_descriptor_limit().map_or(DESCRIPTOR_SWEEP_FALLBACK_CEILING, |descriptor_limit| {
+        descriptor_limit
+            .rlim_cur
+            .min(DESCRIPTOR_SWEEP_FALLBACK_CEILING)
+    }) as libc::c_uint
 }
 
 /// Ask the kernel to mark the whole range at once, and say whether it did.

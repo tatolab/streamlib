@@ -69,9 +69,12 @@ pub use machine_state_directory::{
 pub(crate) use machine_state_directory::{
     OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
 };
-pub(crate) use open_descriptor_soft_limit::start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with;
 pub use open_descriptor_soft_limit::{
     OpenDescriptorSoftLimitRaise, raise_the_open_descriptor_soft_limit_to_its_ceiling,
+};
+pub(crate) use open_descriptor_soft_limit::{
+    start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
+    the_open_descriptor_limit,
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::{

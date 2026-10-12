@@ -56,24 +56,32 @@ impl fmt::Display for OpenDescriptorSoftLimitRaise {
 }
 
 /// Raise this process's soft open-descriptor limit to the highest value it
-/// may take, and record the limit it started with for
-/// [`start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with`].
+/// may take.
 ///
-/// Only the first call raises; a later one reports the ceiling.
+/// The first call records the limit the process started with, which
+/// [`start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with`]
+/// hands every interpreter; a later call never changes that record.
+#[must_use]
 pub fn raise_the_open_descriptor_soft_limit_to_its_ceiling() -> OpenDescriptorSoftLimitRaise {
-    let started_with = match the_open_descriptor_limit() {
+    let current = match the_open_descriptor_limit() {
         Ok(open_descriptor_limit) => open_descriptor_limit,
         Err(refusal) => return OpenDescriptorSoftLimitRaise::Refused { refusal },
     };
-    let ceiling = the_highest_soft_limit_this_process_may_take(started_with.rlim_max);
-    if started_with.rlim_cur >= ceiling {
+    // Recorded before the raise, so no interpreter started meanwhile inherits
+    // the raised limit.
+    let started_with = *OPEN_DESCRIPTOR_LIMIT_THIS_PROCESS_STARTED_WITH.get_or_init(|| current);
+    let ceiling = match the_highest_soft_limit_this_process_may_take(current.rlim_max) {
+        Ok(ceiling) => ceiling,
+        Err(refusal) => return OpenDescriptorSoftLimitRaise::Refused { refusal },
+    };
+    if current.rlim_cur >= ceiling {
         return OpenDescriptorSoftLimitRaise::AlreadyAtItsCeiling {
-            soft_limit: started_with.rlim_cur,
+            soft_limit: current.rlim_cur,
         };
     }
     let raised = libc::rlimit {
         rlim_cur: ceiling,
-        rlim_max: started_with.rlim_max,
+        rlim_max: current.rlim_max,
     };
     // SAFETY: `raised` is a valid, live `rlimit`.
     if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } != 0 {
@@ -81,15 +89,14 @@ pub fn raise_the_open_descriptor_soft_limit_to_its_ceiling() -> OpenDescriptorSo
             refusal: std::io::Error::last_os_error(),
         };
     }
-    let _ = OPEN_DESCRIPTOR_LIMIT_THIS_PROCESS_STARTED_WITH.set(started_with);
     OpenDescriptorSoftLimitRaise::Raised {
         started_with: started_with.rlim_cur,
         raised_to: ceiling,
     }
 }
 
-/// Have `command`'s child start at the soft limit this process started with,
-/// when the raise moved it; a no-op otherwise.
+/// Have `command`'s child start at the open-descriptor limit this process
+/// started with, once the raise has recorded it; a no-op before.
 pub(crate) fn start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with(
     command: &mut Command,
 ) {
@@ -105,14 +112,17 @@ pub(crate) fn start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtim
         }
         Ok(())
     };
-    // SAFETY: the closure makes one `setrlimit` system call, which is the
-    // contract for a `pre_exec` closure running between fork and exec.
+    // SAFETY: a `pre_exec` closure must be async-signal-safe. `setrlimit` is not
+    // on POSIX's list, but glibc, musl and libSystem each implement it as a bare
+    // system call that neither locks nor allocates, and `last_os_error` only
+    // reads errno.
     unsafe {
         command.pre_exec(lower_the_soft_limit);
     }
 }
 
-fn the_open_descriptor_limit() -> std::io::Result<libc::rlimit> {
+/// This process's open-descriptor limit, soft and hard.
+pub(crate) fn the_open_descriptor_limit() -> std::io::Result<libc::rlimit> {
     // SAFETY: a zeroed `rlimit` is a valid buffer for `getrlimit` to fill.
     let mut open_descriptor_limit: libc::rlimit = unsafe { std::mem::zeroed() };
     // SAFETY: `open_descriptor_limit` is a valid, live `rlimit` for the duration.
@@ -123,31 +133,37 @@ fn the_open_descriptor_limit() -> std::io::Result<libc::rlimit> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn the_highest_soft_limit_this_process_may_take(hard_limit: libc::rlim_t) -> libc::rlim_t {
-    hard_limit
+fn the_highest_soft_limit_this_process_may_take(
+    hard_limit: libc::rlim_t,
+) -> std::io::Result<libc::rlim_t> {
+    Ok(hard_limit)
 }
 
 /// macOS refuses a soft limit above `kern.maxfilesperproc`, and its hard limit
 /// is usually `RLIM_INFINITY`.
 #[cfg(target_os = "macos")]
-fn the_highest_soft_limit_this_process_may_take(hard_limit: libc::rlim_t) -> libc::rlim_t {
+fn the_highest_soft_limit_this_process_may_take(
+    hard_limit: libc::rlim_t,
+) -> std::io::Result<libc::rlim_t> {
     let mut descriptors_per_process: libc::c_int = 0;
     let mut answer_length = std::mem::size_of::<libc::c_int>();
     // SAFETY: the name is NUL-terminated, and the answer buffer and its length
     // are valid for the duration.
-    let read = unsafe {
+    let sysctl_status = unsafe {
         libc::sysctlbyname(
             c"kern.maxfilesperproc".as_ptr(),
-            (&mut descriptors_per_process as *mut libc::c_int).cast(),
+            std::ptr::from_mut(&mut descriptors_per_process).cast(),
             &mut answer_length,
             std::ptr::null_mut(),
             0,
         )
     };
-    if read != 0 || descriptors_per_process <= 0 {
-        return hard_limit.min(libc::OPEN_MAX as libc::rlim_t);
+    if sysctl_status != 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    hard_limit.min(descriptors_per_process as libc::rlim_t)
+    let descriptors_per_process = libc::rlim_t::try_from(descriptors_per_process)
+        .map_err(|_| std::io::Error::other("kern.maxfilesperproc is negative"))?;
+    Ok(hard_limit.min(descriptors_per_process))
 }
 
 #[cfg(test)]
@@ -183,7 +199,8 @@ mod tests {
 
     fn raise_from_a_service_managers_limit_and_check_what_an_interpreter_inherits() {
         let limit_at_the_start = the_open_descriptor_limit().expect("the limit reads");
-        let ceiling = the_highest_soft_limit_this_process_may_take(limit_at_the_start.rlim_max);
+        let ceiling = the_highest_soft_limit_this_process_may_take(limit_at_the_start.rlim_max)
+            .expect("the ceiling reads");
         assert!(
             ceiling > SOFT_LIMIT_A_SERVICE_MANAGER_STARTS_THE_RUNTIME_AT,
             "this machine's ceiling, {ceiling}, leaves nothing to raise"
@@ -257,12 +274,12 @@ mod tests {
 
     #[test]
     fn an_interpreter_started_before_any_raise_keeps_the_runtimes_own_limit() {
-        if OPEN_DESCRIPTOR_LIMIT_THIS_PROCESS_STARTED_WITH
-            .get()
-            .is_some()
-        {
-            return;
-        }
+        assert!(
+            OPEN_DESCRIPTOR_LIMIT_THIS_PROCESS_STARTED_WITH
+                .get()
+                .is_none(),
+            "only the child process the raise test re-runs in may raise"
+        );
         assert_eq!(
             soft_limit_an_interpreter_the_runtime_starts_reports(),
             the_open_descriptor_limit()

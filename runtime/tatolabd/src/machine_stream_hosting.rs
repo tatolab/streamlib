@@ -150,7 +150,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
 fn log_the_open_descriptor_soft_limit_raise(raise: &OpenDescriptorSoftLimitRaise) {
     match raise {
         OpenDescriptorSoftLimitRaise::Refused { .. } => tracing::warn!("{raise}"),
-        _ => tracing::info!("{raise}"),
+        OpenDescriptorSoftLimitRaise::Raised { .. }
+        | OpenDescriptorSoftLimitRaise::AlreadyAtItsCeiling { .. } => tracing::info!("{raise}"),
     }
 }
 
