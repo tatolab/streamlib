@@ -80,7 +80,7 @@ fall back to a unit test and call the area verified.
 On macOS the 77 reasons are different, and each names its fix:
 
 - **An audible mode or the rig-only fixture without `STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1`.**
-- **The runtime unit predates the CoreAudio arm** — the node's probe chose another arm than
+- **The runtime unit predates the CoreAudio arm** — the runtime's probe chose another arm than
   `coreaudio`, so the fixture **refuses to score** and names `cargo xtask build-runtime --release`
   (see Running it). An arm that is in the unit and failed to open is *not* 77: that is exit 1, a real failure.
 - **The tap delivered exact digital zeros and TCC says System Audio Recording is not granted**
@@ -129,7 +129,7 @@ and numpy and never the runtime; the fixture makes that venv with uv the first t
 with numpy: `PYTHON`, default `python3` — the fixture venv is one once it exists.
 
 **Build the runtime unit from the tree first: `cargo xtask build-runtime --release`.**
-The node runs whatever unit is on disk, and one built before the change under test is measured
+The runtime runs whatever unit is on disk, and one built before the change under test is measured
 and reported as though it were the change. On
 macOS the fixture enforces the sharpest case of this: it **refuses to score unless `node.log`
 shows the probe line `audio device backend chain probed` with `audio_backend=coreaudio`**, because
@@ -155,12 +155,13 @@ Things only the owner can do, asked for once, before the first run that needs th
 - **For `acoustic` and rig-only:** headphones *off*, the built-in speakers as the output, a quiet
   room, and the output volume noted in the report.
 
-**The through-engine fixture measures the node it launched, and no other.** It resolves that
-process's `runtime_id` from the registry and passes `--node <runtime_id>` to every verb, so an
-orphaned `audio_loopback_stream.py` node from a killed run cannot answer in its place. A node that exits
-first fails at `the loopback node exited before serving its local API`; one that never answers
-fails at `the loopback node never answered over its local API socket`, with the tail of
-`node.log` — both are real failures.
+**The through-engine fixture measures the stream it loaded, and no other.** It starts its own
+`tatolabd` — refusing, naming the holder, while another runtime holds the machine — loads the
+loopback stream with `tatolab run --name audio_loopback_fixture`, and passes that name to every
+verb, so no other stream can answer in its place. A runtime that exits before it serves its
+local API fails at `the fixture could not start its runtime`; a stream that never runs fails at
+`the loopback stream never ran — it never answered over the local API socket with every node
+Running`, with the tails of `stream_run.log` and `node.log` — both are real failures.
 
 ## Reading what came back
 
@@ -182,7 +183,7 @@ An analyser `FAIL` prints that line exactly as a pass does, so far so good. But 
 contract that fails its analysis prints exactly one `artifacts:` line — the nested tap's — and
 "take the last one" then lands you in a `streamlib-audio-channel-` directory with no `node.log`,
 no `captured.wav` and no spectrogram. Anything that fails earlier still (channel resolution, the
-tap itself, the speaker-format refusal, a node that never served) prints none at all. Those are
+tap itself, the speaker-format refusal, a runtime that never served) prints none at all. Those are
 exactly the runs whose `node.log` you need:
 
 ```bash
@@ -332,7 +333,7 @@ without its label invites it to be read as though it were.
 - Acoustic only: `raw_tone_rms_dbfs` <n> · `room_noise_rms_dbfs` <n> · `tone_to_noise_db` <n> ·
   `exact_zero_stretch_ms` <n> · output volume <n> — or `n/a`
 - Channel contract (through-engine only): <verdict + `bags_dropped_by_the_tap`, or "n/a">
-- Tapped channel belonged to this run's own node: yes — `<tapped runtime name>` vs `node.log` | n/a
+- Tapped channel belonged to this run's own stream: yes — `<tapped stream name>` vs `node.log` | n/a
 
 #### Spectrogram
 

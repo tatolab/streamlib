@@ -134,26 +134,29 @@ expect_warn "tatolab run from inside an example directory is noted" example_laun
 # ── The observation verbs stay silent ────────────────────────────────
 # /verify-live taps a channel and exchanges surface ids per frame; a note on
 # each read would bury the audit in reminders.
-run_hook 'tatolab exchange --channel CyberpunkGlitch/video_to_downstream --out /tmp/e2e --count 3'
+run_hook 'tatolab exchange --channel effects/cyberpunkglitch/video --out /tmp/e2e --count 3'
 expect_silent "tatolab exchange is a control-plane read, not a rig command"
 
 run_hook 'tatolab tap camera/video --count 5'
 expect_silent "tatolab tap is a control-plane read"
 
-run_hook 'tatolab nodes'
-expect_silent "tatolab nodes is a registry read"
+run_hook 'tatolab streams'
+expect_silent "tatolab streams is a control-plane read"
 
-run_hook 'tatolab graph --node abc123'
+run_hook 'tatolab graph --stream camera'
 expect_silent "tatolab graph is a control-plane read"
 
-run_hook 'tatolab logs abc123'
+run_hook 'tatolab logs --stream camera'
 expect_silent "tatolab logs is a control-plane read"
 
-run_hook 'tatolab nodes' '/home/dev/streamlib/examples/camera-display'
-expect_silent "tatolab nodes from inside an example directory is still a registry read"
+run_hook 'tatolab streams' '/home/dev/streamlib/examples/camera-display'
+expect_silent "tatolab streams from inside an example directory is still a control-plane read"
 
-run_hook 'tatolabd --dir examples/camera-display'
-expect_silent "tatolabd is not the tatolab launch verb"
+run_hook 'tatolab stop camera' '/home/dev/streamlib/examples/camera-display'
+expect_silent "tatolab stop unloads a stream and launches nothing"
+
+run_hook 'tatolabd' '/home/dev/streamlib/examples/camera-display'
+expect_silent "starting the runtime from an example directory loads no stream"
 
 # ── Prose mentioning the launch path is not the launch path ──────────
 run_hook 'grep -rn "tatolab run" examples/ .claude/'
