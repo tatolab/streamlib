@@ -21,6 +21,12 @@ const STREAMLIB_FOLDER_INSIDE_XDG_RUNTIME_DIR: &str = "streamlib";
 /// The shared temporary directory the per-user fallback folder is created in.
 const SHARED_TEMPORARY_DIRECTORY_FOR_THE_FALLBACK: &str = "/tmp";
 
+/// What a surface-sharing socket's file name starts with, before the runtime id.
+const SURFACE_SHARE_SOCKET_FILE_NAME_PREFIX: &str = "surface-share-";
+
+/// What a surface-sharing socket's file name ends with, after the runtime id.
+const SURFACE_SHARE_SOCKET_FILE_NAME_SUFFIX: &str = ".sock";
+
 /// Every permission bit a group or other could hold.
 const GROUP_AND_OTHER_PERMISSION_BITS: u32 = 0o077;
 
@@ -113,7 +119,27 @@ impl StreamlibRuntimeDirectory {
 
     /// The Unix socket the runtime with `runtime_id` serves its surface-sharing service on.
     pub fn surface_share_socket_path(&self, runtime_id: &str) -> PathBuf {
-        self.path.join(format!("surface-share-{runtime_id}.sock"))
+        self.path.join(format!(
+            "{SURFACE_SHARE_SOCKET_FILE_NAME_PREFIX}{runtime_id}{SURFACE_SHARE_SOCKET_FILE_NAME_SUFFIX}"
+        ))
+    }
+
+    /// Every surface-sharing socket file in the directory, whichever runtime bound it.
+    pub fn surface_share_socket_paths_of_every_runtime(&self) -> std::io::Result<Vec<PathBuf>> {
+        let mut surface_share_socket_paths = Vec::new();
+        for directory_entry in std::fs::read_dir(&self.path)? {
+            let directory_entry = directory_entry?;
+            let file_name = directory_entry.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            if file_name.starts_with(SURFACE_SHARE_SOCKET_FILE_NAME_PREFIX)
+                && file_name.ends_with(SURFACE_SHARE_SOCKET_FILE_NAME_SUFFIX)
+            {
+                surface_share_socket_paths.push(directory_entry.path());
+            }
+        }
+        Ok(surface_share_socket_paths)
     }
 
     /// The Unix socket the machine's runtime serves its local API on, at a fixed path.
@@ -600,6 +626,36 @@ mod tests {
         assert_eq!(
             directory.local_api_socket_path(),
             PathBuf::from("/tmp/streamlib-1000/local-api.sock")
+        );
+    }
+
+    #[test]
+    fn the_surface_share_sockets_of_every_runtime_are_listed_and_nothing_else() {
+        let temporary_directory = tempfile::tempdir().unwrap();
+        let directory = StreamlibRuntimeDirectory {
+            path: temporary_directory.path().to_path_buf(),
+        };
+        for file_name in [
+            "surface-share-Rone.sock",
+            "surface-share-Rtwo.sock",
+            "local-api.sock",
+            "surface-share-Rthree.sock.partial",
+        ] {
+            std::fs::write(directory.path().join(file_name), b"").unwrap();
+        }
+        std::fs::create_dir(directory.path().join("iox2")).unwrap();
+
+        let mut listed = directory
+            .surface_share_socket_paths_of_every_runtime()
+            .unwrap();
+        listed.sort();
+
+        assert_eq!(
+            listed,
+            vec![
+                directory.surface_share_socket_path("Rone"),
+                directory.surface_share_socket_path("Rtwo"),
+            ]
         );
     }
 }

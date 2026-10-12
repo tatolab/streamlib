@@ -9,7 +9,9 @@
 //! `STREAMLIB_SURFACE_SOCKET` and exchange DMA-BUF fds via `SCM_RIGHTS`.
 
 pub mod state;
+pub mod surface_share_sockets_left_by_dead_runtimes;
 pub mod unix_socket_service;
 
 pub use state::SurfaceShareState;
+pub use surface_share_sockets_left_by_dead_runtimes::remove_the_surface_share_sockets_left_by_dead_runtimes;
 pub use unix_socket_service::UnixSocketSurfaceService;

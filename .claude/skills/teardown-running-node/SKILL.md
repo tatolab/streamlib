@@ -20,7 +20,7 @@ Send `SIGTERM` (the default) so the runtime tears down gracefully and removes it
 ```bash
 kill <pid>
 ```
-Signaling the launching `tatolab run` / `tatolab dev` is equivalent: it forwards SIGINT, SIGTERM and SIGHUP to its `tatolabd` and exits with it. A `tatolabd` that ends first ends the `tatolab run` attached to it, but `tatolab dev` stays up and starts a new `tatolabd` on the next saved edit — to stop a `dev` session for good, signal `tatolab dev` itself. If it is a node you launched in this session's foreground, `Ctrl-C` is equivalent too. Escalate to `kill -9 <pid>` only if `tatolabd` refuses to exit after a graceful signal — a hard kill skips clean teardown: `tatolab nodes` still prunes the stale entry on its next scan (unreachable AND pid-dead), but the node's `local-api-<runtime_id>.sock` (and, on Linux, its `surface-share-<runtime_id>.sock`) stays behind in the runtime directory.
+Signaling the launching `tatolab run` / `tatolab dev` is equivalent: it forwards SIGINT, SIGTERM and SIGHUP to its `tatolabd` and exits with it. A `tatolabd` that ends first ends the `tatolab run` attached to it, but `tatolab dev` stays up and starts a new `tatolabd` on the next saved edit — to stop a `dev` session for good, signal `tatolab dev` itself. If it is a node you launched in this session's foreground, `Ctrl-C` is equivalent too. Escalate to `kill -9 <pid>` only if `tatolabd` refuses to exit after a graceful signal — a hard kill skips clean teardown: `tatolab nodes` still prunes the stale entry on its next scan (unreachable AND pid-dead), but the node's `local-api.sock` (and, on Linux, its `surface-share-<runtime_id>.sock`) stays behind in the runtime directory until the next runtime starts and removes it.
 
 ### 3. Confirm the node is gone
 ```bash
