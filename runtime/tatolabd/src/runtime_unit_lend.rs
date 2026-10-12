@@ -7,13 +7,16 @@
 //! `Contents/Resources/lend`.
 
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use streamlib::sdk::processor_interpreter::{
     APP_BUNDLE_CONTENTS_DIRECTORY_NAME, APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME,
     LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS,
-    LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT,
-    PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY,
     app_bundle_contents_directory_holding_the_executable_directory,
-    lend_directory_in_the_app_bundle_contents, lend_directory_in_the_runtime_unit,
+    lend_directory_in_the_app_bundle_contents,
+};
+use streamlib::sdk::processor_interpreter::{
+    LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT,
+    PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY, lend_directory_in_the_runtime_unit,
     processor_interpreter_bootstrap_path,
 };
 
@@ -40,9 +43,12 @@ pub(crate) fn the_lend_beside_the_executable(
     canonical_executable: &Path,
 ) -> Result<PathBuf, String> {
     let executable_directory = canonical_executable.parent();
+    #[cfg(target_os = "macos")]
     let lend_directory_in_the_app_bundle = executable_directory
         .and_then(app_bundle_contents_directory_holding_the_executable_directory)
         .map(lend_directory_in_the_app_bundle_contents);
+    #[cfg(not(target_os = "macos"))]
+    let lend_directory_in_the_app_bundle: Option<PathBuf> = None;
     let lend_directory_in_the_runtime_unit = executable_directory
         .and_then(Path::parent)
         .map(lend_directory_in_the_runtime_unit);
@@ -85,19 +91,20 @@ fn no_lend_refusal_naming_where_it_looked(lend_directories_looked_at: &[PathBuf]
          `{LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT}/`, as `cargo xtask build-runtime` \
          lays one out"
     );
-    if lend_directories_looked_at.len() == 1 {
+    #[cfg(target_os = "macos")]
+    if lend_directories_looked_at.len() > 1 {
         return format!(
-            "no lend at {where_it_looked}: it holds no \
-             {PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY}. {runtime_unit_shape}"
+            "no lend at {where_it_looked}: neither holds \
+             {PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY}. {runtime_unit_shape}, \
+             or from an app bundle — \
+             `{APP_BUNDLE_CONTENTS_DIRECTORY_NAME}/{APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME}/tatolabd` \
+             beside `{APP_BUNDLE_CONTENTS_DIRECTORY_NAME}/\
+             {LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS}/`"
         );
     }
     format!(
-        "no lend at {where_it_looked}: neither holds \
-         {PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY}. {runtime_unit_shape}, \
-         or from an app bundle — \
-         `{APP_BUNDLE_CONTENTS_DIRECTORY_NAME}/{APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME}/tatolabd` \
-         beside `{APP_BUNDLE_CONTENTS_DIRECTORY_NAME}/\
-         {LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS}/`"
+        "no lend at {where_it_looked}: it holds no \
+         {PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY}. {runtime_unit_shape}"
     )
 }
 
@@ -155,6 +162,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     /// An app bundle's `Contents` under `parent_directory`, with `tatolabd`'s
     /// directory made, and the path `tatolabd` would have in it.
     fn tatolabd_in_an_app_bundle(parent_directory: &Path) -> (PathBuf, PathBuf) {
@@ -166,6 +174,7 @@ mod tests {
         (app_bundle_contents, executable_directory.join("tatolabd"))
     }
 
+    #[cfg(target_os = "macos")]
     fn lend_the_app_bundle(app_bundle_contents: &Path) {
         let bootstrap = processor_interpreter_bootstrap_path(
             &lend_directory_in_the_app_bundle_contents(app_bundle_contents),
@@ -174,6 +183,7 @@ mod tests {
         std::fs::write(&bootstrap, "").unwrap();
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_lend_is_found_in_the_resources_of_the_app_bundle_holding_the_executable() {
         let temporary_directory = tempfile::TempDir::new().unwrap();
@@ -187,6 +197,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_app_bundles_lend_is_preferred_over_a_runtime_unit_shaped_lend_in_contents() {
         let temporary_directory = tempfile::TempDir::new().unwrap();
@@ -201,6 +212,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn an_app_bundle_with_no_lend_is_refused_naming_both_places_it_looked() {
         let temporary_directory = tempfile::TempDir::new().unwrap();
@@ -224,6 +236,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_macos_directory_outside_contents_is_not_an_app_bundle() {
         let not_an_app_bundle = tempfile::TempDir::new().unwrap();
