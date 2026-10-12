@@ -998,10 +998,18 @@ impl Runner {
     /// SIGHUP) — the waits inside it walk every loaded stream to the machine's
     /// shutdown level — then clear what this run's interrupts escalated. Fails
     /// if another owner in this process already holds them.
+    ///
+    /// On macOS it first builds the window event pump, which only the process's
+    /// first thread can: entered there, a window first asked for from any other
+    /// thread — a load through the local API — is minted rather than refused.
     pub fn run_owning_the_machine_shutdown_signals<R>(
         &self,
         run: impl FnOnce() -> Result<R>,
     ) -> Result<R> {
+        #[cfg(target_os = "macos")]
+        if let Err(reason) = crate::core::window_event_pump::process_wide_window_event_pump() {
+            tracing::info!(%reason, "no window can be created in this process");
+        }
         let run_outcome = {
             let _shutdown_signals = take_shutdown_signal_ownership()?;
             let _owned_by_this_engine = TheMachineShutdownSignalsOwnedByOneEngine::mark(
