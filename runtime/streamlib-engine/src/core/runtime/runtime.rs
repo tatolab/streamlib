@@ -999,17 +999,18 @@ impl Runner {
     /// shutdown level — then clear what this run's interrupts escalated. Fails
     /// if another owner in this process already holds them.
     ///
-    /// On macOS it first builds the window event pump, which only the process's
-    /// first thread can: entered there, a window first asked for from any other
-    /// thread — a load through the local API — is minted rather than refused.
+    /// On macOS, once it owns them, it builds the window event pump before
+    /// `run`, which only the process's first thread can: entered there, a
+    /// window first asked for from any other thread — a load through the local
+    /// API — is minted rather than refused.
     pub fn run_owning_the_machine_shutdown_signals<R>(
         &self,
         run: impl FnOnce() -> Result<R>,
     ) -> Result<R> {
-        #[cfg(target_os = "macos")]
-        crate::core::window_event_pump::build_the_process_wide_window_event_pump_or_log_why_no_window_can_be_created();
         let run_outcome = {
             let _shutdown_signals = take_shutdown_signal_ownership()?;
+            #[cfg(target_os = "macos")]
+            crate::core::window_event_pump::build_the_process_wide_window_event_pump_or_log_why_no_window_can_be_created();
             let _owned_by_this_engine = TheMachineShutdownSignalsOwnedByOneEngine::mark(
                 &self.engine_resources_shared_by_every_stream,
             );
