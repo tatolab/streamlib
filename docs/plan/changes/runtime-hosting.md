@@ -113,9 +113,12 @@ runtime/tatolabd/, runtime/tatolab-cli/       the runtime process and the CLI
 runtime/streamlib-engine/src/core/runtime/    runtime.rs (Runner, the one engine), loaded_stream.rs
                                               (LoadedStreamInThisRuntime), machine_state_directory.rs,
                                               machine_name.rs (replaces runtime_name.rs)
-installer/                                    install.sh, tatolabd.service, homebrew/tatolab.rb (the cask)
-apps/tatolab-macos/                           Tatolab.app, a menu-bar app carrying the runtime
+installer/                                    install.sh, tatolabd.service
 ```
+
+`Tatolab.app`, a menu-bar app carrying the runtime, lives in the private repository
+`tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app private (owner,
+2026-10-11).
 
 ## ADDED: §Processor model — one engine, many streams
 
@@ -226,10 +229,15 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   and restarts the service; `--uninstall` removes the service and files, never the state directory.
   On macOS the script refuses, pointing at the app.
 - **macOS.** `Tatolab.app`, from a notarised `.dmg` on the release and `brew install --cask
-  tatolab/tap/tatolab`: `Contents/MacOS/tatolabd`, an `SMAppService.agent` (plist in
-  `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit), and the lend laid out by Apple's
-  code rules — native code under `Contents/Frameworks/`, the rest under `Contents/Resources/`,
-  linked into one `tatolab/runtime/` tree, PyInstaller's layout, `dladdr` proved to find
+  tatolab/tap/tatolab`. `tatolab/tatolab-app` checks this repository out at the release tag, builds
+  the runtime unit, lays it into the bundle, signs, notarises, and attaches the `.dmg` to this
+  repository's release. The bundle holds `Contents/MacOS/tatolabd`, an `SMAppService.agent` (plist in `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit), the CLI under a
+  name that does not case-fold onto the app's own executable — a default APFS volume folds case,
+  so `tatolab` would overwrite `Tatolab` — `Contents/MacOS/tatolab-cli` today, which
+  `/usr/local/bin/tatolab` links to, and the lend laid out by Apple's code rules — every Mach-O under
+  `Contents/Frameworks/tatolab-runtime/` at its path below `tatolab/runtime/`, the lend in
+  `Contents/Resources/lend/` with each Mach-O a relative link into it, PyInstaller's layout;
+  `tatolabd` finds the lend there from `Contents/MacOS/`, and `dladdr` is proved to find
   `_vulkan_driver/` through the link. Registration is the login item, so one switch, "Run
   Tatolab", covers both; opening the app registers the agent unless the user turned the switch
   off, which it remembers, and on `.requiresApproval` opens Login Items for the user. The menu shows whether
@@ -239,8 +247,17 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   carries the camera, microphone, local-network and Documents, Desktop and Downloads usage
   strings; the app and `tatolabd` carry the hardened-runtime device entitlements; every Mach-O is
   signed with the Developer ID and the `.dmg` notarised and stapled, with control-tower's desktop
-  workflow steps and six `APPLE_*` secrets copied here. Discovery retries after a local-network
-  denial. The prompt's wording under `SMAppService` is §Media I/O's acceptance check.
+  workflow steps and the seven `APPLE_*` secrets, synced from Infisical (project Tatolab) into
+  `tatolab/tatolab-app`. The local-network usage string ships now; nothing discovers on the LAN
+  since the mesh removal, so the retry after a local-network denial lands with the sharing step. Uninstalling removes the service and the files, never the state directory, as `--uninstall`
+  does on Linux: the app's "Uninstall Tatolab…" and `brew uninstall --cask` alike (owner,
+  2026-10-11).
+- **The app on Linux** (owner, 2026-10-11: macOS and Linux are both supported, so a person installs
+  the app on either). Its Linux build — a `.deb` and an AppImage from `tatolab/tatolab-app` — is the
+  same window and tray over the service the installer registers: the switch is `systemctl --user
+  enable --now` / `disable --now tatolabd.service`. It installs no runtime, so the installer stays
+  Linux's one way to install the runtime and the service stays its end state; with no service, the
+  app points at the installer. The prompt's wording under `SMAppService` is §Media I/O's acceptance check.
 
 ## MODIFIED: in-flight change files
 
@@ -277,7 +294,7 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 
 | Not here | Because | Lands with |
 |---|---|---|
-| The app's stream views, in-place updates, the remaining Rust names | the app | step 10 |
+| The app's stream actions and the rest of its GUI beyond the proof of concept's live stream list, graph and logs (owner, 2026-10-11), in-place updates, the remaining Rust names | the app | step 10 |
 | Starting with no GPU | accelerators OPEN | step 5 |
 | `run <url-or-zip>`, registries | packs OPEN | step 7 |
 | `machines`, router mode, dialing relays, the relay role, the URL forms | their OPENs | steps 8, 9 |
@@ -297,9 +314,10 @@ runtime's own log); the pivot ADR's steps 4 and 10.
   build has none — no second mode.
 - **A machine id per state directory**, not `/etc/machine-id`, so a container is its own machine.
 - **Machine settings apply at the next start**: a rename re-addresses everything, so never live.
-- **The app is Tauri**, as control-tower's desktop app is, registering its agent through
-  `objc2-service-management`; a native AppKit menu would be smaller, and switching rewrites the menu.
-  The cask's tap is `tatolab/homebrew-tap`, created by the owner, bumped per release.
+- **The app is Tauri**, in `tatolab/tatolab-app`, as control-tower's desktop app is, registering
+  its agent through `objc2-service-management`; a native AppKit menu would be smaller, and switching rewrites the menu.
+  The cask's tap is `tatolab/homebrew-tap`, created by the owner, its `Casks/tatolab.rb` bumped
+  per release by the app repository.
 
 ## Tickets, each deleting what it replaces, tests included
 
