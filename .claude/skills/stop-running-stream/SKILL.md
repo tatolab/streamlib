@@ -31,8 +31,13 @@ An attached stream's row is gone; a kept one shows `stopped` with `-` nodes; aft
 ### 3. End a runtime the session started (only that one)
 Never stop the machine's runtime on your own — it is the owner's, and other streams live in it. Before a fixture driver that needs it down (they refuse while it answers), ask the owner; then stop it — `systemctl --user stop tatolabd` on Linux, the "Run Tatolab" switch off in `Tatolab.app` on macOS, or Ctrl-C a `tatolabd` in a terminal — and start it again the same way once the fixture ends. A runtime the session started for itself (`drive-running-stream`, the test-only build) ends by a signal, and must end cleanly:
 ```bash
-kill -INT "$(cat "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.pid")"
+tatolabd_pid="$(cat "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.pid")"
+if [ ! -f "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.exit" ] \
+    && [ "$(ps -o comm= -p "$tatolabd_pid")" = tatolabd ]; then
+  kill -INT "$tatolabd_pid"
+fi
 ```
+A present `tatolabd.exit` means it already ended, and its pid may since name another process — so it is signalled only while it has not exited and the pid is still a `tatolabd`.
 Wait up to ~15 s for `$TATOLAB_TEST_MACHINE_ROOT/tatolabd.exit` to appear and read the exit status it holds: `0` is a clean stop; `124` means its watchdog abandoned a stream's teardown; a runtime that needs `kill -9` is a finding, not a flake. Then delete its `TATOLAB_TEST_MACHINE_ROOT`.
 
 ## Notes

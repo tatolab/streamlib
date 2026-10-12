@@ -27,7 +27,7 @@ tatolab tap camera/video --stream lab --count 10
 ### 3. Interpret the sample
 - **Bags arrive, non-zero byte lengths** — data is flowing on that link; the source node is producing.
 - **Byte lengths change frame-to-frame** — live, varying content rather than a stuck buffer.
-- **Zero bags / the call returns empty** — nothing is publishing on that port; re-check the address against the graph, and confirm the source node is `Running` (`inspect-live-graph`).
+- **Zero bags / the call returns empty** — no bag arrived inside the sample's short window, which a slow or bursty port can do; tap again before concluding the port is quiet, then re-check the address against the graph, and confirm the source node is `Running` (`inspect-live-graph`).
 - **A bag flagged `hex_truncated`** — it was larger than `--max-bag-bytes` and cannot be decoded; raise the cap.
 
 ## Notes

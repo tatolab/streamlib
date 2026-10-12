@@ -25,7 +25,7 @@ With `--stream`, the result is that stream's graph in the shape a load takes: `s
 - **States / metrics** — confirm a node is `Running` and moving data (non-zero counters) rather than merely instantiated.
 
 ### 3. Save it when it is evidence
-To freeze the topology for a PR or a before/after diff, redirect to a file (`graph` has no `--output` flag):
+To freeze the topology for a PR or a before/after diff, redirect to a file (`graph` has no `--output` flag) — only when no node's config carries a secret (see Notes); otherwise read it in a pipe and record what you read:
 ```bash
 tatolab graph --stream <stream> > /tmp/graph-before.json
 ```

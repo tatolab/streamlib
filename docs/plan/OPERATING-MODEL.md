@@ -184,7 +184,7 @@ ends with a say-back loop, and none of them commits work:
 ### Kept, consolidated, retired
 
 - **Kept unchanged:** the nine live-ops CLI skills (`list-running-streams` …
-  `stop-running-stream`) — already perfectly shaped (one skill = one CLI verb);
+  `stop-running-stream`) — already perfectly shaped (one skill = one focused live-ops task);
   `gh-stack`; `local-ci-runner`; `rust-craftsmanship-reviewer`; the three domain experts —
   `gpu-vulkan-expert`, `linux-media-expert`, and `polyglot-ipc-expert`, re-scoped to
   helper-process IPC.
