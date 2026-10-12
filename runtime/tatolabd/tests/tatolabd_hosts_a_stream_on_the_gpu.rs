@@ -3,8 +3,9 @@
 
 //! `tatolabd` hosting a started native-only stream on the GPU: a kept stream
 //! re-loaded and started at the runtime's start, the engine's signal ladder
-//! over it, and a kept stream that keeps crashing the runtime failed while
-//! every other comes back. Rig-only:
+//! over it, a kept stream that keeps crashing the runtime failed while every
+//! other comes back, and, on macOS, a stream started through the local API
+//! opening its window. Rig-only:
 //! `cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root`.
 
 #![cfg(all(

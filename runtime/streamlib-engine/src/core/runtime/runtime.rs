@@ -1002,7 +1002,8 @@ impl Runner {
     /// On macOS, once it owns them, it builds the window event pump before
     /// `run`, which only the process's first thread can: entered there, a
     /// window first asked for from any other thread — a load through the local
-    /// API — is minted rather than refused.
+    /// API — is minted by the pump a wait inside `run` drives, rather than
+    /// refused.
     pub fn run_owning_the_machine_shutdown_signals<R>(
         &self,
         run: impl FnOnce() -> Result<R>,
