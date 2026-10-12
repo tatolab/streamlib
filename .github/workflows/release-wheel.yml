@@ -6,9 +6,17 @@ name: Release to PyPI
 # engine wheel is not published: a processor interpreter borrows the runtime
 # from the runtime unit's lend, so no stream's venv installs it.
 #
+# The runtime itself ships as the Linux runtime tarball, attached to the GitHub
+# release and served with install.sh from get.tatolab.com.
+#
 # Every distribution carries the repository's one version and releases on its
-# one tag, and the upload waits for every one of them and for the macOS proof of
-# the runtime unit, so a release publishes all of them or none.
+# one tag, and the PyPI upload waits for every one of them, for the macOS proof
+# of the runtime unit, for the Linux runtime tarball and for the credentials
+# that publish it, so PyPI takes all of them or none. The Linux runtime
+# publishes after PyPI, because a stream it scaffolds locks the
+# `tatolab-stream` PyPI holds; a failed Linux publish is recovered by re-running
+# the original run's failed publish-linux-runtime job, which uploads the
+# tarball that run built again and overwrites a partial upload.
 #
 # Called from release-please.yml rather than triggered by `on: release`:
 # release-please runs on the default GITHUB_TOKEN, and GitHub does not start
@@ -221,12 +229,47 @@ jobs:
     with:
       ref: ${{ inputs.tag_name }}
 
+  build-linux-runtime-tarball:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/linux-runtime-tarball.yml
+    with:
+      ref: ${{ inputs.tag_name }}
+
+  # Before PyPI takes anything: an upload whose Linux runtime could not then be
+  # published would leave the release half out.
+  check-the-linux-runtime-can-be-published:
+    name: The Linux runtime's upload credentials reach this repository
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every credential the get.tatolab.com upload uses is set
+        env:
+          CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          for required_secret in CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID \
+            CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!required_secret}" ]; then
+              echo "::error::$required_secret does not reach this repository — add it to Infisical's prod environment, which syncs it to the organization's secrets"
+              exit 1
+            fi
+          done
+
   publish-to-pypi:
     name: Publish to PyPI
+    # A dry run skips the credentials check, and runs this regardless.
+    if: ${{ !cancelled() && !failure() }}
     needs:
       - build-tatolab-stream-distribution
       - build-tatolab-webrtc-distribution
       - prove-the-runtime-unit-on-macos
+      - build-linux-runtime-tarball
+      - check-the-linux-runtime-can-be-published
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions: {}
@@ -286,3 +329,122 @@ jobs:
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: uv publish --trusted-publishing never --check-url https://pypi.org/simple/ dist/*
+
+  # Versioned files first and `latest` last, so an install that reads `latest`
+  # always finds the tarball it names.
+  publish-linux-runtime:
+    name: Publish the Linux runtime
+    needs:
+      - publish-to-pypi
+      - build-linux-runtime-tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GET_TATOLAB_COM_BUCKET: get-tatolab-com
+      GET_TATOLAB_COM_URL: https://get.tatolab.com
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+          sparse-checkout: installer
+          sparse-checkout-cone-mode: false
+
+      - name: Collect the tarball this run built
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-runtime-tarball
+          path: linux-runtime-tarball
+
+      - name: The tarball carries the release's version
+        id: tarball
+        env:
+          RELEASE_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          tarball_path="$(ls linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz)"
+          tarball_name="$(basename "$tarball_path")"
+          tarball_version="${tarball_name#tatolab-runtime-}"
+          tarball_version="${tarball_version%-x86_64-linux.tar.gz}"
+          if [ -n "$RELEASE_TAG_NAME" ] && [ "$tarball_version" != "${RELEASE_TAG_NAME#v}" ]; then
+            echo "::error::$tarball_name is version $tarball_version, not the ${RELEASE_TAG_NAME#v} $RELEASE_TAG_NAME releases"
+            exit 1
+          fi
+          (cd linux-runtime-tarball && sha256sum --check "$tarball_name.sha256")
+          echo "name=$tarball_name" >> "$GITHUB_OUTPUT"
+          echo "version=$tarball_version" >> "$GITHUB_OUTPUT"
+
+      - name: An upload names the release it publishes
+        if: ${{ !inputs.dry_run && inputs.tag_name == '' }}
+        run: |
+          echo "::error::publishing the Linux runtime publishes a release — name its tag in tag_name"
+          exit 1
+
+      - name: What a publish would upload
+        if: inputs.dry_run
+        env:
+          TARBALL_NAME: ${{ steps.tarball.outputs.name }}
+          TARBALL_VERSION: ${{ steps.tarball.outputs.version }}
+        run: |
+          echo "the GitHub release: $TARBALL_NAME, $TARBALL_NAME.sha256"
+          echo "s3://$GET_TATOLAB_COM_BUCKET/releases/$TARBALL_VERSION/: $TARBALL_NAME, $TARBALL_NAME.sha256"
+          echo "s3://$GET_TATOLAB_COM_BUCKET/: install.sh, latest = $TARBALL_VERSION"
+
+      - name: Attach the tarball to the GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG_NAME: ${{ inputs.tag_name }}
+          TARBALL_NAME: ${{ steps.tarball.outputs.name }}
+        run: >-
+          gh release upload "$RELEASE_TAG_NAME" --clobber
+          "linux-runtime-tarball/$TARBALL_NAME"
+          "linux-runtime-tarball/$TARBALL_NAME.sha256"
+
+      # R2 through its S3 API, with a token scoped to this one bucket. The
+      # checksum settings are the ones Cloudflare's R2 docs give for the AWS CLI,
+      # whose default checksums R2 does not accept.
+      - name: Serve the tarball, install.sh and latest from get.tatolab.com
+        if: ${{ !inputs.dry_run }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TARBALL_NAME: ${{ steps.tarball.outputs.name }}
+          TARBALL_VERSION: ${{ steps.tarball.outputs.version }}
+        run: |
+          set -euo pipefail
+          r2_endpoint="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
+          put_object() {
+            aws s3 cp --endpoint-url "$r2_endpoint" --only-show-errors \
+              --content-type "$3" --cache-control "$4" "$1" "s3://$GET_TATOLAB_COM_BUCKET/$2"
+          }
+          put_object "linux-runtime-tarball/$TARBALL_NAME" \
+            "releases/$TARBALL_VERSION/$TARBALL_NAME" application/gzip "public, max-age=31536000, immutable"
+          put_object "linux-runtime-tarball/$TARBALL_NAME.sha256" \
+            "releases/$TARBALL_VERSION/$TARBALL_NAME.sha256" "text/plain; charset=utf-8" "public, max-age=31536000, immutable"
+          put_object installer/install.sh install.sh "text/plain; charset=utf-8" "public, max-age=300"
+          printf '%s\n' "$TARBALL_VERSION" > latest
+          put_object latest latest "text/plain; charset=utf-8" "public, max-age=300"
+
+      - name: get.tatolab.com serves the release
+        if: ${{ !inputs.dry_run }}
+        env:
+          TARBALL_NAME: ${{ steps.tarball.outputs.name }}
+          TARBALL_VERSION: ${{ steps.tarball.outputs.version }}
+        run: |
+          set -euo pipefail
+          served_sha256="$(curl -fsSL "$GET_TATOLAB_COM_URL/releases/$TARBALL_VERSION/$TARBALL_NAME" | sha256sum | cut -d ' ' -f 1)"
+          built_sha256="$(cut -d ' ' -f 1 "linux-runtime-tarball/$TARBALL_NAME.sha256")"
+          if [ "$served_sha256" != "$built_sha256" ]; then
+            echo "::error::$GET_TATOLAB_COM_URL serves a $TARBALL_NAME whose sha256 is $served_sha256, not the $built_sha256 built"
+            exit 1
+          fi
+          curl -fsSL "$GET_TATOLAB_COM_URL/install.sh" | cmp - installer/install.sh

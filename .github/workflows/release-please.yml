@@ -182,8 +182,9 @@ jobs:
   publish-release-to-pypi:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
+    # Write, for attaching the Linux runtime tarball to the release just cut.
     permissions:
-      contents: read
+      contents: write
     uses: ./.github/workflows/release-wheel.yml
     with:
       tag_name: ${{ needs.release-please.outputs.tag_name }}

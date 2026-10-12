@@ -9,6 +9,7 @@
 mod bundled_vulkan_driver_environment;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 mod crash_on_demand_test_node;
+mod display_server_environment_from_the_user_manager;
 mod machine_stream_hosting;
 mod refusal_on_standard_error;
 mod runtime_unit_lend;
@@ -28,6 +29,9 @@ use crate::tatolabd_command_line::TatolabdCommandLine;
 
 fn main() -> ExitCode {
     let TatolabdCommandLine {} = TatolabdCommandLine::parse();
+
+    let display_server_environment_at_the_runtimes_start =
+        display_server_environment_from_the_user_manager::take_the_display_server_from_the_user_manager_before_any_thread_exists();
 
     let processor_interpreter_lend_directory =
         match runtime_unit_lend::the_lend_beside_this_executable() {
@@ -77,6 +81,7 @@ fn main() -> ExitCode {
             processor_interpreter_lend_directory,
             runtime_run_in_progress_record,
             &how_the_previous_run_ended,
+            &display_server_environment_at_the_runtimes_start,
         )
     }));
     match hosted {

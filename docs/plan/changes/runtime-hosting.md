@@ -209,14 +209,20 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 ## ADDED: §Distribution — the Linux installer and the Mac app
 
 - **Linux.** Each release attaches `tatolab-runtime-<version>-x86_64-linux.tar.gz` (built in
-  `manylinux_2_28`; the portability gate runs over it). `curl -fsSL
-  https://tatolab.github.io/streamlib/install.sh | sh` unpacks it to
+  `manylinux_2_28`; the portability gate runs over it), which carries its user units in
+  `lib/systemd/user/`, and serves it, `install.sh` and a `latest` naming the
+  version from `get.tatolab.com`, an R2 bucket (owner, 2026-10-11, #2608). `curl -fsSL
+  https://get.tatolab.com/install.sh | sh` checks its sha256 and unpacks it to
   `~/.local/share/tatolab/<version>/`, points `current` at it, links `tatolab` and `tatolabd` into
   `~/.local/bin`, and writes `~/.config/systemd/user/tatolabd.service` (`Restart=on-failure`,
   `WantedBy=default.target`, `After=graphical-session.target`) — always on, across logouts with
-  `loginctl enable-linger`, which it offers. A display node opened with no display in the
-  runtime's environment takes `DISPLAY` and `WAYLAND_DISPLAY` from the user manager's, which
-  desktop sessions import at login, and is refused by name when there is none. Re-running upgrades in place
+  `loginctl enable-linger`, which it offers. A runtime started with no display in its
+  environment takes `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` from the user manager's, which
+  desktop sessions import at login, at its start and never later — NVIDIA's driver reads `DISPLAY`
+  once, at `vkCreateInstance`, and a swapchain on an instance created without it crashes (owner,
+  2026-10-11, #2608). One that found none says so, refuses every window by name, and is restarted
+  by `tatolabd-restart-for-a-display-at-login.service` (`WantedBy=graphical-session.target`) when
+  a desktop session starts. Re-running upgrades in place
   and restarts the service; `--uninstall` removes the service and files, never the state directory.
   On macOS the script refuses, pointing at the app.
 - **macOS.** `Tatolab.app`, from a notarised `.dmg` on the release and `brew install --cask

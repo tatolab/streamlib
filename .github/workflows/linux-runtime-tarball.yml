@@ -1,0 +1,40 @@
+name: Linux Runtime Tarball
+
+# The tarball install.sh installs: the runtime unit built in manylinux_2_28 by
+# `scripts/build_linux_runtime_release_tarball.sh`, which also runs the
+# portability gate over it at the 2.28 glibc floor. Called by python-wheel.yml
+# on every PR — a change needing a newer glibc symbol, or a system library
+# manylinux lacks, must fail on the PR that makes it, not on release day — and
+# by release-wheel.yml, where a failure here withholds the whole release.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "What to check out and build (blank = the calling run's own ref)"
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  build-linux-runtime-tarball:
+    name: x86_64 Linux runtime tarball (manylinux_2_28)
+    runs-on: ubuntu-latest
+    # A release build of the engine from cold, plus glslc from source.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Build the tarball and run the portability gate over it
+        run: bash scripts/build_linux_runtime_release_tarball.sh "$RUNNER_TEMP/linux-runtime-tarball"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-tarball
+          path: ${{ runner.temp }}/linux-runtime-tarball/
+          if-no-files-found: error
