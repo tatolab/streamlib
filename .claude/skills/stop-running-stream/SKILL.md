@@ -29,7 +29,7 @@ tatolab streams
 An attached stream's row is gone; a kept one shows `stopped` with `-` nodes; after `rm` no row remains. A stream no longer loaded has released its camera and GPU work for the next run or another worktree.
 
 ### 3. End a runtime the session started (only that one)
-Never stop the machine's runtime — it is the owner's, and other streams live in it. A runtime the session started for itself (`drive-running-stream`, the test-only build) ends by a signal, and must end cleanly:
+Never stop the machine's runtime on your own — it is the owner's, and other streams live in it. A fixture driver that needs it down (they refuse while it answers) asks the owner first, then `systemctl --user stop tatolabd`, and `systemctl --user start tatolabd` once the fixture ends. A runtime the session started for itself (`drive-running-stream`, the test-only build) ends by a signal, and must end cleanly:
 ```bash
 kill -INT "$(cat "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.pid")"
 ```

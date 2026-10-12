@@ -34,7 +34,7 @@ Each file holds the hex-plus-byte-length sample for that port (bytes-flowing pro
 ```bash
 tatolab logs --stream <stream> > "$EVIDENCE_DIR/logs.txt"
 ```
-Reads the records the runtime holds for that loaded stream, by sequence number, and returns; `-f` would keep following. `--level`, `--source`, `--processor`, `--pipeline` and `--rhi` narrow them. A stream already unloaded is read off disk instead: `tatolab logs --list` names its log files, and `tatolab logs <name>` renders one.
+Reads the records the runtime holds for that loaded stream, by sequence number, and returns; `-f` would keep following. `--level`, `--source`, `--processor`, `--pipeline` and `--rhi` narrow them. A stream already unloaded is read off disk instead, from its project directory (or with `STREAMLIB_HOME=<project>`), whose `.streamlib/logs/` holds its log files: `tatolab logs --list` names them, and `tatolab logs <name>` renders one.
 
 ### 5. Confirm and hand off the bundle
 ```bash

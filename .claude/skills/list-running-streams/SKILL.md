@@ -5,7 +5,7 @@ description: List the streams the machine's one StreamLib runtime holds — atta
 
 # list-running-streams
 
-The entry point for every control-verb workflow. A machine runs one runtime, `tatolabd`, and every stream on it loads into that one process; `tatolab streams` asks it which streams it holds. Every verb reaches the runtime through one socket at a fixed path, `local-api.sock` in this user's runtime directory (`$XDG_RUNTIME_DIR/streamlib/`, else `/tmp/streamlib-<uid>/`), so no verb takes a target flag. A runtime on another machine is reached by running the verb there (`ssh <machine> tatolab streams`).
+The entry point for every control-verb workflow. A machine runs one runtime, `tatolabd`, and every stream on it loads into that one runtime — each Python processor still runs in its own helper process; `tatolab streams` asks the runtime which streams it holds. Every verb reaches the runtime through one socket at a fixed path, `local-api.sock` in this user's runtime directory (`$XDG_RUNTIME_DIR/streamlib/`, else `/tmp/streamlib-<uid>/`), so no verb takes a target flag. A runtime on another machine is reached by running the verb there (`ssh <machine> tatolab streams`).
 
 ## Steps
 
@@ -16,10 +16,10 @@ tatolab streams
 An aligned table, then a line under it per failed stream saying why it failed:
 
 ```
-NAME     STATE     NODES  PROJECT
-camera   attached  4      /home/me/camera
-lab      kept      6      /home/me/lab
-old      stopped   -      /home/me/old
+NAME    STATE     NODES  PROJECT
+camera  attached  4      /home/me/camera
+lab     kept      6      /home/me/lab
+old     stopped   -      /home/me/old
 ```
 
 - `NAME` — the stream's name, which `stop`, `start`, `rm`, `expose`, `graph --stream`, `logs --stream` and the first part of a `tap` / `exchange` channel take. It is the function's name, or `--name` on `run`, cast to lowercase URL-safe.
@@ -30,7 +30,7 @@ old      stopped   -      /home/me/old
 ### 2. Read the outcome
 - **A row in `attached` or `kept`** — that stream is loaded; hand its name to `drive-running-stream`.
 - **`No streams in this runtime.`** — the runtime answers and holds nothing. Load one with `tatolab run --dir <project>` (attached) or `tatolab run -d --dir <project>` (kept).
-- **`no runtime is running on this machine: nothing answers at <socket>`** — no runtime is up for this user. The machine's runtime is a service (`systemctl --user start tatolabd`) or `tatolabd` in a terminal; a session that needs a runtime of its own starts the test-only build instead (`drive-running-stream`). When another user holds the machine, the refusal names them.
+- **`no runtime is running on this machine: nothing answers at <socket>`** — no runtime is up for this user. The machine's runtime is a service (`systemctl --user start tatolabd` on Linux, the "Run Tatolab" switch in `Tatolab.app` on macOS) or `tatolabd` in a terminal — the owner's to start; a session that needs a runtime of its own starts the test-only build instead (`drive-running-stream`). When another user holds the machine, the refusal names them.
 - **`stopped` / `failed`** — not loaded. `tatolab start <name>` loads it again (retrying a failed one); `tatolab rm <name>` forgets it.
 
 ## Notes

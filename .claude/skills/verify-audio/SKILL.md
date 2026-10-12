@@ -129,7 +129,7 @@ and numpy and never the runtime; the fixture makes that venv with uv the first t
 with numpy: `PYTHON`, default `python3` — the fixture venv is one once it exists.
 
 **Build the runtime unit from the tree first: `cargo xtask build-runtime --release`.**
-The node runs whatever unit is on disk, and one built before the change under test is measured
+The runtime runs whatever unit is on disk, and one built before the change under test is measured
 and reported as though it were the change. On
 macOS the fixture enforces the sharpest case of this: it **refuses to score unless `node.log`
 shows the probe line `audio device backend chain probed` with `audio_backend=coreaudio`**, because
