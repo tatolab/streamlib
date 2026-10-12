@@ -207,11 +207,20 @@ install_tatolab() {
 
 	release_version="$(release_version_to_install)"
 	unpack_the_release "$release_version"
+	previous_release_version="$(readlink "$TATOLAB_INSTALL_DIRECTORY/current" 2>/dev/null || true)"
 	point_current_at "$release_version"
 	if the_user_systemd_manager_answers; then
-		start_the_service ||
-			refuse "the runtime is unpacked, but its service did not start; the release before it is" \
-				"kept. See \`systemctl --user status $TATOLAB_SYSTEMD_USER_UNIT_NAME\`."
+		if ! start_the_service; then
+			if [ -n "$previous_release_version" ] && [ "$previous_release_version" != "$release_version" ] &&
+				[ -d "$TATOLAB_INSTALL_DIRECTORY/$previous_release_version" ]; then
+				point_current_at "$previous_release_version"
+				start_the_service || true
+				refuse "Tatolab $release_version's service did not start, so $previous_release_version is back in" \
+					"place. See \`systemctl --user status $TATOLAB_SYSTEMD_USER_UNIT_NAME\`."
+			fi
+			refuse "Tatolab $release_version is unpacked, but its service did not start. See" \
+				"\`systemctl --user status $TATOLAB_SYSTEMD_USER_UNIT_NAME\`."
+		fi
 		say "tatolabd is running as the systemd user service $TATOLAB_SYSTEMD_USER_UNIT_NAME"
 		remove_every_release_but "$release_version"
 		offer_to_keep_the_runtime_running_without_a_login

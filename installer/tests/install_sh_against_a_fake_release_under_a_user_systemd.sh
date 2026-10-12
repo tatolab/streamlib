@@ -220,10 +220,14 @@ if as_the_test_user env PATH="$failing_restart_directory:/usr/bin:/bin" \
 fi
 [ -d "$test_user_home/.local/share/tatolab/1.0.1" ] ||
 	fail "an install whose service did not restart removed the release before it"
+[ "$(readlink "$test_user_home/.local/share/tatolab/current")" = "1.0.1" ] ||
+	fail "an install whose service did not restart left current on the new release"
+[ "$(as_the_test_user tatolab)" = "tatolab 1.0.1" ] ||
+	fail "an install whose service did not restart left tatolab on PATH at the new release"
 run_the_installer
 wait_until_the_running_release_is 1.0.3
 [ ! -e "$test_user_home/.local/share/tatolab/1.0.1" ] || fail "the next good install left 1.0.1 behind"
-pass "a service that fails to restart fails the install and keeps the release before it"
+pass "a service that fails to restart fails the install and puts the release before it back"
 
 # --- macOS is pointed at the app -------------------------------------------
 
