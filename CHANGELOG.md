@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.1](https://github.com/tatolab/streamlib/compare/v0.45.0...v0.45.1) (2026-10-12)
+
+
+### Features
+
+* **dist:** curl | sh installs the runtime as a systemd user service, from get.tatolab.com ([#2722](https://github.com/tatolab/streamlib/issues/2722)) ([617b193](https://github.com/tatolab/streamlib/commit/617b19369f189236eeccde24078ee8ccddf740c6))
+
 ## [0.45.0](https://github.com/tatolab/streamlib/compare/v0.44.1...v0.45.0) (2026-10-11)
 
 
