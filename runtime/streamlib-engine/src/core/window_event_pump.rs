@@ -284,6 +284,15 @@ pub fn process_wide_window_event_pump() -> Result<&'static ProcessWideWindowEven
         .map_err(|reason| Error::DisplaySurfaceUnavailable(reason.clone()))
 }
 
+/// Build the process's one pump now, which only the first thread can, and log
+/// why no window can be created if it is refused.
+#[cfg(target_os = "macos")]
+pub(crate) fn build_the_process_wide_window_event_pump_or_log_why_no_window_can_be_created() {
+    if let Err(reason) = process_wide_window_event_pump() {
+        tracing::info!(%reason, "no window can be created in this process");
+    }
+}
+
 /// Messages the pump's own thread acts on. Carried over the winit proxy, which
 /// is the only way to reach an `ActiveEventLoop` from another thread.
 enum WindowEventPumpControlMessage {

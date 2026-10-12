@@ -1007,9 +1007,7 @@ impl Runner {
         run: impl FnOnce() -> Result<R>,
     ) -> Result<R> {
         #[cfg(target_os = "macos")]
-        if let Err(reason) = crate::core::window_event_pump::process_wide_window_event_pump() {
-            tracing::info!(%reason, "no window can be created in this process");
-        }
+        crate::core::window_event_pump::build_the_process_wide_window_event_pump_or_log_why_no_window_can_be_created();
         let run_outcome = {
             let _shutdown_signals = take_shutdown_signal_ownership()?;
             let _owned_by_this_engine = TheMachineShutdownSignalsOwnedByOneEngine::mark(

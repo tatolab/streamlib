@@ -641,9 +641,7 @@ impl RuntimeContext {
     /// settles as unavailable and every window request says why.
     #[cfg(target_os = "macos")]
     pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
-        if let Err(reason) = crate::core::window_event_pump::process_wide_window_event_pump() {
-            tracing::info!(%reason, "[ensure_platform_ready] no window can be created in this process");
-        }
+        crate::core::window_event_pump::build_the_process_wide_window_event_pump_or_log_why_no_window_can_be_created();
         Ok(())
     }
 

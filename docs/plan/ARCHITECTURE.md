@@ -2180,6 +2180,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib a_request_carries_its_title_and_size_to_the_window_attributes -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test processor_owned_window_on_the_first_thread -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test window_event_pump_built_when_the_run_starts -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_hosts_a_stream_on_the_gpu a_stream_started_through_the_local_api_opens_its_window -->
   <!-- verify: cargo test -p streamlib-media-builtins --features hardware-tests --test two_display_windows_on_the_macos_window_server -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-23-shared-window-event-pump.md -->
 - **DECIDED** — Window ownership is a processor capability, not a built-in privilege:
