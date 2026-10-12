@@ -37,7 +37,10 @@ use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
-use crate::core::runtime::{LoadedStreamTag, ShutdownEscalationOfOneStream, StreamEnvironment};
+use crate::core::runtime::{
+    LoadedStreamTag, ShutdownEscalationOfOneStream, StreamEnvironment,
+    start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
+};
 use crate::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
 };
@@ -133,8 +136,9 @@ pub(crate) fn processor_interpreter_python_path(
 /// A command starting `interpreter` as every interpreter a stream starts is
 /// started — its compile, its describe and each processor interpreter: in
 /// `project_directory`, with the runtime's environment minus every variable
-/// whose name begins with `PYTHON`, and `PYTHONPATH` set to the lend directory
-/// then the project.
+/// whose name begins with `PYTHON`, `PYTHONPATH` set to the lend directory
+/// then the project, and the open-descriptor soft limit the runtime started
+/// with.
 ///
 /// The compile adds `-I`, which ignores every `PYTHON*` variable, so this
 /// `PYTHONPATH` reaches only the describe and the processor interpreters; the
@@ -155,6 +159,7 @@ pub(crate) fn stream_interpreter_command_in_its_project_directory(
         std::env::vars_os().map(|(variable_name, _)| variable_name),
     );
     command.env("PYTHONPATH", python_path);
+    start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with(&mut command);
     Ok(command)
 }
 

@@ -794,6 +794,8 @@ jobs:
             core::runtime::processor_interpreter_launch_record::tests::a_live_add_of_an_undescribed_type_into_a_stream_with_no_environment_is_refused_by_name \
             core::runtime::processor_interpreter_launch_record::tests::a_second_lend_directory_is_refused_and_the_first_kept \
             core::runtime::processor_interpreter_launch_record::tests::two_streams_describe_one_class_each_in_their_own_interpreter \
+            core::runtime::open_descriptor_soft_limit::tests::the_raise_reaches_the_ceiling_and_an_interpreter_the_runtime_starts_runs_at_the_limit_it_started_with \
+            core::runtime::open_descriptor_soft_limit::tests::an_interpreter_started_before_any_raise_keeps_the_runtimes_own_limit \
             core::processors::node_types_one_stream_resolves::tests::a_later_describe_into_a_stream_replaces_the_earlier_ones_registration \
             core::processors::node_types_one_stream_resolves::tests::a_describe_never_replaces_a_natively_compiled_node_type \
             core::processors::node_types_one_stream_resolves::tests::two_streams_describing_one_class_each_resolve_their_own \
