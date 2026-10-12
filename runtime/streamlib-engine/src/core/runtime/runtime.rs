@@ -1503,7 +1503,8 @@ fn take_shutdown_signal_ownership() -> Result<ScopedShutdownSignalOwnership> {
 
 /// Compute the per-runtime surface-sharing socket path, refuse to start if
 /// another live runtime is already bound there, clean up an orphan socket
-/// from a prior crashed runtime, and bring the listener up.
+/// from a prior crashed runtime, bring the listener up, and remove the
+/// surface-sharing sockets every other dead runtime left behind.
 #[cfg(target_os = "linux")]
 fn bring_up_surface_service(
     runtime_directory: &StreamlibRuntimeDirectory,
@@ -1554,6 +1555,18 @@ fn bring_up_surface_service(
         "[new] Runtime-internal surface-sharing service bound at {}",
         socket_path.display()
     );
+    match crate::linux::surface_share::remove_the_surface_share_sockets_left_by_dead_runtimes(
+        runtime_directory,
+    ) {
+        Ok(removed_socket_paths) if !removed_socket_paths.is_empty() => tracing::info!(
+            removed_socket_count = removed_socket_paths.len(),
+            "[new] Removed the surface-sharing sockets runtimes that died without unbinding left behind"
+        ),
+        Ok(_) => {}
+        Err(sweep_failure) => tracing::warn!(
+            "[new] The surface-sharing sockets of dead runtimes were not swept: {sweep_failure}"
+        ),
+    }
 
     Ok((
         service,
@@ -2243,6 +2256,32 @@ mod tests {
                 );
                 let inherited = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 assert_eq!(inherited, socket_path.to_string_lossy());
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn a_starting_runtime_removes_another_dead_runtimes_socket_and_spares_a_live_ones() {
+            with_isolated_xdg_runtime_dir(|xdg| {
+                let runtime_directory = xdg.join("streamlib");
+                streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+                    &runtime_directory,
+                    streamlib_runtime_client_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+                )
+                .expect("create runtime directory");
+                let dead_runtimes_socket =
+                    runtime_directory.join("surface-share-Rdeadruntime.sock");
+                drop(std::os::unix::net::UnixListener::bind(&dead_runtimes_socket).unwrap());
+                let live_runtimes_socket =
+                    runtime_directory.join("surface-share-Rliveruntime.sock");
+                let _live_runtimes_listener =
+                    std::os::unix::net::UnixListener::bind(&live_runtimes_socket).unwrap();
+
+                let runtime = Runner::new().expect("runtime should construct");
+
+                assert!(!dead_runtimes_socket.exists());
+                assert!(live_runtimes_socket.exists());
+                assert!(runtime.surface_socket_path().exists());
             });
         }
 
