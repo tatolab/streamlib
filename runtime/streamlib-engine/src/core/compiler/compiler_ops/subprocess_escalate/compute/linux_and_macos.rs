@@ -186,6 +186,7 @@ pub(in super::super) fn handle_register_compute_kernel(
 /// before returning — so by the time this emits an `Ok`, the GPU work has
 /// retired and the writes are visible to any later submission on the same
 /// device. The subprocess can advance its surface-share timeline on receipt.
+/// The batch recorder's lock is what serializes dispatches.
 ///
 /// Every binding error raises here, before anything is submitted, and names the
 /// shader's own bindings so the caller can see what it should have supplied.
@@ -204,15 +205,18 @@ pub(in super::super) fn handle_run_compute_kernel(
         }
     };
 
-    let dispatched = sandbox.escalate(|full| {
-        let kernel = full.compute_kernel_by_id(&req.kernel_id).ok_or_else(|| {
+    let host_gpu_context = sandbox.host_inner();
+    let dispatched = host_gpu_context
+        .compute_kernel_by_id(&req.kernel_id)
+        .ok_or_else(|| {
             crate::core::error::Error::GpuError(format!(
                 "run_compute_kernel: no kernel registered under id {:?}",
                 req.kernel_id
             ))
-        })?;
-        bind_and_dispatch_compute_kernel(full, kernel, &req, push_constants)
-    });
+        })
+        .and_then(|kernel| {
+            bind_and_dispatch_compute_kernel(host_gpu_context, kernel, &req, push_constants)
+        });
 
     match dispatched {
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
@@ -346,7 +350,7 @@ pub(super) struct ResolvedComputeKernelDispatchBindingWithSurfaceId {
 /// inside a batch — so the extent convention below and the refusal wording
 /// have one home rather than two that can drift.
 pub(super) fn resolve_supplied_compute_bindings(
-    full: &crate::core::context::GpuContextFullAccess,
+    host_gpu_context: &crate::core::context::GpuContext,
     supplied: &[EscalateRequestRunComputeKernelBinding],
     kernel: &crate::vulkan::rhi::VulkanComputeKernel,
 ) -> crate::core::error::Result<Vec<ResolvedComputeKernelDispatchBindingWithSurfaceId>> {
@@ -357,7 +361,7 @@ pub(super) fn resolve_supplied_compute_bindings(
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in &planned {
         let surface_bound_resource = resolve_surface_bound_kernel_binding_resource(
-            full,
+            host_gpu_context,
             binding.kind,
             binding.name,
             binding.target_id,
@@ -408,12 +412,15 @@ pub(super) fn compute_bound_surface_layout_publish_pairs(
 /// bound surface landed in to the surface-share service — on success only,
 /// so a refused recording leaves the published layouts as they arrived.
 pub(super) fn dispatch_compute_recording_and_publish_bound_surface_layouts(
-    full: &crate::core::context::GpuContextFullAccess,
+    host_gpu_context: &crate::core::context::GpuContext,
     recording: &[BatchedComputeKernelDispatch],
     bound_surfaces: &[(String, TextureRegistration)],
 ) -> crate::core::error::Result<()> {
-    full.dispatch_compute_kernel_batch(recording)?;
-    publish_bound_surface_layouts_to_surface_share(full.surface_store(), bound_surfaces);
+    host_gpu_context.dispatch_compute_kernel_batch(recording)?;
+    publish_bound_surface_layouts_to_surface_share(
+        host_gpu_context.surface_store(),
+        bound_surfaces,
+    );
     Ok(())
 }
 
@@ -427,12 +434,12 @@ pub(super) fn dispatch_compute_recording_and_publish_bound_surface_layouts(
 /// not used here: its fence has no in-flight tracking, so a failed submit
 /// would leave it unsignaled forever and hang the next dispatch.
 pub(super) fn bind_and_dispatch_compute_kernel(
-    full: &crate::core::context::GpuContextFullAccess,
+    host_gpu_context: &crate::core::context::GpuContext,
     kernel: Arc<crate::vulkan::rhi::VulkanComputeKernel>,
     req: &EscalateRequestRunComputeKernel,
     push_constants: Vec<u8>,
 ) -> crate::core::error::Result<()> {
-    let resolved = resolve_supplied_compute_bindings(full, &req.bindings, &kernel)?;
+    let resolved = resolve_supplied_compute_bindings(host_gpu_context, &req.bindings, &kernel)?;
     let bound_surfaces = compute_bound_surface_layout_publish_pairs(&resolved);
     let dispatch = BatchedComputeKernelDispatch {
         kernel,
@@ -446,7 +453,7 @@ pub(super) fn bind_and_dispatch_compute_kernel(
         group_count_z: req.group_count_z,
     };
     dispatch_compute_recording_and_publish_bound_surface_layouts(
-        full,
+        host_gpu_context,
         std::slice::from_ref(&dispatch),
         &bound_surfaces,
     )
@@ -483,9 +490,11 @@ pub(in super::super) fn handle_run_compute_kernel_batch(
         }
     }
 
-    let dispatched = sandbox.escalate(move |full| {
-        bind_and_dispatch_compute_kernel_batch(full, &req, push_constants_per_dispatch)
-    });
+    let dispatched = bind_and_dispatch_compute_kernel_batch(
+        sandbox.host_inner(),
+        &req,
+        push_constants_per_dispatch,
+    );
 
     match dispatched {
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
@@ -506,7 +515,7 @@ pub(in super::super) fn handle_run_compute_kernel_batch(
 /// command buffer is open costs an abort, and a partially-recorded batch is
 /// not something a caller asked for.
 pub(super) fn bind_and_dispatch_compute_kernel_batch(
-    full: &crate::core::context::GpuContextFullAccess,
+    host_gpu_context: &crate::core::context::GpuContext,
     req: &EscalateRequestRunComputeKernelBatch,
     push_constants_per_dispatch: Vec<Vec<u8>>,
 ) -> crate::core::error::Result<()> {
@@ -520,7 +529,7 @@ pub(super) fn bind_and_dispatch_compute_kernel_batch(
         .enumerate()
         .zip(push_constants_per_dispatch)
     {
-        let kernel = full
+        let kernel = host_gpu_context
             .compute_kernel_by_id(&dispatch.kernel_id)
             .ok_or_else(|| {
                 Error::GpuError(format!(
@@ -528,8 +537,9 @@ pub(super) fn bind_and_dispatch_compute_kernel_batch(
                     dispatch.kernel_id
                 ))
             })?;
-        let resolved = resolve_supplied_compute_bindings(full, &dispatch.bindings, &kernel)
-            .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
+        let resolved =
+            resolve_supplied_compute_bindings(host_gpu_context, &dispatch.bindings, &kernel)
+                .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
         bound_surfaces_across_the_batch
             .extend(compute_bound_surface_layout_publish_pairs(&resolved));
         let bindings = resolved
@@ -547,7 +557,7 @@ pub(super) fn bind_and_dispatch_compute_kernel_batch(
     }
 
     dispatch_compute_recording_and_publish_bound_surface_layouts(
-        full,
+        host_gpu_context,
         &batch,
         &bound_surfaces_across_the_batch,
     )

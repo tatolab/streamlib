@@ -572,6 +572,64 @@ pub struct GpuCapabilitiesSnapshot {
     pub supports_ray_tracing_pipeline: bool,
 }
 
+/// A cached graphics kernel with the context's draw recorder locked: its staged
+/// bindings are this holder's until it drops.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub struct GraphicsKernelHeldForOneDraw<'context> {
+    kernel: Arc<crate::vulkan::rhi::VulkanGraphicsKernel>,
+    input_transition_recorder_slot:
+        parking_lot::MutexGuard<'context, Option<crate::vulkan::rhi::RhiCommandRecorder>>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl GraphicsKernelHeldForOneDraw<'_> {
+    /// The kernel whose bindings this draw stages, borrowed no longer than
+    /// the lock is held.
+    pub fn kernel(&self) -> &crate::vulkan::rhi::VulkanGraphicsKernel {
+        &self.kernel
+    }
+
+    /// The kernel, with the draw family's input-transition recorder — `None`
+    /// until first built — borrowed alongside it.
+    pub(crate) fn kernel_and_input_transition_recorder_slot(
+        &mut self,
+    ) -> (
+        &crate::vulkan::rhi::VulkanGraphicsKernel,
+        &mut Option<crate::vulkan::rhi::RhiCommandRecorder>,
+    ) {
+        (&self.kernel, &mut self.input_transition_recorder_slot)
+    }
+}
+
+/// A cached ray-tracing kernel with the context's trace recorder locked: its
+/// staged bindings are this holder's until it drops.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub struct RayTracingKernelHeldForOneTrace<'context> {
+    kernel: Arc<crate::vulkan::rhi::VulkanRayTracingKernel>,
+    input_transition_recorder_slot:
+        parking_lot::MutexGuard<'context, Option<crate::vulkan::rhi::RhiCommandRecorder>>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl RayTracingKernelHeldForOneTrace<'_> {
+    /// The kernel whose bindings this trace stages, borrowed no longer than
+    /// the lock is held.
+    pub fn kernel(&self) -> &crate::vulkan::rhi::VulkanRayTracingKernel {
+        &self.kernel
+    }
+
+    /// The kernel, with the trace family's input-transition recorder — `None`
+    /// until first built — borrowed alongside it.
+    pub(crate) fn kernel_and_input_transition_recorder_slot(
+        &mut self,
+    ) -> (
+        &crate::vulkan::rhi::VulkanRayTracingKernel,
+        &mut Option<crate::vulkan::rhi::RhiCommandRecorder>,
+    ) {
+        (&self.kernel, &mut self.input_transition_recorder_slot)
+    }
+}
+
 /// One dispatch inside a batched recording, with its bindings already resolved
 /// to registrations.
 ///
@@ -849,9 +907,9 @@ pub struct GpuContext {
     /// One recorder, not one per recording: its command pool, primary command
     /// buffer and completion fence are exactly what a recording reuses, and
     /// allocating them per frame would spend the submission the batch op
-    /// exists to save. Serial use is what the recorder requires and what it
-    /// gets — both dispatch ops run inside the escalate gate, which
-    /// serializes runtime-wide.
+    /// exists to save. Serial use is what the recorder requires, and this lock
+    /// is what gives it: a dispatch holds it from recording through the fence
+    /// wait, and nothing else serializes two dispatches.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     batched_compute_dispatch_recorder:
         Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
@@ -873,6 +931,21 @@ pub struct GpuContext {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     ray_tracing_kernel_cache:
         Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanRayTracingKernel>>>>,
+    /// The recorder every escalate draw's input transition reuses, built on
+    /// first use so a draw creates no command pool or fence per frame.
+    ///
+    /// Its lock is also what keeps two draws apart: a graphics kernel stages
+    /// its bindings on itself, and the cache hands one kernel to every helper
+    /// registering the same shaders, so a draw holds it from its first staged
+    /// binding through its fence wait.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    graphics_draw_input_transition_recorder:
+        Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
+    /// The ray-tracing twin of `graphics_draw_input_transition_recorder`, held
+    /// by a trace for the same two reasons.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    ray_tracing_trace_input_transition_recorder:
+        Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
     /// Acceleration structures built for the
     /// `register_acceleration_structure_blas` / `_tlas` escalate ops.
     ///
@@ -931,6 +1004,10 @@ impl GpuContext {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
+            graphics_draw_input_transition_recorder: Arc::new(parking_lot::Mutex::new(None)),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            ray_tracing_trace_input_transition_recorder: Arc::new(parking_lot::Mutex::new(None)),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             acceleration_structure_registry: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -979,6 +1056,10 @@ impl GpuContext {
             graphics_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            graphics_draw_input_transition_recorder: Arc::new(parking_lot::Mutex::new(None)),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            ray_tracing_trace_input_transition_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             acceleration_structure_registry: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -3161,17 +3242,23 @@ impl GpuContext {
     }
 
     /// Look up a graphics kernel a prior `create_or_reuse_graphics_kernel`
-    /// returned.
+    /// returned, holding the draw recorder for as long as the caller keeps it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn graphics_kernel_by_id(
+    pub fn graphics_kernel_by_id_held_for_one_draw(
         &self,
         kernel_id: &str,
-    ) -> Option<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
-        self.graphics_kernel_cache
+    ) -> Option<GraphicsKernelHeldForOneDraw<'_>> {
+        let input_transition_recorder_slot = self.graphics_draw_input_transition_recorder.lock();
+        let kernel = self
+            .graphics_kernel_cache
             .lock()
             .unwrap()
             .get(kernel_id)
-            .map(Arc::clone)
+            .map(Arc::clone)?;
+        Some(GraphicsKernelHeldForOneDraw {
+            kernel,
+            input_transition_recorder_slot,
+        })
     }
 
     /// Build a ray-tracing kernel for the `register_ray_tracing_kernel`
@@ -3267,17 +3354,25 @@ impl GpuContext {
     }
 
     /// Look up a ray-tracing kernel a prior
-    /// `create_or_reuse_ray_tracing_kernel` returned.
+    /// `create_or_reuse_ray_tracing_kernel` returned, holding the trace recorder
+    /// for as long as the caller keeps it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn ray_tracing_kernel_by_id(
+    pub fn ray_tracing_kernel_by_id_held_for_one_trace(
         &self,
         kernel_id: &str,
-    ) -> Option<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
-        self.ray_tracing_kernel_cache
+    ) -> Option<RayTracingKernelHeldForOneTrace<'_>> {
+        let input_transition_recorder_slot =
+            self.ray_tracing_trace_input_transition_recorder.lock();
+        let kernel = self
+            .ray_tracing_kernel_cache
             .lock()
             .unwrap()
             .get(kernel_id)
-            .map(Arc::clone)
+            .map(Arc::clone)?;
+        Some(RayTracingKernelHeldForOneTrace {
+            kernel,
+            input_transition_recorder_slot,
+        })
     }
 
     /// Take ownership of a freshly built acceleration structure and return the
@@ -4949,14 +5044,14 @@ impl GpuContextFullAccess {
         )
     }
 
-    /// Look up a graphics kernel a prior `create_or_reuse_graphics_kernel`
-    /// returned.
+    /// [`GpuContext::graphics_kernel_by_id_held_for_one_draw`].
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn graphics_kernel_by_id(
+    pub fn graphics_kernel_by_id_held_for_one_draw(
         &self,
         kernel_id: &str,
-    ) -> Option<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
-        self.host_inner().graphics_kernel_by_id(kernel_id)
+    ) -> Option<GraphicsKernelHeldForOneDraw<'_>> {
+        self.host_inner()
+            .graphics_kernel_by_id_held_for_one_draw(kernel_id)
     }
 
     /// Runs the host's [`GpuContext::create_or_reuse_ray_tracing_kernel`].
@@ -4980,14 +5075,14 @@ impl GpuContextFullAccess {
         )
     }
 
-    /// Look up a ray-tracing kernel a prior
-    /// `create_or_reuse_ray_tracing_kernel` returned.
+    /// [`GpuContext::ray_tracing_kernel_by_id_held_for_one_trace`].
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn ray_tracing_kernel_by_id(
+    pub fn ray_tracing_kernel_by_id_held_for_one_trace(
         &self,
         kernel_id: &str,
-    ) -> Option<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
-        self.host_inner().ray_tracing_kernel_by_id(kernel_id)
+    ) -> Option<RayTracingKernelHeldForOneTrace<'_>> {
+        self.host_inner()
+            .ray_tracing_kernel_by_id_held_for_one_trace(kernel_id)
     }
 
     /// Runs the host's [`GpuContext::register_acceleration_structure`].

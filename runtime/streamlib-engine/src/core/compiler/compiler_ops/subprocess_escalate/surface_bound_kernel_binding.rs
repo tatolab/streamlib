@@ -193,7 +193,7 @@ pub(super) fn plan_supplied_surface_bound_kernel_bindings<'a>(
 /// Shared by every family's resolver so a binding reads the same refusal
 /// whichever op named it.
 pub(super) fn resolve_surface_bound_kernel_binding_resource(
-    full: &crate::core::context::GpuContextFullAccess,
+    host_gpu_context: &crate::core::context::GpuContext,
     kind: SurfaceBoundKernelBindingKind,
     binding_name: &str,
     surface_id: &str,
@@ -206,7 +206,8 @@ pub(super) fn resolve_surface_bound_kernel_binding_resource(
         // the surface-share service. The pixel-buffer fallback is the one path
         // that consults the extent, and it refuses a zero one — a pixel buffer
         // is not something a kernel can bind as an image.
-        full.resolve_texture_registration_by_surface_id(surface_id, None, 0, 0)
+        host_gpu_context
+            .resolve_texture_registration_by_surface_id(surface_id, None, 0, 0)
             .map_err(|e| {
                 Error::GpuError(format!(
                     "binding `{binding_name}` names surface {surface_id:?}, which this graph \
@@ -222,7 +223,7 @@ pub(super) fn resolve_surface_bound_kernel_binding_resource(
             resolve_texture().map(SurfaceBoundKernelBindingResource::SampledTexture)
         }
         SurfaceBoundKernelBindingKind::StorageBuffer => {
-            resolve_tensor_storage_buffer(full, binding_name, surface_id)
+            resolve_tensor_storage_buffer(host_gpu_context, binding_name, surface_id)
                 .map(SurfaceBoundKernelBindingResource::StorageBuffer)
         }
     }
@@ -230,11 +231,11 @@ pub(super) fn resolve_surface_bound_kernel_binding_resource(
 
 /// The tensor storage buffer the parent-wide map holds under `surface_id`.
 fn resolve_tensor_storage_buffer(
-    full: &crate::core::context::GpuContextFullAccess,
+    host_gpu_context: &crate::core::context::GpuContext,
     binding_name: &str,
     surface_id: &str,
 ) -> crate::core::error::Result<crate::core::rhi::StorageBuffer> {
-    full.host_inner()
+    host_gpu_context
         .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(surface_id)
         .map_err(|e| {
             crate::core::error::Error::GpuError(format!(
@@ -251,13 +252,13 @@ fn resolve_tensor_storage_buffer(
 /// caller holds them across the submission, because dropping the last one
 /// before the GPU has run frees the memory out from under it.
 pub(super) fn resolve_planned_surface_bound_kernel_bindings<'a>(
-    full: &crate::core::context::GpuContextFullAccess,
+    host_gpu_context: &crate::core::context::GpuContext,
     planned: Vec<PlannedSurfaceBoundKernelBinding<'a>>,
 ) -> crate::core::error::Result<Vec<ResolvedSurfaceBoundKernelBinding<'a>>> {
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in planned {
         let surface_bound_resource = resolve_surface_bound_kernel_binding_resource(
-            full,
+            host_gpu_context,
             binding.kind,
             binding.name,
             binding.target_id,
@@ -348,37 +349,18 @@ pub(super) fn refuse_one_image_bound_as_two_kinds(
 /// path transitions its colour targets and nothing else — so a surface
 /// arriving in the wrong layout would be read or written through a
 /// descriptor its layout does not satisfy, and its registration
-/// would keep claiming a layout the run has left behind. A run whose textures
-/// already sit in the right layout and that binds no buffer records nothing
-/// and mints no command buffer.
+/// would keep claiming a layout the run has left behind. A run whose sampled
+/// textures already sit in the right layout and that binds no storage image
+/// and no buffer records nothing. The recorder is the family's own, built on
+/// first use, so a run creates no command pool or fence.
 pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
-    full: &crate::core::context::GpuContextFullAccess,
+    host_gpu_context: &crate::core::context::GpuContext,
+    input_transition_recorder_slot: &mut Option<crate::vulkan::rhi::RhiCommandRecorder>,
     recorder_label: &str,
     consuming_stage: crate::vulkan::rhi::VulkanStage,
     bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
 ) -> crate::core::error::Result<()> {
-    let bound_textures: Vec<(&TextureRegistration, crate::core::rhi::VulkanLayout)> = bound_inputs
-        .iter()
-        .filter_map(|binding| binding.surface_bound_resource.texture_and_required_layout())
-        .collect();
-
-    let mut images_already_barriered = Vec::new();
-    let mut textures_to_barrier = Vec::new();
-    for (registration, required_layout) in &bound_textures {
-        if registration.current_layout() == *required_layout {
-            continue;
-        }
-        // One texture bound at two slots is one image and one barrier — a
-        // second would name an oldLayout the first has already left, and the
-        // two slots agree on the layout anyway or the kind clash would have
-        // been refused already.
-        let image = registration.texture().vulkan_inner().image();
-        if images_already_barriered.contains(&image) {
-            continue;
-        }
-        images_already_barriered.push(image);
-        textures_to_barrier.push((*registration, *required_layout));
-    }
+    let textures_to_barrier = bound_textures_a_run_must_barrier(bound_inputs);
     let bound_storage_buffers: Vec<&StorageBuffer> = bound_inputs
         .iter()
         .filter_map(|binding| binding.surface_bound_resource.storage_buffer())
@@ -387,10 +369,14 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
         return Ok(());
     }
 
-    let mut recorder = full.create_command_recorder(recorder_label)?;
+    let recorder = match input_transition_recorder_slot.as_mut() {
+        Some(recorder) => recorder,
+        None => input_transition_recorder_slot
+            .insert(host_gpu_context.create_command_recorder(recorder_label)?),
+    };
     recorder.begin()?;
     if let Err(e) = record_bound_input_barriers(
-        &mut recorder,
+        recorder,
         &textures_to_barrier,
         &bound_storage_buffers,
         consuming_stage,
@@ -402,10 +388,53 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
     // Published for every binding, not just the ones that were barriered: a
     // cross-process import synthesizes a fresh registration per resolve, so two
     // slots naming one surface hold two layout cells for the one image.
-    for (registration, required_layout) in &bound_textures {
-        registration.update_layout(*required_layout);
+    for (registration, required_layout) in bound_inputs
+        .iter()
+        .filter_map(|binding| binding.surface_bound_resource.texture_and_required_layout())
+    {
+        registration.update_layout(required_layout);
     }
     Ok(())
+}
+
+/// The bound textures a run barriers before it starts: each one not already in
+/// the layout its descriptor requires, and every storage image, once per image.
+pub(super) fn bound_textures_a_run_must_barrier<'binding>(
+    bound_inputs: &'binding [ResolvedSurfaceBoundKernelBinding<'_>],
+) -> Vec<(
+    &'binding TextureRegistration,
+    crate::core::rhi::VulkanLayout,
+)> {
+    let mut images_already_barriered = Vec::new();
+    let mut textures_to_barrier = Vec::new();
+    for binding in bound_inputs {
+        let Some((registration, required_layout)) =
+            binding.surface_bound_resource.texture_and_required_layout()
+        else {
+            continue;
+        };
+        // A storage image is written by the run, and nothing drains the device
+        // between runs, so its barrier is what orders the write after the
+        // image's earlier readers on the queue — even with no layout to change.
+        let written_by_the_run = matches!(
+            binding.surface_bound_resource,
+            SurfaceBoundKernelBindingResource::StorageImage(_)
+        );
+        if registration.current_layout() == required_layout && !written_by_the_run {
+            continue;
+        }
+        // One texture bound at two slots is one image and one barrier — a
+        // second would name an oldLayout the first has already left, and the
+        // two slots agree on the layout anyway or the kind clash would have
+        // been refused already.
+        let image = registration.texture().vulkan_inner().image();
+        if images_already_barriered.contains(&image) {
+            continue;
+        }
+        images_already_barriered.push(image);
+        textures_to_barrier.push((registration, required_layout));
+    }
+    textures_to_barrier
 }
 
 /// Record the pre-run barriers: each texture from its tracked layout into the

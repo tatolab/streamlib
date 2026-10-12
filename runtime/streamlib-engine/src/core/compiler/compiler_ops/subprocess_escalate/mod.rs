@@ -5,8 +5,11 @@
 //! processors. The subprocess can only see a `GpuContextLimitedAccess`
 //! sandbox; when it needs the privileged `GpuContextFullAccess` surface it
 //! sends an [`EscalateRequest`] to the host over its stdout, the host
-//! executes the operation inside [`GpuContextLimitedAccess::escalate`], and
-//! replies with an [`EscalateResponse`] on the subprocess's stdin.
+//! executes the operation, and replies with an [`EscalateResponse`] on the
+//! subprocess's stdin. Ops that create resources — registrations, a pool's
+//! growth — run inside [`GpuContextLimitedAccess::escalate`]; per-frame ops —
+//! a dispatch, a batch, a draw, a trace, a surface copy, a pool slot's reuse —
+//! run against the host context under their own locks.
 //!
 //! Wire format is the existing length-prefixed JSON stdio bridge used for
 //! lifecycle commands (see `SubprocessBridge`). Requests and responses are
@@ -321,4 +324,96 @@ pub(crate) fn parse_op_for_tests(value: &serde_json::Value) -> Result<EscalateRe
     try_parse_escalate_request(value)
         .ok_or_else(|| Error::Runtime("not an escalate_request".to_string()))?
         .map_err(|e| Error::Runtime(e.message))
+}
+
+/// Frames a gate-held test runs at one fixed extent: a second of the starter
+/// stream's 30 fps.
+#[cfg(test)]
+pub(super) const FRAMES_AT_A_FIXED_EXTENT: usize = 30;
+
+/// Run [`FRAMES_AT_A_FIXED_EXTENT`] frames of one per-frame op with the escalate
+/// gate held on this thread, failing the test if a frame enters the gate — it
+/// panics as a re-entry rather than blocking — or is refused.
+#[cfg(test)]
+pub(super) fn run_frames_with_the_escalate_gate_held(
+    sandbox: &GpuContextLimitedAccess,
+    per_frame_op_name: &str,
+    mut run_one_frame: impl FnMut(usize) -> EscalateResponse,
+) {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+    const ESCALATE_GATE_REENTRY_PANIC: &str = "EscalateGate::enter() called twice";
+
+    let frames_under_the_held_gate = {
+        let _escalate_gate_held_on_this_thread =
+            sandbox.host_inner().escalate_gate().enter_scoped();
+        catch_unwind(AssertUnwindSafe(|| {
+            (0..FRAMES_AT_A_FIXED_EXTENT)
+                .map(&mut run_one_frame)
+                .collect::<Vec<_>>()
+        }))
+    };
+    let responses = frames_under_the_held_gate.unwrap_or_else(|panic_payload| {
+        let panic_message = panic_payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic_payload.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        if panic_message.contains(ESCALATE_GATE_REENTRY_PANIC) {
+            panic!("a per-frame {per_frame_op_name} entered the escalate gate: {panic_message}");
+        }
+        resume_unwind(panic_payload)
+    });
+    for (frame_index, response) in responses.into_iter().enumerate() {
+        if let EscalateResponse::Err(refusal) = response {
+            panic!(
+                "frame {frame_index}'s {per_frame_op_name} was refused: {}",
+                refusal.message
+            );
+        }
+    }
+}
+
+/// Assert a per-frame op waits while another holder has its kernel, then runs
+/// and succeeds once `held_kernel` is let go.
+#[cfg(test)]
+pub(super) fn assert_a_per_frame_op_waits_for_its_held_kernel_then_succeeds<HeldKernel>(
+    per_frame_op_name: &str,
+    held_kernel: HeldKernel,
+    run_the_op: impl FnOnce() -> EscalateResponse + Send,
+) {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    use std::time::Duration;
+
+    const AN_UNBLOCKED_OP_REPLIES_WITHIN: Duration = Duration::from_millis(300);
+    const A_RELEASED_OP_REPLIES_WITHIN: Duration = Duration::from_secs(10);
+
+    let (op_reply_sender, op_reply_receiver) = channel();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            // Fails only once the test thread has stopped listening.
+            let _ = op_reply_sender.send(run_the_op());
+        });
+        match op_reply_receiver.recv_timeout(AN_UNBLOCKED_OP_REPLIES_WITHIN) {
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(reply) => {
+                panic!("the {per_frame_op_name} ran while another holder had its kernel: {reply:?}")
+            }
+            // The op panicked; the scope re-raises that panic when it joins.
+            Err(RecvTimeoutError::Disconnected) => {
+                drop(held_kernel);
+                return;
+            }
+        }
+        drop(held_kernel);
+        let reply = op_reply_receiver
+            .recv_timeout(A_RELEASED_OP_REPLIES_WITHIN)
+            .unwrap_or_else(|_| {
+                panic!("the {per_frame_op_name} never ran once its kernel was let go")
+            });
+        assert!(
+            matches!(reply, EscalateResponse::Ok(_)),
+            "the {per_frame_op_name} that waited must then succeed: {reply:?}"
+        );
+    });
 }

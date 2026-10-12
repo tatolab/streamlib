@@ -864,14 +864,26 @@ fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_ow
     let held = sandbox
         .escalate(|full| {
             Ok((
-                full.ray_tracing_kernel_by_id(&first),
-                full.ray_tracing_kernel_by_id(&second),
+                full.ray_tracing_kernel_by_id_held_for_one_trace(&first)
+                    .map(|held_kernel| {
+                        std::ptr::from_ref::<crate::vulkan::rhi::VulkanRayTracingKernel>(
+                            held_kernel.kernel(),
+                        )
+                    }),
+                full.ray_tracing_kernel_by_id_held_for_one_trace(&second)
+                    .map(|held_kernel| {
+                        std::ptr::from_ref::<crate::vulkan::rhi::VulkanRayTracingKernel>(
+                            held_kernel.kernel(),
+                        )
+                    }),
             ))
         })
         .expect("the cache answers inside an escalate scope");
+    // Compared by address once each lock is let go: a cached kernel lives as
+    // long as the context, so the address still names it.
     let (a, b) = (held.0.expect("cached"), held.1.expect("cached"));
     assert!(
-        std::sync::Arc::ptr_eq(&a, &b),
+        std::ptr::eq(a, b),
         "the second registration must reuse the first kernel, not build another"
     );
 }
@@ -1316,5 +1328,39 @@ fn a_trace_refuses_a_storage_buffer_binding_by_name() {
             "binding `scene_parameters` is storage_buffer, which a trace cannot bind by surface id"
         ),
         "must name the binding and its kind, got: {message}"
+    );
+}
+
+/// A frame's trace is per-frame work: it takes neither the process-wide
+/// escalate gate nor the whole-device idle wait that comes with it (#2730).
+#[test]
+fn a_trace_every_frame_never_enters_the_escalate_gate() {
+    let Some(scene) = make_ray_traced_scene_if_available() else {
+        println!("a_trace_every_frame_never_enters_the_escalate_gate: no ray tracing — skipping");
+        return;
+    };
+    super::super::run_frames_with_the_escalate_gate_held(&scene.sandbox, "trace", |frame_index| {
+        scene.trace(scene.run_req(&format!("frame-{frame_index}")))
+    });
+}
+
+/// With the escalate gate gone from a trace, the held kernel is what keeps a
+/// second trace off a cached kernel whose bindings another holder is staging:
+/// the trace waits until that holder lets go, then runs.
+#[test]
+fn a_trace_waits_while_another_holder_stages_bindings_on_its_kernel() {
+    let Some(scene) = make_ray_traced_scene_if_available() else {
+        println!("a_trace_waits_while_another_holder_stages_bindings: no ray tracing — skipping");
+        return;
+    };
+    let held_kernel = scene
+        .sandbox
+        .host_inner()
+        .ray_tracing_kernel_by_id_held_for_one_trace(&scene.kernel_id)
+        .expect("the registered kernel is cached");
+    super::super::assert_a_per_frame_op_waits_for_its_held_kernel_then_succeeds(
+        "trace",
+        held_kernel,
+        || scene.trace(scene.run_req("held-trace")),
     );
 }

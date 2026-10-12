@@ -33,7 +33,9 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::{GpuContextLimitedAccess, SurfaceBoundKernelBindingResource};
+use crate::core::context::{
+    GpuContextLimitedAccess, GraphicsKernelHeldForOneDraw, SurfaceBoundKernelBindingResource,
+};
 use crate::core::rhi::{GlslCompilationTargetStage, SurfaceBoundKernelBindingKind};
 use crate::host_rhi::HostTextureExt as _;
 
@@ -339,15 +341,23 @@ pub(in super::super) fn handle_run_graphics_draw(
         }
     };
 
-    let drawn = sandbox.escalate(|full| {
-        let kernel = full.graphics_kernel_by_id(&req.kernel_id).ok_or_else(|| {
+    let host_gpu_context = sandbox.host_inner();
+    let drawn = host_gpu_context
+        .graphics_kernel_by_id_held_for_one_draw(&req.kernel_id)
+        .ok_or_else(|| {
             crate::core::error::Error::GpuError(format!(
                 "run_graphics_draw: no kernel registered under id {:?}",
                 req.kernel_id
             ))
-        })?;
-        bind_and_render_graphics_kernel(full, &kernel, &req, &push_constants)
-    });
+        })
+        .and_then(|mut held_kernel| {
+            bind_and_render_graphics_kernel(
+                host_gpu_context,
+                &mut held_kernel,
+                &req,
+                &push_constants,
+            )
+        });
 
     match drawn {
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
@@ -370,11 +380,10 @@ pub(in super::super) fn handle_run_graphics_draw(
 /// The plan is total and every surface is resolved before the first `set_*`
 /// call, so a refused draw never leaves the kernel holding a mix of this draw's
 /// bindings and the last one's. The kernel's staged bindings are shared across
-/// every caller of the cache; interleaving is prevented by the escalate gate,
-/// which serializes the whole surrounding scope runtime-wide.
+/// every caller of the cache, so the whole draw runs under the held draw lock.
 pub(super) fn bind_and_render_graphics_kernel(
-    full: &crate::core::context::GpuContextFullAccess,
-    kernel: &crate::vulkan::rhi::VulkanGraphicsKernel,
+    host_gpu_context: &crate::core::context::GpuContext,
+    held_kernel: &mut GraphicsKernelHeldForOneDraw<'_>,
     req: &EscalateRequestRunGraphicsDraw,
     push_constants: &[u8],
 ) -> crate::core::error::Result<()> {
@@ -382,6 +391,8 @@ pub(super) fn bind_and_render_graphics_kernel(
     use crate::core::rhi::{DrawCall, ScissorRect, Viewport, VulkanLayout};
     use crate::vulkan::rhi::{OffscreenColorTarget, OffscreenDraw, VulkanStage};
 
+    let (kernel, input_transition_recorder_slot) =
+        held_kernel.kernel_and_input_transition_recorder_slot();
     let declared_specs = kernel.bindings();
     let declared: Vec<DeclaredKernelBindingUnderPlanning<'_>> = declared_specs
         .iter()
@@ -406,9 +417,10 @@ pub(super) fn bind_and_render_graphics_kernel(
     // Held across the render, not consumed by the bind loop: a registration is
     // a refcount on the texture the descriptor set now points at, and dropping
     // the last one before the GPU has run frees the image out from under it.
-    let bound_inputs = resolve_planned_surface_bound_kernel_bindings(full, planned)?;
+    let bound_inputs = resolve_planned_surface_bound_kernel_bindings(host_gpu_context, planned)?;
     transition_bound_kernel_inputs_into_descriptor_layouts(
-        full,
+        host_gpu_context,
+        input_transition_recorder_slot,
         "escalate_graphics_draw_input_layouts",
         VulkanStage::ALL_GRAPHICS,
         &bound_inputs,
@@ -416,7 +428,7 @@ pub(super) fn bind_and_render_graphics_kernel(
 
     let mut color_targets = Vec::with_capacity(req.color_target_uuids.len());
     for surface_id in &req.color_target_uuids {
-        let registration = full
+        let registration = host_gpu_context
             .resolve_texture_registration_by_surface_id(surface_id, None, 0, 0)
             .map_err(|e| {
                 Error::GpuError(format!(
@@ -533,7 +545,10 @@ pub(super) fn bind_and_render_graphics_kernel(
                 .cloned()
                 .zip(color_targets.iter().cloned()),
         );
-        publish_bound_surface_layouts_to_surface_share(full.surface_store(), &bound_surfaces);
+        publish_bound_surface_layouts_to_surface_share(
+            host_gpu_context.surface_store(),
+            &bound_surfaces,
+        );
     }
     drop(color_targets);
     drop(bound_inputs);
