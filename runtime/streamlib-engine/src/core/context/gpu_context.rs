@@ -324,10 +324,6 @@ impl PixelBufferPoolManager {
         }
     }
 
-    /// Acquire a buffer from the pool.
-    ///
-    /// If this is a new pool, pre-allocates POOL_PRE_ALLOCATE_COUNT buffers
-    /// and registers them with the surface-share service (if surface_store is available).
     /// The shared rings, locked; a panic under an earlier hold leaves them
     /// usable rather than poisoning every later acquire.
     fn lock_the_shared_rings(
@@ -338,6 +334,10 @@ impl PixelBufferPoolManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Acquire a buffer of the shape from its shared ring, created on first
+    /// use with POOL_PRE_ALLOCATE_COUNT buffers registered with the
+    /// surface-share service.
+    ///
     /// Returns the next available buffer from the ring, skipping any in use,
     /// and grows the ring when every buffer is held; past the device's memory
     /// budget that growth is refused by name and nothing waits.
@@ -775,7 +775,9 @@ impl PixelBufferPoolManager {
     }
 
     /// Release the registrations of the slots taken out, then destroy at
-    /// most one slot that may be destroyed: this runs on a producer's acquire.
+    /// most one slot that may be destroyed: this runs on a producer's acquire,
+    /// which pays one surface-share round trip per slot taken out and never a
+    /// GPU wait.
     fn park_the_slots_taken_out_and_destroy_at_most_one_ready(
         &self,
         slots_taken_out: impl IntoIterator<Item = PixelBufferPoolSlotTakenOutOfItsRing>,
@@ -979,6 +981,20 @@ impl PixelBufferPoolManager {
         cache
             .buffers_by_surface_id
             .insert(slot.currently_published_frame_id(), buffer.clone());
+    }
+
+    /// Whether any published frame of `pool_slot_key` resolves here — false
+    /// once the slot was freed.
+    fn publishes_a_frame_of_the_slot(&self, pool_slot_key: &str) -> bool {
+        self.buffer_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .buffers_by_surface_id
+            .keys()
+            .any(|cached_surface_id| {
+                PublishedPixelBufferFrameId::parse(cached_surface_id).is_some()
+                    && pool_slot_key_of_surface_id(cached_surface_id) == pool_slot_key
+            })
     }
 
     /// Get a buffer by its UUID from local cache.
@@ -2122,6 +2138,35 @@ impl GpuContext {
     /// `surface_id`; contents are re-uploaded every time so rotating-pool
     /// producers see fresh frames. The returned registration declares the
     /// terminal layout the upload reports leaving the texture in.
+    /// Drop the canvas just cached for `slot_key` when the slot it was drawn
+    /// for was freed meanwhile: freeing evicts the slot's published id before
+    /// its canvas, so a canvas cached after that eviction would outlive the
+    /// slot for the runtime's life.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn evict_a_canvas_cached_after_its_slot_was_freed(
+        &self,
+        surface_id: &str,
+        slot_key: &str,
+        cached_canvas: &Texture,
+    ) {
+        if PublishedPixelBufferFrameId::parse(surface_id).is_none()
+            || self
+                .pixel_buffer_pool_manager
+                .publishes_a_frame_of_the_slot(slot_key)
+        {
+            return;
+        }
+        let mut cache = self
+            .buffer_texture_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cache.get(slot_key).is_some_and(|still_cached| {
+            Arc::ptr_eq(still_cached.vulkan_inner(), cached_canvas.vulkan_inner())
+        }) {
+            cache.remove(slot_key);
+        }
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn refresh_pixel_buffer_texture(
         &self,
@@ -2177,6 +2222,7 @@ impl GpuContext {
                 new_texture
             }
         };
+        self.evict_a_canvas_cached_after_its_slot_was_freed(surface_id, slot_key, &texture);
 
         let upload = unsafe {
             self.device.inner.upload_buffer_to_image(
