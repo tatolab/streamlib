@@ -174,7 +174,7 @@ fn one_native_node_holding_sixteen_one_offs_does_not_refuse_another_nodes_acquis
 }
 
 #[test]
-fn the_shared_context_counts_no_one_offs() {
+fn an_acquisition_for_no_node_is_never_counted() {
     let held: Vec<_> = (0..ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE + 1)
         .map(|_| {
             acquire_a_one_off_counted_against_its_node(

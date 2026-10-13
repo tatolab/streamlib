@@ -503,6 +503,7 @@ mod tests {
         assert_eq!(unlocked, 0, "IOSurfaceUnlock");
 
         let storage_buffer = full
+            .host_inner()
             .acquire_storage_buffer(
                 &crate::core::rhi::TensorStorageBufferLayout::of_bytes(
                     packed.len().next_multiple_of(4) as u64,
@@ -569,11 +570,14 @@ mod tests {
         let readbacks: Vec<StorageBuffer> = sources
             .iter()
             .map(|_| {
-                full.acquire_storage_buffer(
-                    &crate::core::rhi::TensorStorageBufferLayout::of_bytes(rgba_byte_len as u64)
+                full.host_inner()
+                    .acquire_storage_buffer(
+                        &crate::core::rhi::TensorStorageBufferLayout::of_bytes(
+                            rgba_byte_len as u64,
+                        )
                         .expect("a non-zero readback"),
-                )
-                .expect("readback buffer")
+                    )
+                    .expect("readback buffer")
             })
             .collect();
         let mut recorder = full
