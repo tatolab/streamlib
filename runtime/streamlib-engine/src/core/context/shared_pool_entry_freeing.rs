@@ -2,17 +2,22 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! When an entry of one of the runtime's shared pools — the texture pool, the
-//! pixel-buffer rings — may be freed, once the pool has judged it unheld.
+//! pixel-buffer rings — is freed, once the pool has judged it unheld.
 //!
 //! Each pool decides "unheld" by its own holders. What both share is kept
-//! here: when the entry was first seen unheld and what had been submitted to
-//! the GPU by then, which stream last acquired it, and whether its owner went
-//! away so it skips the idle window.
+//! here: when the entry was first seen unheld, which stream last acquired it,
+//! whether its owner went away so it skips the idle window, which entries one
+//! acquire or release looks at, and the wait between taking an entry out of
+//! its pool and destroying it — until nothing else references its memory and
+//! the GPU work submitted by then has completed.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::ops::Range;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::core::rhi::GpuQueueSubmissionsSnapshot;
+use parking_lot::Mutex;
+
+use crate::core::rhi::{GpuDevice, GpuQueueSubmissionsSnapshot};
 use crate::core::runtime::LoadedStreamTag;
 
 /// How long a shared pool entry sits unheld before it is freed. A tuning
@@ -21,9 +26,23 @@ pub(crate) const SHARED_POOL_ENTRY_IDLE_WINDOW_BEFORE_IT_IS_FREED: Duration =
     Duration::from_secs(5);
 
 /// The longest a stopping stream waits for the GPU work naming the shared pool
-/// entries it last acquired; entries whose work outlasts it are freed later.
+/// entries it frees; entries whose work outlasts it are destroyed later.
 pub(crate) const LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK: Duration =
     Duration::from_secs(1);
+
+/// The longest a stopping stream waits for the checkout leases naming the
+/// shared pool entries it last acquired to clear. Its helpers are reaped by
+/// then, and the surface-share service releases a closed connection's leases
+/// on its own thread; a lease outlasting the wait is a holder outside the
+/// stream, and its entry is freed by a later acquire or release.
+pub(crate) const LONGEST_A_STOPPING_STREAM_WAITS_FOR_THE_CHECK_OUT_LEASES_ON_ITS_POOL_ENTRIES:
+    Duration = Duration::from_secs(1);
+
+/// How many entries of one shared pool a single acquire or release observes,
+/// resuming where the previous one stopped. A tuning constant: it bounds the
+/// per-frame cost of the scan, and a pool of `n` entries sees each one every
+/// `n / SHARED_POOL_ENTRIES_OBSERVED_PER_ACQUIRE_OR_RELEASE` calls.
+pub(crate) const SHARED_POOL_ENTRIES_OBSERVED_PER_ACQUIRE_OR_RELEASE: usize = 8;
 
 /// The idle window one shared pool frees by:
 /// [`SHARED_POOL_ENTRY_IDLE_WINDOW_BEFORE_IT_IS_FREED`], or what a test set.
@@ -55,23 +74,14 @@ impl SharedPoolEntryIdleWindow {
     }
 }
 
-/// The moment an entry was first seen unheld, and what had been submitted to
-/// the GPU by then. Every submission naming the entry was made before its last
-/// holder let go, so this snapshot covers all of them.
-#[derive(Clone, Copy, Debug)]
-struct SharedPoolEntryFirstObservedUnheld {
-    observed_at: Instant,
-    queue_submissions_made_by_then: GpuQueueSubmissionsSnapshot,
-}
-
 /// One shared pool entry's freeing bookkeeping.
 #[derive(Debug, Default)]
 pub(crate) struct SharedPoolEntryFreeingRecord {
     /// `None` for an entry the engine's own context acquired.
     stream_that_last_acquired_the_entry: Option<LoadedStreamTag>,
-    first_observed_unheld: Option<SharedPoolEntryFirstObservedUnheld>,
-    /// Set when the entry's stream stopped or its node's pool was torn down
-    /// while it was held: once unheld it is freed without the idle window.
+    first_observed_unheld_at: Option<Instant>,
+    /// Set when the entry's stream stopped or its owner was torn down: once
+    /// unheld it is freed without the idle window.
     freed_as_soon_as_unheld: bool,
 }
 
@@ -90,27 +100,6 @@ impl SharedPoolEntryFreeingRecord {
         *self = Self::handed_out_to(acquiring_stream);
     }
 
-    /// The pool saw the entry held: whatever idle time it had ends.
-    pub(crate) fn note_observed_held(&mut self) {
-        self.first_observed_unheld = None;
-    }
-
-    /// The pool saw the entry unheld at `now`. The first such sighting since it
-    /// was last held records `now` and the GPU snapshot `snapshot_now` takes;
-    /// later sightings keep both.
-    pub(crate) fn note_observed_unheld(
-        &mut self,
-        now: Instant,
-        snapshot_now: impl FnOnce() -> GpuQueueSubmissionsSnapshot,
-    ) {
-        if self.first_observed_unheld.is_none() {
-            self.first_observed_unheld = Some(SharedPoolEntryFirstObservedUnheld {
-                observed_at: now,
-                queue_submissions_made_by_then: snapshot_now(),
-            });
-        }
-    }
-
     /// Free the entry as soon as it is unheld, skipping the idle window.
     pub(crate) fn flag_freed_as_soon_as_unheld(&mut self) {
         self.freed_as_soon_as_unheld = true;
@@ -120,109 +109,313 @@ impl SharedPoolEntryFreeingRecord {
     pub(crate) fn was_last_acquired_by(&self, stream: LoadedStreamTag) -> bool {
         self.stream_that_last_acquired_the_entry == Some(stream)
     }
+}
 
-    /// The GPU work that must complete before the entry is freed; `None` until
-    /// the entry has been seen unheld.
-    pub(crate) fn queue_submissions_made_before_it_was_unheld(
-        &self,
-    ) -> Option<GpuQueueSubmissionsSnapshot> {
-        self.first_observed_unheld
-            .map(|first_observed_unheld| first_observed_unheld.queue_submissions_made_by_then)
+/// One pass of a pool over its entries, at one moment and one idle window.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SharedPoolEntryFreeingScan {
+    now: Instant,
+    idle_window: Duration,
+}
+
+impl SharedPoolEntryFreeingScan {
+    /// A scan at this moment, by the pool's `idle_window`.
+    pub(crate) fn starting_now(idle_window: &SharedPoolEntryIdleWindow) -> Self {
+        Self {
+            now: Instant::now(),
+            idle_window: idle_window.duration(),
+        }
     }
 
-    /// Whether the entry may be freed at `now`: it has been seen unheld, has
-    /// been so for `idle_window` or was flagged to skip it, and every
-    /// submission made before it was unheld has completed.
-    pub(crate) fn may_be_freed_now(
+    /// Note on `record` whether this scan found its entry unheld, answering
+    /// whether the entry is due to be freed: unheld, and so since a sighting
+    /// at least the idle window ago or flagged to skip it.
+    pub(crate) fn observe(
         &self,
-        now: Instant,
-        idle_window: Duration,
-        every_queue_submission_in_snapshot_has_completed: impl FnOnce(
-            &GpuQueueSubmissionsSnapshot,
-        ) -> bool,
+        record: &mut SharedPoolEntryFreeingRecord,
+        is_unheld: bool,
     ) -> bool {
-        let Some(first_observed_unheld) = self.first_observed_unheld else {
+        if !is_unheld {
+            record.first_observed_unheld_at = None;
             return false;
-        };
-        let idle_long_enough = self.freed_as_soon_as_unheld
-            || now.saturating_duration_since(first_observed_unheld.observed_at) >= idle_window;
-        idle_long_enough
-            && every_queue_submission_in_snapshot_has_completed(
-                &first_observed_unheld.queue_submissions_made_by_then,
-            )
+        }
+        let first_observed_unheld_at = *record.first_observed_unheld_at.get_or_insert(self.now);
+        record.freed_as_soon_as_unheld
+            || self.now.saturating_duration_since(first_observed_unheld_at) >= self.idle_window
     }
+}
+
+/// Where a pool's next bounded observation of its entries starts.
+#[derive(Default)]
+pub(crate) struct SharedPoolEntryObservationCursor {
+    position_of_the_next_entry_to_observe: AtomicUsize,
+}
+
+impl SharedPoolEntryObservationCursor {
+    /// The positions, across a pool of `entry_count` entries, the next
+    /// acquire or release observes: at most
+    /// [`SHARED_POOL_ENTRIES_OBSERVED_PER_ACQUIRE_OR_RELEASE`], resuming where
+    /// the previous window ended and starting over past the last entry.
+    pub(crate) fn next_window_over(&self, entry_count: usize) -> SharedPoolEntryObservationWindow {
+        if entry_count == 0 {
+            return SharedPoolEntryObservationWindow::every_entry_of(0);
+        }
+        let start = self
+            .position_of_the_next_entry_to_observe
+            .load(Ordering::Relaxed)
+            % entry_count;
+        let end = (start + SHARED_POOL_ENTRIES_OBSERVED_PER_ACQUIRE_OR_RELEASE).min(entry_count);
+        self.position_of_the_next_entry_to_observe
+            .store(if end == entry_count { 0 } else { end }, Ordering::Relaxed);
+        SharedPoolEntryObservationWindow {
+            positions_across_the_pool: start..end,
+        }
+    }
+}
+
+/// The positions across a pool — its groups (rings, buckets) laid end to end
+/// in iteration order — that one scan observes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SharedPoolEntryObservationWindow {
+    positions_across_the_pool: Range<usize>,
+}
+
+impl SharedPoolEntryObservationWindow {
+    /// Every entry of a pool of `entry_count`.
+    pub(crate) fn every_entry_of(entry_count: usize) -> Self {
+        Self {
+            positions_across_the_pool: 0..entry_count,
+        }
+    }
+
+    /// The indices within one group, whose first entry sits at
+    /// `position_of_the_groups_first_entry` and which holds
+    /// `entry_count_of_the_group`, that the window covers.
+    pub(crate) fn indices_within_the_group(
+        &self,
+        position_of_the_groups_first_entry: usize,
+        entry_count_of_the_group: usize,
+    ) -> Range<usize> {
+        let position_past_the_groups_last_entry =
+            position_of_the_groups_first_entry + entry_count_of_the_group;
+        let start = self.positions_across_the_pool.start.clamp(
+            position_of_the_groups_first_entry,
+            position_past_the_groups_last_entry,
+        );
+        let end = self
+            .positions_across_the_pool
+            .end
+            .clamp(start, position_past_the_groups_last_entry);
+        if start == end {
+            return 0..0;
+        }
+        (start - position_of_the_groups_first_entry)..(end - position_of_the_groups_first_entry)
+    }
+}
+
+/// A shared pool entry taken out of its pool, whose memory goes when it drops.
+pub(crate) trait SharedPoolEntryTakenOutOfItsPool {
+    /// Whether anything besides the taken-out entry still references its
+    /// memory.
+    fn is_referenced_beyond_the_taken_out_entry(&self) -> bool;
+}
+
+struct SharedPoolEntryAwaitingDestruction<Entry> {
+    entry: Entry,
+    /// What this process had submitted to the GPU once nothing but the
+    /// taken-out entry referenced its memory; `None` until then.
+    queue_submissions_made_once_nothing_else_referenced_it: Option<GpuQueueSubmissionsSnapshot>,
+}
+
+impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntryAwaitingDestruction<Entry> {
+    /// The GPU work that must complete before the entry is destroyed; `None`
+    /// while something besides it references its memory. Taken out of its
+    /// pool, the entry gains no new holder, so every submission naming it was
+    /// made before its last other holder let go, and the snapshot taken once
+    /// none is left covers them all.
+    fn queue_submissions_naming_it(
+        &mut self,
+        device: &GpuDevice,
+    ) -> Option<GpuQueueSubmissionsSnapshot> {
+        if self
+            .queue_submissions_made_once_nothing_else_referenced_it
+            .is_none()
+        {
+            if self.entry.is_referenced_beyond_the_taken_out_entry() {
+                return None;
+            }
+            // The holder count above was read relaxed. This fence pairs with
+            // the release decrement of the last other holder's drop, so the
+            // snapshot sees every submission that holder made before it.
+            std::sync::atomic::fence(Ordering::Acquire);
+            self.queue_submissions_made_once_nothing_else_referenced_it =
+                Some(device.snapshot_of_queue_submissions_made_so_far());
+        }
+        self.queue_submissions_made_once_nothing_else_referenced_it
+    }
+}
+
+/// The entries one shared pool has taken out, each destroyed once nothing
+/// else references its memory and the GPU work naming it has completed.
+pub(crate) struct SharedPoolEntriesAwaitingDestruction<Entry> {
+    entries_awaiting_destruction: Mutex<Vec<SharedPoolEntryAwaitingDestruction<Entry>>>,
+    /// Names the pool in a log line.
+    pool_label: &'static str,
+}
+
+impl<Entry> SharedPoolEntriesAwaitingDestruction<Entry> {
+    /// No entry awaiting destruction, for the pool `pool_label` names.
+    pub(crate) fn new(pool_label: &'static str) -> Self {
+        Self {
+            entries_awaiting_destruction: Mutex::new(Vec::new()),
+            pool_label,
+        }
+    }
+
+    /// Hold `entries_taken_out` until each may be destroyed.
+    pub(crate) fn park(&self, entries_taken_out: impl IntoIterator<Item = Entry>) {
+        self.entries_awaiting_destruction
+            .lock()
+            .extend(entries_taken_out.into_iter().map(|entry| {
+                SharedPoolEntryAwaitingDestruction {
+                    entry,
+                    queue_submissions_made_once_nothing_else_referenced_it: None,
+                }
+            }));
+    }
+
+    /// How many entries await destruction.
+    #[cfg(test)]
+    pub(crate) fn count(&self) -> usize {
+        self.entries_awaiting_destruction.lock().len()
+    }
+}
+
+impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntriesAwaitingDestruction<Entry> {
+    /// Take back at most one entry that may be destroyed now, without
+    /// blocking; the caller drops it outside every pool lock.
+    pub(crate) fn take_back_at_most_one_ready_to_destroy(
+        &self,
+        device: &GpuDevice,
+    ) -> Option<Entry> {
+        self.take_back_the_ones_ready_to_destroy(device, 1).pop()
+    }
+
+    /// Take back every entry that may be destroyed now, without blocking.
+    pub(crate) fn take_back_every_one_ready_to_destroy(&self, device: &GpuDevice) -> Vec<Entry> {
+        self.take_back_the_ones_ready_to_destroy(device, usize::MAX)
+    }
+
+    /// Block at most `longest_wait` for the GPU work naming every entry
+    /// nothing else references, then take back every entry that may be
+    /// destroyed.
+    pub(crate) fn take_back_every_one_ready_to_destroy_waiting_at_most(
+        &self,
+        device: &GpuDevice,
+        longest_wait: Duration,
+    ) -> Vec<Entry> {
+        let queue_submissions_naming_them = self
+            .entries_awaiting_destruction
+            .lock()
+            .iter_mut()
+            .filter_map(|awaiting| awaiting.queue_submissions_naming_it(device))
+            .fold(
+                GpuQueueSubmissionsSnapshot::default(),
+                |covering_the_others, queue_submissions| {
+                    covering_the_others.covering_both(&queue_submissions)
+                },
+            );
+        match device.wait_for_every_queue_submission_in_snapshot(
+            &queue_submissions_naming_them,
+            longest_wait,
+        ) {
+            Ok(true) => {}
+            outlasted_or_unreadable => tracing::warn!(
+                "the GPU work naming the {} entries awaiting destruction did not complete within \
+                 {longest_wait:?} ({outlasted_or_unreadable:?}); they are destroyed once it has",
+                self.pool_label
+            ),
+        }
+        self.take_back_every_one_ready_to_destroy(device)
+    }
+
+    fn take_back_the_ones_ready_to_destroy(&self, device: &GpuDevice, most: usize) -> Vec<Entry> {
+        let mut entries_awaiting_destruction = self.entries_awaiting_destruction.lock();
+        let mut indices_ready_to_destroy = Vec::new();
+        for (index, awaiting) in entries_awaiting_destruction.iter_mut().enumerate() {
+            if indices_ready_to_destroy.len() == most {
+                break;
+            }
+            if awaiting
+                .queue_submissions_naming_it(device)
+                .is_some_and(|queue_submissions| {
+                    every_queue_submission_in_snapshot_has_completed(
+                        device,
+                        &queue_submissions,
+                        self.pool_label,
+                    )
+                })
+            {
+                indices_ready_to_destroy.push(index);
+            }
+        }
+        indices_ready_to_destroy
+            .into_iter()
+            .rev()
+            .map(|index| entries_awaiting_destruction.swap_remove(index).entry)
+            .collect()
+    }
+}
+
+/// Whether every submission `snapshot` names has completed; an unreadable
+/// answer is logged and counts as not yet, so nothing is destroyed on it.
+fn every_queue_submission_in_snapshot_has_completed(
+    device: &GpuDevice,
+    snapshot: &GpuQueueSubmissionsSnapshot,
+    pool_label: &str,
+) -> bool {
+    device
+        .every_queue_submission_in_snapshot_has_completed(snapshot)
+        .unwrap_or_else(|unreadable| {
+            tracing::warn!(
+                "the GPU's queue completion could not be read, so no {pool_label} entry is \
+                 destroyed: {unreadable}"
+            );
+            false
+        })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use super::*;
 
     const IDLE_WINDOW: Duration = Duration::from_secs(5);
 
-    fn the_gpu_work_has_completed(_: &GpuQueueSubmissionsSnapshot) -> bool {
-        true
-    }
-
-    fn the_gpu_work_is_still_running(_: &GpuQueueSubmissionsSnapshot) -> bool {
-        false
+    fn a_scan_at(now: Instant) -> SharedPoolEntryFreeingScan {
+        SharedPoolEntryFreeingScan {
+            now,
+            idle_window: IDLE_WINDOW,
+        }
     }
 
     #[test]
-    fn an_entry_never_seen_unheld_is_never_freed() {
-        let record = SharedPoolEntryFreeingRecord::handed_out_to(None);
+    fn an_entry_seen_held_is_never_due_to_be_freed() {
+        let mut record = SharedPoolEntryFreeingRecord::handed_out_to(None);
         let far_later = Instant::now() + IDLE_WINDOW * 100;
-        assert!(!record.may_be_freed_now(far_later, IDLE_WINDOW, the_gpu_work_has_completed));
+        assert!(!a_scan_at(far_later).observe(&mut record, false));
     }
 
     #[test]
-    fn an_unheld_entry_is_freed_once_it_outlasts_the_idle_window_and_not_before() {
+    fn an_unheld_entry_is_due_once_it_outlasts_the_idle_window_and_not_before() {
         let first_seen_unheld = Instant::now();
         let mut record = SharedPoolEntryFreeingRecord::handed_out_to(None);
-        record.note_observed_unheld(first_seen_unheld, GpuQueueSubmissionsSnapshot::default);
+        assert!(!a_scan_at(first_seen_unheld).observe(&mut record, true));
 
         let just_inside = first_seen_unheld + IDLE_WINDOW - Duration::from_millis(1);
-        assert!(!record.may_be_freed_now(just_inside, IDLE_WINDOW, the_gpu_work_has_completed));
+        assert!(!a_scan_at(just_inside).observe(&mut record, true));
         let at_the_window = first_seen_unheld + IDLE_WINDOW;
-        assert!(record.may_be_freed_now(at_the_window, IDLE_WINDOW, the_gpu_work_has_completed));
-    }
-
-    #[test]
-    fn an_idle_entry_whose_gpu_work_is_still_running_is_not_freed() {
-        let first_seen_unheld = Instant::now();
-        let mut record = SharedPoolEntryFreeingRecord::handed_out_to(None);
-        record.note_observed_unheld(first_seen_unheld, GpuQueueSubmissionsSnapshot::default);
-
-        let far_later = first_seen_unheld + IDLE_WINDOW * 100;
-        assert!(!record.may_be_freed_now(far_later, IDLE_WINDOW, the_gpu_work_is_still_running));
-    }
-
-    #[test]
-    fn the_gpu_snapshot_is_taken_at_the_first_unheld_sighting_only() {
-        let snapshots_taken = Cell::new(0);
-        let take_snapshot = || {
-            snapshots_taken.set(snapshots_taken.get() + 1);
-            GpuQueueSubmissionsSnapshot::default()
-        };
-        let first_seen_unheld = Instant::now();
-        let mut record = SharedPoolEntryFreeingRecord::handed_out_to(None);
-        record.note_observed_unheld(first_seen_unheld, take_snapshot);
-        record.note_observed_unheld(first_seen_unheld + IDLE_WINDOW, take_snapshot);
-        assert_eq!(snapshots_taken.get(), 1);
         assert!(
-            record
-                .queue_submissions_made_before_it_was_unheld()
-                .is_some()
-        );
-
-        let at_the_first_sighting_plus_the_window = first_seen_unheld + IDLE_WINDOW;
-        assert!(
-            record.may_be_freed_now(
-                at_the_first_sighting_plus_the_window,
-                IDLE_WINDOW,
-                the_gpu_work_has_completed
-            ),
+            a_scan_at(at_the_window).observe(&mut record, true),
             "a later sighting moved the idle clock"
         );
     }
@@ -231,49 +424,21 @@ mod tests {
     fn an_entry_seen_held_again_restarts_its_idle_window() {
         let first_seen_unheld = Instant::now();
         let mut record = SharedPoolEntryFreeingRecord::handed_out_to(None);
-        record.note_observed_unheld(first_seen_unheld, GpuQueueSubmissionsSnapshot::default);
-        record.note_observed_held();
-        assert!(
-            record
-                .queue_submissions_made_before_it_was_unheld()
-                .is_none()
-        );
+        a_scan_at(first_seen_unheld).observe(&mut record, true);
+        a_scan_at(first_seen_unheld).observe(&mut record, false);
 
         let seen_unheld_again = first_seen_unheld + IDLE_WINDOW;
-        record.note_observed_unheld(seen_unheld_again, GpuQueueSubmissionsSnapshot::default);
-        assert!(!record.may_be_freed_now(
-            seen_unheld_again,
-            IDLE_WINDOW,
-            the_gpu_work_has_completed
-        ));
-        assert!(record.may_be_freed_now(
-            seen_unheld_again + IDLE_WINDOW,
-            IDLE_WINDOW,
-            the_gpu_work_has_completed
-        ));
+        assert!(!a_scan_at(seen_unheld_again).observe(&mut record, true));
+        assert!(a_scan_at(seen_unheld_again + IDLE_WINDOW).observe(&mut record, true));
     }
 
     #[test]
-    fn an_entry_flagged_freed_as_soon_as_unheld_skips_the_idle_window_but_not_its_gpu_work() {
-        let first_seen_unheld = Instant::now();
+    fn an_entry_flagged_freed_as_soon_as_unheld_skips_the_idle_window_but_not_its_holders() {
+        let now = Instant::now();
         let mut record = SharedPoolEntryFreeingRecord::handed_out_to(None);
         record.flag_freed_as_soon_as_unheld();
-        assert!(
-            !record.may_be_freed_now(first_seen_unheld, IDLE_WINDOW, the_gpu_work_has_completed),
-            "a flagged entry is still freed only once it is seen unheld"
-        );
-
-        record.note_observed_unheld(first_seen_unheld, GpuQueueSubmissionsSnapshot::default);
-        assert!(record.may_be_freed_now(
-            first_seen_unheld,
-            IDLE_WINDOW,
-            the_gpu_work_has_completed
-        ));
-        assert!(!record.may_be_freed_now(
-            first_seen_unheld,
-            IDLE_WINDOW,
-            the_gpu_work_is_still_running
-        ));
+        assert!(!a_scan_at(now).observe(&mut record, false));
+        assert!(a_scan_at(now).observe(&mut record, true));
     }
 
     #[test]
@@ -284,22 +449,14 @@ mod tests {
         let mut record = SharedPoolEntryFreeingRecord::handed_out_to(Some(first_stream));
         assert!(record.was_last_acquired_by(first_stream));
         record.flag_freed_as_soon_as_unheld();
-        record.note_observed_unheld(first_seen_unheld, GpuQueueSubmissionsSnapshot::default);
+        a_scan_at(first_seen_unheld).observe(&mut record, true);
 
         record.note_handed_out_again_to(Some(second_stream));
         assert!(record.was_last_acquired_by(second_stream));
         assert!(!record.was_last_acquired_by(first_stream));
         assert!(
-            record
-                .queue_submissions_made_before_it_was_unheld()
-                .is_none()
-        );
-
-        let seen_unheld_again = first_seen_unheld + IDLE_WINDOW;
-        record.note_observed_unheld(seen_unheld_again, GpuQueueSubmissionsSnapshot::default);
-        assert!(
-            !record.may_be_freed_now(seen_unheld_again, IDLE_WINDOW, the_gpu_work_has_completed),
-            "the old owner's flag survived the entry being handed out again"
+            !a_scan_at(first_seen_unheld + IDLE_WINDOW).observe(&mut record, true),
+            "the old owner's flag or idle time survived the entry being handed out again"
         );
     }
 
@@ -318,5 +475,49 @@ mod tests {
         );
         idle_window.set_for_a_test(Duration::ZERO);
         assert_eq!(idle_window.duration(), Duration::ZERO);
+    }
+
+    #[test]
+    fn successive_observation_windows_cover_every_entry_a_bounded_few_at_a_time() {
+        let cursor = SharedPoolEntryObservationCursor::default();
+        let entry_count = SHARED_POOL_ENTRIES_OBSERVED_PER_ACQUIRE_OR_RELEASE * 2 + 3;
+        let mut observed_count_per_entry = vec![0; entry_count];
+        let mut window_count = 0;
+        while observed_count_per_entry.contains(&0) {
+            let window = cursor.next_window_over(entry_count);
+            let observed = window.indices_within_the_group(0, entry_count);
+            assert!(observed.len() <= SHARED_POOL_ENTRIES_OBSERVED_PER_ACQUIRE_OR_RELEASE);
+            for position in observed {
+                observed_count_per_entry[position] += 1;
+            }
+            window_count += 1;
+        }
+        assert_eq!(window_count, 3);
+        assert!(observed_count_per_entry.iter().all(|&count| count == 1));
+        assert_eq!(
+            cursor.next_window_over(entry_count),
+            SharedPoolEntryObservationWindow {
+                positions_across_the_pool: 0..SHARED_POOL_ENTRIES_OBSERVED_PER_ACQUIRE_OR_RELEASE
+            },
+            "the cursor did not start over past the last entry"
+        );
+        assert!(
+            cursor
+                .next_window_over(0)
+                .indices_within_the_group(0, 0)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_window_splits_across_the_groups_it_spans() {
+        let window = SharedPoolEntryObservationWindow {
+            positions_across_the_pool: 3..9,
+        };
+        assert_eq!(window.indices_within_the_group(0, 2), 0..0);
+        assert_eq!(window.indices_within_the_group(2, 4), 1..4);
+        assert_eq!(window.indices_within_the_group(6, 2), 0..2);
+        assert_eq!(window.indices_within_the_group(8, 5), 0..1);
+        assert_eq!(window.indices_within_the_group(13, 4), 0..0);
     }
 }

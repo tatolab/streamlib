@@ -98,9 +98,16 @@ impl RegisteredHandle {
 
     /// Free this handle's shared pool entry as soon as nothing holds it,
     /// without waiting out the idle window — for a helper torn down.
-    pub(crate) fn flag_its_shared_pool_entry_freed_as_soon_as_unheld(&self) {
-        if let Self::Texture { texture, .. } = self {
-            texture.flag_its_pool_slot_freed_as_soon_as_unheld();
+    pub(crate) fn flag_its_shared_pool_entry_freed_as_soon_as_unheld(
+        &self,
+        sandbox: &GpuContextLimitedAccess,
+    ) {
+        match self {
+            Self::Texture { texture, .. } => texture.flag_its_pool_slot_freed_as_soon_as_unheld(),
+            Self::PixelBuffer(buffer) => sandbox
+                .host_inner()
+                .flag_the_pixel_buffer_pool_slot_of_the_buffer_freed_as_soon_as_unheld(buffer),
+            _ => {}
         }
     }
 
@@ -432,7 +439,7 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
     registry: &EscalateHandleRegistry,
 ) {
     for (handle_id, removed_handle) in registry.drain_handles() {
-        removed_handle.flag_its_shared_pool_entry_freed_as_soon_as_unheld();
+        removed_handle.flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
         release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
     }
     let processor_output_pool_slots_drained_at_teardown =
@@ -440,7 +447,7 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
     for released_slot in processor_output_pool_slots_drained_at_teardown {
         released_slot
             .registered_handle
-            .flag_its_shared_pool_entry_freed_as_soon_as_unheld();
+            .flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
         release_processor_output_pool_slot(sandbox, released_slot);
     }
 }

@@ -88,8 +88,7 @@ impl ProcessorOutputPixelBufferPoolOfOneNativeNode {
         } = self;
         let check_out_leases = engines_own_surface_store
             .get()
-            .and_then(SurfaceStore::check_out_leases)
-            .map(Arc::as_ref);
+            .and_then(SurfaceStore::check_out_lease_registry);
         let (_, output_pool) = output_pool_of_the_current_shape.get_or_insert_with(|| {
             (
                 shape,

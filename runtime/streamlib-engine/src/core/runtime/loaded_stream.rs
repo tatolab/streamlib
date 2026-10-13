@@ -550,12 +550,6 @@ impl LoadedStreamInThisRuntime {
             crate::core::window_event_pump::release_the_windows_handed_back_while_the_event_pump_was_not_driven();
 
             self.teardown_progress_note()
-                .note_what_the_teardown_is_waiting_on("freeing the stream's shared pool entries");
-            this_streams_runtime_context
-                .gpu
-                .free_every_unheld_shared_pool_entry_the_stream_last_acquired(self.stream_tag());
-
-            self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the audio clock");
             if let Err(e) = this_streams_runtime_context.audio_clock().stop() {
                 tracing::warn!("[stop] Failed to stop audio clock: {}", e);
@@ -564,6 +558,14 @@ impl LoadedStreamInThisRuntime {
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the stream's surface store");
             this_streams_runtime_context.gpu.clear_surface_store();
+
+            // After the store closes: its leases, like its helpers', are
+            // released as the service sees the connection go.
+            self.teardown_progress_note()
+                .note_what_the_teardown_is_waiting_on("freeing the stream's shared pool entries");
+            this_streams_runtime_context
+                .gpu
+                .free_every_unheld_shared_pool_entry_the_stream_last_acquired(self.stream_tag());
         }
         self.release_every_surface_this_stream_registered();
 

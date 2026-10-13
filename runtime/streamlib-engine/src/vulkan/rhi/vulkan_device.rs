@@ -3279,8 +3279,7 @@ impl HostVulkanDevice {
                 "queue submission to {queue:?}, a queue this device did not hand out"
             )));
         };
-        let Some(completion_timelines) = self.queue_submission_completion_timelines.as_ref()
-        else {
+        let Some(completion_timelines) = self.queue_submission_completion_timelines.as_ref() else {
             return Err(Error::GpuError(
                 "queue submission to a device whose queue completion timelines are already \
                  destroyed"

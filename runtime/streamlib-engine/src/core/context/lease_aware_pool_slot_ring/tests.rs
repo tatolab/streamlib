@@ -284,6 +284,7 @@ fn only_unheld_slots_chosen_to_be_freed_are_taken_out_and_their_ids_retired_ever
     let mut cross_process_holders = PoolSlotReuse::over(Some(&leases));
     let mut slots_shown = Vec::new();
     let taken_out = ring.take_out_and_retire_every_unheld_slot_chosen(
+        0..4,
         &mut cross_process_holders,
         &minted,
         |slot, is_unheld| {
@@ -334,17 +335,28 @@ fn only_unheld_slots_chosen_to_be_freed_are_taken_out_and_their_ids_retired_ever
 }
 
 #[test]
-fn observing_the_ring_shows_every_slot_and_takes_none_out() {
-    let (mut ring, holds) = ring_of_fresh_slots(&["slot-a", "slot-b"]);
-    holds[0].store(true, Ordering::SeqCst);
+fn only_the_slots_in_the_range_observed_are_shown_or_taken_out() {
+    let (mut ring, _holds) = ring_of_fresh_slots(&["slot-a", "slot-b", "slot-c", "slot-d"]);
+    let minted = LeaseAwarePoolMintedFrameGenerations::default();
     let mut slots_shown = Vec::new();
-    ring.observe_whether_each_slot_is_unheld(
-        &PoolSlotReuse::RefcountIsTheWholeAnswer,
-        |slot, is_unheld| slots_shown.push((slot.pool_slot_key().to_string(), is_unheld)),
+    let taken_out = ring.take_out_and_retire_every_unheld_slot_chosen(
+        1..3,
+        &mut PoolSlotReuse::RefcountIsTheWholeAnswer,
+        &minted,
+        |slot, _| {
+            slots_shown.push(slot.pool_slot_key().to_string());
+            true
+        },
     );
-    assert_eq!(
-        slots_shown,
-        [("slot-a".to_string(), false), ("slot-b".to_string(), true)]
-    );
-    assert_eq!(ring.slot_count(), 2);
+    assert_eq!(slots_shown, ["slot-b", "slot-c"]);
+    let taken_out_keys: Vec<_> = taken_out
+        .iter()
+        .map(|slot| slot.pool_slot_key().to_string())
+        .collect();
+    assert_eq!(taken_out_keys, ["slot-b", "slot-c"]);
+    let slots_left: Vec<_> = ring
+        .slots_mut()
+        .map(|slot| slot.pool_slot_key().to_string())
+        .collect();
+    assert_eq!(slots_left, ["slot-a", "slot-d"]);
 }

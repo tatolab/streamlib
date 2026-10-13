@@ -46,12 +46,13 @@ use super::lease_aware_pool_slot_ring::{
     LeaseAwarePoolSlotRing, PoolSlotReuse,
 };
 use super::shared_pool_entry_freeing::{
-    LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK, SharedPoolEntryFreeingRecord,
-    SharedPoolEntryIdleWindow,
+    LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
+    LONGEST_A_STOPPING_STREAM_WAITS_FOR_THE_CHECK_OUT_LEASES_ON_ITS_POOL_ENTRIES,
+    SharedPoolEntriesAwaitingDestruction, SharedPoolEntryFreeingRecord, SharedPoolEntryFreeingScan,
+    SharedPoolEntryIdleWindow, SharedPoolEntryObservationCursor, SharedPoolEntryTakenOutOfItsPool,
 };
 use super::surface_store::SurfaceStore;
 use super::texture_pool::{PooledTextureHandle, TexturePool, TexturePoolDescriptor};
-use crate::core::rhi::GpuQueueSubmissionsSnapshot;
 use crate::core::runtime::LoadedStreamTag;
 
 /// The shape a shared pixel-buffer ring holds buffers of.
@@ -163,8 +164,9 @@ pub(super) struct PixelBufferPoolManager {
     /// keyed by slot; a freed slot's entry goes with it.
     buffer_texture_cache: Arc<Mutex<HashMap<String, Texture>>>,
     idle_window: SharedPoolEntryIdleWindow,
-    /// GPU device reference for creating platform pixel buffer pools.
-    #[allow(dead_code)]
+    observation_cursor: SharedPoolEntryObservationCursor,
+    slots_awaiting_destruction:
+        SharedPoolEntriesAwaitingDestruction<PixelBufferPoolSlotTakenOutOfItsRing>,
     device: Arc<GpuDevice>,
 }
 
@@ -313,6 +315,10 @@ impl PixelBufferPoolManager {
             engines_own_surface_store,
             buffer_texture_cache,
             idle_window: SharedPoolEntryIdleWindow::default(),
+            observation_cursor: SharedPoolEntryObservationCursor::default(),
+            slots_awaiting_destruction: SharedPoolEntriesAwaitingDestruction::new(
+                "pixel-buffer pool",
+            ),
             device,
         }
     }
@@ -340,9 +346,7 @@ impl PixelBufferPoolManager {
             self.hand_off_a_slot_of_the_shape(&mut pools, width, height, format, acquiring_stream);
         let slot_due_to_be_freed = self.take_out_at_most_one_slot_due_to_be_freed(&mut pools);
         drop(pools);
-        if let Some(slot_due_to_be_freed) = slot_due_to_be_freed {
-            self.free_a_slot_taken_out_of_its_ring(slot_due_to_be_freed);
-        }
+        self.park_the_slots_taken_out_and_destroy_at_most_one_ready(slot_due_to_be_freed);
         handed_off
     }
 
@@ -367,9 +371,7 @@ impl PixelBufferPoolManager {
         // a checkout lease — see
         // `docs/decisions/surface-id-lifetime-contract.md` — and on macOS also
         // the kernel's own in-use answer for the slot's IOSurface.
-        let check_out_leases = surface_store
-            .and_then(SurfaceStore::check_out_leases)
-            .map(Arc::as_ref);
+        let check_out_leases = surface_store.and_then(SurfaceStore::check_out_lease_registry);
         if let Some(slot_index) = ring_pool
             .ring
             .hand_off_a_reusable_slot(check_out_leases, &self.minted_frame_generations)
@@ -446,9 +448,7 @@ impl PixelBufferPoolManager {
         let lent_slot = self.lend_a_slot_of_the_shape(&mut pools, shape, acquiring_stream);
         let slot_due_to_be_freed = self.take_out_at_most_one_slot_due_to_be_freed(&mut pools);
         drop(pools);
-        if let Some(slot_due_to_be_freed) = slot_due_to_be_freed {
-            self.free_a_slot_taken_out_of_its_ring(slot_due_to_be_freed);
-        }
+        self.park_the_slots_taken_out_and_destroy_at_most_one_ready(slot_due_to_be_freed);
         lent_slot
     }
 
@@ -460,9 +460,7 @@ impl PixelBufferPoolManager {
     ) -> Result<LeaseAwarePoolSlot<PixelBufferPoolSlot>> {
         let surface_store = self.engines_own_surface_store.get();
         let ring_pool = self.ring_pool_for_shape(pools, shape, surface_store, acquiring_stream)?;
-        let check_out_leases = surface_store
-            .and_then(SurfaceStore::check_out_leases)
-            .map(Arc::as_ref);
+        let check_out_leases = surface_store.and_then(SurfaceStore::check_out_lease_registry);
         let lent_slot_index = match ring_pool
             .ring
             .hand_off_a_reusable_slot(check_out_leases, &self.minted_frame_generations)
@@ -512,9 +510,7 @@ impl PixelBufferPoolManager {
             return;
         };
         for lent_slot in lent_slots {
-            ring_pool.slots_lent_to_native_node_output_pools = ring_pool
-                .slots_lent_to_native_node_output_pools
-                .saturating_sub(1);
+            ring_pool.note_a_lent_slot_came_back(shape);
             ring_pool
                 .ring
                 .push_a_slot_keeping_its_published_frame_generation(lent_slot);
@@ -524,14 +520,14 @@ impl PixelBufferPoolManager {
     /// The slots a torn-down native node's output pool borrowed: each one
     /// nothing holds is freed, and each one still held goes back to its
     /// shape's shared ring, generation kept, to be freed as soon as it is
-    /// unheld. Answers how many were freed.
+    /// unheld. Answers how many were destroyed; a freed slot whose GPU work
+    /// has not completed is destroyed by a later acquire or release.
     pub(super) fn free_or_take_back_the_slots_of_a_torn_down_native_node_output_pool(
         &self,
         shape: PixelBufferPoolKey,
         lent_slots: impl IntoIterator<Item = LeaseAwarePoolSlot<PixelBufferPoolSlot>>,
     ) -> usize {
-        let now = std::time::Instant::now();
-        let idle_window = self.idle_window.duration();
+        let scan = SharedPoolEntryFreeingScan::starting_now(&self.idle_window);
         let mut pools = self
             .pools
             .lock()
@@ -543,39 +539,26 @@ impl PixelBufferPoolManager {
             );
             return 0;
         };
-        let mut cross_process_holders = PoolSlotReuse::over(self.check_out_leases());
-        let mut queue_submissions_made_so_far = None;
+        let mut cross_process_holders = PoolSlotReuse::over(
+            self.engines_own_surface_store
+                .get()
+                .and_then(SurfaceStore::check_out_lease_registry),
+        );
         let mut slots_taken_out = Vec::new();
         for mut lent_slot in lent_slots {
-            ring_pool.slots_lent_to_native_node_output_pools = ring_pool
-                .slots_lent_to_native_node_output_pools
-                .saturating_sub(1);
+            ring_pool.note_a_lent_slot_came_back(shape);
             let is_unheld = lent_slot.is_unheld(&cross_process_holders);
             let freeing_record = &mut lent_slot.resource_mut().freeing_record;
             freeing_record.flag_freed_as_soon_as_unheld();
-            if is_unheld {
-                freeing_record.note_observed_unheld(now, || {
-                    *queue_submissions_made_so_far.get_or_insert_with(|| {
-                        self.device.snapshot_of_queue_submissions_made_so_far()
-                    })
-                });
-            } else {
-                freeing_record.note_observed_held();
-            }
-            if is_unheld
-                && freeing_record.may_be_freed_now(now, idle_window, |queue_submissions| {
-                    self.every_queue_submission_in_snapshot_has_completed(queue_submissions)
-                })
-            {
+            if scan.observe(freeing_record, is_unheld) {
                 cross_process_holders.retire_every_frame_a_slot_being_freed_published(
                     &lent_slot,
                     &self.minted_frame_generations,
                 );
-                self.forget_the_slot_in_its_rings_allocator_and_the_buffer_cache(
+                slots_taken_out.push(self.forget_the_slot_in_its_rings_allocator_and_every_cache(
                     &mut ring_pool.pool,
-                    &lent_slot,
-                );
-                slots_taken_out.push(lent_slot);
+                    lent_slot,
+                ));
             } else {
                 ring_pool
                     .ring
@@ -585,11 +568,15 @@ impl PixelBufferPoolManager {
         drop(cross_process_holders);
         Self::drop_the_ring_of_the_shape_once_it_is_empty(&mut pools, shape);
         drop(pools);
-        let freed_slot_count = slots_taken_out.len();
-        for slot_taken_out in slots_taken_out {
-            self.free_a_slot_taken_out_of_its_ring(slot_taken_out);
-        }
-        freed_slot_count
+        self.release_the_registrations_of_the_slots_taken_out_and_park_them(slots_taken_out);
+        let slots_ready_to_destroy = self
+            .slots_awaiting_destruction
+            .take_back_every_one_ready_to_destroy(&self.device);
+        let destroyed_slot_count = slots_ready_to_destroy.len();
+        slots_ready_to_destroy
+            .into_iter()
+            .for_each(destroy_a_pixel_buffer_pool_slot_taken_out);
+        destroyed_slot_count
     }
 
     /// Free at most one slot due to be freed — idle past the window, or
@@ -601,55 +588,56 @@ impl PixelBufferPoolManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot_due_to_be_freed = self.take_out_at_most_one_slot_due_to_be_freed(&mut pools);
         drop(pools);
-        if let Some(slot_due_to_be_freed) = slot_due_to_be_freed {
-            self.free_a_slot_taken_out_of_its_ring(slot_due_to_be_freed);
-        }
+        self.park_the_slots_taken_out_and_destroy_at_most_one_ready(slot_due_to_be_freed);
     }
 
-    /// Observe every shared ring's slots held or unheld, and take out and
-    /// retire at most one that may be freed: freeing can take milliseconds,
-    /// and this runs on a producer's acquire.
+    /// Observe the few slots of the shared rings this call's window covers,
+    /// held or unheld, and take out and retire at most one that is due to be
+    /// freed: this runs on a producer's acquire.
     fn take_out_at_most_one_slot_due_to_be_freed(
         &self,
         pools: &mut HashMap<PixelBufferPoolKey, PixelBufferRingPool>,
-    ) -> Option<LeaseAwarePoolSlot<PixelBufferPoolSlot>> {
-        let now = std::time::Instant::now();
-        let idle_window = self.idle_window.duration();
-        let mut cross_process_holders = PoolSlotReuse::over(self.check_out_leases());
-        let mut queue_submissions_made_so_far = None;
+    ) -> Option<PixelBufferPoolSlotTakenOutOfItsRing> {
+        let scan = SharedPoolEntryFreeingScan::starting_now(&self.idle_window);
+        let mut cross_process_holders = PoolSlotReuse::over(
+            self.engines_own_surface_store
+                .get()
+                .and_then(SurfaceStore::check_out_lease_registry),
+        );
+        let window = self.observation_cursor.next_window_over(
+            pools
+                .values()
+                .map(|ring_pool| ring_pool.ring.slot_count())
+                .sum(),
+        );
+        let mut position_of_the_rings_first_slot = 0;
         let mut slot_due_to_be_freed = None;
         let mut shape_of_the_slot_due_to_be_freed = None;
         for (shape, ring_pool) in pools.iter_mut() {
+            let slot_count = ring_pool.ring.slot_count();
+            let slot_indices_to_observe =
+                window.indices_within_the_group(position_of_the_rings_first_slot, slot_count);
+            position_of_the_rings_first_slot += slot_count;
+            let mut a_slot_is_chosen = slot_due_to_be_freed.is_some();
             let mut slots_taken_out = ring_pool.ring.take_out_and_retire_every_unheld_slot_chosen(
+                slot_indices_to_observe,
                 &mut cross_process_holders,
                 &self.minted_frame_generations,
                 |slot, is_unheld| {
-                    let freeing_record = &mut slot.resource_mut().freeing_record;
-                    if !is_unheld {
-                        freeing_record.note_observed_held();
-                        return false;
-                    }
-                    freeing_record.note_observed_unheld(now, || {
-                        *queue_submissions_made_so_far.get_or_insert_with(|| {
-                            self.device.snapshot_of_queue_submissions_made_so_far()
-                        })
-                    });
-                    let may_be_freed_now = shape_of_the_slot_due_to_be_freed.is_none()
-                        && freeing_record.may_be_freed_now(now, idle_window, |queue_submissions| {
-                            self.every_queue_submission_in_snapshot_has_completed(queue_submissions)
-                        });
-                    if may_be_freed_now {
-                        shape_of_the_slot_due_to_be_freed = Some(*shape);
-                    }
-                    may_be_freed_now
+                    let is_due_to_be_freed =
+                        scan.observe(&mut slot.resource_mut().freeing_record, is_unheld);
+                    let is_chosen = is_due_to_be_freed && !a_slot_is_chosen;
+                    a_slot_is_chosen |= is_chosen;
+                    is_chosen
                 },
             );
             if let Some(slot_taken_out) = slots_taken_out.pop() {
-                self.forget_the_slot_in_its_rings_allocator_and_the_buffer_cache(
-                    &mut ring_pool.pool,
-                    &slot_taken_out,
-                );
-                slot_due_to_be_freed = Some(slot_taken_out);
+                slot_due_to_be_freed =
+                    Some(self.forget_the_slot_in_its_rings_allocator_and_every_cache(
+                        &mut ring_pool.pool,
+                        slot_taken_out,
+                    ));
+                shape_of_the_slot_due_to_be_freed = Some(*shape);
             }
         }
         drop(cross_process_holders);
@@ -659,139 +647,118 @@ impl PixelBufferPoolManager {
         slot_due_to_be_freed
     }
 
-    /// Free every unheld slot `stream` last acquired, waiting at most
-    /// [`LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK`] for
-    /// the GPU work naming them; every slot it last acquired that is still
-    /// held, or whose work outlasts the wait, is flagged to be freed as soon
-    /// as it is unheld. Answers how many were freed.
-    pub(super) fn free_every_unheld_slot_the_stream_last_acquired(
+    /// Flag every slot of the shared rings `stream` last acquired to be freed
+    /// as soon as it is unheld, answering their pool slot keys — what a
+    /// helper's checkout lease on any of them names.
+    pub(super) fn flag_every_slot_the_stream_last_acquired(
         &self,
         stream: LoadedStreamTag,
-    ) -> usize {
-        let queue_submissions_naming_the_streams_unheld_slots =
-            self.flag_every_slot_the_stream_last_acquired(stream);
-        if let Some(queue_submissions) = queue_submissions_naming_the_streams_unheld_slots {
-            match self.device.wait_for_every_queue_submission_in_snapshot(
-                &queue_submissions,
-                LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
-            ) {
-                Ok(true) => {}
-                outlasted_or_unreadable => tracing::warn!(
-                    stream = %stream,
-                    "the GPU work naming a stopped stream's pixel-buffer pool slots did not \
-                     complete within {:?} ({outlasted_or_unreadable:?}); they are freed once it \
-                     has",
-                    LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK
-                ),
-            }
-        }
-        let now = std::time::Instant::now();
-        let idle_window = self.idle_window.duration();
+    ) -> Vec<String> {
         let mut pools = self
             .pools
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut cross_process_holders = PoolSlotReuse::over(self.check_out_leases());
+        let mut pool_slot_keys_of_the_flagged_slots = Vec::new();
+        for ring_pool in pools.values_mut() {
+            for slot in ring_pool.ring.slots_mut() {
+                let freeing_record = &mut slot.resource_mut().freeing_record;
+                if freeing_record.was_last_acquired_by(stream) {
+                    freeing_record.flag_freed_as_soon_as_unheld();
+                    pool_slot_keys_of_the_flagged_slots.push(slot.pool_slot_key().to_string());
+                }
+            }
+        }
+        pool_slot_keys_of_the_flagged_slots
+    }
+
+    /// Flag the slot whose buffer is `buffer` to be freed as soon as it is
+    /// unheld — for a one-off whose helper was torn down.
+    pub(super) fn flag_the_slot_of_the_buffer_freed_as_soon_as_unheld(&self, buffer: &PixelBuffer) {
+        let mut pools = self
+            .pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(slot) = pools
+            .values_mut()
+            .flat_map(|ring_pool| ring_pool.ring.slots_mut())
+            .find(|slot| std::ptr::eq(slot.resource().buffer.buffer_ref(), buffer.buffer_ref()))
+        {
+            slot.resource_mut()
+                .freeing_record
+                .flag_freed_as_soon_as_unheld();
+        }
+    }
+
+    /// Free every unheld slot due to be freed — flagged, or idle past the
+    /// window — waiting at most
+    /// [`LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK`] for
+    /// the GPU work naming the slots awaiting destruction; answers how many
+    /// were destroyed.
+    pub(super) fn free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work(&self) -> usize {
+        let scan = SharedPoolEntryFreeingScan::starting_now(&self.idle_window);
+        let mut pools = self
+            .pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cross_process_holders = PoolSlotReuse::over(
+            self.engines_own_surface_store
+                .get()
+                .and_then(SurfaceStore::check_out_lease_registry),
+        );
         let mut slots_taken_out = Vec::new();
         for ring_pool in pools.values_mut() {
+            let every_slot_index = 0..ring_pool.ring.slot_count();
             let slots_of_the_ring_taken_out =
                 ring_pool.ring.take_out_and_retire_every_unheld_slot_chosen(
+                    every_slot_index,
                     &mut cross_process_holders,
                     &self.minted_frame_generations,
                     |slot, is_unheld| {
-                        let freeing_record = &slot.resource().freeing_record;
-                        is_unheld
-                            && freeing_record.was_last_acquired_by(stream)
-                            && freeing_record.may_be_freed_now(
-                                now,
-                                idle_window,
-                                |queue_submissions| {
-                                    self.every_queue_submission_in_snapshot_has_completed(
-                                        queue_submissions,
-                                    )
-                                },
-                            )
+                        scan.observe(&mut slot.resource_mut().freeing_record, is_unheld)
                     },
                 );
-            for slot_taken_out in &slots_of_the_ring_taken_out {
-                self.forget_the_slot_in_its_rings_allocator_and_the_buffer_cache(
+            for slot_taken_out in slots_of_the_ring_taken_out {
+                slots_taken_out.push(self.forget_the_slot_in_its_rings_allocator_and_every_cache(
                     &mut ring_pool.pool,
                     slot_taken_out,
-                );
+                ));
             }
-            slots_taken_out.extend(slots_of_the_ring_taken_out);
         }
         drop(cross_process_holders);
         pools.retain(|_, ring_pool| !ring_pool.is_empty_with_no_slot_out_on_loan());
         drop(pools);
-        let freed_slot_count = slots_taken_out.len();
-        for slot_taken_out in slots_taken_out {
-            self.free_a_slot_taken_out_of_its_ring(slot_taken_out);
-        }
-        freed_slot_count
-    }
-
-    /// Flag every slot of the shared rings `stream` last acquired to be freed
-    /// as soon as it is unheld, answering the GPU work naming the unheld ones
-    /// — `None` when none is unheld.
-    fn flag_every_slot_the_stream_last_acquired(
-        &self,
-        stream: LoadedStreamTag,
-    ) -> Option<GpuQueueSubmissionsSnapshot> {
-        let now = std::time::Instant::now();
-        let mut pools = self
-            .pools
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cross_process_holders = PoolSlotReuse::over(self.check_out_leases());
-        let mut queue_submissions_made_so_far = None;
-        let mut queue_submissions_naming_the_unheld_slots: Option<GpuQueueSubmissionsSnapshot> =
-            None;
-        for ring_pool in pools.values_mut() {
-            ring_pool.ring.observe_whether_each_slot_is_unheld(
-                &cross_process_holders,
-                |slot, is_unheld| {
-                    let freeing_record = &mut slot.resource_mut().freeing_record;
-                    if !freeing_record.was_last_acquired_by(stream) {
-                        return;
-                    }
-                    freeing_record.flag_freed_as_soon_as_unheld();
-                    if !is_unheld {
-                        freeing_record.note_observed_held();
-                        return;
-                    }
-                    freeing_record.note_observed_unheld(now, || {
-                        *queue_submissions_made_so_far.get_or_insert_with(|| {
-                            self.device.snapshot_of_queue_submissions_made_so_far()
-                        })
-                    });
-                    if let Some(queue_submissions) =
-                        freeing_record.queue_submissions_made_before_it_was_unheld()
-                    {
-                        queue_submissions_naming_the_unheld_slots = Some(
-                            queue_submissions_naming_the_unheld_slots
-                                .map_or(queue_submissions, |covering| {
-                                    covering.covering_both(&queue_submissions)
-                                }),
-                        );
-                    }
-                },
+        self.release_the_registrations_of_the_slots_taken_out_and_park_them(slots_taken_out);
+        let slots_ready_to_destroy = self
+            .slots_awaiting_destruction
+            .take_back_every_one_ready_to_destroy_waiting_at_most(
+                &self.device,
+                LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
             );
-        }
-        queue_submissions_naming_the_unheld_slots
+        let destroyed_slot_count = slots_ready_to_destroy.len();
+        slots_ready_to_destroy
+            .into_iter()
+            .for_each(destroy_a_pixel_buffer_pool_slot_taken_out);
+        destroyed_slot_count
     }
 
-    /// Let go of the shares of a slot taken out of its ring that its ring's
-    /// allocator and the buffer cache hold, under the hold of the pools that
-    /// took it out, so its retired id stops resolving in the same step.
-    fn forget_the_slot_in_its_rings_allocator_and_the_buffer_cache(
+    /// Let go of the shares of a slot taken out of its ring and retired that
+    /// its ring's allocator and the buffer cache hold, and take its canvas
+    /// out of the texture cache, under the hold of the pools that took it
+    /// out: no new holder can reach it after this.
+    fn forget_the_slot_in_its_rings_allocator_and_every_cache(
         &self,
         rings_allocator: &mut RhiPixelBufferPool,
-        slot_taken_out: &LeaseAwarePoolSlot<PixelBufferPoolSlot>,
-    ) {
-        rings_allocator.forget_the_buffer_of_pool_slot(&PixelBufferPoolSlotId::from_str(
-            slot_taken_out.pool_slot_key(),
-        ));
+        slot_taken_out: LeaseAwarePoolSlot<PixelBufferPoolSlot>,
+    ) -> PixelBufferPoolSlotTakenOutOfItsRing {
+        let pool_slot_key = slot_taken_out.pool_slot_key();
+        if !rings_allocator
+            .forget_the_buffer_of_pool_slot(&PixelBufferPoolSlotId::from_str(pool_slot_key))
+        {
+            tracing::warn!(
+                pool_slot = pool_slot_key,
+                "PixelBufferPoolManager: the ring's allocator held no buffer for a slot being freed"
+            );
+        }
         if slot_taken_out.published_frame_generation() > 0 {
             self.buffer_cache
                 .lock()
@@ -799,59 +766,55 @@ impl PixelBufferPoolManager {
                 .buffers_by_surface_id
                 .remove(&slot_taken_out.currently_published_frame_id());
         }
-    }
-
-    /// Free a slot taken out of every ring and retired: its texture-cache
-    /// entry and its surface-share registration go, and then its memory.
-    fn free_a_slot_taken_out_of_its_ring(
-        &self,
-        slot_taken_out: LeaseAwarePoolSlot<PixelBufferPoolSlot>,
-    ) {
-        let pool_slot_key = slot_taken_out.pool_slot_key();
-        self.buffer_texture_cache
+        let canvas_texture_synthesized_from_the_slot = self
+            .buffer_texture_cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(pool_slot_key);
-        if let Some(store) = self.engines_own_surface_store.get()
-            && let Err(unreleased) = store.release(pool_slot_key)
-        {
-            tracing::warn!(
-                "PixelBufferPoolManager: could not release freed slot {} from the surface-share \
-                 service: {}",
-                pool_slot_key,
-                unreleased
-            );
+        PixelBufferPoolSlotTakenOutOfItsRing {
+            slot: slot_taken_out,
+            canvas_texture_synthesized_from_the_slot,
         }
-        let buffer = &slot_taken_out.resource().buffer;
-        tracing::debug!(
-            pool_slot = pool_slot_key,
-            width = buffer.width,
-            height = buffer.height,
-            format = ?buffer.format(),
-            "freed a pixel-buffer pool slot"
-        );
     }
 
-    fn check_out_leases(&self) -> Option<&super::SurfaceCheckOutLeaseRegistry> {
-        self.engines_own_surface_store
-            .get()
-            .and_then(SurfaceStore::check_out_leases)
-            .map(Arc::as_ref)
-    }
-
-    fn every_queue_submission_in_snapshot_has_completed(
+    /// Release the surface-share registration of each slot taken out — a
+    /// round trip to the service, so outside the hold of the pools — and
+    /// hold the slots until each may be destroyed.
+    fn release_the_registrations_of_the_slots_taken_out_and_park_them(
         &self,
-        queue_submissions: &GpuQueueSubmissionsSnapshot,
-    ) -> bool {
-        self.device
-            .every_queue_submission_in_snapshot_has_completed(queue_submissions)
-            .unwrap_or_else(|unreadable| {
-                tracing::warn!(
-                    "the GPU's queue completion could not be read, so no pixel-buffer pool slot \
-                     is freed: {unreadable}"
-                );
-                false
-            })
+        slots_taken_out: impl IntoIterator<Item = PixelBufferPoolSlotTakenOutOfItsRing>,
+    ) {
+        let slots_taken_out: Vec<_> = slots_taken_out.into_iter().collect();
+        if let Some(store) = self.engines_own_surface_store.get() {
+            for slot_taken_out in &slots_taken_out {
+                let pool_slot_key = slot_taken_out.slot.pool_slot_key();
+                if let Err(unreleased) = store.release(pool_slot_key) {
+                    tracing::warn!(
+                        "PixelBufferPoolManager: could not release freed slot {} from the \
+                         surface-share service: {}",
+                        pool_slot_key,
+                        unreleased
+                    );
+                }
+            }
+        }
+        self.slots_awaiting_destruction.park(slots_taken_out);
+    }
+
+    /// Park the slots taken out, then destroy at most one slot whose GPU work
+    /// has completed: destroying can take milliseconds, and this runs on a
+    /// producer's acquire.
+    fn park_the_slots_taken_out_and_destroy_at_most_one_ready(
+        &self,
+        slots_taken_out: impl IntoIterator<Item = PixelBufferPoolSlotTakenOutOfItsRing>,
+    ) {
+        self.release_the_registrations_of_the_slots_taken_out_and_park_them(slots_taken_out);
+        if let Some(slot_ready_to_destroy) = self
+            .slots_awaiting_destruction
+            .take_back_at_most_one_ready_to_destroy(&self.device)
+        {
+            destroy_a_pixel_buffer_pool_slot_taken_out(slot_ready_to_destroy);
+        }
     }
 
     fn drop_the_ring_of_the_shape_once_it_is_empty(
@@ -1109,6 +1072,55 @@ impl PixelBufferRingPool {
     fn is_empty_with_no_slot_out_on_loan(&self) -> bool {
         self.ring.slot_count() == 0 && self.slots_lent_to_native_node_output_pools == 0
     }
+
+    /// Count one slot lent to a native node's output pool as back from loan.
+    fn note_a_lent_slot_came_back(&mut self, shape: PixelBufferPoolKey) {
+        match self.slots_lent_to_native_node_output_pools.checked_sub(1) {
+            Some(slots_still_lent) => {
+                self.slots_lent_to_native_node_output_pools = slots_still_lent
+            }
+            None => tracing::warn!(
+                "PixelBufferPoolManager: a slot came back to the {}x{} {:?} ring that counted \
+                 none out on loan; its loan count is wrong",
+                shape.width,
+                shape.height,
+                shape.format
+            ),
+        }
+    }
+}
+
+/// A pixel-buffer pool slot taken out of every ring, retired, and evicted
+/// from every cache that resolves it, awaiting destruction.
+struct PixelBufferPoolSlotTakenOutOfItsRing {
+    slot: LeaseAwarePoolSlot<PixelBufferPoolSlot>,
+    /// The texture synthesized from the slot's buffer, taken out of the
+    /// texture cache with it.
+    canvas_texture_synthesized_from_the_slot: Option<Texture>,
+}
+
+impl SharedPoolEntryTakenOutOfItsPool for PixelBufferPoolSlotTakenOutOfItsRing {
+    fn is_referenced_beyond_the_taken_out_entry(&self) -> bool {
+        self.slot.resource().buffer.strong_count() > 1
+            || self
+                .canvas_texture_synthesized_from_the_slot
+                .as_ref()
+                .is_some_and(|canvas_texture| canvas_texture.strong_count() > 1)
+    }
+}
+
+fn destroy_a_pixel_buffer_pool_slot_taken_out(
+    slot_taken_out: PixelBufferPoolSlotTakenOutOfItsRing,
+) {
+    let buffer = &slot_taken_out.slot.resource().buffer;
+    tracing::debug!(
+        pool_slot = slot_taken_out.slot.pool_slot_key(),
+        width = buffer.width,
+        height = buffer.height,
+        format = ?buffer.format(),
+        "freed a pixel-buffer pool slot"
+    );
+    drop(slot_taken_out);
 }
 
 fn warn_of_no_shared_ring_to_take_back_slots_lent_to_a_native_node(
@@ -2364,23 +2376,61 @@ impl GpuContext {
 
     /// Free every unheld shared pool entry `stream` last acquired, and flag
     /// the ones still held to be freed as soon as they are unheld. Run as the
-    /// stream stops, once its processors are gone.
+    /// stream stops, once its processors are gone and its surface store
+    /// closed: it waits, bounded, for the checkout leases its helpers held on
+    /// those entries to clear, then for the GPU work naming them.
     pub(crate) fn free_every_unheld_shared_pool_entry_the_stream_last_acquired(
         &self,
         stream: crate::core::runtime::LoadedStreamTag,
     ) {
-        let freed_texture_pool_slot_count = self
+        let mut surface_ids_naming_the_streams_entries = self
             .texture_pool
-            .free_every_unheld_slot_the_stream_last_acquired(stream);
-        let freed_pixel_buffer_pool_slot_count = self
+            .flag_every_slot_the_stream_last_acquired(stream);
+        surface_ids_naming_the_streams_entries.extend(
+            self.pixel_buffer_pool_manager
+                .flag_every_slot_the_stream_last_acquired(stream),
+        );
+        if let Some(check_out_leases) = self
+            .engines_own_surface_store
+            .get()
+            .and_then(SurfaceStore::check_out_lease_registry)
+        {
+            match check_out_leases.wait_until_no_check_out_lease_names_any_of(
+                &surface_ids_naming_the_streams_entries,
+                LONGEST_A_STOPPING_STREAM_WAITS_FOR_THE_CHECK_OUT_LEASES_ON_ITS_POOL_ENTRIES,
+            ) {
+                Ok(true) => {}
+                still_leased_or_unreadable => tracing::debug!(
+                    stream = %stream,
+                    "a checkout lease on a stopped stream's shared pool entries outlasted {:?} \
+                     ({still_leased_or_unreadable:?}); those entries are freed once it is \
+                     released",
+                    LONGEST_A_STOPPING_STREAM_WAITS_FOR_THE_CHECK_OUT_LEASES_ON_ITS_POOL_ENTRIES
+                ),
+            }
+        }
+        let destroyed_texture_pool_slot_count = self
+            .texture_pool
+            .free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work();
+        let destroyed_pixel_buffer_pool_slot_count = self
             .pixel_buffer_pool_manager
-            .free_every_unheld_slot_the_stream_last_acquired(stream);
+            .free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work();
         tracing::debug!(
             stream = %stream,
-            freed_texture_pool_slot_count,
-            freed_pixel_buffer_pool_slot_count,
+            destroyed_texture_pool_slot_count,
+            destroyed_pixel_buffer_pool_slot_count,
             "freed the shared pool entries a stopped stream last acquired"
         );
+    }
+
+    /// Free the shared pool entry behind a helper's one-off pixel buffer as
+    /// soon as nothing holds it, without waiting out the idle window.
+    pub(crate) fn flag_the_pixel_buffer_pool_slot_of_the_buffer_freed_as_soon_as_unheld(
+        &self,
+        buffer: &PixelBuffer,
+    ) {
+        self.pixel_buffer_pool_manager
+            .flag_the_slot_of_the_buffer_freed_as_soon_as_unheld(buffer);
     }
 
     /// Get the shared command queue.
@@ -7301,6 +7351,171 @@ mod tests {
             &held_frame
         ));
         live_service.stop();
+    }
+
+    /// A stopped stream's entry a helper still holds checked out when the stop
+    /// begins is freed by that stop once the helper's connection closes,
+    /// with no acquire after it.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_stopped_streams_entry_leased_until_its_helpers_connection_closes_is_freed_by_the_stop() {
+        let Ok(gpu) = GpuContext::init_for_platform() else {
+            tracing::warn!("no GPU device, so the leased stopped stream freeing test skips");
+            return;
+        };
+        let live_service =
+            crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let check_out_leases = live_service.check_out_leases();
+        let stopped_stream = crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1);
+        let stopped_streams_view =
+            gpu.view_for_one_loaded_stream(stopped_stream, None, &std::env::temp_dir());
+        let leased_frame = stopped_streams_view
+            .acquire_pixel_buffer(
+                LEASE_TEST_SURFACE_WIDTH,
+                LEASE_TEST_SURFACE_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("the stream's frame a helper leases")
+            .0
+            .to_string();
+        let helpers_connection = check_out_leases.mint_holder_id();
+        check_out_leases
+            .record_check_out_lease(&leased_frame, helpers_connection)
+            .expect("the helper checks the frame out");
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                // Late enough that the stop is already waiting on the lease,
+                // well inside the longest it waits.
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                check_out_leases
+                    .release_every_check_out_lease_held_by(helpers_connection)
+                    .expect("the helper's connection closes");
+            });
+            gpu.free_every_unheld_shared_pool_entry_the_stream_last_acquired(stopped_stream);
+        });
+
+        assert!(
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
+            "the stop left the slot whose lease cleared during it for a later acquire"
+        );
+        assert!(!live_service.is_registered(pool_slot_key_of_surface_id(&leased_frame)));
+        assert!(is_refused_as_recycled_everywhere(
+            &gpu,
+            check_out_leases,
+            &leased_frame
+        ));
+        live_service.stop();
+    }
+
+    /// A freed slot whose canvas texture a reader still holds keeps its
+    /// memory, retired and out of every cache, until the reader lets go;
+    /// the next acquire then destroys it.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_freed_pixel_buffer_slot_whose_canvas_a_reader_holds_is_destroyed_only_once_let_go() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let stopped_stream = crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1);
+        let stopped_streams_view =
+            gpu.view_for_one_loaded_stream(stopped_stream, None, &std::env::temp_dir());
+        let (frame, buffer) = stopped_streams_view
+            .acquire_pixel_buffer(
+                LEASE_TEST_SURFACE_WIDTH,
+                LEASE_TEST_SURFACE_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("the stream's frame");
+        let frame = frame.to_string();
+        let canvas_reader = gpu
+            .resolve_texture_registration_by_surface_id(
+                &frame,
+                None,
+                LEASE_TEST_SURFACE_WIDTH,
+                LEASE_TEST_SURFACE_HEIGHT,
+            )
+            .expect("the frame's canvas texture");
+        drop(buffer);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        gpu.free_every_unheld_shared_pool_entry_the_stream_last_acquired(stopped_stream);
+        assert!(
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
+            "the stopped stream's slots outlived its stop"
+        );
+        assert_eq!(
+            gpu.pixel_buffer_pool_manager
+                .slots_awaiting_destruction
+                .count(),
+            1,
+            "the slot whose canvas a reader holds was destroyed under it, or another slot waits"
+        );
+        assert!(is_refused_as_recycled_everywhere(
+            &gpu,
+            &check_out_leases,
+            &frame
+        ));
+
+        drop(canvas_reader);
+        gpu.acquire_pixel_buffer(
+            LEASE_TEST_SURFACE_WIDTH * 2,
+            LEASE_TEST_SURFACE_HEIGHT,
+            PixelFormat::Rgba32,
+        )
+        .expect("an acquire of another shape");
+        assert_eq!(
+            gpu.pixel_buffer_pool_manager
+                .slots_awaiting_destruction
+                .count(),
+            0,
+            "the slot let go of was not destroyed by the next acquire"
+        );
+    }
+
+    /// A one-off pixel buffer flagged through its buffer, as a torn-down
+    /// helper's are, is freed by the next acquire once let go rather than
+    /// after the idle window.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_pixel_buffer_slot_flagged_through_its_buffer_skips_the_idle_window() {
+        let Some((gpu, _check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let (frame, buffer) = gpu
+            .acquire_pixel_buffer(
+                LEASE_TEST_SURFACE_WIDTH,
+                LEASE_TEST_SURFACE_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("a one-off frame");
+        let flagged_slot_key = pool_slot_key_of_surface_id(&frame.to_string()).to_string();
+        gpu.flag_the_pixel_buffer_pool_slot_of_the_buffer_freed_as_soon_as_unheld(&buffer);
+        drop(buffer);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        gpu.acquire_pixel_buffer(
+            LEASE_TEST_SURFACE_WIDTH * 2,
+            LEASE_TEST_SURFACE_HEIGHT,
+            PixelFormat::Rgba32,
+        )
+        .expect("an acquire of another shape");
+        let slots_left = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+        assert_eq!(
+            slots_left.len(),
+            POOL_PRE_ALLOCATE_COUNT - 1,
+            "other than exactly the flagged slot was freed"
+        );
+        assert!(
+            !slots_left
+                .iter()
+                .any(|(pool_slot_key, _)| *pool_slot_key == flagged_slot_key),
+            "the flagged slot waited out the idle window"
+        );
     }
 
     /// A slot left unused is kept inside the idle window and handed out

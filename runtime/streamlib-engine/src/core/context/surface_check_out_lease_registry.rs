@@ -19,7 +19,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
 use crate::core::rhi::{pool_slot_key_of_surface_id, split_pool_slot_and_frame_generation};
 use crate::core::{Error, Result};
@@ -106,6 +107,8 @@ impl SurfaceCheckOutLeaseTable {
 /// decide whether a slot may be rehanded to its producer.
 pub struct SurfaceCheckOutLeaseRegistry {
     table: Mutex<SurfaceCheckOutLeaseTable>,
+    /// Notified whenever a lease is dropped, for a waiter on a slot's leases.
+    check_out_lease_dropped: Condvar,
     next_holder_id: AtomicU64,
 }
 
@@ -120,6 +123,7 @@ impl SurfaceCheckOutLeaseRegistry {
     pub fn new() -> Self {
         Self {
             table: Mutex::new(SurfaceCheckOutLeaseTable::default()),
+            check_out_lease_dropped: Condvar::new(),
             next_holder_id: AtomicU64::new(0),
         }
     }
@@ -221,6 +225,7 @@ impl SurfaceCheckOutLeaseRegistry {
         if holders.is_empty() {
             table.outstanding_check_outs_by_surface_id.remove(lease_key);
         }
+        self.check_out_lease_dropped.notify_all();
         Ok(true)
     }
 
@@ -239,7 +244,36 @@ impl SurfaceCheckOutLeaseRegistry {
                 holders.remove(&holder);
                 !holders.is_empty()
             });
+        self.check_out_lease_dropped.notify_all();
         Ok(freed_before - table.outstanding_check_outs_by_surface_id.len())
+    }
+
+    /// Block until no checkout lease names any of `surface_ids`' slots, or
+    /// `longest_wait` passes; answers whether none does.
+    pub fn wait_until_no_check_out_lease_names_any_of(
+        &self,
+        surface_ids: &[String],
+        longest_wait: Duration,
+    ) -> Result<bool> {
+        let table = self.readable_table()?;
+        let some_lease_names_one = |table: &mut SurfaceCheckOutLeaseTable| {
+            surface_ids.iter().any(|surface_id| {
+                table
+                    .outstanding_check_outs_by_surface_id
+                    .contains_key(pool_slot_key_of_surface_id(surface_id))
+            })
+        };
+        let (table, _) = self
+            .check_out_lease_dropped
+            .wait_timeout_while(table, longest_wait, some_lease_names_one)
+            .map_err(|_| {
+                Error::Runtime(
+                    "the surface checkout lease table was poisoned while waiting on its leases"
+                        .into(),
+                )
+            })?;
+        let mut table = table;
+        Ok(!some_lease_names_one(&mut table))
     }
 
     /// How many outstanding checkouts stand against `surface_id`'s slot,
@@ -428,6 +462,41 @@ mod tests {
         let hand_off = registry.hold_for_pool_slot_hand_off().unwrap();
         assert!(!hand_off.is_checked_out_by_any_holder("frame-7"));
         assert!(hand_off.is_checked_out_by_any_holder("frame-8"));
+    }
+
+    #[test]
+    fn a_wait_on_leases_ends_when_the_last_one_naming_its_slots_is_dropped() {
+        let registry = std::sync::Arc::new(SurfaceCheckOutLeaseRegistry::new());
+        let closing_child = registry.mint_holder_id();
+        let slot_ids = ["slot-7#3".to_string(), "slot-8".to_string()];
+        assert!(
+            registry
+                .wait_until_no_check_out_lease_names_any_of(&slot_ids, Duration::ZERO)
+                .unwrap()
+        );
+
+        registry
+            .record_check_out_lease("slot-8", closing_child)
+            .unwrap();
+        assert!(
+            !registry
+                .wait_until_no_check_out_lease_names_any_of(&slot_ids, Duration::from_millis(10))
+                .unwrap(),
+            "the wait ended while a lease still named one of its slots"
+        );
+
+        let closing = std::sync::Arc::clone(&registry);
+        let connection_close = std::thread::spawn(move || {
+            closing
+                .release_every_check_out_lease_held_by(closing_child)
+                .unwrap();
+        });
+        assert!(
+            registry
+                .wait_until_no_check_out_lease_names_any_of(&slot_ids, Duration::from_secs(5))
+                .unwrap()
+        );
+        connection_close.join().unwrap();
     }
 
     /// The no-interleaving invariant. A checkout cannot land between the

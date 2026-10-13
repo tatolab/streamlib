@@ -2104,6 +2104,12 @@ impl SurfaceStore {
         self.host_inner().check_out_leases()
     }
 
+    /// The checkout lease table a pool reads to tell whether a helper holds
+    /// one of its slots, if a service owns one.
+    pub(crate) fn check_out_lease_registry(&self) -> Option<&SurfaceCheckOutLeaseRegistry> {
+        self.check_out_leases().map(Arc::as_ref)
+    }
+
     /// Internal helper: leak an initial Arc strong count via
     /// `Arc::into_raw` and wrap it as the opaque handle.
     pub(crate) fn from_arc_into_raw(arc: Arc<SurfaceStoreInner>) -> Self {
