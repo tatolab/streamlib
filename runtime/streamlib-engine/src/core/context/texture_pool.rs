@@ -717,7 +717,7 @@ impl TexturePool {
     /// A texture of the descriptor's shape for `acquiring_stream` (`None` for
     /// the engine's own work): an unheld slot, or a fresh one; past the
     /// device's memory budget the allocation is refused by name. Frees at most
-    /// one slot that sat unheld past the idle window.
+    /// one slot due to be freed.
     pub fn acquire(
         &self,
         desc: &TexturePoolDescriptor,

@@ -3513,6 +3513,85 @@ mod tests {
         }
     }
 
+    /// Stopping a stream frees the shared pool entries it last acquired and
+    /// let go of, retiring their frames; another stream's entries stay.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn stopping_a_stream_frees_the_shared_pool_entries_it_last_acquired_and_leaves_another_streams()
+    {
+        use crate::core::context::TexturePoolDescriptor;
+        use crate::core::rhi::{PixelFormat, TextureFormat, TextureUsages};
+
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let stopped = an_empty_stream_loaded_into(&runner, project_directory.path(), "stopped");
+        let still_running =
+            an_empty_stream_loaded_into(&runner, project_directory.path(), "still-running");
+        stopped.start().expect("the stream to stop starts");
+        still_running.start().expect("the other stream starts");
+        let gpu_of = |stream: &LoadedStreamInThisRuntime| {
+            stream
+                .runtime_context_while_started()
+                .expect("a started stream has its runtime context")
+                .gpu
+                .clone()
+        };
+        let stopped_streams_gpu = gpu_of(&stopped);
+        let still_running_streams_gpu = gpu_of(&still_running);
+        let texture_shape_of_width = |width: u32| {
+            TexturePoolDescriptor::new(width, 16, TextureFormat::Rgba8Unorm)
+                .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST)
+        };
+        let let_go_frame_of = |gpu: &crate::core::context::GpuContext, width: u32| {
+            gpu.acquire_pixel_buffer(width, 16, PixelFormat::Rgba32)
+                .expect("a pixel buffer")
+                .0
+                .to_string()
+        };
+
+        drop(
+            stopped_streams_gpu
+                .acquire_texture(&texture_shape_of_width(16))
+                .expect("the stopped stream's texture"),
+        );
+        let stopped_streams_frame = let_go_frame_of(&stopped_streams_gpu, 16);
+        drop(
+            still_running_streams_gpu
+                .acquire_texture(&texture_shape_of_width(32))
+                .expect("the other stream's texture"),
+        );
+        let still_running_streams_frame = let_go_frame_of(&still_running_streams_gpu, 32);
+
+        stopped.stop().expect("the stream stops");
+
+        let texture_pool = still_running_streams_gpu.texture_pool();
+        assert_eq!(
+            texture_pool.slot_count_of_the_shape_of(&texture_shape_of_width(16)),
+            0,
+            "the stopped stream's texture outlived its stop"
+        );
+        assert_eq!(
+            texture_pool.slot_count_of_the_shape_of(&texture_shape_of_width(32)),
+            1,
+            "another stream's texture went with the stop"
+        );
+        assert!(
+            still_running_streams_gpu
+                .resolve_pixel_buffer_by_surface_id(&stopped_streams_frame)
+                .is_err(),
+            "the stopped stream's freed frame still resolves"
+        );
+        still_running_streams_gpu
+            .resolve_pixel_buffer_by_surface_id(&still_running_streams_frame)
+            .expect("another stream's frame still resolves");
+
+        runner.shut_down().expect("the engine shuts down");
+    }
+
     /// Check in a memfd under `owner_key` over `connection`, as a surface
     /// store registering under that owner does.
     #[cfg(target_os = "linux")]
