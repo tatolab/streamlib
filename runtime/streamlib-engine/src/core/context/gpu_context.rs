@@ -1,7 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::context::TextureRegistration;
+use crate::core::context::{
+    OneOffAcquisitionCountedForItsNode, OneOffAcquisitionShape,
+    OneOffAcquisitionsCountedForOneNativeNode, TextureRegistration,
+    acquire_a_one_off_counted_against_its_node,
+};
 use crate::core::media_clock::MediaClock;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::rhi::KernelShaderStageMask;
@@ -2121,11 +2125,8 @@ impl GpuContext {
         height: u32,
         format: TextureFormat,
     ) -> Result<(String, Texture)> {
-        let desc = TextureDescriptor::new(width, height, format).with_usage(
-            TextureUsages::STORAGE_BINDING
-                | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_DST,
-        );
+        let desc =
+            TextureDescriptor::new(width, height, format).with_usage(output_texture_usages());
         let texture = self.device.create_texture(&desc)?;
         let id = uuid::Uuid::new_v4().to_string();
         self.register_texture(&id, texture.clone());
@@ -4364,6 +4365,9 @@ impl std::fmt::Debug for GpuContext {
 pub struct GpuContextLimitedAccess {
     /// Opaque host handle. Points at a `Box<Arc<GpuContext>>`.
     pub(crate) handle: *const std::ffi::c_void,
+    /// The node this capability acquires one-offs for; `None` for the shared
+    /// context, which counts none.
+    one_off_acquisitions_of_the_node: Option<Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
 }
 
 // SAFETY: `handle` points at a host-owned `Box<Arc<GpuContext>>` that
@@ -4387,7 +4391,10 @@ impl Clone for GpuContextLimitedAccess {
         } else {
             std::ptr::null()
         };
-        Self { handle: new_handle }
+        Self {
+            handle: new_handle,
+            one_off_acquisitions_of_the_node: self.one_off_acquisitions_of_the_node.clone(),
+        }
     }
 }
 
@@ -4425,7 +4432,7 @@ impl Drop for GpuContextLimitedAccess {
 /// assert_not_clone::<streamlib::sdk::context::GpuContextFullAccess>();
 /// ```
 ///
-/// Constructed only by `Self::new` (`pub(in crate::core::context)`,
+/// Constructed only by `Self::counting_one_offs_against_the_node` (`pub(in crate::core::context)`,
 /// so only [`GpuContextLimitedAccess::escalate`]'s engine-internal
 /// body can construct it). `handle` is a host-allocated
 /// `Box<Arc<GpuContext>>`; every method routes through
@@ -4433,6 +4440,9 @@ impl Drop for GpuContextLimitedAccess {
 /// on the boxed Arc.
 pub struct GpuContextFullAccess {
     pub(crate) handle: *const std::ffi::c_void,
+    /// The node this capability acquires one-offs for; `None` for the shared
+    /// context, which counts none.
+    one_off_acquisitions_of_the_node: Option<Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
 }
 
 unsafe impl Send for GpuContextFullAccess {}
@@ -4445,7 +4455,7 @@ impl Drop for GpuContextFullAccess {
         if self.handle.is_null() {
             return;
         }
-        // SAFETY: handle was produced by `Self::new` via
+        // SAFETY: handle was produced by `Self::counting_one_offs_against_the_node` via
         // `Box::into_raw(Box::new(Arc::new(GpuContext)))`.
         // `Box::from_raw` releases the box; the resulting
         // Arc<GpuContext>'s Drop releases the per-scope clone.
@@ -4461,12 +4471,24 @@ impl GpuContextLimitedAccess {
     /// [`Self::host_inner`]. Allocates a host-side
     /// `Box<Arc<GpuContext>>` as the opaque handle.
     pub(crate) fn new(inner: GpuContext) -> Self {
+        Self::counting_one_offs_against_the_node(inner, None)
+    }
+
+    /// Wrap a [`GpuContext`] as a limited-access capability whose one-off
+    /// acquisitions count against `one_off_acquisitions_of_the_node`.
+    pub(crate) fn counting_one_offs_against_the_node(
+        inner: GpuContext,
+        one_off_acquisitions_of_the_node: Option<Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
+    ) -> Self {
         // Leak a fresh `Arc<GpuContext>` to back the opaque handle.
         // The handle is the sole owner; `host_inner()` derefs it.
         let arc: std::sync::Arc<GpuContext> = std::sync::Arc::new(inner);
         let boxed: Box<std::sync::Arc<GpuContext>> = Box::new(arc);
         let handle = Box::into_raw(boxed) as *const std::ffi::c_void;
-        Self { handle }
+        Self {
+            handle,
+            one_off_acquisitions_of_the_node,
+        }
     }
 
     /// Engine-internal borrow of the host's [`GpuContext`] (read
@@ -4493,7 +4515,10 @@ impl GpuContextLimitedAccess {
     /// processor setup paths can still reach the full surface without a
     /// compile-time barrier.
     pub(crate) fn to_full_access(&self) -> GpuContextFullAccess {
-        GpuContextFullAccess::new(self.host_inner().clone())
+        GpuContextFullAccess::counting_one_offs_against_the_node(
+            self.host_inner().clone(),
+            self.one_off_acquisitions_of_the_node.clone(),
+        )
     }
 
     /// Serialized escalation to full GPU capability. Hands the
@@ -4532,7 +4557,10 @@ impl GpuContextLimitedAccess {
         let mutex_wait_ns = lock_start.elapsed().as_nanos() as u64;
 
         let closure_start = std::time::Instant::now();
-        let full = GpuContextFullAccess::new(inner.clone());
+        let full = GpuContextFullAccess::counting_one_offs_against_the_node(
+            inner.clone(),
+            self.one_off_acquisitions_of_the_node.clone(),
+        );
         let closure_result = f(&full);
         drop(full);
         let closure_duration_ns = closure_start.elapsed().as_nanos() as u64;
@@ -4607,24 +4635,31 @@ fn check_sustained_escalation_rate() {
 impl GpuContextFullAccess {
     /// Back-room constructor. Wraps an in-process [`GpuContext`] as a
     /// full-access capability whose methods route through
-    /// [`Self::host_inner`] for direct dispatch.
+    /// [`Self::host_inner`] for direct dispatch, and whose one-off
+    /// acquisitions count against `one_off_acquisitions_of_the_node`.
     ///
     /// Scope tightened to `pub(in crate::core::context)` so only
     /// [`GpuContextLimitedAccess::escalate`]'s host-mode body can
     /// construct one. Other engine code that wants FullAccess goes
     /// through `escalate(|full| ...)`; the privilege gate enforces
     /// serialization + `wait_device_idle`.
-    pub(in crate::core::context) fn new(inner: GpuContext) -> Self {
+    pub(in crate::core::context) fn counting_one_offs_against_the_node(
+        inner: GpuContext,
+        one_off_acquisitions_of_the_node: Option<Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
+    ) -> Self {
         let arc: std::sync::Arc<GpuContext> = std::sync::Arc::new(inner);
         let boxed: Box<std::sync::Arc<GpuContext>> = Box::new(arc);
         let handle = Box::into_raw(boxed) as *const std::ffi::c_void;
-        Self { handle }
+        Self {
+            handle,
+            one_off_acquisitions_of_the_node,
+        }
     }
 
     /// Engine-internal borrow of the host's [`GpuContext`] (read
     /// through the handle's `Box<Arc<GpuContext>>`).
     pub(crate) fn host_inner(&self) -> &GpuContext {
-        // SAFETY: `self.handle` was produced by `Self::new`, which
+        // SAFETY: `self.handle` was produced by `Self::counting_one_offs_against_the_node`, which
         // calls `Box::into_raw(Box::new(Arc::new(GpuContext)))`. The
         // matching Drop reclaims it, so the `Arc<GpuContext>` is alive
         // for the duration of `&self`.
@@ -4655,24 +4690,50 @@ impl GpuContextLimitedAccess {
     /// When every slot of the shape is held — by consumers, or lent to native
     /// nodes' output pools — the pool grows; past the device's memory budget
     /// that growth is refused by name, and nothing waits on another holder.
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
-        self.host_inner()
-            .acquire_pixel_buffer(width, height, format)
+    ) -> Result<(
+        PublishedPixelBufferFrameId,
+        OneOffAcquisitionCountedForItsNode<PixelBuffer>,
+    )> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::PixelBuffer {
+                width,
+                height,
+                format,
+            },
+            || {
+                self.host_inner()
+                    .acquire_pixel_buffer(width, height, format)
+            },
+        )
+        .map(OneOffAcquisitionCountedForItsNode::split_off_the_id_it_was_acquired_under)
     }
 
     /// Acquire a caller-held storage buffer sized for `layout`.
     /// See [`GpuContext::acquire_storage_buffer`].
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
         layout: &crate::core::rhi::TensorStorageBufferLayout,
-    ) -> Result<crate::core::rhi::StorageBuffer> {
-        self.host_inner().acquire_storage_buffer(layout)
+    ) -> Result<OneOffAcquisitionCountedForItsNode<crate::core::rhi::StorageBuffer>> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::StorageBuffer {
+                tensor_layout: layout.clone(),
+            },
+            || self.host_inner().acquire_storage_buffer(layout),
+        )
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
@@ -4776,8 +4837,23 @@ impl GpuContextLimitedAccess {
     /// (Linux) — Sandbox callers don't have a render-target alloc path
     /// because allocating a new RT-capable image is a privileged op
     /// that goes through escalate.
-    pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
-        self.host_inner().acquire_texture(desc)
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
+    pub fn acquire_texture(
+        &self,
+        desc: &TexturePoolDescriptor,
+    ) -> Result<OneOffAcquisitionCountedForItsNode<PooledTextureHandle>> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::Texture {
+                width: desc.width,
+                height: desc.height,
+                format: desc.format,
+                usage: desc.usage,
+            },
+            || self.host_inner().acquire_texture(desc),
+        )
     }
 
     /// Copy a host-visible pixel buffer's contents into a pre-allocated
@@ -4941,24 +5017,50 @@ impl GpuContextFullAccess {
 
     /// Acquire a pixel buffer from the shared pool. LimitedAccess
     /// mirror.
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
-        self.host_inner()
-            .acquire_pixel_buffer(width, height, format)
+    ) -> Result<(
+        PublishedPixelBufferFrameId,
+        OneOffAcquisitionCountedForItsNode<PixelBuffer>,
+    )> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::PixelBuffer {
+                width,
+                height,
+                format,
+            },
+            || {
+                self.host_inner()
+                    .acquire_pixel_buffer(width, height, format)
+            },
+        )
+        .map(OneOffAcquisitionCountedForItsNode::split_off_the_id_it_was_acquired_under)
     }
 
     /// Acquire a caller-held storage buffer sized for `layout`.
     /// See [`GpuContext::acquire_storage_buffer`].
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
         layout: &crate::core::rhi::TensorStorageBufferLayout,
-    ) -> Result<crate::core::rhi::StorageBuffer> {
-        self.host_inner().acquire_storage_buffer(layout)
+    ) -> Result<OneOffAcquisitionCountedForItsNode<crate::core::rhi::StorageBuffer>> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::StorageBuffer {
+                tensor_layout: layout.clone(),
+            },
+            || self.host_inner().acquire_storage_buffer(layout),
+        )
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
@@ -4985,29 +5087,55 @@ impl GpuContextFullAccess {
     /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —
     /// host-only adapter primitive, customers never see this directly).
     /// See [`GpuContext::acquire_render_target_dma_buf_image`].
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
     #[cfg(target_os = "linux")]
     pub fn acquire_render_target_dma_buf_image(
         &self,
         width: u32,
         height: u32,
         format: TextureFormat,
-    ) -> Result<Texture> {
-        self.host_inner()
-            .acquire_render_target_dma_buf_image(width, height, format)
+    ) -> Result<OneOffAcquisitionCountedForItsNode<Texture>> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::RenderTargetImage {
+                width,
+                height,
+                format,
+            },
+            || {
+                self.host_inner()
+                    .acquire_render_target_dma_buf_image(width, height, format)
+            },
+        )
     }
 
     /// Allocate a render-target-capable VkImage over a private IOSurface
     /// (privileged path). See
     /// [`GpuContext::acquire_render_target_iosurface_image`].
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
     #[cfg(target_os = "macos")]
     pub fn acquire_render_target_iosurface_image(
         &self,
         width: u32,
         height: u32,
         format: TextureFormat,
-    ) -> Result<Texture> {
-        self.host_inner()
-            .acquire_render_target_iosurface_image(width, height, format)
+    ) -> Result<OneOffAcquisitionCountedForItsNode<Texture>> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::RenderTargetImage {
+                width,
+                height,
+                format,
+            },
+            || {
+                self.host_inner()
+                    .acquire_render_target_iosurface_image(width, height, format)
+            },
+        )
     }
 
     /// Register a PipeWire `Video/Source` node with `media.role = Camera`, so
@@ -5091,14 +5219,29 @@ impl GpuContextFullAccess {
     }
 
     /// Acquire a new output texture with a UUID and register it in the cache.
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
     pub fn acquire_output_texture(
         &self,
         width: u32,
         height: u32,
         format: TextureFormat,
-    ) -> Result<(String, Texture)> {
-        self.host_inner()
-            .acquire_output_texture(width, height, format)
+    ) -> Result<(String, OneOffAcquisitionCountedForItsNode<Texture>)> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::Texture {
+                width,
+                height,
+                format,
+                usage: output_texture_usages(),
+            },
+            || {
+                self.host_inner()
+                    .acquire_output_texture(width, height, format)
+            },
+        )
+        .map(OneOffAcquisitionCountedForItsNode::split_off_the_id_it_was_acquired_under)
     }
 
     /// Upload a pixel buffer's contents to a GPU texture and register it.
@@ -5253,8 +5396,23 @@ impl GpuContextFullAccess {
     /// (`VK_IMAGE_TILING_OPTIMAL`). For cross-process render targets the
     /// host adapter layer wants on Linux, see
     /// [`Self::acquire_render_target_dma_buf_image`].
-    pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
-        self.host_inner().acquire_texture(desc)
+    /// Counted against this node's one-offs of its shape while the returned
+    /// handle lives; a node's seventeenth held one-off of one shape is refused
+    /// by name before it allocates.
+    pub fn acquire_texture(
+        &self,
+        desc: &TexturePoolDescriptor,
+    ) -> Result<OneOffAcquisitionCountedForItsNode<PooledTextureHandle>> {
+        acquire_a_one_off_counted_against_its_node(
+            self.one_off_acquisitions_of_the_node.as_ref(),
+            OneOffAcquisitionShape::Texture {
+                width: desc.width,
+                height: desc.height,
+                format: desc.format,
+                usage: desc.usage,
+            },
+            || self.host_inner().acquire_texture(desc),
+        )
     }
 
     /// Get the shared command queue.
@@ -5751,6 +5909,11 @@ impl std::fmt::Debug for GpuContextFullAccess {
             .field("handle", &self.handle)
             .finish()
     }
+}
+
+/// The usage set of a kernel's output texture.
+fn output_texture_usages() -> TextureUsages {
+    TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST
 }
 
 /// The usage set of a render-target image a consumer adapter wraps, on every
@@ -6507,7 +6670,7 @@ mod tests {
         let limited = GpuContextLimitedAccess::new(gpu.clone());
         let byte_size: u64 = 1024 * 64;
 
-        let buffer: crate::core::rhi::StorageBuffer = limited
+        let buffer = limited
             .acquire_storage_buffer(
                 &crate::core::rhi::TensorStorageBufferLayout::of_bytes(byte_size)
                     .expect("a non-zero size"),
@@ -6536,6 +6699,73 @@ mod tests {
             "GpuContextLimitedAccess::acquire_storage_buffer: {} bytes; FullAccess mirror also OK",
             byte_size
         );
+    }
+
+    /// A node's limited tier and the full tier its escalate hands out count
+    /// one-offs against the one node, while the shared tier counts none.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_nodes_tiers_count_one_offs_against_the_node_while_the_shared_tier_counts_none() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+        let layout = crate::core::rhi::TensorStorageBufferLayout::of_bytes(256)
+            .expect("a non-zero size");
+
+        let node_tier = GpuContextLimitedAccess::counting_one_offs_against_the_node(
+            gpu.clone(),
+            Some(OneOffAcquisitionsCountedForOneNativeNode::new()),
+        );
+        let mut held_by_the_node = Vec::new();
+        for _ in 0..8 {
+            held_by_the_node.push(
+                node_tier
+                    .acquire_storage_buffer(&layout)
+                    .expect("the node's limited tier acquires up to its count"),
+            );
+        }
+        let held_through_the_escalate = node_tier
+            .escalate(|full| {
+                (0..8)
+                    .map(|_| full.acquire_storage_buffer(&layout))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .expect("the escalate's full tier acquires up to the same count");
+        held_by_the_node.extend(held_through_the_escalate);
+
+        let refusal = node_tier
+            .clone()
+            .acquire_storage_buffer(&layout)
+            .expect_err("a clone of the tier counts against the same node");
+        assert!(
+            matches!(
+                refusal,
+                Error::EveryOneOffAcquisitionOfThisShapeTheNodeMayHoldIsHeld { .. }
+            ),
+            "the node's seventeenth is refused by its own count: {refusal:?}"
+        );
+
+        held_by_the_node.pop();
+        let _in_the_room_handed_back = node_tier
+            .acquire_storage_buffer(&layout)
+            .expect("a dropped one-off hands its count back");
+
+        let shared_tier = GpuContextLimitedAccess::new(gpu);
+        let _held_by_no_node: Vec<_> = (0..17)
+            .map(|_| {
+                shared_tier
+                    .acquire_storage_buffer(&layout)
+                    .expect("the shared tier counts no one-offs")
+            })
+            .collect();
     }
 
     // =====================================================================

@@ -31,9 +31,9 @@ use neither_linux_nor_macos::{
 };
 
 use super::handle_lifecycle::{
-    EscalateHandleRegistry, OneOffAcquisitionShape, ProcessorOutputFrameHandOff,
-    ProcessorOutputFreshSlotHandOff, ProcessorOutputSlotDescriptor,
-    ProcessorOutputTextureDescriptor, RegisteredHandle, release_processor_output_pool_slot,
+    EscalateHandleRegistry, ProcessorOutputFrameHandOff, ProcessorOutputFreshSlotHandOff,
+    ProcessorOutputSlotDescriptor, ProcessorOutputTextureDescriptor, RegisteredHandle,
+    release_processor_output_pool_slot,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -43,9 +43,10 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::GpuContextLimitedAccess;
+use crate::core::context::{GpuContextLimitedAccess, OneOffAcquisitionShape};
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, TensorStorageBufferLayout, TextureFormat, TextureUsages,
+    texture_usages_to_wire,
 };
 
 /// Acquire a pixel buffer on behalf of a helper process, holding it in
@@ -73,8 +74,9 @@ pub(super) fn handle_acquire_pixel_buffer(
                     format: parsed,
                 },
                 |full| {
-                    let (published_frame_id, buffer) =
-                        full.acquire_pixel_buffer(width, height, parsed)?;
+                    let (published_frame_id, buffer) = full
+                        .host_inner()
+                        .acquire_pixel_buffer(width, height, parsed)?;
                     let handle_id = assign_buffer_handle_id(full, &published_frame_id, &buffer)?;
                     Ok((handle_id, RegisteredHandle::PixelBuffer(buffer)))
                 },
@@ -411,24 +413,4 @@ pub(super) fn parse_texture_usages(
         out |= flag;
     }
     Ok(out)
-}
-
-pub(super) fn texture_usages_to_wire(usage: TextureUsages) -> Vec<String> {
-    let mut out = Vec::new();
-    if usage.contains(TextureUsages::COPY_SRC) {
-        out.push("copy_src".to_string());
-    }
-    if usage.contains(TextureUsages::COPY_DST) {
-        out.push("copy_dst".to_string());
-    }
-    if usage.contains(TextureUsages::TEXTURE_BINDING) {
-        out.push("texture_binding".to_string());
-    }
-    if usage.contains(TextureUsages::STORAGE_BINDING) {
-        out.push("storage_binding".to_string());
-    }
-    if usage.contains(TextureUsages::RENDER_ATTACHMENT) {
-        out.push("render_attachment".to_string());
-    }
-    out
 }

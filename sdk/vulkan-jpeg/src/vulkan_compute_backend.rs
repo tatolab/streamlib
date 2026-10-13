@@ -18,7 +18,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use streamlib::sdk::context::{GpuContextFullAccess, TextureRing};
+use streamlib::sdk::context::{
+    GpuContextFullAccess, OneOffAcquisitionCountedForItsNode, TextureRing,
+};
 use streamlib::sdk::engine::host_rhi::{VulkanAccess, VulkanStage};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{
@@ -36,8 +38,8 @@ use crate::simple_decoder::{JpegDecodeOutput, MAX_FRAMES_IN_FLIGHT};
 /// Cross-vendor Vulkan-compute JPEG decode backend.
 pub struct VulkanComputeBackend {
     kernel: JpegDecodeKernel,
-    coef_buf: StorageBuffer,
-    qt_buf: StorageBuffer,
+    coef_buf: OneOffAcquisitionCountedForItsNode<StorageBuffer>,
+    qt_buf: OneOffAcquisitionCountedForItsNode<StorageBuffer>,
     ring: TextureRing,
     max_width: u32,
     max_height: u32,

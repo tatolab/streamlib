@@ -1309,11 +1309,11 @@ fn a_draw_reads_the_surface_its_binding_names_and_publishes_the_targets_layout()
     // and the registration would then name a recycled texture.
     let held = sandbox
         .escalate(|full| {
-            let source = full.acquire_texture(
+            let source = full.host_inner().acquire_texture(
                 &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
                     .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
             )?;
-            let target = full.acquire_texture(
+            let target = full.host_inner().acquire_texture(
                 &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
                     .with_usage(TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC),
             )?;
@@ -1465,11 +1465,11 @@ fn the_pixels_a_draw_does_not_cover_read_transparent_black() {
 
     let held = sandbox
         .escalate(|full| {
-            let source = full.acquire_texture(
+            let source = full.host_inner().acquire_texture(
                 &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
                     .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
             )?;
-            let target = full.acquire_texture(
+            let target = full.host_inner().acquire_texture(
                 &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm).with_usage(
                     TextureUsages::RENDER_ATTACHMENT
                         | TextureUsages::COPY_SRC
@@ -1573,7 +1573,7 @@ fn a_draw_binding_its_own_colour_target_is_refused() {
     .handle_id;
     let held = sandbox
         .escalate(|full| {
-            let texture = full.acquire_texture(
+            let texture = full.host_inner().acquire_texture(
                 &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
                     .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT),
             )?;
@@ -1614,11 +1614,11 @@ fn registered_draw_source_and_target(
 ) {
     sandbox
         .escalate(|full| {
-            let source = full.acquire_texture(
+            let source = full.host_inner().acquire_texture(
                 &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
                     .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
             )?;
-            let target = full.acquire_texture(
+            let target = full.host_inner().acquire_texture(
                 &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
                     .with_usage(TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC),
             )?;
@@ -1739,8 +1739,8 @@ fn a_storage_image_already_in_its_layout_is_still_barriered_and_a_settled_sample
         .escalate(|full| {
             let descriptor = TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
                 .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING);
-            let storage = full.acquire_texture(&descriptor)?;
-            let sampled = full.acquire_texture(&descriptor)?;
+            let storage = full.host_inner().acquire_texture(&descriptor)?;
+            let sampled = full.host_inner().acquire_texture(&descriptor)?;
             full.register_texture_with_layout(
                 "settled-storage-image",
                 storage.texture().clone(),

@@ -7,7 +7,9 @@
 //! rather than failing, and an untouched window reports no events.
 
 use streamlib_engine::core::color::{ColorTraits, PrimariesId, TransferId};
-use streamlib_engine::core::context::GpuContextLimitedAccess;
+use streamlib_engine::core::context::{
+    GpuContextLimitedAccess, OneOffAcquisitionCountedForItsNode,
+};
 use streamlib_engine::core::processor_owned_window::{
     NamedSurfacePresentationOutcome, ProcessorOwnedWindow,
     ProcessorOwnedWindowAwaitingItsPresentTarget, ProcessorOwnedWindowRequest,
@@ -40,7 +42,10 @@ pub fn request_for(window_title: &str) -> ProcessorOwnedWindowRequest {
 pub fn mint_and_hold_a_window_to_the_named_surface_contract(
     gpu_context_limited_access: &GpuContextLimitedAccess,
     registered_window: ProcessorOwnedWindowAwaitingItsPresentTarget,
-) -> (ProcessorOwnedWindow, Texture) {
+) -> (
+    ProcessorOwnedWindow,
+    OneOffAcquisitionCountedForItsNode<Texture>,
+) {
     // Registered outside `escalate`, minted inside it — the ordering the
     // carrier type exists to keep.
     let (published_surface_id, source_texture, mut processor_owned_window) =

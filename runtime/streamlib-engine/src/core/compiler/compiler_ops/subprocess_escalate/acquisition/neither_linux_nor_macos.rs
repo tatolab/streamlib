@@ -32,7 +32,7 @@ pub(super) fn allocate_registered_texture_for_helper(
     parsed_usage: TextureUsages,
 ) -> crate::core::error::Result<(String, RegisteredHandle)> {
     let desc = TexturePoolDescriptor::new(width, height, parsed_format).with_usage(parsed_usage);
-    let texture = full.acquire_texture(&desc)?;
+    let texture = full.host_inner().acquire_texture(&desc)?;
     let (handle_id,) = assign_texture_handle_id(full, &texture)?;
     full.register_texture(&handle_id, texture.texture_clone());
     Ok((handle_id, RegisteredHandle::Texture { texture }))

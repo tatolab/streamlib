@@ -5,7 +5,9 @@
 //! hardware required — the camera-free way to see a pipeline produce.
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::context::{
+    OneOffAcquisitionCountedForItsNode, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::media_clock::MediaClock;
 use streamlib::sdk::processors::ContinuousProcessor;
@@ -83,7 +85,7 @@ enum TestPatternSurfaceState {
         published_frame_id: PublishedPixelBufferFrameId,
         /// Held for the processor's lifetime: the [`PixelBuffer`] keeps the
         /// pool slot (and thus the surface id) alive.
-        _pixel_buffer: PixelBuffer,
+        _pixel_buffer: OneOffAcquisitionCountedForItsNode<PixelBuffer>,
     },
     /// Acquisition failed once, loudly; every later tick stays quiet instead
     /// of re-erroring at 30 Hz.

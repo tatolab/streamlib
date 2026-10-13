@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
 use super::{
-    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
+    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
+    OneOffAcquisitionsCountedForOneNativeNode, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::logging::LoadedStreamLogRoute;
@@ -54,6 +55,9 @@ pub struct RuntimeContext {
     runtime_id: Arc<RuntimeUniqueId>,
     /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
+    /// The one-off acquisitions this processor holds, counted per shape
+    /// (None for the shared/global context, which counts none).
+    one_off_acquisitions_of_the_node: Option<Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
     /// The node's name — the one string `stream_builder.add`'s `NodeReference` and the
     /// control plane's `add_node` report, `graph` renders and the log prefix
     /// carries — so a processor that has to name itself to the outside world
@@ -108,6 +112,7 @@ impl RuntimeContext {
             time,
             runtime_id,
             processor_id: None,
+            one_off_acquisitions_of_the_node: None,
             processor_display_name: None,
             pause_gate: None,
             runtime_ops,
@@ -281,6 +286,7 @@ impl RuntimeContext {
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: Some(processor_id),
+            one_off_acquisitions_of_the_node: Some(OneOffAcquisitionsCountedForOneNativeNode::new()),
             processor_display_name: self.processor_display_name.clone(),
             pause_gate: self.pause_gate.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
@@ -305,6 +311,7 @@ impl RuntimeContext {
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: self.processor_id.clone(),
+            one_off_acquisitions_of_the_node: self.one_off_acquisitions_of_the_node.clone(),
             processor_display_name: self.processor_display_name.clone(),
             pause_gate: Some(pause_gate),
             runtime_ops: Arc::clone(&self.runtime_ops),
@@ -781,8 +788,14 @@ impl<'a> RuntimeContextFullAccess<'a> {
     pub(crate) fn new(base: &'a RuntimeContext, _grant: super::isolation::FullAccessGrant) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
-            gpu_full: GpuContextFullAccess::new(base.gpu.clone()),
-            gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
+            gpu_full: GpuContextFullAccess::counting_one_offs_against_the_node(
+                base.gpu.clone(),
+                base.one_off_acquisitions_of_the_node.clone(),
+            ),
+            gpu_limited: GpuContextLimitedAccess::counting_one_offs_against_the_node(
+                base.gpu.clone(),
+                base.one_off_acquisitions_of_the_node.clone(),
+            ),
             _marker: PhantomData,
         }
     }
@@ -897,7 +910,10 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     pub(crate) fn new(base: &'a RuntimeContext) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
-            gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
+            gpu_limited: GpuContextLimitedAccess::counting_one_offs_against_the_node(
+                base.gpu.clone(),
+                base.one_off_acquisitions_of_the_node.clone(),
+            ),
             _marker: PhantomData,
         }
     }

@@ -399,7 +399,7 @@ fn make_ray_traced_scene_if_available() -> Option<ARayTracedSceneUnderTest> {
 
     let held_output = sandbox
         .escalate(|full| {
-            let output = full.acquire_texture(
+            let output = full.host_inner().acquire_texture(
                 &TexturePoolDescriptor::new(
                     TRACED_GRID_WIDTH,
                     TRACED_GRID_HEIGHT,

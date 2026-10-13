@@ -3,10 +3,10 @@
 
 #[cfg(target_os = "linux")]
 use super::linux::derive_texture_cross_process_importability;
-use super::{parse_texture_format, parse_texture_usages, texture_usages_to_wire};
+use super::{parse_texture_format, parse_texture_usages};
 #[cfg(target_os = "linux")]
 use crate::core::context::TextureCrossProcessImportability;
-use crate::core::rhi::{PixelFormat, TextureFormat, TextureUsages};
+use crate::core::rhi::{PixelFormat, TextureFormat, TextureUsages, texture_usages_to_wire};
 
 #[test]
 fn parse_pixel_format_accepts_common_aliases() {

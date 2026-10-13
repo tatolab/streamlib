@@ -73,7 +73,9 @@ mod linux_rig {
         NAL_UNIT_LENGTH_PREFIX_BYTES, NalUnitLengthPrefixWidth,
         annex_b_access_unit_from_length_prefixed_sample,
     };
-    use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+    use streamlib::sdk::context::{
+        OneOffAcquisitionCountedForItsNode, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+    };
     use streamlib::sdk::descriptors::ProcessorClassImportPath;
     use streamlib::sdk::error::{Error, Result};
     use streamlib::sdk::media_clock::MediaClock;
@@ -201,7 +203,7 @@ mod linux_rig {
         published_frame_id: PublishedPixelBufferFrameId,
         /// Held for the processor's lifetime: the [`PixelBuffer`] keeps the
         /// pool slot, and thus the surface id, alive.
-        _pixel_buffer: PixelBuffer,
+        _pixel_buffer: OneOffAcquisitionCountedForItsNode<PixelBuffer>,
     }
 
     #[streamlib::sdk::processor(

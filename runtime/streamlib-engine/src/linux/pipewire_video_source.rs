@@ -23,7 +23,10 @@ use std::ffi::{CStr, CString};
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::Arc;
 
-use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess, TextureRegistration};
+use crate::core::context::{
+    GpuContextFullAccess, GpuContextLimitedAccess, OneOffAcquisitionCountedForItsNode,
+    TextureRegistration,
+};
 use crate::core::rhi::{Texture, TextureFormat, VulkanLayout};
 use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
@@ -230,7 +233,7 @@ struct OfferedCameraExtent {
     height: u32,
     drm_modifier: u64,
     /// One per buffer slot, in the order the shim hands them out.
-    slot_textures: Vec<Texture>,
+    slot_textures: Vec<OneOffAcquisitionCountedForItsNode<Texture>>,
     /// The exported descriptors, closed when this extent is replaced.
     /// PipeWire and its consumers `dup` on receipt, so closing here is safe
     /// while a consumer still holds the buffer.

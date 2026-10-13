@@ -1047,7 +1047,7 @@ fn seeded_chain_textures<const TEXTURE_COUNT: usize>(
             );
             let mut held = Vec::with_capacity(ids.len());
             for id in ids {
-                let texture = full.acquire_texture(&desc)?;
+                let texture = full.host_inner().acquire_texture(&desc)?;
                 full.register_texture(id, texture.texture().clone());
                 held.push(texture);
             }
@@ -2015,7 +2015,7 @@ fn sentinel_filled_tensor_storage_buffer(
         vec![TENSOR_ELEMENT_COUNT as u64],
         TensorElementType::Float32,
     )?;
-    let buffer = full.acquire_storage_buffer(&layout)?;
+    let buffer = full.host_inner().acquire_storage_buffer(&layout)?;
     tensor_values_mut(&buffer).fill(TENSOR_UNWRITTEN_SENTINEL);
     Ok(buffer)
 }
