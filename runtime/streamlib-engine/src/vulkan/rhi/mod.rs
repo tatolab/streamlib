@@ -35,7 +35,7 @@ pub use vulkan_device::PixelBufferUploadFinalTextureLayout;
 pub use vulkan_device::{
     HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities,
 };
-pub use vulkan_queue_submission_completion::HostVulkanQueueSubmissionsSnapshot;
+pub(crate) use vulkan_queue_submission_completion::HostVulkanQueueSubmissionsSnapshot;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(unused_imports)]

@@ -43,20 +43,21 @@ impl HostVulkanSubmissionQueue {
 /// The value each engine queue's completion timeline was last handed when
 /// the snapshot was taken; zero for a queue nothing had been submitted to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct HostVulkanQueueSubmissionsSnapshot {
+pub(crate) struct HostVulkanQueueSubmissionsSnapshot {
     latest_submitted_value_per_queue: [u64; HostVulkanSubmissionQueue::COUNT],
 }
 
 impl HostVulkanQueueSubmissionsSnapshot {
     /// Whether the snapshot names no submission at all.
-    pub fn names_no_submission(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn names_no_submission(&self) -> bool {
         self.latest_submitted_value_per_queue
             .iter()
             .all(|&value| value == 0)
     }
 
     /// The later of the two snapshots on every queue.
-    pub fn covering_both(&self, other: &Self) -> Self {
+    pub(crate) fn covering_both(&self, other: &Self) -> Self {
         let mut latest_submitted_value_per_queue = self.latest_submitted_value_per_queue;
         for (value, other_value) in latest_submitted_value_per_queue
             .iter_mut()

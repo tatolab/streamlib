@@ -3303,7 +3303,9 @@ impl HostVulkanDevice {
     }
 
     /// The latest submission made so far on every queue of this device.
-    pub fn snapshot_of_queue_submissions_made_so_far(&self) -> HostVulkanQueueSubmissionsSnapshot {
+    pub(crate) fn snapshot_of_queue_submissions_made_so_far(
+        &self,
+    ) -> HostVulkanQueueSubmissionsSnapshot {
         self.queue_submission_completion_timelines
             .as_ref()
             .map(HostVulkanQueueSubmissionCompletionTimelines::snapshot_of_submissions_made_so_far)
@@ -3312,7 +3314,7 @@ impl HostVulkanDevice {
 
     /// Whether every queue submission the snapshot names has completed,
     /// read without blocking.
-    pub fn every_queue_submission_in_snapshot_has_completed(
+    pub(crate) fn every_queue_submission_in_snapshot_has_completed(
         &self,
         snapshot: &HostVulkanQueueSubmissionsSnapshot,
     ) -> Result<bool> {
@@ -3326,7 +3328,7 @@ impl HostVulkanDevice {
 
     /// Block until every queue submission the snapshot names has completed
     /// or `timeout` passes; `Ok(false)` on timeout.
-    pub fn wait_for_every_queue_submission_in_snapshot(
+    pub(crate) fn wait_for_every_queue_submission_in_snapshot(
         &self,
         snapshot: &HostVulkanQueueSubmissionsSnapshot,
         timeout: std::time::Duration,
