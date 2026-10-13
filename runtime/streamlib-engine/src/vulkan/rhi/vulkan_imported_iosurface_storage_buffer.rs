@@ -214,34 +214,16 @@ impl HostVulkanBuffer {
         pixel_format: PixelFormat,
     ) -> Result<Self> {
         const OPERATION: &str = "HostVulkanBuffer::new_iosurface_backed_pixel_buffer";
-        vulkan_device.allocate_as_the_device_memory_budget_admits(
-            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
-            || {
-                Ok(frame_device_memory_request_for_a_private_iosurface(
-                    width,
-                    height,
-                    bytes_per_pixel,
-                    OPERATION,
-                ))
-            },
-            || {
-                let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
-                    width,
-                    height,
-                    bytes_per_pixel,
-                    pixel_format,
-                )?;
-                let pixel_byte_len =
-                    u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
-                let buffer =
-                    Self::from_iosurface_pages(vulkan_device, &iosurface, Some(pixel_byte_len))?;
-                Ok(buffer.counted_in_the_metal_working_set(
-                    vulkan_device.count_a_runtime_minted_iosurface_in_the_metal_working_set(
-                        RuntimeMintedIOSurfaceKind::BackingAHostPointerImportedBuffer,
-                        iosurface.alloc_size() as u64,
-                    ),
-                ))
-            },
+        Self::new_over_a_fresh_private_iosurface_with_packed_rows(
+            vulkan_device,
+            width,
+            height,
+            bytes_per_pixel,
+            pixel_format,
+            u64::from(width)
+                .saturating_mul(u64::from(height))
+                .saturating_mul(u64::from(bytes_per_pixel)),
+            OPERATION,
         )
     }
 
@@ -263,24 +245,48 @@ impl HostVulkanBuffer {
                      an IOSurface's u32 height carries"
                 ))
             })?;
+        Self::new_over_a_fresh_private_iosurface_with_packed_rows(
+            vulkan_device,
+            TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE,
+            row_count,
+            1,
+            PixelFormat::Unknown,
+            byte_len,
+            OPERATION,
+        )
+    }
+
+    /// A buffer of `buffer_byte_len` bytes over a fresh private IOSurface of
+    /// `row_count` packed rows of `width` elements, weighed first against the
+    /// Metal working set as a request for those same rows.
+    fn new_over_a_fresh_private_iosurface_with_packed_rows(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        width: u32,
+        row_count: u32,
+        bytes_per_element: u32,
+        pixel_format: PixelFormat,
+        buffer_byte_len: u64,
+        frame_allocation_site: &'static str,
+    ) -> Result<Self> {
         vulkan_device.allocate_as_the_device_memory_budget_admits(
             DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
             || {
                 Ok(frame_device_memory_request_for_a_private_iosurface(
-                    TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE,
+                    width,
                     row_count,
-                    1,
-                    OPERATION,
+                    bytes_per_element,
+                    frame_allocation_site,
                 ))
             },
             || {
                 let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
-                    TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE,
+                    width,
                     row_count,
-                    1,
-                    PixelFormat::Unknown,
+                    bytes_per_element,
+                    pixel_format,
                 )?;
-                let buffer = Self::from_iosurface_pages(vulkan_device, &iosurface, Some(byte_len))?;
+                let buffer =
+                    Self::from_iosurface_pages(vulkan_device, &iosurface, Some(buffer_byte_len))?;
                 Ok(buffer.counted_in_the_metal_working_set(
                     vulkan_device.count_a_runtime_minted_iosurface_in_the_metal_working_set(
                         RuntimeMintedIOSurfaceKind::BackingAHostPointerImportedBuffer,
