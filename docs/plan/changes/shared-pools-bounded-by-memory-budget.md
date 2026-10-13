@@ -1,7 +1,7 @@
 # shared-pools-bounded-by-memory-budget
 
-A node's frames are limited by the node alone, and the runtime's shared pools are limited by
-device memory alone. After this change:
+A node's frames are limited by the node alone, and the runtime's shared pools only by the
+device: its memory budget and its allocation-count limit. After this change:
 - the runtime-wide texture pool and pixel-buffer pool cap no shape by count; the 16-per-shape
   texture bucket and the 64-per-shape pixel-buffer pool are gone;
 - a node's pooled frames are bounded by its own output pool (16, as today), and its one-off
@@ -121,7 +121,8 @@ frame — a slow consumer costs memory, then its own frames, never another proce
   `VK_EXT_memory_budget` enabled wherever the device advertises it: every frame allocation —
   pooled, one-off, or unpooled (a kernel output, a render target) — is refused by name before
   it allocates when the heap's reported usage plus the request would pass its budget less a
-  small headroom, or when the process nears the device's `maxMemoryAllocationCount`. A refusal
+  small headroom, or when the process nears the device's `maxMemoryAllocationCount`; the check
+  and the allocation are one step, so concurrent allocations never pass on one reading. A refusal
   reads a fresh budget and names the heap, its budget, its usage and the bytes the pools hold;
   the node drops that frame. Without the extension the budget is the allocator's estimate of
   80% of the heap, also capped by the system's available memory for a heap that is not
@@ -161,8 +162,12 @@ frame — a slow consumer costs memory, then its own frames, never another proce
   (`:1393`). Read `maxMemoryAllocationCount`.
 - One budget-and-count check, run by every frame allocation: the five `create_texture*`
   methods, the pixel-buffer slot constructors (`vulkan_pixel_buffer_pool.rs:15-40`) and the
-  storage-buffer flavours (`C/gpu_context.rs:1923`). The count is VMA's allocation count plus
-  `live_allocation_count`.
+  storage-buffer flavours (`C/gpu_context.rs:1923`). The check and the allocation are one step
+  under one device-wide lock, so two allocations on different threads cannot both pass against
+  the same reading; only growth allocates, so the lock is off the per-frame path. The count is
+  the `VkDeviceMemory` objects the process holds: VMA's `blockCount` (each dedicated allocation
+  is its own block) plus `live_allocation_count`, never VMA's `allocationCount`, which counts
+  sub-allocations.
 - macOS: the working-set bound and the IOSurface tally, in the RHI.
 - Delete the texture pool's per-shape cap, `TexturePoolExhaustionPolicy`, the condvar wait and
   the dead config surface; delete `POOL_MAX_BUFFER_COUNT`; delete
@@ -184,8 +189,10 @@ frame — a slow consumer costs memory, then its own frames, never another proce
   bounded per call.
 - A freed pixel-buffer slot calls `SurfaceStore::release` and leaves `buffer_cache`; a freed
   texture leaves `texture_cache` through `unregister_texture`.
-- Keep one live allocation of each exportable flavour: the OPAQUE_FD sentinels already do; the
-  DMA-BUF flavours gain one if the rig test shows the quirk applies to them with no compositor.
+- Keep one live allocation of each exportable flavour for the device's life: the OPAQUE_FD
+  sentinels already do, and the DMA-BUF and tiled DMA-BUF flavours gain one each, replacing
+  their allocate-and-drop probes (`vulkan_device.rs:1885-1934`), so the rule never rests on a
+  compositor's imports.
 - Tests: the two freeing tests above, and the rig re-acquire test for DMA-BUF, tiled DMA-BUF and
   OPAQUE_FD image pools with a swapchain live.
 

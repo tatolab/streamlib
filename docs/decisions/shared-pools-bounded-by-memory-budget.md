@@ -20,7 +20,11 @@ while the GPU has memory free — or why one stream can still cost another its f
    allocations by shape and cap no shape by count. They are bounded by the device's memory
    budget per heap, as the driver reports it through `VK_EXT_memory_budget` and the allocator
    reads it, and by the device's allocation-count limit. Past either, an allocation is
-   refused by name and the node drops that frame.
+   refused by name and the node drops that frame. Where the driver lacks the extension, the
+   budget is the allocator's estimate — 80% of the heap, also capped by the system's
+   available memory for a heap that is not device-local — and the runtime says the bound is
+   an estimate. On macOS the bound is Metal's recommended working set, measured against the
+   runtime's own IOSurface bytes plus the Metal device's allocated size.
 3. **Nothing waits on another holder.** An acquisition refuses at once rather than block for
    a frame some other node holds.
 4. **Memory comes back.** An unheld entry is freed when its stream stops, when its node's
