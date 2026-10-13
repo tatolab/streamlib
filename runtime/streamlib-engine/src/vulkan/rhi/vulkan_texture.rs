@@ -18,10 +18,7 @@ use super::HostVulkanDevice;
 use super::vulkan_device::VmaFrameAllocationSource;
 use super::vulkan_frame_allocation_device_memory_budget::DeviceMemoryBudgetAdmission;
 #[cfg(target_os = "macos")]
-use super::vulkan_metal_working_set_budget::{
-    IOSurfaceBytesCountedInTheMetalWorkingSet, RuntimeMintedIOSurfaceKind,
-    frame_device_memory_request_for_a_private_iosurface,
-};
+use super::vulkan_metal_working_set_budget::frame_device_memory_request_for_a_private_iosurface;
 
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::fourcc;
@@ -225,11 +222,6 @@ pub struct HostVulkanTexture {
     /// to cross to a helper process.
     #[cfg(target_os = "macos")]
     backing_iosurface: Option<crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads>,
-    /// The minted IOSurface's bytes in the device's Metal working set, while
-    /// this image holds the surface; `None` for a surface it imported.
-    #[cfg(target_os = "macos")]
-    runtime_minted_iosurface_bytes_counted_in_the_metal_working_set:
-        Option<IOSurfaceBytesCountedInTheMetalWorkingSet>,
     /// Whether this texture was allocated from the OPAQUE_FD image
     /// pool. Gates `export_opaque_fd_memory`: callers that
     /// allocated via [`Self::new`] / `_render_target_dma_buf` / `_device_local`
@@ -348,8 +340,6 @@ impl HostVulkanTexture {
             cached_image_view: OnceLock::new(),
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
-            #[cfg(target_os = "macos")]
-            runtime_minted_iosurface_bytes_counted_in_the_metal_working_set: None,
             #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]
@@ -418,8 +408,6 @@ impl HostVulkanTexture {
             cached_image_view: OnceLock::new(),
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
-            #[cfg(target_os = "macos")]
-            runtime_minted_iosurface_bytes_counted_in_the_metal_working_set: None,
             #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]
@@ -1588,20 +1576,12 @@ impl HostVulkanTexture {
                     desc.height,
                     desc.format.bytes_per_pixel(),
                 )?;
-                let iosurface_alloc_size_bytes = iosurface.alloc_size() as u64;
-                let mut texture = Self::created_over_iosurface(
+                Self::created_over_iosurface(
                     vulkan_device,
                     desc.format,
                     texture_usages_to_vk(desc.usage),
                     iosurface,
-                )?;
-                texture.runtime_minted_iosurface_bytes_counted_in_the_metal_working_set = Some(
-                    vulkan_device.count_a_runtime_minted_iosurface_in_the_metal_working_set(
-                        RuntimeMintedIOSurfaceKind::BackingAVulkanImage,
-                        iosurface_alloc_size_bytes,
-                    ),
-                );
-                Ok(texture)
+                )
             },
         )
     }
@@ -1695,7 +1675,6 @@ impl HostVulkanTexture {
             backing_iosurface: Some(
                 crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
             ),
-            runtime_minted_iosurface_bytes_counted_in_the_metal_working_set: None,
             width,
             height,
             format,
@@ -1741,8 +1720,6 @@ impl Clone for HostVulkanTexture {
             cached_image_view: OnceLock::new(),
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
-            #[cfg(target_os = "macos")]
-            runtime_minted_iosurface_bytes_counted_in_the_metal_working_set: None,
             #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]

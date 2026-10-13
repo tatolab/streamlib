@@ -13,9 +13,7 @@ use crate::core::rhi::{PixelFormat, SourceLayoutInfo, StorageBuffer};
 use crate::core::{Error, Result};
 
 use super::vulkan_frame_allocation_device_memory_budget::DeviceMemoryBudgetAdmission;
-use super::vulkan_metal_working_set_budget::{
-    RuntimeMintedIOSurfaceKind, frame_device_memory_request_for_a_private_iosurface,
-};
+use super::vulkan_metal_working_set_budget::frame_device_memory_request_for_a_private_iosurface;
 use super::{HostVulkanBuffer, HostVulkanDevice};
 use crate::apple::iosurface::{
     RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
@@ -285,14 +283,7 @@ impl HostVulkanBuffer {
                     bytes_per_element,
                     pixel_format,
                 )?;
-                let buffer =
-                    Self::from_iosurface_pages(vulkan_device, &iosurface, Some(buffer_byte_len))?;
-                Ok(buffer.counted_in_the_metal_working_set(
-                    vulkan_device.count_a_runtime_minted_iosurface_in_the_metal_working_set(
-                        RuntimeMintedIOSurfaceKind::BackingAHostPointerImportedBuffer,
-                        iosurface.alloc_size() as u64,
-                    ),
-                ))
+                Self::from_iosurface_pages(vulkan_device, &iosurface, Some(buffer_byte_len))
             },
         )
     }

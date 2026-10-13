@@ -388,46 +388,45 @@ fn without_the_budget_extension_a_device_local_heap_ignores_available_system_mem
 }
 
 #[test]
-fn the_metal_working_set_refuses_past_the_recommended_maximum_less_the_headroom_naming_both_usages()
-{
+fn the_metal_working_set_refuses_past_the_recommended_maximum_less_the_headroom_naming_its_usage() {
     let recommended_max_working_set = 10_240 * BYTES_PER_MEBIBYTE;
-    let metal_current_allocated = 6_000 * BYTES_PER_MEBIBYTE;
     let request = 16 * BYTES_PER_MEBIBYTE;
-    let reading_with_iosurface_bytes =
-        |runtime_minted_iosurface_bytes: u64| FrameAllocationDeviceMemoryReading {
+    let reading_with_metal_current_allocated =
+        |metal_current_allocated_bytes: u64| FrameAllocationDeviceMemoryReading {
             budget: FrameAllocationBudgetReading::MetalWorkingSet(MetalWorkingSetBudgetReading {
                 recommended_max_working_set_bytes: recommended_max_working_set,
-                metal_current_allocated_bytes: metal_current_allocated,
-                runtime_minted_iosurface_bytes_metal_does_not_count: runtime_minted_iosurface_bytes,
+                metal_current_allocated_bytes,
             }),
             allocation_count: DeviceMemoryAllocationCountReading {
                 live_device_memory_allocation_count: 0,
                 max_memory_allocation_count: ROOMY_MAX_MEMORY_ALLOCATION_COUNT,
             },
         };
-    let iosurface_bytes_that_fill_the_working_set = recommended_max_working_set
+    let metal_current_allocated_that_fills_the_working_set = recommended_max_working_set
         - HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET
-        - metal_current_allocated
         - request;
 
     assert!(
         refusal_of_a_frame_allocation_past_the_device_memory_bound(
             &frame_request(request),
-            &reading_with_iosurface_bytes(iosurface_bytes_that_fill_the_working_set),
+            &reading_with_metal_current_allocated(
+                metal_current_allocated_that_fills_the_working_set
+            ),
         )
         .is_none(),
         "the working set's last room is still room"
     );
     let refusal = refusal_of_a_frame_allocation_past_the_device_memory_bound(
         &frame_request(request),
-        &reading_with_iosurface_bytes(iosurface_bytes_that_fill_the_working_set + 1),
+        &reading_with_metal_current_allocated(
+            metal_current_allocated_that_fills_the_working_set + 1,
+        ),
     )
-    .expect("one IOSurface byte more leaves less than the headroom");
+    .expect("one allocated byte more leaves less than the headroom");
     match &refusal {
         Error::FrameAllocationRefusedPastTheMetalWorkingSetBudget {
             recommended_max_working_set_bytes,
             metal_current_allocated_bytes,
-            runtime_minted_iosurface_bytes,
             requested_bytes,
             headroom_bytes,
             ..
@@ -436,10 +435,9 @@ fn the_metal_working_set_refuses_past_the_recommended_maximum_less_the_headroom_
                 *recommended_max_working_set_bytes,
                 recommended_max_working_set
             );
-            assert_eq!(*metal_current_allocated_bytes, metal_current_allocated);
             assert_eq!(
-                *runtime_minted_iosurface_bytes,
-                iosurface_bytes_that_fill_the_working_set + 1
+                *metal_current_allocated_bytes,
+                metal_current_allocated_that_fills_the_working_set + 1
             );
             assert_eq!(*requested_bytes, request);
             assert_eq!(
@@ -462,7 +460,6 @@ fn a_budget_left_with_no_room_by_a_test_refuses_every_frame() {
             budget: FrameAllocationBudgetReading::MetalWorkingSet(MetalWorkingSetBudgetReading {
                 recommended_max_working_set_bytes: 64_000 * BYTES_PER_MEBIBYTE,
                 metal_current_allocated_bytes: 0,
-                runtime_minted_iosurface_bytes_metal_does_not_count: 0,
             }),
             allocation_count: DeviceMemoryAllocationCountReading {
                 live_device_memory_allocation_count: 0,

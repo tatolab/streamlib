@@ -23,8 +23,12 @@ while the GPU has memory free — or why one stream can still cost another its f
    refused by name and the node drops that frame. Where the driver lacks the extension, the
    budget is the allocator's estimate — 80% of the heap, also capped by the system's
    available memory for a heap that is not device-local — and the runtime says the bound is
-   an estimate. On macOS the bound is Metal's recommended working set, measured against the
-   runtime's own IOSurface bytes plus the Metal device's allocated size.
+   an estimate. On macOS the bound is Metal's recommended working set, measured against
+   ~~the runtime's own IOSurface bytes plus the Metal device's allocated size.~~ — Superseded
+   2026-10-13 by a measurement on the macOS lane: a 1024×1024 RGBA IOSurface-backed image, and
+   a pixel buffer importing an IOSurface's pages as host memory, each grew the Metal device's
+   allocated size by the whole surface, so adding the runtime's own IOSurface bytes counted
+   each twice. Usage is the Metal device's allocated size alone.
 3. **Nothing waits on another holder.** An acquisition refuses at once rather than block for
    a frame some other node holds.
 4. **Memory comes back.** An unheld entry is freed when its stream stops, when its node's
@@ -62,4 +66,6 @@ while the GPU has memory free — or why one stream can still cost another its f
   not keep, and must release the surface-share registration and parent caches with the
   memory, or a duplicated fd keeps the memory alive.
 - macOS has no Vulkan-visible measure of IOSurface memory, so the bound there is Metal's
-  recommended working set against the runtime's own IOSurface tally.
+  recommended working set against ~~the runtime's own IOSurface tally~~ — Superseded
+  2026-10-13 by the same measurement: the Metal device's allocated size, which already counts
+  every IOSurface the runtime mints.

@@ -39,8 +39,7 @@ use super::vulkan_kernel_capability_refusal::{
 };
 #[cfg(target_os = "macos")]
 use super::vulkan_metal_working_set_budget::{
-    IOSurfaceBytesCountedInTheMetalWorkingSet, MetalDeviceWhoseWorkingSetBoundsFrameAllocations,
-    MetalWorkingSetOfTheDevice, RuntimeMintedIOSurfaceKind,
+    MetalDeviceWhoseWorkingSetBoundsFrameAllocations, MetalWorkingSetOfTheDevice,
 };
 use super::vulkan_validation_messenger::{
     VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
@@ -180,7 +179,7 @@ pub struct HostVulkanDevice {
     #[cfg(target_os = "linux")]
     device_memory_budget_fresh_fetch_frame_index: std::sync::atomic::AtomicU32,
     /// The Metal device MoltenVK drives, whose recommended working set bounds
-    /// frame allocations on macOS, and the IOSurface bytes it cannot see.
+    /// frame allocations on macOS.
     #[cfg(target_os = "macos")]
     metal_working_set_of_the_device: MetalWorkingSetOfTheDevice,
     device: vulkanalia::Device,
@@ -4658,18 +4657,6 @@ impl HostVulkanDevice {
                 max_memory_allocation_count: self.max_memory_allocation_count,
             },
         })
-    }
-
-    /// Count a private IOSurface this runtime just minted in the Metal working
-    /// set, for as long as the returned value lives.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn count_a_runtime_minted_iosurface_in_the_metal_working_set(
-        &self,
-        kind: RuntimeMintedIOSurfaceKind,
-        iosurface_alloc_size_bytes: u64,
-    ) -> IOSurfaceBytesCountedInTheMetalWorkingSet {
-        self.metal_working_set_of_the_device
-            .count_a_minted_iosurface(kind, iosurface_alloc_size_bytes)
     }
 
     /// The Metal working set frame allocations are weighed against.

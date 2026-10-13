@@ -20,8 +20,6 @@ use super::vulkan_device::{
     MappedOpaqueFdBufferHostAccessPattern, VmaExportPoolPinnedToOneMemoryType,
 };
 use super::vulkan_frame_allocation_device_memory_budget::DeviceMemoryBudgetAdmission;
-#[cfg(target_os = "macos")]
-use super::vulkan_metal_working_set_budget::IOSurfaceBytesCountedInTheMetalWorkingSet;
 
 /// Process-global HostVulkanDevice reference for external-handle import —
 /// DMA-BUF on Linux, IOSurface on macOS.
@@ -154,11 +152,6 @@ pub struct HostVulkanBuffer {
     /// that memory is freed. `None` on every other allocation path.
     #[cfg(target_os = "macos")]
     backing_iosurface: Option<crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads>,
-    /// The minted IOSurface's bytes in the device's Metal working set, while
-    /// this buffer holds the surface; `None` for a surface it imported.
-    #[cfg(target_os = "macos")]
-    runtime_minted_iosurface_bytes_counted_in_the_metal_working_set:
-        Option<IOSurfaceBytesCountedInTheMetalWorkingSet>,
     /// Plane 0 size in bytes.
     size: vk::DeviceSize,
 }
@@ -343,8 +336,6 @@ impl HostVulkanBuffer {
             extra_imported_planes: Vec::new(),
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
-            #[cfg(target_os = "macos")]
-            runtime_minted_iosurface_bytes_counted_in_the_metal_working_set: None,
             size,
         })
     }
@@ -1279,8 +1270,6 @@ impl HostVulkanBuffer {
             extra_imported_planes: Vec::new(),
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
-            #[cfg(target_os = "macos")]
-            runtime_minted_iosurface_bytes_counted_in_the_metal_working_set: None,
             size: buffer_byte_len,
         })
     }
@@ -1295,17 +1284,6 @@ impl HostVulkanBuffer {
         iosurface: crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads,
     ) -> Self {
         self.backing_iosurface = Some(iosurface);
-        self
-    }
-
-    /// Record that this buffer's IOSurface is one the runtime minted, counted
-    /// in the Metal working set until the buffer drops.
-    pub(super) fn counted_in_the_metal_working_set(
-        mut self,
-        iosurface_bytes_counted: IOSurfaceBytesCountedInTheMetalWorkingSet,
-    ) -> Self {
-        self.runtime_minted_iosurface_bytes_counted_in_the_metal_working_set =
-            Some(iosurface_bytes_counted);
         self
     }
 

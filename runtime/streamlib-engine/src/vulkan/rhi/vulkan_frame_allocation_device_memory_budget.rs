@@ -86,13 +86,15 @@ pub(crate) struct DeviceMemoryHeapBudgetReading {
     pub(crate) heap_budget_source: DeviceMemoryHeapBudgetSource,
 }
 
-/// Metal's recommended working set and what this runtime has spent of it.
+/// Metal's recommended working set and the bytes the Metal device has allocated of it.
 #[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Debug)]
 pub(crate) struct MetalWorkingSetBudgetReading {
     pub(crate) recommended_max_working_set_bytes: u64,
+    /// `currentAllocatedSize`, the working set's usage. It already counts every
+    /// private IOSurface the runtime mints: MoltenVK wraps each at once in an
+    /// `MTLTexture` over the surface or a no-copy `MTLBuffer` over its pages.
     pub(crate) metal_current_allocated_bytes: u64,
-    pub(crate) runtime_minted_iosurface_bytes_metal_does_not_count: u64,
 }
 
 /// The `VkDeviceMemory` objects this process holds against the device's limit.
@@ -119,9 +121,7 @@ impl FrameAllocationDeviceMemoryReading {
             }
             FrameAllocationBudgetReading::MetalWorkingSet(working_set) => {
                 working_set.recommended_max_working_set_bytes =
-                    working_set.metal_current_allocated_bytes.saturating_add(
-                        working_set.runtime_minted_iosurface_bytes_metal_does_not_count,
-                    );
+                    working_set.metal_current_allocated_bytes;
             }
         }
         self
@@ -175,9 +175,7 @@ pub(crate) fn refusal_of_a_frame_allocation_past_the_device_memory_bound(
         FrameAllocationBudgetReading::MetalWorkingSet(working_set) => {
             request_leaves_less_than_the_headroom(
                 working_set.recommended_max_working_set_bytes,
-                working_set.metal_current_allocated_bytes.saturating_add(
-                    working_set.runtime_minted_iosurface_bytes_metal_does_not_count,
-                ),
+                working_set.metal_current_allocated_bytes,
                 request.requested_bytes,
             )
             .then(
@@ -185,8 +183,6 @@ pub(crate) fn refusal_of_a_frame_allocation_past_the_device_memory_bound(
                     recommended_max_working_set_bytes: working_set
                         .recommended_max_working_set_bytes,
                     metal_current_allocated_bytes: working_set.metal_current_allocated_bytes,
-                    runtime_minted_iosurface_bytes: working_set
-                        .runtime_minted_iosurface_bytes_metal_does_not_count,
                     requested_bytes: request.requested_bytes,
                     headroom_bytes:
                         HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET,

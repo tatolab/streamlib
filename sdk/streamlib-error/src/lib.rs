@@ -305,14 +305,12 @@ pub enum Error {
     #[error(
         "{frame_allocation_site} refused a {requested_bytes}-byte frame allocation before \
          allocating: Metal's recommended working set is {recommended_max_working_set_bytes} \
-         bytes and this runtime uses {metal_current_allocated_bytes} bytes the Metal device \
-         allocated plus {runtime_minted_iosurface_bytes} bytes of IOSurfaces it minted; the \
+         bytes and the Metal device has allocated {metal_current_allocated_bytes} bytes; the \
          allocation would leave less than the {headroom_bytes}-byte headroom"
     )]
     FrameAllocationRefusedPastTheMetalWorkingSetBudget {
         recommended_max_working_set_bytes: u64,
         metal_current_allocated_bytes: u64,
-        runtime_minted_iosurface_bytes: u64,
         requested_bytes: u64,
         headroom_bytes: u64,
         frame_allocation_site: String,
@@ -675,11 +673,10 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_allocation_refused_past_the_metal_working_set_reads_both_usages() {
+    fn a_frame_allocation_refused_past_the_metal_working_set_reads_the_working_set_and_its_usage() {
         let msg = Error::FrameAllocationRefusedPastTheMetalWorkingSetBudget {
             recommended_max_working_set_bytes: 11_453_251_584,
-            metal_current_allocated_bytes: 9_000_000_000,
-            runtime_minted_iosurface_bytes: 2_400_000_000,
+            metal_current_allocated_bytes: 11_400_000_000,
             requested_bytes: 4_194_304,
             headroom_bytes: 67_108_864,
             frame_allocation_site: "HostVulkanTexture::new_iosurface_backed".to_string(),
@@ -688,9 +685,9 @@ mod tests {
         assert_eq!(
             msg,
             "HostVulkanTexture::new_iosurface_backed refused a 4194304-byte frame allocation \
-             before allocating: Metal's recommended working set is 11453251584 bytes and this \
-             runtime uses 9000000000 bytes the Metal device allocated plus 2400000000 bytes of \
-             IOSurfaces it minted; the allocation would leave less than the 67108864-byte headroom"
+             before allocating: Metal's recommended working set is 11453251584 bytes and the \
+             Metal device has allocated 11400000000 bytes; the allocation would leave less than \
+             the 67108864-byte headroom"
         );
     }
 

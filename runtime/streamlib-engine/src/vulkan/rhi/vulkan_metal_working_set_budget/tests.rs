@@ -70,7 +70,6 @@ fn a_private_iosurface_too_large_to_count_requests_every_byte_and_is_refused_pas
         budget: FrameAllocationBudgetReading::MetalWorkingSet(MetalWorkingSetBudgetReading {
             recommended_max_working_set_bytes: 16 * 1024 * 1024 * 1024,
             metal_current_allocated_bytes: 0,
-            runtime_minted_iosurface_bytes_metal_does_not_count: 0,
         }),
         allocation_count: DeviceMemoryAllocationCountReading {
             live_device_memory_allocation_count: 0,
@@ -115,9 +114,10 @@ fn frame_descriptor() -> TextureDescriptor<'static> {
 
 /// The working set's usage as the budget gate reads it.
 fn working_set_usage_the_gate_reads(device: &HostVulkanDevice) -> u64 {
-    let reading = device.metal_working_set_of_the_device().reading();
-    reading.metal_current_allocated_bytes
-        + reading.runtime_minted_iosurface_bytes_metal_does_not_count
+    device
+        .metal_working_set_of_the_device()
+        .reading()
+        .metal_current_allocated_bytes
 }
 
 fn metal_current_allocated_bytes(device: &HostVulkanDevice) -> u64 {
@@ -154,8 +154,7 @@ fn assert_counted_once_in_the_working_set(
         gate_usage_delta.saturating_mul(2) >= iosurface_alloc_size
             && gate_usage_delta.saturating_mul(2) <= iosurface_alloc_size.saturating_mul(3),
         "{what_was_minted}: the gate's working-set usage grew by {gate_usage_delta} bytes for a \
-         {iosurface_alloc_size}-byte IOSurface, which is not once — flip the matching \
-         METAL_COUNTS_… const with what this run measured"
+         {iosurface_alloc_size}-byte IOSurface, which is not once"
     );
 }
 
