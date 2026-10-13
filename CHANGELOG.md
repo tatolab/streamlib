@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.1](https://github.com/tatolab/streamlib/compare/v0.46.0...v0.46.1) (2026-10-13)
+
+
+### Features
+
+* **engine:** the shared pools give memory back — freed at stream stop and after an idle window ([#2743](https://github.com/tatolab/streamlib/issues/2743)) ([118a39b](https://github.com/tatolab/streamlib/commit/118a39bba35da1d8164af9e9bd8fa41c2c9360c6))
+
 ## [0.46.0](https://github.com/tatolab/streamlib/compare/v0.45.6...v0.46.0) (2026-10-13)
 
 
