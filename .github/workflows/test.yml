@@ -1107,9 +1107,9 @@ jobs:
       - name: Frame-allocation budget on the Metal device
         run: |
           set -o pipefail
-          cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
+          CARGO_TERM_COLOR=never cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
             --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
-            --lib -- --test-threads=1 --nocapture \
+            --lib -- --color never --test-threads=1 --nocapture \
             vulkan::rhi::vulkan_metal_working_set_budget::tests::an_iosurface_backed_vulkan_image_is_counted_once_in_the_metal_working_set_usage \
             vulkan::rhi::vulkan_metal_working_set_budget::tests::an_iosurface_backed_pixel_buffer_is_counted_once_in_the_metal_working_set_usage \
             vulkan::rhi::vulkan_device::tests::a_frame_texture_past_a_budget_with_no_room_left_is_refused_while_an_engine_buffer_still_allocates \
