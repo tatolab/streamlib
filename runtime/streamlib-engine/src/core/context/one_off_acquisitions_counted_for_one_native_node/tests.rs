@@ -6,28 +6,11 @@ use std::cell::Cell;
 use super::{
     OneOffAcquisitionsCountedForOneNativeNode, acquire_a_one_off_counted_against_its_node,
 };
-use crate::core::context::one_off_acquisitions_held_for_one_node::{
-    ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE, OneOffAcquisitionShape,
+use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+use crate::core::context::one_off_acquisitions_held_for_one_node::one_off_acquisition_shapes_for_tests::{
+    a_640x480_bgra32_pixel_buffer, a_1280x720_rgba8_unorm_texture,
 };
-use crate::core::rhi::{PixelFormat, TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
-
-fn a_1280x720_rgba8_unorm_texture() -> OneOffAcquisitionShape {
-    OneOffAcquisitionShape::Texture {
-        width: 1280,
-        height: 720,
-        format: TextureFormat::Rgba8Unorm,
-        usage: TextureUsages::TEXTURE_BINDING,
-    }
-}
-
-fn a_640x480_bgra32_pixel_buffer() -> OneOffAcquisitionShape {
-    OneOffAcquisitionShape::PixelBuffer {
-        width: 640,
-        height: 480,
-        format: PixelFormat::Bgra32,
-    }
-}
 
 fn an_allocation_named(name: &'static str) -> impl FnOnce() -> Result<&'static str> {
     move || Ok(name)

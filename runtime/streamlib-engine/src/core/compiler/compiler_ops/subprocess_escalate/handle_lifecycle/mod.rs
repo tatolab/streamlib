@@ -181,8 +181,6 @@ impl EscalateHandleRegistry {
     /// of `shape` before `allocate` runs inside the escalate, and held under
     /// the id `allocate` answers until the helper releases it; refused by name
     /// once the node holds or has reserved as many of `shape` as one node may.
-    /// `allocate` allocates through the uncounted `GpuContext`: this count is
-    /// the node's, and the spawn host's own count would count it twice.
     pub(super) fn acquire_a_one_off_for_the_helper_counted_under_its_shape(
         &self,
         sandbox: &GpuContextLimitedAccess,

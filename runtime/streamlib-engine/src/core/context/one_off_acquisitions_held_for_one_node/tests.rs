@@ -1,6 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use super::one_off_acquisition_shapes_for_tests::{
+    a_640x480_bgra32_pixel_buffer, a_1280x720_rgba8_unorm_texture,
+};
 use super::{
     ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE, OneOffAcquisitionShape,
     OneOffAcquisitionsHeldForOneNode,
@@ -8,23 +11,6 @@ use super::{
 use crate::core::rhi::{
     PixelFormat, TensorElementType, TensorStorageBufferLayout, TextureFormat, TextureUsages,
 };
-
-fn a_1280x720_rgba8_unorm_texture() -> OneOffAcquisitionShape {
-    OneOffAcquisitionShape::Texture {
-        width: 1280,
-        height: 720,
-        format: TextureFormat::Rgba8Unorm,
-        usage: TextureUsages::TEXTURE_BINDING,
-    }
-}
-
-fn a_640x480_bgra32_pixel_buffer() -> OneOffAcquisitionShape {
-    OneOffAcquisitionShape::PixelBuffer {
-        width: 640,
-        height: 480,
-        format: PixelFormat::Bgra32,
-    }
-}
 
 #[test]
 fn a_one_off_acquisition_of_another_shape_is_counted_on_its_own() {

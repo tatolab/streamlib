@@ -31,7 +31,9 @@ use super::subprocess_bridge::{
     HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
     refusal_of_a_link_into_a_helper_process_that_failed, spawn_fd_line_reader,
 };
-use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::context::{
+    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
 use crate::core::descriptors::ProcessorDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -773,7 +775,9 @@ impl ProcessorInterpreterSpawnHostProcessor {
         self.child = Some(child);
         let bridge = SubprocessBridge::new(
             escalate_transport.into_parent_stream(),
-            ctx.gpu_limited_access().clone(),
+            // Uncounted: the helper's one-offs are counted by its escalate
+            // registry, never also against this spawn host.
+            GpuContextLimitedAccess::new(ctx.gpu_limited_access().host_inner().clone()),
             self.processor_id.clone(),
         )?;
 

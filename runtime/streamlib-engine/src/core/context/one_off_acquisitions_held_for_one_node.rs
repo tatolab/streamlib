@@ -7,9 +7,36 @@
 #[cfg(test)]
 mod tests;
 
+/// One-off shapes the counting tests acquire under.
+#[cfg(test)]
+pub(crate) mod one_off_acquisition_shapes_for_tests {
+    use super::OneOffAcquisitionShape;
+    use crate::core::rhi::{PixelFormat, TextureFormat, TextureUsages};
+
+    /// A sampled 1280x720 `Rgba8Unorm` texture.
+    pub(crate) fn a_1280x720_rgba8_unorm_texture() -> OneOffAcquisitionShape {
+        OneOffAcquisitionShape::Texture {
+            width: 1280,
+            height: 720,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING,
+        }
+    }
+
+    /// A 640x480 `Bgra32` pixel buffer.
+    pub(crate) fn a_640x480_bgra32_pixel_buffer() -> OneOffAcquisitionShape {
+        OneOffAcquisitionShape::PixelBuffer {
+            width: 640,
+            height: 480,
+            format: PixelFormat::Bgra32,
+        }
+    }
+}
+
 use std::collections::HashMap;
 
 use super::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
+use super::texture_pool::TexturePoolDescriptor;
 use crate::core::rhi::{
     PixelFormat, TensorStorageBufferLayout, TextureFormat, TextureUsages, texture_usages_to_wire,
 };
@@ -42,6 +69,18 @@ pub(crate) enum OneOffAcquisitionShape {
         height: u32,
         format: TextureFormat,
     },
+}
+
+impl OneOffAcquisitionShape {
+    /// The shape a texture acquired from the pool by `descriptor` is counted under.
+    pub(crate) fn of_texture_pool_descriptor(descriptor: &TexturePoolDescriptor) -> Self {
+        Self::Texture {
+            width: descriptor.width,
+            height: descriptor.height,
+            format: descriptor.format,
+            usage: descriptor.usage,
+        }
+    }
 }
 
 impl std::fmt::Display for OneOffAcquisitionShape {

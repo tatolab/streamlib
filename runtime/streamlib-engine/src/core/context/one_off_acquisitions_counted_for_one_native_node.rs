@@ -83,8 +83,11 @@ impl Drop for OneOffAcquisitionCountHeldAgainstANativeNode {
     }
 }
 
-/// A one-off acquisition a node holds, counted against the node's sixteen of
-/// its shape until this drops; a clone of what it derefs to is not counted.
+/// A one-off acquisition a node holds, counted against the most of its shape
+/// one node may hold until this drops; an acquisition past that count is
+/// refused by name before it allocates, and a clone of what this derefs to is
+/// not counted.
+#[must_use = "dropping a one-off acquisition frees it and hands its count back"]
 pub struct OneOffAcquisitionCountedForItsNode<Acquisition> {
     // Declared first so the acquisition is freed before its count goes back.
     acquisition: Acquisition,

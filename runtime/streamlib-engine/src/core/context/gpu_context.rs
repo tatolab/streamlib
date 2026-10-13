@@ -4690,9 +4690,8 @@ impl GpuContextLimitedAccess {
     /// When every slot of the shape is held — by consumers, or lent to native
     /// nodes' output pools — the pool grows; past the device's memory budget
     /// that growth is refused by name, and nothing waits on another holder.
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
@@ -4702,37 +4701,28 @@ impl GpuContextLimitedAccess {
         PublishedPixelBufferFrameId,
         OneOffAcquisitionCountedForItsNode<PixelBuffer>,
     )> {
-        acquire_a_one_off_counted_against_its_node(
+        acquire_pixel_buffer_counted_against_the_node(
+            self.host_inner(),
             self.one_off_acquisitions_of_the_node.as_ref(),
-            OneOffAcquisitionShape::PixelBuffer {
-                width,
-                height,
-                format,
-            },
-            || {
-                self.host_inner()
-                    .acquire_pixel_buffer(width, height, format)
-            },
+            width,
+            height,
+            format,
         )
-        .map(OneOffAcquisitionCountedForItsNode::split_off_the_id_it_was_acquired_under)
     }
 
     /// Acquire a caller-held storage buffer sized for `layout`.
     /// See [`GpuContext::acquire_storage_buffer`].
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
         layout: &crate::core::rhi::TensorStorageBufferLayout,
     ) -> Result<OneOffAcquisitionCountedForItsNode<crate::core::rhi::StorageBuffer>> {
-        acquire_a_one_off_counted_against_its_node(
+        acquire_storage_buffer_counted_against_the_node(
+            self.host_inner(),
             self.one_off_acquisitions_of_the_node.as_ref(),
-            OneOffAcquisitionShape::StorageBuffer {
-                tensor_layout: layout.clone(),
-            },
-            || self.host_inner().acquire_storage_buffer(layout),
+            layout,
         )
     }
 
@@ -4837,22 +4827,16 @@ impl GpuContextLimitedAccess {
     /// (Linux) — Sandbox callers don't have a render-target alloc path
     /// because allocating a new RT-capable image is a privileged op
     /// that goes through escalate.
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     pub fn acquire_texture(
         &self,
         desc: &TexturePoolDescriptor,
     ) -> Result<OneOffAcquisitionCountedForItsNode<PooledTextureHandle>> {
-        acquire_a_one_off_counted_against_its_node(
+        acquire_texture_counted_against_the_node(
+            self.host_inner(),
             self.one_off_acquisitions_of_the_node.as_ref(),
-            OneOffAcquisitionShape::Texture {
-                width: desc.width,
-                height: desc.height,
-                format: desc.format,
-                usage: desc.usage,
-            },
-            || self.host_inner().acquire_texture(desc),
+            desc,
         )
     }
 
@@ -5017,9 +5001,8 @@ impl GpuContextFullAccess {
 
     /// Acquire a pixel buffer from the shared pool. LimitedAccess
     /// mirror.
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
@@ -5029,37 +5012,28 @@ impl GpuContextFullAccess {
         PublishedPixelBufferFrameId,
         OneOffAcquisitionCountedForItsNode<PixelBuffer>,
     )> {
-        acquire_a_one_off_counted_against_its_node(
+        acquire_pixel_buffer_counted_against_the_node(
+            self.host_inner(),
             self.one_off_acquisitions_of_the_node.as_ref(),
-            OneOffAcquisitionShape::PixelBuffer {
-                width,
-                height,
-                format,
-            },
-            || {
-                self.host_inner()
-                    .acquire_pixel_buffer(width, height, format)
-            },
+            width,
+            height,
+            format,
         )
-        .map(OneOffAcquisitionCountedForItsNode::split_off_the_id_it_was_acquired_under)
     }
 
     /// Acquire a caller-held storage buffer sized for `layout`.
     /// See [`GpuContext::acquire_storage_buffer`].
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
         layout: &crate::core::rhi::TensorStorageBufferLayout,
     ) -> Result<OneOffAcquisitionCountedForItsNode<crate::core::rhi::StorageBuffer>> {
-        acquire_a_one_off_counted_against_its_node(
+        acquire_storage_buffer_counted_against_the_node(
+            self.host_inner(),
             self.one_off_acquisitions_of_the_node.as_ref(),
-            OneOffAcquisitionShape::StorageBuffer {
-                tensor_layout: layout.clone(),
-            },
-            || self.host_inner().acquire_storage_buffer(layout),
+            layout,
         )
     }
 
@@ -5087,9 +5061,8 @@ impl GpuContextFullAccess {
     /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —
     /// host-only adapter primitive, customers never see this directly).
     /// See [`GpuContext::acquire_render_target_dma_buf_image`].
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     #[cfg(target_os = "linux")]
     pub fn acquire_render_target_dma_buf_image(
         &self,
@@ -5114,9 +5087,8 @@ impl GpuContextFullAccess {
     /// Allocate a render-target-capable VkImage over a private IOSurface
     /// (privileged path). See
     /// [`GpuContext::acquire_render_target_iosurface_image`].
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     #[cfg(target_os = "macos")]
     pub fn acquire_render_target_iosurface_image(
         &self,
@@ -5219,9 +5191,8 @@ impl GpuContextFullAccess {
     }
 
     /// Acquire a new output texture with a UUID and register it in the cache.
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     pub fn acquire_output_texture(
         &self,
         width: u32,
@@ -5396,22 +5367,16 @@ impl GpuContextFullAccess {
     /// (`VK_IMAGE_TILING_OPTIMAL`). For cross-process render targets the
     /// host adapter layer wants on Linux, see
     /// [`Self::acquire_render_target_dma_buf_image`].
-    /// Counted against this node's one-offs of its shape while the returned
-    /// handle lives; a node's seventeenth held one-off of one shape is refused
-    /// by name before it allocates.
+    /// Counted against this node's one-offs of its shape; see
+    /// [`OneOffAcquisitionCountedForItsNode`].
     pub fn acquire_texture(
         &self,
         desc: &TexturePoolDescriptor,
     ) -> Result<OneOffAcquisitionCountedForItsNode<PooledTextureHandle>> {
-        acquire_a_one_off_counted_against_its_node(
+        acquire_texture_counted_against_the_node(
+            self.host_inner(),
             self.one_off_acquisitions_of_the_node.as_ref(),
-            OneOffAcquisitionShape::Texture {
-                width: desc.width,
-                height: desc.height,
-                format: desc.format,
-                usage: desc.usage,
-            },
-            || self.host_inner().acquire_texture(desc),
+            desc,
         )
     }
 
@@ -5909,6 +5874,58 @@ impl std::fmt::Debug for GpuContextFullAccess {
             .field("handle", &self.handle)
             .finish()
     }
+}
+
+/// Acquire a pixel buffer from `gpu`, counted against `one_offs_of_the_node`.
+fn acquire_pixel_buffer_counted_against_the_node(
+    gpu: &GpuContext,
+    one_offs_of_the_node: Option<&Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+) -> Result<(
+    PublishedPixelBufferFrameId,
+    OneOffAcquisitionCountedForItsNode<PixelBuffer>,
+)> {
+    acquire_a_one_off_counted_against_its_node(
+        one_offs_of_the_node,
+        OneOffAcquisitionShape::PixelBuffer {
+            width,
+            height,
+            format,
+        },
+        || gpu.acquire_pixel_buffer(width, height, format),
+    )
+    .map(OneOffAcquisitionCountedForItsNode::split_off_the_id_it_was_acquired_under)
+}
+
+/// Acquire a storage buffer from `gpu`, counted against `one_offs_of_the_node`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn acquire_storage_buffer_counted_against_the_node(
+    gpu: &GpuContext,
+    one_offs_of_the_node: Option<&Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
+    layout: &crate::core::rhi::TensorStorageBufferLayout,
+) -> Result<OneOffAcquisitionCountedForItsNode<crate::core::rhi::StorageBuffer>> {
+    acquire_a_one_off_counted_against_its_node(
+        one_offs_of_the_node,
+        OneOffAcquisitionShape::StorageBuffer {
+            tensor_layout: layout.clone(),
+        },
+        || gpu.acquire_storage_buffer(layout),
+    )
+}
+
+/// Acquire a pooled texture from `gpu`, counted against `one_offs_of_the_node`.
+fn acquire_texture_counted_against_the_node(
+    gpu: &GpuContext,
+    one_offs_of_the_node: Option<&Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
+    desc: &TexturePoolDescriptor,
+) -> Result<OneOffAcquisitionCountedForItsNode<PooledTextureHandle>> {
+    acquire_a_one_off_counted_against_its_node(
+        one_offs_of_the_node,
+        OneOffAcquisitionShape::of_texture_pool_descriptor(desc),
+        || gpu.acquire_texture(desc),
+    )
 }
 
 /// The usage set of a kernel's output texture.
@@ -6717,8 +6734,8 @@ mod tests {
                 return;
             }
         };
-        let layout = crate::core::rhi::TensorStorageBufferLayout::of_bytes(256)
-            .expect("a non-zero size");
+        let layout =
+            crate::core::rhi::TensorStorageBufferLayout::of_bytes(256).expect("a non-zero size");
 
         let node_tier = GpuContextLimitedAccess::counting_one_offs_against_the_node(
             gpu.clone(),
