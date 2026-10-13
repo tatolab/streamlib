@@ -547,3 +547,117 @@ pub(crate) fn at_owner_only_mode(
     )?;
     Ok(temporary_directory)
 }
+
+/// A live surface-share service wired into a GPU context as the engine's own
+/// store, so what the engine registers reaches a real service.
+#[cfg(target_os = "linux")]
+pub(crate) struct LiveSurfaceShareServiceForATest {
+    pub(crate) state: crate::linux::surface_share::SurfaceShareState,
+    service: crate::linux::surface_share::UnixSocketSurfaceService,
+    _socket_dir: tempfile::TempDir,
+}
+
+#[cfg(target_os = "linux")]
+impl LiveSurfaceShareServiceForATest {
+    /// A started service, its store installed as `gpu`'s engine store.
+    pub(crate) fn wired_into(gpu: &crate::core::context::GpuContext) -> Self {
+        use std::sync::Arc;
+
+        use crate::core::context::SurfaceStore;
+        use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+
+        let socket_dir =
+            a_temporary_directory_at_owner_only_mode().expect("temp dir for the test socket");
+        let socket_path = socket_dir.path().join("surface-share.sock");
+        let state = SurfaceShareState::new();
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !socket_path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let store = SurfaceStore::new_reading_check_out_leases(
+            socket_path.to_string_lossy().into_owned(),
+            "R-live-surface-share-service-for-a-test".to_string(),
+            Arc::clone(state.check_out_leases()),
+        );
+        store.connect().expect("the store connects");
+        gpu.install_the_engines_surface_store(store)
+            .expect("the engine's surface store installs once");
+        Self {
+            state,
+            service,
+            _socket_dir: socket_dir,
+        }
+    }
+
+    /// The service's lease table.
+    pub(crate) fn check_out_leases(&self) -> &crate::core::context::SurfaceCheckOutLeaseRegistry {
+        self.state.check_out_leases()
+    }
+
+    /// Whether the service holds a registration under `surface_id`.
+    pub(crate) fn is_registered(&self, surface_id: &str) -> bool {
+        self.state.get_surface_planes(surface_id).is_some()
+    }
+
+    /// Stop the service.
+    pub(crate) fn stop(mut self) {
+        self.service.stop();
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) struct LiveSurfaceShareServiceForATest {
+    pub(crate) state: crate::apple::surface_share::IOSurfaceShareState,
+    service: crate::apple::surface_share::MachSurfaceShareService,
+}
+
+#[cfg(target_os = "macos")]
+impl LiveSurfaceShareServiceForATest {
+    /// A started service, its store installed as `gpu`'s engine store.
+    pub(crate) fn wired_into(gpu: &crate::core::context::GpuContext) -> Self {
+        use std::sync::Arc;
+
+        use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
+        use crate::core::context::SurfaceStore;
+
+        let state = IOSurfaceShareState::new();
+        let mut service = MachSurfaceShareService::new(
+            state.clone(),
+            format!(
+                "com.tatolab.streamlib.escalate-tensor-test.{}.{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ),
+        );
+        service
+            .start()
+            .expect("the Mach surface-share service starts");
+        let store = SurfaceStore::new_sharing_the_mach_services_tables(
+            service.service_name().to_string(),
+            "R-live-surface-share-service-for-a-test".to_string(),
+            Arc::clone(state.check_out_leases()),
+            Arc::clone(state.cross_process_timeline_pairs()),
+        );
+        store.connect().expect("the store connects");
+        gpu.install_the_engines_surface_store(store)
+            .expect("the engine's surface store installs once");
+        Self { state, service }
+    }
+
+    /// The service's lease table.
+    pub(crate) fn check_out_leases(&self) -> &crate::core::context::SurfaceCheckOutLeaseRegistry {
+        self.state.check_out_leases()
+    }
+
+    /// Whether the service holds a registration under `surface_id`.
+    pub(crate) fn is_registered(&self, surface_id: &str) -> bool {
+        self.state.registration_of(surface_id).is_some()
+    }
+
+    /// Stop the service.
+    pub(crate) fn stop(mut self) {
+        self.service.stop();
+    }
+}

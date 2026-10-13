@@ -266,3 +266,85 @@ fn taking_a_slot_out_keeps_the_rest_of_the_ring_in_ring_order() {
         "taking out the slot due next hands out the one after it, wrapping round"
     );
 }
+
+#[test]
+fn only_unheld_slots_chosen_to_be_freed_are_taken_out_and_their_ids_retired_everywhere() {
+    let (mut ring, holds) = ring_of_fresh_slots(&["slot-a", "slot-b", "slot-c", "slot-d"]);
+    let leases = SurfaceCheckOutLeaseRegistry::new();
+    let minted = LeaseAwarePoolMintedFrameGenerations::default();
+    let published: Vec<_> = (0..4)
+        .map(|_| next_published_id(&mut ring, Some(&leases), &minted).unwrap())
+        .collect();
+    let consumer = leases.mint_holder_id();
+    leases
+        .record_check_out_lease(&published[1], consumer)
+        .expect("the consumer checks slot-b's frame out");
+    holds[2].store(true, Ordering::SeqCst);
+
+    let mut cross_process_holders = PoolSlotReuse::over(Some(&leases));
+    let mut slots_shown = Vec::new();
+    let taken_out = ring.take_out_and_retire_every_unheld_slot_chosen(
+        &mut cross_process_holders,
+        &minted,
+        |slot, is_unheld| {
+            slots_shown.push((slot.pool_slot_key().to_string(), is_unheld));
+            slot.pool_slot_key() != "slot-d"
+        },
+    );
+    drop(cross_process_holders);
+
+    assert_eq!(
+        slots_shown,
+        [
+            ("slot-a".to_string(), true),
+            ("slot-b".to_string(), false),
+            ("slot-c".to_string(), false),
+            ("slot-d".to_string(), true),
+        ],
+        "every slot is shown once, with whether it is unheld"
+    );
+    let taken_out_keys: Vec<_> = taken_out
+        .iter()
+        .map(|slot| slot.pool_slot_key().to_string())
+        .collect();
+    assert_eq!(
+        taken_out_keys,
+        ["slot-a"],
+        "a held or leased slot was taken out, or an unheld one not chosen"
+    );
+    assert_eq!(ring.slot_count(), 3);
+    assert!(matches!(
+        minted.refusal_of_a_retired_frame_id_named(&published[0]),
+        Some(Err(Error::SurfaceFrameRecycled {
+            published_generation: 1,
+            current_generation: 2,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        leases.record_check_out_lease(&published[0], leases.mint_holder_id()),
+        Err(Error::SurfaceFrameRecycled { .. })
+    ));
+    for still_current in &published[1..] {
+        assert!(matches!(
+            minted.refusal_of_a_retired_frame_id_named(still_current),
+            Some(Ok(()))
+        ));
+    }
+}
+
+#[test]
+fn observing_the_ring_shows_every_slot_and_takes_none_out() {
+    let (mut ring, holds) = ring_of_fresh_slots(&["slot-a", "slot-b"]);
+    holds[0].store(true, Ordering::SeqCst);
+    let mut slots_shown = Vec::new();
+    ring.observe_whether_each_slot_is_unheld(
+        &PoolSlotReuse::RefcountIsTheWholeAnswer,
+        |slot, is_unheld| slots_shown.push((slot.pool_slot_key().to_string(), is_unheld)),
+    );
+    assert_eq!(
+        slots_shown,
+        [("slot-a".to_string(), false), ("slot-b".to_string(), true)]
+    );
+    assert_eq!(ring.slot_count(), 2);
+}

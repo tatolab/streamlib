@@ -52,6 +52,11 @@ impl<Resource> LeaseAwarePoolSlot<Resource> {
         &self.resource
     }
 
+    /// The resource, for bookkeeping the ring does not read.
+    pub(crate) fn resource_mut(&mut self) -> &mut Resource {
+        &mut self.resource
+    }
+
     /// The resource, for a slot being torn down.
     pub(crate) fn into_resource(self) -> Resource {
         self.resource
@@ -81,6 +86,17 @@ impl<Resource> LeaseAwarePoolSlot<Resource> {
     fn mint_next_frame_generation(&mut self) -> u64 {
         self.published_frame_generation += 1;
         self.published_frame_generation
+    }
+}
+
+impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlot<Resource> {
+    /// Whether nothing holds the slot: no holder in this address space, no
+    /// platform use, and no cross-process holder `cross_process_holders`
+    /// cannot rule out.
+    pub(crate) fn is_unheld(&self, cross_process_holders: &PoolSlotReuse<'_>) -> bool {
+        cross_process_holders.permits(&self.pool_slot_key)
+            && !self.resource.is_in_use_per_the_platform()
+            && !self.resource.is_held_in_this_process()
     }
 }
 
@@ -221,6 +237,23 @@ impl<'leases> PoolSlotReuse<'leases> {
             hand_off.publish_frame_generation(pool_slot_key, frame_generation);
         }
     }
+
+    /// Retire every frame `slot` published, for a slot being freed: a
+    /// generation none of them carries goes to the lease table on this guard
+    /// and to `minted_frame_generations`, so an old id is refused as recycled
+    /// rather than resolving to nothing.
+    pub(crate) fn retire_every_frame_a_slot_being_freed_published<Resource>(
+        &mut self,
+        slot: &LeaseAwarePoolSlot<Resource>,
+        minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
+    ) {
+        let generation_past_every_published_frame = slot.published_frame_generation + 1;
+        self.publish_frame_generation(&slot.pool_slot_key, generation_past_every_published_frame);
+        minted_frame_generations.retire_every_published_frame_of_slot(
+            &slot.pool_slot_key,
+            generation_past_every_published_frame,
+        );
+    }
 }
 
 /// The slots one producer (or one pool key) publishes frames from, handed out
@@ -247,6 +280,10 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
 
     pub(crate) fn slot(&self, slot_index: usize) -> &LeaseAwarePoolSlot<Resource> {
         &self.slots[slot_index]
+    }
+
+    pub(crate) fn slot_mut(&mut self, slot_index: usize) -> &mut LeaseAwarePoolSlot<Resource> {
+        &mut self.slots[slot_index]
     }
 
     /// Every slot, for teardown.
@@ -315,10 +352,7 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
             self.next_slot_index = (self.next_slot_index + 1) % slot_count;
 
             let slot = &mut self.slots[slot_index];
-            if !reuse.permits(&slot.pool_slot_key)
-                || slot.resource.is_in_use_per_the_platform()
-                || slot.resource.is_held_in_this_process()
-            {
+            if !slot.is_unheld(&reuse) {
                 continue;
             }
             let frame_generation = slot.mint_next_frame_generation();
@@ -327,6 +361,52 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
             return Some(slot_index);
         }
         None
+    }
+
+    /// Show `observe` every slot with whether it is unheld, taking none out.
+    pub(crate) fn observe_whether_each_slot_is_unheld(
+        &mut self,
+        cross_process_holders: &PoolSlotReuse<'_>,
+        mut observe: impl FnMut(&mut LeaseAwarePoolSlot<Resource>, bool),
+    ) {
+        for slot in &mut self.slots {
+            let is_unheld = slot.is_unheld(cross_process_holders);
+            observe(slot, is_unheld);
+        }
+    }
+
+    /// Show `choose` every slot with whether it is unheld, and take out each
+    /// unheld slot it chooses, every frame it published retired on the same
+    /// hold of the lease table its test ran under: a checkout lands strictly
+    /// before the test (and keeps the slot) or strictly after the retire (and
+    /// is refused as recycled).
+    pub(crate) fn take_out_and_retire_every_unheld_slot_chosen(
+        &mut self,
+        cross_process_holders: &mut PoolSlotReuse<'_>,
+        minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
+        mut choose: impl FnMut(&mut LeaseAwarePoolSlot<Resource>, bool) -> bool,
+    ) -> Vec<LeaseAwarePoolSlot<Resource>> {
+        let mut chosen_slot_indices = Vec::new();
+        for (slot_index, slot) in self.slots.iter_mut().enumerate() {
+            let is_unheld = slot.is_unheld(cross_process_holders);
+            if choose(slot, is_unheld) && is_unheld {
+                chosen_slot_indices.push(slot_index);
+            }
+        }
+        let mut slots_taken_out: Vec<_> = chosen_slot_indices
+            .into_iter()
+            .rev()
+            .map(|slot_index| {
+                let slot = self.take_out_the_slot_at(slot_index);
+                cross_process_holders.retire_every_frame_a_slot_being_freed_published(
+                    &slot,
+                    minted_frame_generations,
+                );
+                slot
+            })
+            .collect();
+        slots_taken_out.reverse();
+        slots_taken_out
     }
 
     /// Publish the first frame of a slot [`Self::push_fresh_slot`] just added.
