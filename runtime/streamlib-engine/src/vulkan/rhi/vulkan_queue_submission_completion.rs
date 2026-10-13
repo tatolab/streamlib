@@ -136,6 +136,9 @@ impl HostVulkanQueueSubmissionCompletionTimelines {
             if last_submit.signal_semaphore_info_count == 0 {
                 &[]
             } else {
+                // SAFETY: valid `vkQueueSubmit2` usage, which the caller
+                // guarantees, makes this pointer address
+                // `signal_semaphore_info_count` live `VkSemaphoreSubmitInfo`s.
                 unsafe {
                     std::slice::from_raw_parts(
                         last_submit.signal_semaphore_infos,
@@ -143,31 +146,48 @@ impl HostVulkanQueueSubmissionCompletionTimelines {
                     )
                 }
             };
-        let mut signal_infos_with_completion_timeline =
-            Vec::with_capacity(callers_signal_infos.len() + 1);
-        signal_infos_with_completion_timeline.extend_from_slice(callers_signal_infos);
-        signal_infos_with_completion_timeline.push(
-            vk::SemaphoreSubmitInfo::builder()
-                .semaphore(completion_timeline.timeline_semaphore.semaphore())
-                .value(next_submitted_value)
-                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                .build(),
-        );
+        let completion_timeline_signal = vk::SemaphoreSubmitInfo::builder()
+            .semaphore(completion_timeline.timeline_semaphore.semaphore())
+            .value(next_submitted_value)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .build();
+        let signal_infos_with_completion_timeline_on_the_heap;
+        let signal_infos_with_completion_timeline: &[vk::SemaphoreSubmitInfo] =
+            if callers_signal_infos.is_empty() {
+                std::slice::from_ref(&completion_timeline_signal)
+            } else {
+                signal_infos_with_completion_timeline_on_the_heap = callers_signal_infos
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(completion_timeline_signal))
+                    .collect::<Vec<_>>();
+                &signal_infos_with_completion_timeline_on_the_heap
+            };
 
-        let mut submits_with_completion_signal = submits.to_vec();
-        if let Some(last_submit_with_completion_signal) = submits_with_completion_signal.last_mut()
-        {
-            last_submit_with_completion_signal.signal_semaphore_info_count =
-                signal_infos_with_completion_timeline.len() as u32;
-            last_submit_with_completion_signal.signal_semaphore_infos =
-                signal_infos_with_completion_timeline.as_ptr();
-        }
-
-        unsafe {
-            self.device
-                .queue_submit2(queue, &submits_with_completion_signal, fence)
-        }
-        .map_err(|e| Error::GpuError(format!("queue_submit2 failed: {e}")))?;
+        let mut last_submit_with_completion_signal = *last_submit;
+        last_submit_with_completion_signal.signal_semaphore_info_count =
+            signal_infos_with_completion_timeline.len() as u32;
+        last_submit_with_completion_signal.signal_semaphore_infos =
+            signal_infos_with_completion_timeline.as_ptr();
+        let submit_outcome = if submits.len() == 1 {
+            unsafe {
+                self.device.queue_submit2(
+                    queue,
+                    std::slice::from_ref(&last_submit_with_completion_signal),
+                    fence,
+                )
+            }
+        } else {
+            let mut submits_with_completion_signal = submits.to_vec();
+            if let Some(last) = submits_with_completion_signal.last_mut() {
+                *last = last_submit_with_completion_signal;
+            }
+            unsafe {
+                self.device
+                    .queue_submit2(queue, &submits_with_completion_signal, fence)
+            }
+        };
+        submit_outcome.map_err(|e| Error::GpuError(format!("queue_submit2 failed: {e}")))?;
         completion_timeline
             .latest_submitted_value
             .store(next_submitted_value, Ordering::Release);

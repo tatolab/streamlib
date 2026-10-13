@@ -3265,40 +3265,40 @@ impl HostVulkanDevice {
 
     /// Submit command buffers to a queue with per-queue mutex
     /// synchronization, signalling that queue's completion timeline after
-    /// the last submit.
+    /// the last submit. A queue this device did not hand out is refused:
+    /// no completion timeline would record its work, so the shared pools
+    /// could free memory it still names.
     pub unsafe fn submit_to_queue(
         &self,
         queue: vk::Queue,
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> Result<()> {
-        let submission_queue = self.submission_queue_for(queue);
+        let Some(submission_queue) = self.submission_queue_for(queue) else {
+            return Err(Error::GpuError(format!(
+                "queue submission to {queue:?}, a queue this device did not hand out"
+            )));
+        };
+        let Some(completion_timelines) = self.queue_submission_completion_timelines.as_ref()
+        else {
+            return Err(Error::GpuError(
+                "queue submission to a device whose queue completion timelines are already \
+                 destroyed"
+                    .into(),
+            ));
+        };
         let _lock = self
             .mutex_for_queue(queue)
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        match (
-            submission_queue,
-            self.queue_submission_completion_timelines.as_ref(),
-        ) {
-            (Some(submission_queue), Some(completion_timelines)) => unsafe {
-                completion_timelines.submit_signaling_completion_timeline(
-                    submission_queue,
-                    queue,
-                    submits,
-                    fence,
-                )
-            }?,
-            _ => {
-                tracing::warn!(
-                    ?queue,
-                    "queue submission to a queue this device did not hand out: \
-                     no completion timeline records it"
-                );
-                unsafe { self.device.queue_submit2(queue, submits, fence) }
-                    .map_err(|e| Error::GpuError(format!("queue_submit2 failed: {e}")))?;
-            }
-        }
+        unsafe {
+            completion_timelines.submit_signaling_completion_timeline(
+                submission_queue,
+                queue,
+                submits,
+                fence,
+            )
+        }?;
         self.queue_submission_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
