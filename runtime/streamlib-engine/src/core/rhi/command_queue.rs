@@ -80,6 +80,7 @@ impl RhiCommandQueue {
         Ok(CommandBuffer::from_inner(
             crate::core::rhi::command_buffer::CommandBufferInner {
                 inner: platform_command_buffer,
+                textures_named_by_recorded_commands: Vec::new(),
             },
         ))
     }

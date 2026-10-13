@@ -25,6 +25,10 @@ pub(crate) struct CommandBufferInner {
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: crate::windows::rhi::DX12CommandBuffer,
+
+    /// Every texture a recorded command names, held until the submit: a
+    /// pooled texture with no other holder may be freed.
+    pub(crate) textures_named_by_recorded_commands: Vec<Texture>,
 }
 
 /// Platform-agnostic command buffer wrapper.
@@ -83,6 +87,9 @@ impl CommandBuffer {
                 .inner
                 .copy_texture(src.vulkan_inner(), dst.vulkan_inner());
         }
+        inner
+            .textures_named_by_recorded_commands
+            .extend([src.clone(), dst.clone()]);
     }
 
     /// Commit the command buffer for execution.
@@ -95,9 +102,13 @@ impl CommandBuffer {
         tracing::trace!(rhi_op = "queue_submit", "CommandBuffer::commit");
         if !self.handle.is_null() {
             // SAFETY: matched with `Box::into_raw` in `from_inner`.
-            let inner = unsafe { Box::from_raw(self.handle as *mut CommandBufferInner) };
+            let CommandBufferInner {
+                inner,
+                textures_named_by_recorded_commands,
+            } = *unsafe { Box::from_raw(self.handle as *mut CommandBufferInner) };
             self.handle = std::ptr::null();
-            inner.inner.commit();
+            inner.commit();
+            drop(textures_named_by_recorded_commands);
         }
         // `self` drops here; null handle ⇒ Drop no-op.
     }
@@ -111,9 +122,13 @@ impl CommandBuffer {
         );
         if !self.handle.is_null() {
             // SAFETY: see `commit` above.
-            let inner = unsafe { Box::from_raw(self.handle as *mut CommandBufferInner) };
+            let CommandBufferInner {
+                inner,
+                textures_named_by_recorded_commands,
+            } = *unsafe { Box::from_raw(self.handle as *mut CommandBufferInner) };
             self.handle = std::ptr::null();
-            inner.inner.commit_and_wait();
+            inner.commit_and_wait();
+            drop(textures_named_by_recorded_commands);
         }
     }
 }
