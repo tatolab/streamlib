@@ -17,6 +17,9 @@ mod host_marker;
 mod vulkan_command_buffer;
 mod vulkan_command_queue;
 mod vulkan_device;
+mod vulkan_frame_allocation_device_memory_budget;
+#[cfg(target_os = "macos")]
+mod vulkan_metal_working_set_budget;
 mod vulkan_sync;
 mod vulkan_texture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

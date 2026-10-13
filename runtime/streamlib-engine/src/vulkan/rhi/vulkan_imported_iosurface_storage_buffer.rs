@@ -12,6 +12,10 @@ use objc2_io_surface::IOSurfaceRef;
 use crate::core::rhi::{PixelFormat, SourceLayoutInfo, StorageBuffer};
 use crate::core::{Error, Result};
 
+use super::vulkan_frame_allocation_device_memory_budget::DeviceMemoryBudgetAdmission;
+use super::vulkan_metal_working_set_budget::{
+    RuntimeMintedIOSurfaceKind, frame_device_memory_request_for_a_private_iosurface,
+};
 use super::{HostVulkanBuffer, HostVulkanDevice};
 use crate::apple::iosurface::{
     RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
@@ -209,14 +213,36 @@ impl HostVulkanBuffer {
         bytes_per_pixel: u32,
         pixel_format: PixelFormat,
     ) -> Result<Self> {
-        let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
-            width,
-            height,
-            bytes_per_pixel,
-            pixel_format,
-        )?;
-        let pixel_byte_len = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
-        Self::from_iosurface_pages(vulkan_device, &iosurface, Some(pixel_byte_len))
+        const OPERATION: &str = "HostVulkanBuffer::new_iosurface_backed_pixel_buffer";
+        vulkan_device.allocate_as_the_device_memory_budget_admits(
+            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
+            || {
+                Ok(frame_device_memory_request_for_a_private_iosurface(
+                    width,
+                    height,
+                    bytes_per_pixel,
+                    OPERATION,
+                ))
+            },
+            || {
+                let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
+                    width,
+                    height,
+                    bytes_per_pixel,
+                    pixel_format,
+                )?;
+                let pixel_byte_len =
+                    u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
+                let buffer =
+                    Self::from_iosurface_pages(vulkan_device, &iosurface, Some(pixel_byte_len))?;
+                Ok(buffer.counted_in_the_metal_working_set(
+                    vulkan_device.count_a_runtime_minted_iosurface_in_the_metal_working_set(
+                        RuntimeMintedIOSurfaceKind::BackingAHostPointerImportedBuffer,
+                        iosurface.alloc_size() as u64,
+                    ),
+                ))
+            },
+        )
     }
 
     /// A storage buffer whose memory is a fresh private byte-shaped IOSurface,
@@ -227,7 +253,8 @@ impl HostVulkanBuffer {
         vulkan_device: &Arc<HostVulkanDevice>,
         byte_len: u64,
     ) -> Result<Self> {
-        let row_count = byte_len
+        const OPERATION: &str = "HostVulkanBuffer::new_iosurface_backed_storage_buffer";
+        let row_count: u32 = byte_len
             .div_ceil(u64::from(TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE))
             .try_into()
             .map_err(|_| {
@@ -236,13 +263,32 @@ impl HostVulkanBuffer {
                      an IOSurface's u32 height carries"
                 ))
             })?;
-        let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
-            TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE,
-            row_count,
-            1,
-            PixelFormat::Unknown,
-        )?;
-        Self::from_iosurface_pages(vulkan_device, &iosurface, Some(byte_len))
+        vulkan_device.allocate_as_the_device_memory_budget_admits(
+            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
+            || {
+                Ok(frame_device_memory_request_for_a_private_iosurface(
+                    TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE,
+                    row_count,
+                    1,
+                    OPERATION,
+                ))
+            },
+            || {
+                let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
+                    TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE,
+                    row_count,
+                    1,
+                    PixelFormat::Unknown,
+                )?;
+                let buffer = Self::from_iosurface_pages(vulkan_device, &iosurface, Some(byte_len))?;
+                Ok(buffer.counted_in_the_metal_working_set(
+                    vulkan_device.count_a_runtime_minted_iosurface_in_the_metal_working_set(
+                        RuntimeMintedIOSurfaceKind::BackingAHostPointerImportedBuffer,
+                        iosurface.alloc_size() as u64,
+                    ),
+                ))
+            },
+        )
     }
 
     /// A fresh send right naming this buffer's IOSurface, for the

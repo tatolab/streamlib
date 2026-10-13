@@ -11,11 +11,16 @@ use vulkanalia_vma as vma;
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
-use super::vulkan_device::memory_type_index_is_host_cached;
+use super::vulkan_device::{FrameMemoryTypeSelection, memory_type_index_is_host_cached};
 // The pattern itself is Linux-only, like every OPAQUE_FD export path; the
 // cached/uncached question it answers is not.
 #[cfg(target_os = "linux")]
-use super::vulkan_device::MappedOpaqueFdBufferHostAccessPattern;
+use super::vulkan_device::{
+    MappedOpaqueFdBufferHostAccessPattern, VmaExportPoolPinnedToOneMemoryType,
+};
+use super::vulkan_frame_allocation_device_memory_budget::DeviceMemoryBudgetAdmission;
+#[cfg(target_os = "macos")]
+use super::vulkan_metal_working_set_budget::IOSurfaceBytesCountedInTheMetalWorkingSet;
 
 /// Process-global HostVulkanDevice reference for external-handle import —
 /// DMA-BUF on Linux, IOSurface on macOS.
@@ -148,6 +153,11 @@ pub struct HostVulkanBuffer {
     /// that memory is freed. `None` on every other allocation path.
     #[cfg(target_os = "macos")]
     backing_iosurface: Option<crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads>,
+    /// The minted IOSurface's bytes in the device's Metal working set, while
+    /// this buffer holds the surface; `None` for a surface it imported.
+    #[cfg(target_os = "macos")]
+    runtime_minted_iosurface_bytes_counted_in_the_metal_working_set:
+        Option<IOSurfaceBytesCountedInTheMetalWorkingSet>,
     /// Plane 0 size in bytes.
     size: vk::DeviceSize,
 }
@@ -214,6 +224,19 @@ impl HostVulkanBuffer {
     /// OOM after swapchain creation.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
     pub fn new(vulkan_device: &Arc<HostVulkanDevice>, size: u64) -> Result<Self> {
+        Self::new_with_device_memory_budget_admission(
+            vulkan_device,
+            size,
+            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
+        )
+    }
+
+    /// [`Self::new`], weighed against the device-memory budget as `admission` says.
+    pub(crate) fn new_with_device_memory_budget_admission(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        size: u64,
+        admission: DeviceMemoryBudgetAdmission,
+    ) -> Result<Self> {
         Self::new_host_visible_with_usage(
             vulkan_device,
             size,
@@ -221,6 +244,7 @@ impl HostVulkanBuffer {
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             HostVisibleAllocationIntent::SequentialWriteExportable,
+            admission,
             "HostVulkanBuffer::new",
         )
     }
@@ -228,12 +252,14 @@ impl HostVulkanBuffer {
     /// Internal: allocate a HOST_VISIBLE + HOST_COHERENT mapped buffer with
     /// the given usage flags. Shared spine for every formatless host-visible
     /// buffer constructor on this type; `intent` picks the memory the host
-    /// touches it with and whether it is DMA-BUF exportable.
+    /// touches it with and whether it is DMA-BUF exportable, `admission`
+    /// whether the device-memory budget may refuse it.
     fn new_host_visible_with_usage(
         vulkan_device: &Arc<HostVulkanDevice>,
         byte_size: u64,
         usage: vk::BufferUsageFlags,
         intent: HostVisibleAllocationIntent,
+        admission: DeviceMemoryBudgetAdmission,
         constructor_label: &'static str,
     ) -> Result<Self> {
         if byte_size == 0 {
@@ -270,20 +296,50 @@ impl HostVulkanBuffer {
         };
 
         let allocator = vulkan_device.allocator();
-        let (buffer, allocation) = {
-            #[cfg(target_os = "linux")]
-            let result = match vulkan_device.dma_buf_buffer_pool() {
-                Some(pool) if intent.declares_dma_buf_export() => unsafe {
-                    pool.create_buffer(buffer_info, &alloc_opts)
-                },
-                _ => unsafe { allocator.create_buffer(buffer_info, &alloc_opts) },
-            };
-            #[cfg(not(target_os = "linux"))]
-            let result = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) };
-            result.map_err(|e| {
-                Error::GpuError(format!("{constructor_label}: vmaCreateBuffer failed: {e}"))
-            })?
-        };
+        #[cfg(target_os = "linux")]
+        let dma_buf_buffer_pool = vulkan_device
+            .dma_buf_buffer_pool_pinned_to_one_memory_type()
+            .filter(|_| intent.declares_dma_buf_export());
+        let (buffer, allocation) = vulkan_device.allocate_as_the_device_memory_budget_admits(
+            admission,
+            || {
+                #[cfg(target_os = "linux")]
+                let memory_type_selection = match dma_buf_buffer_pool {
+                    Some(export_pool) => {
+                        FrameMemoryTypeSelection::PinnedByAnExportPool { export_pool }
+                    }
+                    None => FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForABuffer {
+                        buffer_create_info: &buffer_info,
+                        allocation_options: &alloc_opts,
+                    },
+                };
+                #[cfg(not(target_os = "linux"))]
+                let memory_type_selection =
+                    FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForABuffer {
+                        buffer_create_info: &buffer_info,
+                        allocation_options: &alloc_opts,
+                    };
+                vulkan_device.frame_device_memory_request(
+                    vulkan_device.memory_requirements_of_a_buffer_create_info(&buffer_info),
+                    memory_type_selection,
+                    constructor_label,
+                )
+            },
+            || {
+                #[cfg(target_os = "linux")]
+                let result = match dma_buf_buffer_pool {
+                    Some(export_pool) => unsafe {
+                        export_pool.pool.create_buffer(buffer_info, &alloc_opts)
+                    },
+                    None => unsafe { allocator.create_buffer(buffer_info, &alloc_opts) },
+                };
+                #[cfg(not(target_os = "linux"))]
+                let result = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) };
+                result.map_err(|e| {
+                    Error::GpuError(format!("{constructor_label}: vmaCreateBuffer failed: {e}"))
+                })
+            },
+        )?;
 
         let alloc_info = allocator.get_allocation_info(allocation);
         let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
@@ -313,6 +369,8 @@ impl HostVulkanBuffer {
             extra_imported_planes: Vec::new(),
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
+            #[cfg(target_os = "macos")]
+            runtime_minted_iosurface_bytes_counted_in_the_metal_working_set: None,
             size,
         })
     }
@@ -341,6 +399,7 @@ impl HostVulkanBuffer {
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             HostVisibleAllocationIntent::SequentialWriteExportable,
+            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
             "HostVulkanBuffer::new_storage_buffer_host_visible",
         )
     }
@@ -361,6 +420,7 @@ impl HostVulkanBuffer {
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::UNIFORM_BUFFER,
             HostVisibleAllocationIntent::SequentialWriteExportable,
+            DeviceMemoryBudgetAdmission::EngineAllocationTheDeviceMemoryBudgetNeverRefuses,
             "HostVulkanBuffer::new_uniform_buffer_host_visible",
         )
     }
@@ -379,6 +439,7 @@ impl HostVulkanBuffer {
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::VERTEX_BUFFER,
             HostVisibleAllocationIntent::SequentialWriteExportable,
+            DeviceMemoryBudgetAdmission::EngineAllocationTheDeviceMemoryBudgetNeverRefuses,
             "HostVulkanBuffer::new_vertex_buffer_host_visible",
         )
     }
@@ -397,6 +458,7 @@ impl HostVulkanBuffer {
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::INDEX_BUFFER,
             HostVisibleAllocationIntent::SequentialWriteExportable,
+            DeviceMemoryBudgetAdmission::EngineAllocationTheDeviceMemoryBudgetNeverRefuses,
             "HostVulkanBuffer::new_index_buffer_host_visible",
         )
     }
@@ -544,17 +606,19 @@ impl HostVulkanBuffer {
     /// surface only at `vkGetMemoryFdKHR` time.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
     pub fn new_opaque_fd_export(vulkan_device: &Arc<HostVulkanDevice>, size: u64) -> Result<Self> {
-        let pool = vulkan_device.opaque_fd_buffer_pool().ok_or_else(|| {
-            Error::GpuError(
-                "OPAQUE_FD buffer pool unavailable — external memory unsupported \
-                 or pool construction failed; CUDA / OpenCL interop requires this pool"
-                    .into(),
-            )
-        })?;
+        let opaque_fd_buffer_pool = vulkan_device
+            .opaque_fd_buffer_pool_pinned_to_one_memory_type()
+            .ok_or_else(|| {
+                Error::GpuError(
+                    "OPAQUE_FD buffer pool unavailable — external memory unsupported \
+                     or pool construction failed; CUDA / OpenCL interop requires this pool"
+                        .into(),
+                )
+            })?;
         Self::new_opaque_fd_export_from_pool(
             vulkan_device,
             size,
-            pool,
+            opaque_fd_buffer_pool,
             MappedOpaqueFdBufferHostAccessPattern::SequentialWrite,
             "HostVulkanBuffer::new_opaque_fd_export",
         )
@@ -576,11 +640,11 @@ impl HostVulkanBuffer {
         vulkan_device: &Arc<HostVulkanDevice>,
         size: u64,
     ) -> Result<Self> {
-        match vulkan_device.opaque_fd_buffer_pool_host_cached() {
-            Some(pool) => Self::new_opaque_fd_export_from_pool(
+        match vulkan_device.opaque_fd_buffer_pool_host_cached_pinned_to_one_memory_type() {
+            Some(opaque_fd_buffer_pool_host_cached) => Self::new_opaque_fd_export_from_pool(
                 vulkan_device,
                 size,
-                pool,
+                opaque_fd_buffer_pool_host_cached,
                 MappedOpaqueFdBufferHostAccessPattern::Random,
                 "HostVulkanBuffer::new_opaque_fd_export_host_cached",
             ),
@@ -591,14 +655,14 @@ impl HostVulkanBuffer {
     /// Allocate a mapped OPAQUE_FD-exportable HOST_VISIBLE buffer from
     /// `pool` under `host_access_pattern`.
     ///
-    /// `pool` must have been probed with the same `host_access_pattern`
+    /// `export_pool` must have been probed with the same `host_access_pattern`
     /// and the same usage flags: a VMA pool is pinned to one memory type
     /// index, and a mismatch between the probe's `memoryTypeBits` and
     /// this buffer's trips VUID-vkBindBufferMemory-memory-01035.
     fn new_opaque_fd_export_from_pool(
         vulkan_device: &Arc<HostVulkanDevice>,
         size: u64,
-        pool: &vma::Pool,
+        export_pool: &VmaExportPoolPinnedToOneMemoryType,
         host_access_pattern: MappedOpaqueFdBufferHostAccessPattern,
         constructor_label: &'static str,
     ) -> Result<Self> {
@@ -631,12 +695,23 @@ impl HostVulkanBuffer {
             ..Default::default()
         };
 
-        let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "{constructor_label}: failed to create the OPAQUE_FD exportable buffer: {e}"
-                ))
-            })?;
+        let (buffer, allocation) = vulkan_device.allocate_as_the_device_memory_budget_admits(
+            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
+            || {
+                vulkan_device.frame_device_memory_request(
+                    vulkan_device.memory_requirements_of_a_buffer_create_info(&buffer_info),
+                    FrameMemoryTypeSelection::PinnedByAnExportPool { export_pool },
+                    constructor_label,
+                )
+            },
+            || {
+                unsafe { export_pool.pool.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
+                    Error::GpuError(format!(
+                        "{constructor_label}: failed to create the OPAQUE_FD exportable buffer: {e}"
+                    ))
+                })
+            },
+        )?;
 
         let allocator = vulkan_device.allocator();
         let alloc_info = allocator.get_allocation_info(allocation);
@@ -710,8 +785,8 @@ impl HostVulkanBuffer {
             ..Default::default()
         };
 
-        let pool = vulkan_device
-            .opaque_fd_buffer_pool_device_local()
+        let opaque_fd_buffer_pool_device_local = vulkan_device
+            .opaque_fd_buffer_pool_device_local_pinned_to_one_memory_type()
             .ok_or_else(|| {
                 Error::GpuError(
                     "DEVICE_LOCAL OPAQUE_FD buffer pool unavailable — external memory \
@@ -720,12 +795,30 @@ impl HostVulkanBuffer {
                         .into(),
                 )
             })?;
-        let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "Failed to create DEVICE_LOCAL OPAQUE_FD exportable buffer: {e}"
-                ))
-            })?;
+        let (buffer, allocation) = vulkan_device.allocate_as_the_device_memory_budget_admits(
+            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
+            || {
+                vulkan_device.frame_device_memory_request(
+                    vulkan_device.memory_requirements_of_a_buffer_create_info(&buffer_info),
+                    FrameMemoryTypeSelection::PinnedByAnExportPool {
+                        export_pool: opaque_fd_buffer_pool_device_local,
+                    },
+                    "HostVulkanBuffer::new_opaque_fd_export_device_local",
+                )
+            },
+            || {
+                unsafe {
+                    opaque_fd_buffer_pool_device_local
+                        .pool
+                        .create_buffer(buffer_info, &alloc_opts)
+                }
+                .map_err(|e| {
+                    Error::GpuError(format!(
+                        "Failed to create DEVICE_LOCAL OPAQUE_FD exportable buffer: {e}"
+                    ))
+                })
+            },
+        )?;
 
         Ok(Self {
             vulkan_device: Arc::clone(vulkan_device),
@@ -1227,6 +1320,8 @@ impl HostVulkanBuffer {
             extra_imported_planes: Vec::new(),
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
+            #[cfg(target_os = "macos")]
+            runtime_minted_iosurface_bytes_counted_in_the_metal_working_set: None,
             size: buffer_byte_len,
         })
     }
@@ -1241,6 +1336,17 @@ impl HostVulkanBuffer {
         iosurface: crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads,
     ) -> Self {
         self.backing_iosurface = Some(iosurface);
+        self
+    }
+
+    /// Record that this buffer's IOSurface is one the runtime minted, counted
+    /// in the Metal working set until the buffer drops.
+    pub(super) fn counted_in_the_metal_working_set(
+        mut self,
+        iosurface_bytes_counted: IOSurfaceBytesCountedInTheMetalWorkingSet,
+    ) -> Self {
+        self.runtime_minted_iosurface_bytes_counted_in_the_metal_working_set =
+            Some(iosurface_bytes_counted);
         self
     }
 
@@ -1270,6 +1376,7 @@ impl HostVulkanBuffer {
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             HostVisibleAllocationIntent::RandomReadPrivate,
+            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
             "HostVulkanBuffer::new_storage_buffer_host_cached_for_cpu_reads",
         )
     }

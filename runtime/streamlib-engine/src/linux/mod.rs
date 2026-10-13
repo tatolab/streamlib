@@ -10,6 +10,7 @@ pub mod pipewire_runtime_library;
 pub mod pipewire_video_source;
 pub mod rtkit;
 pub mod surface_share;
+pub mod system_memory_available_from_proc_meminfo;
 pub mod thread_priority;
 pub mod v4l2_color;
 pub mod v4l2_video_device_backend;
