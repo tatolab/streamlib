@@ -5,6 +5,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+#[cfg(any(target_os = "linux", test))]
 use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -14,7 +15,7 @@ use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
-use super::vulkan_device::FrameMemoryTypeSelection;
+use super::vulkan_device::VmaFrameAllocationSource;
 use super::vulkan_frame_allocation_device_memory_budget::DeviceMemoryBudgetAdmission;
 #[cfg(target_os = "macos")]
 use super::vulkan_metal_working_set_budget::{
@@ -321,54 +322,20 @@ impl HostVulkanTexture {
         // Prefer the DMA-BUF image pool; fall back to default allocator (no export)
         // if the pool isn't available (e.g., external memory unsupported).
         #[cfg(target_os = "linux")]
-        let dma_buf_image_pool = vulkan_device.dma_buf_image_pool_pinned_to_one_memory_type();
-        let (image, allocation) = vulkan_device.allocate_as_the_device_memory_budget_admits(
-            admission,
-            || {
-                #[cfg(target_os = "linux")]
-                let memory_type_selection = match dma_buf_image_pool {
-                    Some(export_pool) => {
-                        FrameMemoryTypeSelection::PinnedByAnExportPool { export_pool }
-                    }
-                    None => FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForAnImage {
-                        image_create_info: &image_info,
-                        allocation_options: &alloc_opts,
-                    },
-                };
-                #[cfg(not(target_os = "linux"))]
-                let memory_type_selection =
-                    FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForAnImage {
-                        image_create_info: &image_info,
-                        allocation_options: &alloc_opts,
-                    };
-                vulkan_device.frame_device_memory_request(
-                    vulkan_device.memory_requirements_of_an_image_create_info(&image_info)?,
-                    memory_type_selection,
-                    "HostVulkanTexture::new",
-                )
-            },
-            || {
-                #[cfg(target_os = "linux")]
-                let result = match dma_buf_image_pool {
-                    Some(export_pool) => unsafe {
-                        export_pool.pool.create_image(image_info, &alloc_opts)
-                    },
-                    None => unsafe {
-                        vulkan_device
-                            .allocator()
-                            .create_image(image_info, &alloc_opts)
-                    },
-                };
-                #[cfg(not(target_os = "linux"))]
-                let result = unsafe {
-                    vulkan_device
-                        .allocator()
-                        .create_image(image_info, &alloc_opts)
-                };
-                result
-                    .map_err(|e| Error::GpuError(format!("Failed to create exportable image: {e}")))
-            },
-        )?;
+        let allocation_source = VmaFrameAllocationSource::export_pool_or_the_default_allocator(
+            vulkan_device.dma_buf_image_pool_pinned_to_one_memory_type(),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let allocation_source = VmaFrameAllocationSource::DefaultAllocator;
+        let (image, allocation) = vulkan_device
+            .create_frame_image_within_the_device_memory_budget(
+                admission,
+                allocation_source,
+                &image_info,
+                &alloc_opts,
+                "HostVulkanTexture::new",
+                |e| Error::GpuError(format!("Failed to create exportable image: {e}")),
+            )?;
 
         Ok(Self {
             vulkan_device: Some(Arc::clone(vulkan_device)),
@@ -430,27 +397,15 @@ impl HostVulkanTexture {
             ..Default::default()
         };
 
-        let (image, allocation) = vulkan_device.allocate_as_the_device_memory_budget_admits(
-            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
-            || {
-                vulkan_device.frame_device_memory_request(
-                    vulkan_device.memory_requirements_of_an_image_create_info(&image_info)?,
-                    FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForAnImage {
-                        image_create_info: &image_info,
-                        allocation_options: &alloc_opts,
-                    },
-                    "HostVulkanTexture::new_device_local",
-                )
-            },
-            || {
-                unsafe {
-                    vulkan_device
-                        .allocator()
-                        .create_image(image_info, &alloc_opts)
-                }
-                .map_err(|e| Error::GpuError(format!("Failed to create device-local image: {e}")))
-            },
-        )?;
+        let (image, allocation) = vulkan_device
+            .create_frame_image_within_the_device_memory_budget(
+                DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
+                VmaFrameAllocationSource::DefaultAllocator,
+                &image_info,
+                &alloc_opts,
+                "HostVulkanTexture::new_device_local",
+                |e| Error::GpuError(format!("Failed to create device-local image: {e}")),
+            )?;
 
         Ok(Self {
             vulkan_device: Some(Arc::clone(vulkan_device)),
@@ -568,45 +523,22 @@ impl HostVulkanTexture {
         // `VkDeviceMemory` block is pre-warmed at `HostVulkanDevice::new()`
         // (see `nvidia-dma-buf-after-swapchain.md`), so the post-swapchain
         // NVIDIA cap doesn't apply to the pooled path.
-        let dma_buf_image_pool_tiled =
-            vulkan_device.dma_buf_image_pool_tiled_pinned_to_one_memory_type();
-        let (image, allocation) = vulkan_device.allocate_as_the_device_memory_budget_admits(
-            admission,
-            || {
-                let memory_type_selection = match dma_buf_image_pool_tiled {
-                    Some(export_pool) => {
-                        FrameMemoryTypeSelection::PinnedByAnExportPool { export_pool }
-                    }
-                    None => FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForAnImage {
-                        image_create_info: &image_info,
-                        allocation_options: &alloc_opts,
-                    },
-                };
-                vulkan_device.frame_device_memory_request(
-                    vulkan_device.memory_requirements_of_an_image_create_info(&image_info)?,
-                    memory_type_selection,
-                    "HostVulkanTexture::new_render_target_dma_buf",
-                )
-            },
-            || {
-                let result = match dma_buf_image_pool_tiled {
-                    Some(export_pool) => unsafe {
-                        export_pool.pool.create_image(image_info, &alloc_opts)
-                    },
-                    None => unsafe {
-                        vulkan_device
-                            .allocator()
-                            .create_image(image_info, &alloc_opts)
-                    },
-                };
-                result.map_err(|e| {
+        let (image, allocation) = vulkan_device
+            .create_frame_image_within_the_device_memory_budget(
+                admission,
+                VmaFrameAllocationSource::export_pool_or_the_default_allocator(
+                    vulkan_device.dma_buf_image_pool_tiled_pinned_to_one_memory_type(),
+                ),
+                &image_info,
+                &alloc_opts,
+                "HostVulkanTexture::new_render_target_dma_buf",
+                |e| {
                     Error::GpuError(format!(
                         "Failed to create render-target DMA-BUF image (modifiers={:?}): {e}",
                         modifier_candidates
                     ))
-                })
-            },
-        )?;
+                },
+            )?;
 
         // Read back which modifier the driver actually chose.
         let chosen = {
@@ -783,31 +715,20 @@ impl HostVulkanTexture {
                         .into(),
                 )
             })?;
-        let (image, allocation) = vulkan_device.allocate_as_the_device_memory_budget_admits(
-            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
-            || {
-                vulkan_device.frame_device_memory_request(
-                    vulkan_device.memory_requirements_of_an_image_create_info(&image_info)?,
-                    FrameMemoryTypeSelection::PinnedByAnExportPool {
-                        export_pool: opaque_fd_image_pool,
-                    },
-                    "HostVulkanTexture::new_opaque_fd_export",
-                )
-            },
-            || {
-                unsafe {
-                    opaque_fd_image_pool
-                        .pool
-                        .create_image(image_info, &alloc_opts)
-                }
-                .map_err(|e| {
+        let (image, allocation) = vulkan_device
+            .create_frame_image_within_the_device_memory_budget(
+                DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget,
+                VmaFrameAllocationSource::ExportPool(opaque_fd_image_pool),
+                &image_info,
+                &alloc_opts,
+                "HostVulkanTexture::new_opaque_fd_export",
+                |e| {
                     Error::GpuError(format!(
                         "Failed to create OPAQUE_FD exportable image ({}x{} {:?}): {e}",
                         desc.width, desc.height, desc.format,
                     ))
-                })
-            },
-        )?;
+                },
+            )?;
 
         Ok(Self {
             vulkan_device: Some(Arc::clone(vulkan_device)),

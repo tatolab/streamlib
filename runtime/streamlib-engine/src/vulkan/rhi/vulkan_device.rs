@@ -437,23 +437,46 @@ pub(crate) struct VmaExportPoolPinnedToOneMemoryType {
     pub(crate) memory_type_index: u32,
 }
 
-/// Where a frame allocation's memory type comes from.
-pub(crate) enum FrameMemoryTypeSelection<'a> {
-    /// The one type an export pool is pinned to.
+/// The allocator a frame's VMA allocation comes from. It alone decides the
+/// memory type, and through it the heap, whose budget weighs the frame.
+#[derive(Clone, Copy)]
+pub(crate) enum VmaFrameAllocationSource<#[cfg(target_os = "linux")] 'a> {
+    /// An export pool, which allocates from the one memory type it is pinned to.
     #[cfg(target_os = "linux")]
-    PinnedByAnExportPool {
-        export_pool: &'a VmaExportPoolPinnedToOneMemoryType,
-    },
-    /// The type the default allocator chooses for this image under these options.
-    ChosenByTheDefaultAllocatorForAnImage {
-        image_create_info: &'a vk::ImageCreateInfo,
-        allocation_options: &'a vma::AllocationOptions,
-    },
-    /// The type the default allocator chooses for this buffer under these options.
-    ChosenByTheDefaultAllocatorForABuffer {
-        buffer_create_info: &'a vk::BufferCreateInfo,
-        allocation_options: &'a vma::AllocationOptions,
-    },
+    ExportPool(&'a VmaExportPoolPinnedToOneMemoryType),
+    /// The device's default allocator, which picks a memory type per create info.
+    DefaultAllocator,
+}
+
+#[cfg(target_os = "linux")]
+impl<'a> VmaFrameAllocationSource<'a> {
+    /// `export_pool` where the device created it, the default allocator otherwise.
+    pub(crate) fn export_pool_or_the_default_allocator(
+        export_pool: Option<&'a VmaExportPoolPinnedToOneMemoryType>,
+    ) -> Self {
+        export_pool.map_or(Self::DefaultAllocator, Self::ExportPool)
+    }
+}
+
+/// The request a frame of `memory_requirements` makes on the memory type its
+/// allocator chose, or the refusal when no memory type satisfies it.
+fn frame_device_memory_request_on_a_vulkan_memory_type(
+    memory_requirements: vk::MemoryRequirements,
+    memory_type_index_or_refusal: vulkanalia::VkResult<u32>,
+    frame_allocation_site: &'static str,
+) -> Result<FrameDeviceMemoryRequest> {
+    let memory_type_index = memory_type_index_or_refusal.map_err(|e| {
+        Error::GpuError(format!(
+            "{frame_allocation_site}: no memory type in memory_type_bits {:#x} satisfies the \
+             allocation: {e}",
+            memory_requirements.memory_type_bits
+        ))
+    })?;
+    Ok(FrameDeviceMemoryRequest {
+        requested_bytes: memory_requirements.size,
+        placement: FrameDeviceMemoryPlacement::VulkanMemoryType { memory_type_index },
+        frame_allocation_site,
+    })
 }
 
 /// Internal anti-decay sentinel for an export-capable VMA pool.
@@ -4285,71 +4308,153 @@ impl HostVulkanDevice {
         }
     }
 
-    /// The request a frame of these memory requirements makes on the memory
-    /// type it will be allocated from.
-    pub(crate) fn frame_device_memory_request(
+    /// Create a frame image from `allocation_source`, weighed as `admission`
+    /// says against the heap that same source allocates it from.
+    pub(crate) fn create_frame_image_within_the_device_memory_budget(
         &self,
-        memory_requirements: vk::MemoryRequirements,
-        memory_type_selection: FrameMemoryTypeSelection<'_>,
+        admission: DeviceMemoryBudgetAdmission,
+        allocation_source: VmaFrameAllocationSource,
+        image_create_info: &vk::ImageCreateInfo,
+        allocation_options: &vma::AllocationOptions,
         frame_allocation_site: &'static str,
-    ) -> Result<FrameDeviceMemoryRequest> {
-        let allocator = self.allocator();
-        // SAFETY (every arm): pure queries of the allocator's memory types
-        // against create infos the caller is about to allocate with.
-        let memory_type_index_or_refusal = match memory_type_selection {
+        describe_the_allocators_refusal: impl FnOnce(vk::ErrorCode) -> Error,
+    ) -> Result<(vk::Image, vma::Allocation)> {
+        // SAFETY (every unsafe block below): the memory-type queries only read
+        // the allocator's types, and the create info and options are the
+        // caller's, valid on this device.
+        match allocation_source {
             #[cfg(target_os = "linux")]
-            FrameMemoryTypeSelection::PinnedByAnExportPool { export_pool } => {
-                Ok(export_pool.memory_type_index)
-            }
-            // VMA cannot infer a DRM-modifier image's usage for an `Auto`
-            // query, so the type is chosen on the options' flags alone,
-            // which every frame constructor states.
-            FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForAnImage {
-                image_create_info,
-                allocation_options,
-            } if image_create_info.tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT => unsafe {
-                allocator.find_memory_type_index(
-                    memory_requirements.memory_type_bits,
-                    &vma::AllocationOptions {
-                        usage: vma::MemoryUsage::Unknown,
-                        ..*allocation_options
+            VmaFrameAllocationSource::ExportPool(export_pool) => self
+                .allocate_as_the_device_memory_budget_admits(
+                    admission,
+                    || {
+                        frame_device_memory_request_on_a_vulkan_memory_type(
+                            self.memory_requirements_of_an_image_create_info(image_create_info)?,
+                            Ok(export_pool.memory_type_index),
+                            frame_allocation_site,
+                        )
                     },
-                )
-            },
-            FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForAnImage {
-                image_create_info,
-                allocation_options,
-            } => unsafe {
-                allocator
-                    .find_memory_type_index_for_image_info(*image_create_info, allocation_options)
-            },
-            FrameMemoryTypeSelection::ChosenByTheDefaultAllocatorForABuffer {
-                buffer_create_info,
-                allocation_options,
-            } => unsafe {
-                allocator
-                    .find_memory_type_index_for_buffer_info(*buffer_create_info, allocation_options)
-            },
-        };
-        let memory_type_index = memory_type_index_or_refusal.map_err(|e| {
-            Error::GpuError(format!(
-                "{frame_allocation_site}: no memory type in memory_type_bits {:#x} satisfies \
-                 the allocation: {e}",
-                memory_requirements.memory_type_bits
-            ))
-        })?;
-        Ok(FrameDeviceMemoryRequest {
-            requested_bytes: memory_requirements.size,
-            placement: FrameDeviceMemoryPlacement::VulkanMemoryType { memory_type_index },
-            frame_allocation_site,
-        })
+                    || {
+                        unsafe {
+                            export_pool
+                                .pool
+                                .create_image(*image_create_info, allocation_options)
+                        }
+                        .map_err(describe_the_allocators_refusal)
+                    },
+                ),
+            VmaFrameAllocationSource::DefaultAllocator => self
+                .allocate_as_the_device_memory_budget_admits(
+                    admission,
+                    || {
+                        let memory_requirements =
+                            self.memory_requirements_of_an_image_create_info(image_create_info)?;
+                        // VMA cannot infer a DRM-modifier image's usage for an
+                        // `Auto` query, so the type is chosen on the options'
+                        // flags alone, which every frame constructor states.
+                        let memory_type_index_or_refusal = if image_create_info.tiling
+                            == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT
+                        {
+                            unsafe {
+                                self.allocator().find_memory_type_index(
+                                    memory_requirements.memory_type_bits,
+                                    &vma::AllocationOptions {
+                                        usage: vma::MemoryUsage::Unknown,
+                                        ..*allocation_options
+                                    },
+                                )
+                            }
+                        } else {
+                            unsafe {
+                                self.allocator().find_memory_type_index_for_image_info(
+                                    *image_create_info,
+                                    allocation_options,
+                                )
+                            }
+                        };
+                        frame_device_memory_request_on_a_vulkan_memory_type(
+                            memory_requirements,
+                            memory_type_index_or_refusal,
+                            frame_allocation_site,
+                        )
+                    },
+                    || {
+                        unsafe {
+                            self.allocator()
+                                .create_image(*image_create_info, allocation_options)
+                        }
+                        .map_err(describe_the_allocators_refusal)
+                    },
+                ),
+        }
+    }
+
+    /// Create a frame buffer from `allocation_source`, weighed as `admission`
+    /// says against the heap that same source allocates it from.
+    pub(crate) fn create_frame_buffer_within_the_device_memory_budget(
+        &self,
+        admission: DeviceMemoryBudgetAdmission,
+        allocation_source: VmaFrameAllocationSource,
+        buffer_create_info: &vk::BufferCreateInfo,
+        allocation_options: &vma::AllocationOptions,
+        frame_allocation_site: &'static str,
+        describe_the_allocators_refusal: impl FnOnce(vk::ErrorCode) -> Error,
+    ) -> Result<(vk::Buffer, vma::Allocation)> {
+        // SAFETY (every unsafe block below): the memory-type query only reads
+        // the allocator's types, and the create info and options are the
+        // caller's, valid on this device.
+        match allocation_source {
+            #[cfg(target_os = "linux")]
+            VmaFrameAllocationSource::ExportPool(export_pool) => self
+                .allocate_as_the_device_memory_budget_admits(
+                    admission,
+                    || {
+                        frame_device_memory_request_on_a_vulkan_memory_type(
+                            self.memory_requirements_of_a_buffer_create_info(buffer_create_info),
+                            Ok(export_pool.memory_type_index),
+                            frame_allocation_site,
+                        )
+                    },
+                    || {
+                        unsafe {
+                            export_pool
+                                .pool
+                                .create_buffer(*buffer_create_info, allocation_options)
+                        }
+                        .map_err(describe_the_allocators_refusal)
+                    },
+                ),
+            VmaFrameAllocationSource::DefaultAllocator => self
+                .allocate_as_the_device_memory_budget_admits(
+                    admission,
+                    || {
+                        frame_device_memory_request_on_a_vulkan_memory_type(
+                            self.memory_requirements_of_a_buffer_create_info(buffer_create_info),
+                            unsafe {
+                                self.allocator().find_memory_type_index_for_buffer_info(
+                                    *buffer_create_info,
+                                    allocation_options,
+                                )
+                            },
+                            frame_allocation_site,
+                        )
+                    },
+                    || {
+                        unsafe {
+                            self.allocator()
+                                .create_buffer(*buffer_create_info, allocation_options)
+                        }
+                        .map_err(describe_the_allocators_refusal)
+                    },
+                ),
+        }
     }
 
     /// Memory requirements of an image not yet created. A DRM-modifier image
     /// takes a probe image: `vkGetDeviceImageMemoryRequirements` needs a
     /// `planeAspect` naming a memory plane of the modifier the driver picks
     /// only at creation (VUID-VkDeviceImageMemoryRequirements-pCreateInfo-06420).
-    pub(crate) fn memory_requirements_of_an_image_create_info(
+    fn memory_requirements_of_an_image_create_info(
         &self,
         image_create_info: &vk::ImageCreateInfo,
     ) -> Result<vk::MemoryRequirements> {
@@ -4383,7 +4488,7 @@ impl HostVulkanDevice {
     }
 
     /// Memory requirements of a buffer not yet created.
-    pub(crate) fn memory_requirements_of_a_buffer_create_info(
+    fn memory_requirements_of_a_buffer_create_info(
         &self,
         buffer_create_info: &vk::BufferCreateInfo,
     ) -> vk::MemoryRequirements {
