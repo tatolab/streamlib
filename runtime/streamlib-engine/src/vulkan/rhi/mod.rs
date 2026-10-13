@@ -20,6 +20,7 @@ mod vulkan_device;
 mod vulkan_frame_allocation_device_memory_budget;
 #[cfg(target_os = "macos")]
 mod vulkan_metal_working_set_budget;
+mod vulkan_queue_submission_completion;
 mod vulkan_sync;
 mod vulkan_texture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -34,6 +35,7 @@ pub use vulkan_device::PixelBufferUploadFinalTextureLayout;
 pub use vulkan_device::{
     HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities,
 };
+pub use vulkan_queue_submission_completion::HostVulkanQueueSubmissionsSnapshot;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(unused_imports)]

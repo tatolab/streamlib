@@ -59,13 +59,13 @@ pub use crate::linux::pipewire_video_source::{
 };
 
 pub use crate::vulkan::rhi::{
-    AccelerationStructureKind, HostMarker, HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture,
-    HostVulkanTimelineSemaphore, IDENTITY_TRANSFORM, ImageCopyRegion, OffscreenColorTarget,
-    OffscreenDraw, RayTracingPipelineProperties, RhiCommandRecorder, ThirdPartyGpuCapabilities,
-    TlasInstanceDesc, VulkanAccelerationStructure, VulkanAccess, VulkanBufferLike,
-    VulkanComputeKernel, VulkanGraphicsKernel, VulkanIndexBindable, VulkanRayTracingKernel,
-    VulkanStage, VulkanStorageBindable, VulkanTextureReadback, VulkanUniformBindable,
-    VulkanVertexBindable,
+    AccelerationStructureKind, HostMarker, HostVulkanBuffer, HostVulkanDevice,
+    HostVulkanQueueSubmissionsSnapshot, HostVulkanTexture, HostVulkanTimelineSemaphore,
+    IDENTITY_TRANSFORM, ImageCopyRegion, OffscreenColorTarget, OffscreenDraw,
+    RayTracingPipelineProperties, RhiCommandRecorder, ThirdPartyGpuCapabilities, TlasInstanceDesc,
+    VulkanAccelerationStructure, VulkanAccess, VulkanBufferLike, VulkanComputeKernel,
+    VulkanGraphicsKernel, VulkanIndexBindable, VulkanRayTracingKernel, VulkanStage,
+    VulkanStorageBindable, VulkanTextureReadback, VulkanUniformBindable, VulkanVertexBindable,
 };
 
 /// The EGL/DRM modifier probe. Linux-bound by its mechanism, not by its

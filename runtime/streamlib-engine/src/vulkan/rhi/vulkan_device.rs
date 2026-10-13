@@ -41,6 +41,10 @@ use super::vulkan_kernel_capability_refusal::{
 use super::vulkan_metal_working_set_budget::{
     MetalDeviceWhoseWorkingSetBoundsFrameAllocations, MetalWorkingSetOfTheDevice,
 };
+use super::vulkan_queue_submission_completion::{
+    HostVulkanQueueSubmissionCompletionTimelines, HostVulkanQueueSubmissionsSnapshot,
+    HostVulkanSubmissionQueue,
+};
 use super::vulkan_validation_messenger::{
     VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
 };
@@ -365,6 +369,9 @@ pub struct HostVulkanDevice {
     /// Not every `vkWaitForFences` in the engine, and not compute-only — the
     /// recorder is what present, staging and the tone mapper wait on too.
     recorder_and_compute_kernel_fence_wait_count: AtomicUsize,
+    /// A completion timeline per queue, signalled by every
+    /// [`Self::submit_to_queue`]. `None` only once `Drop` has destroyed them.
+    queue_submission_completion_timelines: Option<HostVulkanQueueSubmissionCompletionTimelines>,
     /// Per-queue mutex for thread-safe queue submission (Vulkan spec requirement).
     graphics_queue_mutex: Mutex<()>,
     /// Per-queue mutex for the dedicated transfer queue.
@@ -1508,6 +1515,10 @@ impl HostVulkanDevice {
         let compute_queue = compute_queue_family_index
             .map(|cq_family| unsafe { device.get_device_queue(cq_family, 0) });
 
+        // 8e. One completion timeline per queue
+        let queue_submission_completion_timelines =
+            HostVulkanQueueSubmissionCompletionTimelines::new(&device)?;
+
         // 9. Query memory properties (raw-allocation type choice, heap of a type)
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
@@ -1796,6 +1807,7 @@ impl HostVulkanDevice {
             live_allocation_count: AtomicUsize::new(0),
             queue_submission_count: AtomicUsize::new(0),
             recorder_and_compute_kernel_fence_wait_count: AtomicUsize::new(0),
+            queue_submission_completion_timelines: Some(queue_submission_completion_timelines),
             graphics_queue_mutex: Mutex::new(()),
             transfer_queue_mutex: Mutex::new(()),
             video_encode_queue_mutex: Mutex::new(()),
@@ -3307,40 +3319,110 @@ impl HostVulkanDevice {
     // thread-safety issues during concurrent device-level operations.
     // These methods acquire per-queue mutexes before submitting.
 
-    /// Look up the mutex that guards a given queue handle.
-    fn mutex_for_queue(&self, queue: vk::Queue) -> &Mutex<()> {
+    /// Which of this device's queues a handle is; `None` for a handle this
+    /// device never handed out. Aliased handles resolve to the first match.
+    fn submission_queue_for(&self, queue: vk::Queue) -> Option<HostVulkanSubmissionQueue> {
         if queue == self.queue {
-            &self.graphics_queue_mutex
+            Some(HostVulkanSubmissionQueue::Graphics)
         } else if queue == self.transfer_queue {
-            &self.transfer_queue_mutex
+            Some(HostVulkanSubmissionQueue::Transfer)
         } else if self.video_encode_queue == Some(queue) {
-            &self.video_encode_queue_mutex
+            Some(HostVulkanSubmissionQueue::VideoEncode)
         } else if self.video_decode_queue == Some(queue) {
-            &self.video_decode_queue_mutex
+            Some(HostVulkanSubmissionQueue::VideoDecode)
         } else if self.compute_queue == Some(queue) {
-            &self.compute_queue_mutex
+            Some(HostVulkanSubmissionQueue::Compute)
         } else {
-            // Unknown queue — fall back to graphics mutex as safety net
-            &self.graphics_queue_mutex
+            None
         }
     }
 
-    /// Submit command buffers to a queue with per-queue mutex synchronization.
+    /// Look up the mutex that guards a given queue handle.
+    fn mutex_for_queue(&self, queue: vk::Queue) -> &Mutex<()> {
+        match self.submission_queue_for(queue) {
+            Some(HostVulkanSubmissionQueue::Graphics) | None => &self.graphics_queue_mutex,
+            Some(HostVulkanSubmissionQueue::Transfer) => &self.transfer_queue_mutex,
+            Some(HostVulkanSubmissionQueue::VideoEncode) => &self.video_encode_queue_mutex,
+            Some(HostVulkanSubmissionQueue::VideoDecode) => &self.video_decode_queue_mutex,
+            Some(HostVulkanSubmissionQueue::Compute) => &self.compute_queue_mutex,
+        }
+    }
+
+    /// Submit command buffers to a queue with per-queue mutex
+    /// synchronization, signalling that queue's completion timeline after
+    /// the last submit.
     pub unsafe fn submit_to_queue(
         &self,
         queue: vk::Queue,
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> Result<()> {
+        let submission_queue = self.submission_queue_for(queue);
         let _lock = self
             .mutex_for_queue(queue)
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        unsafe { self.device.queue_submit2(queue, submits, fence) }
-            .map(|_| {
-                self.queue_submission_count.fetch_add(1, Ordering::Relaxed);
-            })
-            .map_err(|e| Error::GpuError(format!("queue_submit2 failed: {e}")))
+        match (
+            submission_queue,
+            self.queue_submission_completion_timelines.as_ref(),
+        ) {
+            (Some(submission_queue), Some(completion_timelines)) => unsafe {
+                completion_timelines.submit_signaling_completion_timeline(
+                    submission_queue,
+                    queue,
+                    submits,
+                    fence,
+                )
+            }?,
+            _ => {
+                tracing::warn!(
+                    ?queue,
+                    "queue submission to a queue this device did not hand out: \
+                     no completion timeline records it"
+                );
+                unsafe { self.device.queue_submit2(queue, submits, fence) }
+                    .map_err(|e| Error::GpuError(format!("queue_submit2 failed: {e}")))?;
+            }
+        }
+        self.queue_submission_count.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// The latest submission made so far on every queue of this device.
+    pub fn snapshot_of_queue_submissions_made_so_far(&self) -> HostVulkanQueueSubmissionsSnapshot {
+        self.queue_submission_completion_timelines
+            .as_ref()
+            .map(HostVulkanQueueSubmissionCompletionTimelines::snapshot_of_submissions_made_so_far)
+            .unwrap_or_default()
+    }
+
+    /// Whether every queue submission the snapshot names has completed,
+    /// read without blocking.
+    pub fn every_queue_submission_in_snapshot_has_completed(
+        &self,
+        snapshot: &HostVulkanQueueSubmissionsSnapshot,
+    ) -> Result<bool> {
+        match self.queue_submission_completion_timelines.as_ref() {
+            Some(completion_timelines) => {
+                completion_timelines.every_submission_in_snapshot_has_completed(snapshot)
+            }
+            None => Ok(true),
+        }
+    }
+
+    /// Block until every queue submission the snapshot names has completed
+    /// or `timeout` passes; `Ok(false)` on timeout.
+    pub fn wait_for_every_queue_submission_in_snapshot(
+        &self,
+        snapshot: &HostVulkanQueueSubmissionsSnapshot,
+        timeout: std::time::Duration,
+    ) -> Result<bool> {
+        match self.queue_submission_completion_timelines.as_ref() {
+            Some(completion_timelines) => {
+                completion_timelines.wait_for_every_submission_in_snapshot(snapshot, timeout)
+            }
+            None => Ok(true),
+        }
     }
 
     /// Block until `fences` signal, counting the stall.
@@ -4810,6 +4892,7 @@ impl Drop for HostVulkanDevice {
         // Queue-mutex-guarded wait (drains every queue before teardown);
         // uncontended at Drop but keeps the single discipline everywhere.
         let _ = self.wait_idle();
+        drop(self.queue_submission_completion_timelines.take());
 
         // Critical drop order:
         //  0. OPAQUE_FD export sentinels — freed before any pool is
