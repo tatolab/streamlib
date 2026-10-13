@@ -16,6 +16,7 @@ pub(crate) mod processor_output_surface_pool;
 mod refusing_null_video_codec_backend;
 mod refusing_null_video_device_backend;
 mod runtime_context;
+pub(crate) mod shared_pool_entry_freeing;
 pub(crate) mod silent_null_audio_device_backend;
 pub(crate) mod surface_backing_resolution;
 pub(crate) mod surface_check_out_lease_registry;

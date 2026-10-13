@@ -200,6 +200,20 @@ impl RhiPixelBufferPool {
             ))
         }
     }
+
+    /// Let go of the pool's share of the buffer `pool_slot_id` names, for a
+    /// slot being freed; answers whether the pool held such a buffer.
+    pub fn forget_the_buffer_of_pool_slot(&mut self, pool_slot_id: &PixelBufferPoolSlotId) -> bool {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            self.inner.forget_the_buffer_of_pool_slot(pool_slot_id)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = pool_slot_id;
+            false
+        }
+    }
 }
 
 impl std::fmt::Debug for RhiPixelBufferPool {

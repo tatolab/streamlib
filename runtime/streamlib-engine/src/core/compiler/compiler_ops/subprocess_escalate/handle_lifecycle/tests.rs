@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use super::EscalateHandleRegistry;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::core::test_support::LiveSurfaceShareServiceForATest;
 
 #[test]
 fn release_handle_flags_unknown_handle() {
@@ -538,112 +540,6 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
     release_processor_output_pool_slot(&sandbox, released_slot);
 }
 
-/// A live surface-share service wired into a GPU context as its store, so an
-/// escalate acquire registers exactly as a helper's would.
-#[cfg(target_os = "linux")]
-struct LiveSurfaceShareServiceForATest {
-    state: crate::linux::surface_share::SurfaceShareState,
-    service: crate::linux::surface_share::UnixSocketSurfaceService,
-    _socket_dir: tempfile::TempDir,
-}
-
-#[cfg(target_os = "linux")]
-impl LiveSurfaceShareServiceForATest {
-    fn wired_into(gpu: &crate::core::context::GpuContext) -> Self {
-        use std::sync::Arc;
-
-        use crate::core::context::SurfaceStore;
-        use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
-
-        let socket_dir = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
-            .expect("temp dir for the test socket");
-        let socket_path = socket_dir.path().join("surface-share.sock");
-        let state = SurfaceShareState::new();
-        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
-        service.start().expect("service start");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while !socket_path.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let store = SurfaceStore::new_reading_check_out_leases(
-            socket_path.to_string_lossy().into_owned(),
-            "R-tensor-storage-buffer".to_string(),
-            Arc::clone(state.check_out_leases()),
-        );
-        store.connect().expect("the store connects");
-        gpu.install_the_engines_surface_store(store)
-            .expect("the engine's surface store installs once");
-        Self {
-            state,
-            service,
-            _socket_dir: socket_dir,
-        }
-    }
-
-    fn check_out_leases(&self) -> &crate::core::context::SurfaceCheckOutLeaseRegistry {
-        self.state.check_out_leases()
-    }
-
-    fn is_registered(&self, surface_id: &str) -> bool {
-        self.state.get_surface_planes(surface_id).is_some()
-    }
-
-    fn stop(mut self) {
-        self.service.stop();
-    }
-}
-
-#[cfg(target_os = "macos")]
-struct LiveSurfaceShareServiceForATest {
-    state: crate::apple::surface_share::IOSurfaceShareState,
-    service: crate::apple::surface_share::MachSurfaceShareService,
-}
-
-#[cfg(target_os = "macos")]
-impl LiveSurfaceShareServiceForATest {
-    fn wired_into(gpu: &crate::core::context::GpuContext) -> Self {
-        use std::sync::Arc;
-
-        use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
-        use crate::core::context::SurfaceStore;
-
-        let state = IOSurfaceShareState::new();
-        let mut service = MachSurfaceShareService::new(
-            state.clone(),
-            format!(
-                "com.tatolab.streamlib.escalate-tensor-test.{}.{}",
-                std::process::id(),
-                uuid::Uuid::new_v4().simple()
-            ),
-        );
-        service
-            .start()
-            .expect("the Mach surface-share service starts");
-        let store = SurfaceStore::new_sharing_the_mach_services_tables(
-            service.service_name().to_string(),
-            "R-tensor-storage-buffer".to_string(),
-            Arc::clone(state.check_out_leases()),
-            Arc::clone(state.cross_process_timeline_pairs()),
-        );
-        store.connect().expect("the store connects");
-        gpu.install_the_engines_surface_store(store)
-            .expect("the engine's surface store installs once");
-        Self { state, service }
-    }
-
-    fn check_out_leases(&self) -> &crate::core::context::SurfaceCheckOutLeaseRegistry {
-        self.state.check_out_leases()
-    }
-
-    fn is_registered(&self, surface_id: &str) -> bool {
-        self.state.registration_of(surface_id).is_some()
-    }
-
-    fn stop(mut self) {
-        self.service.stop();
-    }
-}
-
 /// Acquire a tensor storage buffer over the real escalate op, from a processor
 /// output pool when one is named, answering the surface id or the refusal.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1071,16 +967,7 @@ fn release_everything_the_helpers_teardown_owes(
     sandbox: &crate::core::context::GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
 ) {
-    use super::{
-        release_processor_output_pool_slot, release_surface_share_and_parent_caches_for_handle,
-    };
-
-    for (handle_id, removed_handle) in registry.drain_handles() {
-        release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
-    }
-    for released_slot in registry.processor_output_pools().drain_slots() {
-        release_processor_output_pool_slot(sandbox, released_slot);
-    }
+    super::release_everything_a_torn_down_helper_held(sandbox, registry);
 }
 
 /// One node holding every frame its output pool may grow to, and every
@@ -1410,6 +1297,49 @@ fn a_released_or_torn_down_one_off_hands_its_count_back_to_its_node() {
     );
     acquire_every_one_off_the_node_may_hold();
     release_everything_the_helpers_teardown_owes(&sandbox, &registry);
+}
+
+/// A torn-down helper's one-off textures are freed as soon as nothing holds
+/// them, without waiting out the idle window an explicit release waits.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_torn_down_helpers_textures_are_freed_without_waiting_out_the_idle_window() {
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess, TexturePoolDescriptor};
+    use crate::core::rhi::TextureFormat;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        tracing::warn!("no GPU device, so the teardown freeing test skips");
+        return;
+    };
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let texture_pool = gpu.texture_pool().clone();
+    let sandbox = GpuContextLimitedAccess::new(gpu.clone());
+    let registry = EscalateHandleRegistry::new();
+    for _ in 0..2 {
+        acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &registry)
+            .expect("the helper acquires a one-off texture");
+    }
+    assert_eq!(texture_pool.stats().total_textures, 2);
+
+    release_everything_the_helpers_teardown_owes(&sandbox, &registry);
+    crate::core::test_support::wait_for_every_gpu_submission_made_so_far(&gpu);
+    let _engines_own = texture_pool
+        .acquire(
+            &TexturePoolDescriptor::new(16, 16, TextureFormat::Rgba8Unorm),
+            None,
+        )
+        .expect("an acquire after the teardown");
+    let stats = texture_pool.stats();
+    assert_eq!(
+        (stats.total_textures, stats.textures_in_use),
+        (1, 1),
+        "a torn-down helper's texture waited out the idle window"
+    );
+    live_service.stop();
 }
 
 /// A render-target image is a one-off like any other: held under the id the

@@ -37,6 +37,7 @@ pub(super) fn allocate_registered_texture_for_helper(
         });
     let texture = full.acquire_texture(&desc)?;
     let (handle_id, timeline_pair) = assign_texture_handle_id(full, &texture)?;
+    texture.note_a_surface_share_id_naming_its_pool_slot(&handle_id);
     full.register_texture(&handle_id, texture.texture_clone());
     Ok((
         handle_id,

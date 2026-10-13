@@ -526,6 +526,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::subprocess_escalate::processor_owned_window::tests",
                 "escalate_wire_encoding_tests",
                 "core::context::lease_aware_pool_slot_ring",
+                "core::context::shared_pool_entry_freeing",
+                "core::context::surface_check_out_lease_registry",
                 "core::context::processor_output_surface_pool",
                 "vulkan::rhi::vulkan_frame_allocation_device_memory_budget::tests",
                 "linux::system_memory_available_from_proc_meminfo::tests",

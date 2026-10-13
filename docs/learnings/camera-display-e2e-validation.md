@@ -93,9 +93,11 @@ Verify with `v4l2-ctl -d /dev/video10 --get-fmt-video` — should show
 needs to be loaded with `exclusive_caps=0` (not 1).
 
 **"EventLoop can't be recreated" in unit tests**
-winit's `EventLoop` is per-PROCESS on Linux X11 — only one per process.
-For multi-scenario unit tests, build the EventLoop once and call
-`event_loop.run_app_on_demand()` per scenario.
+winit's `EventLoop` is per-PROCESS on Linux X11 — only one per process,
+and dropping it does not free the slot. A test that needs a window takes it
+from the process's one pump, `core::window_event_pump::process_wide_window_event_pump()`;
+a test that builds its own loop makes every other window-taking test in the
+same test binary skip.
 
 **Process strands after timeout / Ctrl+C**
 Window-based runs sometimes don't respect SIGTERM cleanly (winit + X11

@@ -48,26 +48,27 @@ end-to-end via @docs/learnings/camera-display-e2e-validation.md.
    custom pools with `pMemoryAllocateNext` for the specific allocations
    that need DMA-BUF export. See @docs/learnings/vma-export-pools.md.
 
-2. **The engine pre-warms every export-capable VMA pool at
+2. **The engine anchors every export-capable VMA pool at
    `HostVulkanDevice::new()` time** (DMA-BUF buffers, DMA-BUF images
    linear and tiled, OPAQUE_FD HOST_VISIBLE, host-cached and DEVICE_LOCAL
    buffers, and the OPAQUE_FD image pool)
-   by allocating a tiny probe through each pool, strictly before any
-   caller can build a `VkSwapchainKHR`. Empirical observation from
-   issue #624: this keeps the post-swapchain allocation path open for
-   that handle type. DMA-BUF probes are dropped. Note that the host RHI
-   pixel-buffer and texture constructors all set
-   `vma::AllocationCreateFlags::DEDICATED_MEMORY`, so every export
-   allocation is its own `VkDeviceMemory` and dropping the probe
-   actually issues `vkFreeMemory` — VMA does not "retain a block"
-   for subsequent allocations. The cap-bypass mechanism is internal
-   to NVIDIA's driver rather than VMA-side block retention: the
-   per-handle-type state stays open while a live allocation of that
-   type anchors it, and for DMA-BUF the compositor's swapchain imports
-   are that live allocation. OPAQUE_FD has no ambient anchor, so its
-   probes are retained as long-lived sentinels. Construction either
-   yields a fully pre-warmed `Arc<HostVulkanDevice>` or fails — there
-   is no half-formed instance for callers to observe. Companion
+   by allocating a tiny (256-byte) sentinel out of each pool,
+   strictly before any caller can build a `VkSwapchainKHR`, and
+   holding every sentinel for the device's life. Empirical
+   observation from issue #624: an allocation of the handle type
+   before the swapchain keeps the post-swapchain allocation path open.
+   Note that the host RHI pixel-buffer and texture constructors all
+   set `vma::AllocationCreateFlags::DEDICATED_MEMORY`, so every export
+   allocation is its own `VkDeviceMemory` and freeing one issues
+   `vkFreeMemory` — VMA does not "retain a block" for subsequent
+   allocations. The cap-bypass mechanism is internal to NVIDIA's
+   driver rather than VMA-side block retention: the per-handle-type
+   state stays open while a live allocation of that type anchors it.
+   The shared frame pools free every frame of a flavour once it goes
+   unused, so the engine keeps its own anchor per pool rather than
+   resting on the compositor's swapchain imports. Construction either
+   yields an `Arc<HostVulkanDevice>` holding every sentinel or fails —
+   there is no half-formed instance for callers to observe. Companion
    learning for OPAQUE_FD: @docs/learnings/nvidia-opaque-fd-after-swapchain.md.
 
 3. **Size per-frame Vulkan resources to MAX_FRAMES_IN_FLIGHT (2), not

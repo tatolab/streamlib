@@ -1,9 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use crate::core::rhi::{PixelBuffer, PixelBufferPoolSlotId, PixelBufferRef, PixelFormat};
 use crate::core::{Error, Result};
@@ -46,9 +45,9 @@ pub struct VulkanPixelBufferPool {
     height: u32,
     bytes_per_pixel: u32,
     format: PixelFormat,
-    buffers: Vec<Arc<HostVulkanBuffer>>,
+    /// Each buffer under the pool id it is handed out as.
+    buffers_by_pool_id: Vec<(PixelBufferPoolSlotId, Arc<HostVulkanBuffer>)>,
     next_index: AtomicUsize,
-    buffer_to_pool_id: Mutex<HashMap<usize, PixelBufferPoolSlotId>>,
 }
 
 impl VulkanPixelBufferPool {
@@ -66,15 +65,13 @@ impl VulkanPixelBufferPool {
         format: PixelFormat,
         pre_allocate: usize,
     ) -> Result<Self> {
-        let mut buffers = Vec::with_capacity(pre_allocate);
-        let mut buffer_to_pool_id = HashMap::with_capacity(pre_allocate);
+        let mut buffers_by_pool_id = Vec::with_capacity(pre_allocate);
         let mut last_err: Option<Error> = None;
 
-        for i in 0..pre_allocate {
+        for _ in 0..pre_allocate {
             match allocate_pool_slot_buffer(&device, width, height, bytes_per_pixel, format) {
                 Ok(buffer) => {
-                    buffers.push(Arc::new(buffer));
-                    buffer_to_pool_id.insert(i, PixelBufferPoolSlotId::new());
+                    buffers_by_pool_id.push((PixelBufferPoolSlotId::new(), Arc::new(buffer)));
                 }
                 Err(e) => {
                     last_err = Some(e);
@@ -83,7 +80,7 @@ impl VulkanPixelBufferPool {
             }
         }
 
-        if buffers.is_empty() {
+        if buffers_by_pool_id.is_empty() {
             return Err(last_err.unwrap_or_else(|| {
                 Error::BufferError("VulkanPixelBufferPool: failed to allocate any buffers".into())
             }));
@@ -93,7 +90,7 @@ impl VulkanPixelBufferPool {
             tracing::warn!(
                 "VulkanPixelBufferPool: pre-allocated {} of the {} buffers requested ({}x{} {:?}); \
                  the next was refused: {}",
-                buffers.len(),
+                buffers_by_pool_id.len(),
                 pre_allocate,
                 width,
                 height,
@@ -103,7 +100,7 @@ impl VulkanPixelBufferPool {
         } else {
             tracing::info!(
                 "VulkanPixelBufferPool: pre-allocated {} buffers ({}x{} {:?})",
-                buffers.len(),
+                buffers_by_pool_id.len(),
                 width,
                 height,
                 format
@@ -116,9 +113,8 @@ impl VulkanPixelBufferPool {
             height,
             bytes_per_pixel,
             format,
-            buffers,
+            buffers_by_pool_id,
             next_index: AtomicUsize::new(0),
-            buffer_to_pool_id: Mutex::new(buffer_to_pool_id),
         })
     }
 
@@ -142,20 +138,15 @@ impl VulkanPixelBufferPool {
             self.format,
         )?;
 
-        let index = self.buffers.len();
-        self.buffers.push(Arc::new(buffer));
+        let buffer = Arc::new(buffer);
         let pool_id = PixelBufferPoolSlotId::new();
-        self.buffer_to_pool_id
-            .lock()
-            .map_err(|_| {
-                Error::BufferError("VulkanPixelBufferPool: the pool-id map is poisoned".into())
-            })?
-            .insert(index, pool_id.clone());
+        self.buffers_by_pool_id
+            .push((pool_id.clone(), Arc::clone(&buffer)));
 
         Ok((
             pool_id,
             PixelBuffer::new(PixelBufferRef {
-                inner: Arc::clone(&self.buffers[index]),
+                inner: buffer,
                 width: self.width,
                 height: self.height,
                 bytes_per_pixel: self.bytes_per_pixel,
@@ -164,12 +155,27 @@ impl VulkanPixelBufferPool {
         ))
     }
 
+    /// Let go of the pool's share of the buffer `pool_slot_id` names, for a
+    /// slot being freed; the memory goes once its last holder drops it.
+    /// Answers whether the pool held such a buffer.
+    pub fn forget_the_buffer_of_pool_slot(&mut self, pool_slot_id: &PixelBufferPoolSlotId) -> bool {
+        let Some(forgotten_index) = self
+            .buffers_by_pool_id
+            .iter()
+            .position(|(pool_id, _)| pool_id == pool_slot_id)
+        else {
+            return false;
+        };
+        self.buffers_by_pool_id.remove(forgotten_index);
+        true
+    }
+
     /// Acquire a buffer from the pool via ring-cycling.
     ///
     /// Skips buffers still held externally (Arc::strong_count > 1).
     /// Returns error if all buffers are in use.
     pub fn acquire(&self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
-        let len = self.buffers.len();
+        let len = self.buffers_by_pool_id.len();
         if len == 0 {
             return Err(Error::BufferError(
                 "VulkanPixelBufferPool has no buffers".into(),
@@ -180,16 +186,11 @@ impl VulkanPixelBufferPool {
 
         for offset in 0..len {
             let index = (start + offset) % len;
-            let buffer = &self.buffers[index];
+            let (pool_id, buffer) = &self.buffers_by_pool_id[index];
 
             // strong_count == 1 means only the pool holds it — it's available
             if Arc::strong_count(buffer) == 1 {
-                let pool_id = {
-                    let map = self.buffer_to_pool_id.lock().unwrap();
-                    map.get(&index)
-                        .cloned()
-                        .unwrap_or_else(PixelBufferPoolSlotId::new)
-                };
+                let pool_id = pool_id.clone();
 
                 let pixel_buffer_ref = PixelBufferRef {
                     inner: Arc::clone(buffer),
@@ -211,7 +212,7 @@ impl VulkanPixelBufferPool {
     }
 }
 
-// Safety: All fields are Send + Sync (Arc, AtomicUsize, Mutex)
+// Safety: All fields are Send + Sync (Arc, AtomicUsize)
 unsafe impl Send for VulkanPixelBufferPool {}
 unsafe impl Sync for VulkanPixelBufferPool {}
 
@@ -304,6 +305,51 @@ mod tests {
         assert!(
             result.is_ok(),
             "acquire must succeed after the previously acquired buffer is released"
+        );
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn forgetting_one_buffer_keeps_every_other_buffer_under_its_own_pool_id() {
+        let Ok(device) = HostVulkanDevice::new() else {
+            tracing::warn!("no Vulkan device, so the pool forget test skips");
+            return;
+        };
+        let mut pool =
+            VulkanPixelBufferPool::new(Arc::clone(&device), 64, 64, 4, PixelFormat::Bgra32, 1)
+                .expect("pool creation failed");
+        let (first_id, first_buffer) = pool.acquire().expect("the pre-allocated buffer");
+        let (second_id, second_buffer) =
+            pool.allocate_additional_buffer().expect("a second buffer");
+        let (third_id, third_buffer) = pool.allocate_additional_buffer().expect("a third buffer");
+        drop((first_buffer, third_buffer));
+        assert_eq!(Arc::strong_count(&second_buffer.buffer_ref().inner), 2);
+
+        assert!(pool.forget_the_buffer_of_pool_slot(&second_id));
+        assert!(
+            !pool.forget_the_buffer_of_pool_slot(&second_id),
+            "a forgotten buffer is forgotten once"
+        );
+        assert_eq!(
+            Arc::strong_count(&second_buffer.buffer_ref().inner),
+            1,
+            "the pool kept its share of a forgotten buffer"
+        );
+        let handed_out_again: Vec<_> = (0..2)
+            .map(|_| pool.acquire().expect("an unheld buffer"))
+            .collect();
+        let ids_handed_out_again: Vec<_> = handed_out_again
+            .iter()
+            .map(|(pool_id, _)| pool_id)
+            .collect();
+        assert!(ids_handed_out_again.contains(&&first_id));
+        assert!(ids_handed_out_again.contains(&&third_id));
+        assert!(
+            pool.acquire().is_err(),
+            "the forgotten buffer was handed out again"
         );
     }
 }

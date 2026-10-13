@@ -133,7 +133,9 @@ impl ProcessorOutputPoolsOfOneHelper {
             return (Err(refusal), Vec::new());
         }
         let surface_store = host.surface_store();
-        let check_out_leases = check_out_leases_of(surface_store.as_ref());
+        let check_out_leases = surface_store
+            .as_ref()
+            .and_then(SurfaceStore::check_out_lease_registry);
         let minted_frame_generations = host.lease_aware_pool_minted_frame_generations();
         self.replace_the_pool_if_its_descriptor_changed(pool_key, descriptor);
         let released_slots =
@@ -189,7 +191,9 @@ impl ProcessorOutputPoolsOfOneHelper {
                 registered_handle,
                 strong_count_with_no_holder,
             },
-            check_out_leases_of(surface_store.as_ref()),
+            surface_store
+                .as_ref()
+                .and_then(SurfaceStore::check_out_lease_registry),
             host.lease_aware_pool_minted_frame_generations(),
         ) {
             Ok(slot) => {
@@ -299,14 +303,6 @@ impl ProcessorOutputPoolsOfOneHelper {
             .map(released_slot)
             .collect()
     }
-}
-
-fn check_out_leases_of(
-    surface_store: Option<&SurfaceStore>,
-) -> Option<&SurfaceCheckOutLeaseRegistry> {
-    surface_store
-        .and_then(|store| store.check_out_leases())
-        .map(|leases| leases.as_ref())
 }
 
 fn released_slot(

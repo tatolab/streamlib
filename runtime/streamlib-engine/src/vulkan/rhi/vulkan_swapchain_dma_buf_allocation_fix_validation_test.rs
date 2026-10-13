@@ -3,30 +3,24 @@
 
 //! Fix validation for the NVIDIA swapchain + DMA-BUF allocation OOM bug.
 //!
-//! These tests use a hidden winit window backed by an X11 surface to create a
-//! Vulkan swapchain, then prove the allocation patterns the engine ships hold
-//! up behind one. Tests skip gracefully if no display server is available.
+//! These tests take a window from the process's one window event pump, build
+//! a swapchain on it and present on it, then prove the allocation patterns the
+//! engine ships hold up behind it. Tests skip gracefully if no display server
+//! is available.
 
 #![cfg(all(test, target_os = "linux"))]
 
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use vulkanalia::vk::{
-    KhrSurfaceExtensionInstanceCommands as _, KhrSwapchainExtensionDeviceCommands as _,
-};
 use vulkanalia_vma as vma;
 
-use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::window::{Window, WindowAttributes, WindowId};
-
-use super::HostVulkanDevice;
+use super::{HostVulkanDevice, VulkanPresentTarget};
+use crate::core::window_event_pump::{
+    WindowRegistrationRequestFromOwningProcessor, process_wide_window_event_pump,
+};
 
 const DMA_BUF_EXPORT_HANDLE_TYPES: vk::ExternalMemoryHandleTypeFlags =
     vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
@@ -184,412 +178,274 @@ enum TestScenario {
     CleanConfigExportPools,
 }
 
-/// Application handler that runs a test scenario inside winit's event loop.
-/// Window/swapchain creation happens in `resumed()`, but the actual allocation
-/// work waits for the window to be mapped (via about_to_wait + a frame counter).
-/// This is critical because the bug only triggers AFTER the compositor has had
-/// a chance to import the swapchain images as DMA-BUFs.
-struct SwapchainTestApp {
-    device: Arc<HostVulkanDevice>,
-    scenario: TestScenario,
-    width: u32,
-    height: u32,
-    /// Output: populated by the test scenario.
-    outcome: Arc<Mutex<AllocationOutcome>>,
-    /// Set during resumed() once window+swapchain are created.
-    window: Option<Window>,
-    surface: Option<vk::SurfaceKHR>,
-    swapchain: Option<vk::SwapchainKHR>,
-    /// Frames-elapsed counter; we wait N frames before running scenario.
-    wait_ticks: u32,
-    scenario_run: bool,
-}
-
-impl ApplicationHandler for SwapchainTestApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return; // already initialized
-        }
-
-        // Create visible window
-        let attrs = WindowAttributes::default()
-            .with_title("streamlib-test")
-            .with_visible(true)
-            .with_inner_size(PhysicalSize::new(self.width, self.height));
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => w,
-            Err(e) => {
-                self.outcome.lock().unwrap().setup_skipped = Some(format!("create_window: {e}"));
-                event_loop.exit();
-                return;
-            }
-        };
-
-        // Create Vulkan surface
-        let instance = self.device.instance();
-        let surface = match unsafe {
-            vulkanalia::window::create_surface(instance, &window, &window)
-        } {
-            Ok(s) => s,
-            Err(e) => {
-                self.outcome.lock().unwrap().setup_skipped = Some(format!("create_surface: {e}"));
-                event_loop.exit();
-                return;
-            }
-        };
-
-        // Create swapchain
-        match create_swapchain(&self.device, surface, self.width, self.height) {
-            Ok(sc) => {
-                println!("  [test] swapchain created: {} images", sc.image_count);
-                self.swapchain = Some(sc.swapchain);
-            }
-            Err(e) => {
-                unsafe { instance.destroy_surface_khr(surface, None) };
-                self.outcome.lock().unwrap().setup_skipped = Some(format!("create_swapchain: {e}"));
-                event_loop.exit();
-                return;
-            }
-        }
-
-        self.surface = Some(surface);
-        self.window = Some(window);
-
-        // Use Poll mode so about_to_wait fires repeatedly, letting events drain
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-    }
-
-    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, _event: WindowEvent) {
-        // We don't need to handle window events for the test
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.scenario_run {
-            // Already done — exit
-            event_loop.exit();
-            return;
-        }
-
-        // Wait several ticks to let the compositor map the window and import
-        // swapchain DMA-BUFs.
-        if self.wait_ticks < 30 {
-            self.wait_ticks += 1;
-            return;
-        }
-
-        // Run the scenario, then exit
-        self.run_scenario_inner();
-        self.scenario_run = true;
-        event_loop.exit();
-    }
-}
-
-impl SwapchainTestApp {
-    fn run_scenario_inner(&mut self) {
-        match self.scenario {
-            TestScenario::CleanConfigInternalAllocs => {
-                self.run_clean_internal_scenario();
-            }
-            TestScenario::CleanConfigExportPools => {
-                self.run_clean_pool_scenario();
-            }
-        }
-    }
-
-    fn cleanup(&mut self) {
-        let instance = self.device.instance();
-        let vk_device = self.device.device();
-        unsafe {
-            let _ = vk_device.device_wait_idle();
-            if let Some(sc) = self.swapchain.take() {
-                vk_device.destroy_swapchain_khr(sc, None);
-            }
-            if let Some(surf) = self.surface.take() {
-                instance.destroy_surface_khr(surf, None);
-            }
-        }
-        self.window = None;
-    }
-
-    fn run_clean_internal_scenario(&self) {
-        let allocator = build_vma_without_global_export(&self.device);
-        let mut outcome = self.outcome.lock().unwrap();
-
-        // 4 internal images via plain VMA (no export, no dedicated)
-        for i in 0..4 {
-            outcome.images_attempted += 1;
-            match alloc_internal_image_via_vma(&allocator, self.width, self.height) {
-                Ok((img, alloc)) => {
-                    outcome.images_succeeded += 1;
-                    unsafe { allocator.destroy_image(img, alloc) };
-                }
-                Err(e) => {
-                    outcome.failure_messages.push(format!("image[{i}]: {e}"));
-                }
-            }
-        }
-    }
-
-    fn run_clean_pool_scenario(&self) {
-        let allocator = Arc::new(build_vma_without_global_export(&self.device));
-        let mut outcome = self.outcome.lock().unwrap();
-
-        // ── Find memory type for HOST_VISIBLE DMA-BUF exportable buffers ──
-        let mut probe_buffer_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
-            .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
-            .build();
-        let probe_buffer_info =
-            dma_buf_buffer_create_info(64 * 1024, &mut probe_buffer_external_info);
-        let probe_alloc_opts = dma_buf_buffer_allocation_options();
-        let buffer_mem_type_idx = match unsafe {
-            allocator.find_memory_type_index_for_buffer_info(probe_buffer_info, &probe_alloc_opts)
-        } {
-            Ok(idx) => idx,
-            Err(e) => {
-                outcome
-                    .failure_messages
-                    .push(format!("find buffer mem type: {e}"));
-                return;
-            }
-        };
-
-        // Build buffer export pool
-        let mut export_info_buffer = vk::ExportMemoryAllocateInfo::builder()
-            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-            .build();
-        let mut buffer_pool_options = vma::PoolOptions::default();
-        buffer_pool_options = buffer_pool_options.push_next(&mut export_info_buffer);
-        buffer_pool_options.memory_type_index = buffer_mem_type_idx;
-        let buffer_pool = match allocator.create_pool(&buffer_pool_options) {
-            Ok(p) => p,
-            Err(e) => {
-                outcome
-                    .failure_messages
-                    .push(format!("create buffer pool: {e}"));
-                return;
-            }
-        };
-
-        // ── Find memory type for DEVICE_LOCAL DMA-BUF exportable images ──
-        let mut probe_image_external_info = vk::ExternalMemoryImageCreateInfo::builder()
-            .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
-            .build();
-        let probe_image_info = dma_buf_image_create_info(64, 64, &mut probe_image_external_info);
-        let probe_image_alloc_opts = dma_buf_image_allocation_options();
-        let image_mem_type_idx = match unsafe {
-            allocator
-                .find_memory_type_index_for_image_info(probe_image_info, &probe_image_alloc_opts)
-        } {
-            Ok(idx) => idx,
-            Err(e) => {
-                outcome
-                    .failure_messages
-                    .push(format!("find image mem type: {e}"));
-                drop(buffer_pool);
-                return;
-            }
-        };
-
-        let mut export_info_image = vk::ExportMemoryAllocateInfo::builder()
-            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-            .build();
-        let mut image_pool_options = vma::PoolOptions::default();
-        image_pool_options = image_pool_options.push_next(&mut export_info_image);
-        image_pool_options.memory_type_index = image_mem_type_idx;
-        let image_pool = match allocator.create_pool(&image_pool_options) {
-            Ok(p) => p,
-            Err(e) => {
-                outcome
-                    .failure_messages
-                    .push(format!("create image pool: {e}"));
-                drop(buffer_pool);
-                return;
-            }
-        };
-
-        // 4 exportable buffers via pool
-        let mut buffers = Vec::new();
-        for i in 0..4 {
-            outcome.buffers_attempted += 1;
-            let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
-                .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
-                .build();
-            let buf_info = dma_buf_buffer_create_info(
-                (self.width as u64) * (self.height as u64) * 4,
-                &mut external_buffer_info,
-            );
-            let alloc_opts = dma_buf_buffer_allocation_options();
-            match unsafe { buffer_pool.create_buffer(buf_info, &alloc_opts) } {
-                Ok(pair) => {
-                    outcome.buffers_succeeded += 1;
-                    buffers.push(pair);
-                }
-                Err(e) => outcome
-                    .failure_messages
-                    .push(format!("export buffer[{i}]: {e}")),
-            }
-        }
-
-        // 4 exportable images via pool
-        let mut images = Vec::new();
-        for i in 0..4 {
-            outcome.images_attempted += 1;
-            let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
-                .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
-                .build();
-            let img_info =
-                dma_buf_image_create_info(self.width, self.height, &mut external_image_info);
-            let alloc_opts = dma_buf_image_allocation_options();
-            match unsafe { image_pool.create_image(img_info, &alloc_opts) } {
-                Ok(pair) => {
-                    outcome.images_succeeded += 1;
-                    images.push(pair);
-                }
-                Err(e) => outcome
-                    .failure_messages
-                    .push(format!("export image[{i}]: {e}")),
-            }
-        }
-
-        // Also test: internal images via default pool (no export) work fine
-        let mut internal_images = Vec::new();
-        for i in 0..4 {
-            outcome.images_attempted += 1;
-            match alloc_internal_image_via_vma(&allocator, self.width, self.height) {
-                Ok(pair) => {
-                    outcome.images_succeeded += 1;
-                    internal_images.push(pair);
-                }
-                Err(e) => outcome
-                    .failure_messages
-                    .push(format!("internal image[{i}] (default pool): {e}")),
-            }
-        }
-
-        // Cleanup
-        unsafe {
-            for (img, alloc) in internal_images {
-                allocator.destroy_image(img, alloc);
-            }
-            for (img, alloc) in images {
-                allocator.destroy_image(img, alloc);
-            }
-            for (buf, alloc) in buffers {
-                allocator.destroy_buffer(buf, alloc);
-            }
-        }
-        drop(buffer_pool);
-        drop(image_pool);
-    }
-}
-
-struct SwapchainResources {
-    swapchain: vk::SwapchainKHR,
-    image_count: u32,
-}
-
-fn create_swapchain(
+fn run_clean_internal_scenario(
     device: &HostVulkanDevice,
-    surface: vk::SurfaceKHR,
     width: u32,
     height: u32,
-) -> Result<SwapchainResources, String> {
-    let instance = device.instance();
-    let physical_device = device.physical_device();
-    let vk_device = device.device();
-    let queue_family_index = device.queue_family_index();
+    outcome: &mut AllocationOutcome,
+) {
+    let allocator = build_vma_without_global_export(device);
 
-    // Surface support
-    let supported = unsafe {
-        instance.get_physical_device_surface_support_khr(
-            physical_device,
-            queue_family_index,
-            surface,
-        )
+    // 4 internal images via plain VMA (no export, no dedicated)
+    for i in 0..4 {
+        outcome.images_attempted += 1;
+        match alloc_internal_image_via_vma(&allocator, width, height) {
+            Ok((img, alloc)) => {
+                outcome.images_succeeded += 1;
+                unsafe { allocator.destroy_image(img, alloc) };
+            }
+            Err(e) => {
+                outcome.failure_messages.push(format!("image[{i}]: {e}"));
+            }
+        }
     }
-    .map_err(|e| format!("surface support: {e}"))?;
-    if !supported {
-        return Err("graphics queue family does not support presentation".into());
-    }
+}
 
-    let caps =
-        unsafe { instance.get_physical_device_surface_capabilities_khr(physical_device, surface) }
-            .map_err(|e| format!("surface capabilities: {e}"))?;
+fn run_clean_pool_scenario(
+    device: &HostVulkanDevice,
+    width: u32,
+    height: u32,
+    outcome: &mut AllocationOutcome,
+) {
+    let allocator = Arc::new(build_vma_without_global_export(device));
 
-    let formats =
-        unsafe { instance.get_physical_device_surface_formats_khr(physical_device, surface) }
-            .map_err(|e| format!("surface formats: {e}"))?;
-
-    let format = formats
-        .iter()
-        .find(|f| f.format == vk::Format::B8G8R8A8_UNORM)
-        .copied()
-        .unwrap_or(formats[0]);
-
-    let extent = if caps.current_extent.width != u32::MAX {
-        caps.current_extent
-    } else {
-        vk::Extent2D {
-            width: width.clamp(caps.min_image_extent.width, caps.max_image_extent.width),
-            height: height.clamp(caps.min_image_extent.height, caps.max_image_extent.height),
+    // ── Find memory type for HOST_VISIBLE DMA-BUF exportable buffers ──
+    let mut probe_buffer_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
+        .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
+        .build();
+    let probe_buffer_info = dma_buf_buffer_create_info(64 * 1024, &mut probe_buffer_external_info);
+    let probe_alloc_opts = dma_buf_buffer_allocation_options();
+    let buffer_mem_type_idx = match unsafe {
+        allocator.find_memory_type_index_for_buffer_info(probe_buffer_info, &probe_alloc_opts)
+    } {
+        Ok(idx) => idx,
+        Err(e) => {
+            outcome
+                .failure_messages
+                .push(format!("find buffer mem type: {e}"));
+            return;
         }
     };
 
-    let mut image_count = caps.min_image_count + 1;
-    if caps.max_image_count > 0 && image_count > caps.max_image_count {
-        image_count = caps.max_image_count;
+    // Build buffer export pool
+    let mut export_info_buffer = vk::ExportMemoryAllocateInfo::builder()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+        .build();
+    let mut buffer_pool_options = vma::PoolOptions::default();
+    buffer_pool_options = buffer_pool_options.push_next(&mut export_info_buffer);
+    buffer_pool_options.memory_type_index = buffer_mem_type_idx;
+    let buffer_pool = match allocator.create_pool(&buffer_pool_options) {
+        Ok(p) => p,
+        Err(e) => {
+            outcome
+                .failure_messages
+                .push(format!("create buffer pool: {e}"));
+            return;
+        }
+    };
+
+    // ── Find memory type for DEVICE_LOCAL DMA-BUF exportable images ──
+    let mut probe_image_external_info = vk::ExternalMemoryImageCreateInfo::builder()
+        .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
+        .build();
+    let probe_image_info = dma_buf_image_create_info(64, 64, &mut probe_image_external_info);
+    let probe_image_alloc_opts = dma_buf_image_allocation_options();
+    let image_mem_type_idx = match unsafe {
+        allocator.find_memory_type_index_for_image_info(probe_image_info, &probe_image_alloc_opts)
+    } {
+        Ok(idx) => idx,
+        Err(e) => {
+            outcome
+                .failure_messages
+                .push(format!("find image mem type: {e}"));
+            drop(buffer_pool);
+            return;
+        }
+    };
+
+    let mut export_info_image = vk::ExportMemoryAllocateInfo::builder()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+        .build();
+    let mut image_pool_options = vma::PoolOptions::default();
+    image_pool_options = image_pool_options.push_next(&mut export_info_image);
+    image_pool_options.memory_type_index = image_mem_type_idx;
+    let image_pool = match allocator.create_pool(&image_pool_options) {
+        Ok(p) => p,
+        Err(e) => {
+            outcome
+                .failure_messages
+                .push(format!("create image pool: {e}"));
+            drop(buffer_pool);
+            return;
+        }
+    };
+
+    // 4 exportable buffers via pool
+    let mut buffers = Vec::new();
+    for i in 0..4 {
+        outcome.buffers_attempted += 1;
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
+            .build();
+        let buf_info = dma_buf_buffer_create_info(
+            (width as u64) * (height as u64) * 4,
+            &mut external_buffer_info,
+        );
+        let alloc_opts = dma_buf_buffer_allocation_options();
+        match unsafe { buffer_pool.create_buffer(buf_info, &alloc_opts) } {
+            Ok(pair) => {
+                outcome.buffers_succeeded += 1;
+                buffers.push(pair);
+            }
+            Err(e) => outcome
+                .failure_messages
+                .push(format!("export buffer[{i}]: {e}")),
+        }
     }
 
-    let swapchain_info = vk::SwapchainCreateInfoKHR::builder()
-        .surface(surface)
-        .min_image_count(image_count)
-        .image_format(format.format)
-        .image_color_space(format.color_space)
-        .image_extent(extent)
-        .image_array_layers(1)
-        .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
-        .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .pre_transform(caps.current_transform)
-        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-        .present_mode(vk::PresentModeKHR::FIFO)
-        .clipped(true)
-        .build();
+    // 4 exportable images via pool
+    let mut images = Vec::new();
+    for i in 0..4 {
+        outcome.images_attempted += 1;
+        let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
+            .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
+            .build();
+        let img_info = dma_buf_image_create_info(width, height, &mut external_image_info);
+        let alloc_opts = dma_buf_image_allocation_options();
+        match unsafe { image_pool.create_image(img_info, &alloc_opts) } {
+            Ok(pair) => {
+                outcome.images_succeeded += 1;
+                images.push(pair);
+            }
+            Err(e) => outcome
+                .failure_messages
+                .push(format!("export image[{i}]: {e}")),
+        }
+    }
 
-    let swapchain = unsafe { vk_device.create_swapchain_khr(&swapchain_info, None) }
-        .map_err(|e| format!("create_swapchain_khr: {e}"))?;
+    // Also test: internal images via default pool (no export) work fine
+    let mut internal_images = Vec::new();
+    for i in 0..4 {
+        outcome.images_attempted += 1;
+        match alloc_internal_image_via_vma(&allocator, width, height) {
+            Ok(pair) => {
+                outcome.images_succeeded += 1;
+                internal_images.push(pair);
+            }
+            Err(e) => outcome
+                .failure_messages
+                .push(format!("internal image[{i}] (default pool): {e}")),
+        }
+    }
 
-    let images = unsafe { vk_device.get_swapchain_images_khr(swapchain) }
-        .map_err(|e| format!("get_swapchain_images: {e}"))?;
-
-    Ok(SwapchainResources {
-        swapchain,
-        image_count: images.len() as u32,
-    })
+    // Cleanup
+    unsafe {
+        for (img, alloc) in internal_images {
+            allocator.destroy_image(img, alloc);
+        }
+        for (img, alloc) in images {
+            allocator.destroy_image(img, alloc);
+        }
+        for (buf, alloc) in buffers {
+            allocator.destroy_buffer(buf, alloc);
+        }
+    }
+    drop(buffer_pool);
+    drop(image_pool);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test harness — runs a scenario inside winit's event loop
+// Test harness — runs a scenario with a swapchain live and presenting
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Width and height of every buffer and image a scenario allocates.
+const SCENARIO_ALLOCATION_WIDTH: u32 = 1920;
+const SCENARIO_ALLOCATION_HEIGHT: u32 = 1080;
+
+/// Frames presented before a scenario runs, so the compositor has mapped the
+/// window and imported the swapchain images as DMA-BUFs: the bug triggers
+/// only after that import.
+const FRAMES_PRESENTED_BEFORE_A_SCENARIO_RUNS: usize = 30;
 
 fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
     match HostVulkanDevice::new() {
         Ok(d) => Some(d),
         Err(e) => {
-            println!("Skipping — Vulkan device unavailable: {e}");
+            tracing::warn!("Skipping — Vulkan device unavailable: {e}");
             None
         }
     }
+}
+
+/// Run `scenario` on `device` with a swapchain live on a window from the
+/// process's one window event pump, which every test in the process shares:
+/// winit permits one event loop per process.
+fn run_scenario_with_a_swapchain_live(
+    device: &Arc<HostVulkanDevice>,
+    scenario: TestScenario,
+) -> AllocationOutcome {
+    let mut outcome = AllocationOutcome::default();
+    let window = match process_wide_window_event_pump().and_then(|pump| {
+        pump.request_window_for_owning_processor(WindowRegistrationRequestFromOwningProcessor {
+            window_title: "streamlib-test".to_string(),
+            initial_width_in_logical_pixels: 640,
+            initial_height_in_logical_pixels: 360,
+        })
+    }) {
+        Ok(window) => window,
+        Err(e) => {
+            outcome.setup_skipped = Some(format!("window: {e}"));
+            return outcome;
+        }
+    };
+    let (window_width, window_height) = window.physical_size_when_minted();
+    let mut present_target = match VulkanPresentTarget::new(
+        device,
+        window.present_surface_source(),
+        window_width,
+        window_height,
+        true,
+        None,
+    ) {
+        Ok(present_target) => present_target,
+        Err(e) => {
+            outcome.setup_skipped = Some(format!("swapchain: {e}"));
+            return outcome;
+        }
+    };
+    for _ in 0..FRAMES_PRESENTED_BEFORE_A_SCENARIO_RUNS {
+        present_target
+            .render_frame(|frame| {
+                frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;
+                frame.end_rendering()
+            })
+            .expect("a frame presents on the swapchain");
+    }
+
+    match scenario {
+        TestScenario::CleanConfigInternalAllocs => run_clean_internal_scenario(
+            device,
+            SCENARIO_ALLOCATION_WIDTH,
+            SCENARIO_ALLOCATION_HEIGHT,
+            &mut outcome,
+        ),
+        TestScenario::CleanConfigExportPools => run_clean_pool_scenario(
+            device,
+            SCENARIO_ALLOCATION_WIDTH,
+            SCENARIO_ALLOCATION_HEIGHT,
+            &mut outcome,
+        ),
+    }
+    drop(present_target);
+    drop(window);
+    outcome
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Runs all swapchain-dependent scenarios in a single test because winit's
-/// EventLoop is per-process on Linux X11 — only one EventLoop can be created
-/// per process, and subsequent attempts fail with "EventLoop can't be recreated".
-///
-/// This test exercises two scenarios, both against a live swapchain:
+/// Exercises two scenarios, both against a live swapchain:
 ///   1. FIX (clean VMA): internal allocs via plain VMA → all succeed
 ///   2. FIX (VMA pools): export allocs via custom pools → all succeed
 #[cfg_attr(
@@ -603,25 +459,10 @@ fn test_swapchain_allocation_scenarios() {
         None => return,
     };
 
-    // Build event loop ONCE — winit allows only one EventLoop per process on X11.
-
-    use winit::platform::x11::EventLoopBuilderExtX11;
-
-    let mut event_loop = match EventLoop::builder().with_any_thread(true).build() {
-        Ok(el) => el,
-        Err(e) => {
-            println!("Skipping all swapchain tests — event loop unavailable: {e}");
-            return;
-        }
-    };
-
     // ── Scenario 1: FIX VALIDATION (clean VMA) ─────────────────────────────
     println!("══ Scenario 1: FIX (clean VMA, internal allocs) ══");
-    let outcome = run_scenario_via_event_loop(
-        &mut event_loop,
-        device.clone(),
-        TestScenario::CleanConfigInternalAllocs,
-    );
+    let outcome =
+        run_scenario_with_a_swapchain_live(&device, TestScenario::CleanConfigInternalAllocs);
 
     if let Some(skip_reason) = &outcome.setup_skipped {
         println!("  Skipping scenario 1: {skip_reason}");
@@ -643,11 +484,8 @@ fn test_swapchain_allocation_scenarios() {
     // ── Scenario 2: FIX VALIDATION (VMA pools for export) ──────────────────
     if device.supports_external_memory() {
         println!("══ Scenario 2: FIX (clean VMA + export pools) ══");
-        let outcome = run_scenario_via_event_loop(
-            &mut event_loop,
-            device.clone(),
-            TestScenario::CleanConfigExportPools,
-        );
+        let outcome =
+            run_scenario_with_a_swapchain_live(&device, TestScenario::CleanConfigExportPools);
 
         if let Some(skip_reason) = &outcome.setup_skipped {
             println!("  Skipping scenario 2: {skip_reason}");
@@ -677,37 +515,4 @@ fn test_swapchain_allocation_scenarios() {
     } else {
         println!("══ Scenario 2: SKIPPED — external memory unsupported ══");
     }
-}
-
-/// Helper that runs a scenario via the shared event loop.
-fn run_scenario_via_event_loop(
-    event_loop: &mut EventLoop<()>,
-    device: Arc<HostVulkanDevice>,
-    scenario: TestScenario,
-) -> AllocationOutcome {
-    use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
-
-    let outcome = Arc::new(Mutex::new(AllocationOutcome::default()));
-    let mut app = SwapchainTestApp {
-        device,
-        scenario,
-        width: 1920,
-        height: 1080,
-        outcome: Arc::clone(&outcome),
-        window: None,
-        surface: None,
-        swapchain: None,
-        wait_ticks: 0,
-        scenario_run: false,
-    };
-
-    if let Err(e) = event_loop.run_app_on_demand(&mut app) {
-        outcome.lock().unwrap().setup_skipped = Some(format!("event loop error: {e}"));
-    }
-
-    // Cleanup swapchain/surface (window dropped with app)
-    app.cleanup();
-
-    let result = outcome.lock().unwrap().clone();
-    result
 }

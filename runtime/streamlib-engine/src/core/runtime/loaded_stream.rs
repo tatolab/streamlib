@@ -491,7 +491,11 @@ impl LoadedStreamInThisRuntime {
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let surface_store = None;
 
-        Ok(engine_gpu_context.view_for_one_loaded_stream(surface_store, &pipeline_cache_directory))
+        Ok(engine_gpu_context.view_for_one_loaded_stream(
+            self.stream_tag(),
+            surface_store,
+            &pipeline_cache_directory,
+        ))
     }
 
     /// Stop the stream: every processor removed, its audio clock stopped, its
@@ -554,6 +558,14 @@ impl LoadedStreamInThisRuntime {
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the stream's surface store");
             this_streams_runtime_context.gpu.clear_surface_store();
+
+            // After the store closes: its leases, like its helpers', are
+            // released as the service sees the connection go.
+            self.teardown_progress_note()
+                .note_what_the_teardown_is_waiting_on("freeing the stream's shared pool entries");
+            this_streams_runtime_context
+                .gpu
+                .free_every_unheld_shared_pool_entry_the_stream_last_acquired(self.stream_tag());
         }
         self.release_every_surface_this_stream_registered();
 
@@ -643,7 +655,11 @@ impl LoadedStreamInThisRuntime {
         // ended: its waiters would otherwise wait with nothing to bound them.
         let stop_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.stop()))
             .unwrap_or_else(|teardown_panic| {
-                *self.runtime_context.lock() = None;
+                if let Some(this_streams_runtime_context) = self.runtime_context.lock().take() {
+                    self.free_the_shared_pool_entries_of_a_stream_whose_teardown_panicked(
+                        &this_streams_runtime_context,
+                    );
+                }
                 self.release_every_surface_this_stream_registered();
                 Err(Error::Runtime(format!(
                     "its teardown panicked: {}",
@@ -737,6 +753,29 @@ impl LoadedStreamInThisRuntime {
             the_end.has_ended.wait_for(&mut how_it_ended, budget);
         }
         how_it_ended.is_some()
+    }
+
+    /// Free the shared pool entries a stream whose teardown panicked last
+    /// acquired, as its stop would have.
+    fn free_the_shared_pool_entries_of_a_stream_whose_teardown_panicked(
+        &self,
+        this_streams_runtime_context: &RuntimeContext,
+    ) {
+        // The panic may have come from this freeing; a second one must not
+        // escape the shutdown thread before the stream is marked ended.
+        let freeing_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            this_streams_runtime_context
+                .gpu
+                .free_every_unheld_shared_pool_entry_the_stream_last_acquired(self.stream_tag())
+        }));
+        if let Err(freeing_panic) = freeing_outcome {
+            tracing::error!(
+                "freeing the shared pool entries of the stream `{}` panicked; they are freed \
+                 once idle past the window instead: {}",
+                self.stream_name(),
+                what_a_panic_said(freeing_panic.as_ref())
+            );
+        }
     }
 
     /// Release every surface this stream registered with the engine's

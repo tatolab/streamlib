@@ -96,6 +96,26 @@ impl RegisteredHandle {
         }
     }
 
+    /// Free this handle's shared pool entry as soon as nothing holds it,
+    /// without waiting out the idle window — for a helper torn down.
+    pub(crate) fn flag_its_shared_pool_entry_freed_as_soon_as_unheld(
+        &self,
+        sandbox: &GpuContextLimitedAccess,
+    ) {
+        match self {
+            Self::Texture { texture, .. } => texture.flag_its_pool_slot_freed_as_soon_as_unheld(),
+            Self::PixelBuffer(buffer) => sandbox
+                .host_inner()
+                .flag_the_pixel_buffer_pool_slot_of_the_buffer_freed_as_soon_as_unheld(buffer),
+            // Neither is drawn from a shared pool; each is freed when its
+            // last holder drops it.
+            #[cfg(target_os = "linux")]
+            Self::Image { .. } => {}
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            Self::StorageBuffer { .. } => {}
+        }
+    }
+
     /// Whether releasing this handle also owes the parent-wide storage buffer
     /// map an eviction.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -413,6 +433,27 @@ pub(crate) fn release_surface_share_and_parent_caches_for_handle(
         sandbox
             .host_inner()
             .unregister_storage_buffer_from_the_parent_wide_map(handle_id);
+    }
+}
+
+/// Every release a torn-down helper is owed — each handle it never released
+/// and each slot of its processor output pools — with their shared pool
+/// entries flagged to be freed as soon as nothing holds them.
+pub(crate) fn release_everything_a_torn_down_helper_held(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+) {
+    for (handle_id, removed_handle) in registry.drain_handles() {
+        removed_handle.flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
+        release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
+    }
+    let processor_output_pool_slots_drained_at_teardown =
+        registry.processor_output_pools().drain_slots();
+    for released_slot in processor_output_pool_slots_drained_at_teardown {
+        released_slot
+            .registered_handle
+            .flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
+        release_processor_output_pool_slot(sandbox, released_slot);
     }
 }
 

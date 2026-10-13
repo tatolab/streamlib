@@ -151,6 +151,74 @@ impl GpuDevice {
     pub fn command_queue(&self) -> &RhiCommandQueue {
         &self.command_queue
     }
+
+    /// What this process has submitted to the device's queues so far.
+    pub(crate) fn snapshot_of_queue_submissions_made_so_far(&self) -> GpuQueueSubmissionsSnapshot {
+        GpuQueueSubmissionsSnapshot {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            vulkan_queue_submissions: self.inner.snapshot_of_queue_submissions_made_so_far(),
+        }
+    }
+
+    /// Whether every queue submission `snapshot` names has completed, read
+    /// without blocking.
+    pub(crate) fn every_queue_submission_in_snapshot_has_completed(
+        &self,
+        snapshot: &GpuQueueSubmissionsSnapshot,
+    ) -> Result<bool> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            self.inner.every_queue_submission_in_snapshot_has_completed(
+                &snapshot.vulkan_queue_submissions,
+            )
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = snapshot;
+            Ok(true)
+        }
+    }
+
+    /// Block until every queue submission `snapshot` names has completed or
+    /// `timeout` passes; `Ok(false)` on timeout.
+    pub(crate) fn wait_for_every_queue_submission_in_snapshot(
+        &self,
+        snapshot: &GpuQueueSubmissionsSnapshot,
+        timeout: std::time::Duration,
+    ) -> Result<bool> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            self.inner.wait_for_every_queue_submission_in_snapshot(
+                &snapshot.vulkan_queue_submissions,
+                timeout,
+            )
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (snapshot, timeout);
+            Ok(true)
+        }
+    }
+}
+
+/// What this process had submitted to a [`GpuDevice`]'s queues at one moment;
+/// the default names no submission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GpuQueueSubmissionsSnapshot {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    vulkan_queue_submissions: crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot,
+}
+
+impl GpuQueueSubmissionsSnapshot {
+    /// The later of the two snapshots on every queue.
+    pub(crate) fn covering_both(&self, other: &Self) -> Self {
+        Self {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            vulkan_queue_submissions: self
+                .vulkan_queue_submissions
+                .covering_both(&other.vulkan_queue_submissions),
+        }
+    }
 }
 
 impl std::fmt::Debug for GpuDevice {

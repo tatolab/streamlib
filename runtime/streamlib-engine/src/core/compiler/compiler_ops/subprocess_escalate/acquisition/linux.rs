@@ -48,6 +48,7 @@ pub(super) fn allocate_registered_texture_for_helper(
         });
     let texture = full.acquire_texture(&desc)?;
     let (handle_id, produce_done, consume_done) = assign_texture_handle_id(full, &texture)?;
+    texture.note_a_surface_share_id_naming_its_pool_slot(&handle_id);
     // The parent answers its own binding resolutions from the texture cache —
     // without this entry it would re-import its own allocation through the
     // surface-share socket, a path that cannot rebuild every flavour and
