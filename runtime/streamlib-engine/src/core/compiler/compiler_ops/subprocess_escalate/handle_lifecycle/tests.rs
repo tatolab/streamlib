@@ -108,19 +108,16 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
             .is_some()
     );
 
-    let held_slot_id = {
-        let handles = registry.handles.lock().expect("poisoned");
-        match handles.get(&handle_id) {
-            Some(RegisteredHandle::Texture {
-                texture,
-                timeline_pair,
-            }) => {
-                assert!(timeline_pair.is_some());
-                texture.slot_id()
-            }
-            _ => panic!("the registry holds the texture"),
+    let held_slot_id = registry.read_the_one_off_held_under(&handle_id, |held| match held {
+        Some(RegisteredHandle::Texture {
+            texture,
+            timeline_pair,
+        }) => {
+            assert!(timeline_pair.is_some());
+            texture.slot_id()
         }
-    };
+        _ => panic!("the registry holds the texture"),
+    });
     let same_bucket = TexturePoolDescriptor::new(width, height, format)
         .with_usage(parse_texture_usages(&usage).expect("usage"))
         .with_cross_process_importability(TextureCrossProcessImportability::IOSurface);
@@ -980,5 +977,495 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
             "teardown left tensor slot {pool_slot_key} in the parent-wide map"
         );
     }
+    live_service.stop();
+}
+
+/// The handle id an escalate acquire answered, or its refusal's message.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn handle_id_or_refusal_of(
+    response: Option<
+        crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse,
+    >,
+) -> std::result::Result<String, String> {
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
+
+    match response {
+        Some(EscalateResponse::Ok(ok)) => Ok(ok.handle_id),
+        Some(EscalateResponse::Err(err)) => Err(err.message),
+        None => Err("the escalate op got no response".to_string()),
+    }
+}
+
+/// A one-off 64x32 `rgba8_unorm` `texture_binding` texture request, the
+/// shape the per-node count tests acquire.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_one_off_64x32_rgba8_unorm_texture_request()
+-> crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest {
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
+
+    EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+        request_id: "req-one-off-64x32".to_string(),
+        width: 64,
+        height: 32,
+        format: crate::core::rhi::TextureFormat::Rgba8Unorm
+            .wire_name()
+            .to_string(),
+        processor_output_pool: None,
+        usage: vec!["texture_binding".to_string()],
+    })
+}
+
+/// The shape a one-off 64x32 `rgba8_unorm` `texture_binding` texture is
+/// counted under, the wire's implied copy bits included.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn the_64x32_rgba8_unorm_one_off_texture_shape() -> super::OneOffAcquisitionShape {
+    super::OneOffAcquisitionShape::Texture {
+        width: 64,
+        height: 32,
+        format: crate::core::rhi::TextureFormat::Rgba8Unorm,
+        usage: super::super::acquisition::parse_texture_usages(&["texture_binding".to_string()])
+            .expect("a known usage"),
+    }
+}
+
+/// Acquire a one-off 64x32 `rgba8_unorm` texture over the real escalate op,
+/// answering its handle id or the refusal.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+) -> std::result::Result<String, String> {
+    handle_id_or_refusal_of(super::super::handle_escalate_op(
+        sandbox,
+        registry,
+        a_one_off_64x32_rgba8_unorm_texture_request(),
+    ))
+}
+
+/// Release one handle over the real escalate op, answering the refusal if
+/// the release was refused.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn release_a_handle_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    handle_id: &str,
+) -> std::result::Result<(), String> {
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestReleaseHandle;
+
+    handle_id_or_refusal_of(super::super::handle_escalate_op(
+        sandbox,
+        registry,
+        EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+            request_id: "req-release".to_string(),
+            handle_id: handle_id.to_string(),
+        }),
+    ))
+    .map(|_| ())
+}
+
+/// Run every release a helper's teardown owes, as its bridge's drop does.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn release_everything_the_helpers_teardown_owes(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+) {
+    use super::{
+        release_processor_output_pool_slot, release_surface_share_and_parent_caches_for_handle,
+    };
+
+    for (handle_id, removed_handle) in registry.drain_handles() {
+        release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
+    }
+    for released_slot in registry.processor_output_pools().drain_slots() {
+        release_processor_output_pool_slot(sandbox, released_slot);
+    }
+}
+
+/// One node holding every frame its output pool may grow to, and every
+/// one-off of a shape it may hold, refuses only itself: a second node's
+/// pooled frame and one-off of the same shape are both served.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+#[allow(clippy::disallowed_macros)]
+fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
+    use uuid::Uuid;
+
+    use super::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let node_a = EscalateHandleRegistry::new();
+    let node_b = EscalateHandleRegistry::new();
+    let node_a_pool_key = format!("node-a-pool-{}", Uuid::new_v4().simple());
+    let node_b_pool_key = format!("node-b-pool-{}", Uuid::new_v4().simple());
+    let consumer = live_service.check_out_leases().mint_holder_id();
+
+    let node_a_frames_the_consumer_holds: Vec<String> = (0..PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
+        .map(|_| {
+            let frame = next_processor_output_frame_over_the_escalate_op(
+                &sandbox,
+                &node_a,
+                &node_a_pool_key,
+                2,
+            )
+            .expect("node A's output pool grows while a consumer holds its frames");
+            live_service
+                .check_out_leases()
+                .record_check_out_lease(&frame, consumer)
+                .expect("the consumer holds every frame node A publishes");
+            frame
+        })
+        .collect();
+    let node_a_pool_refusal =
+        next_processor_output_frame_over_the_escalate_op(&sandbox, &node_a, &node_a_pool_key, 2)
+            .expect_err("node A's seventeenth held frame is refused");
+    assert!(
+        node_a_pool_refusal.contains(&node_a_pool_key),
+        "the refusal names node A's own pool: {node_a_pool_refusal}"
+    );
+
+    for _ in 0..ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE {
+        acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &node_a)
+            .expect("node A acquires one-offs up to its own count of the shape");
+    }
+    let node_a_one_off_refusal =
+        acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &node_a)
+            .expect_err("node A's seventeenth one-off of the shape is refused");
+    assert!(
+        node_a_one_off_refusal.contains("64x32 rgba8_unorm")
+            && node_a_one_off_refusal.contains("16"),
+        "the refusal names the shape and the count: {node_a_one_off_refusal}"
+    );
+
+    next_processor_output_frame_over_the_escalate_op(&sandbox, &node_b, &node_b_pool_key, 2)
+        .expect("node B's pooled frame of the same shape is served while node A holds its own");
+    acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &node_b)
+        .expect("node B's one-off of the same shape is served while node A holds its own");
+
+    for frame in &node_a_frames_the_consumer_holds {
+        live_service
+            .check_out_leases()
+            .release_one_check_out_lease(frame, consumer)
+            .expect("the consumer lets each frame go");
+    }
+    release_everything_the_helpers_teardown_owes(&sandbox, &node_a);
+    release_everything_the_helpers_teardown_owes(&sandbox, &node_b);
+    live_service.stop();
+}
+
+/// At the device's memory budget every escalate acquisition that has to
+/// allocate — a one-off, a pooled frame, a pixel buffer, a tensor — is
+/// refused at once, never sitting out a wait for a holder to let go. The held
+/// texture is released only after every answer is in, so an acquire that
+/// waited would miss its answer's deadline rather than be rescued.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+#[allow(clippy::disallowed_macros)]
+fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use uuid::Uuid;
+
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
+        EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireStorageBuffer,
+        EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
+    };
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let held_one_off =
+        acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &registry)
+            .expect("the one-off held through the test is acquired");
+    let held_shape = the_64x32_rgba8_unorm_one_off_texture_shape();
+
+    sandbox
+        .host_inner()
+        .device()
+        .inner
+        .leave_no_room_in_any_frame_allocation_budget_for_this_test();
+
+    let a_storage_buffer_request = |shape: Vec<u64>, pool_key: Option<String>| {
+        EscalateRequest::AcquireStorageBuffer(EscalateRequestAcquireStorageBuffer {
+            request_id: "req-tensor-at-the-budget".to_string(),
+            shape,
+            dtype: "float32".to_string(),
+            processor_output_pool: pool_key.map(|pool_key| EscalateRequestProcessorOutputPool {
+                pool_key,
+                rotation_depth: 2,
+            }),
+        })
+    };
+    let requests_at_the_budget: Vec<(&'static str, EscalateRequest)> = vec![
+        (
+            "a one-off texture of the held texture's shape",
+            a_one_off_64x32_rgba8_unorm_texture_request(),
+        ),
+        (
+            "a pooled texture of a shape nobody holds",
+            EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+                request_id: "req-pooled-at-the-budget".to_string(),
+                width: 96,
+                height: 48,
+                format: "rgba8_unorm".to_string(),
+                processor_output_pool: Some(EscalateRequestProcessorOutputPool {
+                    pool_key: format!("budget-texture-pool-{}", Uuid::new_v4().simple()),
+                    rotation_depth: 2,
+                }),
+                usage: vec!["texture_binding".to_string()],
+            }),
+        ),
+        (
+            "a pixel buffer of a fresh shape",
+            EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
+                request_id: "req-pixel-buffer-at-the-budget".to_string(),
+                width: 48,
+                height: 16,
+                format: "bgra".to_string(),
+            }),
+        ),
+        (
+            "a one-off tensor",
+            a_storage_buffer_request(vec![1, 3, 16, 16], None),
+        ),
+        (
+            "a pooled tensor",
+            a_storage_buffer_request(
+                vec![1, 3, 32, 32],
+                Some(format!("budget-tensor-pool-{}", Uuid::new_v4().simple())),
+            ),
+        ),
+    ];
+    let request_count = requests_at_the_budget.len();
+
+    let (release_signal_tx, release_signal_rx) = mpsc::channel::<()>();
+    let (answer_tx, answer_rx) =
+        mpsc::channel::<(&'static str, Duration, std::result::Result<String, String>)>();
+    std::thread::scope(|scope| {
+        let releasing_sandbox = sandbox.clone();
+        let releasing_registry = std::sync::Arc::clone(&registry);
+        let held_one_off = held_one_off.clone();
+        scope.spawn(move || {
+            if release_signal_rx.recv().is_ok() {
+                release_a_handle_over_the_escalate_op(
+                    &releasing_sandbox,
+                    &releasing_registry,
+                    &held_one_off,
+                )
+                .expect("the held one-off releases");
+            }
+        });
+        let requesting_sandbox = sandbox.clone();
+        let requesting_registry = std::sync::Arc::clone(&registry);
+        scope.spawn(move || {
+            for (what_is_requested, request) in requests_at_the_budget {
+                let requested_at = Instant::now();
+                let answer = handle_id_or_refusal_of(super::super::handle_escalate_op(
+                    &requesting_sandbox,
+                    &requesting_registry,
+                    request,
+                ));
+                if answer_tx
+                    .send((what_is_requested, requested_at.elapsed(), answer))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
+        for _ in 0..request_count {
+            let (what_is_requested, answered_after, answer) = answer_rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("every acquisition at the budget is answered at once, not after a wait");
+            let refusal = answer.expect_err(what_is_requested);
+            assert!(
+                refusal.contains("refused a")
+                    && refusal.contains("frame allocation before allocating"),
+                "{what_is_requested}: the refusal is the device memory budget's, by name: \
+                 {refusal}"
+            );
+            assert!(
+                answered_after < Duration::from_millis(250),
+                "{what_is_requested}: answered after {answered_after:?}, so it waited"
+            );
+        }
+        assert_eq!(registry.handle_count(), 1, "only the held one-off is held");
+        assert_eq!(
+            registry.one_off_acquisitions_held_or_reserved_of_shape(&held_shape),
+            1,
+            "the refused one-off handed its reservation back"
+        );
+        release_signal_tx
+            .send(())
+            .expect("the releasing thread is waiting for the signal");
+    });
+
+    assert_eq!(registry.handle_count(), 0);
+    release_everything_the_helpers_teardown_owes(&sandbox, &registry);
+    live_service.stop();
+}
+
+/// A one-off's count goes back to its node when the helper releases it, and
+/// every count it holds goes back at teardown.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[allow(clippy::disallowed_macros)]
+fn a_released_or_torn_down_one_off_hands_its_count_back_to_its_node() {
+    use super::RegisteredHandle;
+    use super::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let shape = the_64x32_rgba8_unorm_one_off_texture_shape();
+    let acquire_every_one_off_the_node_may_hold = || -> Vec<String> {
+        (0..ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE)
+            .map(|_| {
+                acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(
+                    &sandbox, &registry,
+                )
+                .expect("the node acquires up to its own count of the shape")
+            })
+            .collect()
+    };
+
+    let held = acquire_every_one_off_the_node_may_hold();
+    assert!(
+        registry.read_the_one_off_held_under(&held[0], |held_one_off| {
+            matches!(held_one_off, Some(RegisteredHandle::Texture { .. }))
+        }),
+        "a one-off texture is held under the id the helper was answered with"
+    );
+    let refusal =
+        acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &registry)
+            .expect_err("the seventeenth is refused");
+    assert!(refusal.contains("64x32 rgba8_unorm"), "got: {refusal}");
+
+    release_a_handle_over_the_escalate_op(&sandbox, &registry, &held[0])
+        .expect("the helper releases one");
+    assert_eq!(
+        registry.one_off_acquisitions_held_or_reserved_of_shape(&shape),
+        ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE - 1
+    );
+    acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &registry)
+        .expect("a released one-off's count makes room for one more");
+
+    release_everything_the_helpers_teardown_owes(&sandbox, &registry);
+    assert_eq!(registry.handle_count(), 0);
+    assert_eq!(
+        registry.one_off_acquisitions_held_or_reserved_of_shape(&shape),
+        0
+    );
+    acquire_every_one_off_the_node_may_hold();
+    release_everything_the_helpers_teardown_owes(&sandbox, &registry);
+}
+
+/// Releasing a one-off pixel buffer evicts the lookup its check-in id cached
+/// and leaves its slot's published frame cached: on macOS the one-off's id is
+/// that published frame's, which the pool alone retires.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[allow(clippy::disallowed_macros)]
+fn releasing_a_one_off_pixel_buffer_evicts_its_lookup_and_leaves_its_slots_published_frame_cached()
+{
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquirePixelBuffer;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+
+    let handle_id = handle_id_or_refusal_of(super::super::handle_escalate_op(
+        &sandbox,
+        &registry,
+        EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
+            request_id: "req-one-off-pixel-buffer".to_string(),
+            width: 64,
+            height: 32,
+            format: "bgra".to_string(),
+        }),
+    ))
+    .expect("a one-off pixel buffer is acquired");
+    let published_frame_ids = sandbox
+        .host_inner()
+        .published_pixel_buffer_frame_ids_cached_in_this_process();
+    let [published_frame_id] = published_frame_ids.as_slice() else {
+        panic!("one hand-off publishes one frame: {published_frame_ids:?}");
+    };
+    #[cfg(target_os = "linux")]
+    {
+        assert_ne!(
+            &handle_id, published_frame_id,
+            "on Linux a one-off is checked in under its own id"
+        );
+        sandbox
+            .host_inner()
+            .get_pixel_buffer(&handle_id)
+            .expect("the check-in id resolves through the surface store");
+        assert!(
+            sandbox
+                .host_inner()
+                .pooled_backing_held_in_this_process(&handle_id)
+                .is_some(),
+            "resolving the check-in id caches its lookup"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        &handle_id, published_frame_id,
+        "on macOS a one-off's id is its slot's published frame"
+    );
+
+    release_a_handle_over_the_escalate_op(&sandbox, &registry, &handle_id)
+        .expect("the helper releases the one-off");
+
+    assert!(
+        sandbox
+            .host_inner()
+            .pooled_backing_held_in_this_process(published_frame_id)
+            .is_some(),
+        "releasing a one-off leaves its slot's published frame cached"
+    );
+    #[cfg(target_os = "linux")]
+    assert!(
+        sandbox
+            .host_inner()
+            .pooled_backing_held_in_this_process(&handle_id)
+            .is_none(),
+        "releasing a one-off evicts the lookup its check-in id cached"
+    );
     live_service.stop();
 }

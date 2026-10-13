@@ -350,6 +350,9 @@ jobs:
           # estimate without the budget extension and the system's available
           # memory, the Metal working set's arithmetic, and the one lock two
           # racing allocations take. No device.
+          # A node's one-off acquisitions, counted per shape and refused at its
+          # own sixteen while other shapes and other nodes go on acquiring. No
+          # device.
           # The swapchain acquire barrier's source stage, which must chain off
           # the image-available semaphore wait.
           # A port named in any spelling that casts to it, on the read and the
@@ -377,6 +380,7 @@ jobs:
             core::context::processor_output_surface_pool \
             vulkan::rhi::vulkan_frame_allocation_device_memory_budget::tests \
             linux::system_memory_available_from_proc_meminfo::tests \
+            core::compiler::compiler_ops::subprocess_escalate::handle_lifecycle::one_off_acquisitions_held_for_one_node \
             core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::parse_texture_usages \
             core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::the_implied_copy_bits \
             core::context::audio_device_backend \

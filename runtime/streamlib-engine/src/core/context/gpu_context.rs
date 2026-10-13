@@ -1199,6 +1199,21 @@ impl GpuContext {
             .forget_pixel_buffer_looked_up_through_the_surface_store(surface_id);
     }
 
+    /// The published frame ids this process's pixel-buffer pools hold in
+    /// their cache, one per slot that has published.
+    #[cfg(test)]
+    pub(crate) fn published_pixel_buffer_frame_ids_cached_in_this_process(&self) -> Vec<String> {
+        self.pixel_buffer_pool_manager
+            .buffer_cache
+            .lock()
+            .unwrap()
+            .buffers_by_surface_id
+            .keys()
+            .filter(|surface_id| PublishedPixelBufferFrameId::parse(surface_id).is_some())
+            .cloned()
+            .collect()
+    }
+
     /// Resolve a VideoFrame's buffer from its surface_id.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
         self.get_pixel_buffer(surface_id)

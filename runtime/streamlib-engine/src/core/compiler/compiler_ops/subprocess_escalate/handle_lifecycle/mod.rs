@@ -4,10 +4,15 @@
 //! What the parent holds on a helper process's behalf, and the release every
 //! acquire owes — by explicit `release_handle` or at bridge teardown.
 
+mod one_off_acquisitions_held_for_one_node;
 mod processor_output_pools_of_one_helper;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use one_off_acquisitions_held_for_one_node::OneOffAcquisitionShape;
+use one_off_acquisitions_held_for_one_node::{
+    OneOffAcquisitionCountReservation, OneOffAcquisitionsHeldForOneNode,
+};
 pub(crate) use processor_output_pools_of_one_helper::{
     ProcessorOutputFrameHandOff, ProcessorOutputFreshSlotHandOff, ProcessorOutputPoolsOfOneHelper,
     ProcessorOutputSlotDescriptor, ProcessorOutputTextureDescriptor,
@@ -15,7 +20,7 @@ pub(crate) use processor_output_pools_of_one_helper::{
 };
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::core::compiler::compiler_ops::subprocess_bridge::SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
@@ -111,13 +116,19 @@ impl RegisteredHandle {
 /// references it by ID. Dropping a [`PooledTextureHandle`] releases the pool
 /// slot; dropping an [`PixelBuffer`] releases its refcount.
 ///
+/// It counts the node's one-offs per shape, refusing the next by name once
+/// 16 of a shape are held.
+///
 /// It is the one per-subprocess state the escalate dispatch has, so the
 /// windows that subprocess owns and the lifecycle hook it is currently inside
 /// live here too — both are per-helper, and both are released or forgotten at
 /// the same teardown.
 #[derive(Default)]
 pub(crate) struct EscalateHandleRegistry {
-    handles: Mutex<HashMap<String, RegisteredHandle>>,
+    /// Taken by a reservation's drop and by teardown, so it recovers rather
+    /// than panics when poisoned, and is never held across an allocation.
+    one_off_acquisitions_held_for_the_helper:
+        Mutex<OneOffAcquisitionsHeldForOneNode<RegisteredHandle>>,
     /// The windows this subprocess owns, each driving its own present
     /// thread. Not a [`RegisteredHandle`]: releasing one stops and waits for
     /// a thread rather than evicting a texture-cache entry, and a window id
@@ -146,66 +157,82 @@ impl EscalateHandleRegistry {
         Arc::new(Self::default())
     }
 
-    /// Hold `registered_handle` under `handle_id` until the helper releases it.
-    pub(crate) fn insert_registered_handle(
+    /// Reserve one count of `shape` for a one-off acquisition about to be
+    /// allocated, refused by name when the node already holds or has reserved
+    /// as many of that shape as one node may. The registry's lock is released
+    /// before this returns.
+    pub(crate) fn reserve_one_off_acquisition_count(
         &self,
-        handle_id: String,
-        registered_handle: RegisteredHandle,
-    ) {
-        let mut map = self.handles.lock().expect("poisoned");
-        map.insert(handle_id, registered_handle);
+        shape: OneOffAcquisitionShape,
+    ) -> crate::core::error::Result<OneOffAcquisitionCountReservation<'_>> {
+        self.locked_one_off_acquisitions_held_for_the_helper()
+            .reserve_one_more_of_shape(&shape)?;
+        Ok(OneOffAcquisitionCountReservation::of_a_count_the_registry_counted(self, shape))
     }
 
-    /// The processor output pools this helper publishes from.
-    pub(crate) fn processor_output_pools(
+    /// The one-off acquisitions this helper holds, recovered rather than
+    /// panicked on when poisoned.
+    fn locked_one_off_acquisitions_held_for_the_helper(
         &self,
-    ) -> std::sync::MutexGuard<'_, ProcessorOutputPoolsOfOneHelper> {
-        self.processor_output_pools.lock().expect("poisoned")
+    ) -> MutexGuard<'_, OneOffAcquisitionsHeldForOneNode<RegisteredHandle>> {
+        self.one_off_acquisitions_held_for_the_helper
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn insert_buffer(&self, handle_id: String, buffer: PixelBuffer) {
-        let mut map = self.handles.lock().expect("poisoned");
-        map.insert(handle_id, RegisteredHandle::PixelBuffer(buffer));
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn insert_image(
-        &self,
-        handle_id: String,
-        texture: crate::core::rhi::Texture,
-        produce_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
-        consume_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
-    ) {
-        let mut map = self.handles.lock().expect("poisoned");
-        map.insert(
-            handle_id,
-            RegisteredHandle::Image {
-                texture,
-                produce_done,
-                consume_done,
-            },
-        );
+    /// The processor output pools this helper publishes from, recovered
+    /// rather than panicked on when poisoned: teardown drains them.
+    pub(crate) fn processor_output_pools(&self) -> MutexGuard<'_, ProcessorOutputPoolsOfOneHelper> {
+        self.processor_output_pools
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Remove a handle by id, handing back what was held so the caller can
-    /// pair its removal with the kind-specific cleanup. `None` when the id
-    /// was unknown. Used by the escalate `release_handle` path.
+    /// pair its removal with the kind-specific cleanup, and its count back to
+    /// the node. `None` when the id was unknown. Used by the escalate
+    /// `release_handle` path.
     pub(crate) fn remove_handle(&self, handle_id: &str) -> Option<RegisteredHandle> {
-        let mut map = self.handles.lock().expect("poisoned");
-        map.remove(handle_id)
+        self.locked_one_off_acquisitions_held_for_the_helper()
+            .release_held_acquisition(handle_id)
     }
 
     /// Take every held handle, ids included, so a teardown path can run the
-    /// same kind-specific cleanup the explicit release path does.
+    /// same kind-specific cleanup the explicit release path does; every count
+    /// they held goes back to the node.
     pub(crate) fn drain_handles(&self) -> Vec<(String, RegisteredHandle)> {
-        let mut map = self.handles.lock().expect("poisoned");
-        map.drain().collect()
+        self.locked_one_off_acquisitions_held_for_the_helper()
+            .release_every_held_acquisition()
     }
 
     /// Number of currently-held handles; visible for tests.
     #[cfg(test)]
     pub(crate) fn handle_count(&self) -> usize {
-        self.handles.lock().expect("poisoned").len()
+        self.locked_one_off_acquisitions_held_for_the_helper()
+            .held_count()
+    }
+
+    /// How many one-offs of `shape` this helper holds or has reserved.
+    #[cfg(test)]
+    pub(crate) fn one_off_acquisitions_held_or_reserved_of_shape(
+        &self,
+        shape: &OneOffAcquisitionShape,
+    ) -> usize {
+        self.locked_one_off_acquisitions_held_for_the_helper()
+            .held_or_reserved_count_of_shape(shape)
+    }
+
+    /// Read the one-off held under `handle_id` with the registry's lock held.
+    #[cfg(test)]
+    pub(crate) fn read_the_one_off_held_under<Answer>(
+        &self,
+        handle_id: &str,
+        read: impl FnOnce(Option<&RegisteredHandle>) -> Answer,
+    ) -> Answer {
+        read(
+            self.locked_one_off_acquisitions_held_for_the_helper()
+                .held_acquisition(handle_id),
+        )
     }
 
     /// Record the lifecycle command the parent is about to send the helper,
