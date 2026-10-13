@@ -196,15 +196,18 @@ pub(crate) fn refusal_of_a_frame_allocation_past_the_device_memory_bound(
         }
     };
     budget_refusal.or_else(|| {
-        let count = reading.allocation_count;
-        let allocations_left_under_the_device_limit = u64::from(count.max_memory_allocation_count)
-            .saturating_sub(count.live_device_memory_allocation_count);
+        let device_memory_allocation_count = reading.allocation_count;
+        let allocations_left_under_the_device_limit =
+            u64::from(device_memory_allocation_count.max_memory_allocation_count)
+                .saturating_sub(device_memory_allocation_count.live_device_memory_allocation_count);
         (allocations_left_under_the_device_limit
             < u64::from(DEVICE_MEMORY_ALLOCATIONS_KEPT_IN_RESERVE_UNDER_THE_DEVICE_LIMIT))
         .then(
             || Error::FrameAllocationRefusedNearTheDeviceMemoryAllocationCountLimit {
-                live_device_memory_allocation_count: count.live_device_memory_allocation_count,
-                max_memory_allocation_count: count.max_memory_allocation_count,
+                live_device_memory_allocation_count: device_memory_allocation_count
+                    .live_device_memory_allocation_count,
+                max_memory_allocation_count: device_memory_allocation_count
+                    .max_memory_allocation_count,
                 allocations_kept_in_reserve:
                     DEVICE_MEMORY_ALLOCATIONS_KEPT_IN_RESERVE_UNDER_THE_DEVICE_LIMIT,
                 frame_allocation_site: request.frame_allocation_site.to_string(),
@@ -224,7 +227,7 @@ pub(crate) fn heap_budget_without_the_memory_budget_extension(
     heap_locality: DeviceMemoryHeapLocality,
     system_memory_available_bytes: Option<u64>,
 ) -> (u64, DeviceMemoryHeapBudgetSource) {
-    let estimate = (
+    let allocator_estimate_and_its_source = (
         allocator_estimate_of_eighty_percent_of_the_heap_bytes,
         DeviceMemoryHeapBudgetSource::EstimatedAsEightyPercentOfTheHeap,
     );
@@ -240,10 +243,10 @@ pub(crate) fn heap_budget_without_the_memory_budget_extension(
                     DeviceMemoryHeapBudgetSource::EstimatedAndCappedByTheSystemsAvailableMemory,
                 )
             } else {
-                estimate
+                allocator_estimate_and_its_source
             }
         }
-        _ => estimate,
+        _ => allocator_estimate_and_its_source,
     }
 }
 

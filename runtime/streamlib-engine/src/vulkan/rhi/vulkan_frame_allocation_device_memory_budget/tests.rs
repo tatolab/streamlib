@@ -8,8 +8,7 @@ use std::time::Duration;
 
 use super::*;
 
-const MEBIBYTE: u64 = 1024 * 1024;
-const HEADROOM: u64 = HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET;
+const BYTES_PER_MEBIBYTE: u64 = 1024 * 1024;
 /// A device limit far from anything these readings hold.
 const ROOMY_MAX_MEMORY_ALLOCATION_COUNT: u32 = u32::MAX;
 
@@ -77,7 +76,7 @@ fn a_frame_allocation_past_the_heap_budget_is_refused_naming_the_heap() {
         fetches_made.set(fetches_made.get() + 1);
         Ok(match fetches_made.get() {
             1 => reading_of_one_heap(
-                heap_reading(1, 2_048 * MEBIBYTE, 512 * MEBIBYTE),
+                heap_reading(1, 2_048 * BYTES_PER_MEBIBYTE, 512 * BYTES_PER_MEBIBYTE),
                 40,
                 ROOMY_MAX_MEMORY_ALLOCATION_COUNT,
             ),
@@ -85,9 +84,9 @@ fn a_frame_allocation_past_the_heap_budget_is_refused_naming_the_heap() {
                 DeviceMemoryHeapBudgetReading {
                     heap_index: 1,
                     heap_locality: DeviceMemoryHeapLocality::DeviceLocal,
-                    heap_budget_bytes: 1_900 * MEBIBYTE,
-                    heap_usage_bytes: 1_850 * MEBIBYTE,
-                    bytes_this_runtimes_allocator_pools_hold_on_the_heap: 700 * MEBIBYTE,
+                    heap_budget_bytes: 1_900 * BYTES_PER_MEBIBYTE,
+                    heap_usage_bytes: 1_850 * BYTES_PER_MEBIBYTE,
+                    bytes_this_runtimes_allocator_pools_hold_on_the_heap: 700 * BYTES_PER_MEBIBYTE,
                     device_memory_blocks_this_runtimes_allocator_holds_on_the_heap: 41,
                     heap_budget_source: DeviceMemoryHeapBudgetSource::ReportedByTheDriver,
                 },
@@ -98,7 +97,7 @@ fn a_frame_allocation_past_the_heap_budget_is_refused_naming_the_heap() {
     };
 
     let admitted = gate.allocate_a_frame_within_the_device_memory_budget(
-        &frame_request(8 * MEBIBYTE),
+        &frame_request(8 * BYTES_PER_MEBIBYTE),
         read_heap_one,
         || Ok("the first frame"),
     );
@@ -111,7 +110,7 @@ fn a_frame_allocation_past_the_heap_budget_is_refused_naming_the_heap() {
     let allocate_the_frame_ran = Cell::new(false);
     let refusal = gate
         .allocate_a_frame_within_the_device_memory_budget(
-            &frame_request(8 * MEBIBYTE),
+            &frame_request(8 * BYTES_PER_MEBIBYTE),
             read_heap_one,
             || {
                 allocate_the_frame_ran.set(true);
@@ -141,14 +140,17 @@ fn a_frame_allocation_past_the_heap_budget_is_refused_naming_the_heap() {
             ..
         } => {
             assert_eq!(*heap_index, 1);
-            assert_eq!(*heap_budget_bytes, 1_900 * MEBIBYTE);
-            assert_eq!(*heap_usage_bytes, 1_850 * MEBIBYTE);
+            assert_eq!(*heap_budget_bytes, 1_900 * BYTES_PER_MEBIBYTE);
+            assert_eq!(*heap_usage_bytes, 1_850 * BYTES_PER_MEBIBYTE);
             assert_eq!(
                 *bytes_this_runtimes_allocator_pools_hold_on_the_heap,
-                700 * MEBIBYTE
+                700 * BYTES_PER_MEBIBYTE
             );
-            assert_eq!(*requested_bytes, 8 * MEBIBYTE);
-            assert_eq!(*headroom_bytes, HEADROOM);
+            assert_eq!(*requested_bytes, 8 * BYTES_PER_MEBIBYTE);
+            assert_eq!(
+                *headroom_bytes,
+                HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET
+            );
             assert_eq!(frame_allocation_site, "a frame allocation in a test");
         }
         other => panic!("expected the heap-budget refusal, got {other:?}"),
@@ -156,11 +158,13 @@ fn a_frame_allocation_past_the_heap_budget_is_refused_naming_the_heap() {
     let message = refusal.to_string();
     for named in [
         "device memory heap 1".to_string(),
-        format!("budget of {} bytes", 1_900 * MEBIBYTE),
-        format!("uses {}", 1_850 * MEBIBYTE),
-        format!("pools hold {}", 700 * MEBIBYTE),
-        format!("a {}-byte frame allocation", 8 * MEBIBYTE),
-        format!("the {HEADROOM}-byte headroom"),
+        format!("budget of {} bytes", 1_900 * BYTES_PER_MEBIBYTE),
+        format!("uses {} bytes", 1_850 * BYTES_PER_MEBIBYTE),
+        format!("pools hold {} bytes", 700 * BYTES_PER_MEBIBYTE),
+        format!("a {}-byte frame allocation", 8 * BYTES_PER_MEBIBYTE),
+        format!(
+            "the {HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET}-byte headroom"
+        ),
     ] {
         assert!(
             message.contains(&named),
@@ -171,9 +175,10 @@ fn a_frame_allocation_past_the_heap_budget_is_refused_naming_the_heap() {
 
 #[test]
 fn a_frame_landing_exactly_on_the_budget_less_the_headroom_is_admitted() {
-    let budget = 4_096 * MEBIBYTE;
-    let request = 16 * MEBIBYTE;
-    let usage = budget - HEADROOM - request;
+    let budget = 4_096 * BYTES_PER_MEBIBYTE;
+    let request = 16 * BYTES_PER_MEBIBYTE;
+    let usage =
+        budget - HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET - request;
     assert!(
         refusal_of_a_frame_allocation_past_the_device_memory_bound(
             &frame_request(request),
@@ -186,9 +191,11 @@ fn a_frame_landing_exactly_on_the_budget_less_the_headroom_is_admitted() {
 
 #[test]
 fn a_frame_one_byte_past_the_budget_less_the_headroom_is_refused() {
-    let budget = 4_096 * MEBIBYTE;
-    let request = 16 * MEBIBYTE;
-    let usage = budget - HEADROOM - request + 1;
+    let budget = 4_096 * BYTES_PER_MEBIBYTE;
+    let request = 16 * BYTES_PER_MEBIBYTE;
+    let usage =
+        budget - HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET - request
+            + 1;
     assert!(matches!(
         refusal_of_a_frame_allocation_past_the_device_memory_bound(
             &frame_request(request),
@@ -200,8 +207,9 @@ fn a_frame_one_byte_past_the_budget_less_the_headroom_is_refused() {
 
 #[test]
 fn a_heap_whose_budget_is_below_the_headroom_refuses_every_frame() {
-    let budget_below_the_headroom = HEADROOM - 1;
-    for request in [1, 4_096, MEBIBYTE] {
+    let budget_below_the_headroom =
+        HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET - 1;
+    for request in [1, 4_096, BYTES_PER_MEBIBYTE] {
         assert!(
             matches!(
                 refusal_of_a_frame_allocation_past_the_device_memory_bound(
@@ -223,9 +231,9 @@ fn fewer_than_the_reserved_device_memory_allocations_left_refuses_naming_the_dev
             - DEVICE_MEMORY_ALLOCATIONS_KEPT_IN_RESERVE_UNDER_THE_DEVICE_LIMIT,
     ) + 1;
     let refusal = refusal_of_a_frame_allocation_past_the_device_memory_bound(
-        &frame_request(MEBIBYTE),
+        &frame_request(BYTES_PER_MEBIBYTE),
         &reading_of_one_heap(
-            heap_reading(0, 4_096 * MEBIBYTE, 0),
+            heap_reading(0, 4_096 * BYTES_PER_MEBIBYTE, 0),
             live,
             max_memory_allocation_count,
         ),
@@ -264,9 +272,9 @@ fn exactly_the_reserved_device_memory_allocations_left_is_still_admitted() {
     );
     assert!(
         refusal_of_a_frame_allocation_past_the_device_memory_bound(
-            &frame_request(MEBIBYTE),
+            &frame_request(BYTES_PER_MEBIBYTE),
             &reading_of_one_heap(
-                heap_reading(0, 4_096 * MEBIBYTE, 0),
+                heap_reading(0, 4_096 * BYTES_PER_MEBIBYTE, 0),
                 live,
                 max_memory_allocation_count,
             ),
@@ -278,8 +286,16 @@ fn exactly_the_reserved_device_memory_allocations_left_is_still_admitted() {
 #[test]
 fn a_frame_past_both_bounds_is_refused_naming_the_heap_budget_first() {
     let refusal = refusal_of_a_frame_allocation_past_the_device_memory_bound(
-        &frame_request(MEBIBYTE),
-        &reading_of_one_heap(heap_reading(0, HEADROOM, HEADROOM), 4_096, 4_096),
+        &frame_request(BYTES_PER_MEBIBYTE),
+        &reading_of_one_heap(
+            heap_reading(
+                0,
+                HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET,
+                HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET,
+            ),
+            4_096,
+            4_096,
+        ),
     );
     assert!(matches!(
         refusal,
@@ -310,9 +326,9 @@ fn the_device_memory_allocation_count_is_allocator_blocks_plus_raw_allocations()
 
 #[test]
 fn without_the_budget_extension_a_host_heaps_room_is_capped_by_available_system_memory() {
-    let eighty_percent_of_the_heap = 25_600 * MEBIBYTE;
-    let usage = 1_000 * MEBIBYTE;
-    let system_memory_available = 3_000 * MEBIBYTE;
+    let eighty_percent_of_the_heap = 25_600 * BYTES_PER_MEBIBYTE;
+    let usage = 1_000 * BYTES_PER_MEBIBYTE;
+    let system_memory_available = 3_000 * BYTES_PER_MEBIBYTE;
     assert_eq!(
         heap_budget_without_the_memory_budget_extension(
             eighty_percent_of_the_heap,
@@ -331,7 +347,7 @@ fn without_the_budget_extension_a_host_heaps_room_is_capped_by_available_system_
             eighty_percent_of_the_heap,
             usage,
             DeviceMemoryHeapLocality::NotDeviceLocal,
-            Some(64_000 * MEBIBYTE),
+            Some(64_000 * BYTES_PER_MEBIBYTE),
         ),
         (
             eighty_percent_of_the_heap,
@@ -356,13 +372,13 @@ fn without_the_budget_extension_a_host_heaps_room_is_capped_by_available_system_
 
 #[test]
 fn without_the_budget_extension_a_device_local_heap_ignores_available_system_memory() {
-    let eighty_percent_of_the_heap = 19_660 * MEBIBYTE;
+    let eighty_percent_of_the_heap = 19_660 * BYTES_PER_MEBIBYTE;
     assert_eq!(
         heap_budget_without_the_memory_budget_extension(
             eighty_percent_of_the_heap,
-            100 * MEBIBYTE,
+            100 * BYTES_PER_MEBIBYTE,
             DeviceMemoryHeapLocality::DeviceLocal,
-            Some(MEBIBYTE),
+            Some(BYTES_PER_MEBIBYTE),
         ),
         (
             eighty_percent_of_the_heap,
@@ -374,9 +390,9 @@ fn without_the_budget_extension_a_device_local_heap_ignores_available_system_mem
 #[test]
 fn the_metal_working_set_refuses_past_the_recommended_maximum_less_the_headroom_naming_both_usages()
 {
-    let recommended_max_working_set = 10_240 * MEBIBYTE;
-    let metal_current_allocated = 6_000 * MEBIBYTE;
-    let request = 16 * MEBIBYTE;
+    let recommended_max_working_set = 10_240 * BYTES_PER_MEBIBYTE;
+    let metal_current_allocated = 6_000 * BYTES_PER_MEBIBYTE;
+    let request = 16 * BYTES_PER_MEBIBYTE;
     let reading_with_iosurface_bytes =
         |runtime_minted_iosurface_bytes: u64| FrameAllocationDeviceMemoryReading {
             budget: FrameAllocationBudgetReading::MetalWorkingSet(MetalWorkingSetBudgetReading {
@@ -389,8 +405,10 @@ fn the_metal_working_set_refuses_past_the_recommended_maximum_less_the_headroom_
                 max_memory_allocation_count: ROOMY_MAX_MEMORY_ALLOCATION_COUNT,
             },
         };
-    let iosurface_bytes_that_fill_the_working_set =
-        recommended_max_working_set - HEADROOM - metal_current_allocated - request;
+    let iosurface_bytes_that_fill_the_working_set = recommended_max_working_set
+        - HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET
+        - metal_current_allocated
+        - request;
 
     assert!(
         refusal_of_a_frame_allocation_past_the_device_memory_bound(
@@ -424,7 +442,10 @@ fn the_metal_working_set_refuses_past_the_recommended_maximum_less_the_headroom_
                 iosurface_bytes_that_fill_the_working_set + 1
             );
             assert_eq!(*requested_bytes, request);
-            assert_eq!(*headroom_bytes, HEADROOM);
+            assert_eq!(
+                *headroom_bytes,
+                HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET
+            );
         }
         other => panic!("expected the Metal working-set refusal, got {other:?}"),
     }
@@ -435,11 +456,11 @@ fn a_budget_left_with_no_room_by_a_test_refuses_every_frame() {
     let gate = FrameAllocationDeviceMemoryBudgetGate::new();
     gate.leave_no_room_in_any_budget_for_this_test();
     for reading in [
-        roomy_reading_of_one_heap(64_000 * MEBIBYTE, 0),
-        roomy_reading_of_one_heap(64_000 * MEBIBYTE, 32_000 * MEBIBYTE),
+        roomy_reading_of_one_heap(64_000 * BYTES_PER_MEBIBYTE, 0),
+        roomy_reading_of_one_heap(64_000 * BYTES_PER_MEBIBYTE, 32_000 * BYTES_PER_MEBIBYTE),
         FrameAllocationDeviceMemoryReading {
             budget: FrameAllocationBudgetReading::MetalWorkingSet(MetalWorkingSetBudgetReading {
-                recommended_max_working_set_bytes: 64_000 * MEBIBYTE,
+                recommended_max_working_set_bytes: 64_000 * BYTES_PER_MEBIBYTE,
                 metal_current_allocated_bytes: 0,
                 runtime_minted_iosurface_bytes_metal_does_not_count: 0,
             }),
@@ -467,7 +488,7 @@ fn a_device_memory_reading_that_fails_allocates_nothing() {
     let allocate_the_frame_ran = Cell::new(false);
     let refusal = gate
         .allocate_a_frame_within_the_device_memory_budget(
-            &frame_request(MEBIBYTE),
+            &frame_request(BYTES_PER_MEBIBYTE),
             || Err(Error::GpuError("the reading failed".to_string())),
             || {
                 allocate_the_frame_ran.set(true);
@@ -487,9 +508,11 @@ fn a_device_memory_reading_that_fails_allocates_nothing() {
 /// reading the first is about to change.
 #[test]
 fn two_frame_allocations_racing_for_the_last_room_never_both_pass() {
-    let budget = 1_024 * MEBIBYTE;
-    let request = 32 * MEBIBYTE;
-    let heap_usage = Arc::new(AtomicU64::new(budget - HEADROOM - request));
+    let budget = 1_024 * BYTES_PER_MEBIBYTE;
+    let request = 32 * BYTES_PER_MEBIBYTE;
+    let heap_usage = Arc::new(AtomicU64::new(
+        budget - HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET - request,
+    ));
     let gate = Arc::new(FrameAllocationDeviceMemoryBudgetGate::new());
     let reading_of_the_shared_heap = move |heap_usage: &AtomicU64| {
         roomy_reading_of_one_heap(budget, heap_usage.load(Ordering::SeqCst))
@@ -558,5 +581,8 @@ fn two_frame_allocations_racing_for_the_last_room_never_both_pass() {
         !second_passed,
         "only one allocation fits the last room, so the second is refused"
     );
-    assert_eq!(heap_usage.load(Ordering::SeqCst), budget - HEADROOM);
+    assert_eq!(
+        heap_usage.load(Ordering::SeqCst),
+        budget - HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET
+    );
 }

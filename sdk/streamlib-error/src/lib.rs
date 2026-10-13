@@ -268,9 +268,10 @@ pub enum Error {
     #[error(
         "{frame_allocation_site} refused a {requested_bytes}-byte frame allocation before \
          allocating: device memory heap {heap_index} ({heap_locality}) has a budget of \
-         {heap_budget_bytes} bytes ({heap_budget_source}) and uses {heap_usage_bytes}, of which \
-         this runtime's allocator pools hold {bytes_this_runtimes_allocator_pools_hold_on_the_heap}; \
-         the allocation would leave less than the {headroom_bytes}-byte headroom"
+         {heap_budget_bytes} bytes ({heap_budget_source}) and uses {heap_usage_bytes} bytes, of \
+         which this runtime's allocator pools hold \
+         {bytes_this_runtimes_allocator_pools_hold_on_the_heap} bytes; the allocation would leave \
+         less than the {headroom_bytes}-byte headroom"
     )]
     FrameAllocationRefusedPastTheDeviceMemoryHeapBudget {
         heap_index: u32,
@@ -632,8 +633,8 @@ mod tests {
             "HostVulkanBuffer::new refused a 3686400-byte frame allocation before allocating: \
              device memory heap 1 (not device-local) has a budget of 8000000000 bytes (estimated \
              as 80% of the heap, the driver reporting no budget, and capped by the system's \
-             available memory) and uses 7990000000, of which this runtime's allocator pools hold \
-             1200000000; the allocation would leave less than the 67108864-byte headroom"
+             available memory) and uses 7990000000 bytes, of which this runtime's allocator pools \
+             hold 1200000000 bytes; the allocation would leave less than the 67108864-byte headroom"
         );
     }
 
