@@ -18,7 +18,9 @@ use crate::core::color::ResolvedColorInfo;
 use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::{
     CapturedVideoFrameBytesInAStorageBuffer, CapturedVideoFrameToPooledRgbaConversionStage,
 };
-use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess};
+use crate::core::context::{
+    GpuContextFullAccess, GpuContextLimitedAccess, OneOffAcquisitionCountedForItsNode,
+};
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, PublishedPixelBufferFrameId, SourceLayoutInfo, StorageBuffer,
 };
@@ -115,7 +117,7 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
                 self.conversion_stage.wait_for_the_previous_submission()?;
                 staging.copy_the_planes_of(iosurface)?;
                 CapturedVideoFrameBytesInAStorageBuffer {
-                    storage_buffer: &staging.storage_buffer,
+                    storage_buffer: &*staging.storage_buffer,
                     layout: staging.layout,
                     written_by_another_device: false,
                 }
@@ -174,7 +176,7 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
 /// The storage buffer a CPU upload lands both planes in, luma then chroma,
 /// and the plane geometry it was shaped for.
 struct CpuUploadStagingStorageBuffer {
-    storage_buffer: StorageBuffer,
+    storage_buffer: OneOffAcquisitionCountedForItsNode<StorageBuffer>,
     layout: SourceLayoutInfo,
     luma_bytes_per_row: usize,
     luma_height: usize,

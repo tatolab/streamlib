@@ -11,10 +11,10 @@
 //!      `GpuContextFullAccess`.
 //!   2. Inside the closure:
 //!      - `full.wait_device_idle()`.
-//!      - `full.acquire_pixel_buffer(...)` — returns a `PixelBuffer`
-//!        handle.
-//!      - `full.acquire_output_texture(...)` — returns
-//!        `(String, Texture)`.
+//!      - `full.acquire_pixel_buffer(...)` — returns a counted
+//!        `PixelBuffer` handle.
+//!      - `full.acquire_output_texture(...)` — returns the id and a
+//!        counted texture registered under it until the handle drops.
 //!      - `full.register_texture_with_layout(...)` (per #906 exit
 //!        criterion #4).
 //!      If any FullAccess method regresses, this test fails.
@@ -29,6 +29,8 @@ use streamlib::engine_internal::sdk::rhi::VulkanLayout;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
+#[cfg(target_os = "linux")]
+use streamlib::sdk::rhi::Texture;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 
 #[streamlib::sdk::processor(
@@ -64,7 +66,11 @@ impl ManualProcessor for EscalateSmokeTest::Processor {
             // argument path. SHADER_READ_ONLY_OPTIMAL is a
             // representative non-default value.
             #[cfg(target_os = "linux")]
-            full.register_texture_with_layout(&id, texture, VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
+            full.register_texture_with_layout(
+                &id,
+                Texture::clone(&texture),
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            );
             #[cfg(not(target_os = "linux"))]
             {
                 // VulkanLayout doesn't exist on non-Linux; on those

@@ -979,7 +979,7 @@ fn release_everything_the_helpers_teardown_owes(
 fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
     use uuid::Uuid;
 
-    use super::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
     use crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
@@ -1065,12 +1065,12 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
 
     use uuid::Uuid;
 
-    use super::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
         EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireStorageBuffer,
         EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
     };
+    use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
     const LONGEST_AN_ANSWER_AT_THE_BUDGET_MAY_TAKE: Duration = Duration::from_millis(500);
@@ -1247,7 +1247,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
 #[allow(clippy::disallowed_macros)]
 fn a_released_or_torn_down_one_off_hands_its_count_back_to_its_node() {
     use super::RegisteredHandle;
-    use super::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
@@ -1498,4 +1498,63 @@ fn releasing_a_one_off_pixel_buffer_evicts_its_lookup_and_leaves_its_slots_publi
         "releasing a one-off evicts the lookup its check-in id cached"
     );
     live_service.stop();
+}
+
+/// A node's one-offs of one shape are refused by name at the node's own
+/// count, while another shape, and the same shape on another node, still
+/// acquire — and handing a reservation back makes room for one more.
+#[test]
+fn a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name() {
+    use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::one_off_acquisitions_held_for_one_node::one_off_acquisition_shapes_for_tests::{
+        a_640x480_bgra32_pixel_buffer, a_1280x720_rgba8_unorm_texture,
+    };
+
+    let node_a = EscalateHandleRegistry::new();
+    let node_b = EscalateHandleRegistry::new();
+
+    let mut node_a_reservations: Vec<_> = (0..ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE)
+        .map(|_| {
+            node_a
+                .reserve_one_off_acquisition_count(a_1280x720_rgba8_unorm_texture())
+                .expect("a node acquires up to its own count of one shape")
+        })
+        .collect();
+    assert_eq!(node_a_reservations.len(), 16);
+
+    let Err(refusal) = node_a.reserve_one_off_acquisition_count(a_1280x720_rgba8_unorm_texture())
+    else {
+        panic!("the node's seventeenth one-off of one shape is refused");
+    };
+    assert!(
+        matches!(
+            refusal,
+            crate::core::Error::EveryOneOffAcquisitionOfThisShapeTheNodeMayHoldIsHeld {
+                one_off_acquisitions_one_node_may_hold_of_one_shape: 16,
+                ..
+            }
+        ),
+        "the refusal is the node's own one-off count, not a pool's: {refusal:?}"
+    );
+    let refusal_text = refusal.to_string();
+    assert!(
+        refusal_text.contains("1280x720 rgba8_unorm") && refusal_text.contains("16"),
+        "the refusal names the shape and the count: {refusal_text}"
+    );
+    assert!(
+        !refusal_text.contains("processor output pool"),
+        "a one-off refusal is not the output pool's: {refusal_text}"
+    );
+
+    let _node_a_reservation_of_another_shape = node_a
+        .reserve_one_off_acquisition_count(a_640x480_bgra32_pixel_buffer())
+        .expect("another shape on the same node is counted on its own");
+    let _node_b_reservation_of_the_same_shape = node_b
+        .reserve_one_off_acquisition_count(a_1280x720_rgba8_unorm_texture())
+        .expect("another node's one-offs of the same shape are never refused by this node's");
+
+    node_a_reservations.pop();
+    let _node_a_reservation_in_the_room_handed_back = node_a
+        .reserve_one_off_acquisition_count(a_1280x720_rgba8_unorm_texture())
+        .expect("a reservation handed back unheld makes room for one more");
 }

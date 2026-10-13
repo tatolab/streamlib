@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use super::super::handle_lifecycle::{
-    EscalateHandleRegistry, OneOffAcquisitionShape, RegisteredHandle,
-};
+use super::super::handle_lifecycle::{EscalateHandleRegistry, RegisteredHandle};
 use super::{new_exportable_timeline_edge, parse_texture_format};
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
@@ -15,7 +13,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
     EscalateResponseErr, EscalateResponseOk,
 };
 use crate::core::context::{
-    GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle,
+    GpuContextFullAccess, GpuContextLimitedAccess, OneOffAcquisitionShape, PooledTextureHandle,
     TextureCrossProcessImportability, TexturePoolDescriptor,
 };
 use crate::core::rhi::{TextureFormat, TextureUsages};
@@ -46,7 +44,7 @@ pub(super) fn allocate_registered_texture_for_helper(
             ),
             Err(_) => TextureCrossProcessImportability::NotImportable,
         });
-    let texture = full.acquire_texture(&desc)?;
+    let texture = full.host_inner().acquire_texture(&desc)?;
     let (handle_id, produce_done, consume_done) = assign_texture_handle_id(full, &texture)?;
     texture.note_a_surface_share_id_naming_its_pool_slot(&handle_id);
     // The parent answers its own binding resolutions from the texture cache —
@@ -101,7 +99,11 @@ pub(in super::super) fn handle_acquire_image(
             format: parsed_format,
         },
         |full| {
-            let texture = full.acquire_render_target_dma_buf_image(width, height, parsed_format)?;
+            let texture = full.host_inner().acquire_render_target_dma_buf_image(
+                width,
+                height,
+                parsed_format,
+            )?;
             let (handle_id, produce_done, consume_done) = assign_image_handle_id(full, &texture)?;
             // The timeline pair is held with the image so the FDs handed to
             // surface-share stay valid for the registration's lifetime.

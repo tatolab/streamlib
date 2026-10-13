@@ -4,15 +4,12 @@
 //! What the parent holds on a helper process's behalf, and the release every
 //! acquire owes — by explicit `release_handle` or at bridge teardown.
 
-mod one_off_acquisitions_held_for_one_node;
+mod one_off_acquisition_count_reservation;
 mod processor_output_pools_of_one_helper;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use one_off_acquisitions_held_for_one_node::OneOffAcquisitionShape;
-use one_off_acquisitions_held_for_one_node::{
-    OneOffAcquisitionCountReservation, OneOffAcquisitionsHeldForOneNode,
-};
+use one_off_acquisition_count_reservation::OneOffAcquisitionCountReservation;
 pub(crate) use processor_output_pools_of_one_helper::{
     ProcessorOutputFrameHandOff, ProcessorOutputFreshSlotHandOff, ProcessorOutputPoolsOfOneHelper,
     ProcessorOutputSlotDescriptor, ProcessorOutputTextureDescriptor,
@@ -28,7 +25,10 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle};
+use crate::core::context::{
+    GpuContextFullAccess, GpuContextLimitedAccess, OneOffAcquisitionShape,
+    OneOffAcquisitionsHeldForOneNode, PooledTextureHandle,
+};
 use crate::core::processor_owned_window::WindowPresentLoopForOwningProcessor;
 use crate::core::rhi::PixelBuffer;
 

@@ -350,6 +350,27 @@ impl std::fmt::Debug for Texture {
     }
 }
 
+/// The wire names of `usage`'s flags, in a fixed order.
+pub(crate) fn texture_usages_to_wire(usage: TextureUsages) -> Vec<String> {
+    let mut out = Vec::new();
+    if usage.contains(TextureUsages::COPY_SRC) {
+        out.push("copy_src".to_string());
+    }
+    if usage.contains(TextureUsages::COPY_DST) {
+        out.push("copy_dst".to_string());
+    }
+    if usage.contains(TextureUsages::TEXTURE_BINDING) {
+        out.push("texture_binding".to_string());
+    }
+    if usage.contains(TextureUsages::STORAGE_BINDING) {
+        out.push("storage_binding".to_string());
+    }
+    if usage.contains(TextureUsages::RENDER_ATTACHMENT) {
+        out.push("render_attachment".to_string());
+    }
+    out
+}
+
 // =============================================================================
 // Layout regression tests
 // =============================================================================

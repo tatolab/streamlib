@@ -582,7 +582,7 @@ mod tests {
 
     fn fresh_full_access() -> Option<(GpuContext, GpuContextFullAccess)> {
         let gpu = GpuContext::init_for_platform().ok()?;
-        let full = GpuContextFullAccess::new(gpu.clone());
+        let full = GpuContextFullAccess::counting_one_offs_against_the_node(gpu.clone(), None);
         Some((gpu, full))
     }
 

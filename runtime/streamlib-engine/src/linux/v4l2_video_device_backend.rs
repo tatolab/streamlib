@@ -28,9 +28,9 @@ use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::
 use crate::core::context::{
     CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,
     DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
-    GpuContextLimitedAccess, VideoCaptureDevice, VideoCaptureInstantResolver, VideoCaptureStream,
-    VideoCaptureStreamFormat, VideoDeviceBackend, VideoDeviceStreamRequest,
-    refusal_for_a_named_camera_that_is_not_attached,
+    GpuContextLimitedAccess, OneOffAcquisitionCountedForItsNode, VideoCaptureDevice,
+    VideoCaptureInstantResolver, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
+    VideoDeviceStreamRequest, refusal_for_a_named_camera_that_is_not_attached,
 };
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{PixelFormat, SourceLayoutInfo, StorageBuffer};
@@ -459,7 +459,7 @@ fn negotiate_capture_format(
 
 struct CameraGpuResources {
     conversion_stage: CapturedVideoFrameToPooledRgbaConversionStage,
-    input_storage_buffers: Vec<StorageBuffer>,
+    input_storage_buffers: Vec<OneOffAcquisitionCountedForItsNode<StorageBuffer>>,
     input_mapped_ptrs: [*mut u8; 2],
     use_dmabuf: bool,
     dmabuf_imported_buffers: Vec<StorageBuffer>,
@@ -639,7 +639,7 @@ fn capture_thread_loop(
         )?;
 
         // Double-buffered HOST_VISIBLE input SSBOs (MMAP+memcpy fallback path).
-        let mut input_storage_buffers: Vec<StorageBuffer> = Vec::with_capacity(2);
+        let mut input_storage_buffers = Vec::with_capacity(2);
         let mut input_mapped_ptrs: [*mut u8; 2] = [std::ptr::null_mut(); 2];
         for slot in &mut input_mapped_ptrs {
             let buf = full.acquire_storage_buffer(
@@ -933,7 +933,7 @@ fn capture_thread_loop(
         let input_buffer = if use_dmabuf {
             &dmabuf_imported_buffers[input_ssbo_index]
         } else {
-            &input_storage_buffers[input_ssbo_index]
+            &*input_storage_buffers[input_ssbo_index]
         };
         let frame_result = conversion_stage.convert_into_pooled_pixel_buffer(
             CapturedVideoFrameBytesInAStorageBuffer {

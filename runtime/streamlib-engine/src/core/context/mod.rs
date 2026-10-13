@@ -11,6 +11,8 @@ pub(crate) mod escalate_gate;
 mod gpu_context;
 pub(crate) mod isolation;
 pub(crate) mod lease_aware_pool_slot_ring;
+mod one_off_acquisitions_counted_for_one_native_node;
+pub(crate) mod one_off_acquisitions_held_for_one_node;
 mod processor_output_pixel_buffer_pool_of_one_native_node;
 pub(crate) mod processor_output_surface_pool;
 mod refusing_null_video_codec_backend;
@@ -60,9 +62,18 @@ pub use gpu_context::{
     GraphicsKernelHeldForOneDraw, RayTracingKernelHeldForOneTrace,
     SurfaceBoundKernelBindingResource,
 };
-pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
+pub use gpu_context::{
+    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, OutputTextureRegisteredUntilDropped,
+};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
+pub use one_off_acquisitions_counted_for_one_native_node::OneOffAcquisitionCountedForItsNode;
+pub(crate) use one_off_acquisitions_counted_for_one_native_node::{
+    OneOffAcquisitionsCountedForOneNativeNode, acquire_a_one_off_counted_against_its_node,
+};
+pub(crate) use one_off_acquisitions_held_for_one_node::{
+    OneOffAcquisitionShape, OneOffAcquisitionsHeldForOneNode,
+};
 pub(crate) use processor_output_pixel_buffer_pool_of_one_native_node::ProcessorOutputPixelBufferPoolOfOneNativeNode;
 pub(crate) use runtime_context::LoadedStreamARuntimeContextBelongsTo;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};

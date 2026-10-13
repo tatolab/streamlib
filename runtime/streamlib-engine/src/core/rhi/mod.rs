@@ -118,6 +118,7 @@ pub use pixel_buffer_ref::PixelBufferRef;
 // coordination (#633). In-tree consumers reach it via this re-export
 // rather than depending on `streamlib-consumer-rhi` directly.
 pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, VulkanLayout};
+pub(crate) use texture::texture_usages_to_wire;
 pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
 pub use texture_readback::{
     ReadbackTicket, TextureReadback, TextureReadbackDescriptor, TextureReadbackError,

@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
 use super::{
-    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
+    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
+    OneOffAcquisitionsCountedForOneNativeNode, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::logging::LoadedStreamLogRoute;
@@ -54,6 +55,9 @@ pub struct RuntimeContext {
     runtime_id: Arc<RuntimeUniqueId>,
     /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
+    /// The one-off acquisitions this processor holds, counted per shape
+    /// (None for the shared/global context, which counts none).
+    one_off_acquisitions_of_the_node: Option<Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
     /// The node's name — the one string `stream_builder.add`'s `NodeReference` and the
     /// control plane's `add_node` report, `graph` renders and the log prefix
     /// carries — so a processor that has to name itself to the outside world
@@ -108,6 +112,7 @@ impl RuntimeContext {
             time,
             runtime_id,
             processor_id: None,
+            one_off_acquisitions_of_the_node: None,
             processor_display_name: None,
             pause_gate: None,
             runtime_ops,
@@ -281,6 +286,7 @@ impl RuntimeContext {
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: Some(processor_id),
+            one_off_acquisitions_of_the_node: Some(OneOffAcquisitionsCountedForOneNativeNode::new()),
             processor_display_name: self.processor_display_name.clone(),
             pause_gate: self.pause_gate.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
@@ -305,6 +311,7 @@ impl RuntimeContext {
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: self.processor_id.clone(),
+            one_off_acquisitions_of_the_node: self.one_off_acquisitions_of_the_node.clone(),
             processor_display_name: self.processor_display_name.clone(),
             pause_gate: Some(pause_gate),
             runtime_ops: Arc::clone(&self.runtime_ops),
@@ -781,8 +788,14 @@ impl<'a> RuntimeContextFullAccess<'a> {
     pub(crate) fn new(base: &'a RuntimeContext, _grant: super::isolation::FullAccessGrant) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
-            gpu_full: GpuContextFullAccess::new(base.gpu.clone()),
-            gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
+            gpu_full: GpuContextFullAccess::counting_one_offs_against_the_node(
+                base.gpu.clone(),
+                base.one_off_acquisitions_of_the_node.clone(),
+            ),
+            gpu_limited: GpuContextLimitedAccess::counting_one_offs_against_the_node(
+                base.gpu.clone(),
+                base.one_off_acquisitions_of_the_node.clone(),
+            ),
             _marker: PhantomData,
         }
     }
@@ -897,7 +910,10 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     pub(crate) fn new(base: &'a RuntimeContext) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
-            gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
+            gpu_limited: GpuContextLimitedAccess::counting_one_offs_against_the_node(
+                base.gpu.clone(),
+                base.one_off_acquisitions_of_the_node.clone(),
+            ),
             _marker: PhantomData,
         }
     }
@@ -1030,4 +1046,126 @@ mod host_runtime_ops_wiring_tests {
     //! the assertion itself needs no GPU work, only the context shell.
 
     use crate::core::context::GpuContext;
+}
+
+#[cfg(test)]
+mod one_off_acquisition_counting_tests {
+    use std::sync::Arc;
+
+    use super::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+    use crate::core::Error;
+    use crate::core::context::IsolationTier;
+    use crate::core::graph::ProcessorUniqueId;
+    use crate::core::rhi::TensorStorageBufferLayout;
+    use crate::core::runtime::{OptionsForLoadingOneStream, Runner};
+
+    /// Run `body` against a started empty stream's shared context, skipping
+    /// only where there is no GPU device.
+    fn with_a_started_streams_shared_context(body: impl FnOnce(&Arc<RuntimeContext>)) {
+        if crate::core::context::GpuContext::init_for_platform().is_err() {
+            println!("Skipping - no GPU device available");
+            return;
+        }
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let runner = Runner::new().expect("a runner boots without a graph");
+        let stream = runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("main"),
+            )
+            .expect("an empty stream loads");
+        stream.start().expect("the stream starts");
+        body(
+            &stream
+                .runtime_context_while_started()
+                .expect("a started stream carries its runtime context"),
+        );
+        stream.stop().expect("the stream stops");
+    }
+
+    fn a_256_byte_storage_buffer() -> TensorStorageBufferLayout {
+        TensorStorageBufferLayout::of_bytes(256).expect("a non-zero size")
+    }
+
+    /// A node's one-offs count against one count across every lifecycle
+    /// call's capability view, and another node counts its own.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial_test::serial]
+    fn a_nodes_one_offs_count_across_its_lifecycle_calls_while_another_node_counts_its_own() {
+        with_a_started_streams_shared_context(|shared_context| {
+            let node_context =
+                shared_context.with_processor_id(ProcessorUniqueId::from("Pcounted"));
+            let another_node_context =
+                shared_context.with_processor_id(ProcessorUniqueId::from("Panother"));
+            let layout = a_256_byte_storage_buffer();
+
+            let mut held_by_the_node = Vec::new();
+            for _ in 0..8 {
+                held_by_the_node.push(
+                    RuntimeContextLimitedAccess::new(&node_context)
+                        .gpu_limited_access()
+                        .acquire_storage_buffer(&layout)
+                        .expect("each process call's view acquires against the node"),
+                );
+            }
+            let full_access_grant = IsolationTier::TrustedInstalled
+                .grant_full_access()
+                .expect("the trusted tier grants full access");
+            let setup_view = RuntimeContextFullAccess::new(&node_context, full_access_grant);
+            for _ in 0..8 {
+                held_by_the_node.push(
+                    setup_view
+                        .gpu_full_access()
+                        .acquire_storage_buffer(&layout)
+                        .expect("the setup view acquires against the same node"),
+                );
+            }
+
+            let refusal = RuntimeContextLimitedAccess::new(&node_context)
+                .gpu_limited_access()
+                .acquire_storage_buffer(&layout)
+                .expect_err("a fresh view refuses the node's seventeenth of one shape");
+            assert!(
+                matches!(
+                    refusal,
+                    Error::EveryOneOffAcquisitionOfThisShapeTheNodeMayHoldIsHeld { .. }
+                ),
+                "the refusal is the node's own count: {refusal:?}"
+            );
+
+            let _held_by_another_node = RuntimeContextLimitedAccess::new(&another_node_context)
+                .gpu_limited_access()
+                .acquire_storage_buffer(&layout)
+                .expect("another node counts its own one-offs");
+        });
+    }
+
+    /// The stream's shared context belongs to no node, so it counts no
+    /// one-offs and refuses none by count.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial_test::serial]
+    fn the_shared_context_counts_no_one_offs() {
+        with_a_started_streams_shared_context(|shared_context| {
+            let layout = a_256_byte_storage_buffer();
+            let shared_view = RuntimeContextLimitedAccess::new(shared_context);
+            let _held_by_no_node: Vec<_> = (0..17)
+                .map(|_| {
+                    shared_view
+                        .gpu_limited_access()
+                        .acquire_storage_buffer(&layout)
+                        .expect("the shared context counts no one-offs")
+                })
+                .collect();
+        });
+    }
 }
