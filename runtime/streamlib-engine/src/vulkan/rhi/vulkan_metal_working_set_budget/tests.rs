@@ -107,7 +107,7 @@ fn host_vulkan_device_on_moltenvk_or_skip() -> Option<Arc<HostVulkanDevice>> {
     }
 }
 
-fn frame_descriptor() -> TextureDescriptor {
+fn frame_descriptor() -> TextureDescriptor<'static> {
     TextureDescriptor::new(FRAME_WIDTH, FRAME_HEIGHT, TextureFormat::Rgba8Unorm).with_usage(
         TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
     )
