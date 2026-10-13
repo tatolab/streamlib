@@ -262,6 +262,14 @@ name = "processor_owned_window_on_the_first_thread"
 path = "tests/processor_owned_window_on_the_first_thread.rs"
 harness = false
 required-features = ["hardware-tests"]
+# A run entered on the first thread builds the window event pump there, so a
+# window first asked for from another thread is minted. Same tier and
+# `harness = false` reason as above; its `main` is empty off Apple.
+[[test]]
+name = "window_event_pump_built_when_the_run_starts"
+path = "tests/window_event_pump_built_when_the_run_starts.rs"
+harness = false
+required-features = ["hardware-tests"]
 # The VideoToolbox codec arm round-trips the PSNR references on Apple's
 # hardware encoder and decoder. Rig tier — a virtual machine exposes neither —
 # so it builds only under `hardware-tests`. Empty off Apple.
