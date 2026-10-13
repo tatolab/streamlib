@@ -210,6 +210,8 @@ impl<HeldAcquisition> OneOffAcquisitionsHeldForOneNode<HeldAcquisition> {
 
 /// One count a one-off acquisition reserved before allocating, handed back
 /// when it drops unless the acquisition was held.
+#[must_use = "a reservation dropped unheld hands its count straight back; hold the acquisition \
+              with `hold_until_the_helper_releases_it`"]
 pub(crate) struct OneOffAcquisitionCountReservation<'registry> {
     registry: &'registry EscalateHandleRegistry,
     reserved_shape: Option<OneOffAcquisitionShape>,

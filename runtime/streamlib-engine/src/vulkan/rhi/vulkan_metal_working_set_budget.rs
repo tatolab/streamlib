@@ -21,11 +21,11 @@ use super::vulkan_frame_allocation_device_memory_budget::{
 const IOSURFACE_ALLOCATION_GRANULE_BYTES: u64 = 16 * 1024;
 
 /// Whether Metal's `currentAllocatedSize` already counts an IOSurface-backed
-/// MoltenVK image (measured on the macOS lane).
+/// MoltenVK image; the macOS lane's working-set step measures it.
 const METAL_COUNTS_AN_IOSURFACE_BACKED_VULKAN_IMAGE_IN_ITS_CURRENT_ALLOCATED_SIZE: bool = false;
 
 /// Whether Metal's `currentAllocatedSize` already counts an IOSurface imported
-/// as a host-pointer buffer (measured on the macOS lane).
+/// as a host-pointer buffer; the macOS lane's working-set step measures it.
 const METAL_COUNTS_AN_IOSURFACE_IMPORTED_AS_A_HOST_POINTER_BUFFER_IN_ITS_CURRENT_ALLOCATED_SIZE:
     bool = false;
 

@@ -43,7 +43,7 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle:
-        """Acquire a pooled device texture, named by the surface id the engine minted.
+        """A one-off device texture, named by the surface id the engine minted.
 
         The id is the whole handle: a kernel dispatch binds it, and a downstream
         node resolves it. `copy_src` and `copy_dst` ride every request, so
@@ -51,7 +51,7 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
         on Linux, through its own IOSurface on macOS — without the caller
         spelling a transfer usage.
 
-        A one-off, held until the handle closes. A node holds at most 16
+        Held until the handle closes. A node holds at most 16
         one-off textures of one width, height, format and usage at once: the
         17th raises, naming the shape, before anything is allocated. Past the
         device's memory budget the call raises, naming the heap (on macOS,

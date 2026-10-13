@@ -69,15 +69,15 @@ fn a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name() {
         "a one-off refusal is not the output pool's: {refusal_text}"
     );
 
-    node_a
+    let _node_a_reservation_of_another_shape = node_a
         .reserve_one_off_acquisition_count(a_640x480_bgra32_pixel_buffer())
         .expect("another shape on the same node is counted on its own");
-    node_b
+    let _node_b_reservation_of_the_same_shape = node_b
         .reserve_one_off_acquisition_count(a_1280x720_rgba8_unorm_texture())
         .expect("another node's one-offs of the same shape are never refused by this node's");
 
     node_a_reservations.pop();
-    node_a
+    let _node_a_reservation_in_the_room_handed_back = node_a
         .reserve_one_off_acquisition_count(a_1280x720_rgba8_unorm_texture())
         .expect("a reservation handed back unheld makes room for one more");
 }
