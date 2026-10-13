@@ -1,5 +1,7 @@
 # shared-pools-bounded-by-memory-budget
 
+> **Approved by the owner, 2026-10-12**, as written, with its stated assumptions.
+
 A node's frames are limited by the node alone, and the runtime's shared pools only by the
 device: its memory budget and its allocation-count limit. After this change:
 - the runtime-wide texture pool and pixel-buffer pool cap no shape by count; the 16-per-shape
