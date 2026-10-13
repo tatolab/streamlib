@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.46.0](https://github.com/tatolab/streamlib/compare/v0.45.6...v0.46.0) (2026-10-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** one node's held frames never drop another node's frames, and the shared pools are bounded by device memory ([#2741](https://github.com/tatolab/streamlib/issues/2741))
+
+### Bug Fixes
+
+* **engine:** one node's held frames never drop another node's frames, and the shared pools are bounded by device memory ([#2741](https://github.com/tatolab/streamlib/issues/2741)) ([04a0401](https://github.com/tatolab/streamlib/commit/04a0401d9fc103600a881b582bbb23f0e8e83cee))
+
 ## [0.45.6](https://github.com/tatolab/streamlib/compare/v0.45.5...v0.45.6) (2026-10-13)
 
 
