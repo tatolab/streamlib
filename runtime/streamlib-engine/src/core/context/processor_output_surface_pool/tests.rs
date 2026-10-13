@@ -229,3 +229,155 @@ fn a_fresh_slot_handed_in_at_the_cap_is_refused_by_name_and_handed_back() {
         PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
     );
 }
+
+/// A slot `lending_ring` published `frames_published_before_lending` frames
+/// from, taken out of it to lend.
+fn slot_lent_out_of(
+    lending_ring: &mut LeaseAwarePoolSlotRing<SlotResourceHeldOnlyWhenTheTestSays>,
+    pool_slot_key: &str,
+    frames_published_before_lending: usize,
+    leases: &SurfaceCheckOutLeaseRegistry,
+    minted: &LeaseAwarePoolMintedFrameGenerations,
+) -> LeaseAwarePoolSlot<SlotResourceHeldOnlyWhenTheTestSays> {
+    let slot_index = lending_ring.push_fresh_slot(
+        pool_slot_key.to_string(),
+        SlotResourceHeldOnlyWhenTheTestSays {
+            held_in_this_process: Arc::new(AtomicBool::new(false)),
+        },
+    );
+    lending_ring.hand_off_fresh_slot(slot_index, Some(leases), minted);
+    for _ in 1..frames_published_before_lending {
+        assert_eq!(
+            lending_ring.hand_off_a_reusable_slot(Some(leases), minted),
+            Some(slot_index),
+            "the lending ring republishes its one unheld slot"
+        );
+    }
+    lending_ring.take_out_the_slot_at(slot_index)
+}
+
+#[test]
+fn a_slot_its_lender_republished_counts_toward_the_cap_and_is_handed_back_at_it() {
+    let mut pool = PoolUnderTest::new();
+    let mut lending_ring = LeaseAwarePoolSlotRing::default();
+    for lent_slot_number in 0..PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
+        assert!(
+            matches!(
+                pool.pool
+                    .hand_off_a_reusable_frame(2, Some(&pool.leases), &pool.minted),
+                Ok(ProcessorOutputSurfacePoolHandOff::NeedsAFreshSlot)
+            ),
+            "with every slot held the pool asks for one more"
+        );
+        let lent_slot = slot_lent_out_of(
+            &mut lending_ring,
+            &format!("lent-slot-{lent_slot_number}"),
+            1,
+            &pool.leases,
+            &pool.minted,
+        );
+        let published = pool
+            .pool
+            .hand_off_a_slot_its_lender_already_republished(lent_slot)
+            .map_err(|refused| refused.refusal)
+            .expect("a lent slot under the cap is added")
+            .currently_published_frame_id();
+        pool.check_out(&published);
+    }
+
+    let refusal = match pool
+        .pool
+        .hand_off_a_reusable_frame(2, Some(&pool.leases), &pool.minted)
+    {
+        Err(refusal) => refusal,
+        Ok(_) => panic!("lent slots count toward the cap like allocated ones"),
+    };
+    assert!(
+        matches!(
+            &refusal,
+            Error::EverySlotInTheProcessorOutputPoolIsInUse { pool_key, .. }
+                if pool_key == "pool-under-test"
+        ),
+        "got: {refusal}"
+    );
+
+    let lent_past_the_cap = slot_lent_out_of(
+        &mut lending_ring,
+        "lent-slot-past-the-cap",
+        1,
+        &pool.leases,
+        &pool.minted,
+    );
+    let Err(refused) = pool
+        .pool
+        .hand_off_a_slot_its_lender_already_republished(lent_past_the_cap)
+    else {
+        panic!("a lent slot past the cap was added");
+    };
+    assert!(matches!(
+        refused.refusal,
+        Error::EverySlotInTheProcessorOutputPoolIsInUse { .. }
+    ));
+    assert_eq!(refused.slot.pool_slot_key(), "lent-slot-past-the-cap");
+    assert_eq!(
+        refused.slot.published_frame_generation(),
+        1,
+        "the slot goes back to its lender as its lender published it"
+    );
+    assert_eq!(
+        pool.pool.slot_count(),
+        PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+    );
+}
+
+#[test]
+fn a_lent_slot_is_handed_out_under_the_generation_its_lender_minted() {
+    let mut pool = PoolUnderTest::new();
+    let mut lending_ring = LeaseAwarePoolSlotRing::default();
+    let lent_slot = slot_lent_out_of(
+        &mut lending_ring,
+        "lent-slot",
+        3,
+        &pool.leases,
+        &pool.minted,
+    );
+    assert!(matches!(
+        pool.pool
+            .hand_off_a_reusable_frame(1, Some(&pool.leases), &pool.minted),
+        Ok(ProcessorOutputSurfacePoolHandOff::NeedsAFreshSlot)
+    ));
+
+    let handed_out = pool
+        .pool
+        .hand_off_a_slot_its_lender_already_republished(lent_slot)
+        .map_err(|refused| refused.refusal)
+        .expect("an empty pool takes a lent slot")
+        .currently_published_frame_id();
+    assert_eq!(
+        handed_out, "lent-slot#3",
+        "the pool hands the lent slot out under the generation its lender minted, minting none"
+    );
+    assert_eq!(
+        pool.minted.minted_frame_generation_of_slot("lent-slot"),
+        Some(3)
+    );
+    assert_eq!(
+        pool.leases.current_frame_generation("lent-slot").unwrap(),
+        Some(3)
+    );
+
+    let reused = match pool
+        .pool
+        .hand_off_a_reusable_frame(1, Some(&pool.leases), &pool.minted)
+    {
+        Ok(ProcessorOutputSurfacePoolHandOff::ReusedSlot(slot)) => {
+            slot.currently_published_frame_id()
+        }
+        _ => panic!("at its rotation depth with nothing held the pool reuses the lent slot"),
+    };
+    assert_eq!(reused, "lent-slot#4");
+    assert!(matches!(
+        pool.minted.refusal_of_a_retired_frame_id_named(&handed_out),
+        Some(Err(Error::SurfaceFrameRecycled { .. }))
+    ));
+}

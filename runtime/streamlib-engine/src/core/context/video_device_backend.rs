@@ -89,6 +89,9 @@ pub struct VideoDeviceStreamRequest {
     pub max_height: u32,
     /// The GPU the stream converts its frames on.
     pub gpu_context: GpuContextLimitedAccess,
+    /// The node the stream captures for: its frames are published from that
+    /// node's own output pool, named by this id when the pool refuses.
+    pub processor_id_of_the_capturing_node: String,
 }
 
 /// A capture stream a backend opened.

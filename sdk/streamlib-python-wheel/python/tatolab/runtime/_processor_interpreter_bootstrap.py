@@ -206,6 +206,7 @@ RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS = 1.0
 RELEASE_OWED_BY_AN_ANSWER_TO_ESCALATE_OP = {
     "acquire_pixel_buffer": ("release_handle", "handle_id"),
     "acquire_texture": ("release_handle", "handle_id"),
+    "acquire_storage_buffer": ("release_handle", "handle_id"),
     "register_acceleration_structure_blas": ("release_handle", "handle_id"),
     "register_acceleration_structure_tlas": ("release_handle", "handle_id"),
     "create_processor_owned_window": ("close_processor_owned_window", "window_id"),

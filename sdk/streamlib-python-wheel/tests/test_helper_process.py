@@ -558,6 +558,7 @@ def test_a_record_goes_out_under_the_lock_that_numbered_it(stand_in_parent):
     ("escalate_op", "release_op", "released_id_field"),
     [
         ("acquire_pixel_buffer", "release_handle", "handle_id"),
+        ("acquire_storage_buffer", "release_handle", "handle_id"),
         ("register_acceleration_structure_blas", "release_handle", "handle_id"),
         ("create_processor_owned_window", "close_processor_owned_window", "window_id"),
     ],

@@ -8,9 +8,9 @@
 use crate::core::color::H273ColorVui;
 use crate::core::context::{
     DecodedVideoPictureInPooledPixelBuffer, EncodedVideoAccessUnitFromSession,
-    GpuContextFullAccess, GpuContextLimitedAccess, VideoCodecBackend, VideoCodecElementaryStream,
-    VideoDecodeSession, VideoDecodeSessionRequest, VideoEncodeKnobs, VideoEncodeSession,
-    VideoEncodeSessionRequest, VideoEncodeSourceSurface,
+    GpuContextFullAccess, GpuContextLimitedAccess, ProcessorOutputPixelBufferPoolOfOneNativeNode,
+    VideoCodecBackend, VideoCodecElementaryStream, VideoDecodeSession, VideoDecodeSessionRequest,
+    VideoEncodeKnobs, VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
 };
 use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
@@ -68,7 +68,11 @@ impl VideoCodecBackend for VulkanVideoCodecBackend {
         })?;
         Ok(Box::new(VulkanVideoDecodeSession {
             decoder,
-            gpu_context: gpu_context.host_inner().limited_access(),
+            processor_output_pixel_buffer_pool: gpu_context
+                .host_inner()
+                .create_processor_output_pixel_buffer_pool_for_a_native_node(
+                    &request.processor_id_of_the_decoding_node,
+                ),
         }))
     }
 }
@@ -143,8 +147,9 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
 
 struct VulkanVideoDecodeSession {
     decoder: SimpleDecoder,
-    /// Acquires the pooled pixel buffers decoded pictures are staged into.
-    gpu_context: GpuContextLimitedAccess,
+    /// The decoding node's own output pool, which the pixel buffers decoded
+    /// pictures are staged into come from.
+    processor_output_pixel_buffer_pool: ProcessorOutputPixelBufferPoolOfOneNativeNode,
 }
 
 impl VideoDecodeSession for VulkanVideoDecodeSession {
@@ -156,7 +161,10 @@ impl VideoDecodeSession for VulkanVideoDecodeSession {
         let decoded_frames = self.decoder.feed(annex_b_access_unit_bytes)?;
         for decoded_frame in decoded_frames {
             decoded_pictures_in_completion_order.push(
-                stage_decoded_frame_into_pooled_pixel_buffer(&self.gpu_context, decoded_frame)?,
+                stage_decoded_frame_into_pooled_pixel_buffer(
+                    &mut self.processor_output_pixel_buffer_pool,
+                    decoded_frame,
+                )?,
             );
         }
         Ok(())
@@ -175,12 +183,13 @@ impl VideoDecodeSession for VulkanVideoDecodeSession {
     }
 }
 
-/// Stage one read-back RGBA picture into a pooled pixel buffer whose pool id
-/// becomes the frame's surface id. The extent is the session's own — already
-/// the stream's conformance window, so an H.265 stream's CTU padding is gone
-/// before a surface id ever names these pixels.
+/// Stage one read-back RGBA picture into the next pixel buffer of the decoding
+/// node's output pool, whose published id becomes the frame's surface id. The
+/// extent is the session's own — already the stream's conformance window, so
+/// an H.265 stream's CTU padding is gone before a surface id ever names these
+/// pixels.
 fn stage_decoded_frame_into_pooled_pixel_buffer(
-    gpu_context: &GpuContextLimitedAccess,
+    processor_output_pixel_buffer_pool: &mut ProcessorOutputPixelBufferPoolOfOneNativeNode,
     decoded_frame: SimpleDecodedFrame,
 ) -> Result<DecodedVideoPictureInPooledPixelBuffer> {
     if !decoded_frame.is_rgba {
@@ -204,8 +213,8 @@ fn stage_decoded_frame_into_pooled_pixel_buffer(
             ))
         })?;
 
-    let (published_pixel_buffer_frame_id, pixel_buffer) =
-        gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
+    let (published_pixel_buffer_frame_id, pixel_buffer) = processor_output_pixel_buffer_pool
+        .acquire_the_next_output_pixel_buffer(width, height, PixelFormat::Rgba32)?;
     pixel_buffer.write_this_plane_from(0, tightly_packed_rgba)?;
     Ok(DecodedVideoPictureInPooledPixelBuffer {
         published_pixel_buffer_frame_id,

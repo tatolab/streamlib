@@ -330,6 +330,7 @@ struct AvFoundationCaptureSessionControl {
     opened_device: VideoCaptureDevice,
     stream_format: VideoCaptureStreamFormat,
     gpu_context: GpuContextLimitedAccess,
+    processor_id_of_the_capturing_node: String,
     failure_recorder: DeviceStreamFailureRecorder,
     capture_instant_resolver: Arc<VideoCaptureInstantResolver>,
     camera_access: CameraAccessForTheStream,
@@ -412,6 +413,7 @@ impl AvFoundationVideoCaptureStream {
             opened_device: opened_device.clone(),
             stream_format,
             gpu_context: request.gpu_context.clone(),
+            processor_id_of_the_capturing_node: request.processor_id_of_the_capturing_node.clone(),
             failure_recorder,
             capture_instant_resolver: Arc::clone(&capture_instant_resolver),
             camera_access: CameraAccessForTheStream::AwaitingTheUsersAnswer {
@@ -559,6 +561,7 @@ impl AvFoundationCaptureSessionControl {
             stream_format: self.stream_format,
             pixel_format_delivered: self.pixel_format_to_deliver,
             gpu_context: self.gpu_context.clone(),
+            processor_id_of_the_capturing_node: self.processor_id_of_the_capturing_node.clone(),
             capture_instant_resolver: Arc::clone(&self.capture_instant_resolver),
             capture_progress: Mutex::new(AvFoundationCaptureProgress::default()),
             loaded_stream_log_route_of_the_starting_thread:
@@ -934,6 +937,7 @@ struct AvFoundationFrameDelivery {
     stream_format: VideoCaptureStreamFormat,
     pixel_format_delivered: PixelFormat,
     gpu_context: GpuContextLimitedAccess,
+    processor_id_of_the_capturing_node: String,
     capture_instant_resolver: Arc<VideoCaptureInstantResolver>,
     capture_progress: Mutex<AvFoundationCaptureProgress>,
     /// The route of the thread that started the delivery, which each frame's
@@ -1102,6 +1106,7 @@ impl AvFoundationCaptureProgress {
                     delivery.pixel_format_delivered,
                     width,
                     height,
+                    &delivery.processor_id_of_the_capturing_node,
                 )?),
         };
         conversion.convert_into_pooled_pixel_buffer(

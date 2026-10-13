@@ -118,13 +118,16 @@ pub struct VideoDecodeMaximumCodedExtent {
 }
 
 /// What a caller asks a backend to open a decode session for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoDecodeSessionRequest {
     /// The elementary stream the session consumes.
     pub elementary_stream: VideoCodecElementaryStream,
     /// The cap on the stream's extent. `None`: whatever the stream's first
     /// parameter sets state.
     pub maximum_coded_extent: Option<VideoDecodeMaximumCodedExtent>,
+    /// The node the session decodes for: its pictures are published from
+    /// that node's own output pool, named by this id when the pool refuses.
+    pub processor_id_of_the_decoding_node: String,
 }
 
 /// One picture a decode session reconstructed, already in a pooled `Rgba32`

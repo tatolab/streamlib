@@ -11,6 +11,7 @@ pub(crate) mod escalate_gate;
 mod gpu_context;
 pub(crate) mod isolation;
 pub(crate) mod lease_aware_pool_slot_ring;
+mod processor_output_pixel_buffer_pool_of_one_native_node;
 pub(crate) mod processor_output_surface_pool;
 mod refusing_null_video_codec_backend;
 mod refusing_null_video_device_backend;
@@ -61,6 +62,7 @@ pub use gpu_context::{
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
+pub(crate) use processor_output_pixel_buffer_pool_of_one_native_node::ProcessorOutputPixelBufferPoolOfOneNativeNode;
 pub(crate) use runtime_context::LoadedStreamARuntimeContextBelongsTo;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 // Exported rather than crate-private so a test about deviceless pacing can open

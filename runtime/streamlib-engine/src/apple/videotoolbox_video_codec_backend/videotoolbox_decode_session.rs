@@ -111,8 +111,12 @@ pub(super) struct VideoToolboxDecodeSession {
         Option<VideoToolboxDecompressionSessionForOneFormat>,
     pooled_rgba_conversion: Option<PooledRgbaConversionForOneShape>,
     last_decoded_color_vui: Option<H273ColorVui>,
-    /// Acquires the pooled pixel buffers pictures land in.
+    /// Escalates to build the pool conversion and to import the IOSurfaces
+    /// pictures are decoded on.
     gpu_context: GpuContextLimitedAccess,
+    /// The node the session decodes for, whose own output pool the pictures
+    /// are published from.
+    processor_id_of_the_decoding_node: String,
 }
 
 impl VideoToolboxDecodeSession {
@@ -130,6 +134,7 @@ impl VideoToolboxDecodeSession {
             pooled_rgba_conversion: None,
             last_decoded_color_vui: None,
             gpu_context,
+            processor_id_of_the_decoding_node: request.processor_id_of_the_decoding_node.clone(),
         }
     }
 
@@ -250,6 +255,7 @@ impl VideoToolboxDecodeSession {
                             source_pixel_format,
                             picture_extent.0,
                             picture_extent.1,
+                            &self.processor_id_of_the_decoding_node,
                         )?,
                     source_pixel_format,
                     picture_extent,

@@ -31,9 +31,9 @@ use neither_linux_nor_macos::{
 };
 
 use super::handle_lifecycle::{
-    EscalateHandleRegistry, ProcessorOutputFrameHandOff, ProcessorOutputFreshSlotHandOff,
-    ProcessorOutputSlotDescriptor, ProcessorOutputTextureDescriptor, RegisteredHandle,
-    release_processor_output_pool_slot,
+    EscalateHandleRegistry, OneOffAcquisitionShape, ProcessorOutputFrameHandOff,
+    ProcessorOutputFreshSlotHandOff, ProcessorOutputSlotDescriptor,
+    ProcessorOutputTextureDescriptor, RegisteredHandle, release_processor_output_pool_slot,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -48,31 +48,9 @@ use crate::core::rhi::{
     PixelBuffer, PixelFormat, TensorStorageBufferLayout, TextureFormat, TextureUsages,
 };
 
-/// Whether a texture allocation may wait on the texture pool's exhaustion
-/// policy for another holder to let a texture go.
-#[derive(Clone, Copy)]
-pub(super) enum TexturePoolWaitWhenExhausted {
-    /// Whatever the pool is configured to do — a one-off acquire.
-    AsThePoolIsConfigured,
-    /// Refuse at once: a processor output pool's producer never waits.
-    RefuseAtOnce,
-}
-
-impl TexturePoolWaitWhenExhausted {
-    fn acquire_texture(
-        self,
-        full: &crate::core::context::GpuContextFullAccess,
-        desc: &crate::core::context::TexturePoolDescriptor,
-    ) -> crate::core::error::Result<crate::core::context::PooledTextureHandle> {
-        match self {
-            Self::AsThePoolIsConfigured => full.acquire_texture(desc),
-            Self::RefuseAtOnce => full.acquire_texture_without_waiting(desc),
-        }
-    }
-}
-
 /// Acquire a pixel buffer on behalf of a helper process, holding it in
-/// `registry` until the helper releases it.
+/// `registry` until the helper releases it; counted against the node's
+/// one-off acquisitions of its shape.
 pub(super) fn handle_acquire_pixel_buffer(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -87,24 +65,29 @@ pub(super) fn handle_acquire_pixel_buffer(
     } = request;
     match PixelFormat::parse_wire_name(&format) {
         Ok(parsed) => {
-            let acquired = sandbox.escalate(|full| {
-                let (published_frame_id, buffer) =
-                    full.acquire_pixel_buffer(width, height, parsed)?;
-                let handle_id = assign_buffer_handle_id(full, &published_frame_id, &buffer)?;
-                Ok((handle_id, buffer))
-            });
+            let acquired = registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
+                sandbox,
+                OneOffAcquisitionShape::PixelBuffer {
+                    width,
+                    height,
+                    format: parsed,
+                },
+                |full| {
+                    let (published_frame_id, buffer) =
+                        full.acquire_pixel_buffer(width, height, parsed)?;
+                    let handle_id = assign_buffer_handle_id(full, &published_frame_id, &buffer)?;
+                    Ok((handle_id, RegisteredHandle::PixelBuffer(buffer)))
+                },
+            );
             match acquired {
-                Ok((handle_id, buffer)) => {
-                    registry.insert_buffer(handle_id.clone(), buffer);
-                    EscalateResponse::Ok(EscalateResponseOk {
-                        request_id: rid,
-                        handle_id,
-                        width: Some(width),
-                        height: Some(height),
-                        format: Some(parsed.wire_name().to_string()),
-                        ..Default::default()
-                    })
-                }
+                Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
+                    request_id: rid,
+                    handle_id,
+                    width: Some(width),
+                    height: Some(height),
+                    format: Some(parsed.wire_name().to_string()),
+                    ..Default::default()
+                }),
                 Err(e) => EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: format!("acquire_pixel_buffer failed: {e}"),
@@ -119,8 +102,9 @@ pub(super) fn handle_acquire_pixel_buffer(
 }
 
 /// Acquire a texture on behalf of a helper process: a one-off the registry
-/// holds until the helper releases it, or the next frame of a processor output
-/// pool, which the pool holds.
+/// holds until the helper releases it, counted against the node's one-off
+/// acquisitions of its shape, or the next frame of a processor output pool,
+/// which the pool holds.
 pub(super) fn handle_acquire_texture(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -154,18 +138,24 @@ pub(super) fn handle_acquire_texture(
         }
     };
     let acquired = match processor_output_pool {
-        None => sandbox.escalate(|full| {
-            let (handle_id, registered_texture) = allocate_registered_texture_for_helper(
-                full,
+        None => registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
+            sandbox,
+            OneOffAcquisitionShape::Texture {
                 width,
                 height,
-                parsed_format,
-                parsed_usage,
-                TexturePoolWaitWhenExhausted::AsThePoolIsConfigured,
-            )?;
-            registry.insert_registered_handle(handle_id.clone(), registered_texture);
-            Ok(handle_id)
-        }),
+                format: parsed_format,
+                usage: parsed_usage,
+            },
+            |full| {
+                allocate_registered_texture_for_helper(
+                    full,
+                    width,
+                    height,
+                    parsed_format,
+                    parsed_usage,
+                )
+            },
+        ),
         Some(processor_output_pool) => hand_off_processor_output_frame(
             sandbox,
             registry,
@@ -196,8 +186,9 @@ pub(super) fn handle_acquire_texture(
 }
 
 /// Acquire a tensor storage buffer on behalf of a helper process: a one-off
-/// the registry holds until the helper releases it, or the next frame of a
-/// processor output pool, which the pool holds.
+/// the registry holds until the helper releases it, counted against the
+/// node's one-off acquisitions of its shape, or the next frame of a processor
+/// output pool, which the pool holds.
 pub(super) fn handle_acquire_storage_buffer(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -220,12 +211,13 @@ pub(super) fn handle_acquire_storage_buffer(
         }
     };
     let acquired = match processor_output_pool {
-        None => sandbox.escalate(|full| {
-            let (handle_id, registered_buffer) =
-                allocate_registered_storage_buffer_for_helper(full, &tensor_layout)?;
-            registry.insert_registered_handle(handle_id.clone(), registered_buffer);
-            Ok(handle_id)
-        }),
+        None => registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
+            sandbox,
+            OneOffAcquisitionShape::StorageBuffer {
+                tensor_layout: tensor_layout.clone(),
+            },
+            |full| allocate_registered_storage_buffer_for_helper(full, &tensor_layout),
+        ),
         Some(processor_output_pool) => hand_off_processor_output_frame(
             sandbox,
             registry,
@@ -272,8 +264,7 @@ fn allocate_registered_storage_buffer_for_helper(
     Ok((handle_id, RegisteredHandle::StorageBuffer { buffer }))
 }
 
-/// Allocate and register one fresh slot of the kind `descriptor` names,
-/// refusing at once rather than waiting on an exhausted allocator.
+/// Allocate and register one fresh slot of the kind `descriptor` names.
 fn allocate_registered_processor_output_slot(
     full: &crate::core::context::GpuContextFullAccess,
     descriptor: &ProcessorOutputSlotDescriptor,
@@ -286,7 +277,6 @@ fn allocate_registered_processor_output_slot(
                 texture_descriptor.height,
                 texture_descriptor.format,
                 texture_descriptor.usage,
-                TexturePoolWaitWhenExhausted::RefuseAtOnce,
             )
         }
         ProcessorOutputSlotDescriptor::StorageBuffer(tensor_layout) => {

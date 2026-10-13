@@ -147,6 +147,7 @@ fn the_default_camera_delivers_stamped_frames_with_real_content() {
             max_width: CAPTURE_CAP_WIDTH,
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
+            processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
         })
         .expect("the default camera opens");
     let stream_format = stream.stream_format();
@@ -294,6 +295,7 @@ fn a_stop_while_the_camera_powers_up_does_not_wait_for_the_camera() {
             max_width: CAPTURE_CAP_WIDTH,
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
+            processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
         })
         .expect("the default camera opens");
     for _ in 0..3 {
@@ -320,6 +322,7 @@ fn a_named_camera_that_is_not_attached_is_refused_naming_it() {
             max_width: CAPTURE_CAP_WIDTH,
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
+            processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
         }) {
             Ok(_) => panic!("a camera that is not attached cannot open"),
             Err(refusal) => refusal.to_string(),

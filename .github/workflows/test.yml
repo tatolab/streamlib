@@ -345,6 +345,14 @@ jobs:
           # The lease-aware slot ring every pool hands frames out of, and the
           # processor output pool on it: which slot is next, a held one
           # skipped, growth to the cap and the refusal there — no device.
+          # The frame-allocation budget: the refusal past a heap's budget less
+          # the fixed headroom, the device-memory allocation margin, the
+          # estimate without the budget extension and the system's available
+          # memory, the Metal working set's arithmetic, and the one lock two
+          # racing allocations take. No device.
+          # A node's one-off acquisitions, counted per shape and refused at its
+          # own sixteen while other shapes and other nodes go on acquiring. No
+          # device.
           # The swapchain acquire barrier's source stage, which must chain off
           # the image-available semaphore wait.
           # A port named in any spelling that casts to it, on the read and the
@@ -370,6 +378,9 @@ jobs:
             escalate_wire_encoding_tests \
             core::context::lease_aware_pool_slot_ring \
             core::context::processor_output_surface_pool \
+            vulkan::rhi::vulkan_frame_allocation_device_memory_budget::tests \
+            linux::system_memory_available_from_proc_meminfo::tests \
+            core::compiler::compiler_ops::subprocess_escalate::handle_lifecycle::one_off_acquisitions_held_for_one_node \
             core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::parse_texture_usages \
             core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::the_implied_copy_bits \
             core::context::audio_device_backend \
@@ -1082,3 +1093,32 @@ jobs:
             echo "::error::an in-process adapter test skipped instead of running on the Metal device"
             exit 1
           fi
+
+      # The frame-allocation budget's macOS arms, which need the MoltenVK
+      # device installed above and run on no other lane: whether the
+      # working-set bound counts each IOSurface the runtime mints once, read
+      # from Metal's own count around one frame of each kind; a frame refused
+      # past the working set while engine memory still allocates; and a
+      # released one-off pixel buffer leaving cached the published frame its
+      # id names on macOS. Both packages and their features match the
+      # `--no-run` build, which this reuses. A skip passes without running, so
+      # any skip line fails the step, and only the engine binary's own result
+      # line with all four tests passed passes it.
+      - name: Frame-allocation budget on the Metal device
+        run: |
+          set -o pipefail
+          CARGO_TERM_COLOR=never cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
+            --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
+            --lib -- --color never --test-threads=1 --nocapture \
+            vulkan::rhi::vulkan_metal_working_set_budget::tests::an_iosurface_backed_vulkan_image_is_counted_once_in_the_metal_working_set_usage \
+            vulkan::rhi::vulkan_metal_working_set_budget::tests::an_iosurface_backed_pixel_buffer_is_counted_once_in_the_metal_working_set_usage \
+            vulkan::rhi::vulkan_device::tests::a_frame_texture_past_a_budget_with_no_room_left_is_refused_while_an_engine_buffer_still_allocates \
+            core::compiler::compiler_ops::subprocess_escalate::handle_lifecycle::tests::releasing_a_one_off_pixel_buffer_evicts_its_lookup_and_leaves_its_slots_published_frame_cached \
+            2>&1 | tee frame-allocation-budget-on-metal-output.txt
+          if grep -i "skip" frame-allocation-budget-on-metal-output.txt; then
+            echo "::error::a frame-allocation budget test skipped instead of running on the Metal device"
+            exit 1
+          fi
+          sed -n '/Running unittests .*streamlib_engine-/,/^test result:/p' \
+            frame-allocation-budget-on-metal-output.txt \
+            | grep "^test result: ok. 4 passed;"

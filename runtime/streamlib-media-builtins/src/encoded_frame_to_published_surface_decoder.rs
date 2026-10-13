@@ -137,6 +137,13 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     ) -> Result<()> {
         let maximum_coded_extent =
             resolve_decoded_picture_buffer_dimension_caps(Identity::PROCESSOR_NAME, config);
+        let processor_id_of_the_decoding_node = ctx.processor_id().ok_or_else(|| {
+            Error::Configuration(format!(
+                "{} needs its node's processor id to give its pictures a node output pool; \
+                 this context carries none",
+                Identity::PROCESSOR_NAME
+            ))
+        })?;
         let backend = probe_video_codec_backend();
         let session = backend
             .open_decode_session(
@@ -144,6 +151,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 &VideoDecodeSessionRequest {
                     elementary_stream: Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
                     maximum_coded_extent,
+                    processor_id_of_the_decoding_node,
                 },
             )
             .map_err(|mint_failure| {

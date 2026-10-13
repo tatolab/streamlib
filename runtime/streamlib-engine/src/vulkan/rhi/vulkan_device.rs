@@ -7,7 +7,6 @@ use std::ffi::{CStr, c_char};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-#[cfg(target_os = "linux")]
 use vma::Alloc as _;
 use vulkanalia::loader::LibloadingLoader;
 use vulkanalia::prelude::v1_4::*;
@@ -25,8 +24,22 @@ use streamlib_consumer_rhi::{
 use super::VulkanTextureLike;
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
+use super::vulkan_frame_allocation_device_memory_budget::{
+    DeviceMemoryAllocationCountReading, DeviceMemoryBudgetAdmission, FrameAllocationBudgetReading,
+    FrameAllocationDeviceMemoryBudgetGate, FrameAllocationDeviceMemoryReading,
+    FrameDeviceMemoryPlacement, FrameDeviceMemoryRequest,
+    device_memory_allocations_this_process_holds,
+};
+#[cfg(target_os = "linux")]
+use super::vulkan_frame_allocation_device_memory_budget::{
+    DeviceMemoryHeapBudgetReading, heap_budget_without_the_memory_budget_extension,
+};
 use super::vulkan_kernel_capability_refusal::{
     VulkanSubgroupOperationSupport, ray_tracing_tier_absent_refusal,
+};
+#[cfg(target_os = "macos")]
+use super::vulkan_metal_working_set_budget::{
+    MetalDeviceWhoseWorkingSetBoundsFrameAllocations, MetalWorkingSetOfTheDevice,
 };
 use super::vulkan_validation_messenger::{
     VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
@@ -148,8 +161,27 @@ pub struct HostVulkanDevice {
     entry: vulkanalia::Entry,
     instance: vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
-    /// Memory properties kept for DMA-BUF import path (raw vkAllocateMemory).
+    /// Memory types and heaps: the raw `vkAllocateMemory` paths pick a type
+    /// from them, and the frame-allocation budget maps a type to its heap.
     memory_properties: vk::PhysicalDeviceMemoryProperties,
+    /// `VkPhysicalDeviceLimits::maxMemoryAllocationCount`: how many
+    /// `VkDeviceMemory` objects the device lets this process hold at once.
+    max_memory_allocation_count: u32,
+    /// Whether `VK_EXT_memory_budget` was enabled: the driver reports each
+    /// heap's budget and usage, rather than the allocator estimating them.
+    #[cfg(target_os = "linux")]
+    has_memory_budget: bool,
+    /// Weighs every frame allocation against the device-memory bound and
+    /// makes it, one at a time. A lock of its own, never [`Self::device_mutex`].
+    frame_allocation_device_memory_budget_gate: FrameAllocationDeviceMemoryBudgetGate,
+    /// The frame index handed to `vmaSetCurrentFrameIndex`, which is what
+    /// makes VMA fetch a fresh budget from the driver.
+    #[cfg(target_os = "linux")]
+    device_memory_budget_fresh_fetch_frame_index: std::sync::atomic::AtomicU32,
+    /// The Metal device MoltenVK drives, whose recommended working set bounds
+    /// frame allocations on macOS.
+    #[cfg(target_os = "macos")]
+    metal_working_set_of_the_device: MetalWorkingSetOfTheDevice,
     device: vulkanalia::Device,
     queue: vk::Queue,
     queue_family_index: u32,
@@ -229,10 +261,10 @@ pub struct HostVulkanDevice {
     /// allocations don't carry export flags (which NVIDIA rejects after swapchain
     /// creation when set globally on the allocator).
     #[cfg(target_os = "linux")]
-    dma_buf_buffer_pool: Option<vma::Pool>,
+    dma_buf_buffer_pool: Option<VmaExportPoolPinnedToOneMemoryType>,
     /// VMA pool for DMA-BUF exportable DEVICE_LOCAL images (textures for IPC).
     #[cfg(target_os = "linux")]
-    dma_buf_image_pool: Option<vma::Pool>,
+    dma_buf_image_pool: Option<VmaExportPoolPinnedToOneMemoryType>,
     /// VMA pool for DMA-BUF exportable images created with
     /// `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` and a render-target-capable
     /// DRM modifier from [`Self::drm_modifier_table`]. Separate from
@@ -241,21 +273,21 @@ pub struct HostVulkanDevice {
     /// callers should never get a sampler-only LINEAR image when they asked
     /// for an RT-capable one.
     #[cfg(target_os = "linux")]
-    dma_buf_image_pool_tiled: Option<vma::Pool>,
+    dma_buf_image_pool_tiled: Option<VmaExportPoolPinnedToOneMemoryType>,
     /// VMA pool for OPAQUE_FD exportable HOST_VISIBLE buffers — the export
     /// flavor CUDA / OpenCL interop expects. Separate from
     /// [`Self::dma_buf_buffer_pool`] because `VkExportMemoryAllocateInfo`'s
     /// `handleTypes` differ (OPAQUE_FD vs DMA_BUF_EXT) and a single VMA pool
     /// can carry only one chained `pNext`.
     #[cfg(target_os = "linux")]
-    opaque_fd_buffer_pool: Option<vma::Pool>,
+    opaque_fd_buffer_pool: Option<VmaExportPoolPinnedToOneMemoryType>,
     /// VMA pool for OPAQUE_FD exportable HOST_VISIBLE buffers on a
     /// HOST_CACHED memory type — the CPU-read sibling of
     /// [`Self::opaque_fd_buffer_pool`]. `None` on a device with no cached
     /// exportable type; see
     /// [`Self::create_opaque_fd_buffer_pool_host_cached`].
     #[cfg(target_os = "linux")]
-    opaque_fd_buffer_pool_host_cached: Option<vma::Pool>,
+    opaque_fd_buffer_pool_host_cached: Option<VmaExportPoolPinnedToOneMemoryType>,
     /// VMA pool for OPAQUE_FD exportable DEVICE_LOCAL buffers — the
     /// GPU-resident sibling of [`Self::opaque_fd_buffer_pool`]. CUDA imports
     /// the same OPAQUE_FD handle type, but the underlying memory lives in
@@ -264,7 +296,7 @@ pub struct HostVulkanDevice {
     /// pool because VMA pools are pinned to a single memory-type-index and
     /// DEVICE_LOCAL types differ from HOST_VISIBLE ones.
     #[cfg(target_os = "linux")]
-    opaque_fd_buffer_pool_device_local: Option<vma::Pool>,
+    opaque_fd_buffer_pool_device_local: Option<VmaExportPoolPinnedToOneMemoryType>,
     /// VMA pool for OPAQUE_FD exportable DEVICE_LOCAL **images** —
     /// `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier. CUDA's
     /// `cudaExternalMemoryGetMappedMipmappedArray` consumes the
@@ -276,7 +308,7 @@ pub struct HostVulkanDevice {
     /// only one `VkExportMemoryAllocateInfo` per pool — same reason
     /// the DMA-BUF image pool is split from the DMA-BUF buffer pool.
     #[cfg(target_os = "linux")]
-    opaque_fd_image_pool: Option<vma::Pool>,
+    opaque_fd_image_pool: Option<VmaExportPoolPinnedToOneMemoryType>,
     /// Backing storage for the buffer pool's VkExportMemoryAllocateInfo. VMA stores
     /// a raw pointer to this struct via pMemoryAllocateNext, so we must keep it
     /// alive for the pool's entire lifetime.
@@ -323,7 +355,8 @@ pub struct HostVulkanDevice {
     /// own findings reach the pNext-chained messenger using the same
     /// user-data pointer.
     validation_messenger: Option<VulkanValidationMessenger>,
-    /// Tracks DMA-BUF import-path allocations (raw vkAllocateMemory for import only).
+    /// Live raw `vkAllocateMemory` allocations, which VMA never sees: DMA-BUF
+    /// and host-pointer imports, and IOSurface-backed image memory.
     live_allocation_count: AtomicUsize,
     /// Every `vkQueueSubmit2` this device has made, across every queue.
     queue_submission_count: AtomicUsize,
@@ -342,7 +375,8 @@ pub struct HostVulkanDevice {
     video_decode_queue_mutex: Mutex<()>,
     /// Per-queue mutex for the dedicated compute queue (if available).
     compute_queue_mutex: Mutex<()>,
-    /// Device-level mutex for resource creation (video sessions, VMA allocations).
+    /// Device-level mutex for the codec layer's resource creation: video
+    /// sessions, query pools, DPB, bitstream and encode-staging allocations.
     device_mutex: Mutex<()>,
     /// Long-lived sentinels for the OPAQUE_FD export pools, kept alive
     /// for the device's lifetime so NVIDIA's per-handle-type kernel
@@ -393,6 +427,55 @@ pub struct RayTracingPipelineProperties {
     /// Maximum recursion depth a ray-tracing pipeline can declare.
     /// Pipelines requesting a higher value fail at creation.
     pub max_ray_recursion_depth: u32,
+}
+
+/// A VMA export pool and the one memory type it allocates from.
+#[cfg(target_os = "linux")]
+pub(crate) struct VmaExportPoolPinnedToOneMemoryType {
+    pub(crate) pool: vma::Pool,
+    pub(crate) memory_type_index: u32,
+}
+
+/// The allocator a frame's VMA allocation comes from. It alone decides the
+/// memory type, and through it the heap, whose budget weighs the frame.
+#[derive(Clone, Copy)]
+pub(crate) enum VmaFrameAllocationSource<#[cfg(target_os = "linux")] 'a> {
+    /// An export pool, which allocates from the one memory type it is pinned to.
+    #[cfg(target_os = "linux")]
+    ExportPool(&'a VmaExportPoolPinnedToOneMemoryType),
+    /// The device's default allocator, which picks a memory type per create info.
+    DefaultAllocator,
+}
+
+#[cfg(target_os = "linux")]
+impl<'a> VmaFrameAllocationSource<'a> {
+    /// `export_pool` where the device created it, the default allocator otherwise.
+    pub(crate) fn export_pool_or_the_default_allocator(
+        export_pool: Option<&'a VmaExportPoolPinnedToOneMemoryType>,
+    ) -> Self {
+        export_pool.map_or(Self::DefaultAllocator, Self::ExportPool)
+    }
+}
+
+/// The request a frame of `memory_requirements` makes on the memory type its
+/// allocator chose, or the refusal when no memory type satisfies it.
+fn frame_device_memory_request_on_a_vulkan_memory_type(
+    memory_requirements: vk::MemoryRequirements,
+    memory_type_index_or_refusal: vulkanalia::VkResult<u32>,
+    frame_allocation_site: &'static str,
+) -> Result<FrameDeviceMemoryRequest> {
+    let memory_type_index = memory_type_index_or_refusal.map_err(|e| {
+        Error::GpuError(format!(
+            "{frame_allocation_site}: no memory type in memory_type_bits {:#x} satisfies the \
+             allocation: {e}",
+            memory_requirements.memory_type_bits
+        ))
+    })?;
+    Ok(FrameDeviceMemoryRequest {
+        requested_bytes: memory_requirements.size,
+        placement: FrameDeviceMemoryPlacement::VulkanMemoryType { memory_type_index },
+        frame_allocation_site,
+    })
 }
 
 /// Internal anti-decay sentinel for an export-capable VMA pool.
@@ -629,6 +712,18 @@ impl HostVulkanDevice {
         if let Some(messenger_info) = instance_creation_messenger_info.as_mut() {
             instance_info = instance_info.push_next(messenger_info);
         }
+        // VK_EXT_metal_objects exports the device's MTLDevice only from an
+        // instance created with this in its pNext chain
+        // (VUID-VkExportMetalObjectsInfoEXT-pNext-06791); the registry makes
+        // it extend VkInstanceCreateInfo, not VkDeviceCreateInfo.
+        #[cfg(target_os = "macos")]
+        let mut metal_device_export_declaration = vk::ExportMetalObjectCreateInfoEXT::builder()
+            .export_object_type(vk::ExportMetalObjectTypeFlagsEXT::METAL_DEVICE)
+            .build();
+        #[cfg(target_os = "macos")]
+        {
+            instance_info = instance_info.push_next(&mut metal_device_export_declaration);
+        }
         let instance_info = instance_info.build();
 
         let instance = unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| {
@@ -667,6 +762,7 @@ impl HostVulkanDevice {
         let device_name = device_props.device_name.as_cstr().to_string_lossy();
         let min_storage_buffer_offset_alignment =
             device_props.limits.min_storage_buffer_offset_alignment;
+        let max_memory_allocation_count = device_props.limits.max_memory_allocation_count;
 
         // PCI vendor IDs assigned by Khronos Vulkan registry. NVIDIA's
         // proprietary Linux driver (and currently NVK on the same
@@ -885,6 +981,28 @@ impl HostVulkanDevice {
                 .unwrap_or_default();
         let available_device_ext_names =
             vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
+
+        let has_memory_budget = {
+            let memory_budget_ext = c"VK_EXT_memory_budget";
+            let advertised = available_device_ext_names.contains(&memory_budget_ext);
+            if advertised {
+                device_extensions.push(memory_budget_ext.as_ptr());
+                tracing::info!("VK_EXT_memory_budget enabled");
+            } else if cfg!(target_os = "macos") {
+                tracing::info!(
+                    "VK_EXT_memory_budget is not advertised; frame allocations are bounded by \
+                     Metal's recommended working set, which the extension does not change"
+                );
+            } else {
+                tracing::warn!(
+                    "VK_EXT_memory_budget is not advertised, so the bound on frame allocations \
+                     is an estimate: 80% of each heap, a heap that is not device-local also \
+                     capped by the system's available memory, weighed against this runtime's \
+                     own allocator usage rather than the driver's"
+                );
+            }
+            advertised
+        };
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         let has_external_memory_host = {
@@ -1338,6 +1456,32 @@ impl HostVulkanDevice {
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
             .map_err(|e| Error::GpuError(format!("Failed to create logical device: {e}")))?;
 
+        #[cfg(target_os = "macos")]
+        let metal_working_set_of_the_device = {
+            let metal_device =
+                match MetalDeviceWhoseWorkingSetBoundsFrameAllocations::exported_from_moltenvk(
+                    &device,
+                ) {
+                    Some(metal_device) => Some(metal_device),
+                    None => {
+                        tracing::warn!(
+                            "MoltenVK exported no MTLDevice (VK_EXT_metal_objects absent or \
+                             declined); frame allocations are bounded by the working set of \
+                             the system's default Metal device instead"
+                        );
+                        MetalDeviceWhoseWorkingSetBoundsFrameAllocations::the_systems_default()
+                    }
+                }
+                .ok_or_else(|| {
+                    Error::GpuError(
+                        "no Metal device could be read for the working set that bounds frame \
+                         allocations: MoltenVK exported none and the system has no default"
+                            .into(),
+                    )
+                })?;
+            MetalWorkingSetOfTheDevice::new(metal_device)
+        };
+
         // 8. Get the graphics queue
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
@@ -1364,7 +1508,7 @@ impl HostVulkanDevice {
         let compute_queue = compute_queue_family_index
             .map(|cq_family| unsafe { device.get_device_queue(cq_family, 0) });
 
-        // 9. Query memory properties (kept for DMA-BUF import path)
+        // 9. Query memory properties (raw-allocation type choice, heap of a type)
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
@@ -1390,7 +1534,10 @@ impl HostVulkanDevice {
         // allocator's behavior is unchanged on hardware without RT.
         #[cfg(target_os = "linux")]
         if has_ray_tracing_pipeline {
-            alloc_options.flags = vma::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+            alloc_options.flags |= vma::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+        }
+        if has_memory_budget {
+            alloc_options.flags |= vma::AllocatorCreateFlags::EXT_MEMORY_BUDGET;
         }
 
         let allocator = Arc::new(
@@ -1573,11 +1720,21 @@ impl HostVulkanDevice {
             }
         );
 
+        let frame_allocation_device_memory_budget_gate =
+            FrameAllocationDeviceMemoryBudgetGate::new();
         let device = Self {
             entry,
             instance,
             physical_device,
             memory_properties,
+            max_memory_allocation_count,
+            #[cfg(target_os = "linux")]
+            has_memory_budget,
+            frame_allocation_device_memory_budget_gate,
+            #[cfg(target_os = "linux")]
+            device_memory_budget_fresh_fetch_frame_index: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(target_os = "macos")]
+            metal_working_set_of_the_device,
             device,
             queue,
             queue_family_index,
@@ -1874,6 +2031,10 @@ impl HostVulkanDevice {
         use super::{HostVulkanBuffer, HostVulkanTexture};
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 
+        // A refusal here would fail device creation itself, and a probe is no frame.
+        const PREWARM_PROBE_ADMISSION: DeviceMemoryBudgetAdmission =
+            DeviceMemoryBudgetAdmission::EngineAllocationTheDeviceMemoryBudgetNeverRefuses;
+
         const PROBE_W: u32 = 8;
         const PROBE_H: u32 = 8;
         const PROBE_BPP: u32 = 4;
@@ -1884,9 +2045,10 @@ impl HostVulkanDevice {
         //    Allocate-and-drop: compositor swapchain DMA-BUF imports
         //    keep the kernel state alive for the process's lifetime.
         if device.dma_buf_buffer_pool().is_some() {
-            let probe = HostVulkanBuffer::new(
+            let probe = HostVulkanBuffer::new_with_device_memory_budget_admission(
                 device,
                 (PROBE_W as u64) * (PROBE_H as u64) * (PROBE_BPP as u64),
+                PREWARM_PROBE_ADMISSION,
             )
             .map_err(|e| Error::GpuError(format!("DMA-BUF buffer pool pre-warm failed: {e}")))?;
             drop(probe);
@@ -1900,8 +2062,12 @@ impl HostVulkanDevice {
                         | TextureUsages::COPY_SRC
                         | TextureUsages::COPY_DST,
                 );
-            let probe = HostVulkanTexture::new(device, &desc)
-                .map_err(|e| Error::GpuError(format!("DMA-BUF image pool pre-warm failed: {e}")))?;
+            let probe = HostVulkanTexture::new_with_device_memory_budget_admission(
+                device,
+                &desc,
+                PREWARM_PROBE_ADMISSION,
+            )
+            .map_err(|e| Error::GpuError(format!("DMA-BUF image pool pre-warm failed: {e}")))?;
             drop(probe);
         }
 
@@ -1923,12 +2089,15 @@ impl HostVulkanDevice {
                             | TextureUsages::COPY_DST,
                     );
                 let probe =
-                    HostVulkanTexture::new_render_target_dma_buf(device, &desc, bgra_modifiers)
-                        .map_err(|e| {
-                            Error::GpuError(format!(
-                                "tiled DMA-BUF image pool pre-warm failed: {e}"
-                            ))
-                        })?;
+                    HostVulkanTexture::new_render_target_dma_buf_with_device_memory_budget_admission(
+                        device,
+                        &desc,
+                        bgra_modifiers,
+                        PREWARM_PROBE_ADMISSION,
+                    )
+                    .map_err(|e| {
+                        Error::GpuError(format!("tiled DMA-BUF image pool pre-warm failed: {e}"))
+                    })?;
                 drop(probe);
             }
         }
@@ -1937,10 +2106,10 @@ impl HostVulkanDevice {
         //    Small (8×8×4) because no large-allocation HOST_VISIBLE
         //    OPAQUE_FD consumer exists today; the sentinel exists to
         //    pin the per-handle-type kernel state.
-        if let Some(pool) = device.opaque_fd_buffer_pool() {
+        if let Some(pinned_pool) = device.opaque_fd_buffer_pool_pinned_to_one_memory_type() {
             let sentinel = make_opaque_fd_buffer_sentinel(
                 device,
-                pool,
+                pinned_pool,
                 "opaque_fd_host_visible",
                 (PROBE_W as vk::DeviceSize)
                     * (PROBE_H as vk::DeviceSize)
@@ -1956,10 +2125,12 @@ impl HostVulkanDevice {
         //    index differs from the write-combined pool's wherever the
         //    device has a cached exportable type, so it needs its own
         //    sentinel rather than riding that one's.
-        if let Some(pool) = device.opaque_fd_buffer_pool_host_cached() {
+        if let Some(pinned_pool) =
+            device.opaque_fd_buffer_pool_host_cached_pinned_to_one_memory_type()
+        {
             let sentinel = make_opaque_fd_buffer_sentinel(
                 device,
-                pool,
+                pinned_pool,
                 "opaque_fd_host_cached",
                 (PROBE_W as vk::DeviceSize)
                     * (PROBE_H as vk::DeviceSize)
@@ -1979,10 +2150,12 @@ impl HostVulkanDevice {
         //    *deterministically* blocked the consumer's same-size
         //    allocation post-swapchain, indicating NVIDIA tracks a
         //    cumulative byte budget — so the sentinel must be tiny.
-        if let Some(pool) = device.opaque_fd_buffer_pool_device_local() {
+        if let Some(pinned_pool) =
+            device.opaque_fd_buffer_pool_device_local_pinned_to_one_memory_type()
+        {
             let sentinel = make_opaque_fd_buffer_sentinel(
                 device,
-                pool,
+                pinned_pool,
                 "opaque_fd_device_local",
                 (PROBE_W as vk::DeviceSize)
                     * (PROBE_H as vk::DeviceSize)
@@ -2023,9 +2196,14 @@ impl HostVulkanDevice {
         //    256 bytes for R8G8B8A8 keeps the kernel state pinned
         //    without competing with consumer-class allocations on
         //    NVIDIA's cumulative OPAQUE_FD byte budget.
-        if let Some(pool) = device.opaque_fd_image_pool() {
-            let sentinel =
-                make_opaque_fd_image_sentinel(device, pool, "opaque_fd_image", PROBE_W, PROBE_H)?;
+        if let Some(pinned_pool) = device.opaque_fd_image_pool_pinned_to_one_memory_type() {
+            let sentinel = make_opaque_fd_image_sentinel(
+                device,
+                pinned_pool,
+                "opaque_fd_image",
+                PROBE_W,
+                PROBE_H,
+            )?;
             sentinels.push(sentinel);
         }
 
@@ -2135,11 +2313,11 @@ impl MappedOpaqueFdBufferHostAccessPattern {
 /// Bypasses [`super::HostVulkanBuffer`] deliberately: that wrapper
 /// holds an `Arc<HostVulkanDevice>` for cleanup, which would create a
 /// reference cycle when stored as a field on the device itself.
-/// `pool` must be one of `device`'s pools.
+/// `pinned_pool` must be one of `device`'s pools.
 #[cfg(target_os = "linux")]
 fn make_opaque_fd_buffer_sentinel(
     device: &HostVulkanDevice,
-    pool: &vma::Pool,
+    pinned_pool: &VmaExportPoolPinnedToOneMemoryType,
     label: &'static str,
     size: vk::DeviceSize,
     required_flags: vk::MemoryPropertyFlags,
@@ -2169,8 +2347,8 @@ fn make_opaque_fd_buffer_sentinel(
         ..Default::default()
     };
 
-    let (buffer, allocation) =
-        unsafe { pool.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
+    let (buffer, allocation) = unsafe { pinned_pool.pool.create_buffer(buffer_info, &alloc_opts) }
+        .map_err(|e| {
             Error::GpuError(format!(
                 "OPAQUE_FD export pool '{label}' sentinel allocation failed \
                  (size={size}): {e}"
@@ -2205,11 +2383,11 @@ fn make_opaque_fd_buffer_sentinel(
 /// avoid competing with consumer-class allocations on NVIDIA's
 /// cumulative OPAQUE_FD byte budget — see the
 /// `nvidia-opaque-fd-after-swapchain` learning's "tiny sentinels"
-/// rationale. `pool` must be one of `device`'s pools.
+/// rationale. `pinned_pool` must be one of `device`'s pools.
 #[cfg(target_os = "linux")]
 fn make_opaque_fd_image_sentinel(
     device: &HostVulkanDevice,
-    pool: &vma::Pool,
+    pinned_pool: &VmaExportPoolPinnedToOneMemoryType,
     label: &'static str,
     width: u32,
     height: u32,
@@ -2246,8 +2424,8 @@ fn make_opaque_fd_image_sentinel(
         ..Default::default()
     };
 
-    let (image, allocation) =
-        unsafe { pool.create_image(image_info, &alloc_opts) }.map_err(|e| {
+    let (image, allocation) = unsafe { pinned_pool.pool.create_image(image_info, &alloc_opts) }
+        .map_err(|e| {
             Error::GpuError(format!(
                 "OPAQUE_FD image export pool '{label}' sentinel allocation failed \
                  ({width}x{height}): {e}"
@@ -2355,9 +2533,9 @@ impl HostVulkanDevice {
         memory_properties: &vk::PhysicalDeviceMemoryProperties,
         tiled_modifiers: &[u64],
     ) -> Result<(
-        vma::Pool,
-        vma::Pool,
-        Option<vma::Pool>,
+        VmaExportPoolPinnedToOneMemoryType,
+        VmaExportPoolPinnedToOneMemoryType,
+        Option<VmaExportPoolPinnedToOneMemoryType>,
         Box<vk::ExportMemoryAllocateInfo>,
         Box<vk::ExportMemoryAllocateInfo>,
         Option<Box<vk::ExportMemoryAllocateInfo>>,
@@ -2491,7 +2669,13 @@ impl HostVulkanDevice {
                                 tiled_mem_type_idx,
                                 tiled_modifiers.len(),
                             );
-                            (Some(tiled_pool), Some(tiled_export_info))
+                            (
+                                Some(VmaExportPoolPinnedToOneMemoryType {
+                                    pool: tiled_pool,
+                                    memory_type_index: tiled_mem_type_idx,
+                                }),
+                                Some(tiled_export_info),
+                            )
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -2519,8 +2703,14 @@ impl HostVulkanDevice {
         );
 
         Ok((
-            buffer_pool,
-            image_pool,
+            VmaExportPoolPinnedToOneMemoryType {
+                pool: buffer_pool,
+                memory_type_index: buffer_mem_type_idx,
+            },
+            VmaExportPoolPinnedToOneMemoryType {
+                pool: image_pool,
+                memory_type_index: image_mem_type_idx,
+            },
             tiled_pool,
             buffer_export_info,
             image_export_info,
@@ -2575,7 +2765,10 @@ impl HostVulkanDevice {
     fn create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
         allocator: &Arc<vma::Allocator>,
         memory_type_index: u32,
-    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
+    ) -> Result<(
+        VmaExportPoolPinnedToOneMemoryType,
+        Box<vk::ExportMemoryAllocateInfo>,
+    )> {
         let mut export_info = Box::new(
             vk::ExportMemoryAllocateInfo::builder()
                 .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
@@ -2587,7 +2780,13 @@ impl HostVulkanDevice {
         let pool = allocator
             .create_pool(&pool_options)
             .map_err(|e| Error::GpuError(format!("create OPAQUE_FD buffer pool: {e}")))?;
-        Ok((pool, export_info))
+        Ok((
+            VmaExportPoolPinnedToOneMemoryType {
+                pool,
+                memory_type_index,
+            },
+            export_info,
+        ))
     }
 
     /// Build a VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers.
@@ -2606,21 +2805,25 @@ impl HostVulkanDevice {
     #[cfg(target_os = "linux")]
     fn create_opaque_fd_buffer_pool(
         allocator: &Arc<vma::Allocator>,
-    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
+    ) -> Result<(
+        VmaExportPoolPinnedToOneMemoryType,
+        Box<vk::ExportMemoryAllocateInfo>,
+    )> {
         let memory_type_index = Self::probe_opaque_fd_host_visible_buffer_memory_type_index(
             allocator,
             MappedOpaqueFdBufferHostAccessPattern::SequentialWrite,
         )?;
-        let (pool, export_info) = Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
-            allocator,
-            memory_type_index,
-        )?;
+        let (pinned_pool, export_info) =
+            Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
+                allocator,
+                memory_type_index,
+            )?;
 
         tracing::info!(
             "OPAQUE_FD VMA buffer pool created — mem_type={}",
             memory_type_index
         );
-        Ok((pool, export_info))
+        Ok((pinned_pool, export_info))
     }
 
     /// Build a VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE
@@ -2641,7 +2844,12 @@ impl HostVulkanDevice {
     #[cfg(target_os = "linux")]
     fn create_opaque_fd_buffer_pool_host_cached(
         allocator: &Arc<vma::Allocator>,
-    ) -> Result<Option<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)>> {
+    ) -> Result<
+        Option<(
+            VmaExportPoolPinnedToOneMemoryType,
+            Box<vk::ExportMemoryAllocateInfo>,
+        )>,
+    > {
         let memory_type_index = Self::probe_opaque_fd_host_visible_buffer_memory_type_index(
             allocator,
             MappedOpaqueFdBufferHostAccessPattern::Random,
@@ -2649,16 +2857,17 @@ impl HostVulkanDevice {
         if !memory_type_index_is_host_cached(allocator.get_memory_properties(), memory_type_index) {
             return Ok(None);
         }
-        let (pool, export_info) = Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
-            allocator,
-            memory_type_index,
-        )?;
+        let (pinned_pool, export_info) =
+            Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
+                allocator,
+                memory_type_index,
+            )?;
 
         tracing::info!(
             "OPAQUE_FD VMA buffer pool (HOST_CACHED) created — mem_type={}",
             memory_type_index
         );
-        Ok(Some((pool, export_info)))
+        Ok(Some((pinned_pool, export_info)))
     }
 
     /// Build a VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL
@@ -2674,7 +2883,10 @@ impl HostVulkanDevice {
     #[cfg(target_os = "linux")]
     fn create_opaque_fd_buffer_pool_device_local(
         allocator: &Arc<vma::Allocator>,
-    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
+    ) -> Result<(
+        VmaExportPoolPinnedToOneMemoryType,
+        Box<vk::ExportMemoryAllocateInfo>,
+    )> {
         let mut probe_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
         let probe_buffer_info = vk::BufferCreateInfo::builder()
@@ -2716,7 +2928,13 @@ impl HostVulkanDevice {
             "OPAQUE_FD VMA buffer pool (DEVICE_LOCAL) created — mem_type={}",
             mem_type_idx
         );
-        Ok((pool, export_info))
+        Ok((
+            VmaExportPoolPinnedToOneMemoryType {
+                pool,
+                memory_type_index: mem_type_idx,
+            },
+            export_info,
+        ))
     }
 
     /// Build a VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL
@@ -2749,7 +2967,10 @@ impl HostVulkanDevice {
     #[cfg(target_os = "linux")]
     fn create_opaque_fd_image_pool(
         allocator: &Arc<vma::Allocator>,
-    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
+    ) -> Result<(
+        VmaExportPoolPinnedToOneMemoryType,
+        Box<vk::ExportMemoryAllocateInfo>,
+    )> {
         let mut probe_external_info = vk::ExternalMemoryImageCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
         let probe_image_info = vk::ImageCreateInfo::builder()
@@ -2799,7 +3020,13 @@ impl HostVulkanDevice {
             "OPAQUE_FD VMA image pool created — mem_type={}",
             mem_type_idx
         );
-        Ok((pool, export_info))
+        Ok((
+            VmaExportPoolPinnedToOneMemoryType {
+                pool,
+                memory_type_index: mem_type_idx,
+            },
+            export_info,
+        ))
     }
 
     /// Find a memory type that satisfies both the type filter and required properties.
@@ -3910,14 +4137,18 @@ impl HostVulkanDevice {
     /// Returns None if external memory is not supported on this device.
     #[cfg(target_os = "linux")]
     pub fn dma_buf_buffer_pool(&self) -> Option<&vma::Pool> {
-        self.dma_buf_buffer_pool.as_ref()
+        self.dma_buf_buffer_pool
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
     }
 
     /// Get the VMA pool for DMA-BUF exportable DEVICE_LOCAL images.
     /// Returns None if external memory is not supported on this device.
     #[cfg(target_os = "linux")]
     pub fn dma_buf_image_pool(&self) -> Option<&vma::Pool> {
-        self.dma_buf_image_pool.as_ref()
+        self.dma_buf_image_pool
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
     }
 
     /// Get the VMA pool for DMA-BUF exportable images created with
@@ -3930,7 +4161,9 @@ impl HostVulkanDevice {
     /// sampler-only on NVIDIA.
     #[cfg(target_os = "linux")]
     pub fn dma_buf_image_pool_tiled(&self) -> Option<&vma::Pool> {
-        self.dma_buf_image_pool_tiled.as_ref()
+        self.dma_buf_image_pool_tiled
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
     }
 
     /// VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers.
@@ -3941,7 +4174,9 @@ impl HostVulkanDevice {
     /// [`super::HostVulkanBuffer::new_opaque_fd_export`].
     #[cfg(target_os = "linux")]
     pub fn opaque_fd_buffer_pool(&self) -> Option<&vma::Pool> {
-        self.opaque_fd_buffer_pool.as_ref()
+        self.opaque_fd_buffer_pool
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
     }
 
     /// VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers on
@@ -3957,7 +4192,9 @@ impl HostVulkanDevice {
     /// degrades to [`Self::opaque_fd_buffer_pool`].
     #[cfg(target_os = "linux")]
     pub fn opaque_fd_buffer_pool_host_cached(&self) -> Option<&vma::Pool> {
-        self.opaque_fd_buffer_pool_host_cached.as_ref()
+        self.opaque_fd_buffer_pool_host_cached
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
     }
 
     /// VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL buffers
@@ -3969,7 +4206,9 @@ impl HostVulkanDevice {
     /// [`super::HostVulkanBuffer::new_opaque_fd_export_device_local`].
     #[cfg(target_os = "linux")]
     pub fn opaque_fd_buffer_pool_device_local(&self) -> Option<&vma::Pool> {
-        self.opaque_fd_buffer_pool_device_local.as_ref()
+        self.opaque_fd_buffer_pool_device_local
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
     }
 
     /// VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL **images**
@@ -3982,7 +4221,456 @@ impl HostVulkanDevice {
     /// [`super::HostVulkanTexture::new_opaque_fd_export`].
     #[cfg(target_os = "linux")]
     pub fn opaque_fd_image_pool(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_image_pool
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
+    }
+
+    /// [`Self::dma_buf_buffer_pool`] with the memory type it is pinned to.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn dma_buf_buffer_pool_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.dma_buf_buffer_pool.as_ref()
+    }
+
+    /// [`Self::dma_buf_image_pool`] with the memory type it is pinned to.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn dma_buf_image_pool_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.dma_buf_image_pool.as_ref()
+    }
+
+    /// [`Self::dma_buf_image_pool_tiled`] with the memory type it is pinned to.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn dma_buf_image_pool_tiled_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.dma_buf_image_pool_tiled.as_ref()
+    }
+
+    /// [`Self::opaque_fd_buffer_pool`] with the memory type it is pinned to.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn opaque_fd_buffer_pool_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.opaque_fd_buffer_pool.as_ref()
+    }
+
+    /// [`Self::opaque_fd_buffer_pool_host_cached`] with the memory type it is pinned to.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn opaque_fd_buffer_pool_host_cached_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.opaque_fd_buffer_pool_host_cached.as_ref()
+    }
+
+    /// [`Self::opaque_fd_buffer_pool_device_local`] with the memory type it is pinned to.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn opaque_fd_buffer_pool_device_local_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.opaque_fd_buffer_pool_device_local.as_ref()
+    }
+
+    /// [`Self::opaque_fd_image_pool`] with the memory type it is pinned to.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn opaque_fd_image_pool_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
         self.opaque_fd_image_pool.as_ref()
+    }
+
+    /// Allocate as `admission` says: a frame through the device-memory budget
+    /// gate, refused by name past its budget or near the allocation-count
+    /// limit; an exempt engine allocation straight through, never weighed.
+    pub(crate) fn allocate_as_the_device_memory_budget_admits<Allocated>(
+        &self,
+        admission: DeviceMemoryBudgetAdmission,
+        frame_device_memory_request: impl FnOnce() -> Result<FrameDeviceMemoryRequest>,
+        allocate: impl FnOnce() -> Result<Allocated>,
+    ) -> Result<Allocated> {
+        match admission {
+            DeviceMemoryBudgetAdmission::EngineAllocationTheDeviceMemoryBudgetNeverRefuses => {
+                allocate()
+            }
+            DeviceMemoryBudgetAdmission::FrameRefusedPastTheDeviceMemoryBudget => {
+                let request = frame_device_memory_request()?;
+                self.frame_allocation_device_memory_budget_gate
+                    .allocate_a_frame_within_the_device_memory_budget(
+                        &request,
+                        || self.read_the_frame_allocation_device_memory_fetched_now(&request),
+                        allocate,
+                    )
+            }
+        }
+    }
+
+    /// Create a frame image from `allocation_source`, weighed as `admission`
+    /// says against the heap that same source allocates it from.
+    pub(crate) fn create_frame_image_within_the_device_memory_budget(
+        &self,
+        admission: DeviceMemoryBudgetAdmission,
+        allocation_source: VmaFrameAllocationSource,
+        image_create_info: &vk::ImageCreateInfo,
+        allocation_options: &vma::AllocationOptions,
+        frame_allocation_site: &'static str,
+        describe_the_allocators_refusal: impl FnOnce(vk::ErrorCode) -> Error,
+    ) -> Result<(vk::Image, vma::Allocation)> {
+        // SAFETY (every unsafe block below): the memory-type queries only read
+        // the allocator's types, and the create info and options are the
+        // caller's, valid on this device.
+        match allocation_source {
+            #[cfg(target_os = "linux")]
+            VmaFrameAllocationSource::ExportPool(export_pool) => self
+                .allocate_as_the_device_memory_budget_admits(
+                    admission,
+                    || {
+                        frame_device_memory_request_on_a_vulkan_memory_type(
+                            self.memory_requirements_of_an_image_create_info(image_create_info)?,
+                            Ok(export_pool.memory_type_index),
+                            frame_allocation_site,
+                        )
+                    },
+                    || {
+                        unsafe {
+                            export_pool
+                                .pool
+                                .create_image(*image_create_info, allocation_options)
+                        }
+                        .map_err(describe_the_allocators_refusal)
+                    },
+                ),
+            VmaFrameAllocationSource::DefaultAllocator => self
+                .allocate_as_the_device_memory_budget_admits(
+                    admission,
+                    || {
+                        let memory_requirements =
+                            self.memory_requirements_of_an_image_create_info(image_create_info)?;
+                        // VMA cannot infer a DRM-modifier image's usage for an
+                        // `Auto` query, so the type is chosen on the options'
+                        // flags alone, which every frame constructor states.
+                        let memory_type_index_or_refusal = if image_create_info.tiling
+                            == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT
+                        {
+                            unsafe {
+                                self.allocator().find_memory_type_index(
+                                    memory_requirements.memory_type_bits,
+                                    &vma::AllocationOptions {
+                                        usage: vma::MemoryUsage::Unknown,
+                                        ..*allocation_options
+                                    },
+                                )
+                            }
+                        } else {
+                            unsafe {
+                                self.allocator().find_memory_type_index_for_image_info(
+                                    *image_create_info,
+                                    allocation_options,
+                                )
+                            }
+                        };
+                        frame_device_memory_request_on_a_vulkan_memory_type(
+                            memory_requirements,
+                            memory_type_index_or_refusal,
+                            frame_allocation_site,
+                        )
+                    },
+                    || {
+                        unsafe {
+                            self.allocator()
+                                .create_image(*image_create_info, allocation_options)
+                        }
+                        .map_err(describe_the_allocators_refusal)
+                    },
+                ),
+        }
+    }
+
+    /// Create a frame buffer from `allocation_source`, weighed as `admission`
+    /// says against the heap that same source allocates it from.
+    pub(crate) fn create_frame_buffer_within_the_device_memory_budget(
+        &self,
+        admission: DeviceMemoryBudgetAdmission,
+        allocation_source: VmaFrameAllocationSource,
+        buffer_create_info: &vk::BufferCreateInfo,
+        allocation_options: &vma::AllocationOptions,
+        frame_allocation_site: &'static str,
+        describe_the_allocators_refusal: impl FnOnce(vk::ErrorCode) -> Error,
+    ) -> Result<(vk::Buffer, vma::Allocation)> {
+        // SAFETY (every unsafe block below): the memory-type query only reads
+        // the allocator's types, and the create info and options are the
+        // caller's, valid on this device.
+        match allocation_source {
+            #[cfg(target_os = "linux")]
+            VmaFrameAllocationSource::ExportPool(export_pool) => self
+                .allocate_as_the_device_memory_budget_admits(
+                    admission,
+                    || {
+                        frame_device_memory_request_on_a_vulkan_memory_type(
+                            self.memory_requirements_of_a_buffer_create_info(buffer_create_info),
+                            Ok(export_pool.memory_type_index),
+                            frame_allocation_site,
+                        )
+                    },
+                    || {
+                        unsafe {
+                            export_pool
+                                .pool
+                                .create_buffer(*buffer_create_info, allocation_options)
+                        }
+                        .map_err(describe_the_allocators_refusal)
+                    },
+                ),
+            VmaFrameAllocationSource::DefaultAllocator => self
+                .allocate_as_the_device_memory_budget_admits(
+                    admission,
+                    || {
+                        frame_device_memory_request_on_a_vulkan_memory_type(
+                            self.memory_requirements_of_a_buffer_create_info(buffer_create_info),
+                            unsafe {
+                                self.allocator().find_memory_type_index_for_buffer_info(
+                                    *buffer_create_info,
+                                    allocation_options,
+                                )
+                            },
+                            frame_allocation_site,
+                        )
+                    },
+                    || {
+                        unsafe {
+                            self.allocator()
+                                .create_buffer(*buffer_create_info, allocation_options)
+                        }
+                        .map_err(describe_the_allocators_refusal)
+                    },
+                ),
+        }
+    }
+
+    /// Memory requirements of an image not yet created. A DRM-modifier image
+    /// takes a probe image: `vkGetDeviceImageMemoryRequirements` needs a
+    /// `planeAspect` naming a memory plane of the modifier the driver picks
+    /// only at creation (VUID-VkDeviceImageMemoryRequirements-pCreateInfo-06420).
+    fn memory_requirements_of_an_image_create_info(
+        &self,
+        image_create_info: &vk::ImageCreateInfo,
+    ) -> Result<vk::MemoryRequirements> {
+        if image_create_info.tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT {
+            // SAFETY: the create info is the one the caller is about to
+            // allocate with; the probe image is destroyed before returning.
+            let probe_image = unsafe { self.device.create_image(image_create_info, None) }
+                .map_err(|e| {
+                    Error::GpuError(format!(
+                        "vkCreateImage for the memory-requirements probe of a DRM-modifier \
+                         image failed: {e}"
+                    ))
+                })?;
+            let memory_requirements =
+                unsafe { self.device.get_image_memory_requirements(probe_image) };
+            unsafe { self.device.destroy_image(probe_image, None) };
+            return Ok(memory_requirements);
+        }
+        let image_memory_requirements_info = vk::DeviceImageMemoryRequirements::builder()
+            .create_info(image_create_info)
+            .build();
+        let mut memory_requirements = vk::MemoryRequirements2::default();
+        // SAFETY: a query on a valid create info; nothing is created.
+        unsafe {
+            self.device.get_device_image_memory_requirements(
+                &image_memory_requirements_info,
+                &mut memory_requirements,
+            )
+        };
+        Ok(memory_requirements.memory_requirements)
+    }
+
+    /// Memory requirements of a buffer not yet created.
+    fn memory_requirements_of_a_buffer_create_info(
+        &self,
+        buffer_create_info: &vk::BufferCreateInfo,
+    ) -> vk::MemoryRequirements {
+        let buffer_memory_requirements_info = vk::DeviceBufferMemoryRequirements::builder()
+            .create_info(buffer_create_info)
+            .build();
+        let mut memory_requirements = vk::MemoryRequirements2::default();
+        // SAFETY: a query on a valid create info; nothing is created.
+        unsafe {
+            self.device.get_device_buffer_memory_requirements(
+                &buffer_memory_requirements_info,
+                &mut memory_requirements,
+            )
+        };
+        memory_requirements.memory_requirements
+    }
+
+    /// The heap a memory type allocates from; refused by name past the
+    /// device's memory type count.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn device_memory_heap_of_memory_type(&self, memory_type_index: u32) -> Result<u32> {
+        if memory_type_index >= self.memory_properties.memory_type_count {
+            return Err(Error::GpuError(format!(
+                "memory type {memory_type_index} is past this device's {} memory types",
+                self.memory_properties.memory_type_count
+            )));
+        }
+        Ok(self.memory_properties.memory_types[memory_type_index as usize].heap_index)
+    }
+
+    /// Every heap's budget, usage and allocator holdings, with the budget
+    /// fetched from the driver for this call: VMA otherwise serves a budget
+    /// it refreshes only every 30 of its own operations.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn read_every_heaps_device_memory_budget_fetched_from_the_driver_now(
+        &self,
+    ) -> Result<Vec<DeviceMemoryHeapBudgetReading>> {
+        use crate::core::error::{DeviceMemoryHeapBudgetSource, DeviceMemoryHeapLocality};
+
+        let allocator = self.allocator();
+        let fresh_fetch_frame_index = self
+            .device_memory_budget_fresh_fetch_frame_index
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        // SAFETY: the frame index is opaque to VMA; with EXT_MEMORY_BUDGET
+        // enabled, setting it fetches every heap's budget from the driver.
+        unsafe { allocator.set_current_frame_index(fresh_fetch_frame_index) };
+        let heap_budgets = allocator
+            .get_heap_budgets()
+            .map_err(|e| Error::GpuError(format!("vmaGetHeapBudgets failed: {e}")))?;
+        let heap_locality_of = |heap_index: usize| {
+            if self.memory_properties.memory_heaps[heap_index]
+                .flags
+                .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+            {
+                DeviceMemoryHeapLocality::DeviceLocal
+            } else {
+                DeviceMemoryHeapLocality::NotDeviceLocal
+            }
+        };
+        let system_memory_available_bytes = (!self.has_memory_budget
+            && (0..heap_budgets.len())
+                .any(|heap_index| heap_locality_of(heap_index) == DeviceMemoryHeapLocality::NotDeviceLocal))
+        .then(|| {
+            crate::linux::system_memory_available_from_proc_meminfo::read_system_memory_available_bytes_from_proc_meminfo()
+                .inspect_err(|e| {
+                    tracing::debug!(
+                        error = %e,
+                        "the system's available memory is unreadable; a host heap's budget stays \
+                         the allocator's estimate"
+                    );
+                })
+                .ok()
+        })
+        .flatten();
+        Ok(heap_budgets
+            .iter()
+            .enumerate()
+            .map(|(heap_index, heap_budget)| {
+                let heap_locality = heap_locality_of(heap_index);
+                let (heap_budget_bytes, heap_budget_source) = if self.has_memory_budget {
+                    (
+                        heap_budget.budget,
+                        DeviceMemoryHeapBudgetSource::ReportedByTheDriver,
+                    )
+                } else {
+                    heap_budget_without_the_memory_budget_extension(
+                        heap_budget.budget,
+                        heap_budget.usage,
+                        heap_locality,
+                        system_memory_available_bytes,
+                    )
+                };
+                DeviceMemoryHeapBudgetReading {
+                    heap_index: heap_index as u32,
+                    heap_locality,
+                    heap_budget_bytes,
+                    heap_usage_bytes: heap_budget.usage,
+                    bytes_this_runtimes_allocator_pools_hold_on_the_heap: heap_budget
+                        .statistics
+                        .blockBytes,
+                    device_memory_blocks_this_runtimes_allocator_holds_on_the_heap: heap_budget
+                        .statistics
+                        .blockCount,
+                    heap_budget_source,
+                }
+            })
+            .collect())
+    }
+
+    /// The device memory one frame allocation is decided on, read for it now.
+    #[cfg(target_os = "linux")]
+    fn read_the_frame_allocation_device_memory_fetched_now(
+        &self,
+        request: &FrameDeviceMemoryRequest,
+    ) -> Result<FrameAllocationDeviceMemoryReading> {
+        let FrameDeviceMemoryPlacement::VulkanMemoryType { memory_type_index } = request.placement;
+        let heap_index = self.device_memory_heap_of_memory_type(memory_type_index)?;
+        let every_heaps_reading =
+            self.read_every_heaps_device_memory_budget_fetched_from_the_driver_now()?;
+        let allocation_count = DeviceMemoryAllocationCountReading {
+            live_device_memory_allocation_count: device_memory_allocations_this_process_holds(
+                every_heaps_reading.iter().map(|heap| {
+                    heap.device_memory_blocks_this_runtimes_allocator_holds_on_the_heap
+                }),
+                self.live_allocation_count.load(Ordering::Relaxed),
+            ),
+            max_memory_allocation_count: self.max_memory_allocation_count,
+        };
+        let heap_reading = every_heaps_reading
+            .into_iter()
+            .nth(heap_index as usize)
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "the allocator reported no budget for heap {heap_index} of memory type \
+                     {memory_type_index}"
+                ))
+            })?;
+        Ok(FrameAllocationDeviceMemoryReading {
+            budget: FrameAllocationBudgetReading::VulkanMemoryHeap(heap_reading),
+            allocation_count,
+        })
+    }
+
+    /// The device memory one frame allocation is decided on, read for it now:
+    /// Metal's working set read live, whatever the frame's placement.
+    #[cfg(target_os = "macos")]
+    fn read_the_frame_allocation_device_memory_fetched_now(
+        &self,
+        _request: &FrameDeviceMemoryRequest,
+    ) -> Result<FrameAllocationDeviceMemoryReading> {
+        let heap_budgets = self
+            .allocator()
+            .get_heap_budgets()
+            .map_err(|e| Error::GpuError(format!("vmaGetHeapBudgets failed: {e}")))?;
+        Ok(FrameAllocationDeviceMemoryReading {
+            budget: FrameAllocationBudgetReading::MetalWorkingSet(
+                self.metal_working_set_of_the_device.reading(),
+            ),
+            allocation_count: DeviceMemoryAllocationCountReading {
+                live_device_memory_allocation_count: device_memory_allocations_this_process_holds(
+                    heap_budgets
+                        .iter()
+                        .map(|heap_budget| heap_budget.statistics.blockCount),
+                    self.live_allocation_count.load(Ordering::Relaxed),
+                ),
+                max_memory_allocation_count: self.max_memory_allocation_count,
+            },
+        })
+    }
+
+    /// The Metal working set frame allocations are weighed against.
+    #[cfg(all(target_os = "macos", test))]
+    pub(crate) fn metal_working_set_of_the_device(&self) -> &MetalWorkingSetOfTheDevice {
+        &self.metal_working_set_of_the_device
+    }
+
+    /// From now on, weigh every frame allocation on this device against a
+    /// budget lowered to its usage, so the next one is refused.
+    #[cfg(test)]
+    pub(crate) fn leave_no_room_in_any_frame_allocation_budget_for_this_test(&self) {
+        self.frame_allocation_device_memory_budget_gate
+            .leave_no_room_in_any_budget_for_this_test();
     }
 
     /// `VkPhysicalDeviceIDProperties::deviceUUID` queried at construction.
@@ -4102,7 +4790,8 @@ impl HostVulkanDevice {
         unsafe { self.device.unmap_memory(memory) };
     }
 
-    /// Current number of live DMA-BUF import-path allocations.
+    /// Live raw `vkAllocateMemory` allocations: DMA-BUF and host-pointer
+    /// imports, and IOSurface-backed image memory.
     pub fn live_import_allocation_count(&self) -> usize {
         self.live_allocation_count.load(Ordering::Relaxed)
     }
@@ -4711,12 +5400,14 @@ mod tests {
             Some(d) => d,
             None => return,
         };
-        let Some(pool) = device.opaque_fd_buffer_pool() else {
+        let Some(pinned_pool) = device.opaque_fd_buffer_pool_pinned_to_one_memory_type() else {
             println!("Skipping — no OPAQUE_FD buffer pool on this driver");
             return;
         };
         let live_allocations_in_pool = || {
-            pool.calculate_statistics()
+            pinned_pool
+                .pool
+                .calculate_statistics()
                 .expect("pool statistics")
                 .statistics
                 .allocationCount
@@ -4725,7 +5416,7 @@ mod tests {
 
         let sentinel = make_opaque_fd_buffer_sentinel(
             &device,
-            pool,
+            pinned_pool,
             "opaque_fd_host_visible",
             64,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -4921,6 +5612,425 @@ mod tests {
         assert!(
             matches!(refusal, Error::GpuError(_)),
             "the refusal must be the engine's typed GPU error, got {refusal:?}"
+        );
+    }
+
+    /// Past a budget with no room left, a frame texture is refused by name
+    /// before anything is allocated, while a uniform buffer — engine memory
+    /// the budget never weighs — still allocates.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[allow(clippy::disallowed_macros)]
+    fn a_frame_texture_past_a_budget_with_no_room_left_is_refused_while_an_engine_buffer_still_allocates()
+     {
+        use crate::core::rhi::{TextureFormat, TextureUsages};
+
+        let Some(device) = try_create_device() else {
+            return;
+        };
+        let device_memory_blocks_the_allocator_holds = || -> u64 {
+            device
+                .allocator()
+                .get_heap_budgets()
+                .expect("the allocator reports every heap")
+                .iter()
+                .map(|heap_budget| u64::from(heap_budget.statistics.blockCount))
+                .sum()
+        };
+        let frame_descriptor = TextureDescriptor::new(256, 256, TextureFormat::Bgra8Unorm)
+            .with_usage(
+                TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+            );
+
+        device.leave_no_room_in_any_frame_allocation_budget_for_this_test();
+        let blocks_before_the_refusal = device_memory_blocks_the_allocator_holds();
+        let refusal = device
+            .create_texture(&frame_descriptor)
+            .err()
+            .expect("a frame past a budget with no room left is refused");
+        println!("refused: {refusal}");
+
+        #[cfg(target_os = "linux")]
+        match &refusal {
+            Error::FrameAllocationRefusedPastTheDeviceMemoryHeapBudget {
+                heap_index,
+                frame_allocation_site,
+                ..
+            } => {
+                assert_eq!(frame_allocation_site, "HostVulkanTexture::new");
+                if let Some(dma_buf_image_pool) =
+                    device.dma_buf_image_pool_pinned_to_one_memory_type()
+                {
+                    assert_eq!(
+                        *heap_index,
+                        device
+                            .device_memory_heap_of_memory_type(dma_buf_image_pool.memory_type_index)
+                            .expect("the pool's pinned type is one of the device's"),
+                        "the refusal names the heap the DMA-BUF image pool's pinned memory type \
+                         allocates from: {refusal}"
+                    );
+                }
+            }
+            other => panic!("expected the heap-budget refusal, got {other:?}"),
+        }
+        #[cfg(target_os = "macos")]
+        assert!(
+            matches!(
+                refusal,
+                Error::FrameAllocationRefusedPastTheMetalWorkingSetBudget { .. }
+            ),
+            "expected the Metal working-set refusal, got {refusal:?}"
+        );
+        assert_eq!(
+            device_memory_blocks_the_allocator_holds(),
+            blocks_before_the_refusal,
+            "a refused frame allocates no device memory"
+        );
+
+        crate::vulkan::rhi::HostVulkanBuffer::new_uniform_buffer_host_visible(&device, 256)
+            .expect("a uniform buffer the budget never weighs still allocates past it");
+    }
+
+    /// Every VMA frame constructor, past a budget with no room left, is
+    /// refused naming the heap that the same constructor's allocation lands on.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[allow(clippy::disallowed_macros)]
+    fn every_vma_frame_constructors_refusal_names_the_heap_its_allocation_lands_on() {
+        use crate::core::rhi::{TextureFormat, TextureUsages};
+        use crate::vulkan::rhi::HostVulkanBuffer;
+        use crate::vulkan::rhi::drm_modifier_probe::fourcc;
+
+        type MemoryTypeOfOneFreshFrameAllocation<'a> = Box<dyn Fn() -> Result<u32> + 'a>;
+        fn memory_type_of_the_texture(texture: HostVulkanTexture) -> u32 {
+            texture
+                .vma_allocation_memory_type_index()
+                .expect("a VMA-allocated texture has a memory type")
+        }
+        fn memory_type_of_the_buffer(buffer: HostVulkanBuffer) -> u32 {
+            buffer
+                .vma_allocation_memory_type_index()
+                .expect("a VMA-allocated buffer has a memory type")
+        }
+
+        let Some(device) = try_create_device() else {
+            return;
+        };
+        const FRAME_EDGE_PIXELS: u32 = 256;
+        let frame_byte_len = u64::from(FRAME_EDGE_PIXELS * FRAME_EDGE_PIXELS * 4);
+        let sampled_frame_descriptor = TextureDescriptor::new(
+            FRAME_EDGE_PIXELS,
+            FRAME_EDGE_PIXELS,
+            TextureFormat::Bgra8Unorm,
+        )
+        .with_usage(
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+        );
+        let render_target_frame_descriptor = TextureDescriptor::new(
+            FRAME_EDGE_PIXELS,
+            FRAME_EDGE_PIXELS,
+            TextureFormat::Bgra8Unorm,
+        )
+        .with_usage(
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+        );
+        let cuda_mappable_frame_descriptor = TextureDescriptor::new(
+            FRAME_EDGE_PIXELS,
+            FRAME_EDGE_PIXELS,
+            TextureFormat::Rgba8Unorm,
+        );
+        let render_target_modifiers = device
+            .drm_modifier_table()
+            .rt_modifiers(fourcc::DRM_FORMAT_ARGB8888);
+        let host_cached_opaque_fd_buffer_site = if device
+            .opaque_fd_buffer_pool_host_cached_pinned_to_one_memory_type()
+            .is_some()
+        {
+            "HostVulkanBuffer::new_opaque_fd_export_host_cached"
+        } else {
+            "HostVulkanBuffer::new_opaque_fd_export"
+        };
+        let frame_constructors_by_site: Vec<(&str, MemoryTypeOfOneFreshFrameAllocation<'_>)> = vec![
+            (
+                "HostVulkanTexture::new",
+                Box::new(|| {
+                    HostVulkanTexture::new(&device, &sampled_frame_descriptor)
+                        .map(memory_type_of_the_texture)
+                }),
+            ),
+            (
+                "HostVulkanTexture::new_device_local",
+                Box::new(|| {
+                    HostVulkanTexture::new_device_local(&device, &sampled_frame_descriptor)
+                        .map(memory_type_of_the_texture)
+                }),
+            ),
+            (
+                "HostVulkanTexture::new_render_target_dma_buf",
+                Box::new(|| {
+                    HostVulkanTexture::new_render_target_dma_buf(
+                        &device,
+                        &render_target_frame_descriptor,
+                        render_target_modifiers,
+                    )
+                    .map(memory_type_of_the_texture)
+                }),
+            ),
+            (
+                "HostVulkanTexture::new_opaque_fd_export",
+                Box::new(|| {
+                    HostVulkanTexture::new_opaque_fd_export(
+                        &device,
+                        &cuda_mappable_frame_descriptor,
+                    )
+                    .map(memory_type_of_the_texture)
+                }),
+            ),
+            (
+                "HostVulkanBuffer::new",
+                Box::new(|| {
+                    HostVulkanBuffer::new(&device, frame_byte_len).map(memory_type_of_the_buffer)
+                }),
+            ),
+            (
+                "HostVulkanBuffer::new_storage_buffer_host_cached_for_cpu_reads",
+                Box::new(|| {
+                    HostVulkanBuffer::new_storage_buffer_host_cached_for_cpu_reads(
+                        &device,
+                        frame_byte_len,
+                    )
+                    .map(memory_type_of_the_buffer)
+                }),
+            ),
+            (
+                "HostVulkanBuffer::new_opaque_fd_export",
+                Box::new(|| {
+                    HostVulkanBuffer::new_opaque_fd_export(&device, frame_byte_len)
+                        .map(memory_type_of_the_buffer)
+                }),
+            ),
+            (
+                host_cached_opaque_fd_buffer_site,
+                Box::new(|| {
+                    HostVulkanBuffer::new_opaque_fd_export_host_cached(&device, frame_byte_len)
+                        .map(memory_type_of_the_buffer)
+                }),
+            ),
+            (
+                "HostVulkanBuffer::new_opaque_fd_export_device_local",
+                Box::new(|| {
+                    HostVulkanBuffer::new_opaque_fd_export_device_local(&device, frame_byte_len)
+                        .map(memory_type_of_the_buffer)
+                }),
+            ),
+        ];
+
+        let heap_each_frame_constructors_allocation_lands_on: Vec<_> = frame_constructors_by_site
+            .iter()
+            .filter_map(
+                |(frame_allocation_site, allocate_one_frame)| match allocate_one_frame() {
+                    Ok(memory_type_index) => Some((
+                        *frame_allocation_site,
+                        allocate_one_frame,
+                        device
+                            .device_memory_heap_of_memory_type(memory_type_index)
+                            .expect("the allocation's memory type is one of the device's"),
+                    )),
+                    Err(e) => {
+                        println!(
+                            "skipping {frame_allocation_site}: it does not allocate here: {e}"
+                        );
+                        None
+                    }
+                },
+            )
+            .collect();
+        assert!(
+            !heap_each_frame_constructors_allocation_lands_on.is_empty(),
+            "a device that allocates no frame through any constructor has nothing to weigh"
+        );
+
+        device.leave_no_room_in_any_frame_allocation_budget_for_this_test();
+        for (expected_frame_allocation_site, allocate_one_frame, heap_the_allocation_lands_on) in
+            heap_each_frame_constructors_allocation_lands_on
+        {
+            match allocate_one_frame() {
+                Err(Error::FrameAllocationRefusedPastTheDeviceMemoryHeapBudget {
+                    heap_index,
+                    frame_allocation_site,
+                    ..
+                }) => {
+                    assert_eq!(frame_allocation_site, expected_frame_allocation_site);
+                    assert_eq!(
+                        heap_index, heap_the_allocation_lands_on,
+                        "{expected_frame_allocation_site} is refused naming heap {heap_index}, \
+                         but its allocation lands on heap {heap_the_allocation_lands_on}"
+                    );
+                    println!(
+                        "{expected_frame_allocation_site}: refused naming heap {heap_index}, the \
+                         heap its allocation lands on"
+                    );
+                }
+                Ok(_) => panic!(
+                    "{expected_frame_allocation_site} allocated past a budget with no room left"
+                ),
+                Err(other) => panic!(
+                    "{expected_frame_allocation_site}: expected the heap-budget refusal, got \
+                     {other:?}"
+                ),
+            }
+        }
+    }
+
+    /// The rig's evidence that GPU memory another process holds reaches this
+    /// runtime as a smaller heap budget: a child holds a CUDA allocation and
+    /// the largest device-local heap's driver-reported budget falls by it.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[allow(clippy::disallowed_macros)]
+    fn the_heap_budget_the_device_reads_falls_while_another_process_holds_a_large_cuda_allocation()
+    {
+        use std::io::{BufRead as _, BufReader};
+        use std::process::{Command, Stdio};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        use crate::core::error::DeviceMemoryHeapLocality;
+
+        const PYTHON_WITH_CUDA_TORCH_VARIABLE: &str = "STREAMLIB_RIG_PYTHON_WITH_CUDA_TORCH";
+        const LARGEST_CHILD_CUDA_ALLOCATION_BYTES: u64 = 4 << 30;
+        const SMALLEST_CHILD_CUDA_ALLOCATION_WORTH_MEASURING_BYTES: u64 = 256 << 20;
+        const CHILD_HOLDS_ITS_ALLOCATION_WITHIN: Duration = Duration::from_secs(120);
+
+        let Ok(python_with_cuda_torch) = std::env::var(PYTHON_WITH_CUDA_TORCH_VARIABLE) else {
+            println!(
+                "Skipping - {PYTHON_WITH_CUDA_TORCH_VARIABLE} names no python whose torch has CUDA"
+            );
+            return;
+        };
+        let Some(device) = try_create_device() else {
+            return;
+        };
+        if !device.has_memory_budget {
+            println!(
+                "Skipping - VK_EXT_memory_budget is not advertised, so no driver-reported \
+                 budget exists to fall"
+            );
+            return;
+        }
+        let largest_device_local_heap =
+            |every_heaps_reading: &[DeviceMemoryHeapBudgetReading]| {
+                every_heaps_reading
+                    .iter()
+                    .filter(|heap| heap.heap_locality == DeviceMemoryHeapLocality::DeviceLocal)
+                    .max_by_key(|heap| heap.heap_budget_bytes)
+                    .cloned()
+                    .expect("a GPU has a device-local heap")
+            };
+
+        let heap_before = largest_device_local_heap(
+            &device
+                .read_every_heaps_device_memory_budget_fetched_from_the_driver_now()
+                .expect("every heap's budget reads before the child allocates"),
+        );
+        let heap_room_before = heap_before
+            .heap_budget_bytes
+            .saturating_sub(heap_before.heap_usage_bytes);
+        let child_cuda_allocation_bytes =
+            (heap_room_before / 4).min(LARGEST_CHILD_CUDA_ALLOCATION_BYTES);
+        if child_cuda_allocation_bytes < SMALLEST_CHILD_CUDA_ALLOCATION_WORTH_MEASURING_BYTES {
+            println!(
+                "Skipping - heap {} has {heap_room_before} bytes of room, too little to measure a \
+                 child's allocation against",
+                heap_before.heap_index
+            );
+            return;
+        }
+
+        let child_script = format!(
+            "import sys, torch\n\
+             print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), flush=True)\n\
+             if not torch.cuda.is_available():\n    sys.exit(3)\n\
+             held = torch.empty({child_cuda_allocation_bytes}, dtype=torch.uint8, device='cuda')\n\
+             torch.cuda.synchronize()\n\
+             print('held', flush=True)\n\
+             sys.stdin.read()\n"
+        );
+        let mut child = Command::new(&python_with_cuda_torch)
+            .arg("-c")
+            .arg(&child_script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("the python named by the variable starts");
+        let child_stdout = child.stdout.take().expect("the child's stdout is piped");
+        let (child_line_tx, child_line_rx) = mpsc::channel::<String>();
+        let child_stdout_reader = std::thread::spawn(move || {
+            for line in BufReader::new(child_stdout)
+                .lines()
+                .map_while(|line| line.ok())
+            {
+                if child_line_tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut child_holds_its_cuda_allocation = false;
+        while let Ok(line) = child_line_rx.recv_timeout(CHILD_HOLDS_ITS_ALLOCATION_WITHIN) {
+            println!("child: {line}");
+            if line == "held" {
+                child_holds_its_cuda_allocation = true;
+                break;
+            }
+        }
+        if !child_holds_its_cuda_allocation {
+            let _ = child.kill();
+            let child_status = child.wait();
+            let _ = child_stdout_reader.join();
+            println!(
+                "Skipping - the child exited or stalled before holding a \
+                 {child_cuda_allocation_bytes}-byte CUDA allocation ({child_status:?}); a +cpu \
+                 torch exits 3"
+            );
+            return;
+        }
+
+        let every_heaps_reading_while_the_child_holds = device
+            .read_every_heaps_device_memory_budget_fetched_from_the_driver_now()
+            .expect("every heap's budget reads while the child holds its allocation");
+        drop(child.stdin.take());
+        let child_status = child.wait().expect("the child exits once its stdin closes");
+        let _ = child_stdout_reader.join();
+        let heap_while_the_child_holds = every_heaps_reading_while_the_child_holds
+            .into_iter()
+            .nth(heap_before.heap_index as usize)
+            .expect("the same heap reads again");
+
+        println!("child CUDA allocation: {child_cuda_allocation_bytes} bytes ({child_status})");
+        println!("heap before the child allocated: {heap_before:?}");
+        println!("heap while the child held it:    {heap_while_the_child_holds:?}");
+        let heap_budget_fall = heap_before
+            .heap_budget_bytes
+            .saturating_sub(heap_while_the_child_holds.heap_budget_bytes);
+        assert!(
+            heap_budget_fall >= child_cuda_allocation_bytes / 4 * 3,
+            "heap {}'s budget fell by {heap_budget_fall} bytes while another process held \
+             {child_cuda_allocation_bytes} bytes of CUDA memory",
+            heap_before.heap_index
         );
     }
 }

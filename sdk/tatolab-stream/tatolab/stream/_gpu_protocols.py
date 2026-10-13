@@ -28,18 +28,36 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
 
     def acquire_pixel_buffer(
         self, width: int, height: int, format: str = "bgra"
-    ) -> GpuSurfaceHandle: ...
+    ) -> GpuSurfaceHandle:
+        """A host-visible pixel buffer of `width` x `height` in `format`, named by the surface id the engine minted.
+
+        A one-off, held until the handle closes. A node holds at most 16
+        one-offs of one width, height and format at once: the 17th raises,
+        naming the shape, before anything is allocated, while other shapes and
+        other nodes go on acquiring. Past the device's memory budget the call
+        raises, naming the heap (on macOS, Metal's working set). Neither
+        refusal waits on another holder; the node drops that frame.
+        """
+        ...
 
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle:
-        """Acquire a pooled device texture, named by the surface id the engine minted.
+        """A one-off device texture, named by the surface id the engine minted.
 
         The id is the whole handle: a kernel dispatch binds it, and a downstream
         node resolves it. `copy_src` and `copy_dst` ride every request, so
         the CPU doors reach the pixels — over the surface's host-visible staging
         on Linux, through its own IOSurface on macOS — without the caller
         spelling a transfer usage.
+
+        Held until the handle closes. A node holds at most 16
+        one-off textures of one width, height, format and usage at once: the
+        17th raises, naming the shape, before anything is allocated. Past the
+        device's memory budget the call raises, naming the heap (on macOS,
+        Metal's working set). Neither refusal waits on another holder; the node
+        drops that frame. A texture published every frame comes from
+        `acquire_texture_from_node_output_pool`.
         """
         ...
 
@@ -57,9 +75,9 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
         Every call names a new frame, `<slot>#<generation>`, in a slot the pool
         owns; a slot any consumer still holds is skipped, never rewritten. The
         pool rotates through `rotation_depth` slots, grows while consumers hold
-        frames, and at its cap raises naming the pool — the producer drops its
-        own frame rather than wait. `NodeOutputTextureRing` is the
-        spelling a node reaches for.
+        frames, and at its cap, or growing past the device's memory budget,
+        raises by name — the producer drops its own frame rather than wait.
+        `NodeOutputTextureRing` is the spelling a node reaches for.
         """
         ...
 
@@ -80,6 +98,11 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
         owes inside the block. A one-off is released at close; a tensor
         published downstream comes from
         `acquire_storage_buffer_from_node_output_pool`.
+
+        A node holds at most 16 one-off tensors of one shape and dtype at once:
+        the 17th raises, naming them, before anything is allocated. Past the
+        device's memory budget the call raises, naming the heap (on macOS,
+        Metal's working set). Neither refusal waits on another holder.
         """
         ...
 
@@ -94,7 +117,8 @@ class _GpuContextMembersBothCapabilitiesShare(Protocol):
 
         The pool contract `acquire_texture_from_node_output_pool` states:
         a new `<slot>#<generation>` per call, a slot a consumer still holds is
-        never rewritten, and at the cap the call raises naming the pool.
+        never rewritten, and at the cap, or growing past the device's memory
+        budget, the call raises by name.
         """
         ...
 

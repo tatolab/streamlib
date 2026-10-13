@@ -250,6 +250,72 @@ pub enum Error {
         pool_capacity: usize,
     },
 
+    /// A node's one-off acquisition refused because the node already holds
+    /// as many of that shape as one node may.
+    #[error(
+        "this node already holds {one_off_acquisitions_one_node_may_hold_of_one_shape} one-off \
+         acquisitions of {acquisition_shape}, the most one node may hold of one shape at once, so \
+         this one is refused before anything is allocated; release one it holds, or publish \
+         per-frame output from a node output pool"
+    )]
+    EveryOneOffAcquisitionOfThisShapeTheNodeMayHoldIsHeld {
+        acquisition_shape: String,
+        one_off_acquisitions_one_node_may_hold_of_one_shape: usize,
+    },
+
+    /// A frame allocation the device memory heap it would come from has no
+    /// room for, refused before anything was allocated.
+    #[error(
+        "{frame_allocation_site} refused a {requested_bytes}-byte frame allocation before \
+         allocating: device memory heap {heap_index} ({heap_locality}) has a budget of \
+         {heap_budget_bytes} bytes ({heap_budget_source}) and uses {heap_usage_bytes} bytes, of \
+         which this runtime's allocator pools hold \
+         {bytes_this_runtimes_allocator_pools_hold_on_the_heap} bytes; the allocation would leave \
+         less than the {headroom_bytes}-byte headroom"
+    )]
+    FrameAllocationRefusedPastTheDeviceMemoryHeapBudget {
+        heap_index: u32,
+        heap_locality: DeviceMemoryHeapLocality,
+        heap_budget_bytes: u64,
+        heap_usage_bytes: u64,
+        bytes_this_runtimes_allocator_pools_hold_on_the_heap: u64,
+        requested_bytes: u64,
+        headroom_bytes: u64,
+        heap_budget_source: DeviceMemoryHeapBudgetSource,
+        frame_allocation_site: String,
+    },
+
+    /// A frame allocation refused because the process holds nearly as many
+    /// device memory allocations as the device allows.
+    #[error(
+        "{frame_allocation_site} refused a frame allocation before allocating: this process \
+         holds {live_device_memory_allocation_count} device memory allocations of the \
+         {max_memory_allocation_count} the device allows, fewer than \
+         {allocations_kept_in_reserve} short of its limit"
+    )]
+    FrameAllocationRefusedNearTheDeviceMemoryAllocationCountLimit {
+        live_device_memory_allocation_count: u64,
+        max_memory_allocation_count: u32,
+        allocations_kept_in_reserve: u32,
+        frame_allocation_site: String,
+    },
+
+    /// A frame allocation Metal's recommended working set has no room for,
+    /// refused before anything was allocated.
+    #[error(
+        "{frame_allocation_site} refused a {requested_bytes}-byte frame allocation before \
+         allocating: Metal's recommended working set is {recommended_max_working_set_bytes} \
+         bytes and the Metal device has allocated {metal_current_allocated_bytes} bytes; the \
+         allocation would leave less than the {headroom_bytes}-byte headroom"
+    )]
+    FrameAllocationRefusedPastTheMetalWorkingSetBudget {
+        recommended_max_working_set_bytes: u64,
+        metal_current_allocated_bytes: u64,
+        requested_bytes: u64,
+        headroom_bytes: u64,
+        frame_allocation_site: String,
+    },
+
     #[error("Clock synchronization error: {0}")]
     ClockError(String),
 
@@ -390,6 +456,50 @@ impl std::fmt::Display for PortDirection {
     }
 }
 
+/// Whether a device memory heap is the device's own memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceMemoryHeapLocality {
+    /// The heap carries `VK_MEMORY_HEAP_DEVICE_LOCAL_BIT`.
+    DeviceLocal,
+    /// The heap is system memory the device reaches.
+    NotDeviceLocal,
+}
+
+impl std::fmt::Display for DeviceMemoryHeapLocality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DeviceLocal => f.write_str("device-local"),
+            Self::NotDeviceLocal => f.write_str("not device-local"),
+        }
+    }
+}
+
+/// Where a device memory heap's budget came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceMemoryHeapBudgetSource {
+    /// `VK_EXT_memory_budget`'s `heapBudget`, as the driver reported it.
+    ReportedByTheDriver,
+    /// The allocator's estimate without the extension: 80% of the heap's size.
+    EstimatedAsEightyPercentOfTheHeap,
+    /// That estimate, lowered to the heap's usage plus the system's available memory.
+    EstimatedAndCappedByTheSystemsAvailableMemory,
+}
+
+impl std::fmt::Display for DeviceMemoryHeapBudgetSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ReportedByTheDriver => f.write_str("reported by the driver"),
+            Self::EstimatedAsEightyPercentOfTheHeap => {
+                f.write_str("estimated as 80% of the heap, the driver reporting no budget")
+            }
+            Self::EstimatedAndCappedByTheSystemsAvailableMemory => f.write_str(
+                "estimated as 80% of the heap, the driver reporting no budget, and capped by \
+                 the system's available memory",
+            ),
+        }
+    }
+}
+
 /// Trust tier of the iceoryx2 data channel a payload was refused on, named in
 /// [`Error::PayloadExceedsChannelCeiling`]. Mirrors the engine's
 /// `iceoryx2::ChannelTrustTier` at the error boundary so the ceiling error stays
@@ -499,5 +609,105 @@ mod tests {
         // Display is the same words, so a log and a frame never disagree.
         assert_eq!(PortDirection::Input.to_string(), "input");
         assert_eq!(PortDirection::Output.to_string(), "output");
+    }
+
+    #[test]
+    fn a_frame_allocation_refused_past_a_heap_budget_reads_its_heap_budget_usage_and_pool_bytes() {
+        let msg = Error::FrameAllocationRefusedPastTheDeviceMemoryHeapBudget {
+            heap_index: 1,
+            heap_locality: DeviceMemoryHeapLocality::NotDeviceLocal,
+            heap_budget_bytes: 8_000_000_000,
+            heap_usage_bytes: 7_990_000_000,
+            bytes_this_runtimes_allocator_pools_hold_on_the_heap: 1_200_000_000,
+            requested_bytes: 3_686_400,
+            headroom_bytes: 67_108_864,
+            heap_budget_source:
+                DeviceMemoryHeapBudgetSource::EstimatedAndCappedByTheSystemsAvailableMemory,
+            frame_allocation_site: "HostVulkanBuffer::new".to_string(),
+        }
+        .to_string();
+        assert_eq!(
+            msg,
+            "HostVulkanBuffer::new refused a 3686400-byte frame allocation before allocating: \
+             device memory heap 1 (not device-local) has a budget of 8000000000 bytes (estimated \
+             as 80% of the heap, the driver reporting no budget, and capped by the system's \
+             available memory) and uses 7990000000 bytes, of which this runtime's allocator pools \
+             hold 1200000000 bytes; the allocation would leave less than the 67108864-byte headroom"
+        );
+    }
+
+    #[test]
+    fn a_refused_one_off_acquisition_reads_its_shape_and_the_count() {
+        let msg =
+            Error::EveryOneOffAcquisitionOfThisShapeTheNodeMayHoldIsHeld {
+                acquisition_shape:
+                    "1280x720 rgba8_unorm texture (usage copy_src|copy_dst|texture_binding)"
+                        .to_string(),
+                one_off_acquisitions_one_node_may_hold_of_one_shape: 16,
+            }
+            .to_string();
+        assert_eq!(
+            msg,
+            "this node already holds 16 one-off acquisitions of 1280x720 rgba8_unorm texture \
+             (usage copy_src|copy_dst|texture_binding), the most one node may hold of one shape at \
+             once, so this one is refused before anything is allocated; release one it holds, or \
+             publish per-frame output from a node output pool"
+        );
+    }
+
+    #[test]
+    fn a_frame_allocation_refused_near_the_allocation_limit_reads_the_count_and_the_limit() {
+        let msg = Error::FrameAllocationRefusedNearTheDeviceMemoryAllocationCountLimit {
+            live_device_memory_allocation_count: 3_970,
+            max_memory_allocation_count: 4_096,
+            allocations_kept_in_reserve: 128,
+            frame_allocation_site: "HostVulkanTexture::new".to_string(),
+        }
+        .to_string();
+        assert_eq!(
+            msg,
+            "HostVulkanTexture::new refused a frame allocation before allocating: this process \
+             holds 3970 device memory allocations of the 4096 the device allows, fewer than 128 \
+             short of its limit"
+        );
+    }
+
+    #[test]
+    fn a_frame_allocation_refused_past_the_metal_working_set_reads_the_working_set_and_its_usage() {
+        let msg = Error::FrameAllocationRefusedPastTheMetalWorkingSetBudget {
+            recommended_max_working_set_bytes: 11_453_251_584,
+            metal_current_allocated_bytes: 11_400_000_000,
+            requested_bytes: 4_194_304,
+            headroom_bytes: 67_108_864,
+            frame_allocation_site: "HostVulkanTexture::new_iosurface_backed".to_string(),
+        }
+        .to_string();
+        assert_eq!(
+            msg,
+            "HostVulkanTexture::new_iosurface_backed refused a 4194304-byte frame allocation \
+             before allocating: Metal's recommended working set is 11453251584 bytes and the \
+             Metal device has allocated 11400000000 bytes; the allocation would leave less than \
+             the 67108864-byte headroom"
+        );
+    }
+
+    #[test]
+    fn a_device_memory_heap_reads_its_locality_and_where_its_budget_came_from() {
+        assert_eq!(
+            DeviceMemoryHeapLocality::DeviceLocal.to_string(),
+            "device-local"
+        );
+        assert_eq!(
+            DeviceMemoryHeapLocality::NotDeviceLocal.to_string(),
+            "not device-local"
+        );
+        assert_eq!(
+            DeviceMemoryHeapBudgetSource::ReportedByTheDriver.to_string(),
+            "reported by the driver"
+        );
+        assert_eq!(
+            DeviceMemoryHeapBudgetSource::EstimatedAsEightyPercentOfTheHeap.to_string(),
+            "estimated as 80% of the heap, the driver reporting no budget"
+        );
     }
 }

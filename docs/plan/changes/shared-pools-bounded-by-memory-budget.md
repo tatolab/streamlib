@@ -129,11 +129,12 @@ frame — a slow consumer costs memory, then its own frames, never another proce
   the node drops that frame. Without the extension the budget is the allocator's estimate of
   80% of the heap, also capped by the system's available memory for a heap that is not
   `DEVICE_LOCAL`, and the runtime says once that its bound is an estimate. On macOS the bound is
-  Metal's `recommendedMaxWorkingSetSize`, and usage is the runtime's own IOSurface bytes plus
-  the Metal device's allocated size. Memory a helper process allocates reaches the runtime only
-  as a smaller budget, and a smaller budget never takes back a held frame. No acquisition waits
-  on another holder. Memory is shared, so a stream that grows into the budget can cost another
-  stream its frames; isolation is by count, per node. [shared-pools-bounded-by-memory-budget]
+  Metal's `recommendedMaxWorkingSetSize`, and usage is the Metal device's
+  `currentAllocatedSize`, which counts the IOSurfaces the runtime mints. Memory a helper process
+  allocates reaches the runtime only as a smaller budget, and a smaller budget never takes back
+  a held frame. No acquisition waits on another holder. Memory is shared, so a stream that
+  grows into the budget can cost another stream its frames; isolation is by count, per node.
+  [shared-pools-bounded-by-memory-budget]
   Rejected: raising the shared pool's per-shape cap — any count shared across nodes lets one
   node's held frames drop another node's frames (owner, 2026-10-12).
   Rejected: bounding the shared pools only by the driver's allocation failure — NVIDIA reports
@@ -170,7 +171,7 @@ frame — a slow consumer costs memory, then its own frames, never another proce
   the `VkDeviceMemory` objects the process holds: VMA's `blockCount` (each dedicated allocation
   is its own block) plus `live_allocation_count`, never VMA's `allocationCount`, which counts
   sub-allocations.
-- macOS: the working-set bound and the IOSurface tally, in the RHI.
+- macOS: the working-set bound, in the RHI, weighed against the Metal device's allocated size.
 - Delete the texture pool's per-shape cap, `TexturePoolExhaustionPolicy`, the condvar wait and
   the dead config surface; delete `POOL_MAX_BUFFER_COUNT`; delete
   `TexturePoolWaitWhenExhausted` (every escalate acquisition refuses at once).

@@ -3,12 +3,13 @@
 
 //! The GPU stage every video capture arm lands its frames through: the
 //! device's pixels converted into the stage's own scratch texture, copied into
-//! a pooled `Rgba32` pixel buffer, and waited on host-side so the pixel buffer
-//! is readable before the arm hands the frame off.
+//! an `Rgba32` pixel buffer from the capturing node's own output pool, and
+//! waited on host-side so the pixel buffer is readable before the arm hands
+//! the frame off.
 
 use std::sync::Arc;
 
-use super::{GpuContextFullAccess, GpuContextLimitedAccess};
+use super::{GpuContextFullAccess, ProcessorOutputPixelBufferPoolOfOneNativeNode};
 use crate::core::color::{ResolvedColorInfo, TransferId};
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, PublishedPixelBufferFrameId, RhiColorConverter, SourceLayoutInfo,
@@ -47,8 +48,8 @@ pub(crate) struct CapturedVideoFrameBytesInAStorageBuffer<'a> {
     pub(crate) written_by_another_device: bool,
 }
 
-/// One capture stream's conversion from device pixels into pooled `Rgba32`
-/// pixel buffers.
+/// One capture stream's conversion from device pixels into `Rgba32` pixel
+/// buffers from its node's own output pool.
 ///
 /// Owned by the thread that captures, which is the only one that converts.
 pub(crate) struct CapturedVideoFrameToPooledRgbaConversionStage {
@@ -59,11 +60,13 @@ pub(crate) struct CapturedVideoFrameToPooledRgbaConversionStage {
     conversion_timeline: Arc<HostVulkanTimelineSemaphore>,
     scratch_texture: Texture,
     next_timeline_signal_value: u64,
+    processor_output_pixel_buffer_pool: ProcessorOutputPixelBufferPoolOfOneNativeNode,
 }
 
 impl CapturedVideoFrameToPooledRgbaConversionStage {
     /// Create the stage for frames of `width` × `height` whose device pixels
-    /// are in `source_pixel_format`.
+    /// are in `source_pixel_format`, published from the output pool of the
+    /// node `processor_id_of_the_owning_node`.
     ///
     /// The converter is the stream's own: two cameras of one source format
     /// each dispatch from their own capture thread, and a shared converter's
@@ -73,6 +76,7 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
         source_pixel_format: PixelFormat,
         width: u32,
         height: u32,
+        processor_id_of_the_owning_node: &str,
     ) -> Result<Self> {
         let color_converter =
             full.create_color_converter(source_pixel_format, PixelFormat::Rgba32)?;
@@ -93,22 +97,28 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
             conversion_timeline,
             scratch_texture,
             next_timeline_signal_value: 1,
+            processor_output_pixel_buffer_pool: full
+                .host_inner()
+                .create_processor_output_pixel_buffer_pool_for_a_native_node(
+                    processor_id_of_the_owning_node,
+                ),
         })
     }
 
-    /// Convert one frame into a freshly acquired pooled pixel buffer, and
-    /// return once that buffer is host-readable.
+    /// Convert one frame into the next pixel buffer of the node's output pool,
+    /// and return once that buffer is host-readable.
     ///
     /// The device's pixels are read by the time this returns, so an arm may
     /// hand its device buffer back as soon as it does, success or failure.
-    /// An `Err` is a dropped frame; the stage stays usable for the next one.
+    /// An `Err` is a dropped frame — the pool's own refusal, by name, when the
+    /// node holds every frame its pool may or the device's memory budget is
+    /// spent — and the stage stays usable for the next one.
     pub(crate) fn convert_into_pooled_pixel_buffer(
         &mut self,
-        gpu_context: &GpuContextLimitedAccess,
         device_bytes: CapturedVideoFrameBytesInAStorageBuffer<'_>,
         color: &ResolvedColorInfo,
     ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
-        let converted = self.record_submit_and_wait(gpu_context, device_bytes, color);
+        let converted = self.record_submit_and_wait(device_bytes, color);
         if converted.is_err() {
             // A begun-but-unsubmitted recording would fail the next begin();
             // harmless when nothing is recording.
@@ -135,7 +145,6 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
 
     fn record_submit_and_wait(
         &mut self,
-        gpu_context: &GpuContextLimitedAccess,
         device_bytes: CapturedVideoFrameBytesInAStorageBuffer<'_>,
         color: &ResolvedColorInfo,
     ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
@@ -145,9 +154,9 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
         // The pooled buffer's id is the frame's surface id — the one key a
         // same-process consumer, the surface-share service and a CPU readback
         // all resolve the frame through.
-        let (published_pixel_buffer_frame_id, pooled_pixel_buffer) = gpu_context
-            .acquire_pixel_buffer(self.width, self.height, PixelFormat::Rgba32)
-            .map_err(|e| Error::GpuError(format!("acquire pixel buffer: {e}")))?;
+        let (published_pixel_buffer_frame_id, pooled_pixel_buffer) = self
+            .processor_output_pixel_buffer_pool
+            .acquire_the_next_output_pixel_buffer(self.width, self.height, PixelFormat::Rgba32)?;
 
         // Display path consumes RGBA8_UNORM treated as sRGB-encoded by the
         // swapchain; #817 replaces this with the negotiated VkColorSpaceKHR.

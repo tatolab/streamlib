@@ -263,6 +263,33 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         self.slots.len() - 1
     }
 
+    /// Take one slot out of the ring, its published generation with it; the
+    /// slots left keep their ring order.
+    pub(crate) fn take_out_the_slot_at(
+        &mut self,
+        slot_index: usize,
+    ) -> LeaseAwarePoolSlot<Resource> {
+        let taken_out = self.slots.remove(slot_index);
+        if slot_index < self.next_slot_index {
+            self.next_slot_index -= 1;
+        }
+        if self.next_slot_index >= self.slots.len() {
+            self.next_slot_index = 0;
+        }
+        taken_out
+    }
+
+    /// Add a slot another ring published from, keeping its generation, so its
+    /// next hand-off retires the last id it published there; answers its
+    /// index.
+    pub(crate) fn push_a_slot_keeping_its_published_frame_generation(
+        &mut self,
+        slot: LeaseAwarePoolSlot<Resource>,
+    ) -> usize {
+        self.slots.push(slot);
+        self.slots.len() - 1
+    }
+
     /// Hand out the next slot in ring order that nobody holds, minting and
     /// publishing its next generation; `None` when every slot is held.
     ///

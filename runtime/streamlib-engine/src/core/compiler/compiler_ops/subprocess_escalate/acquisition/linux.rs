@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use super::super::handle_lifecycle::{EscalateHandleRegistry, RegisteredHandle};
-use super::TexturePoolWaitWhenExhausted;
+use super::super::handle_lifecycle::{
+    EscalateHandleRegistry, OneOffAcquisitionShape, RegisteredHandle,
+};
 use super::{new_exportable_timeline_edge, parse_texture_format};
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
@@ -29,7 +30,6 @@ pub(super) fn allocate_registered_texture_for_helper(
     height: u32,
     parsed_format: TextureFormat,
     parsed_usage: TextureUsages,
-    texture_pool_wait: TexturePoolWaitWhenExhausted,
 ) -> crate::core::error::Result<(String, RegisteredHandle)> {
     // The importability flavor is derived engine-side from the request —
     // there is no Python dial for it, and a flavor the request cannot take
@@ -46,7 +46,7 @@ pub(super) fn allocate_registered_texture_for_helper(
             ),
             Err(_) => TextureCrossProcessImportability::NotImportable,
         });
-    let texture = texture_pool_wait.acquire_texture(full, &desc)?;
+    let texture = full.acquire_texture(&desc)?;
     let (handle_id, produce_done, consume_done) = assign_texture_handle_id(full, &texture)?;
     // The parent answers its own binding resolutions from the texture cache —
     // without this entry it would re-import its own allocation through the
@@ -64,7 +64,8 @@ pub(super) fn allocate_registered_texture_for_helper(
 }
 
 /// Acquire a render-target DMA-BUF image on behalf of a helper process,
-/// holding it and its timeline pair in `registry` until the helper releases it.
+/// holding it and its timeline pair in `registry` until the helper releases
+/// it; counted against the node's one-off acquisitions of its shape.
 pub(in super::super) fn handle_acquire_image(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -91,31 +92,42 @@ pub(in super::super) fn handle_acquire_image(
     // The wire op deliberately does not take a usage list (that's
     // an acquire_texture concern); here the host knows the exact
     // set because the consumer is always a render-target adapter.
-    let acquired = sandbox.escalate(|full| {
-        let texture = full.acquire_render_target_dma_buf_image(width, height, parsed_format)?;
-        let (handle_id, produce_done, consume_done) = assign_image_handle_id(full, &texture)?;
-        Ok((handle_id, texture, produce_done, consume_done))
-    });
-    match acquired {
-        Ok((handle_id, texture, produce_done, consume_done)) => {
-            // Stash the texture + timeline pair in the
-            // registry so the FDs handed to surface-share
-            // stay valid for the registration's lifetime.
-            registry.insert_image(handle_id.clone(), texture, produce_done, consume_done);
-            EscalateResponse::Ok(EscalateResponseOk {
-                request_id: rid,
+    let acquired = registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
+        sandbox,
+        OneOffAcquisitionShape::RenderTargetImage {
+            width,
+            height,
+            format: parsed_format,
+        },
+        |full| {
+            let texture = full.acquire_render_target_dma_buf_image(width, height, parsed_format)?;
+            let (handle_id, produce_done, consume_done) = assign_image_handle_id(full, &texture)?;
+            // The timeline pair is held with the image so the FDs handed to
+            // surface-share stay valid for the registration's lifetime.
+            Ok((
                 handle_id,
-                width: Some(width),
-                height: Some(height),
-                format: Some(parsed_format.wire_name().to_string()),
-                usage: Some(vec![
-                    "render_attachment".to_string(),
-                    "texture_binding".to_string(),
-                    "copy_src".to_string(),
-                ]),
-                ..Default::default()
-            })
-        }
+                RegisteredHandle::Image {
+                    texture,
+                    produce_done,
+                    consume_done,
+                },
+            ))
+        },
+    );
+    match acquired {
+        Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id,
+            width: Some(width),
+            height: Some(height),
+            format: Some(parsed_format.wire_name().to_string()),
+            usage: Some(vec![
+                "render_attachment".to_string(),
+                "texture_binding".to_string(),
+                "copy_src".to_string(),
+            ]),
+            ..Default::default()
+        }),
         Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
             message: format!("acquire_image failed: {e}"),
