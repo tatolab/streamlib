@@ -17,9 +17,10 @@ use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
     EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded,
-    HowThePreviousRuntimeRunEnded, KeptStreamReloadAtTheStart, LoadedStreamInThisRuntime, Runner,
-    RunnerConstructionOptions, RuntimeRunInProgressRecord,
+    HowThePreviousRuntimeRunEnded, KeptStreamReloadAtTheStart, LoadedStreamInThisRuntime,
+    OpenDescriptorSoftLimitRaise, Runner, RunnerConstructionOptions, RuntimeRunInProgressRecord,
     note_what_the_engine_teardown_is_waiting_on,
+    raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
@@ -60,6 +61,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         }
     };
     display_server_environment_at_the_runtimes_start.log_where_the_display_server_came_from();
+    log_the_open_descriptor_soft_limit_raise(&raise_the_open_descriptor_soft_limit_to_its_ceiling());
     display_server_environment_at_the_runtimes_start
         .mark_in_the_runtime_directory_whether_the_runtime_started_with_no_display_server();
     if let Err(lend_directory_refusal) =
@@ -143,6 +145,14 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         write_refusal_to_standard_error(&refusal);
     }
     ExitCode::from(exit_status)
+}
+
+fn log_the_open_descriptor_soft_limit_raise(raise: &OpenDescriptorSoftLimitRaise) {
+    match raise {
+        OpenDescriptorSoftLimitRaise::Refused { .. } => tracing::warn!("{raise}"),
+        OpenDescriptorSoftLimitRaise::Raised { .. }
+        | OpenDescriptorSoftLimitRaise::AlreadyAtItsCeiling { .. } => tracing::info!("{raise}"),
+    }
 }
 
 /// One line once the start's re-loads are over, counting them; the engine has
