@@ -1253,22 +1253,25 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
     ];
     let request_count = requests_at_the_budget.len();
 
-    let (release_signal_tx, release_signal_rx) = mpsc::channel::<()>();
-    let (answer_tx, answer_rx) =
-        mpsc::channel::<(&'static str, Duration, std::result::Result<String, String>)>();
     std::thread::scope(|scope| {
+        // The body owns the release sender and the answer receiver, so a failed
+        // assertion drops both before the scope joins: the held one-off is let
+        // go, the requester stops at its next answer, and the test fails
+        // rather than hangs.
+        let (release_signal_tx, release_signal_rx) = mpsc::channel::<()>();
+        let (answer_tx, answer_rx) =
+            mpsc::channel::<(&'static str, Duration, std::result::Result<String, String>)>();
         let releasing_sandbox = sandbox.clone();
         let releasing_registry = std::sync::Arc::clone(&registry);
         let held_one_off = held_one_off.clone();
         scope.spawn(move || {
-            if release_signal_rx.recv().is_ok() {
-                release_a_handle_over_the_escalate_op(
-                    &releasing_sandbox,
-                    &releasing_registry,
-                    &held_one_off,
-                )
-                .expect("the held one-off releases");
-            }
+            let _signalled_or_the_body_failed = release_signal_rx.recv();
+            release_a_handle_over_the_escalate_op(
+                &releasing_sandbox,
+                &releasing_registry,
+                &held_one_off,
+            )
+            .expect("the held one-off releases");
         });
         let requesting_sandbox = sandbox.clone();
         let requesting_registry = std::sync::Arc::clone(&registry);
