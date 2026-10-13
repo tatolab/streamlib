@@ -48,25 +48,26 @@ use super::lease_aware_pool_slot_ring::{
 use super::surface_store::SurfaceStore;
 use super::texture_pool::{PooledTextureHandle, TexturePool, TexturePoolDescriptor};
 
-/// Key for caching pixel buffer pools.
+/// The shape a shared pixel-buffer ring holds buffers of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct PixelBufferPoolKey {
-    width: u32,
-    height: u32,
-    format: PixelFormat,
+pub(super) struct PixelBufferPoolKey {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) format: PixelFormat,
 }
 
 /// One pixel-buffer pool slot's resource, as the lease-aware ring sees it.
-struct PixelBufferPoolSlot {
-    buffer: PixelBuffer,
+pub(super) struct PixelBufferPoolSlot {
+    pub(super) buffer: PixelBuffer,
 }
 
 impl LeaseAwarePoolSlotResource for PixelBufferPoolSlot {
     /// `PixelBuffer` holds an opaque handle to a host-side `Arc`; the
-    /// baseline is 2 — one share in the ring, one under the current
-    /// published id in `buffer_cache` (1 before the slot ever publishes,
-    /// when no consumer can hold it either) — so anything above that is a
-    /// live reader.
+    /// baseline is 2 — one share in the ring that holds the slot, the shared
+    /// ring or the native node output pool it is lent to, and one under the
+    /// current published id in `buffer_cache` (1 before the slot ever
+    /// publishes, when no consumer can hold it either) — so anything above
+    /// that is a live reader.
     fn is_held_in_this_process(&self) -> bool {
         self.buffer.strong_count() > 2
     }
@@ -86,7 +87,7 @@ impl LeaseAwarePoolSlotResource for PixelBufferPoolSlot {
 }
 
 /// The published frame id a pixel-buffer slot's most recent hand-off minted.
-fn published_pixel_buffer_frame_id(
+pub(super) fn published_pixel_buffer_frame_id(
     slot: &LeaseAwarePoolSlot<PixelBufferPoolSlot>,
 ) -> PublishedPixelBufferFrameId {
     PublishedPixelBufferFrameId::new(
@@ -99,7 +100,9 @@ fn published_pixel_buffer_frame_id(
 ///
 /// Buffers are pre-allocated at pool creation and held for the runtime's lifetime.
 /// `acquire()` cycles through buffers, skipping any currently in use, and
-/// grows when every one is held; no count caps it.
+/// grows when every one is held; no count caps it. A slot may be lent to a
+/// native node's output pool, which publishes from it under its own count and
+/// hands it back, generation kept, when it drops.
 struct PixelBufferRingPool {
     /// The underlying CVPixelBufferPool (used only for initial allocation).
     /// Kept alive for ownership - buffers reference its backing storage.
@@ -125,8 +128,9 @@ struct PixelBufferCacheBySurfaceId {
 ///
 /// Manages ring pools keyed by (width, height, format).
 /// Pre-allocates buffers on pool creation and registers them with the surface-share service.
-/// Buffers are held permanently for the runtime's lifetime.
-struct PixelBufferPoolManager {
+/// Buffers are held permanently for the runtime's lifetime, in a shared ring
+/// or lent from it to a native node's output pool.
+pub(super) struct PixelBufferPoolManager {
     pools: Mutex<HashMap<PixelBufferPoolKey, PixelBufferRingPool>>,
     /// Global cache for UUID -> PixelBuffer lookups (includes buffers from all pools).
     /// Used by consumers (e.g., display processor) to resolve UUIDs received via IPC.
@@ -320,10 +324,8 @@ impl PixelBufferPoolManager {
             .ring
             .hand_off_a_reusable_slot(check_out_leases, &self.minted_frame_generations)
         {
-            let slot = ring_pool.ring.slot(slot_index);
-            let handed_off_buffer = slot.resource().buffer.clone();
-            self.retire_previous_frame_in_cache(slot, &handed_off_buffer);
-            let published = published_pixel_buffer_frame_id(slot);
+            let (published, handed_off_buffer) = self
+                .publish_the_handed_off_frame_in_the_buffer_cache(ring_pool.ring.slot(slot_index));
             tracing::trace!(
                 "PixelBufferPoolManager: acquired buffer {} (idx {})",
                 published,
@@ -373,10 +375,90 @@ impl PixelBufferPoolManager {
             check_out_leases,
             &self.minted_frame_generations,
         );
-        let slot = ring_pool.ring.slot(handed_off_slot_index);
+        Ok(self.publish_the_handed_off_frame_in_the_buffer_cache(
+            ring_pool.ring.slot(handed_off_slot_index),
+        ))
+    }
+
+    /// Take one slot of `shape` out of its shared ring for a native node's
+    /// output pool — an unheld slot, or a fresh one when every slot is held —
+    /// minted, published and filed in the buffer cache under one hold of the
+    /// pools; past the device's memory budget the allocation is refused by
+    /// name.
+    pub(super) fn lend_a_slot_to_a_native_node_output_pool(
+        &self,
+        shape: PixelBufferPoolKey,
+        surface_store: Option<&SurfaceStore>,
+    ) -> Result<LeaseAwarePoolSlot<PixelBufferPoolSlot>> {
+        let mut pools = self.pools.lock().unwrap();
+        let ring_pool = self.ring_pool_for_shape(&mut pools, shape, surface_store)?;
+        let check_out_leases = surface_store
+            .and_then(SurfaceStore::check_out_leases)
+            .map(Arc::as_ref);
+        let lent_slot_index = match ring_pool
+            .ring
+            .hand_off_a_reusable_slot(check_out_leases, &self.minted_frame_generations)
+        {
+            Some(reused_slot_index) => reused_slot_index,
+            None => {
+                let fresh_slot_index =
+                    Self::allocate_and_register_one_more_slot(ring_pool, surface_store)?;
+                ring_pool.ring.hand_off_fresh_slot(
+                    fresh_slot_index,
+                    check_out_leases,
+                    &self.minted_frame_generations,
+                );
+                fresh_slot_index
+            }
+        };
+        self.publish_the_handed_off_frame_in_the_buffer_cache(ring_pool.ring.slot(lent_slot_index));
+        Ok(ring_pool.ring.take_out_the_slot_at(lent_slot_index))
+    }
+
+    /// Hand slots a native node's output pool borrowed back to their shape's
+    /// shared ring, generations kept, so each one's next hand-off there
+    /// retires the last frame the node published from it.
+    pub(super) fn take_back_slots_lent_to_a_native_node_output_pool(
+        &self,
+        shape: PixelBufferPoolKey,
+        lent_slots: impl IntoIterator<Item = LeaseAwarePoolSlot<PixelBufferPoolSlot>>,
+    ) {
+        let mut pools = self
+            .pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(ring_pool) = pools.get_mut(&shape) else {
+            tracing::warn!(
+                "PixelBufferPoolManager: no shared {}x{} {:?} ring to take back {} slots a \
+                 native node's output pool borrowed; they drop",
+                shape.width,
+                shape.height,
+                shape.format,
+                lent_slots.into_iter().count()
+            );
+            return;
+        };
+        for lent_slot in lent_slots {
+            ring_pool
+                .ring
+                .push_a_slot_keeping_its_published_frame_generation(lent_slot);
+        }
+    }
+
+    /// File the frame a hand-off just minted on `slot` in the buffer cache,
+    /// answering its published id and a share of its buffer.
+    pub(super) fn publish_the_handed_off_frame_in_the_buffer_cache(
+        &self,
+        slot: &LeaseAwarePoolSlot<PixelBufferPoolSlot>,
+    ) -> (PublishedPixelBufferFrameId, PixelBuffer) {
         let handed_off_buffer = slot.resource().buffer.clone();
         self.retire_previous_frame_in_cache(slot, &handed_off_buffer);
-        Ok((published_pixel_buffer_frame_id(slot), handed_off_buffer))
+        (published_pixel_buffer_frame_id(slot), handed_off_buffer)
+    }
+
+    /// The generation every lease-aware ring most recently minted per slot.
+    pub(super) fn minted_frame_generations(&self) -> &LeaseAwarePoolMintedFrameGenerations {
+        &self.minted_frame_generations
     }
 
     /// The shared ring of `shape`, created on its first acquire with its
@@ -1154,6 +1236,20 @@ impl GpuContext {
             height,
             format,
             self.engines_own_surface_store.get(),
+        )
+    }
+
+    /// An empty output pool for the native node `processor_id_of_the_owning_node`,
+    /// which publishes its per-frame pixel buffers from slots it borrows from
+    /// the shared pixel-buffer pool; allocates nothing until its first frame.
+    pub(crate) fn create_processor_output_pixel_buffer_pool_for_a_native_node(
+        &self,
+        processor_id_of_the_owning_node: &str,
+    ) -> super::ProcessorOutputPixelBufferPoolOfOneNativeNode {
+        super::ProcessorOutputPixelBufferPoolOfOneNativeNode::new(
+            processor_id_of_the_owning_node,
+            Arc::clone(&self.pixel_buffer_pool_manager),
+            Arc::clone(&self.engines_own_surface_store),
         )
     }
 
@@ -4009,9 +4105,9 @@ impl GpuContextLimitedAccess {
     /// The expected steady-state is a ring-slot hit. Callers should pre-reserve
     /// the pool in `setup()` by calling `acquire_pixel_buffer` on the
     /// [`GpuContextFullAccess`] with the target `(width, height, format)`.
-    /// If the pool has to grow to serve this call, the growth path internally
-    /// allocates — nonzero sustained rates will fire the escalation-rate
-    /// warning, indicating a pre-reservation gap.
+    /// When every slot of the shape is held — by consumers, or lent to native
+    /// nodes' output pools — the pool grows; past the device's memory budget
+    /// that growth is refused by name, and nothing waits on another holder.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
@@ -6234,6 +6330,385 @@ mod tests {
         )
         .expect("the current frame id keeps resolving");
     }
+
+    // =====================================================================
+    // Native nodes' output pools over the shared pixel-buffer pool
+    //
+    // A native built-in's per-frame pixel buffers come from an output pool of
+    // its own, whose slots it borrows from the shared ring of their shape: the
+    // count is the node's, the memory the runtime's.
+    // =====================================================================
+
+    #[cfg(target_os = "linux")]
+    const LEASE_TEST_SURFACE_SHAPE: PixelBufferPoolKey = PixelBufferPoolKey {
+        width: LEASE_TEST_SURFACE_WIDTH,
+        height: LEASE_TEST_SURFACE_HEIGHT,
+        format: PixelFormat::Rgba32,
+    };
+
+    /// The next frame `native_node_output_pool` publishes, its buffer handed
+    /// back at once so only a lease can keep the slot.
+    #[cfg(target_os = "linux")]
+    fn acquire_one_native_node_frame_id(
+        native_node_output_pool: &mut super::super::ProcessorOutputPixelBufferPoolOfOneNativeNode,
+    ) -> Result<String> {
+        native_node_output_pool
+            .acquire_the_next_output_pixel_buffer(
+                LEASE_TEST_SURFACE_WIDTH,
+                LEASE_TEST_SURFACE_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .map(|(published_frame_id, _returned_to_the_pool_immediately)| {
+                published_frame_id.to_string()
+            })
+    }
+
+    /// Each slot of `shape`'s shared ring, in ring order, with the generation
+    /// it last published.
+    #[cfg(target_os = "linux")]
+    fn shared_ring_slots_and_generations(
+        gpu: &GpuContext,
+        shape: PixelBufferPoolKey,
+    ) -> Vec<(String, u64)> {
+        let pools = gpu.pixel_buffer_pool_manager.pools.lock().unwrap();
+        pools.get(&shape).map_or_else(Vec::new, |ring_pool| {
+            (0..ring_pool.ring.slot_count())
+                .map(|slot_index| {
+                    let slot = ring_pool.ring.slot(slot_index);
+                    (
+                        slot.pool_slot_key().to_string(),
+                        slot.published_frame_generation(),
+                    )
+                })
+                .collect()
+        })
+    }
+
+    /// The generation `published_frame_id` names.
+    #[cfg(target_os = "linux")]
+    fn frame_generation_of(published_frame_id: &str) -> u64 {
+        crate::core::rhi::split_pool_slot_and_frame_generation(published_frame_id)
+            .expect("a published frame id carries its generation")
+            .1
+    }
+
+    /// Lease every frame `native_node_output_pool` may hold, to `holder`.
+    #[cfg(target_os = "linux")]
+    fn lease_every_frame_a_native_node_may_hold(
+        native_node_output_pool: &mut super::super::ProcessorOutputPixelBufferPoolOfOneNativeNode,
+        check_out_leases: &crate::core::context::SurfaceCheckOutLeaseRegistry,
+        holder: crate::core::context::SurfaceCheckOutLeaseHolderId,
+    ) -> Vec<String> {
+        (0..super::super::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
+            .map(|_| {
+                let frame = acquire_one_native_node_frame_id(native_node_output_pool)
+                    .expect("a node under its cap is served");
+                check_out_leases
+                    .record_check_out_lease(&frame, holder)
+                    .expect("a consumer holds the node's frame");
+                frame
+            })
+            .collect()
+    }
+
+    /// The bug #2736 fixed, in-process: a node whose consumers hold every
+    /// frame its pool may costs only its own frames. Another node publishing
+    /// the same shape, and the shared pool itself, go on being served.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_same_shape() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let consumer = check_out_leases.mint_holder_id();
+        let mut first_native_node =
+            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("first-native-node");
+        let mut second_native_node =
+            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("second-native-node");
+
+        lease_every_frame_a_native_node_may_hold(
+            &mut first_native_node,
+            &check_out_leases,
+            consumer,
+        );
+        assert!(
+            matches!(
+                acquire_one_native_node_frame_id(&mut first_native_node),
+                Err(Error::EverySlotInTheProcessorOutputPoolIsInUse { .. })
+            ),
+            "the first node is refused at its own cap"
+        );
+
+        let second_nodes_frames: Vec<String> = (0
+            ..super::super::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
+            .map(|_| {
+                let frame = acquire_one_native_node_frame_id(&mut second_native_node)
+                    .expect("another node's frames of the same shape are served");
+                check_out_leases
+                    .record_check_out_lease(&frame, consumer)
+                    .expect("a consumer holds the second node's frame");
+                frame
+            })
+            .collect();
+        assert_eq!(
+            second_nodes_frames.len(),
+            super::super::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
+            "the second node reaches its own cap, untouched by the first's"
+        );
+        acquire_one_pool_slot_id(&gpu).expect(
+            "the shared pool serves a frame of the same shape while both nodes hold theirs",
+        );
+    }
+
+    /// A node at its cap is refused at once by the processor output pool's
+    /// refusal, naming the node and the shape, before anything is allocated;
+    /// a frame its consumer lets go of serves the next one.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let consumer = check_out_leases.mint_holder_id();
+        let mut native_node =
+            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-held-native-node");
+        let held_frames =
+            lease_every_frame_a_native_node_may_hold(&mut native_node, &check_out_leases, consumer);
+        let shared_ring_before_the_refusal =
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+
+        let refusal_started = std::time::Instant::now();
+        let refusal = acquire_one_native_node_frame_id(&mut native_node)
+            .expect_err("a node holding every frame its pool may is refused");
+        let refusal_took = refusal_started.elapsed();
+
+        let expected_pool_key = format!(
+            "native-node-output-pixel-buffer-pool-a-held-native-node-{LEASE_TEST_SURFACE_WIDTH}x{LEASE_TEST_SURFACE_HEIGHT}-{}",
+            PixelFormat::Rgba32.wire_name()
+        );
+        match &refusal {
+            Error::EverySlotInTheProcessorOutputPoolIsInUse {
+                pool_key,
+                pool_capacity,
+            } => {
+                assert_eq!(pool_key, &expected_pool_key);
+                assert_eq!(
+                    *pool_capacity,
+                    super::super::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+                );
+            }
+            other => panic!("expected the node output pool's refusal, got {other:?}"),
+        }
+        assert!(
+            refusal.to_string().contains(&expected_pool_key),
+            "the refusal reads the node's pool: {refusal}"
+        );
+        assert!(
+            refusal_took < std::time::Duration::from_millis(250),
+            "the refusal came after {refusal_took:?}: the node was made to wait"
+        );
+        assert_eq!(
+            native_node.slot_count(),
+            super::super::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+        );
+        assert_eq!(
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE),
+            shared_ring_before_the_refusal,
+            "a refusal borrows and allocates nothing"
+        );
+
+        check_out_leases
+            .release_one_check_out_lease(&held_frames[0], consumer)
+            .expect("the consumer lets one frame go");
+        let after_the_release = acquire_one_native_node_frame_id(&mut native_node)
+            .expect("a frame let go of serves the node's next");
+        assert!(same_pool_slot(&after_the_release, &held_frames[0]));
+    }
+
+    /// A node's pool handing its slots back keeps each slot's generations
+    /// counting: the shared ring's next hand-off of a slot retires the last
+    /// frame the node published from it.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_torn_down_native_nodes_slots_return_to_the_shared_pool_with_their_generations_continuing()
+    {
+        let Some((gpu, _check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let mut native_node =
+            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-torn-down-node");
+        let mut last_frame_the_node_published_by_slot = std::collections::HashMap::new();
+        for _ in 0..(POOL_PRE_ALLOCATE_COUNT * 2 + 1) {
+            let frame = acquire_one_native_node_frame_id(&mut native_node)
+                .expect("a node with nothing held is served");
+            last_frame_the_node_published_by_slot
+                .insert(pool_slot_key_of_surface_id(&frame).to_string(), frame);
+        }
+        assert!(
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
+            "the node borrowed every slot the shared ring held"
+        );
+
+        drop(native_node);
+        let returned_slots = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+        assert_eq!(
+            returned_slots.len(),
+            last_frame_the_node_published_by_slot.len(),
+            "every slot the node borrowed is back in the shared ring"
+        );
+        for (pool_slot_key, generation) in &returned_slots {
+            assert_eq!(
+                *generation,
+                frame_generation_of(&last_frame_the_node_published_by_slot[pool_slot_key]),
+                "slot {pool_slot_key} came back with the generation the node last published"
+            );
+        }
+
+        for _ in 0..returned_slots.len() {
+            let republished = acquire_one_pool_slot_id(&gpu).expect("the shared ring reuses");
+            let last_from_the_node =
+                &last_frame_the_node_published_by_slot[pool_slot_key_of_surface_id(&republished)];
+            assert_eq!(
+                frame_generation_of(&republished),
+                frame_generation_of(last_from_the_node) + 1,
+                "the shared ring continues the slot's generations"
+            );
+            assert!(
+                gpu.resolve_pixel_buffer_by_surface_id(last_from_the_node)
+                    .is_err(),
+                "the frame the node last published is retired once the slot republishes"
+            );
+        }
+    }
+
+    /// A slot handed back while a consumer still leases the node's last frame
+    /// from it stays off the producer's ring until the consumer lets go.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_returned_slot_is_never_rehanded_while_its_last_frame_is_leased() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let mut native_node =
+            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-leased-node");
+        let leased_frame =
+            acquire_one_native_node_frame_id(&mut native_node).expect("the node's first frame");
+        let consumer = check_out_leases.mint_holder_id();
+        check_out_leases
+            .record_check_out_lease(&leased_frame, consumer)
+            .expect("a consumer holds the node's frame");
+        drop(native_node);
+
+        for _ in 0..(POOL_PRE_ALLOCATE_COUNT * 2) {
+            let handed = acquire_one_pool_slot_id(&gpu).expect("free slots remain");
+            assert!(
+                !same_pool_slot(&handed, &leased_frame),
+                "the shared ring rehanded a returned slot whose last frame a consumer holds"
+            );
+        }
+        gpu.resolve_pixel_buffer_by_surface_id(&leased_frame)
+            .expect("the leased frame still resolves to its own pixels");
+
+        check_out_leases
+            .release_one_check_out_lease(&leased_frame, consumer)
+            .expect("the consumer lets the frame go");
+        let comes_back = (0..(POOL_PRE_ALLOCATE_COUNT * 4)).any(|_| {
+            acquire_one_pool_slot_id(&gpu)
+                .is_ok_and(|handed| same_pool_slot(&handed, &leased_frame))
+        });
+        assert!(
+            comes_back,
+            "a returned slot comes back to the shared ring once its frame is let go"
+        );
+    }
+
+    /// Native nodes may borrow every slot a shape's shared ring holds; the
+    /// ring then grows rather than refusing its own producers.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_shared_pixel_buffer_pool_grows_when_native_nodes_have_borrowed_every_slot_of_a_shape() {
+        let Some((gpu, _check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let mut native_node =
+            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-borrowing-node");
+        let borrowed_frames: Vec<String> = (0..POOL_PRE_ALLOCATE_COUNT)
+            .map(|_| acquire_one_native_node_frame_id(&mut native_node).expect("the node's frame"))
+            .collect();
+        assert!(
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
+            "the node borrowed every slot the shared ring pre-allocated"
+        );
+
+        let shared_frame = acquire_one_pool_slot_id(&gpu)
+            .expect("the shared ring grows when every slot of the shape is borrowed");
+        assert!(
+            !borrowed_frames
+                .iter()
+                .any(|borrowed| same_pool_slot(borrowed, &shared_frame)),
+            "the shared ring handed out a slot a node has borrowed"
+        );
+        assert!(
+            !shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
+            "the shared ring grew"
+        );
+    }
+
+    /// A node whose frames change shape hands every slot of the old shape
+    /// back to that shape's shared ring and borrows the new shape's.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_native_nodes_shape_change_returns_the_old_shapes_slots() {
+        let Some((gpu, _check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let mut native_node =
+            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-resized-node");
+        let old_shapes_frames: Vec<String> = (0..POOL_PRE_ALLOCATE_COUNT)
+            .map(|_| acquire_one_native_node_frame_id(&mut native_node).expect("the node's frame"))
+            .collect();
+        assert!(shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty());
+
+        let (new_shapes_frame, new_shapes_buffer) = native_node
+            .acquire_the_next_output_pixel_buffer(
+                LEASE_TEST_SURFACE_WIDTH * 2,
+                LEASE_TEST_SURFACE_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("the node's first frame of its new shape");
+        assert_eq!(
+            (new_shapes_buffer.width, new_shapes_buffer.height),
+            (LEASE_TEST_SURFACE_WIDTH * 2, LEASE_TEST_SURFACE_HEIGHT)
+        );
+        assert!(
+            !old_shapes_frames
+                .iter()
+                .any(|old| same_pool_slot(old, &new_shapes_frame.to_string())),
+            "a frame of the new shape is published from a slot of the new shape"
+        );
+        assert_eq!(native_node.slot_count(), 1);
+
+        let returned_slots = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+        let mut returned_slot_keys: Vec<&str> =
+            returned_slots.iter().map(|(key, _)| key.as_str()).collect();
+        let mut old_shapes_slot_keys: Vec<&str> = old_shapes_frames
+            .iter()
+            .map(|frame| pool_slot_key_of_surface_id(frame))
+            .collect();
+        returned_slot_keys.sort_unstable();
+        old_shapes_slot_keys.sort_unstable();
+        assert_eq!(
+            returned_slot_keys, old_shapes_slot_keys,
+            "every slot of the old shape is back in its shared ring"
+        );
+    }
+
     /// The upload's terminal barrier — and the layout it publishes to the
     /// registration — follow the destination's create-time usage.
     /// `SHADER_READ_ONLY_OPTIMAL` requires `SAMPLED` or `INPUT_ATTACHMENT`

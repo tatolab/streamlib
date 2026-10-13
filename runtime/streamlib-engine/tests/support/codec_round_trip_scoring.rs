@@ -275,6 +275,7 @@ pub fn decode_the_checked_in_videotoolbox_clip_inside_the_bands(
                 &VideoDecodeSessionRequest {
                     elementary_stream,
                     maximum_coded_extent: None,
+                    processor_id_of_the_decoding_node: "cross-floor-clip-decoder".to_string(),
                 },
             )
         })

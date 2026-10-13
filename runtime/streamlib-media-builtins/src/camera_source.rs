@@ -76,12 +76,20 @@ pub struct CameraSource {
 
 impl ManualProcessor for CameraSource::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let processor_id_of_the_capturing_node = ctx.processor_id().ok_or_else(|| {
+            Error::Configuration(
+                "CameraSource needs its node's processor id to give its frames a node output \
+                 pool; this context carries none"
+                    .into(),
+            )
+        })?;
         let backend = probe_video_device_backend();
         let capture_stream = backend.open_capture_stream(&VideoDeviceStreamRequest {
             device_id: self.config.device_id.clone(),
             max_width: self.config.max_width.unwrap_or(DEFAULT_MAX_WIDTH),
             max_height: self.config.max_height.unwrap_or(DEFAULT_MAX_HEIGHT),
             gpu_context: ctx.gpu_limited_access().clone(),
+            processor_id_of_the_capturing_node,
         })?;
         let stream_format = capture_stream.stream_format();
         let opened_device = capture_stream.opened_device();

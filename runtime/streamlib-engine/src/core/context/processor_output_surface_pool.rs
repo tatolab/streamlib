@@ -39,6 +39,12 @@ pub(crate) struct ProcessorOutputSurfacePoolRefusedFreshSlot<Resource> {
     pub(crate) resource: Resource,
 }
 
+/// A lent slot the pool refused at its capacity, handed back to its lender.
+pub(crate) struct ProcessorOutputSurfacePoolRefusedLentSlot<Resource> {
+    pub(crate) refusal: Error,
+    pub(crate) slot: Box<LeaseAwarePoolSlot<Resource>>,
+}
+
 /// The slots a processor publishes its output frames from, under one pool key.
 pub(crate) struct ProcessorOutputSurfacePool<Resource> {
     pool_key: String,
@@ -115,6 +121,29 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
         let slot_index = self.ring.push_fresh_slot(pool_slot_key, resource);
         self.ring
             .hand_off_fresh_slot(slot_index, check_out_leases, minted_frame_generations);
+        Ok(self.ring.slot(slot_index))
+    }
+
+    /// Add a slot its lender already republished under a fresh generation,
+    /// after [`Self::hand_off_a_reusable_frame`] asked for one, and hand it
+    /// out under that generation; at [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`]
+    /// the slot is handed back.
+    pub(crate) fn hand_off_a_slot_its_lender_already_republished(
+        &mut self,
+        slot: LeaseAwarePoolSlot<Resource>,
+    ) -> std::result::Result<
+        &LeaseAwarePoolSlot<Resource>,
+        ProcessorOutputSurfacePoolRefusedLentSlot<Resource>,
+    > {
+        if self.ring.slot_count() >= PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
+            return Err(ProcessorOutputSurfacePoolRefusedLentSlot {
+                refusal: self.every_slot_in_use_refusal(),
+                slot: Box::new(slot),
+            });
+        }
+        let slot_index = self
+            .ring
+            .push_a_slot_keeping_its_published_frame_generation(slot);
         Ok(self.ring.slot(slot_index))
     }
 

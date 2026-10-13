@@ -305,6 +305,7 @@ fn a_decode_cap_below_the_picture_is_refused_and_one_at_it_is_not() {
                             max_coded_width: REFERENCE_WIDTH,
                             max_coded_height,
                         }),
+                        processor_id_of_the_decoding_node: "capped-extent-decoder".to_string(),
                     },
                 )
             })
@@ -361,6 +362,7 @@ fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream
                 &VideoDecodeSessionRequest {
                     elementary_stream,
                     maximum_coded_extent: None,
+                    processor_id_of_the_decoding_node: "psnr-reference-decoder".to_string(),
                 },
             )
         })

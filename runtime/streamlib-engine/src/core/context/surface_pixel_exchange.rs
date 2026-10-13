@@ -11,7 +11,8 @@
 //!
 //! **What the claim covers, exactly.** A pooled backing is claimed: the
 //! resolved [`PixelBuffer`] *is* the refcount clone the ring reads before
-//! it rehands a slot ([`GpuContext::acquire_pixel_buffer`]), so holding it
+//! it rehands a slot — the shared ring ([`GpuContext::acquire_pixel_buffer`])
+//! and a native node's output pool alike — so holding it
 //! is what keeps a producer from recycling the frame mid-copy and handing
 //! the caller half of one frame and half of the next. That refcount is a
 //! same-address-space test, and it is the whole seam here because this

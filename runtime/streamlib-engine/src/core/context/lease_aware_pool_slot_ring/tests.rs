@@ -186,3 +186,83 @@ fn a_fresh_slots_first_frame_is_published_at_the_service() {
     assert_eq!(leases.current_frame_generation("slot-a").unwrap(), Some(1));
     assert_eq!(minted.minted_frame_generation_of_slot("slot-a"), Some(1));
 }
+
+#[test]
+fn a_slot_taken_out_of_one_ring_keeps_counting_its_generations_in_the_next() {
+    let (mut lending_ring, _lending_holds) = ring_of_fresh_slots(&["slot-a"]);
+    let (mut borrowing_ring, _borrowing_holds) = ring_of_fresh_slots(&[]);
+    let leases = SurfaceCheckOutLeaseRegistry::new();
+    let minted = LeaseAwarePoolMintedFrameGenerations::default();
+    next_published_id(&mut lending_ring, Some(&leases), &minted).unwrap();
+    let last_published_in_the_lending_ring =
+        next_published_id(&mut lending_ring, Some(&leases), &minted).unwrap();
+    assert_eq!(last_published_in_the_lending_ring, "slot-a#2");
+
+    let lent_slot = lending_ring.take_out_the_slot_at(0);
+    assert_eq!(lending_ring.slot_count(), 0);
+    let lent_slot_index =
+        borrowing_ring.push_a_slot_keeping_its_published_frame_generation(lent_slot);
+    assert_eq!(
+        borrowing_ring
+            .slot(lent_slot_index)
+            .published_frame_generation(),
+        2,
+        "the slot arrives with the generation its lender last published"
+    );
+
+    assert_eq!(
+        next_published_id(&mut borrowing_ring, Some(&leases), &minted).unwrap(),
+        "slot-a#3"
+    );
+    assert!(
+        matches!(
+            minted.refusal_of_a_retired_frame_id_named(&last_published_in_the_lending_ring),
+            Some(Err(Error::SurfaceFrameRecycled {
+                published_generation: 2,
+                current_generation: 3,
+                ..
+            }))
+        ),
+        "the borrowing ring's hand-off retires the last id the lending ring published"
+    );
+    assert!(
+        leases
+            .record_check_out_lease(&last_published_in_the_lending_ring, leases.mint_holder_id())
+            .is_err(),
+        "the service refuses a checkout of the id the borrowing ring retired"
+    );
+}
+
+#[test]
+fn taking_a_slot_out_keeps_the_rest_of_the_ring_in_ring_order() {
+    let (mut ring, _holds) = ring_of_fresh_slots(&["slot-a", "slot-b", "slot-c", "slot-d"]);
+    let minted = LeaseAwarePoolMintedFrameGenerations::default();
+    assert_eq!(
+        next_published_id(&mut ring, None, &minted).unwrap(),
+        "slot-a#1"
+    );
+    assert_eq!(
+        next_published_id(&mut ring, None, &minted).unwrap(),
+        "slot-b#1"
+    );
+
+    let taken_out = ring.take_out_the_slot_at(1);
+    assert_eq!(taken_out.pool_slot_key(), "slot-b");
+    let after_the_take_out: Vec<_> = (0..4)
+        .map(|_| next_published_id(&mut ring, None, &minted).unwrap())
+        .collect();
+    assert_eq!(
+        after_the_take_out,
+        ["slot-c#1", "slot-d#1", "slot-a#2", "slot-c#2"],
+        "the ring goes on from the slot after the one taken out"
+    );
+
+    let last_slot_index = ring.slot_count() - 1;
+    let taken_out_last = ring.take_out_the_slot_at(last_slot_index);
+    assert_eq!(taken_out_last.pool_slot_key(), "slot-d");
+    assert_eq!(
+        next_published_id(&mut ring, None, &minted).unwrap(),
+        "slot-a#3",
+        "taking out the slot due next hands out the one after it, wrapping round"
+    );
+}
