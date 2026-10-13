@@ -5602,6 +5602,203 @@ mod tests {
             .expect("a uniform buffer the budget never weighs still allocates past it");
     }
 
+    /// Every VMA frame constructor, past a budget with no room left, is
+    /// refused naming the heap that the same constructor's allocation lands on.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[allow(clippy::disallowed_macros)]
+    fn every_vma_frame_constructors_refusal_names_the_heap_its_allocation_lands_on() {
+        use crate::core::rhi::{TextureFormat, TextureUsages};
+        use crate::vulkan::rhi::HostVulkanBuffer;
+        use crate::vulkan::rhi::drm_modifier_probe::fourcc;
+
+        type MemoryTypeOfOneFreshFrameAllocation<'a> = Box<dyn Fn() -> Result<u32> + 'a>;
+        fn memory_type_of_the_texture(texture: HostVulkanTexture) -> u32 {
+            texture
+                .vma_allocation_memory_type_index()
+                .expect("a VMA-allocated texture has a memory type")
+        }
+        fn memory_type_of_the_buffer(buffer: HostVulkanBuffer) -> u32 {
+            buffer
+                .vma_allocation_memory_type_index()
+                .expect("a VMA-allocated buffer has a memory type")
+        }
+
+        let Some(device) = try_create_device() else {
+            return;
+        };
+        const FRAME_EDGE_PIXELS: u32 = 256;
+        let frame_byte_len = u64::from(FRAME_EDGE_PIXELS * FRAME_EDGE_PIXELS * 4);
+        let sampled_frame_descriptor = TextureDescriptor::new(
+            FRAME_EDGE_PIXELS,
+            FRAME_EDGE_PIXELS,
+            TextureFormat::Bgra8Unorm,
+        )
+        .with_usage(
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+        );
+        let render_target_frame_descriptor = TextureDescriptor::new(
+            FRAME_EDGE_PIXELS,
+            FRAME_EDGE_PIXELS,
+            TextureFormat::Bgra8Unorm,
+        )
+        .with_usage(
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+        );
+        let cuda_mappable_frame_descriptor = TextureDescriptor::new(
+            FRAME_EDGE_PIXELS,
+            FRAME_EDGE_PIXELS,
+            TextureFormat::Rgba8Unorm,
+        );
+        let render_target_modifiers = device
+            .drm_modifier_table()
+            .rt_modifiers(fourcc::DRM_FORMAT_ARGB8888);
+        let host_cached_opaque_fd_buffer_site = if device
+            .opaque_fd_buffer_pool_host_cached_pinned_to_one_memory_type()
+            .is_some()
+        {
+            "HostVulkanBuffer::new_opaque_fd_export_host_cached"
+        } else {
+            "HostVulkanBuffer::new_opaque_fd_export"
+        };
+        let frame_constructors_by_site: Vec<(&str, MemoryTypeOfOneFreshFrameAllocation<'_>)> = vec![
+            (
+                "HostVulkanTexture::new",
+                Box::new(|| {
+                    HostVulkanTexture::new(&device, &sampled_frame_descriptor)
+                        .map(memory_type_of_the_texture)
+                }),
+            ),
+            (
+                "HostVulkanTexture::new_device_local",
+                Box::new(|| {
+                    HostVulkanTexture::new_device_local(&device, &sampled_frame_descriptor)
+                        .map(memory_type_of_the_texture)
+                }),
+            ),
+            (
+                "HostVulkanTexture::new_render_target_dma_buf",
+                Box::new(|| {
+                    HostVulkanTexture::new_render_target_dma_buf(
+                        &device,
+                        &render_target_frame_descriptor,
+                        render_target_modifiers,
+                    )
+                    .map(memory_type_of_the_texture)
+                }),
+            ),
+            (
+                "HostVulkanTexture::new_opaque_fd_export",
+                Box::new(|| {
+                    HostVulkanTexture::new_opaque_fd_export(
+                        &device,
+                        &cuda_mappable_frame_descriptor,
+                    )
+                    .map(memory_type_of_the_texture)
+                }),
+            ),
+            (
+                "HostVulkanBuffer::new",
+                Box::new(|| {
+                    HostVulkanBuffer::new(&device, frame_byte_len).map(memory_type_of_the_buffer)
+                }),
+            ),
+            (
+                "HostVulkanBuffer::new_storage_buffer_host_cached_for_cpu_reads",
+                Box::new(|| {
+                    HostVulkanBuffer::new_storage_buffer_host_cached_for_cpu_reads(
+                        &device,
+                        frame_byte_len,
+                    )
+                    .map(memory_type_of_the_buffer)
+                }),
+            ),
+            (
+                "HostVulkanBuffer::new_opaque_fd_export",
+                Box::new(|| {
+                    HostVulkanBuffer::new_opaque_fd_export(&device, frame_byte_len)
+                        .map(memory_type_of_the_buffer)
+                }),
+            ),
+            (
+                host_cached_opaque_fd_buffer_site,
+                Box::new(|| {
+                    HostVulkanBuffer::new_opaque_fd_export_host_cached(&device, frame_byte_len)
+                        .map(memory_type_of_the_buffer)
+                }),
+            ),
+            (
+                "HostVulkanBuffer::new_opaque_fd_export_device_local",
+                Box::new(|| {
+                    HostVulkanBuffer::new_opaque_fd_export_device_local(&device, frame_byte_len)
+                        .map(memory_type_of_the_buffer)
+                }),
+            ),
+        ];
+
+        let heap_each_frame_constructors_allocation_lands_on: Vec<_> = frame_constructors_by_site
+            .iter()
+            .filter_map(
+                |(frame_allocation_site, allocate_one_frame)| match allocate_one_frame() {
+                    Ok(memory_type_index) => Some((
+                        *frame_allocation_site,
+                        allocate_one_frame,
+                        device
+                            .device_memory_heap_of_memory_type(memory_type_index)
+                            .expect("the allocation's memory type is one of the device's"),
+                    )),
+                    Err(e) => {
+                        println!(
+                            "skipping {frame_allocation_site}: it does not allocate here: {e}"
+                        );
+                        None
+                    }
+                },
+            )
+            .collect();
+        assert!(
+            !heap_each_frame_constructors_allocation_lands_on.is_empty(),
+            "a device that allocates no frame through any constructor has nothing to weigh"
+        );
+
+        device.leave_no_room_in_any_frame_allocation_budget_for_this_test();
+        for (expected_frame_allocation_site, allocate_one_frame, heap_the_allocation_lands_on) in
+            heap_each_frame_constructors_allocation_lands_on
+        {
+            match allocate_one_frame() {
+                Err(Error::FrameAllocationRefusedPastTheDeviceMemoryHeapBudget {
+                    heap_index,
+                    frame_allocation_site,
+                    ..
+                }) => {
+                    assert_eq!(frame_allocation_site, expected_frame_allocation_site);
+                    assert_eq!(
+                        heap_index, heap_the_allocation_lands_on,
+                        "{expected_frame_allocation_site} is refused naming heap {heap_index}, \
+                         but its allocation lands on heap {heap_the_allocation_lands_on}"
+                    );
+                    println!(
+                        "{expected_frame_allocation_site}: refused naming heap {heap_index}, the \
+                         heap its allocation lands on"
+                    );
+                }
+                Ok(_) => panic!(
+                    "{expected_frame_allocation_site} allocated past a budget with no room left"
+                ),
+                Err(other) => panic!(
+                    "{expected_frame_allocation_site}: expected the heap-budget refusal, got \
+                     {other:?}"
+                ),
+            }
+        }
+    }
+
     /// The rig's evidence that GPU memory another process holds reaches this
     /// runtime as a smaller heap budget: a child holds a CUDA allocation and
     /// the largest device-local heap's driver-reported budget falls by it.
