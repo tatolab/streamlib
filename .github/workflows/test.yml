@@ -345,6 +345,11 @@ jobs:
           # The lease-aware slot ring every pool hands frames out of, and the
           # processor output pool on it: which slot is next, a held one
           # skipped, growth to the cap and the refusal there — no device.
+          # The frame-allocation budget: the refusal past a heap's budget less
+          # the fixed headroom, the device-memory allocation margin, the
+          # estimate without the budget extension and the system's available
+          # memory, the Metal working set's arithmetic, and the one lock two
+          # racing allocations take. No device.
           # The swapchain acquire barrier's source stage, which must chain off
           # the image-available semaphore wait.
           # A port named in any spelling that casts to it, on the read and the
@@ -370,6 +375,8 @@ jobs:
             escalate_wire_encoding_tests \
             core::context::lease_aware_pool_slot_ring \
             core::context::processor_output_surface_pool \
+            vulkan::rhi::vulkan_frame_allocation_device_memory_budget::tests \
+            linux::system_memory_available_from_proc_meminfo::tests \
             core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::parse_texture_usages \
             core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::the_implied_copy_bits \
             core::context::audio_device_backend \
@@ -1082,3 +1089,22 @@ jobs:
             echo "::error::an in-process adapter test skipped instead of running on the Metal device"
             exit 1
           fi
+
+      # Whether the working-set bound counts each IOSurface the runtime mints
+      # once, read from Metal's own count around one frame of each kind — so
+      # it needs the MoltenVK device installed above. Both packages and their
+      # features match the `--no-run` build, which this reuses. A skip passes
+      # without measuring, so any skip line fails the step, and only the
+      # engine binary's own result line with both tests passed passes it.
+      - name: Metal working set counts each IOSurface once
+        run: |
+          set -o pipefail
+          cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
+            --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
+            --lib vulkan::rhi::vulkan_metal_working_set_budget::tests \
+            -- --test-threads=1 --nocapture 2>&1 | tee metal-working-set-output.txt
+          if grep -i "skip" metal-working-set-output.txt; then
+            echo "::error::a working-set test skipped instead of measuring on the Metal device"
+            exit 1
+          fi
+          grep -q "test result: ok. 2 passed" metal-working-set-output.txt
