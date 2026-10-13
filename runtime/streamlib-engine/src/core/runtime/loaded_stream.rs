@@ -491,7 +491,11 @@ impl LoadedStreamInThisRuntime {
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let surface_store = None;
 
-        Ok(engine_gpu_context.view_for_one_loaded_stream(surface_store, &pipeline_cache_directory))
+        Ok(engine_gpu_context.view_for_one_loaded_stream(
+            self.stream_tag(),
+            surface_store,
+            &pipeline_cache_directory,
+        ))
     }
 
     /// Stop the stream: every processor removed, its audio clock stopped, its
@@ -544,6 +548,12 @@ impl LoadedStreamInThisRuntime {
 
             #[cfg(target_os = "macos")]
             crate::core::window_event_pump::release_the_windows_handed_back_while_the_event_pump_was_not_driven();
+
+            self.teardown_progress_note()
+                .note_what_the_teardown_is_waiting_on("freeing the stream's shared pool entries");
+            this_streams_runtime_context
+                .gpu
+                .free_every_unheld_shared_pool_entry_the_stream_last_acquired(self.stream_tag());
 
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the audio clock");

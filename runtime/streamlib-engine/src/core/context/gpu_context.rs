@@ -933,6 +933,9 @@ pub struct GpuContext {
     /// Where kernels this view builds keep their on-disk pipeline caches: the
     /// stream's, under its project. `None` on the engine's own context.
     pipeline_cache_directory_of_its_stream: Option<Arc<std::path::Path>>,
+    /// The loaded stream this view serves, which every shared pool entry it
+    /// acquires is attributed to. `None` on the engine's own context.
+    loaded_stream_this_view_serves: Option<crate::core::runtime::LoadedStreamTag>,
     /// GPU blitter for efficient buffer-to-buffer copies with texture caching.
     blitter: Arc<dyn RhiBlitter>,
     /// Same-process texture cache — maps surface_id to a registration
@@ -1084,7 +1087,11 @@ impl GpuContext {
     /// Create a new GPU context with an RHI device.
     pub fn new(device: GpuDevice) -> Self {
         let device = Arc::new(device);
-        let texture_pool = TexturePool::new(Arc::clone(&device));
+        let engines_own_surface_store = Arc::<std::sync::OnceLock<SurfaceStore>>::default();
+        let texture_pool = TexturePool::new_seeing_the_engines_surface_store(
+            Arc::clone(&device),
+            Arc::clone(&engines_own_surface_store),
+        );
         let blitter = Self::create_blitter(&device);
         let lease_aware_pool_minted_frame_generations =
             Arc::new(LeaseAwarePoolMintedFrameGenerations::default());
@@ -1097,8 +1104,9 @@ impl GpuContext {
             device,
             texture_pool,
             surface_store: Arc::new(Mutex::new(None)),
-            engines_own_surface_store: Arc::default(),
+            engines_own_surface_store,
             pipeline_cache_directory_of_its_stream: None,
+            loaded_stream_this_view_serves: None,
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
@@ -1893,7 +1901,25 @@ impl GpuContext {
             format = ?desc.format,
             "GpuContext::acquire_texture"
         );
-        self.texture_pool.acquire(desc)
+        self.texture_pool
+            .acquire(desc, self.loaded_stream_this_view_serves)
+    }
+
+    /// Free every unheld shared pool entry `stream` last acquired, and flag
+    /// the ones still held to be freed as soon as they are unheld. Run as the
+    /// stream stops, once its processors are gone.
+    pub(crate) fn free_every_unheld_shared_pool_entry_the_stream_last_acquired(
+        &self,
+        stream: crate::core::runtime::LoadedStreamTag,
+    ) {
+        let freed_texture_pool_slot_count = self
+            .texture_pool
+            .free_every_unheld_slot_the_stream_last_acquired(stream);
+        tracing::debug!(
+            stream = %stream,
+            freed_texture_pool_slot_count,
+            "freed the shared pool entries a stopped stream last acquired"
+        );
     }
 
     /// Get the shared command queue.
@@ -3011,10 +3037,12 @@ impl GpuContext {
     // =========================================================================
 
     /// This context's view for one loaded stream: it shares the device and
-    /// every pool, cache and gate, and owns a surface-store slot holding
-    /// `surface_store` and the stream's pipeline-cache directory.
+    /// every pool, cache and gate, owns a surface-store slot holding
+    /// `surface_store` and the stream's pipeline-cache directory, and
+    /// attributes the shared pool entries it acquires to `loaded_stream`.
     pub(crate) fn view_for_one_loaded_stream(
         &self,
+        loaded_stream: crate::core::runtime::LoadedStreamTag,
         surface_store: Option<SurfaceStore>,
         pipeline_cache_directory_of_the_stream: &std::path::Path,
     ) -> Self {
@@ -3023,6 +3051,7 @@ impl GpuContext {
             pipeline_cache_directory_of_its_stream: Some(Arc::from(
                 pipeline_cache_directory_of_the_stream,
             )),
+            loaded_stream_this_view_serves: Some(loaded_stream),
             ..self.clone()
         }
     }

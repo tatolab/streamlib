@@ -44,6 +44,7 @@ pub use compute_kernel::{
     SurfaceBoundKernelBindingKind, derive_bindings_from_spirv,
 };
 pub use device::GpuDevice;
+pub(crate) use device::GpuQueueSubmissionsSnapshot;
 pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use glsl_shader_source_compiler::{

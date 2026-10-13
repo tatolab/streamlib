@@ -1071,16 +1071,7 @@ fn release_everything_the_helpers_teardown_owes(
     sandbox: &crate::core::context::GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
 ) {
-    use super::{
-        release_processor_output_pool_slot, release_surface_share_and_parent_caches_for_handle,
-    };
-
-    for (handle_id, removed_handle) in registry.drain_handles() {
-        release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
-    }
-    for released_slot in registry.processor_output_pools().drain_slots() {
-        release_processor_output_pool_slot(sandbox, released_slot);
-    }
+    super::release_everything_a_torn_down_helper_held(sandbox, registry);
 }
 
 /// One node holding every frame its output pool may grow to, and every
@@ -1410,6 +1401,57 @@ fn a_released_or_torn_down_one_off_hands_its_count_back_to_its_node() {
     );
     acquire_every_one_off_the_node_may_hold();
     release_everything_the_helpers_teardown_owes(&sandbox, &registry);
+}
+
+/// A torn-down helper's one-off textures are freed as soon as nothing holds
+/// them, without waiting out the idle window an explicit release waits.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_torn_down_helpers_textures_are_freed_without_waiting_out_the_idle_window() {
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess, TexturePoolDescriptor};
+    use crate::core::rhi::TextureFormat;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        tracing::warn!("no GPU device, so the teardown freeing test skips");
+        return;
+    };
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let texture_pool = gpu.texture_pool().clone();
+    let sandbox = GpuContextLimitedAccess::new(gpu.clone());
+    let registry = EscalateHandleRegistry::new();
+    for _ in 0..2 {
+        acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &registry)
+            .expect("the helper acquires a one-off texture");
+    }
+    assert_eq!(texture_pool.stats().total_textures, 2);
+
+    release_everything_the_helpers_teardown_owes(&sandbox, &registry);
+    let made_so_far = gpu.device().snapshot_of_queue_submissions_made_so_far();
+    assert!(
+        gpu.device()
+            .wait_for_every_queue_submission_in_snapshot(
+                &made_so_far,
+                std::time::Duration::from_secs(5)
+            )
+            .expect("the GPU's queue completion reads")
+    );
+    let _engines_own = texture_pool
+        .acquire(
+            &TexturePoolDescriptor::new(16, 16, TextureFormat::Rgba8Unorm),
+            None,
+        )
+        .expect("an acquire after the teardown");
+    let stats = texture_pool.stats();
+    assert_eq!(
+        (stats.total_textures, stats.textures_in_use),
+        (1, 1),
+        "a torn-down helper's texture waited out the idle window"
+    );
+    live_service.stop();
 }
 
 /// A render-target image is a one-off like any other: held under the id the

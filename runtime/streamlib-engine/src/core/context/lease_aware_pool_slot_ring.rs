@@ -175,11 +175,12 @@ impl LeaseAwarePoolMintedFrameGenerations {
     }
 }
 
-/// What one hand-off is allowed to conclude about reusing an existing slot.
+/// What one hand-off — or one freeing scan — is allowed to conclude about an
+/// existing slot's cross-process holders.
 ///
 /// Held for the whole scan, so the answer a slot is tested against is still
-/// the answer when that slot is handed over.
-enum PoolSlotReuse<'leases> {
+/// the answer when that slot is handed over or freed.
+pub(crate) enum PoolSlotReuse<'leases> {
     /// No surface-share service, so no cross-process consumer can exist.
     RefcountIsTheWholeAnswer,
     /// Leases are readable and pinned for the length of this decision.
@@ -190,7 +191,8 @@ enum PoolSlotReuse<'leases> {
 }
 
 impl<'leases> PoolSlotReuse<'leases> {
-    fn over(check_out_leases: Option<&'leases SurfaceCheckOutLeaseRegistry>) -> Self {
+    /// The conclusion `check_out_leases` allows, its table held when readable.
+    pub(crate) fn over(check_out_leases: Option<&'leases SurfaceCheckOutLeaseRegistry>) -> Self {
         match check_out_leases {
             None => Self::RefcountIsTheWholeAnswer,
             Some(leases) => match leases.hold_for_pool_slot_hand_off() {
@@ -200,7 +202,8 @@ impl<'leases> PoolSlotReuse<'leases> {
         }
     }
 
-    fn permits(&self, pool_slot_key: &str) -> bool {
+    /// Whether no cross-process holder can have `pool_slot_key` checked out.
+    pub(crate) fn permits(&self, pool_slot_key: &str) -> bool {
         match self {
             Self::RefcountIsTheWholeAnswer => true,
             Self::LeaseAware(hand_off) => !hand_off.is_checked_out_by_any_holder(pool_slot_key),

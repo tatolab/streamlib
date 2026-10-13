@@ -5,14 +5,23 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use parking_lot::Mutex;
 
-use crate::core::rhi::{
-    GpuDevice, NativeTextureHandle, Texture, TextureDescriptor, TextureFormat, TextureUsages,
+use super::lease_aware_pool_slot_ring::PoolSlotReuse;
+use super::shared_pool_entry_freeing::{
+    LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK, SharedPoolEntryFreeingRecord,
+    SharedPoolEntryIdleWindow,
 };
+use super::{SurfaceCheckOutLeaseRegistry, SurfaceStore};
+use crate::core::rhi::{
+    GpuDevice, GpuQueueSubmissionsSnapshot, NativeTextureHandle, Texture, TextureDescriptor,
+    TextureFormat, TextureUsages,
+};
+use crate::core::runtime::LoadedStreamTag;
 use crate::core::{Error, Result};
 
 /// How a pooled texture's allocation crosses a process boundary, decided at
@@ -129,17 +138,66 @@ pub struct TexturePoolStats {
     pub bucket_count: usize,
 }
 
+/// What decides when a texture pool slot is freed, beyond its in-use flag.
+#[derive(Default)]
+pub(crate) struct TexturePoolSlotFreeingBookkeeping {
+    freeing_record: SharedPoolEntryFreeingRecord,
+    /// The surface-share ids the slot's texture was registered under that a
+    /// helper may still hold checked out; dropped once no lease names them.
+    surface_share_ids_naming_the_slot: Vec<String>,
+}
+
 /// A slot in the texture pool.
 pub(crate) struct PoolSlot {
     pub(crate) id: PoolSlotId,
     pub(crate) texture: Texture,
     pub(crate) key: TexturePoolKey,
     pub(crate) in_use: AtomicBool,
+    /// Taken under the pool's bucket lock, never the other way round.
+    pub(crate) freeing_bookkeeping: Mutex<TexturePoolSlotFreeingBookkeeping>,
 }
 
 impl PoolSlot {
     pub(crate) fn is_available(&self) -> bool {
         !self.in_use.load(Ordering::Acquire)
+    }
+
+    /// Whether nothing holds the slot: no handle, no other reference to its
+    /// texture, no checkout lease on any id it was registered under, and on
+    /// macOS no process using its IOSurface. Forgets the ids no lease names.
+    fn is_unheld(
+        &self,
+        freeing_bookkeeping: &mut TexturePoolSlotFreeingBookkeeping,
+        cross_process_holders: &PoolSlotReuse<'_>,
+    ) -> bool {
+        if !self.is_available() || self.texture.strong_count() > 1 {
+            return false;
+        }
+        if self.backing_iosurface_is_in_use() {
+            return false;
+        }
+        freeing_bookkeeping
+            .surface_share_ids_naming_the_slot
+            .retain(|surface_share_id| !cross_process_holders.permits(surface_share_id));
+        freeing_bookkeeping
+            .surface_share_ids_naming_the_slot
+            .is_empty()
+    }
+
+    /// Whether the kernel reports the slot's IOSurface in use by any process.
+    #[cfg(target_os = "macos")]
+    fn backing_iosurface_is_in_use(&self) -> bool {
+        use crate::host_rhi::HostTextureExt as _;
+
+        self.texture
+            .vulkan_inner()
+            .backing_iosurface()
+            .is_some_and(|iosurface| objc2_io_surface::IOSurfaceRef::is_in_use(iosurface))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn backing_iosurface_is_in_use(&self) -> bool {
+        false
     }
 
     pub(crate) fn try_acquire(&self) -> bool {
@@ -158,6 +216,10 @@ pub(crate) struct TexturePoolInner {
     pub(crate) buckets: Mutex<HashMap<TexturePoolKey, Vec<Arc<PoolSlot>>>>,
     pub(crate) device: Arc<GpuDevice>,
     pub(crate) next_slot_id: AtomicU64,
+    /// The engine's own surface store, once installed: its lease table is
+    /// where a helper's checkout of a slot's texture shows.
+    engines_own_surface_store: Arc<OnceLock<SurfaceStore>>,
+    idle_window: SharedPoolEntryIdleWindow,
 }
 
 impl TexturePoolInner {
@@ -165,28 +227,230 @@ impl TexturePoolInner {
         PoolSlotId(self.next_slot_id.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// Mark the slot available, then free at most one slot due to be freed.
     pub(crate) fn release(&self, slot_id: PoolSlotId) {
+        self.with_slot(slot_id, PoolSlot::release);
+        self.free_at_most_one_slot_due_to_be_freed();
+    }
+
+    fn with_slot(&self, slot_id: PoolSlotId, act_on_the_slot: impl FnOnce(&PoolSlot)) {
         let buckets = self.buckets.lock();
-        for slots in buckets.values() {
-            for slot in slots {
-                if slot.id == slot_id {
-                    slot.release();
-                    return;
+        if let Some(slot) = buckets.values().flatten().find(|slot| slot.id == slot_id) {
+            act_on_the_slot(slot);
+        }
+    }
+
+    /// Free the slot without waiting out the idle window once it is unheld.
+    pub(crate) fn flag_slot_freed_as_soon_as_unheld(&self, slot_id: PoolSlotId) {
+        self.with_slot(slot_id, |slot| {
+            slot.freeing_bookkeeping
+                .lock()
+                .freeing_record
+                .flag_freed_as_soon_as_unheld();
+        });
+    }
+
+    /// Record that the slot's texture is registered with the surface-share
+    /// service under `surface_share_id`, where a helper can check it out.
+    pub(crate) fn note_surface_share_id_naming_slot(
+        &self,
+        slot_id: PoolSlotId,
+        surface_share_id: &str,
+    ) {
+        self.with_slot(slot_id, |slot| {
+            slot.freeing_bookkeeping
+                .lock()
+                .surface_share_ids_naming_the_slot
+                .push(surface_share_id.to_string());
+        });
+    }
+
+    pub(crate) fn find_available_slot(
+        &self,
+        key: &TexturePoolKey,
+        acquiring_stream: Option<LoadedStreamTag>,
+    ) -> Option<Arc<PoolSlot>> {
+        let buckets = self.buckets.lock();
+        let slot = buckets.get(key)?.iter().find(|slot| slot.try_acquire())?;
+        slot.freeing_bookkeeping
+            .lock()
+            .freeing_record
+            .note_handed_out_again_to(acquiring_stream);
+        Some(Arc::clone(slot))
+    }
+
+    fn check_out_leases(&self) -> Option<&SurfaceCheckOutLeaseRegistry> {
+        self.engines_own_surface_store
+            .get()
+            .and_then(SurfaceStore::check_out_leases)
+            .map(Arc::as_ref)
+    }
+
+    fn every_queue_submission_in_snapshot_has_completed(
+        &self,
+        snapshot: &GpuQueueSubmissionsSnapshot,
+    ) -> bool {
+        self.device
+            .every_queue_submission_in_snapshot_has_completed(snapshot)
+            .unwrap_or_else(|unreadable| {
+                tracing::warn!(
+                    "the GPU's queue completion could not be read, so no texture pool slot is \
+                     freed: {unreadable}"
+                );
+                false
+            })
+    }
+
+    /// Observe every slot held or unheld, and free at most one that may be
+    /// freed: freeing can take milliseconds, and this runs on the producer's
+    /// acquire and release.
+    pub(crate) fn free_at_most_one_slot_due_to_be_freed(&self) {
+        if let Some(slot_taken_out) = self.take_out_at_most_one_slot_due_to_be_freed() {
+            log_the_texture_pool_slot_freed(&slot_taken_out);
+        }
+    }
+
+    fn take_out_at_most_one_slot_due_to_be_freed(&self) -> Option<Arc<PoolSlot>> {
+        let now = Instant::now();
+        let idle_window = self.idle_window.duration();
+        let cross_process_holders = PoolSlotReuse::over(self.check_out_leases());
+        let mut buckets = self.buckets.lock();
+        let mut queue_submissions_made_so_far = None;
+        let mut slot_due_to_be_freed = None;
+        for (key, slots) in buckets.iter() {
+            for (slot_index, slot) in slots.iter().enumerate() {
+                let mut freeing_bookkeeping = slot.freeing_bookkeeping.lock();
+                if !slot.is_unheld(&mut freeing_bookkeeping, &cross_process_holders) {
+                    freeing_bookkeeping.freeing_record.note_observed_held();
+                    continue;
                 }
+                freeing_bookkeeping
+                    .freeing_record
+                    .note_observed_unheld(now, || {
+                        *queue_submissions_made_so_far.get_or_insert_with(|| {
+                            self.device.snapshot_of_queue_submissions_made_so_far()
+                        })
+                    });
+                if slot_due_to_be_freed.is_none()
+                    && freeing_bookkeeping.freeing_record.may_be_freed_now(
+                        now,
+                        idle_window,
+                        |snapshot| self.every_queue_submission_in_snapshot_has_completed(snapshot),
+                    )
+                {
+                    slot_due_to_be_freed = Some((key.clone(), slot_index));
+                }
+            }
+        }
+        drop(cross_process_holders);
+        let (key, slot_index) = slot_due_to_be_freed?;
+        let slots = buckets.get_mut(&key)?;
+        let slot_taken_out = slots.remove(slot_index);
+        if slots.is_empty() {
+            buckets.remove(&key);
+        }
+        Some(slot_taken_out)
+    }
+
+    /// Free every unheld slot `stream` last acquired, waiting at most
+    /// [`LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK`] for the
+    /// GPU work naming them; a slot still held, or whose work outlasts the
+    /// wait, is flagged to be freed as soon as it is unheld. Answers how many
+    /// were freed.
+    pub(crate) fn free_every_unheld_slot_the_stream_last_acquired(
+        &self,
+        stream: LoadedStreamTag,
+    ) -> usize {
+        let slots_taken_out = self.take_out_every_unheld_slot_the_stream_last_acquired(stream);
+        if slots_taken_out.is_empty() {
+            return 0;
+        }
+        let queue_submissions_naming_them = slots_taken_out.iter().fold(
+            GpuQueueSubmissionsSnapshot::default(),
+            |covering_every_slot, slot| {
+                slot.freeing_bookkeeping
+                    .lock()
+                    .freeing_record
+                    .queue_submissions_made_before_it_was_unheld()
+                    .map_or(covering_every_slot, |queue_submissions| {
+                        covering_every_slot.covering_both(&queue_submissions)
+                    })
+            },
+        );
+        match self.device.wait_for_every_queue_submission_in_snapshot(
+            &queue_submissions_naming_them,
+            LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
+        ) {
+            Ok(true) => {
+                let freed_slot_count = slots_taken_out.len();
+                for slot_taken_out in slots_taken_out {
+                    log_the_texture_pool_slot_freed(&slot_taken_out);
+                }
+                freed_slot_count
+            }
+            outlasted_or_unreadable => {
+                tracing::warn!(
+                    stream = %stream,
+                    slot_count = slots_taken_out.len(),
+                    "the GPU work naming a stopped stream's texture pool slots did not complete \
+                     within {:?} ({outlasted_or_unreadable:?}); they are freed once it has",
+                    LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK
+                );
+                for slot_taken_out in &slots_taken_out {
+                    slot_taken_out
+                        .freeing_bookkeeping
+                        .lock()
+                        .freeing_record
+                        .flag_freed_as_soon_as_unheld();
+                }
+                for slot_taken_out in slots_taken_out {
+                    self.add_slot(slot_taken_out);
+                }
+                0
             }
         }
     }
 
-    pub(crate) fn find_available_slot(&self, key: &TexturePoolKey) -> Option<Arc<PoolSlot>> {
-        let buckets = self.buckets.lock();
-        if let Some(slots) = buckets.get(key) {
-            for slot in slots {
-                if slot.try_acquire() {
-                    return Some(Arc::clone(slot));
-                }
-            }
+    fn take_out_every_unheld_slot_the_stream_last_acquired(
+        &self,
+        stream: LoadedStreamTag,
+    ) -> Vec<Arc<PoolSlot>> {
+        let now = Instant::now();
+        let cross_process_holders = PoolSlotReuse::over(self.check_out_leases());
+        let mut buckets = self.buckets.lock();
+        let mut queue_submissions_made_so_far = None;
+        let mut slots_taken_out = Vec::new();
+        for slots in buckets.values_mut() {
+            let (unheld_slots_of_the_stream, slots_kept): (Vec<_>, Vec<_>) =
+                std::mem::take(slots).into_iter().partition(|slot| {
+                    let mut freeing_bookkeeping = slot.freeing_bookkeeping.lock();
+                    if !freeing_bookkeeping
+                        .freeing_record
+                        .was_last_acquired_by(stream)
+                    {
+                        return false;
+                    }
+                    if !slot.is_unheld(&mut freeing_bookkeeping, &cross_process_holders) {
+                        freeing_bookkeeping.freeing_record.note_observed_held();
+                        freeing_bookkeeping
+                            .freeing_record
+                            .flag_freed_as_soon_as_unheld();
+                        return false;
+                    }
+                    freeing_bookkeeping
+                        .freeing_record
+                        .note_observed_unheld(now, || {
+                            *queue_submissions_made_so_far.get_or_insert_with(|| {
+                                self.device.snapshot_of_queue_submissions_made_so_far()
+                            })
+                        });
+                    true
+                });
+            *slots = slots_kept;
+            slots_taken_out.extend(unheld_slots_of_the_stream);
         }
-        None
+        buckets.retain(|_, slots| !slots.is_empty());
+        slots_taken_out
     }
 
     pub(crate) fn add_slot(&self, slot: Arc<PoolSlot>) {
@@ -213,6 +477,17 @@ impl TexturePoolInner {
             bucket_count: buckets.len(),
         }
     }
+}
+
+fn log_the_texture_pool_slot_freed(slot: &PoolSlot) {
+    tracing::debug!(
+        slot = slot.id.0,
+        width = slot.key.width,
+        height = slot.key.height,
+        format = ?slot.key.format,
+        importability = ?slot.key.cross_process_importability,
+        "freed a texture pool slot"
+    );
 }
 
 /// Rich data backing a [`PooledTextureHandle`]. Holds the
@@ -352,9 +627,32 @@ impl PooledTextureHandle {
     /// **Panics if called from cdylib code** for the same reason
     /// [`Texture::host_inner`] does.
     pub fn slot_id(&self) -> PoolSlotId {
+        self.host_inner().slot_id
+    }
+
+    fn host_inner(&self) -> &PooledTextureHandleInner {
         // SAFETY: `self.handle` is `Box::into_raw(Box<PooledTextureHandleInner>)`
         // (see `from_parts`); the Box keeps the inner alive until Drop runs.
-        unsafe { (*(self.handle as *const PooledTextureHandleInner)).slot_id }
+        unsafe { &*(self.handle as *const PooledTextureHandleInner) }
+    }
+
+    /// Free this texture's pool slot as soon as it is unheld, without waiting
+    /// out the idle window — for a slot whose owner went away.
+    pub(crate) fn flag_its_pool_slot_freed_as_soon_as_unheld(&self) {
+        let inner = self.host_inner();
+        inner
+            .pool_inner
+            .flag_slot_freed_as_soon_as_unheld(inner.slot_id);
+    }
+
+    /// Record that this texture is registered with the surface-share service
+    /// under `surface_share_id`, so its slot is not freed while a helper holds
+    /// it checked out.
+    pub(crate) fn note_a_surface_share_id_naming_its_pool_slot(&self, surface_share_id: &str) {
+        let inner = self.host_inner();
+        inner
+            .pool_inner
+            .note_surface_share_id_naming_slot(inner.slot_id, surface_share_id);
     }
 
     /// Get the platform-native sharing handle for this texture — on Linux
@@ -392,28 +690,76 @@ impl Clone for TexturePool {
 }
 
 impl TexturePool {
-    /// Create an empty texture pool on `device`.
+    /// Create an empty texture pool on `device` that sees no surface-share
+    /// service.
     pub fn new(device: Arc<GpuDevice>) -> Self {
+        Self::new_seeing_the_engines_surface_store(device, Arc::default())
+    }
+
+    /// Create an empty texture pool on `device` whose slots are kept while the
+    /// lease table of `engines_own_surface_store`, once installed, shows a
+    /// helper holding one.
+    pub(crate) fn new_seeing_the_engines_surface_store(
+        device: Arc<GpuDevice>,
+        engines_own_surface_store: Arc<OnceLock<SurfaceStore>>,
+    ) -> Self {
         Self {
             inner: Arc::new(TexturePoolInner {
                 buckets: Mutex::new(HashMap::new()),
                 device,
                 next_slot_id: AtomicU64::new(0),
+                engines_own_surface_store,
+                idle_window: SharedPoolEntryIdleWindow::default(),
             }),
         }
     }
 
-    /// A texture of the descriptor's shape: an unheld slot, or a fresh one;
-    /// past the device's memory budget the allocation is refused by name.
-    pub fn acquire(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
+    /// A texture of the descriptor's shape for `acquiring_stream` (`None` for
+    /// the engine's own work): an unheld slot, or a fresh one; past the
+    /// device's memory budget the allocation is refused by name. Frees at most
+    /// one slot that sat unheld past the idle window.
+    pub fn acquire(
+        &self,
+        desc: &TexturePoolDescriptor,
+        acquiring_stream: Option<LoadedStreamTag>,
+    ) -> Result<PooledTextureHandle> {
         let key = TexturePoolKey::from_descriptor(desc);
-        if let Some(slot) = self.inner.find_available_slot(&key) {
+        if let Some(slot) = self.inner.find_available_slot(&key, acquiring_stream) {
+            self.inner.free_at_most_one_slot_due_to_be_freed();
             return Ok(self.create_handle_from_slot(&slot));
         }
-        let slot = self.allocate_slot(desc)?;
+        self.inner.free_at_most_one_slot_due_to_be_freed();
+        let slot = self.allocate_slot(desc, acquiring_stream)?;
         slot.try_acquire();
         self.inner.add_slot(Arc::clone(&slot));
         Ok(self.create_handle_from_slot(&slot))
+    }
+
+    /// Free every unheld slot `stream` last acquired, and flag the ones still
+    /// held to be freed as soon as they are unheld; answers how many were
+    /// freed.
+    pub(crate) fn free_every_unheld_slot_the_stream_last_acquired(
+        &self,
+        stream: LoadedStreamTag,
+    ) -> usize {
+        self.inner
+            .free_every_unheld_slot_the_stream_last_acquired(stream)
+    }
+
+    /// Replace this pool's idle window for one test.
+    #[cfg(test)]
+    pub(crate) fn set_idle_window_for_a_test(&self, idle_window: std::time::Duration) {
+        self.inner.idle_window.set_for_a_test(idle_window);
+    }
+
+    /// How many slots of `desc`'s shape the pool holds, held or not.
+    #[cfg(test)]
+    pub(crate) fn slot_count_of_the_shape_of(&self, desc: &TexturePoolDescriptor) -> usize {
+        self.inner
+            .buckets
+            .lock()
+            .get(&TexturePoolKey::from_descriptor(desc))
+            .map_or(0, Vec::len)
     }
 
     fn create_handle_from_slot(&self, slot: &Arc<PoolSlot>) -> PooledTextureHandle {
@@ -427,8 +773,12 @@ impl TexturePool {
         )
     }
 
-    /// Allocate a new texture slot.
-    fn allocate_slot(&self, desc: &TexturePoolDescriptor) -> Result<Arc<PoolSlot>> {
+    /// Allocate a new texture slot, attributed to `acquiring_stream`.
+    fn allocate_slot(
+        &self,
+        desc: &TexturePoolDescriptor,
+        acquiring_stream: Option<LoadedStreamTag>,
+    ) -> Result<Arc<PoolSlot>> {
         let texture_desc =
             TextureDescriptor::new(desc.width, desc.height, desc.format).with_usage(desc.usage);
 
@@ -464,13 +814,17 @@ impl TexturePool {
             texture,
             key: TexturePoolKey::from_descriptor(desc),
             in_use: AtomicBool::new(false),
+            freeing_bookkeeping: Mutex::new(TexturePoolSlotFreeingBookkeeping {
+                freeing_record: SharedPoolEntryFreeingRecord::handed_out_to(acquiring_stream),
+                surface_share_ids_naming_the_slot: Vec::new(),
+            }),
         }))
     }
 
     /// Pre-warm the pool with textures of specific dimensions.
     pub fn prewarm(&self, desc: &TexturePoolDescriptor, count: usize) -> Result<()> {
         for _ in 0..count {
-            let slot = self.allocate_slot(desc)?;
+            let slot = self.allocate_slot(desc, None)?;
             self.inner.add_slot(slot);
         }
         Ok(())
@@ -567,7 +921,7 @@ mod texture_pool_growth_tests {
             .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST);
         let held: Vec<PooledTextureHandle> = (0..17)
             .map(|_| {
-                pool.acquire(&desc)
+                pool.acquire(&desc, None)
                     .expect("an acquire with every texture held allocates")
             })
             .collect();
@@ -579,5 +933,278 @@ mod texture_pool_growth_tests {
             "every held texture is its own slot"
         );
         assert_eq!(pool.stats().textures_in_use, held.len());
+    }
+}
+
+#[cfg(test)]
+mod texture_pool_freeing_tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::core::context::{GpuContext, SurfaceCheckOutLeaseRegistry, SurfaceStore};
+
+    fn gpu_context_or_skip() -> Option<GpuContext> {
+        match GpuContext::init_for_platform_sync() {
+            Ok(gpu) => Some(gpu),
+            Err(no_device) => {
+                tracing::warn!(
+                    "no GPU device, so the texture pool freeing test skips: {no_device}"
+                );
+                None
+            }
+        }
+    }
+
+    fn a_16_high_rgba8_texture_of_width(width: u32) -> TexturePoolDescriptor {
+        TexturePoolDescriptor::new(width, 16, TextureFormat::Rgba8Unorm)
+            .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST)
+    }
+
+    /// Block until every GPU submission made so far has completed, so a
+    /// freeing decision in the test turns on holders and time alone.
+    fn wait_for_every_gpu_submission_made_so_far(gpu: &GpuContext) {
+        let device = gpu.device();
+        let made_so_far = device.snapshot_of_queue_submissions_made_so_far();
+        assert!(
+            device
+                .wait_for_every_queue_submission_in_snapshot(&made_so_far, Duration::from_secs(5))
+                .expect("the GPU's queue completion reads"),
+            "the GPU work made before the test did not complete"
+        );
+    }
+
+    #[test]
+    fn a_texture_pool_slot_unheld_past_the_idle_window_is_freed_on_a_later_acquire() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let pool = gpu.texture_pool();
+        pool.set_idle_window_for_a_test(Duration::ZERO);
+        let idle_shape = a_16_high_rgba8_texture_of_width(16);
+        drop(pool.acquire(&idle_shape, None).expect("a texture"));
+        assert_eq!(pool.slot_count_of_the_shape_of(&idle_shape), 1);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        let _another_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(32), None)
+            .expect("a texture of another shape");
+        assert_eq!(
+            pool.slot_count_of_the_shape_of(&idle_shape),
+            0,
+            "an unheld slot past the idle window survived an acquire"
+        );
+    }
+
+    #[test]
+    fn a_texture_pool_slot_unheld_inside_the_idle_window_is_kept_and_handed_out_again() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let pool = gpu.texture_pool();
+        let idle_shape = a_16_high_rgba8_texture_of_width(16);
+        let first = pool.acquire(&idle_shape, None).expect("a texture");
+        let first_slot_id = first.slot_id();
+        drop(first);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        let _another_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(32), None)
+            .expect("a texture of another shape");
+        assert_eq!(pool.slot_count_of_the_shape_of(&idle_shape), 1);
+        let again = pool.acquire(&idle_shape, None).expect("a texture");
+        assert_eq!(again.slot_id(), first_slot_id);
+    }
+
+    #[test]
+    fn at_most_one_idle_texture_pool_slot_is_freed_per_acquire() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let pool = gpu.texture_pool();
+        pool.set_idle_window_for_a_test(Duration::ZERO);
+        let idle_shape = a_16_high_rgba8_texture_of_width(16);
+        let held: Vec<PooledTextureHandle> = (0..3)
+            .map(|_| pool.acquire(&idle_shape, None).expect("a texture"))
+            .collect();
+        // Each handle's own release sees a reader still on its texture, so no
+        // slot is freed while the three are let go.
+        let readers: Vec<Texture> = held
+            .iter()
+            .map(PooledTextureHandle::texture_clone)
+            .collect();
+        drop(held);
+        drop(readers);
+        assert_eq!(pool.slot_count_of_the_shape_of(&idle_shape), 3);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        let _first_other_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(32), None)
+            .expect("a texture");
+        assert_eq!(pool.slot_count_of_the_shape_of(&idle_shape), 2);
+        let _second_other_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(48), None)
+            .expect("a texture");
+        assert_eq!(pool.slot_count_of_the_shape_of(&idle_shape), 1);
+    }
+
+    #[test]
+    fn a_texture_pool_slot_a_reader_still_holds_is_never_freed() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let pool = gpu.texture_pool();
+        pool.set_idle_window_for_a_test(Duration::ZERO);
+        let idle_shape = a_16_high_rgba8_texture_of_width(16);
+        let handle = pool.acquire(&idle_shape, None).expect("a texture");
+        let reader = handle.texture_clone();
+        drop(handle);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        let _another_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(32), None)
+            .expect("a texture");
+        assert_eq!(
+            pool.slot_count_of_the_shape_of(&idle_shape),
+            1,
+            "a slot was freed under a reader of its texture"
+        );
+        drop(reader);
+        let _a_third_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(48), None)
+            .expect("a texture");
+        assert_eq!(pool.slot_count_of_the_shape_of(&idle_shape), 0);
+    }
+
+    #[test]
+    fn a_texture_pool_slot_a_helper_holds_checked_out_is_never_freed() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let check_out_leases = Arc::new(SurfaceCheckOutLeaseRegistry::new());
+        gpu.install_the_engines_surface_store(SurfaceStore::new_reading_check_out_leases(
+            "the-texture-pool-reads-this-lease-table-in-process".to_string(),
+            "texture-pool-freeing-test-runtime".to_string(),
+            Arc::clone(&check_out_leases),
+        ))
+        .expect("the engine's surface store installs once");
+        let pool = gpu.texture_pool();
+        pool.set_idle_window_for_a_test(Duration::ZERO);
+        let checked_out_shape = a_16_high_rgba8_texture_of_width(16);
+        let handle = pool.acquire(&checked_out_shape, None).expect("a texture");
+        handle.note_a_surface_share_id_naming_its_pool_slot("texture-checked-out-by-a-helper");
+        let helper = check_out_leases.mint_holder_id();
+        check_out_leases
+            .record_check_out_lease("texture-checked-out-by-a-helper", helper)
+            .expect("the lease records");
+        drop(handle);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        let _another_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(32), None)
+            .expect("a texture");
+        assert_eq!(
+            pool.slot_count_of_the_shape_of(&checked_out_shape),
+            1,
+            "a slot a helper holds checked out was freed"
+        );
+        check_out_leases
+            .release_one_check_out_lease("texture-checked-out-by-a-helper", helper)
+            .expect("the lease releases");
+        let _a_third_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(48), None)
+            .expect("a texture");
+        assert_eq!(pool.slot_count_of_the_shape_of(&checked_out_shape), 0);
+    }
+
+    #[test]
+    fn a_texture_pool_slot_flagged_freed_as_soon_as_unheld_skips_the_idle_window() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let pool = gpu.texture_pool();
+        let owner_gone_shape = a_16_high_rgba8_texture_of_width(16);
+        let handle = pool.acquire(&owner_gone_shape, None).expect("a texture");
+        handle.flag_its_pool_slot_freed_as_soon_as_unheld();
+        drop(handle);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        let _another_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(32), None)
+            .expect("a texture");
+        assert_eq!(
+            pool.slot_count_of_the_shape_of(&owner_gone_shape),
+            0,
+            "a flagged slot waited out the idle window"
+        );
+    }
+
+    #[test]
+    fn a_stopped_streams_unheld_texture_pool_slots_are_freed_and_its_held_ones_once_let_go() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let stopping_stream = LoadedStreamTag::numbered_for_a_test(1);
+        let running_stream = LoadedStreamTag::numbered_for_a_test(2);
+        let pool = gpu.texture_pool();
+        let shape = a_16_high_rgba8_texture_of_width(16);
+        let unheld_of_the_stopping_stream = pool
+            .acquire(&shape, Some(stopping_stream))
+            .expect("a texture");
+        let still_held_by_the_stopping_stream = pool
+            .acquire(&shape, Some(stopping_stream))
+            .expect("a texture");
+        let unheld_of_the_running_stream = pool
+            .acquire(&shape, Some(running_stream))
+            .expect("a texture");
+        drop(unheld_of_the_stopping_stream);
+        drop(unheld_of_the_running_stream);
+        assert_eq!(pool.slot_count_of_the_shape_of(&shape), 3);
+
+        assert_eq!(
+            pool.free_every_unheld_slot_the_stream_last_acquired(stopping_stream),
+            1
+        );
+        assert_eq!(pool.slot_count_of_the_shape_of(&shape), 2);
+
+        drop(still_held_by_the_stopping_stream);
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+        let _another_shape = pool
+            .acquire(&a_16_high_rgba8_texture_of_width(32), None)
+            .expect("a texture");
+        assert_eq!(
+            pool.slot_count_of_the_shape_of(&shape),
+            1,
+            "the running stream's idle slot was freed, or the stopped stream's held one was not \
+             once let go"
+        );
+    }
+
+    #[test]
+    fn a_texture_pool_slot_handed_out_again_belongs_to_the_stream_that_acquired_it_last() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let first_stream = LoadedStreamTag::numbered_for_a_test(1);
+        let second_stream = LoadedStreamTag::numbered_for_a_test(2);
+        let pool = gpu.texture_pool();
+        let shape = a_16_high_rgba8_texture_of_width(16);
+        let first = pool.acquire(&shape, Some(first_stream)).expect("a texture");
+        let slot_id = first.slot_id();
+        drop(first);
+        let second = pool
+            .acquire(&shape, Some(second_stream))
+            .expect("a texture");
+        assert_eq!(second.slot_id(), slot_id);
+        drop(second);
+
+        assert_eq!(
+            pool.free_every_unheld_slot_the_stream_last_acquired(first_stream),
+            0
+        );
+        assert_eq!(
+            pool.free_every_unheld_slot_the_stream_last_acquired(second_stream),
+            1
+        );
+        assert_eq!(pool.slot_count_of_the_shape_of(&shape), 0);
     }
 }
