@@ -2110,6 +2110,16 @@ impl SurfaceStore {
         self.check_out_leases().map(Arc::as_ref)
     }
 
+    /// The checkout lease table of the engine's own surface store, once that
+    /// store is installed and a service owns a table.
+    pub(crate) fn check_out_lease_registry_of_the_engines_own(
+        engines_own_surface_store: &std::sync::OnceLock<SurfaceStore>,
+    ) -> Option<&SurfaceCheckOutLeaseRegistry> {
+        engines_own_surface_store
+            .get()
+            .and_then(SurfaceStore::check_out_lease_registry)
+    }
+
     /// Internal helper: leak an initial Arc strong count via
     /// `Arc::into_raw` and wrap it as the opaque handle.
     pub(crate) fn from_arc_into_raw(arc: Arc<SurfaceStoreInner>) -> Self {

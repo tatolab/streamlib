@@ -107,7 +107,12 @@ impl RegisteredHandle {
             Self::PixelBuffer(buffer) => sandbox
                 .host_inner()
                 .flag_the_pixel_buffer_pool_slot_of_the_buffer_freed_as_soon_as_unheld(buffer),
-            _ => {}
+            // Neither is drawn from a shared pool; each is freed when its
+            // last holder drops it.
+            #[cfg(target_os = "linux")]
+            Self::Image { .. } => {}
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            Self::StorageBuffer { .. } => {}
         }
     }
 

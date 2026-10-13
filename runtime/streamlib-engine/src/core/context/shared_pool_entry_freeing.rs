@@ -12,6 +12,7 @@
 //! the GPU work submitted by then has completed.
 
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -37,6 +38,11 @@ pub(crate) const LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK: 
 /// stream, and its entry is freed by a later acquire or release.
 pub(crate) const LONGEST_A_STOPPING_STREAM_WAITS_FOR_THE_CHECK_OUT_LEASES_ON_ITS_POOL_ENTRIES:
     Duration = Duration::from_secs(1);
+
+/// The longest a shared pool being dropped waits for the GPU work naming the
+/// entries it took out and has not destroyed yet.
+const LONGEST_A_DROPPED_POOL_WAITS_FOR_THE_GPU_WORK_OF_ITS_ENTRIES_AWAITING_DESTRUCTION: Duration =
+    Duration::from_secs(1);
 
 /// How many entries of one shared pool a single acquire or release observes,
 /// resuming where the previous one stopped. A tuning constant: it bounds the
@@ -218,6 +224,9 @@ pub(crate) trait SharedPoolEntryTakenOutOfItsPool {
     /// Whether anything besides the taken-out entry still references its
     /// memory.
     fn is_referenced_beyond_the_taken_out_entry(&self) -> bool;
+
+    /// Log, at debug, that the entry is being destroyed.
+    fn note_its_destruction(&self);
 }
 
 struct SharedPoolEntryAwaitingDestruction<Entry> {
@@ -255,33 +264,41 @@ impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntryAwaitingDestruction
     }
 }
 
+/// The GPU work naming every entry of `entries_awaiting_destruction` nothing
+/// else references, as one snapshot.
+fn queue_submissions_naming_every_unreferenced_entry<Entry: SharedPoolEntryTakenOutOfItsPool>(
+    entries_awaiting_destruction: &mut [SharedPoolEntryAwaitingDestruction<Entry>],
+    device: &GpuDevice,
+) -> GpuQueueSubmissionsSnapshot {
+    entries_awaiting_destruction
+        .iter_mut()
+        .filter_map(|awaiting| awaiting.queue_submissions_naming_it(device))
+        .fold(
+            GpuQueueSubmissionsSnapshot::default(),
+            |covering_the_others, queue_submissions| {
+                covering_the_others.covering_both(&queue_submissions)
+            },
+        )
+}
+
 /// The entries one shared pool has taken out, each destroyed once nothing
 /// else references its memory and the GPU work naming it has completed.
-pub(crate) struct SharedPoolEntriesAwaitingDestruction<Entry> {
+pub(crate) struct SharedPoolEntriesAwaitingDestruction<Entry: SharedPoolEntryTakenOutOfItsPool> {
     entries_awaiting_destruction: Mutex<Vec<SharedPoolEntryAwaitingDestruction<Entry>>>,
     /// Names the pool in a log line.
     pool_label: &'static str,
+    device: Arc<GpuDevice>,
 }
 
-impl<Entry> SharedPoolEntriesAwaitingDestruction<Entry> {
-    /// No entry awaiting destruction, for the pool `pool_label` names.
-    pub(crate) fn new(pool_label: &'static str) -> Self {
+impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntriesAwaitingDestruction<Entry> {
+    /// No entry awaiting destruction, for the pool `pool_label` names on
+    /// `device`.
+    pub(crate) fn new(pool_label: &'static str, device: Arc<GpuDevice>) -> Self {
         Self {
             entries_awaiting_destruction: Mutex::new(Vec::new()),
             pool_label,
+            device,
         }
-    }
-
-    /// Hold `entries_taken_out` until each may be destroyed.
-    pub(crate) fn park(&self, entries_taken_out: impl IntoIterator<Item = Entry>) {
-        self.entries_awaiting_destruction
-            .lock()
-            .extend(entries_taken_out.into_iter().map(|entry| {
-                SharedPoolEntryAwaitingDestruction {
-                    entry,
-                    queue_submissions_made_once_nothing_else_referenced_it: None,
-                }
-            }));
     }
 
     /// How many entries await destruction.
@@ -289,43 +306,44 @@ impl<Entry> SharedPoolEntriesAwaitingDestruction<Entry> {
     pub(crate) fn count(&self) -> usize {
         self.entries_awaiting_destruction.lock().len()
     }
-}
 
-impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntriesAwaitingDestruction<Entry> {
-    /// Take back at most one entry that may be destroyed now, without
-    /// blocking; the caller drops it outside every pool lock.
-    pub(crate) fn take_back_at_most_one_ready_to_destroy(
+    /// Hold `entries_taken_out` until each may be destroyed, then destroy at
+    /// most one that may be destroyed now, without blocking: destroying can
+    /// take milliseconds, and this runs on a producer's acquire or release.
+    pub(crate) fn park_and_destroy_at_most_one_ready(
         &self,
-        device: &GpuDevice,
-    ) -> Option<Entry> {
-        self.take_back_the_ones_ready_to_destroy(device, 1).pop()
+        entries_taken_out: impl IntoIterator<Item = Entry>,
+    ) {
+        self.park(entries_taken_out);
+        destroy(self.take_back_the_ones_ready_to_destroy(1));
     }
 
-    /// Take back every entry that may be destroyed now, without blocking.
-    pub(crate) fn take_back_every_one_ready_to_destroy(&self, device: &GpuDevice) -> Vec<Entry> {
-        self.take_back_the_ones_ready_to_destroy(device, usize::MAX)
+    /// Hold `entries_taken_out` until each may be destroyed, then destroy
+    /// every entry that may be destroyed now, without blocking; answers how
+    /// many were destroyed.
+    pub(crate) fn park_and_destroy_every_one_ready(
+        &self,
+        entries_taken_out: impl IntoIterator<Item = Entry>,
+    ) -> usize {
+        self.park(entries_taken_out);
+        destroy(self.take_back_the_ones_ready_to_destroy(usize::MAX))
     }
 
-    /// Block at most `longest_wait` for the GPU work naming every entry
-    /// nothing else references, then take back every entry that may be
-    /// destroyed.
-    pub(crate) fn take_back_every_one_ready_to_destroy_waiting_at_most(
+    /// Hold `entries_taken_out` until each may be destroyed, block at most
+    /// `longest_wait` for the GPU work naming every entry nothing else
+    /// references, then destroy every entry that may be destroyed; answers
+    /// how many were destroyed.
+    pub(crate) fn park_and_destroy_every_one_ready_waiting_at_most(
         &self,
-        device: &GpuDevice,
+        entries_taken_out: impl IntoIterator<Item = Entry>,
         longest_wait: Duration,
-    ) -> Vec<Entry> {
-        let queue_submissions_naming_them = self
-            .entries_awaiting_destruction
-            .lock()
-            .iter_mut()
-            .filter_map(|awaiting| awaiting.queue_submissions_naming_it(device))
-            .fold(
-                GpuQueueSubmissionsSnapshot::default(),
-                |covering_the_others, queue_submissions| {
-                    covering_the_others.covering_both(&queue_submissions)
-                },
-            );
-        match device.wait_for_every_queue_submission_in_snapshot(
+    ) -> usize {
+        self.park(entries_taken_out);
+        let queue_submissions_naming_them = queue_submissions_naming_every_unreferenced_entry(
+            &mut self.entries_awaiting_destruction.lock(),
+            &self.device,
+        );
+        match self.device.wait_for_every_queue_submission_in_snapshot(
             &queue_submissions_naming_them,
             longest_wait,
         ) {
@@ -336,10 +354,23 @@ impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntriesAwaitingDestructi
                 self.pool_label
             ),
         }
-        self.take_back_every_one_ready_to_destroy(device)
+        self.park_and_destroy_every_one_ready([])
     }
 
-    fn take_back_the_ones_ready_to_destroy(&self, device: &GpuDevice, most: usize) -> Vec<Entry> {
+    fn park(&self, entries_taken_out: impl IntoIterator<Item = Entry>) {
+        self.entries_awaiting_destruction
+            .lock()
+            .extend(entries_taken_out.into_iter().map(|entry| {
+                SharedPoolEntryAwaitingDestruction {
+                    entry,
+                    queue_submissions_made_once_nothing_else_referenced_it: None,
+                }
+            }));
+    }
+
+    /// Take back at most `most` entries that may be destroyed now, without
+    /// blocking; the caller drops them outside this lock.
+    fn take_back_the_ones_ready_to_destroy(&self, most: usize) -> Vec<Entry> {
         let mut entries_awaiting_destruction = self.entries_awaiting_destruction.lock();
         let mut indices_ready_to_destroy = Vec::new();
         for (index, awaiting) in entries_awaiting_destruction.iter_mut().enumerate() {
@@ -347,10 +378,10 @@ impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntriesAwaitingDestructi
                 break;
             }
             if awaiting
-                .queue_submissions_naming_it(device)
+                .queue_submissions_naming_it(&self.device)
                 .is_some_and(|queue_submissions| {
                     every_queue_submission_in_snapshot_has_completed(
-                        device,
+                        &self.device,
                         &queue_submissions,
                         self.pool_label,
                     )
@@ -365,6 +396,60 @@ impl<Entry: SharedPoolEntryTakenOutOfItsPool> SharedPoolEntriesAwaitingDestructi
             .map(|index| entries_awaiting_destruction.swap_remove(index).entry)
             .collect()
     }
+}
+
+impl<Entry: SharedPoolEntryTakenOutOfItsPool> Drop for SharedPoolEntriesAwaitingDestruction<Entry> {
+    // Nothing destroys these entries later, so an entry whose GPU work the
+    // bounded wait did not see complete is leaked rather than destroyed under
+    // the GPU. One something else still references goes with that holder.
+    fn drop(&mut self) {
+        let mut entries_awaiting_destruction =
+            std::mem::take(self.entries_awaiting_destruction.get_mut());
+        if entries_awaiting_destruction.is_empty() {
+            return;
+        }
+        let queue_submissions_naming_them = queue_submissions_naming_every_unreferenced_entry(
+            &mut entries_awaiting_destruction,
+            &self.device,
+        );
+        let their_gpu_work_completed = matches!(
+            self.device.wait_for_every_queue_submission_in_snapshot(
+                &queue_submissions_naming_them,
+                LONGEST_A_DROPPED_POOL_WAITS_FOR_THE_GPU_WORK_OF_ITS_ENTRIES_AWAITING_DESTRUCTION,
+            ),
+            Ok(true)
+        );
+        let mut leaked_entry_count = 0;
+        for awaiting in entries_awaiting_destruction {
+            let is_destroyed_by_this_drop = awaiting
+                .queue_submissions_made_once_nothing_else_referenced_it
+                .is_some();
+            if is_destroyed_by_this_drop && !their_gpu_work_completed {
+                std::mem::forget(awaiting.entry);
+                leaked_entry_count += 1;
+            } else if is_destroyed_by_this_drop {
+                awaiting.entry.note_its_destruction();
+            }
+        }
+        if leaked_entry_count > 0 {
+            tracing::warn!(
+                "the {} was dropped with {leaked_entry_count} entries whose GPU work did not \
+                 complete within {:?}; they are leaked rather than destroyed under the GPU",
+                self.pool_label,
+                LONGEST_A_DROPPED_POOL_WAITS_FOR_THE_GPU_WORK_OF_ITS_ENTRIES_AWAITING_DESTRUCTION
+            );
+        }
+    }
+}
+
+/// Destroy `entries`, answering how many.
+fn destroy<Entry: SharedPoolEntryTakenOutOfItsPool>(entries: Vec<Entry>) -> usize {
+    let destroyed_entry_count = entries.len();
+    for entry in entries {
+        entry.note_its_destruction();
+        drop(entry);
+    }
+    destroyed_entry_count
 }
 
 /// Whether every submission `snapshot` names has completed; an unreadable

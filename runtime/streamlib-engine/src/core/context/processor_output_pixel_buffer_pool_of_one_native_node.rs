@@ -86,9 +86,8 @@ impl ProcessorOutputPixelBufferPoolOfOneNativeNode {
             shared_pixel_buffer_pool_manager,
             engines_own_surface_store,
         } = self;
-        let check_out_leases = engines_own_surface_store
-            .get()
-            .and_then(SurfaceStore::check_out_lease_registry);
+        let check_out_leases =
+            SurfaceStore::check_out_lease_registry_of_the_engines_own(engines_own_surface_store);
         let (_, output_pool) = output_pool_of_the_current_shape.get_or_insert_with(|| {
             (
                 shape,

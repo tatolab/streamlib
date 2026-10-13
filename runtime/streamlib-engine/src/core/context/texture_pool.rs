@@ -226,6 +226,17 @@ impl SharedPoolEntryTakenOutOfItsPool for Arc<PoolSlot> {
     fn is_referenced_beyond_the_taken_out_entry(&self) -> bool {
         Arc::strong_count(self) > 1 || self.texture.strong_count() > 1
     }
+
+    fn note_its_destruction(&self) {
+        tracing::debug!(
+            slot = self.id.0,
+            width = self.key.width,
+            height = self.key.height,
+            format = ?self.key.format,
+            importability = ?self.key.cross_process_importability,
+            "freed a texture pool slot"
+        );
+    }
 }
 
 /// Inner pool state (behind Arc for sharing).
@@ -303,24 +314,14 @@ impl TexturePoolInner {
     /// completed: freeing can take milliseconds, and this runs on the
     /// producer's acquire and release.
     pub(crate) fn free_at_most_one_slot_due_to_be_freed(&self) {
-        if let Some(slot_taken_out) = self.take_out_at_most_one_slot_due_to_be_freed() {
-            self.slots_awaiting_destruction.park([slot_taken_out]);
-        }
-        if let Some(slot_ready_to_destroy) = self
-            .slots_awaiting_destruction
-            .take_back_at_most_one_ready_to_destroy(&self.device)
-        {
-            destroy_a_texture_pool_slot_taken_out(slot_ready_to_destroy);
-        }
+        self.slots_awaiting_destruction
+            .park_and_destroy_at_most_one_ready(self.take_out_at_most_one_slot_due_to_be_freed());
     }
 
     fn take_out_at_most_one_slot_due_to_be_freed(&self) -> Option<Arc<PoolSlot>> {
         let scan = SharedPoolEntryFreeingScan::starting_now(&self.idle_window);
-        let cross_process_holders = PoolSlotReuse::over(
-            self.engines_own_surface_store
-                .get()
-                .and_then(SurfaceStore::check_out_lease_registry),
-        );
+        let cross_process_holders =
+            PoolSlotReuse::over_the_engines_own_surface_store(&self.engines_own_surface_store);
         let mut buckets = self.buckets.lock();
         let window = self
             .observation_cursor
@@ -385,28 +386,17 @@ impl TexturePoolInner {
     /// the GPU work naming the slots awaiting destruction; answers how many
     /// were destroyed.
     pub(crate) fn free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work(&self) -> usize {
-        let slots_taken_out = self.take_out_every_unheld_slot_due_to_be_freed();
-        self.slots_awaiting_destruction.park(slots_taken_out);
-        let slots_ready_to_destroy = self
-            .slots_awaiting_destruction
-            .take_back_every_one_ready_to_destroy_waiting_at_most(
-                &self.device,
+        self.slots_awaiting_destruction
+            .park_and_destroy_every_one_ready_waiting_at_most(
+                self.take_out_every_unheld_slot_due_to_be_freed(),
                 LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
-            );
-        let destroyed_slot_count = slots_ready_to_destroy.len();
-        slots_ready_to_destroy
-            .into_iter()
-            .for_each(destroy_a_texture_pool_slot_taken_out);
-        destroyed_slot_count
+            )
     }
 
     fn take_out_every_unheld_slot_due_to_be_freed(&self) -> Vec<Arc<PoolSlot>> {
         let scan = SharedPoolEntryFreeingScan::starting_now(&self.idle_window);
-        let cross_process_holders = PoolSlotReuse::over(
-            self.engines_own_surface_store
-                .get()
-                .and_then(SurfaceStore::check_out_lease_registry),
-        );
+        let cross_process_holders =
+            PoolSlotReuse::over_the_engines_own_surface_store(&self.engines_own_surface_store);
         let mut buckets = self.buckets.lock();
         let mut slots_taken_out = Vec::new();
         for slots in buckets.values_mut() {
@@ -445,18 +435,6 @@ impl TexturePoolInner {
             bucket_count: buckets.len(),
         }
     }
-}
-
-fn destroy_a_texture_pool_slot_taken_out(slot: Arc<PoolSlot>) {
-    tracing::debug!(
-        slot = slot.id.0,
-        width = slot.key.width,
-        height = slot.key.height,
-        format = ?slot.key.format,
-        importability = ?slot.key.cross_process_importability,
-        "freed a texture pool slot"
-    );
-    drop(slot);
 }
 
 /// Rich data backing a [`PooledTextureHandle`]. Holds the
@@ -675,14 +653,15 @@ impl TexturePool {
         Self {
             inner: Arc::new(TexturePoolInner {
                 buckets: Mutex::new(HashMap::new()),
+                slots_awaiting_destruction: SharedPoolEntriesAwaitingDestruction::new(
+                    "texture pool",
+                    Arc::clone(&device),
+                ),
                 device,
                 next_slot_id: AtomicU64::new(0),
                 engines_own_surface_store,
                 idle_window: SharedPoolEntryIdleWindow::default(),
                 observation_cursor: SharedPoolEntryObservationCursor::default(),
-                slots_awaiting_destruction: SharedPoolEntriesAwaitingDestruction::new(
-                    "texture pool",
-                ),
             }),
         }
     }
@@ -729,6 +708,12 @@ impl TexturePool {
     #[cfg(test)]
     pub(crate) fn set_idle_window_for_a_test(&self, idle_window: std::time::Duration) {
         self.inner.idle_window.set_for_a_test(idle_window);
+    }
+
+    /// How many slots taken out of the pool await destruction.
+    #[cfg(test)]
+    pub(crate) fn slot_count_awaiting_destruction(&self) -> usize {
+        self.inner.slots_awaiting_destruction.count()
     }
 
     /// How many slots of `desc`'s shape the pool holds, held or not.
@@ -921,6 +906,7 @@ mod texture_pool_freeing_tests {
 
     use super::*;
     use crate::core::context::{GpuContext, SurfaceCheckOutLeaseRegistry, SurfaceStore};
+    use crate::core::test_support::wait_for_every_gpu_submission_made_so_far;
 
     fn gpu_context_or_skip() -> Option<GpuContext> {
         match GpuContext::init_for_platform_sync() {
@@ -937,19 +923,6 @@ mod texture_pool_freeing_tests {
     fn a_16_high_rgba8_texture_of_width(width: u32) -> TexturePoolDescriptor {
         TexturePoolDescriptor::new(width, 16, TextureFormat::Rgba8Unorm)
             .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST)
-    }
-
-    /// Block until every GPU submission made so far has completed, so a
-    /// freeing decision in the test turns on holders and time alone.
-    fn wait_for_every_gpu_submission_made_so_far(gpu: &GpuContext) {
-        let device = gpu.device();
-        let made_so_far = device.snapshot_of_queue_submissions_made_so_far();
-        assert!(
-            device
-                .wait_for_every_queue_submission_in_snapshot(&made_so_far, Duration::from_secs(5))
-                .expect("the GPU's queue completion reads"),
-            "the GPU work made before the test did not complete"
-        );
     }
 
     /// What a stream's stop runs on the texture pool, with no lease to wait

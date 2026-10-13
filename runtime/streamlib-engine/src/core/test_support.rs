@@ -661,3 +661,18 @@ impl LiveSurfaceShareServiceForATest {
         self.service.stop();
     }
 }
+
+/// Block until every GPU submission `gpu` made so far has completed, so a
+/// freeing decision in a test turns on holders and time alone.
+pub(crate) fn wait_for_every_gpu_submission_made_so_far(gpu: &crate::core::context::GpuContext) {
+    let made_so_far = gpu.device().snapshot_of_queue_submissions_made_so_far();
+    assert!(
+        gpu.device()
+            .wait_for_every_queue_submission_in_snapshot(
+                &made_so_far,
+                std::time::Duration::from_secs(5)
+            )
+            .expect("the GPU's queue completion reads"),
+        "the GPU work made before the test did not complete"
+    );
+}

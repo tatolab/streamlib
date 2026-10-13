@@ -219,6 +219,18 @@ impl<'leases> PoolSlotReuse<'leases> {
         }
     }
 
+    /// The conclusion the lease table of the engine's own surface store
+    /// allows, once that store is installed.
+    pub(crate) fn over_the_engines_own_surface_store(
+        engines_own_surface_store: &'leases std::sync::OnceLock<super::SurfaceStore>,
+    ) -> Self {
+        Self::over(
+            super::SurfaceStore::check_out_lease_registry_of_the_engines_own(
+                engines_own_surface_store,
+            ),
+        )
+    }
+
     /// Whether no cross-process holder can have `pool_slot_key` checked out.
     pub(crate) fn permits(&self, pool_slot_key: &str) -> bool {
         match self {

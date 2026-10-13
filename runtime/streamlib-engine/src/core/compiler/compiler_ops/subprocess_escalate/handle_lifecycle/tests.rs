@@ -1326,15 +1326,7 @@ fn a_torn_down_helpers_textures_are_freed_without_waiting_out_the_idle_window() 
     assert_eq!(texture_pool.stats().total_textures, 2);
 
     release_everything_the_helpers_teardown_owes(&sandbox, &registry);
-    let made_so_far = gpu.device().snapshot_of_queue_submissions_made_so_far();
-    assert!(
-        gpu.device()
-            .wait_for_every_queue_submission_in_snapshot(
-                &made_so_far,
-                std::time::Duration::from_secs(5)
-            )
-            .expect("the GPU's queue completion reads")
-    );
+    crate::core::test_support::wait_for_every_gpu_submission_made_so_far(&gpu);
     let _engines_own = texture_pool
         .acquire(
             &TexturePoolDescriptor::new(16, 16, TextureFormat::Rgba8Unorm),
