@@ -3,6 +3,15 @@
 
 use std::sync::Arc;
 
+use super::super::vulkan_frame_allocation_device_memory_budget::{
+    DeviceMemoryAllocationCountReading, FrameAllocationBudgetReading,
+    FrameAllocationDeviceMemoryReading, FrameDeviceMemoryPlacement, MetalWorkingSetBudgetReading,
+    refusal_of_a_frame_allocation_past_the_device_memory_bound,
+};
+use super::{
+    IOSURFACE_ALLOCATION_GRANULE_BYTES, frame_device_memory_request_for_a_private_iosurface,
+};
+use crate::core::Error;
 use crate::core::rhi::{PixelFormat, TextureDescriptor, TextureFormat, TextureUsages};
 use crate::vulkan::rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture, VulkanTextureLike,
@@ -11,6 +20,78 @@ use crate::vulkan::rhi::{
 const FRAME_WIDTH: u32 = 1024;
 const FRAME_HEIGHT: u32 = 1024;
 const RGBA_BYTES_PER_PIXEL: u32 = 4;
+
+fn bytes_a_private_iosurface_requests(width: u32, height: u32, bytes_per_element: u32) -> u64 {
+    frame_device_memory_request_for_a_private_iosurface(
+        width,
+        height,
+        bytes_per_element,
+        "a private IOSurface in a test",
+    )
+    .requested_bytes
+}
+
+#[test]
+fn a_private_iosurfaces_request_rounds_its_packed_bytes_up_to_the_allocation_granule() {
+    assert_eq!(bytes_a_private_iosurface_requests(0, 0, 4), 0);
+    assert_eq!(
+        bytes_a_private_iosurface_requests(1, 1, 4),
+        IOSURFACE_ALLOCATION_GRANULE_BYTES
+    );
+    assert_eq!(
+        bytes_a_private_iosurface_requests(64, 64, 4),
+        IOSURFACE_ALLOCATION_GRANULE_BYTES,
+        "packed bytes already on the granule are not rounded further"
+    );
+    assert_eq!(
+        bytes_a_private_iosurface_requests(65, 64, 4),
+        2 * IOSURFACE_ALLOCATION_GRANULE_BYTES
+    );
+    assert_eq!(
+        bytes_a_private_iosurface_requests(1920, 1080, 4),
+        507 * IOSURFACE_ALLOCATION_GRANULE_BYTES
+    );
+}
+
+/// The extent comes straight from a helper's acquire, so a size past `u64`
+/// must neither overflow the rounding nor wrap to a request that fits.
+#[test]
+fn a_private_iosurface_too_large_to_count_requests_every_byte_and_is_refused_past_the_working_set()
+{
+    let request =
+        frame_device_memory_request_for_a_private_iosurface(u32::MAX, u32::MAX, 4, "a test");
+    assert_eq!(request.requested_bytes, u64::MAX);
+    assert_eq!(
+        request.placement,
+        FrameDeviceMemoryPlacement::PrivateIOSurface
+    );
+
+    let a_working_set_with_nothing_allocated = FrameAllocationDeviceMemoryReading {
+        budget: FrameAllocationBudgetReading::MetalWorkingSet(MetalWorkingSetBudgetReading {
+            recommended_max_working_set_bytes: 16 * 1024 * 1024 * 1024,
+            metal_current_allocated_bytes: 0,
+            runtime_minted_iosurface_bytes_metal_does_not_count: 0,
+        }),
+        allocation_count: DeviceMemoryAllocationCountReading {
+            live_device_memory_allocation_count: 0,
+            max_memory_allocation_count: u32::MAX,
+        },
+    };
+    let refusal = refusal_of_a_frame_allocation_past_the_device_memory_bound(
+        &request,
+        &a_working_set_with_nothing_allocated,
+    );
+    assert!(
+        matches!(
+            refusal,
+            Some(Error::FrameAllocationRefusedPastTheMetalWorkingSetBudget {
+                requested_bytes: u64::MAX,
+                ..
+            })
+        ),
+        "the request is refused by name past the working set: {refusal:?}"
+    );
+}
 
 // A device-gated test that finds no device passes trivially, so the skip has
 // to reach the person reading the run — and stdout is the only channel a test

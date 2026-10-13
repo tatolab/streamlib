@@ -31,7 +31,7 @@ const METAL_COUNTS_AN_IOSURFACE_IMPORTED_AS_A_HOST_POINTER_BUFFER_IN_ITS_CURRENT
 
 /// The request a private IOSurface of `height` rows of `width` elements makes:
 /// its packed bytes rounded up to IOSurface's allocation granule, since the
-/// surface allocates when it is created.
+/// surface allocates when it is created, and saturated at `u64::MAX`.
 pub(crate) fn frame_device_memory_request_for_a_private_iosurface(
     width: u32,
     height: u32,
@@ -42,8 +42,9 @@ pub(crate) fn frame_device_memory_request_for_a_private_iosurface(
         .saturating_mul(u64::from(height))
         .saturating_mul(u64::from(bytes_per_element));
     FrameDeviceMemoryRequest {
-        requested_bytes: packed_bytes.div_ceil(IOSURFACE_ALLOCATION_GRANULE_BYTES)
-            * IOSURFACE_ALLOCATION_GRANULE_BYTES,
+        requested_bytes: packed_bytes
+            .div_ceil(IOSURFACE_ALLOCATION_GRANULE_BYTES)
+            .saturating_mul(IOSURFACE_ALLOCATION_GRANULE_BYTES),
         placement: FrameDeviceMemoryPlacement::PrivateIOSurface,
         frame_allocation_site,
     }
