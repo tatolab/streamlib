@@ -354,6 +354,11 @@ pub(crate) fn release_surface_share_and_parent_caches_for_handle(
     if removed_handle.is_texture_backed() {
         sandbox.unregister_texture(handle_id);
     }
+    if let RegisteredHandle::PixelBuffer(_) = removed_handle {
+        sandbox
+            .host_inner()
+            .forget_pixel_buffer_looked_up_through_the_surface_store(handle_id);
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if removed_handle.is_storage_buffer_backed() {
         sandbox

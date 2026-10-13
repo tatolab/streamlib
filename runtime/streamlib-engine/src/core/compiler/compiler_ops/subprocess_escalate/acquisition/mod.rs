@@ -48,29 +48,6 @@ use crate::core::rhi::{
     PixelBuffer, PixelFormat, TensorStorageBufferLayout, TextureFormat, TextureUsages,
 };
 
-/// Whether a texture allocation may wait on the texture pool's exhaustion
-/// policy for another holder to let a texture go.
-#[derive(Clone, Copy)]
-pub(super) enum TexturePoolWaitWhenExhausted {
-    /// Whatever the pool is configured to do — a one-off acquire.
-    AsThePoolIsConfigured,
-    /// Refuse at once: a processor output pool's producer never waits.
-    RefuseAtOnce,
-}
-
-impl TexturePoolWaitWhenExhausted {
-    fn acquire_texture(
-        self,
-        full: &crate::core::context::GpuContextFullAccess,
-        desc: &crate::core::context::TexturePoolDescriptor,
-    ) -> crate::core::error::Result<crate::core::context::PooledTextureHandle> {
-        match self {
-            Self::AsThePoolIsConfigured => full.acquire_texture(desc),
-            Self::RefuseAtOnce => full.acquire_texture_without_waiting(desc),
-        }
-    }
-}
-
 /// Acquire a pixel buffer on behalf of a helper process, holding it in
 /// `registry` until the helper releases it.
 pub(super) fn handle_acquire_pixel_buffer(
@@ -161,7 +138,6 @@ pub(super) fn handle_acquire_texture(
                 height,
                 parsed_format,
                 parsed_usage,
-                TexturePoolWaitWhenExhausted::AsThePoolIsConfigured,
             )?;
             registry.insert_registered_handle(handle_id.clone(), registered_texture);
             Ok(handle_id)
@@ -272,8 +248,7 @@ fn allocate_registered_storage_buffer_for_helper(
     Ok((handle_id, RegisteredHandle::StorageBuffer { buffer }))
 }
 
-/// Allocate and register one fresh slot of the kind `descriptor` names,
-/// refusing at once rather than waiting on an exhausted allocator.
+/// Allocate and register one fresh slot of the kind `descriptor` names.
 fn allocate_registered_processor_output_slot(
     full: &crate::core::context::GpuContextFullAccess,
     descriptor: &ProcessorOutputSlotDescriptor,
@@ -286,7 +261,6 @@ fn allocate_registered_processor_output_slot(
                 texture_descriptor.height,
                 texture_descriptor.format,
                 texture_descriptor.usage,
-                TexturePoolWaitWhenExhausted::RefuseAtOnce,
             )
         }
         ProcessorOutputSlotDescriptor::StorageBuffer(tensor_layout) => {

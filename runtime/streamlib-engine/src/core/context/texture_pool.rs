@@ -8,7 +8,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 
 use crate::core::rhi::{
     GpuDevice, NativeTextureHandle, Texture, TextureDescriptor, TextureFormat, TextureUsages,
@@ -120,44 +120,6 @@ impl TexturePoolKey {
     }
 }
 
-/// Policy for handling pool exhaustion.
-#[derive(Clone, Debug)]
-pub enum TexturePoolExhaustionPolicy {
-    /// Block and wait for a texture to be released.
-    Block { timeout_ms: u64 },
-    /// Grow the pool up to the specified maximum size.
-    GrowPool { max_size: usize },
-    /// Return an error immediately.
-    ReturnError,
-}
-
-impl Default for TexturePoolExhaustionPolicy {
-    fn default() -> Self {
-        Self::Block { timeout_ms: 1000 }
-    }
-}
-
-/// Configuration for the texture pool.
-#[derive(Clone, Debug)]
-pub struct TexturePoolConfig {
-    /// Initial number of textures per bucket.
-    pub initial_pool_size_per_bucket: usize,
-    /// Maximum number of textures per bucket.
-    pub max_pool_size_per_bucket: usize,
-    /// Policy when pool is exhausted.
-    pub exhaustion_policy: TexturePoolExhaustionPolicy,
-}
-
-impl Default for TexturePoolConfig {
-    fn default() -> Self {
-        Self {
-            initial_pool_size_per_bucket: 4,
-            max_pool_size_per_bucket: 16,
-            exhaustion_policy: TexturePoolExhaustionPolicy::default(),
-        }
-    }
-}
-
 /// Statistics about texture pool usage.
 #[derive(Clone, Debug, Default)]
 pub struct TexturePoolStats {
@@ -194,11 +156,8 @@ impl PoolSlot {
 /// Inner pool state (behind Arc for sharing).
 pub(crate) struct TexturePoolInner {
     pub(crate) buckets: Mutex<HashMap<TexturePoolKey, Vec<Arc<PoolSlot>>>>,
-    pub(crate) config: TexturePoolConfig,
     pub(crate) device: Arc<GpuDevice>,
     pub(crate) next_slot_id: AtomicU64,
-    pub(crate) available_condvar: Condvar,
-    pub(crate) buckets_mutex_for_condvar: Mutex<()>,
 }
 
 impl TexturePoolInner {
@@ -212,8 +171,6 @@ impl TexturePoolInner {
             for slot in slots {
                 if slot.id == slot_id {
                     slot.release();
-                    // Signal waiting acquirers
-                    self.available_condvar.notify_one();
                     return;
                 }
             }
@@ -230,11 +187,6 @@ impl TexturePoolInner {
             }
         }
         None
-    }
-
-    pub(crate) fn bucket_size(&self, key: &TexturePoolKey) -> usize {
-        let buckets = self.buckets.lock();
-        buckets.get(key).map(|v| v.len()).unwrap_or(0)
     }
 
     pub(crate) fn add_slot(&self, slot: Arc<PoolSlot>) {
@@ -440,124 +392,28 @@ impl Clone for TexturePool {
 }
 
 impl TexturePool {
-    /// Create a new texture pool with default configuration.
+    /// Create an empty texture pool on `device`.
     pub fn new(device: Arc<GpuDevice>) -> Self {
-        Self::with_config(device, TexturePoolConfig::default())
-    }
-
-    /// Create a new texture pool with custom configuration.
-    pub fn with_config(device: Arc<GpuDevice>, config: TexturePoolConfig) -> Self {
         Self {
             inner: Arc::new(TexturePoolInner {
                 buckets: Mutex::new(HashMap::new()),
-                config,
                 device,
                 next_slot_id: AtomicU64::new(0),
-                available_condvar: Condvar::new(),
-                buckets_mutex_for_condvar: Mutex::new(()),
             }),
         }
     }
 
-    /// Acquire a texture from the pool.
+    /// A texture of the descriptor's shape: an unheld slot, or a fresh one;
+    /// past the device's memory budget the allocation is refused by name.
     pub fn acquire(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
-        if let Some(handle) = self.acquire_without_waiting(desc)? {
-            return Ok(handle);
-        }
         let key = TexturePoolKey::from_descriptor(desc);
-        let current_size = self.inner.bucket_size(&key);
-
-        // Pool exhausted - apply policy
-        match &self.inner.config.exhaustion_policy {
-            TexturePoolExhaustionPolicy::Block { timeout_ms } => {
-                self.acquire_blocking(&key, desc, *timeout_ms)
-            }
-            TexturePoolExhaustionPolicy::GrowPool { max_size } => {
-                if current_size < *max_size {
-                    let slot = self.allocate_slot(desc)?;
-                    slot.try_acquire();
-                    self.inner.add_slot(Arc::clone(&slot));
-                    Ok(self.create_handle_from_slot(&slot))
-                } else {
-                    Err(Error::TextureError(
-                        "Texture pool exhausted (max size reached)".into(),
-                    ))
-                }
-            }
-            TexturePoolExhaustionPolicy::ReturnError => Err(Error::TextureError(
-                "Texture pool exhausted (no available slots)".into(),
-            )),
-        }
-    }
-
-    /// Acquire a texture if a free slot exists or the bucket can still grow;
-    /// `None` when the bucket is at its cap, without applying the exhaustion
-    /// policy — for callers that must never wait on another holder.
-    pub fn acquire_without_waiting(
-        &self,
-        desc: &TexturePoolDescriptor,
-    ) -> Result<Option<PooledTextureHandle>> {
-        let key = TexturePoolKey::from_descriptor(desc);
-
-        // Try to find an available slot
         if let Some(slot) = self.inner.find_available_slot(&key) {
-            return Ok(Some(self.create_handle_from_slot(&slot)));
+            return Ok(self.create_handle_from_slot(&slot));
         }
-
-        // No available slot - check if we can grow
-        if self.inner.bucket_size(&key) < self.inner.config.max_pool_size_per_bucket {
-            let slot = self.allocate_slot(desc)?;
-            slot.try_acquire(); // Mark as in use
-            self.inner.add_slot(Arc::clone(&slot));
-            return Ok(Some(self.create_handle_from_slot(&slot)));
-        }
-        Ok(None)
-    }
-
-    /// The most textures one descriptor's bucket holds.
-    pub fn max_pool_size_per_bucket(&self) -> usize {
-        self.inner.config.max_pool_size_per_bucket
-    }
-
-    fn acquire_blocking(
-        &self,
-        key: &TexturePoolKey,
-        _desc: &TexturePoolDescriptor,
-        timeout_ms: u64,
-    ) -> Result<PooledTextureHandle> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-
-        loop {
-            // Try to acquire
-            if let Some(slot) = self.inner.find_available_slot(key) {
-                return Ok(self.create_handle_from_slot(&slot));
-            }
-
-            // Check timeout
-            let now = std::time::Instant::now();
-            if now >= deadline {
-                return Err(Error::TextureError(format!(
-                    "Texture pool exhausted (timeout after {}ms)",
-                    timeout_ms
-                )));
-            }
-
-            // Wait for a slot to become available
-            let remaining = deadline - now;
-            let mut guard = self.inner.buckets_mutex_for_condvar.lock();
-            let result = self.inner.available_condvar.wait_for(&mut guard, remaining);
-
-            if result.timed_out() {
-                // Check one more time before giving up
-                if let Some(slot) = self.inner.find_available_slot(key) {
-                    return Ok(self.create_handle_from_slot(&slot));
-                }
-                return Err(Error::TextureError(format!(
-                    "Texture pool exhausted (timeout after {}ms)",
-                    timeout_ms
-                )));
-            }
-        }
+        let slot = self.allocate_slot(desc)?;
+        slot.try_acquire();
+        self.inner.add_slot(Arc::clone(&slot));
+        Ok(self.create_handle_from_slot(&slot))
     }
 
     fn create_handle_from_slot(&self, slot: &Arc<PoolSlot>) -> PooledTextureHandle {
@@ -625,16 +481,6 @@ impl TexturePool {
         self.inner.stats()
     }
 
-    /// Clear all unused textures from the pool.
-    pub fn clear_unused(&self) {
-        let mut buckets = self.inner.buckets.lock();
-        for slots in buckets.values_mut() {
-            slots.retain(|slot| !slot.is_available());
-        }
-        // Remove empty buckets
-        buckets.retain(|_, slots| !slots.is_empty());
-    }
-
     /// Get the inner pool reference (for advanced usage).
     #[allow(dead_code)]
     pub(crate) fn inner(&self) -> &Arc<TexturePoolInner> {
@@ -699,47 +545,38 @@ mod layout_tests {
 }
 
 #[cfg(test)]
-mod acquire_without_waiting_tests {
+mod texture_pool_growth_tests {
     use super::*;
     use crate::core::rhi::{TextureFormat, TextureUsages};
 
-    /// At the bucket's cap the non-waiting acquire answers `None` at once,
-    /// where `acquire` would sit out the pool's blocking policy.
+    /// The runtime-wide pool caps no shape by count: with every texture of a
+    /// shape held, the next acquire allocates another.
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
     )]
     #[test]
-    fn a_full_bucket_refuses_at_once_instead_of_waiting() {
+    fn the_texture_pool_holds_more_than_sixteen_textures_of_one_shape_at_once() {
         let Ok(device) = GpuDevice::new() else {
             println!("no GPU device — skipping");
             return;
         };
-        let pool = TexturePool::with_config(
-            Arc::new(device),
-            TexturePoolConfig {
-                initial_pool_size_per_bucket: 1,
-                max_pool_size_per_bucket: 1,
-                exhaustion_policy: TexturePoolExhaustionPolicy::Block { timeout_ms: 60_000 },
-            },
-        );
+        let pool = TexturePool::new(Arc::new(device));
         let desc = TexturePoolDescriptor::new(16, 16, TextureFormat::Rgba8Unorm)
             .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST);
-        let held = pool
-            .acquire_without_waiting(&desc)
-            .expect("the first texture allocates")
-            .expect("an empty bucket can grow");
-        assert!(
-            pool.acquire_without_waiting(&desc)
-                .expect("a full bucket is not an error")
-                .is_none(),
-            "the bucket is at its cap of one"
+        let held: Vec<PooledTextureHandle> = (0..17)
+            .map(|_| {
+                pool.acquire(&desc)
+                    .expect("an acquire with every texture held allocates")
+            })
+            .collect();
+        let distinct_slot_ids: std::collections::HashSet<PoolSlotId> =
+            held.iter().map(PooledTextureHandle::slot_id).collect();
+        assert_eq!(
+            distinct_slot_ids.len(),
+            held.len(),
+            "every held texture is its own slot"
         );
-        drop(held);
-        assert!(
-            pool.acquire_without_waiting(&desc)
-                .expect("the released texture is free again")
-                .is_some()
-        );
+        assert_eq!(pool.stats().textures_in_use, held.len());
     }
 }

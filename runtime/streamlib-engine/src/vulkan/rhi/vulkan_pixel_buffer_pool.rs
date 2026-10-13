@@ -54,10 +54,10 @@ pub struct VulkanPixelBufferPool {
 impl VulkanPixelBufferPool {
     /// Create a new pool, pre-allocating up to `pre_allocate` buffers.
     ///
-    /// Returns successfully if AT LEAST 1 buffer was allocated. NVIDIA limits
-    /// DMA-BUF exportable allocations after swapchain creation, so partial
-    /// pre-allocation is acceptable — the pool degrades gracefully under
-    /// memory pressure rather than failing the entire pipeline.
+    /// Returns successfully if at least one buffer was allocated: a later
+    /// allocation refused — past the device's memory budget, say — leaves a
+    /// smaller pool rather than failing the pipeline. With none allocated,
+    /// the first allocation's refusal is the answer.
     pub fn new(
         device: Arc<HostVulkanDevice>,
         width: u32,
@@ -78,8 +78,7 @@ impl VulkanPixelBufferPool {
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "VulkanPixelBufferPool: allocation {}/{} failed: {} \
-                         (likely NVIDIA DMA-BUF limit after swapchain creation)",
+                        "VulkanPixelBufferPool: allocation {}/{} failed: {}",
                         i + 1,
                         pre_allocate,
                         e
@@ -129,7 +128,8 @@ impl VulkanPixelBufferPool {
     ///
     /// `pre_allocate` is a starting depth, not a ceiling: a consumer holding
     /// frames makes a producer need more slots than its ring began with. The
-    /// caller owns the cap that bounds this.
+    /// device's memory budget bounds it; past it the allocation is refused by
+    /// name.
     ///
     /// A fresh allocation, never a recycled slot, so what comes back is
     /// guaranteed free — [`Self::acquire`] cannot answer here, because a
