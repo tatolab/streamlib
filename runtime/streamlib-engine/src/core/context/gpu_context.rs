@@ -1676,7 +1676,7 @@ impl GpuContext {
     ///
     /// Never waits on another holder; past the device's memory budget the
     /// allocation is refused by name. The slot is attributed to the stream
-    /// this view serves, and at most one idle slot is freed.
+    /// this view serves, and at most one slot due to be freed is freed.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
@@ -7039,6 +7039,19 @@ mod tests {
         );
     }
 
+    /// The device memory this context's allocator holds across every heap,
+    /// read from the driver now.
+    #[cfg(target_os = "linux")]
+    fn device_memory_bytes_the_allocator_holds_on_every_heap(gpu: &GpuContext) -> u64 {
+        gpu.device()
+            .inner
+            .read_every_heaps_device_memory_budget_fetched_from_the_driver_now()
+            .expect("every heap's budget reads")
+            .iter()
+            .map(|heap| heap.bytes_this_runtimes_allocator_pools_hold_on_the_heap)
+            .sum()
+    }
+
     /// Whether `published_frame_id` is refused as a recycled frame, in this
     /// process and by the lease table alike.
     #[cfg(target_os = "linux")]
@@ -7229,8 +7242,15 @@ mod tests {
             assert!(live_service.is_registered(pool_slot_key));
         }
         wait_for_every_gpu_submission_made_so_far(&gpu);
+        let device_memory_held_before_the_stop =
+            device_memory_bytes_the_allocator_holds_on_every_heap(&gpu);
 
         gpu.free_every_unheld_shared_pool_entry_the_stream_last_acquired(stopped_stream);
+        assert!(
+            device_memory_bytes_the_allocator_holds_on_every_heap(&gpu)
+                < device_memory_held_before_the_stop,
+            "the stopped stream's freed entries gave no device memory back"
+        );
         let held_slot_key = pool_slot_key_of_surface_id(&held_frame).to_string();
         assert_eq!(
             shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE),
@@ -7320,7 +7340,14 @@ mod tests {
         gpu.pixel_buffer_pool_manager
             .idle_window
             .set_for_a_test(std::time::Duration::ZERO);
+        let device_memory_held_inside_the_window =
+            device_memory_bytes_the_allocator_holds_on_every_heap(&gpu);
         let held_past_the_window = acquire_and_hold();
+        assert!(
+            device_memory_bytes_the_allocator_holds_on_every_heap(&gpu)
+                < device_memory_held_inside_the_window,
+            "the slot freed past the idle window gave no device memory back"
+        );
         let slots_past_the_window =
             shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
         assert_eq!(
@@ -7355,6 +7382,163 @@ mod tests {
         ));
         drop((held_inside_the_window, held_past_the_window));
         live_service.stop();
+    }
+
+    /// With a swapchain live and presenting, every exportable flavour the
+    /// shared pools allocate — the DMA-BUF buffer, DMA-BUF image, tiled
+    /// DMA-BUF image and OPAQUE_FD image — allocates again after a stopped
+    /// stream's entries of it were all freed. NVIDIA refuses the first
+    /// export allocation of a flavour with none live after a swapchain;
+    /// the device's sentinels keep each above zero.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn every_exportable_flavour_reacquires_after_its_pool_is_freed_with_a_swapchain_live() {
+        const FRAMES_PRESENTED_SO_THE_COMPOSITOR_IMPORTS_THE_SWAPCHAIN: usize = 30;
+        const FLAVOUR_TEST_EXTENT: u32 = 64;
+
+        let Ok(gpu) = GpuContext::init_for_platform() else {
+            tracing::warn!("no GPU device, so the swapchain re-acquire test skips");
+            return;
+        };
+        let window = match crate::core::window_event_pump::process_wide_window_event_pump()
+            .and_then(|pump| {
+                pump.request_window_for_owning_processor(
+                    crate::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor {
+                        window_title: "streamlib-swapchain-reacquire-test".to_string(),
+                        initial_width_in_logical_pixels: 640,
+                        initial_height_in_logical_pixels: 360,
+                    },
+                )
+            }) {
+            Ok(window) => window,
+            Err(no_window) => {
+                tracing::warn!("no window, so the swapchain re-acquire test skips: {no_window}");
+                return;
+            }
+        };
+        let (window_width, window_height) = window.physical_size_when_minted();
+        let mut present_target = gpu
+            .create_vulkan_present_target(
+                window.present_surface_source(),
+                window_width,
+                window_height,
+                true,
+                None,
+            )
+            .expect("a swapchain on the window");
+        for _ in 0..FRAMES_PRESENTED_SO_THE_COMPOSITOR_IMPORTS_THE_SWAPCHAIN {
+            present_target
+                .render_frame(|frame| {
+                    frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;
+                    frame.end_rendering()
+                })
+                .expect("a frame presents on the swapchain");
+        }
+
+        let host_device = &gpu.device().inner;
+        assert!(host_device.dma_buf_buffer_pool().is_some());
+        assert!(host_device.dma_buf_image_pool().is_some());
+        assert!(host_device.dma_buf_image_pool_tiled().is_some());
+        assert!(host_device.opaque_fd_image_pool().is_some());
+        assert!(
+            host_device.has_render_target_modifier_for_texture_format(TextureFormat::Rgba8Unorm),
+            "the device advertises no render-target modifier, so the tiled flavour is untested"
+        );
+        let texture_flavours = [
+            (
+                "DMA-BUF image",
+                TexturePoolDescriptor::new(
+                    FLAVOUR_TEST_EXTENT,
+                    FLAVOUR_TEST_EXTENT,
+                    TextureFormat::Rgba8Unorm,
+                )
+                .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
+            ),
+            (
+                "tiled DMA-BUF image",
+                TexturePoolDescriptor::new(
+                    FLAVOUR_TEST_EXTENT,
+                    FLAVOUR_TEST_EXTENT,
+                    TextureFormat::Rgba8Unorm,
+                )
+                .with_usage(TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING)
+                .with_cross_process_importability(
+                    super::super::texture_pool::TextureCrossProcessImportability::RenderTargetDmaBuf,
+                ),
+            ),
+            (
+                "OPAQUE_FD image",
+                TexturePoolDescriptor::new(
+                    FLAVOUR_TEST_EXTENT,
+                    FLAVOUR_TEST_EXTENT,
+                    TextureFormat::Rgba8Unorm,
+                )
+                .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST)
+                .with_cross_process_importability(
+                    super::super::texture_pool::TextureCrossProcessImportability::OpaqueFd,
+                ),
+            ),
+        ];
+
+        let stopped_stream = crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1);
+        let stopped_streams_view =
+            gpu.view_for_one_loaded_stream(stopped_stream, None, &std::env::temp_dir());
+        drop(
+            stopped_streams_view
+                .acquire_pixel_buffer(
+                    LEASE_TEST_SURFACE_WIDTH,
+                    LEASE_TEST_SURFACE_HEIGHT,
+                    PixelFormat::Rgba32,
+                )
+                .expect("a DMA-BUF buffer with the swapchain live"),
+        );
+        for (flavour, descriptor) in &texture_flavours {
+            drop(
+                stopped_streams_view
+                    .acquire_texture(descriptor)
+                    .unwrap_or_else(|refusal| {
+                        panic!("a {flavour} with the swapchain live was refused: {refusal}")
+                    }),
+            );
+        }
+        wait_for_every_gpu_submission_made_so_far(&gpu);
+
+        gpu.free_every_unheld_shared_pool_entry_the_stream_last_acquired(stopped_stream);
+        assert!(
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
+            "the stopped stream's DMA-BUF buffers outlived its stop"
+        );
+        for (flavour, descriptor) in &texture_flavours {
+            assert_eq!(
+                gpu.texture_pool().slot_count_of_the_shape_of(descriptor),
+                0,
+                "the stopped stream's {flavour} outlived its stop"
+            );
+        }
+
+        gpu.acquire_pixel_buffer(
+            LEASE_TEST_SURFACE_WIDTH,
+            LEASE_TEST_SURFACE_HEIGHT,
+            PixelFormat::Rgba32,
+        )
+        .expect("a DMA-BUF buffer allocates again after its pool was freed");
+        for (flavour, descriptor) in &texture_flavours {
+            gpu.acquire_texture(descriptor).unwrap_or_else(|refusal| {
+                panic!("a {flavour} did not allocate again after its pool was freed: {refusal}")
+            });
+        }
+        present_target
+            .render_frame(|frame| {
+                frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;
+                frame.end_rendering()
+            })
+            .expect("the swapchain still presents");
+        drop(present_target);
+        drop(window);
     }
 
     /// A slot handed back while a consumer still leases the node's last frame
