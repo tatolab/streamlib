@@ -5190,7 +5190,8 @@ impl GpuContextFullAccess {
             .resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
     }
 
-    /// Acquire a new output texture with a UUID and register it in the cache.
+    /// Acquire a new output texture registered in the cache under a fresh
+    /// UUID until the returned handle drops.
     /// Counted against this node's one-offs of its shape; see
     /// [`OneOffAcquisitionCountedForItsNode`].
     pub fn acquire_output_texture(
@@ -5198,7 +5199,11 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
         format: TextureFormat,
-    ) -> Result<(String, OneOffAcquisitionCountedForItsNode<Texture>)> {
+    ) -> Result<(
+        String,
+        OneOffAcquisitionCountedForItsNode<OutputTextureRegisteredUntilDropped>,
+    )> {
+        let gpu = self.host_inner();
         acquire_a_one_off_counted_against_its_node(
             self.one_off_acquisitions_of_the_node.as_ref(),
             OneOffAcquisitionShape::Texture {
@@ -5208,8 +5213,16 @@ impl GpuContextFullAccess {
                 usage: output_texture_usages(),
             },
             || {
-                self.host_inner()
-                    .acquire_output_texture(width, height, format)
+                let (registered_under_id, texture) =
+                    gpu.acquire_output_texture(width, height, format)?;
+                Ok((
+                    registered_under_id.clone(),
+                    OutputTextureRegisteredUntilDropped {
+                        texture,
+                        registered_under_id,
+                        gpu_the_texture_is_registered_with: gpu.clone(),
+                    },
+                ))
             },
         )
         .map(OneOffAcquisitionCountedForItsNode::split_off_the_id_it_was_acquired_under)
@@ -5872,6 +5885,39 @@ impl std::fmt::Debug for GpuContextFullAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GpuContextFullAccess")
             .field("handle", &self.handle)
+            .finish()
+    }
+}
+
+/// A kernel's output texture, registered in the texture cache under its id
+/// until this drops.
+pub struct OutputTextureRegisteredUntilDropped {
+    texture: Texture,
+    registered_under_id: String,
+    gpu_the_texture_is_registered_with: GpuContext,
+}
+
+impl std::ops::Deref for OutputTextureRegisteredUntilDropped {
+    type Target = Texture;
+
+    fn deref(&self) -> &Texture {
+        &self.texture
+    }
+}
+
+impl Drop for OutputTextureRegisteredUntilDropped {
+    fn drop(&mut self) {
+        self.gpu_the_texture_is_registered_with
+            .unregister_texture(&self.registered_under_id);
+    }
+}
+
+impl std::fmt::Debug for OutputTextureRegisteredUntilDropped {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OutputTextureRegisteredUntilDropped")
+            .field("texture", &self.texture)
+            .field("registered_under_id", &self.registered_under_id)
             .finish()
     }
 }
@@ -6783,6 +6829,62 @@ mod tests {
                     .expect("the shared tier counts no one-offs")
             })
             .collect();
+    }
+
+    /// A node's output texture stays registered and counted while its handle
+    /// lives, and dropping the handle unregisters its id and hands the count
+    /// back, so a node acquiring one every frame cannot grow the cache.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn dropping_a_nodes_output_texture_unregisters_its_id_and_hands_its_count_back() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+        let one_offs_of_the_node = OneOffAcquisitionsCountedForOneNativeNode::new();
+        let node_tier = GpuContextLimitedAccess::counting_one_offs_against_the_node(
+            gpu.clone(),
+            Some(Arc::clone(&one_offs_of_the_node)),
+        );
+        let output_texture_shape = OneOffAcquisitionShape::Texture {
+            width: 64,
+            height: 64,
+            format: TextureFormat::Rgba8Unorm,
+            usage: output_texture_usages(),
+        };
+        let is_registered = |id: &str| {
+            gpu.texture_cache
+                .lock()
+                .unwrap()
+                .contains_key(pool_slot_key_of_surface_id(id))
+        };
+
+        let (registered_under_id, output_texture) = node_tier
+            .escalate(|full| full.acquire_output_texture(64, 64, TextureFormat::Rgba8Unorm))
+            .expect("the node acquires an output texture");
+        assert!(is_registered(&registered_under_id));
+        assert_eq!(
+            one_offs_of_the_node.held_count_of_shape(&output_texture_shape),
+            1
+        );
+
+        drop(output_texture);
+        assert!(
+            !is_registered(&registered_under_id),
+            "dropping the handle unregisters its id"
+        );
+        assert_eq!(
+            one_offs_of_the_node.held_count_of_shape(&output_texture_shape),
+            0,
+            "dropping the handle hands its count back"
+        );
     }
 
     // =====================================================================

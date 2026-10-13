@@ -9,7 +9,7 @@ use super::{
     OneOffAcquisitionsHeldForOneNode,
 };
 use crate::core::rhi::{
-    PixelFormat, TensorElementType, TensorStorageBufferLayout, TextureFormat, TextureUsages,
+    TensorElementType, TensorStorageBufferLayout, TextureFormat, TextureUsages,
 };
 
 #[test]

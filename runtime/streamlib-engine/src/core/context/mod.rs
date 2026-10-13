@@ -62,7 +62,9 @@ pub use gpu_context::{
     GraphicsKernelHeldForOneDraw, RayTracingKernelHeldForOneTrace,
     SurfaceBoundKernelBindingResource,
 };
-pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
+pub use gpu_context::{
+    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, OutputTextureRegisteredUntilDropped,
+};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
 pub use one_off_acquisitions_counted_for_one_native_node::OneOffAcquisitionCountedForItsNode;

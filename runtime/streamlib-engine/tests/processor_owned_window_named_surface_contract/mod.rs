@@ -9,13 +9,14 @@
 use streamlib_engine::core::color::{ColorTraits, PrimariesId, TransferId};
 use streamlib_engine::core::context::{
     GpuContextLimitedAccess, OneOffAcquisitionCountedForItsNode,
+    OutputTextureRegisteredUntilDropped,
 };
 use streamlib_engine::core::processor_owned_window::{
     NamedSurfacePresentationOutcome, ProcessorOwnedWindow,
     ProcessorOwnedWindowAwaitingItsPresentTarget, ProcessorOwnedWindowRequest,
     SurfaceNamedForPresentationOnOwnedWindow,
 };
-use streamlib_engine::core::rhi::{Texture, TextureFormat};
+use streamlib_engine::core::rhi::TextureFormat;
 use streamlib_engine::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor;
 use streamlib_engine::host_rhi::PresentScalingMode;
 
@@ -44,7 +45,7 @@ pub fn mint_and_hold_a_window_to_the_named_surface_contract(
     registered_window: ProcessorOwnedWindowAwaitingItsPresentTarget,
 ) -> (
     ProcessorOwnedWindow,
-    OneOffAcquisitionCountedForItsNode<Texture>,
+    OneOffAcquisitionCountedForItsNode<OutputTextureRegisteredUntilDropped>,
 ) {
     // Registered outside `escalate`, minted inside it — the ordering the
     // carrier type exists to keep.
