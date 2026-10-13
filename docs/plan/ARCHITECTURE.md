@@ -21,7 +21,7 @@ fact about the shipped tree until the change that removes them ships and folds i
 direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
-## Product (the MVP sentence) — DECIDED (unbuilt: accelerators optional, pivot step 5; the sharing step)
+## Product (the MVP sentence) — SHIPPED (unbuilt: accelerators optional, pivot step 5; the sharing step)
 <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
@@ -249,9 +249,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   (unload; record `stopped` for a kept stream, end an attached one's `run`), `start_stream` (a
   stopped or failed one), `remove_stream` (unload, forget), `list_streams` (name, attached /
   kept / stopped / failed and why, project, node count) and `expose_port {stream, node, port,
-  level}`, `level` one of `internal`, `private`, `public`, which sets the port's level live and
-  records the owner's ruling for a kept stream — the owner's `expose` wins over the function's
-  `exposed`, which is the default for a port without a ruling. A restriction on a kept stream
+  level}`, `level` one of `internal`, `private`, `public`, which sets the port's level live,
+  cutting at once every reader the level no longer allows, and records the owner's ruling
+  for a kept stream — the owner's `expose` wins over the function's `exposed`, which is the
+  default for a port without a ruling. A restriction on a kept stream
   is recorded before it changes live, so a crash can only tighten a port, never reopen it.
   `dev` is `run` plus a watch re-loading on save, and after a crash it waits and loads again.
   The service restarts a crashed `tatolabd` and its kept streams return. Owner, 2026-10-02.
@@ -836,7 +837,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — DECIDED (unbuilt: scheduling across streams; the sharing step)
+## Processor model & scheduling — SHIPPED (OPEN: resources across streams; unbuilt: the sharing step)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -1602,9 +1603,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   stream's graph in its state directory (§Product), the runtime directory staying ephemeral.
   A kept stream implicated in the runtime's last two crashes in a row is recorded `failed`
   (§Product): a node's threads, those it spawns, its escalate worker and a stream callback on
-  an OS-owned thread carry its stream, and alternate-stack signal handlers and a hook on an
-  escaping panic write the crashing thread's stream through a file opened at start; a crash
-  outside any stream's work, SIGKILL and an OOM kill implicate none, and a crash no stream owns
+  an OS-owned thread carry its stream, and alternate-stack signal handlers, a hook on an
+  escaping panic and the watchdog's exit 124 write the crashing thread's stream through a
+  file opened at start; a crash outside any stream's work, SIGKILL and an OOM kill implicate none, and a crash no stream owns
   restarts and is a bug to file. Owner, 2026-09-30: a driver-level fault taking every stream
   down for a few seconds is the equivalent of a fundamental Docker issue crashing everything;
   one engine is easier to run and to get bug reports for, and an engine per stream multiplies
@@ -3338,7 +3339,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
   #2721]
 
-## Networking — transport, moq, webrtc — DECIDED (unbuilt: the sharing step)
+## Networking — transport, moq, webrtc — SHIPPED (unbuilt: the sharing step)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -3659,9 +3660,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   builds the snapshot and sample forms: from then the repo's live verification reads a port
   the way a user does — the fixture stream exposes it private, and the check fetches exact,
   full-resolution snapshots from the machine's local HTTP listing.
-  The one-runtime-per-machine sequence continues through runtime hosting, its in-flight
-  changes built minus their mesh parts, then
-  accelerators optional, then one sharing step — the entries above — in place of that
+  The one-runtime-per-machine sequence continues, after runtime hosting, with accelerators
+  optional, then one sharing step — the entries above — in place of that
   sequence's steps 8 and 9, then resources, packs and the app. Owner, 2026-10-04.
   [moq-on-the-tailnet; zenoh-and-moq-wheel-removal — SHIPPED #2633, #2643, #2645, #2649]
 - **OPEN** — The sharing step's details, decided at its own align and built against by nothing
@@ -3728,7 +3728,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_sighup_tears_the_graph_down_gracefully -->
 
-## Distribution & versioning — DECIDED (unbuilt: the Rust crate's `tatolab-stream` name)
+## Distribution & versioning — SHIPPED (unbuilt: the Rust crate's `tatolab-stream` name)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -3917,7 +3917,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
   Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721]
 
-## Control plane & observability — DECIDED (unbuilt: the sharing step)
+## Control plane & observability — SHIPPED (unbuilt: the sharing step)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
@@ -4039,7 +4039,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `$XDG_RUNTIME_DIR/streamlib/` when that variable is set and non-empty, and otherwise —
   empty or unset, and on macOS always — `/tmp/streamlib-<uid>/`, created owner-only and
   checked as a real directory this uid owns with no group or other bits. The check runs once
-  as the runtime starts, before its first node, socket or registry write, and a failure
+  as the runtime starts, before its first socket write, and a failure
   refuses the start by name; every user takes the resolved directory. No StreamLib variable
   overrides it — a container or CI job sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere
   with nothing set, and `tatolab` resolves it through `streamlib-runtime-client-contract`, the
