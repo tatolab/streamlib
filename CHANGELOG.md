@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.2](https://github.com/tatolab/streamlib/compare/v0.46.1...v0.46.2) (2026-10-13)
+
+
+### Features
+
+* **engine:** a native node's one-off acquisitions are counted per shape and refused by name at 16 ([#2748](https://github.com/tatolab/streamlib/issues/2748)) ([6854fde](https://github.com/tatolab/streamlib/commit/6854fde2e5787402e465a7f0634cb2eefed1eead))
+
 ## [0.46.1](https://github.com/tatolab/streamlib/compare/v0.46.0...v0.46.1) (2026-10-13)
 
 
