@@ -1163,9 +1163,12 @@ fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
 
 /// At the device's memory budget every escalate acquisition that has to
 /// allocate — a one-off, a pooled frame, a pixel buffer, a tensor — is
-/// refused at once, never sitting out a wait for a holder to let go. The held
-/// texture is released only after every answer is in, so an acquire that
-/// waited would miss its answer's deadline rather than be rescued.
+/// refused at once by the budget, never sitting out a wait for a holder to let
+/// go. Another node holds every one-off of the tested node's requested shape
+/// one node may hold, so no texture of that shape is free and the request
+/// must allocate; they are released only after every answer is in, so an
+/// acquire that waited on them would miss its answer's deadline rather than
+/// be rescued.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 #[allow(clippy::disallowed_macros)]
@@ -1175,12 +1178,16 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
 
     use uuid::Uuid;
 
+    use super::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
         EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireStorageBuffer,
         EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
     };
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+
+    const LONGEST_AN_ANSWER_AT_THE_BUDGET_MAY_TAKE: Duration = Duration::from_millis(500);
+    const LONGEST_THE_TEST_WAITS_FOR_AN_ANSWER: Duration = Duration::from_secs(2);
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
         println!("no GPU device — skipping");
@@ -1189,10 +1196,18 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
     let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let sandbox = GpuContextLimitedAccess::new(gpu);
     let registry = EscalateHandleRegistry::new();
-    let held_one_off =
-        acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &registry)
-            .expect("the one-off held through the test is acquired");
-    let held_shape = the_64x32_rgba8_unorm_one_off_texture_shape();
+    let another_node = EscalateHandleRegistry::new();
+    let one_offs_another_node_holds: Vec<String> = (0
+        ..ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE)
+        .map(|_| {
+            acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(
+                &sandbox,
+                &another_node,
+            )
+            .expect("another node acquires the one-offs it holds through the test")
+        })
+        .collect();
+    let requested_shape = the_64x32_rgba8_unorm_one_off_texture_shape();
 
     sandbox
         .host_inner()
@@ -1213,7 +1228,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
     };
     let requests_at_the_budget: Vec<(&'static str, EscalateRequest)> = vec![
         (
-            "a one-off texture of the held texture's shape",
+            "a one-off texture of the shape another node holds every one-off of",
             a_one_off_64x32_rgba8_unorm_texture_request(),
         ),
         (
@@ -1255,23 +1270,25 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
 
     std::thread::scope(|scope| {
         // The body owns the release sender and the answer receiver, so a failed
-        // assertion drops both before the scope joins: the held one-off is let
-        // go, the requester stops at its next answer, and the test fails
-        // rather than hangs.
+        // assertion drops both before the scope joins: the other node's
+        // one-offs are let go, the requester stops at its next answer, and the
+        // test fails rather than hangs.
         let (release_signal_tx, release_signal_rx) = mpsc::channel::<()>();
         let (answer_tx, answer_rx) =
             mpsc::channel::<(&'static str, Duration, std::result::Result<String, String>)>();
         let releasing_sandbox = sandbox.clone();
-        let releasing_registry = std::sync::Arc::clone(&registry);
-        let held_one_off = held_one_off.clone();
+        let releasing_registry_of_another_node = std::sync::Arc::clone(&another_node);
+        let one_offs_another_node_holds = &one_offs_another_node_holds;
         scope.spawn(move || {
             let _signalled_or_the_body_failed = release_signal_rx.recv();
-            release_a_handle_over_the_escalate_op(
-                &releasing_sandbox,
-                &releasing_registry,
-                &held_one_off,
-            )
-            .expect("the held one-off releases");
+            for one_off in one_offs_another_node_holds {
+                release_a_handle_over_the_escalate_op(
+                    &releasing_sandbox,
+                    &releasing_registry_of_another_node,
+                    one_off,
+                )
+                .expect("another node's one-off releases");
+            }
         });
         let requesting_sandbox = sandbox.clone();
         let requesting_registry = std::sync::Arc::clone(&registry);
@@ -1294,33 +1311,41 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
 
         for _ in 0..request_count {
             let (what_is_requested, answered_after, answer) = answer_rx
-                .recv_timeout(Duration::from_millis(500))
-                .expect("every acquisition at the budget is answered at once, not after a wait");
+                .recv_timeout(LONGEST_THE_TEST_WAITS_FOR_AN_ANSWER)
+                .expect("every acquisition at the budget is answered, never left waiting");
             let refusal = answer.expect_err(what_is_requested);
             assert!(
                 refusal.contains("refused a")
-                    && refusal.contains("frame allocation before allocating"),
+                    && refusal.contains("frame allocation before allocating")
+                    && !refusal.contains("timeout")
+                    && !refusal.contains("exhausted"),
                 "{what_is_requested}: the refusal is the device memory budget's, by name: \
                  {refusal}"
             );
             assert!(
-                answered_after < Duration::from_millis(250),
+                answered_after < LONGEST_AN_ANSWER_AT_THE_BUDGET_MAY_TAKE,
                 "{what_is_requested}: answered after {answered_after:?}, so it waited"
             );
         }
-        assert_eq!(registry.handle_count(), 1, "only the held one-off is held");
+        assert_eq!(registry.handle_count(), 0, "the tested node holds nothing");
         assert_eq!(
-            registry.one_off_acquisitions_held_or_reserved_of_shape(&held_shape),
-            1,
+            registry.one_off_acquisitions_held_or_reserved_of_shape(&requested_shape),
+            0,
             "the refused one-off handed its reservation back"
+        );
+        assert_eq!(
+            another_node.handle_count(),
+            ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE,
+            "another node still holds every one-off it acquired"
         );
         release_signal_tx
             .send(())
             .expect("the releasing thread is waiting for the signal");
     });
 
-    assert_eq!(registry.handle_count(), 0);
+    assert_eq!(another_node.handle_count(), 0);
     release_everything_the_helpers_teardown_owes(&sandbox, &registry);
+    release_everything_the_helpers_teardown_owes(&sandbox, &another_node);
     live_service.stop();
 }
 
