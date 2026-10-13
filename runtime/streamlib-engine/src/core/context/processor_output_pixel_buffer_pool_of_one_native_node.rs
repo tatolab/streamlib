@@ -22,7 +22,7 @@ use crate::core::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
 
 /// How many frames a native node's output pool keeps in rotation before it
 /// reuses one.
-const NATIVE_NODE_OUTPUT_PIXEL_BUFFER_POOL_ROTATION_DEPTH: usize = 4;
+pub(super) const NATIVE_NODE_OUTPUT_PIXEL_BUFFER_POOL_ROTATION_DEPTH: usize = 4;
 
 /// The pixel buffers one native built-in node publishes its frames in,
 /// borrowed from the runtime's shared pixel-buffer pool and handed back to it
@@ -115,7 +115,7 @@ impl ProcessorOutputPixelBufferPoolOfOneNativeNode {
     }
 
     /// How many slots the pool holds of its current shape.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn slot_count(&self) -> usize {
         self.output_pool_of_the_current_shape
             .as_ref()

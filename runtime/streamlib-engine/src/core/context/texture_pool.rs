@@ -556,6 +556,7 @@ mod texture_pool_growth_tests {
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
     )]
     #[test]
+    #[allow(clippy::disallowed_macros)]
     fn the_texture_pool_holds_more_than_sixteen_textures_of_one_shape_at_once() {
         let Ok(device) = GpuDevice::new() else {
             println!("no GPU device — skipping");

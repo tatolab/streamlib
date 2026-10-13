@@ -6126,24 +6126,23 @@ mod tests {
         );
     }
 
-    /// The shared pool caps no shape by count: a consumer holding every frame
-    /// grows it past where a count would stop it. Past the heap budget the
-    /// producer drops its own frame, refused at once and naming the heap —
-    /// the consumer's cost is memory and then frames, never the producer's
-    /// cadence.
+    /// The shared pool caps no shape by count: while a consumer holds every
+    /// frame it is handed, each next acquire grows the pool. Past the heap
+    /// budget the producer drops its own frame, refused at once and naming the
+    /// heap — the consumer's cost is memory and then frames, never the
+    /// producer's cadence.
     /// GPU-gated: skips when no device is present.
     #[test]
     #[cfg(target_os = "linux")]
     fn past_the_heap_budget_the_shared_pixel_buffer_pool_refuses_its_producer_at_once_rather_than_making_it_wait()
      {
-        const LEASED_SLOTS_PAST_WHERE_A_SHARED_COUNT_ONCE_STOPPED_THE_POOL: usize = 68;
+        const FRAMES_THE_CHILD_HOLDS_WHILE_THE_SHARED_POOL_GROWS: usize = 68;
 
         let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
             return;
         };
         let child = check_out_leases.mint_holder_id();
-        let leased_slots: Vec<String> = (0
-            ..LEASED_SLOTS_PAST_WHERE_A_SHARED_COUNT_ONCE_STOPPED_THE_POOL)
+        let leased_slots: Vec<String> = (0..FRAMES_THE_CHILD_HOLDS_WHILE_THE_SHARED_POOL_GROWS)
             .map(|_| {
                 let slot = acquire_one_pool_slot_id(&gpu)
                     .expect("with every slot leased the shared pool grows");
@@ -6341,6 +6340,18 @@ mod tests {
         format: PixelFormat::Rgba32,
     };
 
+    /// The slots of a shape one native node borrows from the shared ring while
+    /// nothing holds its frames: one per frame of its rotation.
+    #[cfg(target_os = "linux")]
+    const SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD: usize =
+        super::super::processor_output_pixel_buffer_pool_of_one_native_node::NATIVE_NODE_OUTPUT_PIXEL_BUFFER_POOL_ROTATION_DEPTH;
+
+    /// The pre-allocated slots a shape's shared ring keeps once one native
+    /// node has borrowed a slot per frame of its rotation.
+    #[cfg(target_os = "linux")]
+    const PRE_ALLOCATED_SLOTS_THE_SHARED_RING_KEEPS_PAST_ONE_NATIVE_NODES_ROTATION: usize =
+        POOL_PRE_ALLOCATE_COUNT.saturating_sub(SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD);
+
     /// The next frame `native_node_output_pool` publishes, its buffer handed
     /// back at once so only a lease can keep the slot.
     #[cfg(target_os = "linux")]
@@ -6406,9 +6417,9 @@ mod tests {
             .collect()
     }
 
-    /// The bug #2736 fixed, in-process: a node whose consumers hold every
-    /// frame its pool may costs only its own frames. Another node publishing
-    /// the same shape, and the shared pool itself, go on being served.
+    /// A native node whose consumers hold every frame its pool may is refused
+    /// only its own next frame: a second native node publishing the same
+    /// shape, and the shared pool itself, go on being served.
     /// GPU-gated: skips when no device is present.
     #[test]
     #[cfg(target_os = "linux")]
@@ -6536,19 +6547,35 @@ mod tests {
         let mut native_node =
             gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-torn-down-node");
         let mut last_frame_the_node_published_by_slot = std::collections::HashMap::new();
-        for _ in 0..(POOL_PRE_ALLOCATE_COUNT * 2 + 1) {
+        for _ in 0..(SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD * 2 + 1) {
             let frame = acquire_one_native_node_frame_id(&mut native_node)
                 .expect("a node with nothing held is served");
             last_frame_the_node_published_by_slot
                 .insert(pool_slot_key_of_surface_id(&frame).to_string(), frame);
         }
-        assert!(
-            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
-            "the node borrowed every slot the shared ring held"
+        assert_eq!(
+            last_frame_the_node_published_by_slot.len(),
+            SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD,
+            "the node published from one borrowed slot per frame of its rotation"
+        );
+        let slots_the_shared_ring_kept =
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+        assert_eq!(
+            slots_the_shared_ring_kept.len(),
+            PRE_ALLOCATED_SLOTS_THE_SHARED_RING_KEEPS_PAST_ONE_NATIVE_NODES_ROTATION,
+            "the node's borrowed slots left the shared ring"
         );
 
         drop(native_node);
-        let returned_slots = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+        let returned_slots: Vec<(String, u64)> =
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE)
+                .into_iter()
+                .filter(|(pool_slot_key, _)| {
+                    !slots_the_shared_ring_kept
+                        .iter()
+                        .any(|(kept_pool_slot_key, _)| kept_pool_slot_key == pool_slot_key)
+                })
+                .collect();
         assert_eq!(
             returned_slots.len(),
             last_frame_the_node_published_by_slot.len(),
@@ -6562,10 +6589,15 @@ mod tests {
             );
         }
 
-        for _ in 0..returned_slots.len() {
+        let mut republished_slots_the_node_returned = 0;
+        for _ in 0..(slots_the_shared_ring_kept.len() + returned_slots.len()) {
             let republished = acquire_one_pool_slot_id(&gpu).expect("the shared ring reuses");
-            let last_from_the_node =
-                &last_frame_the_node_published_by_slot[pool_slot_key_of_surface_id(&republished)];
+            let Some(last_from_the_node) = last_frame_the_node_published_by_slot
+                .get(pool_slot_key_of_surface_id(&republished))
+            else {
+                continue;
+            };
+            republished_slots_the_node_returned += 1;
             assert_eq!(
                 frame_generation_of(&republished),
                 frame_generation_of(last_from_the_node) + 1,
@@ -6577,6 +6609,11 @@ mod tests {
                 "the frame the node last published is retired once the slot republishes"
             );
         }
+        assert_eq!(
+            republished_slots_the_node_returned,
+            returned_slots.len(),
+            "one turn of the shared ring republishes every slot the node returned"
+        );
     }
 
     /// A slot handed back while a consumer still leases the node's last frame
@@ -6630,14 +6667,28 @@ mod tests {
         let Some((gpu, _check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
             return;
         };
-        let mut native_node =
-            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-borrowing-node");
-        let borrowed_frames: Vec<String> = (0..POOL_PRE_ALLOCATE_COUNT)
-            .map(|_| acquire_one_native_node_frame_id(&mut native_node).expect("the node's frame"))
+        let native_nodes_that_borrow_every_pre_allocated_slot =
+            POOL_PRE_ALLOCATE_COUNT.div_ceil(SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD);
+        let mut native_nodes: Vec<_> = (0..native_nodes_that_borrow_every_pre_allocated_slot)
+            .map(|native_node_index| {
+                gpu.create_processor_output_pixel_buffer_pool_for_a_native_node(&format!(
+                    "a-borrowing-node-{native_node_index}"
+                ))
+            })
+            .collect();
+        let borrowed_frames: Vec<String> = native_nodes
+            .iter_mut()
+            .flat_map(|native_node| {
+                (0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD)
+                    .map(|_| {
+                        acquire_one_native_node_frame_id(native_node).expect("the node's frame")
+                    })
+                    .collect::<Vec<String>>()
+            })
             .collect();
         assert!(
             shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
-            "the node borrowed every slot the shared ring pre-allocated"
+            "the nodes borrowed every slot the shared ring pre-allocated"
         );
 
         let shared_frame = acquire_one_pool_slot_id(&gpu)
@@ -6665,10 +6716,15 @@ mod tests {
         };
         let mut native_node =
             gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-resized-node");
-        let old_shapes_frames: Vec<String> = (0..POOL_PRE_ALLOCATE_COUNT)
+        let old_shapes_frames: Vec<String> = (0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD)
             .map(|_| acquire_one_native_node_frame_id(&mut native_node).expect("the node's frame"))
             .collect();
-        assert!(shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty());
+        let slots_the_shared_ring_kept =
+            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+        assert_eq!(
+            slots_the_shared_ring_kept.len(),
+            PRE_ALLOCATED_SLOTS_THE_SHARED_RING_KEEPS_PAST_ONE_NATIVE_NODES_ROTATION
+        );
 
         let (new_shapes_frame, new_shapes_buffer) = native_node
             .acquire_the_next_output_pixel_buffer(
@@ -6689,17 +6745,24 @@ mod tests {
         );
         assert_eq!(native_node.slot_count(), 1);
 
-        let returned_slots = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
-        let mut returned_slot_keys: Vec<&str> =
-            returned_slots.iter().map(|(key, _)| key.as_str()).collect();
-        let mut old_shapes_slot_keys: Vec<&str> = old_shapes_frames
+        let shared_ring_slots = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+        let mut shared_ring_slot_keys: Vec<&str> = shared_ring_slots
             .iter()
-            .map(|frame| pool_slot_key_of_surface_id(frame))
+            .map(|(key, _)| key.as_str())
             .collect();
-        returned_slot_keys.sort_unstable();
-        old_shapes_slot_keys.sort_unstable();
+        let mut kept_and_old_shapes_slot_keys: Vec<&str> = slots_the_shared_ring_kept
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .chain(
+                old_shapes_frames
+                    .iter()
+                    .map(|frame| pool_slot_key_of_surface_id(frame)),
+            )
+            .collect();
+        shared_ring_slot_keys.sort_unstable();
+        kept_and_old_shapes_slot_keys.sort_unstable();
         assert_eq!(
-            returned_slot_keys, old_shapes_slot_keys,
+            shared_ring_slot_keys, kept_and_old_shapes_slot_keys,
             "every slot of the old shape is back in its shared ring"
         );
     }
