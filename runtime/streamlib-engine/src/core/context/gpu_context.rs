@@ -334,15 +334,7 @@ impl PixelBufferPoolManager {
             return Ok((published, handed_off_buffer));
         }
 
-        let held_buffer_count = ring_pool.ring.slot_count();
-        tracing::warn!(
-            "PixelBufferPoolManager: all {} buffers in use for {}x{} {:?}, growing by up to {}",
-            held_buffer_count,
-            width,
-            height,
-            format,
-            PIXEL_BUFFERS_A_SHARED_RING_ADDS_WHEN_EVERY_ONE_IS_HELD
-        );
+        let slot_count_before_growing = ring_pool.ring.slot_count();
         let handed_off_slot_index =
             Self::allocate_and_register_one_more_slot(ring_pool, surface_store)?;
         for _ in 1..PIXEL_BUFFERS_A_SHARED_RING_ADDS_WHEN_EVERY_ONE_IS_HELD {
@@ -361,10 +353,12 @@ impl PixelBufferPoolManager {
             }
         }
         tracing::info!(
-            "PixelBufferPoolManager: grew the {}x{} {:?} ring to {} buffers",
+            "PixelBufferPoolManager: no free buffer in the {}x{} {:?} shared ring; grew it from \
+             {} to {} buffers",
             width,
             height,
             format,
+            slot_count_before_growing,
             ring_pool.ring.slot_count()
         );
 
@@ -430,7 +424,8 @@ impl PixelBufferPoolManager {
         let Some(ring_pool) = pools.get_mut(&shape) else {
             tracing::warn!(
                 "PixelBufferPoolManager: no shared {}x{} {:?} ring to take back {} slots a \
-                 native node's output pool borrowed; they drop",
+                 native node's output pool borrowed; no pool hands them out again, and each \
+                 one's last published frame stays in the buffer cache, still resolvable",
                 shape.width,
                 shape.height,
                 shape.format,
@@ -479,7 +474,7 @@ impl PixelBufferPoolManager {
             height,
             format,
         } = shape;
-        tracing::info!(
+        tracing::debug!(
             "PixelBufferPoolManager: creating new pool for {}x{} {:?}",
             width,
             height,
@@ -513,7 +508,7 @@ impl PixelBufferPoolManager {
         let mut ring = LeaseAwarePoolSlotRing::default();
         let mut registered_count = 0;
 
-        tracing::info!(
+        tracing::debug!(
             "PixelBufferPoolManager: pre-allocating {} buffers for {}x{} {:?}",
             POOL_PRE_ALLOCATE_COUNT,
             width,

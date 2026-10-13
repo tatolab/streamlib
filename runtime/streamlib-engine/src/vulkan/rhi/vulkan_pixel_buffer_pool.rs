@@ -77,12 +77,6 @@ impl VulkanPixelBufferPool {
                     buffer_to_pool_id.insert(i, PixelBufferPoolSlotId::new());
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "VulkanPixelBufferPool: allocation {}/{} failed: {}",
-                        i + 1,
-                        pre_allocate,
-                        e
-                    );
                     last_err = Some(e);
                     break;
                 }
@@ -95,12 +89,16 @@ impl VulkanPixelBufferPool {
             }));
         }
 
-        if buffers.len() < pre_allocate {
+        if let Some(refusal_of_the_next_buffer) = &last_err {
             tracing::warn!(
-                "VulkanPixelBufferPool: degraded to {} buffers (requested {}). \
-                 Pipeline will run with reduced parallelism.",
+                "VulkanPixelBufferPool: pre-allocated {} of the {} buffers requested ({}x{} {:?}); \
+                 the next was refused: {}",
                 buffers.len(),
-                pre_allocate
+                pre_allocate,
+                width,
+                height,
+                format,
+                refusal_of_the_next_buffer
             );
         } else {
             tracing::info!(
