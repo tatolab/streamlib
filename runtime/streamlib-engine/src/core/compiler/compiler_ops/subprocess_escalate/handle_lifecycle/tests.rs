@@ -1412,6 +1412,78 @@ fn a_released_or_torn_down_one_off_hands_its_count_back_to_its_node() {
     release_everything_the_helpers_teardown_owes(&sandbox, &registry);
 }
 
+/// A render-target image is a one-off like any other: held under the id the
+/// helper was answered with, counted under its shape, and its count handed
+/// back when the helper releases it.
+#[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[allow(clippy::disallowed_macros)]
+fn a_render_target_image_is_held_and_counted_under_its_shape_until_the_helper_releases_it() {
+    use super::{OneOffAcquisitionShape, RegisteredHandle};
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::TextureFormat;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let format = TextureFormat::Bgra8Unorm;
+    let device_has_a_render_target_modifier_for_the_format = sandbox
+        .escalate(|full| {
+            Ok(full
+                .host_vulkan_device_arc()?
+                .has_render_target_modifier_for_texture_format(format))
+        })
+        .expect("the device answers whether it has a render-target modifier");
+    if !device_has_a_render_target_modifier_for_the_format {
+        println!("no render-target DRM modifier for {format:?} on this device — skipping");
+        return;
+    }
+    let registry = EscalateHandleRegistry::new();
+    let shape = OneOffAcquisitionShape::RenderTargetImage {
+        width: 64,
+        height: 32,
+        format,
+    };
+
+    let handle_id = handle_id_or_refusal_of(super::super::handle_escalate_op(
+        &sandbox,
+        &registry,
+        EscalateRequest::AcquireImage(EscalateRequestAcquireImage {
+            request_id: "req-render-target-image".to_string(),
+            width: 64,
+            height: 32,
+            format: format.wire_name().to_string(),
+        }),
+    ))
+    .expect("the helper acquires a render-target image");
+    assert!(
+        registry.read_the_one_off_held_under(&handle_id, |held_one_off| {
+            matches!(held_one_off, Some(RegisteredHandle::Image { .. }))
+        }),
+        "the image is held under the id the helper was answered with"
+    );
+    assert_eq!(
+        registry.one_off_acquisitions_held_or_reserved_of_shape(&shape),
+        1
+    );
+
+    release_a_handle_over_the_escalate_op(&sandbox, &registry, &handle_id)
+        .expect("the helper releases the image");
+    assert_eq!(registry.handle_count(), 0);
+    assert_eq!(
+        registry.one_off_acquisitions_held_or_reserved_of_shape(&shape),
+        0
+    );
+}
+
 /// Releasing a one-off pixel buffer evicts the lookup its check-in id cached
 /// and leaves its slot's published frame cached: on macOS the one-off's id is
 /// that published frame's, which the pool alone retires.
