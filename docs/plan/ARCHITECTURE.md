@@ -226,7 +226,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [runtime-hosting; one-runtime-per-machine]
 
-## Packages & extension model — SHIPPED
+## Packages & extension model — IN-FLIGHT (→ shared-pools-bounded-by-memory-budget)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-08-package-split-and-lend.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-07-authoring-names.md -->
 
@@ -1535,7 +1535,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   one engine is easier to run and to get bug reports for, and an engine per stream multiplies
   the ways things can fail. An engine per stream is not a fallback. [one-runtime-per-machine]
 
-## Graphics (RHI / GPU) — DECIDED (unbuilt: accelerators optional, pivot step 5)
+## Graphics (RHI / GPU) — IN-FLIGHT (→ shared-pools-bounded-by-memory-budget; unbuilt: accelerators optional, pivot step 5)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the
