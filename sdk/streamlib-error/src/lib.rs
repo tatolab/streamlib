@@ -250,6 +250,19 @@ pub enum Error {
         pool_capacity: usize,
     },
 
+    /// A node's one-off acquisition refused because the node already holds
+    /// as many of that shape as one node may.
+    #[error(
+        "this node already holds {one_off_acquisitions_one_node_may_hold_of_one_shape} one-off \
+         acquisitions of {acquisition_shape}, the most one node may hold of one shape at once, so \
+         this one is refused before anything is allocated; release one it holds, or publish \
+         per-frame output from a node output pool"
+    )]
+    EveryOneOffAcquisitionOfThisShapeTheNodeMayHoldIsHeld {
+        acquisition_shape: String,
+        one_off_acquisitions_one_node_may_hold_of_one_shape: usize,
+    },
+
     /// A frame allocation the device memory heap it would come from has no
     /// room for, refused before anything was allocated.
     #[error(
@@ -621,6 +634,25 @@ mod tests {
              as 80% of the heap, the driver reporting no budget, and capped by the system's \
              available memory) and uses 7990000000, of which this runtime's allocator pools hold \
              1200000000; the allocation would leave less than the 67108864-byte headroom"
+        );
+    }
+
+    #[test]
+    fn a_refused_one_off_acquisition_reads_its_shape_and_the_count() {
+        let msg =
+            Error::EveryOneOffAcquisitionOfThisShapeTheNodeMayHoldIsHeld {
+                acquisition_shape:
+                    "1280x720 rgba8_unorm texture (usage copy_src|copy_dst|texture_binding)"
+                        .to_string(),
+                one_off_acquisitions_one_node_may_hold_of_one_shape: 16,
+            }
+            .to_string();
+        assert_eq!(
+            msg,
+            "this node already holds 16 one-off acquisitions of 1280x720 rgba8_unorm texture \
+             (usage copy_src|copy_dst|texture_binding), the most one node may hold of one shape at \
+             once, so this one is refused before anything is allocated; release one it holds, or \
+             publish per-frame output from a node output pool"
         );
     }
 
