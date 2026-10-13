@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.5](https://github.com/tatolab/streamlib/compare/v0.45.4...v0.45.5) (2026-10-13)
+
+
+### Bug Fixes
+
+* **runtime:** tatolabd raises its open-descriptor soft limit to the hard limit, and its interpreters start at the original ([#2735](https://github.com/tatolab/streamlib/issues/2735)) ([91d562f](https://github.com/tatolab/streamlib/commit/91d562ffe257505cf7223eea53e7450f67e14afd))
+
 ## [0.45.4](https://github.com/tatolab/streamlib/compare/v0.45.3...v0.45.4) (2026-10-12)
 
 
