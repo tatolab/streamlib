@@ -1060,8 +1060,12 @@ mod one_off_acquisition_counting_tests {
     use crate::core::runtime::{OptionsForLoadingOneStream, Runner};
 
     /// Run `body` against a started empty stream's shared context, skipping
-    /// where no stream can start.
+    /// only where there is no GPU device.
     fn with_a_started_streams_shared_context(body: impl FnOnce(&Arc<RuntimeContext>)) {
+        if crate::core::context::GpuContext::init_for_platform().is_err() {
+            println!("Skipping - no GPU device available");
+            return;
+        }
         let project_directory = tempfile::tempdir().expect("a project directory");
         let runner = Runner::new().expect("a runner boots without a graph");
         let stream = runner
@@ -1070,10 +1074,7 @@ mod one_off_acquisition_counting_tests {
                     .named("main"),
             )
             .expect("an empty stream loads");
-        if stream.start().is_err() {
-            println!("Skipping - the stream could not start (no GPU device available)");
-            return;
-        }
+        stream.start().expect("the stream starts");
         body(
             &stream
                 .runtime_context_while_started()
@@ -1157,7 +1158,7 @@ mod one_off_acquisition_counting_tests {
         with_a_started_streams_shared_context(|shared_context| {
             let layout = a_256_byte_storage_buffer();
             let shared_view = RuntimeContextLimitedAccess::new(shared_context);
-            let held_by_no_node: Vec<_> = (0..17)
+            let _held_by_no_node: Vec<_> = (0..17)
                 .map(|_| {
                     shared_view
                         .gpu_limited_access()
@@ -1165,7 +1166,6 @@ mod one_off_acquisition_counting_tests {
                         .expect("the shared context counts no one-offs")
                 })
                 .collect();
-            assert_eq!(held_by_no_node.len(), 17);
         });
     }
 }

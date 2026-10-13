@@ -14,7 +14,7 @@
 //!      - `full.acquire_pixel_buffer(...)` — returns a counted
 //!        `PixelBuffer` handle.
 //!      - `full.acquire_output_texture(...)` — returns the id and a
-//!        counted `Texture`.
+//!        counted texture registered under it until the handle drops.
 //!      - `full.register_texture_with_layout(...)` (per #906 exit
 //!        criterion #4).
 //!      If any FullAccess method regresses, this test fails.
