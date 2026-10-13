@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.6](https://github.com/tatolab/streamlib/compare/v0.45.5...v0.45.6) (2026-10-13)
+
+
+### Bug Fixes
+
+* **engine:** a run entered on the first thread builds the window event pump before anything asks for it ([#2734](https://github.com/tatolab/streamlib/issues/2734)) ([5707df7](https://github.com/tatolab/streamlib/commit/5707df74ad499e41b0a4fbc300892cf9adf99a6a))
+
 ## [0.45.5](https://github.com/tatolab/streamlib/compare/v0.45.4...v0.45.5) (2026-10-13)
 
 
