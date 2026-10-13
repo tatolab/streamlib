@@ -3,7 +3,7 @@
 
 //! Pinning a crash of the runtime on the stream whose thread crashed it.
 //!
-//! `docs/plan/changes/runtime-hosting.md`, decision 5 and "Pinning a crash": a
+//! `docs/plan/ARCHITECTURE.md` §Processor model, failure isolation: a
 //! thread working for a stream carries the stream's name; handlers for the
 //! fatal signals on the alternate stack, a hook on a panic that ends the
 //! process, and the ends past a watchdog each append the crashing thread's

@@ -216,6 +216,12 @@ frame — a slow consumer costs memory, then its own frames, never another proce
   margin inside the reported budget (ANV), so a percentage would count it twice.
 - **The idle window is about 5 s.** A tuning constant inside slice 2, not a contract.
 
+## Tickets
+
+Milestone #58. Slice 1: #2736 (PR #2741). Slice 2: #2740 (PR #2743). The per-node count of a
+native Rust node's one-off acquisitions, which slice 1 built for processor interpreters only:
+#2746.
+
 ## REMOVED
 
 - REMOVED: TexturePoolExhaustionPolicy

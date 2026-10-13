@@ -21,12 +21,14 @@ fact about the shipped tree until the change that removes them ships and folds i
 direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-hosting)
+## Product (the MVP sentence) — DECIDED (unbuilt: accelerators optional, pivot step 5; the sharing step)
 <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
-  with the Tatolab runtime on their machine, installs `tatolab-stream` from PyPI into an
+  installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac, each
+  registering it as a per-user service — installs `tatolab-stream` from PyPI into an
   ordinary uv-managed venv, runs `tatolab new` then `tatolab dev`, sees their camera live in
   a window within a minute, and makes the pipeline theirs by editing the scaffolded node —
   zero ceremony: no manifest, no `main()`, no schema wrangling, a fast edit loop. The
@@ -37,9 +39,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   app bundle to obtain them would. Every ticket traces to this sentence or does not exist.
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
   SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
-  amended by one-runtime-per-machine: "with an NVIDIA GPU" (accelerators are optional), and
-  the install step — the runtime arrives from an installer that registers it as a per-user
-  service, so the loop is install, then `new`, then `run`]
+  runtime-hosting — SHIPPED #2721, #2722; amended by one-runtime-per-machine: "with an NVIDIA
+  GPU" (accelerators are optional)]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
@@ -119,23 +120,45 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_tatolab_new.py::test_every_scaffolded_python_file_passes_ruff -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_binds_to_no_floor -->
-- **DECIDED** — `tatolabd --stream-graph <file> --project <dir> --interpreter <path>` hosts
-  one stream in the foreground: the engine and its built-ins, the graph loaded with its
-  environment (§Processor model), the local API on its socket, the engine's signal ladder,
-  its logs on stderr, and no Python in its process. `tatolab` is a native CLI beside it,
-  linking no engine. `run` and `dev` find `<project>/.venv/bin/python` — absent, they refuse
-  by name, pointing at `uv sync` — run `tatolab.stream`'s compile entry in it with the
-  project as the import root (the graph's JSON on stdout, cross-floor warnings on stderr, a
-  failed compile's traceback as the error), start `tatolabd` attached and forward Ctrl-C;
-  `dev` restarts it on an edit. `graph`, `tap`, `logs`, `nodes`, `exchange` and `mcp` speak
+- **DECIDED** — `tatolabd` takes no stream and no argument: it is the machine's one runtime
+  process — one engine, its built-ins, the local API on `<runtime directory>/local-api.sock`,
+  the engine's signal ladder, and no Python in its process. It runs in the foreground and
+  never detaches. At start it takes the machine lock, opens the state directory, resolves the
+  machine name (§Networking) and re-loads every kept stream neither stopped nor failed; one
+  that cannot re-load is recorded `failed`, never deleted. `tatolab` is a native CLI beside
+  it, linking no engine, and every stream verb is a local-API call. `run` sends
+  `run_stream {project_directory, stream_function, name, keep}` — `stream_function` as `run`
+  takes it, none for the sole one — and the runtime finds `<project>/.venv/bin/python` —
+  absent, refused by name, pointing at `uv sync` — runs `tatolab.stream`'s compile entry in
+  it with the project as the import root (the graph's JSON on stdout, a failed compile's
+  traceback as the error), describes the Python types and loads; the compile's cross-floor
+  warnings come back in the reply and the CLI prints them on stderr. The runtime compiles, so
+  an agent loads exactly as the CLI does. `graph`, `tap`, `logs`, `exchange` and `mcp` speak
   the local API, and `new` writes the embedded scaffold. Only `<project>/.venv/bin/python` is
   taken; a relocated venv is refused by name until a need appears. Owner, 2026-10-02.
-  [package-split-and-lend — SHIPPED #2693, #2697; amended by runtime-hosting: one `tatolabd`
-  per machine hosts every stream, and `run` loads into the running one rather than starting
-  its own]
+  [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_run_and_dev_attached -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_stream_actions -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name -->
+  <!-- verify: cargo test -p tatolabd --test tatolabd_command_line any_argument_is_a_usage_error_naming_it -->
+- **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
+  socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
+  it; on macOS it is an `fcntl` lock on a root-owned 0666 regular file in root-owned
+  `/Library/Application Support/Tatolab/`, which the app's first-launch administrator prompt
+  creates — any other type, owner or mode is refused by name, and a missing one is refused
+  naming the commands that create it. A second `tatolabd`, or any squatter, is refused naming
+  its user, pid and executable (peer credentials, `F_GETLK`); any user may take the one
+  runtime first, and the CLI names the holder too. The state directory is
+  `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or `~/Library/Application
+  Support/Tatolab/`: `streams/<stream>.json` per kept stream, written atomically with mode
+  0600 — the graph compiled at load, the project directory and interpreter, the stream
+  function, `stopped` or `failed` and why, its crash count and the owner's exposure rulings —
+  and, under `logs/`, the runtime's own log, which belongs to no project. A stream's logs and
+  pipeline cache stay under its project's `.streamlib/`. Owner, 2026-10-02.
+  [runtime-hosting — SHIPPED #2711, #2713]
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name a_second_tatolabd_on_the_machine_is_refused_naming_the_first_ones_user_pid_and_executable -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams the_runtime_keeps_its_state_owner_only_and_writes_its_own_log_beneath_it -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams a_kept_streams_record_round_trips_through_a_restart_until_it_is_removed -->
 - **DECIDED** — The tests divide as the code does. The stream suite
   (`sdk/tatolab-stream/tests`) is pure Python in a venv holding only `tatolab-stream` —
   declarations, the builder and its name resolution, compile, the generated built-ins, the
@@ -177,10 +200,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   one fails at once, unable to reach the local API's socket, naming the socket and how to start
   the runtime — Docker's shape when its daemon is down; nothing a verb does starts a runtime. On
   Apple, `Tatolab.app` registers `tatolabd` as its login service, as Docker Desktop does, and a
-  `run` against a running runtime connects as usual; until the app ships, `tatolabd` runs in a
-  terminal there. On Linux the installer — `curl | sh` or a distro package — registers
+  `run` against a running runtime connects as usual; a developer may still run `tatolabd` in a
+  terminal. On Linux the installer — `curl | sh` or a distro package — registers
   `tatolabd` as a systemd user service, the service being the end state on Linux, not a stand-in
-  for the app. Owner, 2026-10-02. [runtime-hosting]
+  for the app. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2721, #2722]
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolabd_hosts_the_machines_streams.py::test_every_verb_that_reaches_the_runtime_fails_at_once_naming_the_socket_and_starts_no_runtime -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket with_no_runtime_every_verb_fails_at_once_naming_the_socket_and_how_to_start_one -->
 - **DECIDED** — How a stream is loaded and kept. `tatolab run <stream>` loads it attached — its
   logs in the terminal, Ctrl-C unloads it; `tatolab run -d` loads it to keep — the runtime
   records the graph its function compiled to at that load, the project's venv path and the
@@ -197,7 +222,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   runtime or a manual restart is no crash and resets the count — or one that cannot re-load at
   start (a missing venv, a type that will not describe) is `failed`, shown with its reason and
   skipped at start until `tatolab start` retries it; a first load that fails is refused
-  (runtime-hosting decision 5). `tatolab streams` lists all four — attached, kept,
+  (owner, 2026-10-02). `tatolab streams` lists all four — attached, kept,
   stopped, failed; `tatolab dev` is `run` reloading on edit, and after a crash it waits for the
   runtime and loads again. Where no installer
   put a runtime, `tatolabd` runs in a terminal or as a container's entrypoint; there is no
@@ -208,7 +233,33 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   compute; every stream is addressable by URL, somewhat in the manner of Plan 9; no second
   mode unless it solves a real problem; it runs on very low-power devices; a stream that
   exposes devices stays long-running. Testing a stream without a full runtime is separate
-  work, outside this pivot. Owner, 2026-10-01. [runtime-hosting; one-runtime-per-machine]
+  work, outside this pivot. Owner, 2026-10-01. [one-runtime-per-machine; runtime-hosting —
+  SHIPPED #2711, #2713]
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolabd_hosts_the_machines_streams.py::test_a_stopped_kept_stream_stays_stopped_across_restarts_takes_the_owners_ruling_and_rm_forgets_it -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolabd_hosts_the_machines_streams.py::test_an_attached_run_unloads_on_ctrl_c_and_on_a_killed_cli_while_a_kept_stream_runs_on -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_records_a_stream_that_keeps_crashing_it_failed -->
+- **DECIDED** — The stream actions, as built. `keep: false` binds a stream to the connection
+  carrying the call — `/mcp/stdio`, which `tatolab run` and `tatolab mcp` both hold — and it
+  unloads when that connection closes (Ctrl-C, a closed terminal, a killed CLI, an MCP host
+  exiting); a one-shot `POST /mcp` can only keep. `run` follows the stream's records with
+  `logs {stream, after}`, `after` a record sequence number, and a runtime crash closes the
+  connection so `run` exits 1 naming it. A name loaded or kept — stopped or failed included —
+  is refused naming its project, `--name` the way out; a `keep` load of the same project and
+  function replaces the record and keeps the owner's rulings. The tools: `stop_stream`
+  (unload; record `stopped` for a kept stream, end an attached one's `run`), `start_stream` (a
+  stopped or failed one), `remove_stream` (unload, forget), `list_streams` (name, attached /
+  kept / stopped / failed and why, project, node count) and `expose_port {stream, node, port,
+  level}`, `level` one of `internal`, `private`, `public`, which sets the port's level live and
+  records the owner's ruling for a kept stream — the owner's `expose` wins over the function's
+  `exposed`, which is the default for a port without a ruling. A restriction on a kept stream
+  is recorded before it changes live, so a crash can only tighten a port, never reopen it.
+  `dev` is `run` plus a watch re-loading on save, and after a crash it waits and loads again.
+  The service restarts a crashed `tatolabd` and its kept streams return. Owner, 2026-10-02.
+  [runtime-hosting — SHIPPED #2711, #2713]
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolabd_hosts_the_machines_streams.py::test_expose_sets_a_running_streams_port_internal_private_or_public_live_and_nothing_restarts -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolabd_hosts_the_machines_streams.py::test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_before_any_reader -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolabd_hosts_the_machines_streams.py::test_two_projects_kept_streams_run_come_back_after_a_restart_and_stop_start_rm_hold -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolabd_hosts_the_machines_streams.py::test_an_agent_does_all_of_it_over_tatolab_mcp -->
 - **DECIDED** — Several streams in one project or package: a stream is a decorated function,
   `@stream def camera_rig(stream_builder: StreamBuilder)`, and a file or a package may define
   as many as it likes; the bare `setup(stream)` retires rather than living beside it, and a
@@ -224,7 +275,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   stays flat and addresses stay `<machine>/<stream>/<node>/<port>`; no group label and no nested
   subgraph is built until an editor or an agent needs to see a fragment as one thing. Across
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
-  [runtime-hosting; one-runtime-per-machine]
+  [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
 ## Packages & extension model — IN-FLIGHT (→ shared-pools-bounded-by-memory-budget)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-08-package-split-and-lend.md -->
@@ -785,8 +836,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ runtime-hosting)
+## Processor model & scheduling — DECIDED (unbuilt: scheduling across streams; the sharing step)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -1150,13 +1202,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   In-process hosting of a Python processor does not exist — not as a default, a
   fallback, an optimisation, or an engine choice. Isolation, not latency, is the
   optimised axis: no processor may ever block, stall, or degrade another. Same user
-  code, one venv, no per-processor environments, no placement surface of any kind.
+  code, one venv per stream — each stream's interpreters start from its own project's venv
+  inside the one runtime process — no per-processor environments, no placement surface of
+  any kind.
   A child imports the lent `tatolab.runtime`, never a copy in its venv — one native
   artifact. Every processor class
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
   placement. [helper-process-placement-only — SHIPPED #1714; package-split-and-lend —
-  SHIPPED #2689; amended by runtime-hosting: per-stream environments in one runtime process]
+  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
   the checkout lease and the retired-frame refusal are one platform-neutral core both arms
@@ -1302,10 +1356,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   therefore leaves no helper on either floor, and on macOS the helper's `teardown()` still
   runs. **A third interrupt exits 130 on both floors**: the run loop parks for good while the
   process is being ended at once, so killing the helper groups can no longer let the run
-  return inside the log-flush grace and exit 0.
+  return inside the log-flush grace and exit 0. The runtime itself is started by the per-user
+  service its installer registers and never detaches.
   [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266; macos-platform-floor —
-  SHIPPED #2357; macos-capability-parity — SHIPPED #2410; amended by one-runtime-per-machine:
-  an installer-registered per-user service starts the runtime, which never detaches itself]
+  SHIPPED #2357; macos-capability-parity — SHIPPED #2410; runtime-hosting — SHIPPED #2721,
+  #2722]
   <!-- verify: tests/stream-on-runtime/test_helper_placement.py -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_placement.py::test_a_processor_interrupted_while_still_setting_up_still_tears_down -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_placement.py::test_a_worker_a_processor_forked_goes_down_with_the_apps_helper -->
@@ -1419,8 +1474,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting would re-invent an identity grammar.
   [processor-class-identity — SHIPPED #1838, #1841; runtime-mesh — SHIPPED #2282;
-  stream-graph — SHIPPED #2614, #2618; reopened by one-runtime-per-machine: whether
-  addresses gain a stream level]
+  stream-graph — SHIPPED #2614, #2618; runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: cargo test -p streamlib-engine --test node_name_test a_typed_duplicate_is_refused_by_name_and_adds_nothing -->
@@ -1468,29 +1522,28 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   interpreter. It is recorded beside the graph when the stream is loaded — never inside it, so
   the same graph loads from another checkout — and every processor interpreter of the stream
   starts from it, its working directory the project. The runtime adds nothing per stream and
-  nothing from the caller — no `.env`, no `-e`, no caller's shell; a stream's compile and its
-  processor interpreters inherit the runtime's own environment — and a stream reads its own
-  settings from its project as any program does
-  (runtime-hosting decision 4). Provisioning an environment is
-  the packs OPEN in §Packages. Owner, 2026-10-02. [package-split-and-lend — SHIPPED #2689,
-  #2693; runtime-hosting]
+  nothing from the caller — no `.env`, no `-e`, no caller's shell; a stream's compile, describe
+  and processor interpreters inherit the runtime's own environment minus every `PYTHON*`
+  variable — and a stream reads its own settings from its project as any program does.
+  Provisioning an environment is the packs OPEN in §Packages. Owner, 2026-10-02.
+  [package-split-and-lend — SHIPPED #2689, #2693; runtime-hosting — SHIPPED #2711]
 - **DECIDED** — Spawn and describe live in the engine, beside `subprocess_bridge.rs`, and
   run no Python in the runtime process. A loaded stream's environment is recorded as
   `StreamEnvironment { project_directory, interpreter }`. A processor interpreter's command is
   `<interpreter> <lend>/tatolab/runtime/_processor_interpreter_bootstrap.py`, run by path and
-  never `-m` or `-c`; `PYTHONPATH` is the lend directory, then the project directory;
-  `PYTHONHOME` is removed; the working directory is the project; the `STREAMLIB_*` variables
+  never `-m` or `-c`; `PYTHONPATH` is the lend directory, then the project directory; every
+  other `PYTHON*` variable is removed; the working directory is the project; the `STREAMLIB_*` variables
   are unchanged. The bootstrap first drops its own directory from `sys.path`, then imports
   `tatolab.runtime` — an interpreter that cannot load it (not CPython, below 3.10,
   free-threaded, a foreign architecture) writes a refusal to raw stderr naming its path,
   implementation, version, free-threading, architecture and the import error, and exits —
   then checks the build id, then runs its node. `tatolabd` finds the lend relative to its own
-  executable, at `../lib/tatolab/lend`. Describe is the same command with `--describe <import
+  executable, at `../lib/tatolab/lend`, or at `Contents/Resources/lend` inside `Tatolab.app`. Describe is the same command with `--describe <import
   paths>`, run at load for every Python `type` a graph names and at a live `add_node` for one
   not yet described; the bootstrap prints each declaration as JSON, and a type that will not
   import or carries no stamp is refused by name, quoting the interpreter's stderr. It costs one
   interpreter start per load and per live add of an undescribed type. [package-split-and-lend
-  — SHIPPED #2689]
+  — SHIPPED #2689; runtime-hosting — SHIPPED #2711, #2721]
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::processor_interpreter_describe -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_interpreter_lend.py -->
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
@@ -1500,21 +1553,38 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   runtime requests exactly those at load and refuses by name what the machine cannot grant, so
   nothing enumerates every possible device up front. Decided with the resources entry below.
   [one-runtime-per-machine]
-- **DECIDED** — Several streams in one runtime process. The runtime keeps, once for the
-  machine: the one `GpuContext` every stream shares, signal ownership and the local API.
-  Everything else the tree keeps once per process today
-  becomes per stream: the event topic, the processor registry, the interpreter a stream's
-  nodes start from, the log file, shutdown and its escalation, the teardown watchdog, and the
-  process-group table of its processor interpreters — so one stream's shutdown, crash budget
-  or graph change never touches another's. A stream links to any private or public port of
-  another stream on the same machine (§Networking, exposure), over the
-  local transport, and surfaces are shared
-  across every stream's processor interpreters on both floors, all being the runtime's
-  children, so a link between two streams on one machine copies no pixels. Streams needing
-  conflicting Python packages each start from their own venv (the package split and the lend,
-  §Packages). Owner, 2026-10-01; the surface clause confirmed 2026-10-02. [runtime-hosting;
-  one-runtime-per-machine; amended by moq-on-the-tailnet: the machine's MoQ endpoint is kept
-  once for the machine, built at the sharing step]
+- **DECIDED** — Several streams in one runtime process: one engine, a table of streams.
+  `Runner` is the engine — `tatolabd` builds one, and the library type stays constructible so
+  the runtime suite runs many per test binary. It makes once, for every stream: the
+  `GpuContext` (so `VULKAN_DEVICE_FOR_IMPORT` names the only device), the iceoryx2 node, one
+  tokio runtime, the surface-sharing service, one logging subscriber, signal ownership, and the
+  local API, which it hosts itself. Each stream is a `LoadedStreamInThisRuntime`, keyed by its
+  cast name: its compiler (graph, transaction, commit lock), status and graph-change listener,
+  and a `RuntimeContext` sharing the engine's GPU, node and tokio. Per stream: events, which
+  carry their stream on a per-stream topic; the Python node types, described in its own
+  interpreter, while built-ins register once for the machine and the node catalog lists both;
+  its log file, records routed by stream; shutdown and its escalation, the machine's signal
+  ladder walking every stream at once; the teardown watchdog; exposures; the virtual camera's
+  stable id; and the pipeline cache. The process-group table of processor interpreters stays
+  one lock-free machine table, each slot tagged with its stream — so one stream's shutdown,
+  crash budget or graph change never touches another's. A stream's watchdog, on expiry, kills
+  that stream's groups, abandons its threads and unloads it, never recording it `failed`; past
+  an engine-chosen bound of abandoned threads in the process, the runtime exits 124. A stream
+  links to any private or public port of another stream on the same machine (§Networking,
+  exposure) over iceoryx2; the input's stream owns the link, and a source stream not loaded
+  leaves it `awaiting_remote`, its reason naming that stream. Surfaces are shared across every
+  stream's processor interpreters on both floors, all being the runtime's children, so a link
+  between two streams on one machine copies no pixels. Streams needing conflicting Python
+  packages each start from their own venv (the package split and the lend, §Packages). Owner,
+  2026-10-01; the surface clause confirmed 2026-10-02. [one-runtime-per-machine;
+  runtime-hosting — SHIPPED #2704, #2715; amended by moq-on-the-tailnet: the machine's MoQ
+  endpoint is kept once for the machine, built at the sharing step]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::one_streams_shutdown_ends_it_and_leaves_the_other_loaded -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::one_streams_graph_change_reaches_only_its_own_compiler_and_topic -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_streams_log_each_to_its_own_file_and_a_record_no_stream_emitted_to_neither -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::helper_process_group_registry::tests::one_streams_kill_takes_only_the_groups_tagged_with_that_stream -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::processors::node_types_one_stream_resolves::tests::two_streams_describing_one_class_each_resolve_their_own -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test two_streams_reading_each_other_wire_and_shut_down_within_the_budget -->
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
   admission control, and how a stream states what it needs. Direction (review, not decided):
   what a stream needs is read from its graph (the derived needs above) and granted per stream
@@ -1528,12 +1598,20 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   bounded per node by the existing abandon budget and ends only that stream; Python crashes and hangs
   stay in their own process. "Restart the runtime and the streams come back" means re-loading
   from persisted graphs, never re-attaching — processor interpreters die with their parent by
-  construction and surfaces cannot outlive the device's owner — so the runtime keeps a state
-  directory holding each loaded graph (the runtime directory is
-  deliberately ephemeral today). Owner, 2026-09-30: a driver-level fault taking every stream
+  construction and surfaces cannot outlive the device's owner — so the runtime keeps each kept
+  stream's graph in its state directory (§Product), the runtime directory staying ephemeral.
+  A kept stream implicated in the runtime's last two crashes in a row is recorded `failed`
+  (§Product): a node's threads, those it spawns, its escalate worker and a stream callback on
+  an OS-owned thread carry its stream, and alternate-stack signal handlers and a hook on an
+  escaping panic write the crashing thread's stream through a file opened at start; a crash
+  outside any stream's work, SIGKILL and an OOM kill implicate none, and a crash no stream owns
+  restarts and is a bug to file. Owner, 2026-09-30: a driver-level fault taking every stream
   down for a few seconds is the equivalent of a fundamental Docker issue crashing everything;
   one engine is easier to run and to get bug reports for, and an engine per stream multiplies
-  the ways things can fail. An engine per stream is not a fallback. [one-runtime-per-machine]
+  the ways things can fail. An engine per stream is not a fallback. [one-runtime-per-machine;
+  runtime-hosting — SHIPPED #2704, #2713]
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_records_a_stream_that_keeps_crashing_it_failed a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start_retries_it -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_hosts_a_stream_on_the_gpu a_clean_restart_between_two_crashes_resets_the_count -->
 
 ## Graphics (RHI / GPU) — IN-FLIGHT (→ shared-pools-bounded-by-memory-budget; unbuilt: accelerators optional, pivot step 5)
 
@@ -1974,7 +2052,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   every stream. Undecided: whether the adapter crates move anywhere, and what the
   software-Vulkan bundle costs the Linux wheel. [one-runtime-per-machine]
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ runtime-hosting: Apple permissions through Tatolab.app; jpeg-after-the-robotics-cut)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into `tatolabd` — pre-built named blocks added and
@@ -1999,9 +2078,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   in and pulled out from every other application's point of view, whose frames are
   whatever the graph writes. It takes video on an input `video` declared `newest`, the
   display's shape. Config: `name`, the camera's name in every picker, defaulting to
-  `StreamLib Camera` followed by a four-character id derived from the app's entry
-  directory and the instance's display name — distinct across instances and apps, the
-  same on every run of the same app, so unnamed cameras never collide and a device left
+  `StreamLib Camera` followed by a four-character id derived from the stream's project
+  directory, the stream's name and the node's name — distinct across nodes and streams, the
+  same on every run of the same stream, so unnamed cameras never collide and a device left
   behind is still recognised; `door`, optional, `auto` by default. Two doors, one per instance,
   chosen at `setup()` and logged once. The **v4l2loopback** door creates its own device
   through the module's control node (`/dev/v4l2loopback`, `CTL_ADD` with the label set to
@@ -2053,7 +2132,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   for WirePlumber's own V4L2 devices, and Chrome 152 ships the flag off — so which door a
   consumer takes and what stamp it observes is unproven, and closing it needs a machine with
   a working PipeWire camera consumer. [virtual-camera-sink — SHIPPED #2196, #2197, #2198;
-  macos-capability-parity]
+  macos-capability-parity; runtime-hosting — SHIPPED #2704]
   <!-- verify: cargo test -p streamlib-media-builtins virtual_camera_sink -->
   <!-- verify: pytest tests/stream-on-runtime/test_virtual_camera_sink.py -->
   <!-- verify: cargo test -p streamlib-engine a_pipewire_camera_node_offers_a_modifier_and_a_shared_memory_sibling -->
@@ -3252,14 +3331,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   carries the camera, microphone and local-network usage strings; the app and `tatolabd`
   carry the hardened-runtime device entitlements; only the runtime process opens devices,
   never a processor interpreter. The runtime checks authorization before opening a device and
-  refuses by name, because a denied microphone delivers silence, and discovery retries after
-  a local-network denial. A runtime started from a terminal credits that terminal — the
-  responsible code — and only Apple's Terminal is exempt from the local-network check. The
-  prompt's exact wording under `SMAppService` is an acceptance check of the installer change.
-  Owner, 2026-10-01, on #2560's research. [runtime-hosting; one-runtime-per-machine]
+  refuses by name, because a denied microphone delivers silence. Nothing discovers on the LAN,
+  so the local-network usage string ships and the retry after a local-network denial lands
+  with the sharing step. A runtime started from a terminal credits that terminal — the
+  responsible code — and only Apple's Terminal is exempt from the local-network check.
+  Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
+  #2721]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ runtime-hosting)
+## Networking — transport, moq, webrtc — DECIDED (unbuilt: the sharing step)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -3359,28 +3440,21 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   already scored, so a mismatch is the wheel's. [networking-extension-wheels — SHIPPED #2153]
   <!-- verify: git ls-files packages/streamlib-webrtc -->
   <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
-- **DECIDED** — A runtime has a name, and a port is addressed `<runtime name>/<display name>/<port>`
-  — the string `tap` spells a channel with. The name belongs to the runtime rather than to its
-  control plane and is a field of `Runner`, taken from `Runner::new_with_runtime_name` in Rust,
-  else `STREAMLIB_RUNTIME_NAME` — which `run` / `dev`'s `--runtime-name` hands `tatolabd` —
-  else the default
-  `<hostname>-<app directory name>-<id>`: every forbidden character replaced by `-`, the id four
-  base-36 characters of an FNV-1a hash over the app directory's full path — the virtual camera's
-  own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else the working directory. A host that
-  reports no name takes a stand-in, said once. Each part of an address is one address chunk — non-empty, no `/`, `*`,
-  `$`, `#` or `?`, not beginning with `@`, spaces and unicode legal — checked against the rule's
-  own table, and an explicit runtime name that breaks it is refused at construction naming the
-  character. The type is `PortAddress` (`core/graph/edges/port_address.rs`, the rule in
-  `core/runtime/address_chunk.rs`); `tap` resolves a channel naming this runtime only and
-  refuses another runtime's name by name. The registry entry, `--node`, `tap`'s channel and
-  `graph`'s top-level `runtime_name` read the one name. Nothing refuses a duplicate: two runs
-  from one directory both start, and a `--node` name two live registry rows hold is refused
-  naming both. `run` and `dev` take no other naming flag. `runtime_id` stays per-run — logs,
-  the registry file, iceoryx2 names — and is never an address.
+- **DECIDED** — The address, as built. A port's address is `PortAddress`
+  (`core/graph/edges/port_address.rs`): `[<machine>/][<stream>/]<node>/<port>`,
+  right-anchored, leading parts omitted meaning here, every part cast as one address chunk
+  (`core/runtime/address_chunk.rs`, one shared fixture of cases the engine and the
+  pure-Python builder both cast from). It carries no processor id; whatever owns the port
+  resolves the node's name when asked. The machine is named as the machine-name entry below
+  states and read by `graph`'s top-level `machine`; a stream's name is cast at load. `tap`'s
+  channel is an address on this machine and one naming another machine is refused naming it.
+  `runtime_id` stays per-run — logs, iceoryx2 names, the surface-sharing service — and is
+  never an address. In Python `stream_builder.remote_output(address)` takes the address string,
+  right-anchored — `"main/camera/video"` another stream on this machine — each chunk cast, one
+  casting to empty, `.` or `..` refused where it is written; an address naming another machine
+  links nothing until the sharing step and is refused by name.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
-  package-split-and-lend — SHIPPED #2693; reopened by one-runtime-per-machine: whether
-  addresses gain a stream level; amended by runtime-hosting: the runtime name gives way to the
-  machine name (the address entry below)]
+  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
@@ -3393,20 +3467,21 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket the_retired_verbs_and_flags_are_usage_errors -->
-- **DECIDED** — A link's ends are both on this runtime. `OutputLinkPortRef` and
-  `InputLinkPortRef` name a port of this runtime's graph and nothing else, and the graph holds
-  one link collection, which every traversal walks; `LinkState` has no state that waits on
-  another runtime. A snapshot whose link end names a runtime is refused by name at load rather
-  than read as a local end. In Python `connect(source, destination)` takes a reference minted by this
-  stream's builder on each end, and a value of any other kind is refused naming the spelling
-  that would work. The engine reads no bag key to carry a link. Linking to another machine is the
-  sharing step's (the moq-on-the-tailnet entries below).
-  [zenoh-and-moq-wheel-removal — SHIPPED #2643]
+- **DECIDED** — A link's ends are both on this machine. A link end names a port of this
+  stream's graph, or — a source only — `{stream, node, port}` of another stream on this
+  machine; the graph holds one link collection, which every traversal walks. `LinkState`'s
+  `AwaitingRemote` waits on a source stream that is not loaded or a source port it may not
+  read yet, its reason naming which, and the link wires once the source can be read. A
+  snapshot whose link end names another machine is refused by name at load rather than read
+  as a local end. In Python `connect(source, destination)` takes a reference minted by this
+  stream's builder, or `remote_output`'s, as its source, and a value of any other kind is
+  refused naming the spelling that would work. The engine reads no bag key to carry a link.
+  Linking to another machine is the sharing step's (the moq-on-the-tailnet entries below).
+  [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_carrying_a_key_no_address_chunk_is_refused_naming_the_keys_of_a_link_end -->
   <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the_address_shape -->
   <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machine -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_an_input_as_its_source_naming_the_fix -->
-  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
   creates it, reading a port the source stream has exposed — private on the machine, public off
   it — and the source is never asked. No runtime pushes its output into another's input, and no
@@ -3426,7 +3501,6 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and `Mp4Sink` compares first stamps across tracks with no another-machine refusal. How a stamp taken on another machine's clock is marked is the sharing step's OPEN below.
   [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643]
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
-  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
   machines become comparable; until then the per-clock rule above stands. A relay — a
@@ -3442,10 +3516,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   relay the machine dials out to. streamlib owns what leaves a machine, streams as URLs, and
   many streams on one runtime (owner, 2026-09-30). Nothing is built for a private network
   without a tailnet. [one-runtime-per-machine; moq-on-the-tailnet]
-- **DECIDED** — The address is `<machine>/<stream>/<node>/<port>`: the stream takes the place
-  of today's runtime name, the runtime is addressed by its machine (default the hostname),
-  every existing address maps across with one segment prefixed, and the same string is the
-  address in Python, the CLI, the URL path and the graph (owner, 2026-09-30). Collisions (owner,
+- **DECIDED** — The address is `<machine>/<stream>/<node>/<port>`: the runtime is addressed by
+  its machine (its tailnet name, else its hostname), and the same string is the address in
+  Python, the CLI, the URL path and the graph (owner, 2026-09-30). Collisions (owner,
   2026-10-02): a second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
   is unique per machine, defaults to its function's, and a second
   load of a name is refused naming where the first came from, with `--name` the way out, which
@@ -3463,9 +3536,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   a hostname `Jonathans-MacBook` is `jonathans-macbook`. What a person writes — class names,
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
-  Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting;
-  stream-graph — SHIPPED #2614, #2618, #2658; amended by moq-on-the-tailnet: a machine name is
-  its tailnet name (the entry below)]
+  Owner, 2026-10-02. [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2658;
+  runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_names_the_port_a_fixture_address_parses_to -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_refuses_a_fixture_address_naming_no_port_where_it_is_written -->
@@ -3549,7 +3621,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   machine. `desk/<stream>/<node>/<port>` therefore names the tailnet machine `desk`, and a full
   tailnet name is accepted in the machine position for a machine shared in from another
   tailnet. With no Tailscale the machine's name is its hostname and matters only on that
-  machine. Owner, 2026-10-04. [moq-on-the-tailnet]
+  machine. Owner, 2026-10-04. [moq-on-the-tailnet; runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::no_tailscale_names_the_machine_by_its_hostname -->
@@ -3592,7 +3664,6 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   accelerators optional, then one sharing step — the entries above — in place of that
   sequence's steps 8 and 9, then resources, packs and the app. Owner, 2026-10-04.
   [moq-on-the-tailnet; zenoh-and-moq-wheel-removal — SHIPPED #2633, #2643, #2645, #2649]
-  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **OPEN** — The sharing step's details, decided at its own align and built against by nothing
   until then: which versions of `moq-net` and `moq-tokio` are pinned; how groups are cut for
   data that is not video, without the engine reading a bag;
@@ -3646,27 +3717,30 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   refusal naming each abandoned processor and exits non-zero, while a forced shutdown that
   abandoned nothing exits zero. An engine-chosen watchdog of about fifteen seconds, armed
   when the teardown starts, ends a teardown hung anywhere else: it logs what is still
-  running and ends the process with status 124, distinct from the third interrupt's 130.
+  running and ends the process with status 124, distinct from the third interrupt's 130. One
+  stream's own shutdown runs under that stream's watchdog (§Processor model, several streams).
+  The per-user service the installer registers starts `tatolabd`, which never detaches itself.
   [shutdown-ladder; local-transport-hardening — SHIPPED #2266; package-split-and-lend —
-  SHIPPED #2693; amended by one-runtime-per-machine: an installer-registered per-user service
-  starts the runtime, which never detaches itself]
+  SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722]
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_hosts_a_stream_on_the_gpu a_kept_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_by_an_interrupt -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::engine_teardown_watchdog -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_sighup_tears_the_graph_down_gracefully -->
 
-## Distribution & versioning — IN-FLIGHT (→ runtime-hosting)
+## Distribution & versioning — DECIDED (unbuilt: the Rust crate's `tatolab-stream` name)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
-  crate for Rust apps, all at one version (the entry below); it publishes no engine wheel and
-  attaches nothing. Positioning is "realtime engine, Python authoring" — the Rust engine is
-  named as material; never marketed as "a Python library". Owner, 2026-10-08.
+  crate for Rust apps, all at one version (the entry below); it publishes no engine wheel,
+  and the runtime unit ships inside the installer (the entry below). Positioning is
+  "realtime engine, Python authoring" — the Rust engine is named as material; never marketed
+  as "a Python library". Owner, 2026-10-08.
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
-  SHIPPED #2697; amended by one-runtime-per-machine: the runtime package ships inside the
-  installer; amended by tatolab-names: the crate is `tatolab-stream`]
+  SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; amended by tatolab-names: the crate
+  is `tatolab-stream`]
   <!-- verify: grep -n "publish-to-pypi:" .github/workflows/release-wheel.yml -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index -->
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
@@ -3790,11 +3864,63 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   with the CLI and the desktop app, never through pip (owner, 2026-09-30). Known: maturin ships a native
   portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
   custom module system is needed. [one-runtime-per-machine; package-split-and-lend — SHIPPED
-  #2673, #2697]
+  #2673, #2697; runtime-hosting — SHIPPED #2721, #2722]
+- **DECIDED** — The Linux installer. Each release attaches
+  `tatolab-runtime-<version>-x86_64-linux.tar.gz`, built in `manylinux_2_28` with the
+  portability gate run over it and carrying its user units in `lib/systemd/user/`, and serves
+  it, `install.sh` and a `latest` naming the version from `get.tatolab.com`, an R2 bucket.
+  `curl -fsSL https://get.tatolab.com/install.sh | sh` checks the tarball's sha256, unpacks it
+  to `~/.local/share/tatolab/<version>/`, points `current` at it, links `tatolab` and
+  `tatolabd` into `~/.local/bin`, and writes `~/.config/systemd/user/tatolabd.service`
+  (`Restart=on-failure`, `WantedBy=default.target`, `After=graphical-session.target`) — always
+  on, and across logouts with `loginctl enable-linger`, which it offers. A runtime started with
+  no display in its environment takes `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` from the
+  user manager's, which desktop sessions import at login, at its start and never later —
+  NVIDIA's driver reads `DISPLAY` once, at `vkCreateInstance`, and a swapchain on an instance
+  created without it crashes. One that found none says so, refuses every window by name, and is
+  restarted by `tatolabd-restart-for-a-display-at-login.service`
+  (`WantedBy=graphical-session.target`) when a desktop session starts. Re-running upgrades in
+  place and restarts the service, a failed restart keeping the previous release; `--uninstall`
+  removes the service and the files, never the state directory. On macOS the script refuses,
+  pointing at the app. Owner, 2026-10-11. [runtime-hosting — SHIPPED #2722]
+  <!-- verify: bash installer/tests/run_install_sh_test_in_a_systemd_container.sh -->
+  <!-- verify: grep -n "GET_TATOLAB_COM_URL: https://get.tatolab.com" .github/workflows/release-wheel.yml -->
+- **DECIDED** — `Tatolab.app`, a menu-bar app carrying the runtime, lives in the private
+  repository `tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app
+  private — and is a Tauri app registering its agent through `objc2-service-management`. On
+  macOS it ships as a notarised `.dmg` on this repository's release and as `brew install --cask
+  tatolab/tap/tatolab` from `tatolab/homebrew-tap`, whose `Casks/tatolab.rb` the app
+  repository bumps per release. The app repository checks this repository out at the release
+  tag, builds the runtime unit, lays it into the bundle, signs, notarises, and attaches the
+  `.dmg`. The bundle holds `Contents/MacOS/tatolabd`; an `SMAppService.agent` (plist in
+  `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit); the CLI as
+  `Contents/MacOS/tatolab-cli`, a name that does not case-fold onto the app's own executable on a
+  default APFS volume, which `/usr/local/bin/tatolab` links to; and the lend laid out by
+  Apple's code rules — every Mach-O under `Contents/Frameworks/tatolab-runtime/` at its path
+  below `tatolab/runtime/`, the lend in `Contents/Resources/lend/` with each Mach-O a relative
+  link into it — which `tatolabd` finds from `Contents/MacOS/`, `dladdr` finding
+  `_vulkan_driver/` through the link. Registration is the login item, so one switch, "Run
+  Tatolab", covers both; opening the app registers the agent unless the user turned the switch
+  off, which it remembers, and on `.requiresApproval` opens Login Items. The menu shows whether
+  the runtime is up and its stream count (`list_streams`); Quit quits the app, never the
+  runtime. First launch links `tatolab` into `/usr/local/bin` and creates the machine lock's
+  directory behind one administrator prompt. `Info.plist` carries the camera, microphone,
+  local-network and Documents, Desktop and Downloads usage strings; the app and `tatolabd`
+  carry the hardened-runtime device entitlements; every Mach-O is signed with the Developer ID
+  and the `.dmg` notarised and stapled, the seven `APPLE_*` secrets synced from Infisical into
+  the app repository. Uninstalling — the app's "Uninstall Tatolab…" or `brew uninstall --cask` —
+  removes the service and the files, never the state directory. On Linux the app is a `.deb`
+  and an AppImage from the same repository: the same window and tray over the service the
+  installer registers, its switch `systemctl --user enable --now` / `disable --now
+  tatolabd.service`; it installs no runtime, so the installer stays Linux's one way to install
+  the runtime, and with no service the app points at the installer. Beyond its live stream
+  list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
+  Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721]
 
-## Control plane & observability — IN-FLIGHT (→ runtime-hosting)
+## Control plane & observability — DECIDED (unbuilt: the sharing step)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3804,14 +3930,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::graph_response_top_level_key_rendering_tests::a_graph_renders_no_extensions_key_and_its_schema_declares_none -->
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
-  hosted in-process by any runtime that enables it. The MCP tool set is the canonical
+  hosted in-process by the engine itself. The MCP tool set is the canonical
   control vocabulary; the CLI is a pure JSON-RPC client of it — agents and humans use
   the same verbs; REST/WS routes serve the same operations for programmatic clients.
-  The served MCP tool set is exactly the observation verbs `graph`, `tap`, `logs`,
-  `exchange` and `shutdown` beside the four graph-mutation verbs the engine's runtime
-  API has always carried — `add_processor`, `remove_processor`, `connect` and
-  `disconnect`; `health` is a REST route and `nodes` a registry surface, neither of
-  them a tool. Rejected: a control plane that never mutates the graph, code being the
+  The served MCP tool set is exactly the observation verbs `graph`, `tap`, `logs` and
+  `exchange`, the four graph-mutation verbs — `add_node`, `remove_node`, `connect` and
+  `disconnect` — and the six stream actions — `run_stream`, `stop_stream`, `start_stream`,
+  `remove_stream`, `list_streams` and `expose_port` (§Product); `health` is a REST route,
+  not a tool. The runtime has no shutdown verb: it stays on as a service does, stopped by
+  the service manager or a signal, and `stop_stream` ends a client's work. Rejected: a control plane that never mutates the graph, code being the
   source of truth and the edit loop `dev` — a dynamic graph an agent cannot add to is not
   worth having (owner, 2026-09-06). A mutation compiles inside the call, so the caller learns whether
   its change took rather than reading a `Running` node with nothing flowing. A Python
@@ -3840,8 +3967,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   agent-readable-processor-catalog — SHIPPED #2232;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; local-transport-hardening —
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
-  SHIPPED #2689; amended by moq-on-the-tailnet: `tap` and `exchange` leave the tool set at the
-  sharing step]
+  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; amended by moq-on-the-tailnet: `tap`
+  and `exchange` leave the tool set at the sharing step]
   <!-- verify: cargo test -p streamlib-api-server the_upgraded_stream_serves_the_same_tools_and_resources_as_post_mcp -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest tests/stream-on-runtime/test_live_graph_mutation.py -->
@@ -3854,29 +3981,28 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `processor_id` beside it. The graph-mutation tools are `add_node(type, config, name)`,
   answering the name the node received; `remove_node(name)`; `connect`, each end given as
   `<end>_node` and `<end>_port`, answering a `link_id`; and `disconnect`, taking a `link_id`.
-  Every tool
-  addresses a node by its name within its stream, never by an id; `graph` still renders a
-  node's `id` as a live key. While a runtime holds one stream, the name alone is the node; once
-  one runtime hosts several, every tool that names or adds a node also names its stream, as the
-  address does, spelled with the stream actions by the change that builds them. `tap`'s
-  channel is `<runtime_name>/<node>/<port>`, the name read from `graph`'s top-level
-  `runtime_name`; the catalog resource is
-  `node-catalog`, listing `nodes`, each under the `type` `add_node` takes; the instructions and
-  the prompts say node — `insert_node_between_linked_nodes` among them. `runtime_name` stays
-  until one runtime hosts several streams and the address gains its machine and stream. The
-  engine's Rust identifiers keep "processor" until the rename. Owner, 2026-10-02. [local-api;
-  stream-graph — SHIPPED #2614; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; amended by
-  moq-on-the-tailnet: `tap`'s channel goes with `tap`, at the sharing step]
+  Every tool addresses a node by its name within its stream, never by an id; `graph` still
+  renders a node's `id` as a live key. `add_node`, `remove_node`, `connect`, `disconnect` and
+  `logs` take a required `stream`; `graph {stream?}` returns one stream's one-shape graph,
+  loadable, or `{machine, streams: […]}`; `exchange` takes a surface id, unique on the
+  machine. A link end renders right-anchored — `{node, port}`, `{stream, node, port}` — and
+  `connect`, named by the input's stream, takes `<end>_stream` beside `<end>_node` and
+  `<end>_port`, an omitted stream meaning that one, and only the source may name another. `tap`'s channel is an address (§Networking, the address); the catalog
+  resource is `node-catalog`, listing `nodes`, each under the `type` `add_node` takes; the
+  `graph` resource, the instructions and the prompts say node and stream —
+  `insert_node_between_linked_nodes` among them. The engine's Rust identifiers keep
+  "processor" until the rename. Owner, 2026-10-02. [local-api; stream-graph — SHIPPED #2614;
+  zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; runtime-hosting — SHIPPED #2704, #2711,
+  #2715; amended by moq-on-the-tailnet: `tap`'s channel goes with `tap`, at the sharing step]
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_states_the_link_id_and_the_links_state -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_resolves_each_ends_node_by_its_cast_name -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_takes_its_stream_and_a_link_id_alone -->
-- **DECIDED** — `graph` carries the runtime's name as a top-level key, `runtime_name`, beside
-  `nodes`, `links` and `exposed` — in the OpenAPI schema, the MCP tool, the generated schema
-  and the prompt fixture — because `tap`'s channel is spelled from it and `tap` stays until the
-  sharing step. `tatolab nodes` prints the registry table alone. Every
-  channel reserves one subscriber slot beyond its fixed cap, `tap`'s, and no other. The key
-  goes with the runtime name at runtime hosting. [zenoh-and-moq-wheel-removal — SHIPPED #2643,
-  #2645; package-split-and-lend — SHIPPED #2691, #2697]
+- **DECIDED** — `graph` carries the machine's name as a top-level key, `machine`, beside a
+  stream's `stream`, `nodes`, `links` and `exposed` — in the OpenAPI schema, the MCP tool, the
+  generated schema and the prompt fixture — and no mesh key. Every channel reserves one
+  subscriber slot beyond its fixed cap, `tap`'s, and no other. [zenoh-and-moq-wheel-removal —
+  SHIPPED #2643, #2645; package-split-and-lend — SHIPPED #2691, #2697; runtime-hosting —
+  SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::graph_response_top_level_key_rendering_tests::the_machine_is_a_top_level_key_and_no_mesh_key_renders -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_the_taps_reservation_and_refuses_past_it -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
@@ -3885,9 +4011,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —
   SHIPPED #2693]
 - **DECIDED** — The CLI is the native `tatolab`, shipped with the runtime and never in a
-  pip distribution, linking no engine: `new`, `run` and `dev` (starting `tatolabd`
-  attached) plus the observation verbs (`nodes` / `graph` / `tap` / `logs` / `exchange`),
-  the `mcp` verb, and one machine-setup verb, `enable-virtual-camera`, which installs the
+  pip distribution, linking no engine: `new`; the stream verbs `run`, `dev`, `stop`,
+  `start`, `rm`, `streams` and `expose`, each a call into the running runtime; the
+  observation verbs `graph`, `tap`, `logs` and `exchange`; the `mcp` verb; and one
+  machine-setup verb, `enable-virtual-camera`, which installs the
   loopback permission the virtual camera's loopback door needs behind the desktop's
   password prompt and touches no node. `exchange` takes a surface id, or a
   channel: the channel form composes tap → decode → exchange client-side in one warm
@@ -3899,17 +4026,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975;
   virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667; tatolab-names;
-  package-split-and-lend — SHIPPED #2693, #2697; amended by one-runtime-per-machine: an
-  installer-registered per-user service starts the runtime, which never detaches itself, and
-  the installer ships the CLI; amended by moq-on-the-tailnet: `tap` and `exchange` leave the
-  CLI at the sharing step]
+  package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711, #2721,
+  #2722; amended by moq-on-the-tailnet: `tap` and `exchange` leave the CLI at the sharing
+  step]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help help_lists_exactly_the_served_verbs -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_exchange_verb the_channel_form_taps_then_exchanges_each_sampled_id -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_mcp_verb -->
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
-  on disk that means nothing once its processes are gone: the node registry, the
-  surface-sharing socket, the local API socket and the iceoryx2 domain. On Linux it is
+  on disk that means nothing once its processes are gone: the surface-sharing socket, the
+  local API socket and the iceoryx2 domain. On Linux it is
   `$XDG_RUNTIME_DIR/streamlib/` when that variable is set and non-empty, and otherwise —
   empty or unset, and on macOS always — `/tmp/streamlib-<uid>/`, created owner-only and
   checked as a real directory this uid owns with no group or other bits. The check runs once
@@ -3917,16 +4043,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   refuses the start by name; every user takes the resolved directory. No StreamLib variable
   overrides it — a container or CI job sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere
   with nothing set, and `tatolab` resolves it through `streamlib-runtime-client-contract`, the
-  code the runtime resolves it with. What a runtime *keeps* — logs, caches — stays under the project's
-  `.streamlib/`. Node discovery is the per-user on-disk registry inside that directory: one
-  JSON file per live node, written only by runtimes hosting their local API, pruned only
-  when both liveness signals (a `graph` round trip over the socket, process check) fail.
-  The entry carries the runtime's own `runtime_name` beside its `runtime_id`, taken from
-  the runtime rather than from the local API it hosts, which carries no name of its own,
-  and the `local_api_socket_path` a client dials; a reader refuses an entry of an earlier
-  schema by name. Owner, 2026-09-14. [control-plane-one-surface; local-transport-hardening
-  — SHIPPED #2261; runtime-mesh — SHIPPED #2282; local-api — SHIPPED #2660, #2663;
-  package-split-and-lend — SHIPPED #2697]
+  code the runtime resolves it with. What a runtime *keeps* sits elsewhere: a stream's logs
+  and caches under its project's `.streamlib/`, and the kept streams and the runtime's own
+  log in the state directory (§Product). There is no registry to discover a runtime by: one
+  runtime per machine serves one socket at a fixed path. Owner, 2026-09-14.
+  [control-plane-one-surface; local-transport-hardening — SHIPPED #2261; local-api — SHIPPED
+  #2660, #2663; package-split-and-lend — SHIPPED #2697; runtime-hosting — SHIPPED #2711]
   <!-- verify: cargo test -p streamlib-runtime-client-contract streamlib_runtime_directory -->
   <!-- verify: cargo test -p streamlib-runtime-client-contract a_fallback_that_does_not_exist_yet_is_resolved_for_a_reader_without_being_created -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket with_no_runtime_every_verb_fails_at_once_naming_the_socket_and_how_to_start_one -->
@@ -4025,17 +4147,18 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-api-server the_socket_is_only_its_owners_to_open -->
 - **DECIDED** — The local API is reachable only on its own machine. Each machine's runtime
   serves one local API on a socket in its runtime directory that only the owning user can
-  open — `local-api-<runtime_id>.sock`, chmod 0600 inside the 0700 directory, a live
-  duplicate refused by a connect probe naming the path and a stale file replaced — carrying
-  the router and control vocabulary unchanged; no network address serves control. A client
-  picks a runtime by `--node <runtime name or id>`, or takes the sole live one. The URL forms are a separate listener that changes nothing — private and public
+  open — `local-api.sock`, chmod 0600 inside the 0700 directory, a live holder refused by a
+  connect probe naming the path and a stale file replaced — carrying the router and control
+  vocabulary unchanged; no network address serves control, and a client dials the one socket.
+  The URL forms are a separate listener that changes nothing — private and public
   ports on loopback — because browsers and ffmpeg cannot dial a socket. A runtime is never
   driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
   client's. Owner, 2026-10-01. [one-runtime-per-machine; local-api — SHIPPED
-  #2660, #2662, #2663; amended by moq-on-the-tailnet: the URL listener's tailnet half,
-  through `tailscale serve`]
+  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; amended by moq-on-the-tailnet: the URL
+  listener's tailnet half, through `tailscale serve`]
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name a_local_api_socket_a_live_process_holds_is_refused_naming_it -->
   <!-- verify: cargo test -p streamlib-api-server serving_the_router_on_the_local_api_socket_opens_no_tcp_listener -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket -->
 - **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
@@ -4045,7 +4168,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and protocol revision stay the runtime's alone. Stdin closing half-closes the socket and
   the verb exits when the runtime closes its side; the runtime going away exits it non-zero
   with one stderr line naming the runtime; no live runtime at launch is a one-line refusal
-  naming `tatolab nodes`. Run over ssh — `ssh <machine> <cli> mcp` — it is how an agent
+  naming the socket and how to start the runtime. Run over ssh — `ssh <machine> <cli> mcp` — it is how an agent
   changes a stream on another machine. No network listener serves MCP. The runtime serves
   only the latest MCP revision `rmcp` speaks, 2026-07-28 (stateless: no `initialize`
   handshake and no session); a host that speaks only an earlier revision is refused with the
@@ -4058,7 +4181,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p tatolab-cli --test tatolab_mcp_verb the_verb_opens_the_stream_with_one_upgrade_and_copies_both_ways_untouched -->
 - **DECIDED** — `graph` returns every stream the runtime holds, and every stream action the CLI
   has — `run` attached, `run -d`, `stop`, `start`, `rm`, `streams`, `expose` — is also a tool,
-  beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can; the
-  change that builds them spells them. One runtime per machine owned by one user (§Product)
-  means one socket per machine. Owner, 2026-10-01; confirmed 2026-10-02. [runtime-hosting;
-  local-api]
+  beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can. One
+  runtime per machine owned by one user (§Product) means one socket per machine. Owner,
+  2026-10-01; confirmed 2026-10-02. [local-api; runtime-hosting — SHIPPED #2711]
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolabd_hosts_the_machines_streams.py::test_an_agent_does_all_of_it_over_tatolab_mcp -->
