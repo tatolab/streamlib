@@ -212,7 +212,7 @@ impl<HeldAcquisition> OneOffAcquisitionsHeldForOneNode<HeldAcquisition> {
 /// when it drops unless the acquisition was held.
 #[must_use = "a reservation dropped unheld hands its count straight back; hold the acquisition \
               with `hold_until_the_helper_releases_it`"]
-pub(crate) struct OneOffAcquisitionCountReservation<'registry> {
+pub(super) struct OneOffAcquisitionCountReservation<'registry> {
     registry: &'registry EscalateHandleRegistry,
     reserved_shape: Option<OneOffAcquisitionShape>,
 }
@@ -232,7 +232,7 @@ impl<'registry> OneOffAcquisitionCountReservation<'registry> {
 
     /// Hold `registered_handle` under `handle_id`, counted under the reserved
     /// shape, until the helper releases it.
-    pub(crate) fn hold_until_the_helper_releases_it(
+    pub(super) fn hold_until_the_helper_releases_it(
         mut self,
         handle_id: String,
         registered_handle: RegisteredHandle,

@@ -92,31 +92,28 @@ pub(in super::super) fn handle_acquire_image(
     // The wire op deliberately does not take a usage list (that's
     // an acquire_texture concern); here the host knows the exact
     // set because the consumer is always a render-target adapter.
-    let acquired = registry
-        .reserve_one_off_acquisition_count(OneOffAcquisitionShape::RenderTargetImage {
+    let acquired = registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
+        sandbox,
+        OneOffAcquisitionShape::RenderTargetImage {
             width,
             height,
             format: parsed_format,
-        })
-        .and_then(|reservation| {
-            sandbox.escalate(move |full| {
-                let texture =
-                    full.acquire_render_target_dma_buf_image(width, height, parsed_format)?;
-                let (handle_id, produce_done, consume_done) =
-                    assign_image_handle_id(full, &texture)?;
-                // The timeline pair is held with the image so the FDs handed
-                // to surface-share stay valid for the registration's lifetime.
-                reservation.hold_until_the_helper_releases_it(
-                    handle_id.clone(),
-                    RegisteredHandle::Image {
-                        texture,
-                        produce_done,
-                        consume_done,
-                    },
-                );
-                Ok(handle_id)
-            })
-        });
+        },
+        |full| {
+            let texture = full.acquire_render_target_dma_buf_image(width, height, parsed_format)?;
+            let (handle_id, produce_done, consume_done) = assign_image_handle_id(full, &texture)?;
+            // The timeline pair is held with the image so the FDs handed to
+            // surface-share stay valid for the registration's lifetime.
+            Ok((
+                handle_id,
+                RegisteredHandle::Image {
+                    texture,
+                    produce_done,
+                    consume_done,
+                },
+            ))
+        },
+    );
     match acquired {
         Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,

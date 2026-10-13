@@ -28,7 +28,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::{GpuContextLimitedAccess, PooledTextureHandle};
+use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle};
 use crate::core::processor_owned_window::WindowPresentLoopForOwningProcessor;
 use crate::core::rhi::PixelBuffer;
 
@@ -157,11 +157,33 @@ impl EscalateHandleRegistry {
         Arc::new(Self::default())
     }
 
+    /// Acquire a one-off for the helper, counted against the node's one-offs
+    /// of `shape` before `allocate` runs inside the escalate, and held under
+    /// the id `allocate` answers until the helper releases it; refused by name
+    /// once the node holds or has reserved as many of `shape` as one node may.
+    pub(super) fn acquire_a_one_off_for_the_helper_counted_under_its_shape(
+        &self,
+        sandbox: &GpuContextLimitedAccess,
+        shape: OneOffAcquisitionShape,
+        allocate: impl FnOnce(
+            &GpuContextFullAccess,
+        ) -> crate::core::error::Result<(String, RegisteredHandle)>,
+    ) -> crate::core::error::Result<String> {
+        let reservation = self.reserve_one_off_acquisition_count(shape)?;
+        sandbox.escalate(move |full| {
+            let (handle_id, registered_handle) = allocate(full)?;
+            // Held inside the escalate: its trailing device-idle wait can fail
+            // after `allocate` registered the handle, which would drop it unheld.
+            reservation.hold_until_the_helper_releases_it(handle_id.clone(), registered_handle);
+            Ok(handle_id)
+        })
+    }
+
     /// Reserve one count of `shape` for a one-off acquisition about to be
     /// allocated, refused by name when the node already holds or has reserved
     /// as many of that shape as one node may. The registry's lock is released
     /// before this returns.
-    pub(crate) fn reserve_one_off_acquisition_count(
+    fn reserve_one_off_acquisition_count(
         &self,
         shape: OneOffAcquisitionShape,
     ) -> crate::core::error::Result<OneOffAcquisitionCountReservation<'_>> {

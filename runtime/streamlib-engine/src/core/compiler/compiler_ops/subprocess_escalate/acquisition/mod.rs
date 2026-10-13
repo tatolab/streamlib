@@ -65,25 +65,20 @@ pub(super) fn handle_acquire_pixel_buffer(
     } = request;
     match PixelFormat::parse_wire_name(&format) {
         Ok(parsed) => {
-            let acquired = registry
-                .reserve_one_off_acquisition_count(OneOffAcquisitionShape::PixelBuffer {
+            let acquired = registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
+                sandbox,
+                OneOffAcquisitionShape::PixelBuffer {
                     width,
                     height,
                     format: parsed,
-                })
-                .and_then(|reservation| {
-                    sandbox.escalate(move |full| {
-                        let (published_frame_id, buffer) =
-                            full.acquire_pixel_buffer(width, height, parsed)?;
-                        let handle_id =
-                            assign_buffer_handle_id(full, &published_frame_id, &buffer)?;
-                        reservation.hold_until_the_helper_releases_it(
-                            handle_id.clone(),
-                            RegisteredHandle::PixelBuffer(buffer),
-                        );
-                        Ok(handle_id)
-                    })
-                });
+                },
+                |full| {
+                    let (published_frame_id, buffer) =
+                        full.acquire_pixel_buffer(width, height, parsed)?;
+                    let handle_id = assign_buffer_handle_id(full, &published_frame_id, &buffer)?;
+                    Ok((handle_id, RegisteredHandle::PixelBuffer(buffer)))
+                },
+            );
             match acquired {
                 Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
                     request_id: rid,
@@ -143,27 +138,24 @@ pub(super) fn handle_acquire_texture(
         }
     };
     let acquired = match processor_output_pool {
-        None => registry
-            .reserve_one_off_acquisition_count(OneOffAcquisitionShape::Texture {
+        None => registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
+            sandbox,
+            OneOffAcquisitionShape::Texture {
                 width,
                 height,
                 format: parsed_format,
                 usage: parsed_usage,
-            })
-            .and_then(|reservation| {
-                sandbox.escalate(move |full| {
-                    let (handle_id, registered_texture) = allocate_registered_texture_for_helper(
-                        full,
-                        width,
-                        height,
-                        parsed_format,
-                        parsed_usage,
-                    )?;
-                    reservation
-                        .hold_until_the_helper_releases_it(handle_id.clone(), registered_texture);
-                    Ok(handle_id)
-                })
-            }),
+            },
+            |full| {
+                allocate_registered_texture_for_helper(
+                    full,
+                    width,
+                    height,
+                    parsed_format,
+                    parsed_usage,
+                )
+            },
+        ),
         Some(processor_output_pool) => hand_off_processor_output_frame(
             sandbox,
             registry,
@@ -219,19 +211,13 @@ pub(super) fn handle_acquire_storage_buffer(
         }
     };
     let acquired = match processor_output_pool {
-        None => registry
-            .reserve_one_off_acquisition_count(OneOffAcquisitionShape::StorageBuffer {
+        None => registry.acquire_a_one_off_for_the_helper_counted_under_its_shape(
+            sandbox,
+            OneOffAcquisitionShape::StorageBuffer {
                 tensor_layout: tensor_layout.clone(),
-            })
-            .and_then(|reservation| {
-                sandbox.escalate(|full| {
-                    let (handle_id, registered_buffer) =
-                        allocate_registered_storage_buffer_for_helper(full, &tensor_layout)?;
-                    reservation
-                        .hold_until_the_helper_releases_it(handle_id.clone(), registered_buffer);
-                    Ok(handle_id)
-                })
-            }),
+            },
+            |full| allocate_registered_storage_buffer_for_helper(full, &tensor_layout),
+        ),
         Some(processor_output_pool) => hand_off_processor_output_frame(
             sandbox,
             registry,
