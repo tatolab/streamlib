@@ -2,8 +2,8 @@
 
 # Tatolab
 
-**Live streams as pipes, written in Python.** Wire a camera, a GPU effect, your model and a window<br>
-in a few lines; a native runtime runs it on your machine, and you and your agents can look inside while it runs.
+**Turn anything into a live stream.**<br>
+Wire cameras, models and your own code into a stream. Expose an output, and apps, agents and your other machines read it by URL.
 
 [![website](https://img.shields.io/badge/tatolab.com-0ea5e9?label=website)](https://tatolab.com)
 [![license](https://img.shields.io/badge/license-BUSL--1.1-0ea5e9)](LICENSE)
@@ -39,13 +39,21 @@ in a few lines; a native runtime runs it on your machine, and you and your agent
   one when an edit fails to compile.
 
 > **Alpha.** APIs will change. On Linux one command installs the runtime; on macOS you build it
-> from a checkout of this repository for now. One runtime per machine runs every stream on it. See
-> [what ships today](#what-ships-today).
+> from a checkout of this repository for now. One runtime per machine runs every stream on it. An
+> exposed output is read by the streams and agents on its own machine today; reading it from your
+> other machines is not built yet. See [what ships today](#what-ships-today).
+
+> **License.** Source-available under [BUSL-1.1](LICENSE), converting to Apache 2.0 on January 1,
+> 2029. Building nodes, applications and products on Tatolab is free, commercial use included. Selling,
+> hosting as a managed service, white-labelling or sublicensing the runtime itself, or building a
+> competing runtime from it, needs a [commercial license](docs/license/COMMERCIAL-LICENSING.md). See
+> [License](#license).
 
 ## Built for
 
-Tatolab is a simple SDK for defining live streams as pipes and sharing them with people and agents.
-Today the pipes run on one machine, and you and your agents work on them there.
+Tatolab turns anything into a live stream: cameras, models and your own code, wired together in
+Python and shared with people and agents. Today a stream runs on one machine, and you and your
+agents work on it there.
 
 - **Live video and audio with a model in the loop** — a camera into torch on the GPU, the result in a
   window, in an MP4, or on a virtual camera that other applications can pick.
@@ -655,7 +663,7 @@ and research use.
 
 A commercial license is required to sell, host as a managed service, white-label, or sublicense
 **the runtime itself** — the engine, graph compiler, scheduler, processor execution, GPU context,
-and link infrastructure — as your product.
+and link infrastructure — as your product, or to build a competing runtime from it.
 
 Tatolab also distributes third-party code. Each dependency's copyright notice and licence
 text, as of that file's last regeneration, is reproduced in
