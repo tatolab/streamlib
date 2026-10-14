@@ -23,11 +23,12 @@ use streamlib_surface_client::{
 
 use crate::core::context::SurfaceCheckOutLeaseHolderId;
 use crate::core::context::surface_share_wire_verbs::{
+    SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID, SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX,
     answer_release_check_out, answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
     latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
     record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
     release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
-    tensor_layout_of_a_storage_buffer_registration,
+    stated_vk_memory_type_index, tensor_layout_of_a_storage_buffer_registration,
 };
 
 use super::state::{SurfaceRegistration, SurfaceShareState};
@@ -311,12 +312,9 @@ fn parse_raw_handle_export_contract_fields(
     request: &serde_json::Value,
 ) -> RawHandleExportContractFields {
     RawHandleExportContractFields {
-        vk_memory_type_index: request
-            .get("vk_memory_type_index")
-            .and_then(|v| v.as_u64())
-            .and_then(|v| u32::try_from(v).ok()),
+        vk_memory_type_index: stated_vk_memory_type_index(request),
         exporting_device_uuid: request
-            .get("exporting_device_uuid")
+            .get(SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID)
             .and_then(|v| v.as_str())
             .map(str::to_string),
     }
@@ -790,10 +788,10 @@ fn handle_lookup(
     // `SurfaceMetadata::vk_memory_type_index`), so no default may appear
     // on the wire.
     if let Some(vk_memory_type_index) = checkout.vk_memory_type_index {
-        response["vk_memory_type_index"] = vk_memory_type_index.into();
+        response[SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX] = vk_memory_type_index.into();
     }
     if let Some(exporting_device_uuid) = checkout.exporting_device_uuid {
-        response["exporting_device_uuid"] = exporting_device_uuid.into();
+        response[SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID] = exporting_device_uuid.into();
     }
     echo_the_tensor_layout_onto_a_lookup_reply(&mut response, checkout.tensor_layout.as_ref());
     (response, dup_fds)

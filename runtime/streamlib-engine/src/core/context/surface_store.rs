@@ -99,8 +99,9 @@ fn state_the_opaque_fd_export_contract_of_the_planes(
     if let ExportedPlaneFlavourOnTheWire::OpaqueFd(opaque_fd_export_contract) =
         &exported_planes.plane_flavour
     {
-        payload["vk_memory_type_index"] = opaque_fd_export_contract.vk_memory_type_index.into();
-        payload["exporting_device_uuid"] = opaque_fd_export_contract
+        payload[SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX] =
+            opaque_fd_export_contract.vk_memory_type_index.into();
+        payload[SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID] = opaque_fd_export_contract
             .exporting_device_uuid
             .clone()
             .into();
@@ -326,6 +327,11 @@ use super::surface_share_wire_verbs::{
     SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_STORAGE_BUFFER,
     SURFACE_RESOURCE_TYPE_TEXTURE,
 };
+#[cfg(target_os = "linux")]
+use super::surface_share_wire_verbs::{
+    SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID, SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX,
+    stated_vk_memory_type_index,
+};
 
 /// How long a connect waits for the service to admit this process.
 #[cfg(target_os = "macos")]
@@ -465,16 +471,6 @@ fn plane_sizes_of_reply(response: &serde_json::Value, plane_count: usize) -> Vec
         .unwrap_or_else(|| vec![0u64; plane_count])
 }
 
-/// The exporter's `vk_memory_type_index` a lookup reply states, if any —
-/// never defaulted, because `0` is a real index.
-#[cfg(target_os = "linux")]
-fn vk_memory_type_index_of_reply(response: &serde_json::Value) -> Option<u32> {
-    response
-        .get("vk_memory_type_index")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|vk_memory_type_index| u32::try_from(vk_memory_type_index).ok())
-}
-
 /// Release the plane fds to the pixel-buffer import about to take them,
 /// which owns each one from here: handed to the driver at its import, or
 /// closed before that.
@@ -515,7 +511,7 @@ fn pixel_buffer_imported_from_surface_share_reply(
             .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF),
         &raw_plane_fds,
         &plane_sizes,
-        vk_memory_type_index_of_reply(response),
+        stated_vk_memory_type_index(response),
     )?;
     leave_plane_fds_to_the_import(plane_fds);
     PixelBuffer::from_external_plane_handles(handles, 0, 0, PixelFormat::default())
@@ -1195,8 +1191,8 @@ impl SurfaceStoreInner {
                 "vk_image_tiling": VK_IMAGE_TILING_OPTIMAL,
                 "vk_image_usage": vk_image_usage,
                 "vk_image_allocation_size": allocation_size,
-                "vk_memory_type_index": memory_type_index,
-                "exporting_device_uuid": exporting_device_uuid,
+                SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX: memory_type_index,
+                SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID: exporting_device_uuid,
             })
         } else {
             dma_buf_texture_registration_payload(
@@ -2130,7 +2126,7 @@ fn surface_export_staging_registration_payload(
         "plane_offsets": [0],
         SURFACE_REPLY_HAS_PRODUCE_DONE_FD: true,
         SURFACE_REPLY_HAS_CONSUME_DONE_FD: false,
-        "vk_memory_type_index": memory_type_index,
+        SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX: memory_type_index,
     })
 }
 
@@ -2152,8 +2148,8 @@ fn storage_buffer_registration_payload(
         "plane_sizes": [tensor_layout.byte_size()],
         "plane_offsets": [0u64],
         "plane_strides": [0u64],
-        "vk_memory_type_index": memory_type_index,
-        "exporting_device_uuid": exporting_device_uuid,
+        SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX: memory_type_index,
+        SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID: exporting_device_uuid,
     });
     tensor_layout.write_surface_share_fields(&mut payload);
     payload

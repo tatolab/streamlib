@@ -26,6 +26,26 @@ pub(crate) const SURFACE_RESOURCE_TYPE_PIXEL_BUFFER: &str = "pixel_buffer";
 /// which carries `shape` and `dtype` beside its memory handle.
 pub(crate) const SURFACE_RESOURCE_TYPE_STORAGE_BUFFER: &str = "storage_buffer";
 
+/// Wire key under which an OPAQUE_FD registration, and the checkout that
+/// echoes it, states the exporter's Vulkan memory type index.
+#[cfg(target_os = "linux")]
+pub(crate) const SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX: &str = "vk_memory_type_index";
+
+/// Wire key under which an OPAQUE_FD registration, and the checkout that
+/// echoes it, states the exporting device's UUID in lowercase hex.
+#[cfg(target_os = "linux")]
+pub(crate) const SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID: &str = "exporting_device_uuid";
+
+/// The exporter's Vulkan memory type index `wire_fields` states, if any —
+/// never defaulted, because `0` is a real index.
+#[cfg(target_os = "linux")]
+pub(crate) fn stated_vk_memory_type_index(wire_fields: &Value) -> Option<u32> {
+    wire_fields
+        .get(SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX)
+        .and_then(Value::as_u64)
+        .and_then(|vk_memory_type_index| u32::try_from(vk_memory_type_index).ok())
+}
+
 /// A surface-share table's registrations, by the runtime that made them.
 pub(crate) trait SurfaceShareRegistrationsByRuntime {
     /// Surface ids `runtime_id` registered.
