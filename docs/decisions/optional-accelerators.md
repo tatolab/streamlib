@@ -65,11 +65,13 @@ Checked against the tree on 2026-10-13:
   the default udev rule gives to the `kvm` group. A flavour whose presence depends on a
   container's device permissions is a flavour that breaks in exactly the environments the
   software device is for, so it is ruled absent rather than probed.
-- Lavapipe cannot start the engine today because the device-wide pre-warm allocates one
-  sentinel per export pool and fails the device when any sentinel fails, and the tiled
-  DMA-BUF pool's modifier list comes from an EGL probe the Vulkan driver does not honour.
-  Under decision 2 a sentinel failing in a flavour the device advertises passes that device
-  over; under decision 4 the software device offers no DMA-BUF pool to pre-warm.
+- ~~Lavapipe cannot start the engine today because the device-wide pre-warm allocates one
+  sentinel per export pool and fails the device when any sentinel fails~~ — Superseded
+  2026-10-13 by a measurement with the engine's own test binary on the rig: the device comes
+  up and every sentinel passes; the first real tiled allocation then refuses, because the
+  tiled DMA-BUF pool's modifier list comes from an EGL probe the Vulkan driver does not
+  honour. Under decision 2 a sentinel failing in a flavour the device advertises passes that
+  device over; under decision 4 the software device offers no DMA-BUF pool to pre-warm.
 
 ## Rejected alternatives
 
@@ -98,9 +100,14 @@ Checked against the tree on 2026-10-13:
 - The pixel-buffer pool gains the OPAQUE_FD flavour on Linux where DMA-BUF is absent, and
   the processor interpreter's pixel-buffer import gains the OPAQUE_FD arm it already has for
   textures and storage buffers.
-- Whether lavapipe exports a timeline semaphore as an opaque fd is unverified. If it does
-  not, the device-write ordering on the software device takes the macOS shape, retiring the
-  write before the id is published, rather than a second ordering mechanism.
+- ~~Whether lavapipe exports a timeline semaphore as an opaque fd is unverified.~~ —
+  Settled 2026-10-13, measured: lavapipe exports no semaphore as an opaque fd, binary or
+  timeline (its sync type is a userspace mutex and condvar; only a pre-signalled sync file
+  exists, and only with `/dev/udmabuf`). So the device-write ordering on the software device
+  takes the macOS shape, retiring the copy on the host before the reply, rather than a second
+  ordering mechanism.
+- A lavapipe built with window-system support links the X11 and Wayland client libraries,
+  which a minimal container lacks; the change proposal carries that fork.
 - The headless and container cases fall out: lavapipe needs no window system and no
   `/dev/dri`, so a stream with no display window runs on a server or in a plain container.
   A display window still needs X11 or Wayland to put it on.
