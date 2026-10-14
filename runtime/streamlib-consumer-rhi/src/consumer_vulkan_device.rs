@@ -55,6 +55,11 @@ fn default_color_subresource_range() -> vk::ImageSubresourceRange {
     }
 }
 
+/// Whether `device_extension` was enabled on `device`.
+fn device_extension_is_enabled(device: &Device, device_extension: vk::Extension) -> bool {
+    device.extensions().contains(&device_extension.name)
+}
+
 /// Device extensions every import on the platform needs; the device refuses
 /// to construct without any of them.
 #[cfg(target_os = "linux")]
@@ -385,15 +390,9 @@ impl ConsumerVulkanDevice {
             queue_family_index,
             memory_properties.memory_type_count,
             has_acquire_unmodified,
-            device
-                .extensions()
-                .contains(&vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION.name),
-            device
-                .extensions()
-                .contains(&vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION.name),
-            device
-                .extensions()
-                .contains(&vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION.name),
+            device_extension_is_enabled(&device, vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION),
+            device_extension_is_enabled(&device, vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION),
+            device_extension_is_enabled(&device, vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION),
         );
 
         Ok(Self {
@@ -441,25 +440,19 @@ impl ConsumerVulkanDevice {
     /// Whether `VK_EXT_external_memory_dma_buf` was enabled — what every
     /// DMA-BUF memory import needs; never on a software device.
     pub fn supports_dma_buf_memory_import(&self) -> bool {
-        self.device
-            .extensions()
-            .contains(&vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION.name)
+        device_extension_is_enabled(&self.device, vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION)
     }
 
     /// Whether `VK_EXT_image_drm_format_modifier` was enabled — what an
     /// image over a DMA-BUF with an explicit DRM modifier needs.
     pub fn supports_drm_format_modifier_image_import(&self) -> bool {
-        self.device
-            .extensions()
-            .contains(&vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION.name)
+        device_extension_is_enabled(&self.device, vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION)
     }
 
     /// Whether `VK_KHR_external_semaphore_fd` was enabled — what importing a
     /// timeline semaphore's OPAQUE_FD needs.
     pub fn supports_opaque_fd_timeline_semaphore_import(&self) -> bool {
-        self.device
-            .extensions()
-            .contains(&vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION.name)
+        device_extension_is_enabled(&self.device, vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION)
     }
 
     /// Refuse `refusing_operation` by name, naming this device, unless
@@ -470,7 +463,7 @@ impl ConsumerVulkanDevice {
         device_extension: vk::Extension,
         what_cannot_happen_without_it: &str,
     ) -> Result<()> {
-        if self.device.extensions().contains(&device_extension.name) {
+        if device_extension_is_enabled(&self.device, device_extension) {
             return Ok(());
         }
         Err(ConsumerRhiError::Gpu(format!(
@@ -762,9 +755,7 @@ impl ConsumerVulkanDevice {
     /// IOSurface and a timeline over a Metal shared event both need.
     #[cfg(target_os = "macos")]
     pub fn supports_metal_objects_interop(&self) -> bool {
-        self.device
-            .extensions()
-            .contains(&vk::EXT_METAL_OBJECTS_EXTENSION.name)
+        device_extension_is_enabled(&self.device, vk::EXT_METAL_OBJECTS_EXTENSION)
     }
 
     /// Memory for an image created over an IOSurface, on the type
