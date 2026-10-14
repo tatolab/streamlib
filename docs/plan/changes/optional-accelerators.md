@@ -291,8 +291,15 @@ driver bytes (owner, 2026-10-13). A user who wants a window on a GPU-less box po
 
 ## Tickets
 
-Derived by `/derive-tickets` after approval; one milestone. Slices 1 and 2 are independent and
-first; 3 needs 2; 4 needs 1 and 3.
+Milestone #65, *Streams run on a machine without a GPU*. Slice 1: #2753 (the Linux bundle).
+Slice 2: #2754 (device selection and the snapshot fields), #2755 (DMA-BUF as a device
+capability, the OPAQUE_FD pixel buffer — including the interpreter's import arm and its
+probed extensions), #2757 (no timeline on a device that exports none, including the
+interpreter's staging check-out; `as_device_tensor` refused on a software device).
+Slice 3: #2756 (the interpreter selecting the device the runtime names — selection only,
+blocked by #2754 alone). Slice 4: #2758 (the integration lane and `rig_only_capability`),
+and #2759 (the engine's hardware tests on the lane). The first two tickets (#2753 and
+also #2754) start in parallel; the blocked-by edges are on the issues.
 
 ## REMOVED
 
