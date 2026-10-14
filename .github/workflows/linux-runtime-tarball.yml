@@ -30,8 +30,21 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      # The bundled lavapipe takes minutes to build in manylinux; the staging
+      # script reuses a build whose key matches, and these three files are the key.
+      - name: Cache the Linux bundled Vulkan driver build
+        uses: actions/cache@v4
+        with:
+          path: target/linux_bundled_vulkan_driver_cache
+          key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
+
       - name: Build the tarball and run the portability gate over it
         run: bash scripts/build_linux_runtime_release_tarball.sh "$RUNNER_TEMP/linux-runtime-tarball"
+
+      - name: The tarball starts a stream on machines with no Vulkan driver
+        run: >-
+          bash scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh
+          "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:

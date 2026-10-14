@@ -18,9 +18,11 @@ toolchain. "Carries" has to mean statically linked: a `libshaderc.so` on the
 does not ship and most machines do not have, turning the toolchain-free
 promise into a toolchain requirement discovered at import.
 
-The macOS wheel also carries the Vulkan loader and MoltenVK, because a stock
-Mac has neither. Every Mach-O it carries must still link only what macOS itself
-supplies, must be code signed — an arm64 binary whose signature a post-link
+The wheel also carries the Vulkan loader and a Vulkan driver — MoltenVK on
+macOS, Mesa's lavapipe on Linux — because a stock Mac has neither, and neither
+has a Linux machine with no GPU driver installed. Every ELF the lend carries
+must still link only what any Linux host supplies, and every Mach-O only what
+macOS itself supplies, must be code signed — an arm64 binary whose signature a post-link
 rewrite broke loads on the machine that built it and fails on every other, so
 on macOS the signature is verified, not merely found — and
 must not ask for a newer macOS than the wheel's tag admits.
@@ -45,8 +47,8 @@ import pytest
 
 # manylinux's policy list: the libraries a conforming wheel may leave to the
 # host. Everything else must be inside the artifact. `libvulkan` is absent
-# deliberately — the Vulkan loader is dlopen'd at runtime, which is not a
-# `NEEDED` entry and not what this checks.
+# deliberately — the engine dlopens the Vulkan loader at runtime and the loader
+# dlopens the driver, neither of which is a `NEEDED` entry.
 LIBRARIES_THE_HOST_MAY_SUPPLY = frozenset(
     {
         "libc.so.6",
@@ -387,6 +389,11 @@ def code_signature_verification_failure(mach_o_path: Path) -> Optional[str]:
     return f"fails `codesign --verify --strict`: {verification.stderr.strip()}"
 
 
+# A shared object's file name: `.so`, a versioned soname such as `.so.1`, or
+# `.dylib`.
+NATIVE_LIBRARY_FILE_NAME_PATTERN = re.compile(r".*(\.so(\.\d+)*|\.dylib)")
+
+
 def _native_binaries_in(directory: Path) -> list[Path]:
     """Every ELF or Mach-O file under a directory, plus anything named like one —
     which then has to parse, or the test fails."""
@@ -399,10 +406,15 @@ def _native_binaries_in(directory: Path) -> list[Path]:
         if (
             leading_bytes == ELF_MAGIC
             or _is_mach_o(leading_bytes)
-            or candidate.suffix in (".so", ".dylib")
+            or NATIVE_LIBRARY_FILE_NAME_PATTERN.fullmatch(candidate.name)
         ):
             native_binaries.append(candidate)
     return native_binaries
+
+
+def elf_libraries_the_host_is_not_promised(elf_needed_libraries: list[str]) -> list[str]:
+    """Each `NEEDED` library of an ELF outside what any Linux host supplies."""
+    return sorted(set(elf_needed_libraries) - LIBRARIES_THE_HOST_MAY_SUPPLY)
 
 
 @pytest.fixture(scope="module")
@@ -477,24 +489,28 @@ def test_the_glsl_compiler_is_linked_statically(native_extension_needed_librarie
     )
 
 
-def test_the_native_extension_links_nothing_the_host_may_not_supply(
-    native_extension_path, native_extension_needed_libraries
+def test_every_elf_the_lend_carries_links_only_what_the_host_may_supply(
+    native_binaries_the_lend_carries, native_extension_path
 ):
-    """Every other portability regression the static link could have caused,
-    caught by the same read of the same list."""
+    """`_engine`, the Vulkan loader and lavapipe alike: a library on any of their
+    `NEEDED` lists that the host is not promised fails the unit on every machine
+    that lacks it. Vacuous on macOS, which carries no ELF."""
+    elf_binaries = [
+        binary for binary in native_binaries_the_lend_carries if binary.read_bytes()[:4] == ELF_MAGIC
+    ]
     if native_extension_path.read_bytes()[:4] == ELF_MAGIC:
-        outside_the_policy = sorted(
-            set(native_extension_needed_libraries) - LIBRARIES_THE_HOST_MAY_SUPPLY
-        )
-    else:
-        outside_the_policy = sorted(
-            library
-            for library in native_extension_needed_libraries
-            if not library.startswith(MACOS_PATH_PREFIXES_THE_HOST_MAY_SUPPLY)
-        )
-    assert not outside_the_policy, (
-        f"the wheel needs {outside_the_policy}, which the host is not promised to have. "
-        f"Full list: {sorted(native_extension_needed_libraries)}"
+        assert native_extension_path in elf_binaries, elf_binaries
+    outside_the_policy_per_binary = {}
+    for binary in elf_binaries:
+        needed_libraries = _dynamic_libraries_needed_by_elf(binary.read_bytes(), binary)
+        if outside_the_policy := elf_libraries_the_host_is_not_promised(needed_libraries):
+            outside_the_policy_per_binary[str(binary)] = {
+                "outside the policy": outside_the_policy,
+                "needed": sorted(needed_libraries),
+            }
+    assert not outside_the_policy_per_binary, (
+        f"ELFs in the lend need libraries the host is not promised to have: "
+        f"{outside_the_policy_per_binary}"
     )
 
 
@@ -543,7 +559,7 @@ def test_the_runtime_units_executables_link_nothing_the_host_may_not_supply(
     for executable in runtime_unit_executables:
         linked_libraries = _libraries_linked_by(executable)
         if executable.read_bytes()[:4] == ELF_MAGIC:
-            outside_the_policy = sorted(set(linked_libraries) - LIBRARIES_THE_HOST_MAY_SUPPLY)
+            outside_the_policy = elf_libraries_the_host_is_not_promised(linked_libraries)
         else:
             outside_the_policy = sorted(
                 library
@@ -665,6 +681,34 @@ def test_an_elf_at_the_glibc_floor_passes():
     )
     assert summary.glibc_versions_needed == [(2, 2, 5), (2, 17), (2, 28)]
     assert glibc_versions_newer_than_the_floor(summary, (2, 28)) == []
+
+
+def test_an_elf_linking_a_library_the_host_may_not_supply_is_caught():
+    needed_libraries = _read_elf_dynamic_section(
+        _synthetic_elf(["libdrm.so.2", "libc.so.6", "libxcb.so.1"], ["2.2.5"]), Path("libvulkan_lvp.so")
+    ).needed_libraries
+    assert elf_libraries_the_host_is_not_promised(needed_libraries) == ["libdrm.so.2", "libxcb.so.1"]
+
+
+def test_an_elf_linking_only_what_the_host_supplies_passes():
+    needed_libraries = _read_elf_dynamic_section(
+        _synthetic_elf(
+            ["libc.so.6", "libm.so.6", "libstdc++.so.6", "libgcc_s.so.1", "libdl.so.2", "libpthread.so.0"],
+            ["2.2.5"],
+        ),
+        Path("libvulkan_lvp.so"),
+    ).needed_libraries
+    assert elf_libraries_the_host_is_not_promised(needed_libraries) == []
+
+
+def test_a_versioned_soname_that_does_not_parse_fails_rather_than_skips(tmp_path: Path):
+    named_like_the_vulkan_loader = tmp_path / "libvulkan.so.1"
+    named_like_the_vulkan_loader.write_bytes(b"not a binary")
+    (tmp_path / "lvp_icd.x86_64.json").write_text("{}")
+
+    assert _native_binaries_in(tmp_path) == [named_like_the_vulkan_loader]
+    with pytest.raises(NativeBinaryUnreadable):
+        _libraries_linked_by(named_like_the_vulkan_loader)
 
 
 def _synthetic_dylib_load_command(command: int, library_path: str) -> bytes:

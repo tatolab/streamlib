@@ -127,7 +127,7 @@ MACHINE_RUNTIME_LOCK_FILE_MODE = 0o666
 #: The Vulkan loader's own variables naming the driver files to load. Pointed
 #: at a path that does not exist, they leave the loader no driver, so a stream
 #: loads and its start is then refused at the GPU, before any device opens.
-#: They also keep `tatolabd` from naming its bundled driver on macOS.
+#: They also keep `tatolabd` from naming the driver its lend carries.
 VULKAN_LOADER_DRIVER_FILE_VARIABLES = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "VK_ADD_DRIVER_FILES")
 
 #: The engine's refusal when the Vulkan loader finds no driver, on every platform.

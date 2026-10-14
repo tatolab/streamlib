@@ -119,8 +119,10 @@ pinned maturin through `uvx`), plus a native toolchain. On Debian or Ubuntu that
 sudo apt install pkg-config protobuf-compiler libclang-dev libvulkan-dev glslc python3-dev cmake ninja-build
 ```
 
-On macOS it is `glslc` (from shaderc), CMake and Ninja, and the build first stages a Vulkan loader
-and MoltenVK into the lend, so the Mac that runs the result needs no Vulkan SDK.
+On Linux the build first stages a Vulkan loader and Mesa's lavapipe into the lend, built inside the
+release's pinned manylinux image, so it also needs Docker. On macOS it is `glslc` (from shaderc),
+CMake and Ninja, and the build first stages a Vulkan loader and MoltenVK into the lend, so the Mac
+that runs the result needs no Vulkan SDK.
 
 A runtime built from source has no service: start it with `tatolabd` in a terminal of its own.
 
@@ -565,8 +567,9 @@ running, not when you wire the graph.
 
 Every GPU operation in the runtime goes through Vulkan. CUDA appears only at the edge, as the tensor
 a frame hands to torch. On Linux, `libcuda`, the Vulkan loader and the window system are opened at
-run time, never linked, so one build runs on any system that has them. On macOS the runtime carries
-its own Vulkan loader and MoltenVK and links only the system. It also carries its own GLSL compiler,
+run time, never linked, so one build runs on any system that has them; the runtime also carries its
+own Vulkan loader and Mesa's lavapipe, a CPU Vulkan driver, for a machine with no GPU driver. On
+macOS the runtime carries its own Vulkan loader and MoltenVK and links only the system. It also carries its own GLSL compiler,
 so writing a pixel effect or a kernel needs no shader toolchain.
 
 **It costs you** any CUDA-specific fast path inside the runtime, permanently — a vendor trick that

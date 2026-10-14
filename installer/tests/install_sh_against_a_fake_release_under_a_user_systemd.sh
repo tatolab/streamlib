@@ -27,11 +27,16 @@ pass() {
 	echo "ok - $*"
 }
 
+bundled_vulkan_icd_manifest_in_a_release="lib/tatolab/lend/tatolab/runtime/_vulkan_driver/lvp_icd.x86_64.json"
+
+# A second argument of `without-the-bundled-vulkan-icd-manifest` leaves the
+# lend's ICD manifest out of the release.
 make_release() {
 	local release_version="$1"
+	local release_shape="${2:-whole}"
 	local release_contents
 	release_contents="$(mktemp -d)"
-	mkdir -p "$release_contents/bin" "$release_contents/lib/tatolab/lend/tatolab/runtime" \
+	mkdir -p "$release_contents/bin" "$release_contents/lib/tatolab/lend/tatolab/runtime/_vulkan_driver" \
 		"$release_contents/lib/systemd/user"
 	cat >"$release_contents/bin/tatolabd" <<EOF
 #!/bin/sh
@@ -41,6 +46,9 @@ EOF
 	printf '#!/bin/sh\necho "tatolab %s"\n' "$release_version" >"$release_contents/bin/tatolab"
 	chmod +x "$release_contents/bin/tatolabd" "$release_contents/bin/tatolab"
 	touch "$release_contents/lib/tatolab/lend/tatolab/runtime/__init__.py"
+	if [ "$release_shape" != without-the-bundled-vulkan-icd-manifest ]; then
+		printf '{}\n' >"$release_contents/$bundled_vulkan_icd_manifest_in_a_release"
+	fi
 	cp "$installer_directory/tatolabd.service" \
 		"$installer_directory/tatolabd-restart-for-a-display-at-login.service" \
 		"$release_contents/lib/systemd/user/"
@@ -200,6 +208,23 @@ fi
 	fail "a refused download moved current"
 [ ! -e "$test_user_home/.local/share/tatolab/1.0.2" ] || fail "a refused download was unpacked"
 pass "a tarball that does not match its published sha256 is refused and changes nothing"
+
+# --- a tarball without the bundled Vulkan driver's manifest is refused ------
+
+make_release 1.0.2-without-a-vulkan-driver without-the-bundled-vulkan-icd-manifest
+publish_as_latest 1.0.2-without-a-vulkan-driver
+if missing_manifest_refusal="$(run_the_installer 2>&1)"; then
+	fail "a tarball carrying no $bundled_vulkan_icd_manifest_in_a_release was installed"
+fi
+case "$missing_manifest_refusal" in
+*"carries no $bundled_vulkan_icd_manifest_in_a_release"*) ;;
+*) fail "the refusal does not name the missing manifest: $missing_manifest_refusal" ;;
+esac
+[ "$(readlink "$test_user_home/.local/share/tatolab/current")" = "1.0.1" ] ||
+	fail "a tarball without the manifest moved current"
+[ ! -e "$test_user_home/.local/share/tatolab/1.0.2-without-a-vulkan-driver" ] ||
+	fail "a tarball without the manifest was left unpacked"
+pass "a tarball that carries no bundled Vulkan ICD manifest is refused and changes nothing"
 
 # --- a service that fails to restart keeps the release before it ----------
 

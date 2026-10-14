@@ -1,11 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Naming the Vulkan driver the lend carries on macOS to the Vulkan loader.
+//! Naming the Vulkan driver the lend carries to the Vulkan loader.
 //!
-//! A stock Mac has no Vulkan driver, so the lend carries MoltenVK and its ICD
-//! manifest in its bundled Vulkan driver directory; nothing else does, so on
-//! every other floor this changes nothing. The same rule as
+//! A stock Mac has no Vulkan driver, and neither has a Linux machine with no
+//! GPU driver installed, so the lend carries one and its ICD manifest in its
+//! bundled Vulkan driver directory: MoltenVK on macOS, Mesa's lavapipe on
+//! Linux. The same rule as
 //! `tatolab/runtime/_bundled_vulkan_driver.py`, which a processor interpreter
 //! runs again on the environment it inherits — so the manifest is named by its
 //! canonical path, and naming it twice adds nothing.
@@ -64,7 +65,7 @@ pub(crate) fn vk_add_driver_files_naming_the_bundled_icd_manifest(
     .ok()
 }
 
-/// The ICD manifest the lend at `lend_directory` carries on macOS.
+/// The ICD manifest the lend at `lend_directory` carries.
 fn bundled_icd_manifest_in_the_lend(lend_directory: &Path) -> PathBuf {
     bundled_vulkan_driver_directory_in_the_lend(lend_directory).join(BUNDLED_ICD_MANIFEST_FILE_NAME)
 }

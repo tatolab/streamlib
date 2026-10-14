@@ -1,22 +1,27 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Points the Vulkan loader at the driver the macOS wheel carries.
+"""Points the Vulkan loader at the driver the wheel carries.
 
-A stock Mac has no Vulkan driver, so the wheel ships MoltenVK beside the loader
-in `_vulkan_driver/`. The engine opens that loader by path; this names the ICD
-manifest to it. Only the macOS wheel stages the directory, so everywhere else
-this is a no-op.
+A stock Mac has no Vulkan driver, and neither has a Linux machine with no GPU
+driver installed, so the wheel ships one beside the loader in `_vulkan_driver/`:
+MoltenVK on macOS, Mesa's lavapipe on Linux. The engine opens that loader by
+path; this names the ICD manifest to it. A wheel built without the directory
+staged carries none, and there this is a no-op.
 """
 
 import os
+import sys
 from collections.abc import MutableMapping
 from pathlib import Path
 
-# Staged by `scripts/stage_macos_bundled_vulkan_driver.sh`; the engine's loader
-# search (`vulkan_loader_library.rs`) looks in the same directory.
+# Staged by `scripts/stage_macos_bundled_vulkan_driver.sh` or
+# `scripts/stage_linux_bundled_vulkan_driver.sh`; the engine's loader search
+# (`vulkan_loader_library.rs`) looks in the same directory.
 BUNDLED_VULKAN_DRIVER_DIRECTORY = Path(__file__).resolve().parent / "_vulkan_driver"
-BUNDLED_ICD_MANIFEST_FILE_NAME = "MoltenVK_icd.json"
+# The names `runtime_unit_layout.rs` gives the manifest per platform; lavapipe's
+# is Mesa's own name for it on x86_64, the one Linux build.
+BUNDLED_ICD_MANIFEST_FILE_NAME = "MoltenVK_icd.json" if sys.platform == "darwin" else "lvp_icd.x86_64.json"
 
 # Either one replaces the loader's driver search outright; a user who set one
 # has chosen their drivers, and adding ours would override that choice.

@@ -16,8 +16,9 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
-# The macOS wheel's Vulkan loader and MoltenVK, staged by
-# scripts/stage_macos_bundled_vulkan_driver.sh at build time.
+# The wheel's Vulkan loader and driver, staged at build time by
+# scripts/stage_macos_bundled_vulkan_driver.sh or
+# scripts/stage_linux_bundled_vulkan_driver.sh.
 sdk/streamlib-python-wheel/python/tatolab/runtime/_vulkan_driver/
 
 # Output files

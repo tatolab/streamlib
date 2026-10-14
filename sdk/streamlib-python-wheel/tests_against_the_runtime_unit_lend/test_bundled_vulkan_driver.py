@@ -3,13 +3,15 @@
 
 """The loader is pointed at the wheel's driver additively, and only once.
 
-A stock Mac has no Vulkan driver, so the macOS wheel carries MoltenVK. It must
-reach the loader without displacing a driver the user installed, and without
-overriding a user who has chosen their drivers explicitly.
+A stock Mac has no Vulkan driver, and neither has a Linux machine with no GPU
+driver installed, so the wheel carries one: MoltenVK on macOS, lavapipe on
+Linux. It must reach the loader without displacing a driver the user installed,
+and without overriding a user who has chosen their drivers explicitly.
 
 The lend `cargo xtask build-runtime` lays out carries that driver beside
-`_engine` on macOS and nothing of it elsewhere; those tests read the lend first
-on `PYTHONPATH` and fail when `tatolab.runtime` came from anywhere else.
+`_engine` on macOS and Linux and nothing of it elsewhere; those tests read the
+lend first on `PYTHONPATH` and fail when `tatolab.runtime` came from anywhere
+else.
 """
 
 import os
@@ -25,8 +27,12 @@ from tatolab.runtime._bundled_vulkan_driver import (
 )
 from test_wheel_portability import runtime_unit_lend_directory
 
-# What `scripts/stage_macos_bundled_vulkan_driver.sh` writes.
-BUNDLED_VULKAN_DRIVER_FILE_NAMES = ("libvulkan.1.dylib", "libMoltenVK.dylib", BUNDLED_ICD_MANIFEST_FILE_NAME)
+# What `scripts/stage_macos_bundled_vulkan_driver.sh` and
+# `scripts/stage_linux_bundled_vulkan_driver.sh` write, per platform.
+BUNDLED_VULKAN_DRIVER_FILE_NAMES_PER_PLATFORM = {
+    "darwin": ("libvulkan.1.dylib", "libMoltenVK.dylib", "MoltenVK_icd.json"),
+    "linux": ("libvulkan.so.1", "libvulkan_lvp.so", "lvp_icd.x86_64.json"),
+}
 
 
 @pytest.fixture
@@ -91,21 +97,30 @@ def lent_runtime_package_directory() -> Path:
     return runtime_unit_lend_directory() / "tatolab" / "runtime"
 
 
-def test_the_lend_carries_the_driver_beside_the_engine_on_macos_and_none_elsewhere(
+def test_the_bundled_manifest_is_the_one_the_platform_stages():
+    bundled_vulkan_driver_file_names = BUNDLED_VULKAN_DRIVER_FILE_NAMES_PER_PLATFORM.get(sys.platform)
+    if bundled_vulkan_driver_file_names is None:
+        pytest.skip(f"{sys.platform} stages no bundled Vulkan driver")
+
+    assert BUNDLED_ICD_MANIFEST_FILE_NAME in bundled_vulkan_driver_file_names
+
+
+def test_the_lend_carries_the_platforms_driver_beside_the_engine_on_macos_and_linux_and_none_elsewhere(
     lent_runtime_package_directory: Path,
 ):
     bundled_vulkan_driver_directory = lent_runtime_package_directory / "_vulkan_driver"
+    bundled_vulkan_driver_file_names = BUNDLED_VULKAN_DRIVER_FILE_NAMES_PER_PLATFORM.get(sys.platform)
 
     assert list(lent_runtime_package_directory.glob("_engine*.so")), lent_runtime_package_directory
-    if sys.platform == "darwin":
-        missing_driver_files = [
-            driver_file_name
-            for driver_file_name in BUNDLED_VULKAN_DRIVER_FILE_NAMES
-            if not (bundled_vulkan_driver_directory / driver_file_name).is_file()
-        ]
-        assert missing_driver_files == [], bundled_vulkan_driver_directory
-    else:
+    if bundled_vulkan_driver_file_names is None:
         assert not bundled_vulkan_driver_directory.exists(), bundled_vulkan_driver_directory
+        return
+    missing_driver_files = [
+        driver_file_name
+        for driver_file_name in bundled_vulkan_driver_file_names
+        if not (bundled_vulkan_driver_directory / driver_file_name).is_file()
+    ]
+    assert missing_driver_files == [], bundled_vulkan_driver_directory
 
 
 def test_importing_the_lent_runtime_points_the_loader_at_the_lends_driver(
@@ -130,7 +145,7 @@ def test_importing_the_lent_runtime_points_the_loader_at_the_lends_driver(
 
     expected_driver_files = (
         str(lent_runtime_package_directory / "_vulkan_driver" / BUNDLED_ICD_MANIFEST_FILE_NAME)
-        if sys.platform == "darwin"
+        if sys.platform in BUNDLED_VULKAN_DRIVER_FILE_NAMES_PER_PLATFORM
         else ""
     )
     assert reported.stdout.strip() == expected_driver_files, reported.stderr

@@ -105,6 +105,14 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
+      # The bundled lavapipe takes minutes to build in manylinux; the staging
+      # script reuses a build whose key matches, and these three files are the key.
+      - name: Cache the Linux bundled Vulkan driver build
+        uses: actions/cache@v4
+        with:
+          path: target/linux_bundled_vulkan_driver_cache
+          key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
+
       # The runtime unit's one build: `tatolabd` and `tatolab` in
       # `target/tatolab-runtime/bin/`, the wheel in `wheel/` and its lend in
       # `lib/tatolab/lend/`. It refuses a wheel carrying anything beside
