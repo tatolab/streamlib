@@ -22,8 +22,11 @@ fn each_readback_direction_spells_the_wire_token_its_copy_runs() {
 fn a_readback_staging_registration_states_the_exporters_memory_type_index() {
     let registration = serde_json::json!({ "vk_memory_type_index": 3u32 });
     assert_eq!(
-        memory_type_index_stated_by_a_staging_registration("readback", "staging#1", &registration)
-            .expect("a stated index parses"),
+        memory_type_index_stated_by_an_opaque_fd_registration(
+            format_args!("the readback staging {:?}", "staging#1"),
+            &registration
+        )
+        .expect("a stated index parses"),
         3
     );
 }
@@ -37,11 +40,12 @@ fn a_readback_staging_registration_without_a_memory_type_index_is_refused_naming
         serde_json::json!({ "vk_memory_type_index": "7" }),
         serde_json::json!({ "vk_memory_type_index": u64::from(u32::MAX) + 1 }),
     ] {
-        let refusal =
-            memory_type_index_stated_by_a_staging_registration("readback", "staging#1", &unusable)
-                .err()
-                .expect("an unusable index refuses the import")
-                .to_string();
+        let refusal = memory_type_index_stated_by_an_opaque_fd_registration(
+            format_args!("the readback staging {:?}", "staging#1"),
+            &unusable,
+        )
+        .expect_err("an unusable index refuses the import")
+        .to_string();
         assert!(
             refusal.contains("vk_memory_type_index"),
             "the refusal must name the field it could not read: {refusal:?}"

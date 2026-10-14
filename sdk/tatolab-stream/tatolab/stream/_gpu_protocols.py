@@ -379,9 +379,11 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
 
         Refuses by name for an OPAQUE_FD-flavoured texture — that fd imports
         through Vulkan or CUDA external memory, not as a DMA-BUF; export it
-        through `export_opaque_fd` instead — and for a pooled-texture handle
-        whose memory was never checked out into this process (resolve the
-        surface id first).
+        through `export_opaque_fd` instead — for an OPAQUE_FD pixel buffer,
+        what a pooled frame is on a device without DMA-BUF export, whose
+        pixels are reached through the CPU door, and for a pooled-texture
+        handle whose memory was never checked out into this process (resolve
+        the surface id first).
         """
         ...
 
