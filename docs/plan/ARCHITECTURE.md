@@ -2152,7 +2152,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   set, not a rule: a further first-party capability is a built-in only under the criterion
   in §Packages & extension model, and is otherwise an extension wheel.
   [importable-python-library — SHIPPED #1709; extension-model; package-split-and-lend —
-  SHIPPED #2684, #2693]
+  SHIPPED #2684, #2693; reopened by window-retirement: the display built-in (the windows
+  OPEN below)]
   <!-- verify: pytest tests/stream-on-runtime/test_native_builtin_blocks.py -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
@@ -2343,7 +2344,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   320×180 on a Retina Mac. A processor that cannot get a window drains and discards, so
   upstream still sees a live consumer.
   [importable-python-library — SHIPPED #1707; shared-window-event-pump — SHIPPED #1734;
-  macos-platform-floor — SHIPPED #2357]
+  macos-platform-floor — SHIPPED #2357; reopened by window-retirement: the whole entry (the
+  windows OPEN below)]
   <!-- verify: cargo test -p streamlib-engine --test window_event_pump_serves_many_windows -->
   <!-- verify: cargo test -p streamlib-engine --lib a_request_carries_its_title_and_size_to_the_window_attributes -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test processor_owned_window_on_the_first_thread -->
@@ -2392,13 +2394,25 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   shows, drains and closes its own window and carries the HDR sidecar through the same
   present loop, the helper's window exchange client being fd-free and shared.
   [processor-owned-windows — SHIPPED #1928, #1929, #1930; macos-capability-parity — SHIPPED
-  #2407]
+  #2407; reopened by window-retirement: the whole entry (the windows OPEN below)]
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_over_the_escalate_wire -->
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_shows_named_surfaces -->
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_refused_without_a_display_server -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_all_three_ways_of_naming_a_published_surface_reach_the_window -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar -->
+- **OPEN** — Retiring the runtime's windows. Direction (owner, 2026-10-14, not decided): the
+  runtime opens no windows. `DisplayWindow`, processor-owned windows (`NodeOwnedWindow` and its
+  events), the window event pump and the present loop are retired; a person sees a stream by
+  opening it in a browser, which shows the same thing and leaves the runtime simpler: a
+  stream's one output off its graph is MoQ, through a relay or straight over the tailnet. The retirement belongs to the
+  sharing step (§Networking): its align decides this OPEN with the rest, and the change that
+  builds the relays and the viewer page deletes the windows, inventorying every window site in
+  the tree and these entries' tests in the same change, so no window path outlives the
+  browser path. Undecided: what replaces a window where an entry leans on one — the codec
+  blocks' camera → encode → decode → display proof and the rig's live verification, the
+  scaffold's and `camera-display`'s display, and the Linux unit's restart for a display at
+  login. [window-retirement]
 - **DECIDED** — Camera → GPU transport: zero-copy import of the device's own memory when
   the driver takes it, transparent CPU upload otherwise, selected automatically — no
   configuration dial. Both arms land frames through one stage: the device's NV12 or YUYV
@@ -3729,7 +3743,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   any relay from an address and a credential and holds nothing else about relays — no account,
   team, directory, signed link or billing, which belong to a separate private service. No relay
   is written or bundled here; a person who wants their own runs an existing open-source relay
-  program. The relay is never a role of the runtime. Owner, 2026-10-04. [moq-on-the-tailnet]
+  program. The relay is never a role of the runtime. Owner, 2026-10-04. [moq-on-the-tailnet;
+  reopened by relay-adapters: "joins any relay from an address and a credential and holds
+  nothing else about relays" — a machine joins several relays, each through a relay adapter;
+  "No relay is written or bundled here" — the app ships a relay for the local adapter (the
+  sharing step's OPEN below)]
 - **DECIDED** — HTTP carries only what is not real time: the listing of exposed ports, a
   read-only MCP, snapshots, small samples and the viewer page — never live media, in any
   browser and for any tool. `tatolabd` asks Tailscale to serve its HTTP, on a port of its own,
@@ -3765,7 +3783,23 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   taken on another machine's clock is marked. Direction (session's, not decided): a bag stands alone, so each may open
   its own group, video cutting at its keyframes; machine to machine needs no certificate from
   Tailscale, a tailnet address being authenticated already; `tailscale serve` supplies the
-  HTTPS certificate for what it fronts, so the runtime requests and renews none. Known
+  HTTPS certificate for what it fronts, so the runtime requests and renews none. Direction
+  (owner, 2026-10-14, from customer feedback; not decided): a machine may join several relays
+  at once, and each joins through a relay adapter — the adapter pattern, one interface any
+  relay can implement. One publisher reads each public port once and fans out to every joined
+  relay that has a subscriber; the adapter carries what differs between relays: authentication
+  and credential refresh, the MoQ version spoken, how a machine's ports are named there, and
+  each relay's quirks. The first adapters are a local relay, Cloudflare, moq.pro and Red5, Red5
+  on hold while its cost is weighed. Relay adapters come with the runtime, through the
+  installer and the app alike, so a headless machine publishes to relays too — relays being
+  the goal for every machine's output, headless included. Undecided: whether an adapter runs
+  inside the runtime or as its own thing beside it. The local one is an
+  adapter like the rest; the app also ships the relay it joins, so every app user has one, and
+  a browser on the machine brings up a stream through `localhost` in a player or the
+  user's own scripts and views. A user adds a relay from their own account in the app;
+  signing in to a provider and provisioning a relay live in the app or the private service,
+  never the runtime. The sharing step also takes up §Media I/O's windows OPEN: the runtime's
+  windows are retired in favour of the browser, so MoQ is a stream's one output. Known
   (2026-10-04): `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet
   address itself; changing serve settings needs root, Tailscale's operator user or, on macOS,
   the admin group, and HTTPS must be switched on for the tailnet; Funnel carries TCP only, on
