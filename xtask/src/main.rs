@@ -1387,8 +1387,8 @@ enum Commands {
     /// processor interpreter puts first on `PYTHONPATH` — and `wheel/`. Builds
     /// `sdk/streamlib-python-wheel` as a wheel with the pinned maturin into
     /// `wheel/`, replaces the lend with that wheel's contents, then builds
-    /// `tatolabd` and `tatolab` and copies them into `bin/`. On macOS it first
-    /// stages the bundled Vulkan driver, so `_vulkan_driver/` lands beside
+    /// `tatolabd` and `tatolab` and copies them into `bin/`. It first stages the
+    /// platform's bundled Vulkan driver, so `_vulkan_driver/` lands beside
     /// `_engine`. The one build of the runtime unit for developers, CI and the
     /// installer; it installs and publishes nothing.
     ///

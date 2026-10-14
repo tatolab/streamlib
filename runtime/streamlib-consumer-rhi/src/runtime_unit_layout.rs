@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Where a runtime unit lays out what it carries: `bin/` beside the lend, and
-//! on macOS the bundled Vulkan driver beside `_engine` in the lent
+//! on macOS and Linux the bundled Vulkan driver beside `_engine` in the lent
 //! `tatolab/runtime/`. Also where the macOS app bundle lays the same unit out:
 //! binaries in `Contents/MacOS`, the lend in `Contents/Resources/lend`, and the
 //! lend's Mach-Os in `Contents/Frameworks/tatolab-runtime`.
@@ -27,19 +27,37 @@ pub const BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME: &str = "_vulkan_driver";
 
 /// The Vulkan loader's versioned soname: the bare name dyld searches for, and
 /// the loader the bundled Vulkan driver directory carries.
+#[cfg(target_os = "macos")]
 pub const VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME: &str = "libvulkan.1.dylib";
 
+/// The Vulkan loader's versioned soname: the bare name the dynamic linker
+/// searches for, and the loader the bundled Vulkan driver directory carries.
+#[cfg(target_os = "linux")]
+pub const VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME: &str = "libvulkan.so.1";
+
 /// MoltenVK, the driver the bundled Vulkan driver directory carries.
-pub const BUNDLED_MOLTENVK_LIBRARY_FILE_NAME: &str = "libMoltenVK.dylib";
+#[cfg(target_os = "macos")]
+pub const BUNDLED_VULKAN_DRIVER_LIBRARY_FILE_NAME: &str = "libMoltenVK.dylib";
+
+/// Mesa's lavapipe, the driver the bundled Vulkan driver directory carries.
+#[cfg(target_os = "linux")]
+pub const BUNDLED_VULKAN_DRIVER_LIBRARY_FILE_NAME: &str = "libvulkan_lvp.so";
 
 /// The ICD manifest naming MoltenVK to the Vulkan loader.
+#[cfg(target_os = "macos")]
 pub const BUNDLED_ICD_MANIFEST_FILE_NAME: &str = "MoltenVK_icd.json";
 
-/// Every file `scripts/stage_macos_bundled_vulkan_driver.sh` writes into the
-/// bundled Vulkan driver directory.
+/// The ICD manifest naming lavapipe to the Vulkan loader, as Mesa names it on
+/// x86_64, the one Linux build.
+#[cfg(target_os = "linux")]
+pub const BUNDLED_ICD_MANIFEST_FILE_NAME: &str = "lvp_icd.x86_64.json";
+
+/// Every file `scripts/stage_macos_bundled_vulkan_driver.sh` or
+/// `scripts/stage_linux_bundled_vulkan_driver.sh` writes into the bundled
+/// Vulkan driver directory.
 pub const BUNDLED_VULKAN_DRIVER_FILE_NAMES: [&str; 3] = [
     VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME,
-    BUNDLED_MOLTENVK_LIBRARY_FILE_NAME,
+    BUNDLED_VULKAN_DRIVER_LIBRARY_FILE_NAME,
     BUNDLED_ICD_MANIFEST_FILE_NAME,
 ];
 
@@ -97,4 +115,31 @@ pub fn bundled_vulkan_driver_directory_in_the_app_bundle_contents(
     app_bundle_contents_directory
         .join(LENT_RUNTIME_PACKAGE_MACH_O_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS)
         .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_unit_carries_the_loader_moltenvk_and_its_manifest() {
+        assert_eq!(
+            BUNDLED_VULKAN_DRIVER_FILE_NAMES,
+            [
+                "libvulkan.1.dylib",
+                "libMoltenVK.dylib",
+                "MoltenVK_icd.json"
+            ]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_unit_carries_the_loader_lavapipe_and_its_manifest() {
+        assert_eq!(
+            BUNDLED_VULKAN_DRIVER_FILE_NAMES,
+            ["libvulkan.so.1", "libvulkan_lvp.so", "lvp_icd.x86_64.json"]
+        );
+    }
 }

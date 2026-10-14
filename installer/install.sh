@@ -129,6 +129,7 @@ unpack_the_release() {
 	mkdir "$partial_release_directory"
 	tar -xzf "$download_directory/$tarball_name" -C "$partial_release_directory"
 	for unpacked_member in bin/tatolabd bin/tatolab lib/tatolab/lend \
+		lib/tatolab/lend/tatolab/runtime/_vulkan_driver/lvp_icd.x86_64.json \
 		"lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME" "lib/systemd/user/$TATOLAB_SYSTEMD_USER_LOGIN_UNIT_NAME"; do
 		[ -e "$partial_release_directory/$unpacked_member" ] || {
 			rm -rf "$partial_release_directory"
