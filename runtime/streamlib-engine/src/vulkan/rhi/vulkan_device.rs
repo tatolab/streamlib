@@ -3955,27 +3955,18 @@ impl HostVulkanDevice {
         memory_type_bits: u32,
         preferred_flags: vk::MemoryPropertyFlags,
     ) -> Result<vk::DeviceMemory> {
-        use std::os::fd::IntoRawFd as _;
-
         #[cfg(target_os = "linux")]
         let dma_buf_fd = refuse_a_file_descriptor_that_is_not_a_dma_buf(dma_buf_fd)?;
         let memory_type_index = self.find_memory_type(memory_type_bits, preferred_flags)?;
 
-        let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
-            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-            .fd(dma_buf_fd.into_raw_fd())
-            .build();
-
-        let alloc_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(allocation_size)
-            .memory_type_index(memory_type_index)
-            .push_next(&mut import_info)
-            .build();
-
-        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }
+        let (memory, count) = self
+            .allocate_device_memory_importing_the_fd(
+                dma_buf_fd,
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                allocation_size,
+                memory_type_index,
+            )
             .map_err(|e| Error::GpuError(format!("Failed to import DMA-BUF memory: {e}")))?;
-
-        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::debug!(
             "HostVulkanDevice: DMA-BUF memory imported ({} bytes, type={}, live={})",
             allocation_size,
@@ -3984,6 +3975,34 @@ impl HostVulkanDevice {
         );
 
         Ok(memory)
+    }
+
+    /// The `vkAllocateMemory` import both fd import paths share, after each
+    /// has made its own refusals. The fd is the driver's from the call on,
+    /// whatever it returns; a success counts one more live allocation, and
+    /// the new count comes back with the memory.
+    fn allocate_device_memory_importing_the_fd(
+        &self,
+        imported_fd: std::os::fd::OwnedFd,
+        handle_type: vk::ExternalMemoryHandleTypeFlags,
+        allocation_size: vk::DeviceSize,
+        memory_type_index: u32,
+    ) -> std::result::Result<(vk::DeviceMemory, usize), vk::ErrorCode> {
+        use std::os::fd::IntoRawFd as _;
+
+        let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
+            .handle_type(handle_type)
+            .fd(imported_fd.into_raw_fd())
+            .build();
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(allocation_size)
+            .memory_type_index(memory_type_index)
+            .push_next(&mut import_info)
+            .build();
+
+        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }?;
+        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
+        Ok((memory, count))
     }
 
     /// Import an OPAQUE_FD as device memory at the memory type index the
@@ -4003,8 +4022,6 @@ impl HostVulkanDevice {
         allocation_size: vk::DeviceSize,
         stated_memory_type_index: u32,
     ) -> Result<vk::DeviceMemory> {
-        use std::os::fd::IntoRawFd as _;
-
         if !self.supports_external_memory {
             return Err(Error::NotSupported(format!(
                 "OPAQUE_FD import: {} did not enable VK_KHR_external_memory_fd",
@@ -4019,25 +4036,20 @@ impl HostVulkanDevice {
             )));
         }
 
-        let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
-            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
-            .fd(opaque_fd.into_raw_fd())
-            .build();
-        let alloc_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(allocation_size)
-            .memory_type_index(stated_memory_type_index)
-            .push_next(&mut import_info)
-            .build();
-
-        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
-            Error::GpuError(format!(
-                "OPAQUE_FD import of {allocation_size} bytes at memory type \
-                 {stated_memory_type_index} on {} failed: {e}",
-                self.device_name
-            ))
-        })?;
-
-        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
+        let (memory, count) = self
+            .allocate_device_memory_importing_the_fd(
+                opaque_fd,
+                vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+                allocation_size,
+                stated_memory_type_index,
+            )
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "OPAQUE_FD import of {allocation_size} bytes at memory type \
+                     {stated_memory_type_index} on {} failed: {e}",
+                    self.device_name
+                ))
+            })?;
         tracing::debug!(
             allocation_size,
             stated_memory_type_index,
