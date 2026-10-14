@@ -3776,9 +3776,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   relay that has a subscriber; the adapter carries what differs between relays: authentication
   and credential refresh, the MoQ version spoken, how a machine's ports are named there, and
   each relay's quirks. The first adapters are a local relay, Cloudflare, moq.pro and Red5, Red5
-  on hold while its cost is weighed. Every relay adapter is distributed in the app. The local
-  one is an adapter like the rest; the app also ships the relay it joins, so every user has
-  one, and a browser on the machine brings up a stream through `localhost` in a player or the
+  on hold while its cost is weighed. The runtime runs relay adapters, and they ship with it
+  through the installer and the app alike, so a headless machine publishes to relays too —
+  relays being the goal for every machine's output, headless included. The local one is an
+  adapter like the rest; the app also ships the relay it joins, so every app user has one, and
+  a browser on the machine brings up a stream through `localhost` in a player or the
   user's own scripts and views. A user adds a relay from their own account in the app;
   signing in to a provider and provisioning a relay live in the app or the private service,
   never the runtime. Known
