@@ -49,6 +49,7 @@ mod error;
 mod formats;
 mod pixel_format;
 pub mod runtime_unit_layout;
+mod runtime_vulkan_device_named_at_spawn;
 
 // Compiled wherever `ConsumerVulkanDevice` is, because it is
 // `ConsumerMarker::Buffer` and the privilege ladder does not resolve without
@@ -79,6 +80,10 @@ mod vulkan_loader_library;
 pub use error::{ConsumerRhiError, Result};
 pub use formats::{TextureFormat, TextureUsages};
 pub use pixel_format::PixelFormat;
+pub use runtime_vulkan_device_named_at_spawn::{
+    RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE, lowercase_hex_of_vulkan_device_uuid,
+    runtime_vulkan_device_uuid_named_at_spawn, vulkan_device_uuid_from_hex,
+};
 
 /// This crate's package version, captured at compile time. Folded into
 /// the engine's build fingerprint so a host and plugin that disagree on
@@ -90,7 +95,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use consumer_vulkan_device::ConsumerVulkanDevice;
+pub use consumer_vulkan_device::{
+    ConsumerVulkanDevice, VulkanDeviceTheLoaderEnumerates, vulkan_devices_the_loader_enumerates,
+};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -227,9 +234,9 @@ pub use device_capability::private;
 /// // Constructor is reachable but not called — avoids hitting the
 /// // Vulkan loader on doc-test runs.
 /// fn _ctor_signature()
-///     -> fn() -> Result<ConsumerVulkanDevice, streamlib_consumer_rhi::ConsumerRhiError>
+///     -> fn([u8; 16]) -> Result<ConsumerVulkanDevice, streamlib_consumer_rhi::ConsumerRhiError>
 /// {
-///     ConsumerVulkanDevice::new
+///     ConsumerVulkanDevice::new_on_the_device_the_runtime_named
 /// }
 /// ```
 #[doc(hidden)]

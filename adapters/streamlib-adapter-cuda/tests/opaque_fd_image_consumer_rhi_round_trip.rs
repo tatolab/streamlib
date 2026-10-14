@@ -173,7 +173,9 @@ fn opaque_fd_image_carve_out_round_trip() {
     );
 
     // Phase 5: consumer imports both via consumer-rhi.
-    let consumer_device = match ConsumerVulkanDevice::new() {
+    let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        host_device.physical_device_uuid(),
+    ) {
         Ok(d) => Arc::new(d),
         Err(e) => {
             unsafe {
@@ -378,7 +380,9 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
     let host_image_alloc_size = host_image.vma_allocation_size();
     let host_dest_size = dest_buf.size() as vk::DeviceSize;
 
-    let consumer_device = match ConsumerVulkanDevice::new() {
+    let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        host_device.physical_device_uuid(),
+    ) {
         Ok(d) => Arc::new(d),
         Err(e) => {
             unsafe {

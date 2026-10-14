@@ -63,6 +63,8 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
                 requester.clone().unbind(),
                 releaser.clone().unbind(),
                 surface_share_channel_name,
+                streamlib_consumer_rhi::runtime_vulkan_device_uuid_named_at_spawn()
+                    .map_err(|absent_or_malformed| absent_or_malformed.to_string()),
                 // Child-scoped, never the node's own runtime id — the
                 // service's crash watchdog sweeps registrations by
                 // runtime id, and this child's crash must sweep only

@@ -57,7 +57,11 @@ platform.
 
 A subprocess can't share a host's `VkDevice` across processes — it must
 construct its own consumer-only `VkDevice` to bind imported FDs. The
-carve-out exists to make that bind possible and nothing more:
+carve-out exists to make that bind possible and nothing more. That
+`VkDevice` is built on the physical device whose `deviceUUID` the runtime
+names in `STREAMLIB_RUNTIME_VULKAN_DEVICE_UUID` at spawn — an import binds
+only on the device that exported it — and a helper refuses by name when no
+device it enumerates carries that UUID, or the variable is absent:
 
 - DMA-BUF FD import + bind + map (`vkImportMemoryFdKHR`,
   `vkBindBufferMemory`, `vkBindImageMemory`).
@@ -81,7 +85,8 @@ carve-out exists to make that bind possible and nothing more:
   acquire (optional extension `VK_EXT_external_memory_acquire_unmodified`)
   so producer-side content survives the transfer per Vulkan spec. The
   acquire-side extension is the only meaningful gate, optionally probed
-  at `ConsumerVulkanDevice::new` / `HostVulkanDevice::new`; when missing
+  at `ConsumerVulkanDevice::new_on_the_device_the_runtime_named` /
+  `HostVulkanDevice::new`; when missing
   the helpers fall back to a bridging `UNDEFINED → target` transition
   (content discard permitted by spec, preserved in practice on every
   modern Linux Vulkan driver). The release/acquire helpers

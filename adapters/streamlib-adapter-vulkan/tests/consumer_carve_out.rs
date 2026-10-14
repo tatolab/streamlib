@@ -36,15 +36,30 @@ use std::sync::Arc;
 use serial_test::serial;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
-use streamlib_consumer_rhi::{ConsumerVulkanDevice, VulkanRhiDevice};
+use streamlib_consumer_rhi::{
+    ConsumerVulkanDevice, VulkanRhiDevice, vulkan_devices_the_loader_enumerates,
+};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
+/// A consumer device on the first device the loader enumerates — these tests
+/// have no runtime to name one.
 fn try_consumer() -> Option<Arc<ConsumerVulkanDevice>> {
-    match ConsumerVulkanDevice::new() {
+    let first_enumerated_device = match vulkan_devices_the_loader_enumerates() {
+        Ok(enumerated_devices) => enumerated_devices.into_iter().next()?,
+        Err(e) => {
+            println!("skip: vulkan_devices_the_loader_enumerates failed: {e}");
+            return None;
+        }
+    };
+    try_consumer_on(first_enumerated_device.device_uuid)
+}
+
+fn try_consumer_on(vulkan_device_uuid: [u8; 16]) -> Option<Arc<ConsumerVulkanDevice>> {
+    match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(vulkan_device_uuid) {
         Ok(d) => Some(Arc::new(d)),
         Err(e) => {
-            println!("skip: ConsumerVulkanDevice::new failed: {e}");
+            println!("skip: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {e}");
             None
         }
     }
@@ -349,7 +364,7 @@ fn consumer_device_drop_with_live_imports_emits_leak_warning() {
         Some(d) => d,
         None => return,
     };
-    let consumer = match try_consumer() {
+    let consumer = match try_consumer_on(host.physical_device_uuid()) {
         Some(d) => d,
         None => return,
     };

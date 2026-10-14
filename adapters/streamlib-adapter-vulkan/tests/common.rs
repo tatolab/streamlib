@@ -138,7 +138,7 @@ pub struct RegisteredSurface {
 /// Returns the child handle and the parent end of the socketpair the
 /// helper reads its descriptor + fds from.
 #[cfg(target_os = "linux")]
-pub fn spawn_helper(role: &str) -> (Child, UnixStream) {
+pub fn spawn_helper(role: &str, host: &HostFixture) -> (Child, UnixStream) {
     let (parent, child) = UnixStream::pair().expect("socketpair");
     // Move the child end's fd into the helper's fd table without
     // closing it on exec; the parent side is normal Rust ownership.
@@ -153,6 +153,12 @@ pub fn spawn_helper(role: &str) -> (Child, UnixStream) {
     let mut cmd = Command::new(bin_path);
     cmd.arg(role)
         .env("STREAMLIB_HELPER_SOCKET_FD", child_fd.to_string())
+        .env(
+            streamlib_consumer_rhi::RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
+            streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+                host.adapter.device().physical_device_uuid(),
+            ),
+        )
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     let child_proc = cmd.spawn().expect("spawn subprocess helper");

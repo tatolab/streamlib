@@ -8144,7 +8144,7 @@ mod tests {
             assert_eq!(registration.exporting_device_uuid, None, "{device_name}");
         } else {
             let exporting_device_uuid_in_lowercase_hex =
-                crate::core::context::surface_store::lowercase_hex_of_device_uuid(
+                streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
                     host_device.physical_device_uuid(),
                 );
             assert_eq!(registration.handle_type, "opaque_fd", "{device_name}");

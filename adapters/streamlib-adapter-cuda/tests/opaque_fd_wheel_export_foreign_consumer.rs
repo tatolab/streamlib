@@ -553,16 +553,20 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         )
     };
 
-    let consumer_vulkan_device = match ConsumerVulkanDevice::new() {
-        Ok(device) => Arc::new(device),
-        Err(unavailable) => {
-            println!(
-                "wheel export handoff: ConsumerVulkanDevice::new failed: {unavailable:?} — \
+    let exporting_device_uuid =
+        streamlib_consumer_rhi::vulkan_device_uuid_from_hex(exporting_device_uuid_hex)
+            .expect("the exporting device UUID is 32 hex characters");
+    let consumer_vulkan_device =
+        match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(exporting_device_uuid) {
+            Ok(device) => Arc::new(device),
+            Err(unavailable) => {
+                println!(
+                    "wheel export handoff: ConsumerVulkanDevice::new failed: {unavailable:?} — \
                  skipping (likely a UUID mismatch on a multi-GPU rig)"
-            );
-            return;
-        }
-    };
+                );
+                return;
+            }
+        };
     // The texture import adopts its fd on success and leaves it owned here on
     // failure, so it is released only at its call; the staging import always
     // consumes its fd.

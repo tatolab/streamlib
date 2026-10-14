@@ -43,25 +43,12 @@ fn decimal_string_field(response: &Bound<'_, PyAny>, field: &str) -> PyResult<u6
 
 /// The exporting device's UUID, as 32 hex characters.
 fn parse_device_uuid(as_hex: &str) -> PyResult<[u8; 16]> {
-    let mut uuid = [0u8; 16];
-    if as_hex.len() != 32 {
-        return Err(crate::python_processor_context::gpu_operation_error(
-            format!(
-                "the parent reported the exporting device UUID as {as_hex:?}, which is not 32 hex \
+    streamlib_consumer_rhi::vulkan_device_uuid_from_hex(as_hex).ok_or_else(|| {
+        crate::python_processor_context::gpu_operation_error(format!(
+            "the parent reported the exporting device UUID as {as_hex:?}, which is not 32 hex \
              characters; importing onto the wrong GPU reads the wrong memory rather than failing"
-            ),
-        ));
-    }
-    for (byte, hex_pair) in uuid.iter_mut().zip(as_hex.as_bytes().chunks_exact(2)) {
-        *byte = u8::from_str_radix(std::str::from_utf8(hex_pair).unwrap_or("zz"), 16).map_err(
-            |_| {
-                crate::python_processor_context::gpu_operation_error(format!(
-                    "the parent reported the exporting device UUID as {as_hex:?}, which is not hex"
-                ))
-            },
-        )?;
-    }
-    Ok(uuid)
+        ))
+    })
 }
 
 /// The memory type index an OPAQUE_FD registration states, or the refusal

@@ -365,7 +365,7 @@ device flavor work unchanged.
 `acquire_from_foreign` chains `VkExternalMemoryAcquireUnmodifiedEXT`
 when `VK_EXT_external_memory_acquire_unmodified` is enabled at device
 construction (probed by `HostVulkanDevice::new` /
-`ConsumerVulkanDevice::new`); this is the spec-correct
+`ConsumerVulkanDevice::new_on_the_device_the_runtime_named`); this is the spec-correct
 content-preserving QFOT acquire. The queue family index used for
 QFOT src/dst is `VK_QUEUE_FAMILY_EXTERNAL`, which is core Vulkan 1.1
 (promoted from `VK_KHR_external_memory`) and always available — only

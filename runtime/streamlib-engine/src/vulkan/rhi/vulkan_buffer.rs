@@ -1819,7 +1819,9 @@ mod tests {
             println!("Skipping - OPAQUE_FD buffer pool unavailable on this driver");
             return;
         }
-        let consumer_device = match ConsumerVulkanDevice::new() {
+        let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+            device.physical_device_uuid(),
+        ) {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 println!("Skipping - ConsumerVulkanDevice unavailable: {e}");
@@ -1866,9 +1868,20 @@ mod tests {
     #[test]
     fn a_stated_memory_type_index_the_importer_cannot_bind_is_refused_by_name() {
         use crate::core::rhi::plane_fd_under_test::PlaneFdUnderTest;
-        use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+        use streamlib_consumer_rhi::{
+            ConsumerVulkanBuffer, ConsumerVulkanDevice, vulkan_devices_the_loader_enumerates,
+        };
 
-        let consumer_device = match ConsumerVulkanDevice::new() {
+        let Some(first_enumerated_device) = vulkan_devices_the_loader_enumerates()
+            .ok()
+            .and_then(|enumerated_devices| enumerated_devices.into_iter().next())
+        else {
+            println!("Skipping - no Vulkan device enumerates");
+            return;
+        };
+        let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+            first_enumerated_device.device_uuid,
+        ) {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 println!("Skipping - ConsumerVulkanDevice unavailable: {e}");

@@ -57,7 +57,13 @@ fn subprocess_crash_mid_write_does_not_break_host_adapter() {
     let bin_path = common::vulkan_adapter_subprocess_helper_path();
     let mut cmd = Command::new(bin_path);
     cmd.arg("crash-mid-write")
-        .env("STREAMLIB_HELPER_SOCKET_FD", child_fd.to_string());
+        .env("STREAMLIB_HELPER_SOCKET_FD", child_fd.to_string())
+        .env(
+            streamlib_consumer_rhi::RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
+            streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+                host.adapter.device().physical_device_uuid(),
+            ),
+        );
 
     // Send the descriptor over the socketpair before the harness runs
     // — the helper reads it on startup, then crashes.

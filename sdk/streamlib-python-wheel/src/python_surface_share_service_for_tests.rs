@@ -24,6 +24,17 @@ use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
 
 /// A running service, and the lease table the pool reads to decide whether a
 /// slot may be rehanded.
+/// The `deviceUUID` a helper's exchange client builds on in a test with no
+/// runtime to name one: the first device the loader enumerates.
+pub(crate) fn vulkan_device_uuid_for_a_test_with_no_runtime() -> Result<[u8; 16], String> {
+    streamlib_consumer_rhi::vulkan_devices_the_loader_enumerates()
+        .map_err(|unavailable| unavailable.to_string())?
+        .into_iter()
+        .next()
+        .map(|first_enumerated_device| first_enumerated_device.device_uuid)
+        .ok_or_else(|| "the Vulkan loader enumerates no device".to_owned())
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) struct SurfaceShareUnderTest {
     _service: UnixSocketSurfaceService,
@@ -443,6 +454,7 @@ impl SurfaceShareUnderTest {
                     python.None(),
                     python.None(),
                     self.channel_name_for_the_helper(),
+                    vulkan_device_uuid_for_a_test_with_no_runtime(),
                     format!("helper:{label}"),
                 ),
             )

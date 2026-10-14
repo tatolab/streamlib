@@ -201,6 +201,12 @@ impl SpawnedHelperProcess {
                 SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
                 engine.service.service_name(),
             )
+            .env(
+                streamlib_consumer_rhi::RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
+                streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+                    engine._gpu.device().vulkan_device().physical_device_uuid(),
+                ),
+            )
             .stdout(Stdio::piped())
             .spawn()
             .expect("spawn the helper");

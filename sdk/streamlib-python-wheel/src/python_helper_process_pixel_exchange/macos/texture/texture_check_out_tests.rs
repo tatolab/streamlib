@@ -11,7 +11,11 @@ use super::super::super::HelperCheckedOutSurface;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
 
 fn a_vulkan_device_is_available() -> bool {
-    match ConsumerVulkanDevice::new() {
+    match crate::python_surface_share_service_for_tests::vulkan_device_uuid_for_a_test_with_no_runtime()
+        .and_then(|vulkan_device_uuid| {
+            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(vulkan_device_uuid)
+                .map_err(|unavailable| unavailable.to_string())
+        }) {
         Ok(_) => true,
         Err(unavailable) => {
             let _ = writeln!(

@@ -174,9 +174,16 @@ fn run() -> ExitCode {
 
     // Build our own VkDevice. The parent has no GPU work in flight when
     // it spawns us, so the dual-VkDevice crash on NVIDIA does not apply.
-    let device = match ConsumerVulkanDevice::new() {
+    let device = match streamlib_consumer_rhi::runtime_vulkan_device_uuid_named_at_spawn()
+        .and_then(ConsumerVulkanDevice::new_on_the_device_the_runtime_named)
+    {
         Ok(d) => Arc::new(d),
-        Err(e) => return die(Some(&socket), format!("ConsumerVulkanDevice::new: {e}")),
+        Err(e) => {
+            return die(
+                Some(&socket),
+                format!("ConsumerVulkanDevice::new_on_the_device_the_runtime_named: {e}"),
+            );
+        }
     };
 
     // Import VkImage with the host-chosen DRM modifier.

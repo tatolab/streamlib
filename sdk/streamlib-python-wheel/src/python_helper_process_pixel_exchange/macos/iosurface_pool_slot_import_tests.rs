@@ -6,7 +6,11 @@ use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
 use std::io::Write as _;
 
 fn a_vulkan_device_is_available() -> bool {
-    match ConsumerVulkanDevice::new() {
+    match crate::python_surface_share_service_for_tests::vulkan_device_uuid_for_a_test_with_no_runtime()
+        .and_then(|vulkan_device_uuid| {
+            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(vulkan_device_uuid)
+                .map_err(|unavailable| unavailable.to_string())
+        }) {
         Ok(_) => true,
         Err(unavailable) => {
             let _ = writeln!(
@@ -161,6 +165,7 @@ fn helper_process_that_holds_a_frame_until_it_is_killed() {
             python.None(),
             python.None(),
             service_name,
+            crate::python_surface_share_service_for_tests::vulkan_device_uuid_for_a_test_with_no_runtime(),
             "helper:killed-under-test".to_string(),
         ))
     });

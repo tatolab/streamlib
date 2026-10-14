@@ -263,6 +263,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
         runtime_id: &str,
         iceoryx2_domain_root: &Path,
         surface_share_channel: Option<SurfaceShareChannelNamedToTheHelperProcess<'_>>,
+        runtime_vulkan_device_uuid: Option<[u8; 16]>,
     ) -> Result<Command> {
         let mut command = processor_interpreter_bootstrap_command(
             &self.stream_environment,
@@ -298,6 +299,14 @@ impl ProcessorInterpreterSpawnHostProcessor {
             command.env(
                 surface_share_channel.environment_variable,
                 surface_share_channel.channel_name,
+            );
+        }
+        if let Some(runtime_vulkan_device_uuid) = runtime_vulkan_device_uuid {
+            command.env(
+                streamlib_consumer_rhi::RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
+                streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+                    runtime_vulkan_device_uuid,
+                ),
             );
         }
         detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
@@ -690,6 +699,18 @@ impl ProcessorInterpreterSpawnHostProcessor {
         });
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let surface_share_channel = None;
+        // The device every surface the helper imports was exported from: an
+        // OPAQUE_FD import binds only on the exporting `deviceUUID`.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let runtime_vulkan_device_uuid = Some(
+            ctx.gpu_limited_access()
+                .host_inner()
+                .device()
+                .inner
+                .physical_device_uuid(),
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let runtime_vulkan_device_uuid = None;
 
         // Before the child exists, so its first counts have a board to land on
         // and the board outlives whatever becomes of it.
@@ -716,6 +737,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
             &ctx.runtime_id(),
             &iceoryx2_domain_root,
             surface_share_channel,
+            runtime_vulkan_device_uuid,
         )?;
         self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
@@ -1986,7 +2008,12 @@ sys.exit(0)
     #[test]
     fn the_child_is_the_streams_interpreter_running_the_lent_bootstrap_by_path() {
         let command = spawn_host_for_test()
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
             .expect("the test directories hold no path-list separator");
         assert_eq!(
             command.get_program(),
@@ -2021,7 +2048,12 @@ sys.exit(0)
     #[test]
     fn the_child_is_told_which_class_to_import_and_who_it_is() {
         let command = spawn_host_for_test()
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
             .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
         assert_eq!(
@@ -2043,7 +2075,12 @@ sys.exit(0)
     #[test]
     fn the_child_is_handed_the_parents_iceoryx2_domain_root() {
         let command = spawn_host_for_test()
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
             .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
         assert_eq!(
@@ -2057,7 +2094,12 @@ sys.exit(0)
     #[test]
     fn the_child_is_handed_the_engine_build_id_it_must_match() {
         let command = spawn_host_for_test()
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
             .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
         assert_eq!(
@@ -2080,6 +2122,7 @@ sys.exit(0)
                     environment_variable: "STREAMLIB_SURFACE_MACH_SERVICE",
                     channel_name: OsStr::new("com.tatolab.streamlib.surface-share.Rtest"),
                 }),
+                None,
             )
             .expect("the test directories hold no path-list separator");
         assert_eq!(
@@ -2088,7 +2131,12 @@ sys.exit(0)
         );
 
         let without_a_channel = spawn_host
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
             .expect("the test directories hold no path-list separator");
         let environment = environment_of(&without_a_channel);
         assert_eq!(
@@ -2096,6 +2144,57 @@ sys.exit(0)
             None
         );
         assert_eq!(value_of(&environment, "STREAMLIB_SURFACE_SOCKET"), None);
+    }
+
+    /// The child is handed the device the runtime built on, spelled as the
+    /// wire spells a device UUID, and a helper started with no device is told
+    /// none.
+    #[test]
+    fn the_child_is_handed_the_vulkan_device_the_runtime_built_on() {
+        let spawn_host = spawn_host_for_test();
+        let runtime_vulkan_device_uuid = [
+            0x94, 0x10, 0x5c, 0x9d, 0x1e, 0x3f, 0x69, 0x46, 0xc6, 0x65, 0x7e, 0x58, 0xe8, 0x20,
+            0x30, 0x0e,
+        ];
+        let command = spawn_host
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                Some(runtime_vulkan_device_uuid),
+            )
+            .expect("the test directories hold no path-list separator");
+        let handed_device_uuid = value_of(
+            &environment_of(&command),
+            "STREAMLIB_RUNTIME_VULKAN_DEVICE_UUID",
+        )
+        .map(str::to_owned);
+        assert_eq!(
+            handed_device_uuid.as_deref(),
+            Some("94105c9d1e3f6946c6657e58e820300e")
+        );
+        assert_eq!(
+            handed_device_uuid
+                .as_deref()
+                .and_then(streamlib_consumer_rhi::vulkan_device_uuid_from_hex),
+            Some(runtime_vulkan_device_uuid)
+        );
+
+        let without_a_device = spawn_host
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
+            .expect("the test directories hold no path-list separator");
+        assert_eq!(
+            value_of(
+                &environment_of(&without_a_device),
+                "STREAMLIB_RUNTIME_VULKAN_DEVICE_UUID"
+            ),
+            None
+        );
     }
 
     /// A helper refuses its own start on raw standard error before its log
@@ -2232,7 +2331,12 @@ sys.exit(0)
     #[test]
     fn the_childs_python_path_is_the_lend_directory_then_the_project_exactly() {
         let command = spawn_host_for_test()
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
             .expect("the test directories hold no path-list separator");
         assert_eq!(
             value_of(&environment_of(&command), "PYTHONPATH"),
@@ -2329,7 +2433,12 @@ sys.exit(0)
             );
         }
         let bootstrap_command = spawn_host_for_test()
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
             .expect("the test directories hold no path-list separator");
         let describe_command =
             super::super::processor_interpreter_describe::processor_interpreter_describe_command(
@@ -2429,7 +2538,12 @@ sys.exit(0)
     #[test]
     fn the_childs_working_directory_is_the_project() {
         let command = spawn_host_for_test()
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                None,
+                None,
+            )
             .expect("the test directories hold no path-list separator");
         assert_eq!(
             command.get_current_dir(),
