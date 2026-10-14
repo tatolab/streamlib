@@ -13,18 +13,6 @@ const PIXEL_BUFFER_HEIGHT: u32 = 16;
 const PIXEL_BUFFER_BYTE_SIZE: u64 = 64 * 4 * 16;
 const ENGINE_WRITTEN_STAMP: u8 = 0xA7;
 
-fn exchange_client_on(share: &SurfaceShareUnderTest) -> Arc<HelperProcessGpuExchangeClient> {
-    Python::initialize();
-    Python::attach(|python| {
-        Arc::new(HelperProcessGpuExchangeClient::new(
-            python.None(),
-            python.None(),
-            share.socket_path.clone(),
-            "helper:opaque-fd-pixel-buffer-under-test".to_string(),
-        ))
-    })
-}
-
 /// An engine-exported OPAQUE_FD pixel buffer — what a pooled frame is on a
 /// device without DMA-BUF export — published through the engine's own
 /// `SurfaceStore::check_in`, checks out through the helper's pixel arm, maps
@@ -76,7 +64,7 @@ fn an_opaque_fd_pixel_buffer_imports_at_its_stated_memory_type_index_and_reads_t
     let surface_id = engine_surface_store
         .check_in(&engine_pixel_buffer)
         .expect("the engine checks the OPAQUE_FD pixel buffer in");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("opaque-fd-pixel-buffer-under-test");
 
     let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = exchange_client
         .check_out_and_import(&surface_id)

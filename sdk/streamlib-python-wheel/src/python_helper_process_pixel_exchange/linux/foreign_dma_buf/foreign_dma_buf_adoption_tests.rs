@@ -10,18 +10,6 @@ const ADOPTED_WIDTH: u32 = 64;
 const ADOPTED_HEIGHT: u32 = 16;
 const ADOPTED_BYTE_SIZE: u64 = 64 * 4 * 16;
 
-fn exchange_client_on(share: &SurfaceShareUnderTest) -> Arc<HelperProcessGpuExchangeClient> {
-    Python::initialize();
-    Python::attach(|python| {
-        Arc::new(HelperProcessGpuExchangeClient::new(
-            python.None(),
-            python.None(),
-            share.socket_path.clone(),
-            "helper:adoption-under-test".to_string(),
-        ))
-    })
-}
-
 /// A sized memfd standing in for a foreign DMA-BUF.
 fn a_foreign_memory_fd() -> OwnedFd {
     let raw_fd =
@@ -54,7 +42,7 @@ fn check_in_request() -> serde_json::Value {
 #[test]
 fn an_adopted_foreign_fd_is_resolvable_with_its_declared_geometry() {
     let share = SurfaceShareUnderTest::start("adoption");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("adoption-under-test");
     let foreign_fd = a_foreign_memory_fd();
 
     let (check_in_response, _no_fds) = exchange_client
@@ -109,7 +97,7 @@ fn an_adopted_foreign_fd_is_resolvable_with_its_declared_geometry() {
 #[test]
 fn releasing_an_adoption_removes_the_registration() {
     let share = SurfaceShareUnderTest::start("adoption-release");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("adoption-under-test");
     let foreign_fd = a_foreign_memory_fd();
 
     let (check_in_response, _no_fds) = exchange_client
@@ -177,7 +165,7 @@ fn a_pixel_registration_of(
 #[test]
 fn a_multi_plane_opaque_fd_pixel_buffer_is_refused_by_name() {
     let share = SurfaceShareUnderTest::start("opaque-pixel-multi-plane");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("adoption-under-test");
     let surface_id = a_pixel_registration_of(
         &exchange_client,
         "opaque_fd",
@@ -206,7 +194,7 @@ fn a_multi_plane_opaque_fd_pixel_buffer_is_refused_by_name() {
 #[test]
 fn an_opaque_fd_pixel_buffer_without_a_memory_type_index_is_refused_by_name() {
     let share = SurfaceShareUnderTest::start("opaque-pixel-no-index");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("adoption-under-test");
     let surface_id =
         a_pixel_registration_of(&exchange_client, "opaque_fd", 1, serde_json::json!({}));
 
@@ -228,7 +216,7 @@ fn an_opaque_fd_pixel_buffer_without_a_memory_type_index_is_refused_by_name() {
 #[test]
 fn a_pixel_buffer_of_an_unknown_handle_type_is_refused_by_name() {
     let share = SurfaceShareUnderTest::start("unknown-pixel-handle");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("adoption-under-test");
     let surface_id = a_pixel_registration_of(
         &exchange_client,
         "win32_kmt",

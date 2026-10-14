@@ -426,4 +426,26 @@ impl SurfaceShareUnderTest {
             .outstanding_check_out_count(surface_id)
             .expect("the lease table stays readable")
     }
+
+    /// A helper's exchange client on this service, registering foreign
+    /// surfaces as `helper:{label}`. Its escalate callables are `None`: the
+    /// paths under test speak only to the surface-share channel.
+    pub(crate) fn exchange_client_labelled(
+        &self,
+        label: &str,
+    ) -> Arc<crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient> {
+        use pyo3::prelude::*;
+
+        Python::initialize();
+        Python::attach(|python| {
+            Arc::new(
+                crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient::new(
+                    python.None(),
+                    python.None(),
+                    self.channel_name_for_the_helper(),
+                    format!("helper:{label}"),
+                ),
+            )
+        })
+    }
 }
