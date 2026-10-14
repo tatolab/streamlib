@@ -228,7 +228,6 @@ pub struct HostVulkanTexture {
     /// must NOT call the OPAQUE_FD export accessor because the underlying
     /// memory carries `DMA_BUF_EXT` (or no) export handle types, and
     /// `vkGetMemoryFdKHR` with `OPAQUE_FD` would fail at the driver.
-    /// Mirrors `HostVulkanBuffer::is_opaque_fd_export`.
     #[cfg(target_os = "linux")]
     is_opaque_fd_export: bool,
     /// DRM format modifier the driver picked for this image. Meaningful
@@ -1158,8 +1157,7 @@ impl HostVulkanTexture {
 
     /// True iff this texture was allocated via
     /// [`Self::new_opaque_fd_export`]. Gates the OPAQUE_FD export
-    /// accessor; the buffer-side mirror is
-    /// `HostVulkanBuffer::is_opaque_fd_export`.
+    /// accessor.
     pub fn is_opaque_fd_export(&self) -> bool {
         self.is_opaque_fd_export
     }
