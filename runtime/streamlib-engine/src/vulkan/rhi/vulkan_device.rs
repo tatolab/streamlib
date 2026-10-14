@@ -558,10 +558,12 @@ impl VulkanLogicalDeviceDestroyedUnlessTaken {
         &self.device
     }
 
-    /// Hand the device on without destroying it; `vulkanalia::Device` is a
-    /// handle plus its command table and destroys nothing on drop.
+    /// Hand the device on without destroying it.
     fn take_the_logical_device(self) -> vulkanalia::Device {
-        std::mem::ManuallyDrop::new(self).device.clone()
+        let guard_that_never_drops = std::mem::ManuallyDrop::new(self);
+        // SAFETY: the guard is never dropped and `device` is its only field,
+        // so the device is moved out exactly once.
+        unsafe { std::ptr::read(&guard_that_never_drops.device) }
     }
 }
 
