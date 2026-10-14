@@ -2,35 +2,65 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Runs the Linux runtime tarball on a machine with no Vulkan driver and no
-# Vulkan loader — a slim container — and starts a stream on it:
+# Runs the Linux runtime tarball on two machines with no Vulkan driver and
+# starts a stream on each:
 #
 #   scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh <tarball>
 #
-# Passes when `tatolabd` opened the Vulkan loader the lend carries and the first
-# stream start built its device on the lavapipe beside it. What the stream does
-# after the device is built is not checked here. Needs docker.
+# one with no Vulkan loader either, and an Ubuntu 22.04 whose system loader
+# (1.3.204) predates the `VK_ADD_DRIVER_FILES` that names the bundled driver.
+# Passes when on both `tatolabd` opened the Vulkan loader the lend carries and
+# the first stream start built its device on the lavapipe beside it. What the
+# stream does after the device is built is not checked here. Needs docker.
 
 set -euo pipefail
 
 # python:3.12-slim-bookworm as of 2026-10-13: a Debian with Python and nothing
 # of Vulkan, pinned so the check runs against the image it last passed on.
 MACHINE_WITH_NO_VULKAN_DRIVER_IMAGE="python@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258"
+# ubuntu:22.04 as of 2026-10-14, given its own libvulkan1 and no driver.
+MACHINE_WITH_AN_OLD_SYSTEM_VULKAN_LOADER_IMAGE="ubuntu@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401"
+OLD_SYSTEM_VULKAN_LOADER_PACKAGE_VERSION="1.3.204.1-2"
 
 workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
 script_name="$(basename "$0")"
 
-if [ "${1:-}" != "--inside-the-machine-with-no-vulkan-driver" ]; then
+case "${1:-}" in
+--inside-the-machine-with-no-vulkan-loader | --inside-the-machine-with-an-old-system-vulkan-loader)
+	machine="$1"
+	;;
+*)
 	runtime_tarball="${1:?usage: $script_name <linux-runtime-tarball>}"
 	runtime_tarball="$(cd "$(dirname "$runtime_tarball")" && pwd)/$(basename "$runtime_tarball")"
-	exec docker run --rm \
-		--volume "$runtime_tarball:/linux-runtime-tarball.tar.gz:ro" \
-		--volume "$workspace_root:/workspace:ro" \
-		"$MACHINE_WITH_NO_VULKAN_DRIVER_IMAGE" \
-		bash "/workspace/scripts/$script_name" --inside-the-machine-with-no-vulkan-driver
-fi
+	for machine_and_image in \
+		"--inside-the-machine-with-no-vulkan-loader $MACHINE_WITH_NO_VULKAN_DRIVER_IMAGE" \
+		"--inside-the-machine-with-an-old-system-vulkan-loader $MACHINE_WITH_AN_OLD_SYSTEM_VULKAN_LOADER_IMAGE"; do
+		read -r machine image <<<"$machine_and_image"
+		echo "=== $machine"
+		docker run --rm \
+			--volume "$runtime_tarball:/linux-runtime-tarball.tar.gz:ro" \
+			--volume "$workspace_root:/workspace:ro" \
+			"$image" \
+			bash "/workspace/scripts/$script_name" "$machine"
+	done
+	exit 0
+	;;
+esac
 
-for vulkan_presence in /usr/share/vulkan /etc/vulkan /usr/lib/x86_64-linux-gnu/libvulkan.so.1; do
+if [ "$machine" = --inside-the-machine-with-an-old-system-vulkan-loader ]; then
+	apt-get update -qq
+	DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+		"libvulkan1=$OLD_SYSTEM_VULKAN_LOADER_PACKAGE_VERSION" python3 python3-venv python3-pip >/dev/null
+	if [ ! -e /usr/lib/x86_64-linux-gnu/libvulkan.so.1 ]; then
+		echo "error: the image carries no system Vulkan loader to be passed over" >&2
+		exit 1
+	fi
+	# The package makes the driver directories; a driver is a manifest in one.
+	vulkan_driver_presences=(/usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json)
+else
+	vulkan_driver_presences=(/usr/share/vulkan /etc/vulkan /usr/lib/x86_64-linux-gnu/libvulkan.so.1)
+fi
+for vulkan_presence in "${vulkan_driver_presences[@]}"; do
 	if [ -e "$vulkan_presence" ]; then
 		echo "error: the image carries $vulkan_presence, so it is not a machine with no Vulkan driver" >&2
 		exit 1

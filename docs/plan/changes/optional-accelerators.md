@@ -138,7 +138,8 @@ stay rig-only" (`:173`); the amendment pointers on both fold.
 > Mesa tag pinned by SHA-256, and its unedited ICD manifest — each linking only what the host
 > may supply, proven for every native binary the lend carries, not only `_engine`. Engine and
 > helper alike dlopen that loader by absolute path, found beside the `_engine` image through
-> `dladdr`, after the bare names … and `tatolabd` names the manifest to the loader additively
+> `dladdr` — on Linux before the bare name, on macOS after it — … and `tatolabd` names the
+> manifest to the loader additively
 > through `VK_ADD_DRIVER_FILES`, deferring to a user's `VK_DRIVER_FILES` …
 
 The Linux installer entry (`:3961-3980`) gains the sentence "The tarball carries the Vulkan
@@ -163,9 +164,9 @@ a tarball without the driver's manifest"; both pointers fold.
   `xtask/src/build_runtime.rs:150-184`: one `stage_bundled_vulkan_driver` per platform and one
   `ensure_lend_carries_the_bundled_vulkan_driver`, the `MACOS_` constant and macOS-named
   function deleted. `installer/install.sh:131-137` adds the manifest path to its list.
-- `CR/vulkan_loader_library.rs`: a Linux tail after the bare soname — `_vulkan_driver/libvulkan.so.1`
-  beside the `_engine` image (`dladdr`) and beside `bin/` for `tatolabd` — logged as the macOS
-  tail is.
+- `CR/vulkan_loader_library.rs`: on Linux the lend's loader first — `_vulkan_driver/libvulkan.so.1`
+  beside the `_engine` image (`dladdr`) and beside `bin/` for `tatolabd` — and the bare soname
+  last, logged as the macOS tail is.
 - Tests: `test_wheel_portability.py` gains
   `test_every_elf_the_lend_carries_links_only_what_the_host_may_supply` (closing the gap that
   checks `_engine` alone); `test_bundled_vulkan_driver.py` gets Linux arms (the three files
@@ -288,6 +289,17 @@ Rejected: a desktop-linked build — a window on a driverless desktop, no device
 container (owner, 2026-10-13). Rejected: both builds chosen at start — roughly doubles the
 driver bytes (owner, 2026-10-13). A user who wants a window on a GPU-less box points
 `VK_DRIVER_FILES` at their distro's own lavapipe, which carries the window-system code.
+
+## Decided in review — the bundled loader before the system's (owner, 2026-10-14)
+
+`VK_ADD_DRIVER_FILES` first appears in Vulkan-Loader 1.3.207; Ubuntu 22.04 ships 1.3.204 and
+Debian 11 1.2.162, and a GPU-less host often has one, pulled in by ffmpeg or GTK4. Opened
+first, such a loader never sees the bundled driver, and every stream is refused. On Linux the
+engine and the helper open the lend's loader before the bare soname, so every Linux machine
+runs the one loader the unit was tested with; the host's drivers and layers stay reachable
+through the loader's own search and variables. macOS keeps the bare name first.
+Rejected: the system loader first (the order this change proposed) — an old distribution loader hides the bundled driver (owner, 2026-10-14).
+Rejected: the system loader when it reports 1.3.207 or later, else the lend's — users run loaders the unit was never tested with (owner, 2026-10-14).
 
 ## Tickets
 

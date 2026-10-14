@@ -41,7 +41,7 @@ jobs:
       - name: Build the tarball and run the portability gate over it
         run: bash scripts/build_linux_runtime_release_tarball.sh "$RUNNER_TEMP/linux-runtime-tarball"
 
-      - name: The tarball starts a stream on a machine with no Vulkan driver
+      - name: The tarball starts a stream on machines with no Vulkan driver
         run: >-
           bash scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh
           "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz

@@ -17,38 +17,46 @@ use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 
 /// Dynamic libraries the Vulkan loader may live in, in the order they are tried.
 ///
-/// vulkanalia's own [`LIBRARY`] name is first on every platform, so a host that
-/// already resolves it loads exactly that. Apple needs more: dyld's default
+/// On Linux the loaders the runtime unit carries come first and vulkanalia's own
+/// [`LIBRARY`] name last: a distribution's loader can predate the
+/// `VK_ADD_DRIVER_FILES` that names the bundled driver (Vulkan-Loader 1.3.207),
+/// and opening it would hide that driver, while any current loader still finds
+/// the host's own drivers and layers. On macOS [`LIBRARY`] is first, so a host
+/// that already resolves it loads exactly that. Apple needs more: dyld's default
 /// search path does not include Homebrew's prefix on Apple Silicon, so a bare
 /// `libvulkan.dylib` resolves nothing on a stock machine even with the loader
 /// installed. `VULKAN_SDK` is the LunarG SDK's own variable, read to honour that
 /// convention rather than as a StreamLib dial — there is no setting for which
 /// loader to use, and the order is fixed.
 ///
-/// The runtime unit carries its own loader on macOS and Linux, which is what a
-/// machine without one opens: beside the wheel's `_engine`, in the lend a
-/// binary linking the engine finds relative to its own directory, or, on
-/// macOS, in the `Frameworks/` of the app bundle whose `Contents/MacOS` holds
-/// that binary. The Homebrew prefixes after it are macOS developer-machine
+/// The runtime unit carries its own loader on macOS and Linux — what every
+/// Linux machine opens, and a Mac without a loader of its own: beside the
+/// wheel's `_engine`, in the lend a binary linking the engine finds relative
+/// to its own directory, or, on macOS, in the `Frameworks/` of the app bundle
+/// whose `Contents/MacOS` holds that binary. The Homebrew prefixes after it are macOS developer-machine
 /// fallbacks, and a package manager must never appear in anything a user reads.
 pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
-    candidate_paths.extend(platform_vulkan_loader_library_candidate_paths());
-    candidate_paths
+    platform_vulkan_loader_library_candidate_paths(
+        directory_of_the_image_this_code_is_in().as_deref(),
+    )
 }
 
 #[cfg(target_os = "macos")]
-fn platform_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    macos_vulkan_loader_library_candidate_paths_for_the_image_in(
-        directory_of_the_image_this_code_is_in().as_deref(),
-    )
+fn platform_vulkan_loader_library_candidate_paths(
+    directory_of_the_image: Option<&std::path::Path>,
+) -> Vec<std::ffi::OsString> {
+    let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
+    candidate_paths.extend(
+        macos_vulkan_loader_library_candidate_paths_for_the_image_in(directory_of_the_image),
+    );
+    candidate_paths
 }
 
 #[cfg(target_os = "linux")]
-fn platform_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    linux_vulkan_loader_library_candidate_paths_for_the_image_in(
-        directory_of_the_image_this_code_is_in().as_deref(),
-    )
+fn platform_vulkan_loader_library_candidate_paths(
+    directory_of_the_image: Option<&std::path::Path>,
+) -> Vec<std::ffi::OsString> {
+    linux_vulkan_loader_library_candidate_paths_for_the_image_in(directory_of_the_image)
 }
 
 /// The macOS-only tail of the search list, for code in an image whose
@@ -96,9 +104,11 @@ fn macos_vulkan_loader_library_candidate_paths_for_the_image_in(
 fn linux_vulkan_loader_library_candidate_paths_for_the_image_in(
     directory_of_the_image: Option<&std::path::Path>,
 ) -> Vec<std::ffi::OsString> {
-    directory_of_the_image
+    let mut candidate_paths: Vec<std::ffi::OsString> = directory_of_the_image
         .map(vulkan_loader_libraries_the_runtime_unit_carries_for_the_image_in)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    candidate_paths.push(LIBRARY.into());
+    candidate_paths
 }
 
 /// The loader beside the image whose directory is `directory_of_the_image`,
@@ -291,8 +301,9 @@ pub fn open_the_first_vulkan_loader_library_that_opens()
 mod tests {
     use super::*;
 
-    /// The first candidate is vulkanalia's own platform name, so a host that
-    /// already resolves it is unaffected by the search list existing.
+    /// On macOS the first candidate is vulkanalia's own platform name, so a
+    /// host that already resolves it is unaffected by the search list existing.
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_vulkan_loader_search_list_starts_at_the_platform_default_name() {
         let candidate_paths = vulkan_loader_library_candidate_paths();
@@ -512,7 +523,7 @@ mod tests {
     /// is ever named.
     #[cfg(target_os = "linux")]
     #[test]
-    fn the_linux_search_list_is_the_bare_soname_then_the_loader_beside_the_image_then_the_lends() {
+    fn the_linux_search_list_is_the_loader_beside_the_image_then_the_lends_then_the_bare_soname() {
         assert_eq!(LIBRARY, VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME);
         assert_eq!(
             linux_vulkan_loader_library_candidate_paths_for_the_image_in(Some(
@@ -521,19 +532,22 @@ mod tests {
             [
                 "/opt/tatolab-runtime/bin/_vulkan_driver/libvulkan.so.1",
                 "/opt/tatolab-runtime/lib/tatolab/lend/tatolab/runtime/_vulkan_driver/libvulkan.so.1",
+                "libvulkan.so.1",
             ]
             .map(std::ffi::OsString::from)
         );
-        assert!(linux_vulkan_loader_library_candidate_paths_for_the_image_in(None).is_empty());
+        assert_eq!(
+            linux_vulkan_loader_library_candidate_paths_for_the_image_in(None),
+            [std::ffi::OsString::from(LIBRARY)]
+        );
 
         let directory_of_this_image = directory_of_the_image_this_code_is_in()
             .expect("the dynamic linker names the image a function of this test binary is in");
-        let mut expected_candidate_paths = vec![std::ffi::OsString::from(LIBRARY)];
-        expected_candidate_paths.extend(
+        let mut expected_candidate_paths =
             vulkan_loader_libraries_the_runtime_unit_carries_for_the_image_in(
                 &directory_of_this_image,
-            ),
-        );
+            );
+        expected_candidate_paths.push(std::ffi::OsString::from(LIBRARY));
         assert_eq!(
             vulkan_loader_library_candidate_paths(),
             expected_candidate_paths
