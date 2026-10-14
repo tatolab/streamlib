@@ -32,7 +32,14 @@ someone asks why a runtime with no GPU still builds a Vulkan device.
 6. **The Linux CI lane runs the engine on the software device.** Rig-only narrows to what a
    runner cannot give: Vulkan Video, DMA-BUF modifiers, CUDA, a real camera, display or audio
    device.
-7. **The adapter crates stay where they are.** The earlier "do they move" item had no driver
+7. **No window on the software device** (owner, 2026-10-13, resolving the change proposal's
+   fork). The bundled lavapipe is built without window-system code so it links only what any
+   Linux has and loads in a bare container; `DisplayWindow` refuses by name on the software
+   device, offscreen rendering is untouched, and a stream there is viewed from outside the
+   runtime — by its URL once the sharing step lands, or by a node reading its frames into a
+   window of its own. The owner's framing: streams are pipelines; a window is the viewer's,
+   not the stream's.
+8. **The adapter crates stay where they are.** The earlier "do they move" item had no driver
    behind it: nothing about optional accelerators touches where an in-process Rust crate
    lives, and only the CUDA adapter ships at all, compiled into the runtime portion.
 
@@ -65,11 +72,13 @@ Checked against the tree on 2026-10-13:
   the default udev rule gives to the `kvm` group. A flavour whose presence depends on a
   container's device permissions is a flavour that breaks in exactly the environments the
   software device is for, so it is ruled absent rather than probed.
-- Lavapipe cannot start the engine today because the device-wide pre-warm allocates one
-  sentinel per export pool and fails the device when any sentinel fails, and the tiled
-  DMA-BUF pool's modifier list comes from an EGL probe the Vulkan driver does not honour.
-  Under decision 2 a sentinel failing in a flavour the device advertises passes that device
-  over; under decision 4 the software device offers no DMA-BUF pool to pre-warm.
+- ~~Lavapipe cannot start the engine today because the device-wide pre-warm allocates one
+  sentinel per export pool and fails the device when any sentinel fails~~ — Superseded
+  2026-10-13 by a measurement with the engine's own test binary on the rig: the device comes
+  up and every sentinel passes; the first real tiled allocation then refuses, because the
+  tiled DMA-BUF pool's modifier list comes from an EGL probe the Vulkan driver does not
+  honour. Under decision 2 a sentinel failing in a flavour the device advertises passes that
+  device over; under decision 4 the software device offers no DMA-BUF pool to pre-warm.
 
 ## Rejected alternatives
 
@@ -85,6 +94,11 @@ Checked against the tree on 2026-10-13:
   at the first stream start; a per-node speed warning would be a judgement the engine cannot
   make for a stream it does not know.
 - **An engine dial for device selection.** The Vulkan loader and Mesa already ship one.
+- **A lavapipe built with window-system support.** It links libxcb, its extension libraries
+  and the Wayland client, which a minimal container lacks, so the driver would fail to load
+  exactly where the software device is needed; a window on a driverless desktop is rare and
+  has a named remedy. **Both builds, chosen at start** was rejected with it as roughly
+  doubling the driver bytes.
 - **A separate accelerated distribution.** Already rejected by `one-runtime-per-machine.md`:
   an extra cannot change the runtime's native module.
 
@@ -98,9 +112,14 @@ Checked against the tree on 2026-10-13:
 - The pixel-buffer pool gains the OPAQUE_FD flavour on Linux where DMA-BUF is absent, and
   the processor interpreter's pixel-buffer import gains the OPAQUE_FD arm it already has for
   textures and storage buffers.
-- Whether lavapipe exports a timeline semaphore as an opaque fd is unverified. If it does
-  not, the device-write ordering on the software device takes the macOS shape, retiring the
-  write before the id is published, rather than a second ordering mechanism.
+- ~~Whether lavapipe exports a timeline semaphore as an opaque fd is unverified.~~ —
+  Settled 2026-10-13, measured: lavapipe exports no semaphore as an opaque fd, binary or
+  timeline (its sync type is a userspace mutex and condvar; only a pre-signalled sync file
+  exists, and only with `/dev/udmabuf`). So the device-write ordering on the software device
+  takes the macOS shape, retiring the copy on the host before the reply, rather than a second
+  ordering mechanism.
+- A lavapipe built with window-system support links the X11 and Wayland client libraries,
+  which a minimal container lacks; the change proposal carries that fork.
 - The headless and container cases fall out: lavapipe needs no window system and no
   `/dev/dri`, so a stream with no display window runs on a server or in a plain container.
   A display window still needs X11 or Wayland to put it on.

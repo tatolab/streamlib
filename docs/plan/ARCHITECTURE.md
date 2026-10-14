@@ -21,7 +21,7 @@ fact about the shipped tree until the change that removes them ships and folds i
 direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
-## Product (the MVP sentence) — SHIPPED (unbuilt: accelerators optional, pivot step 5; the sharing step)
+## Product (the MVP sentence) — IN-FLIGHT (→ optional-accelerators; unbuilt: the sharing step)
 <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
@@ -1622,7 +1622,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_records_a_stream_that_keeps_crashing_it_failed a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start_retries_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_hosts_a_stream_on_the_gpu a_clean_restart_between_two_crashes_resets_the_count -->
 
-## Graphics (RHI / GPU) — DECIDED (unbuilt: accelerators optional, pivot step 5)
+## Graphics (RHI / GPU) — IN-FLIGHT (→ optional-accelerators)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-13-shared-pools-bounded-by-memory-budget.md -->
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
@@ -3816,7 +3816,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_sighup_tears_the_graph_down_gracefully -->
 
-## Distribution & versioning — SHIPPED (unbuilt: the Rust crate's `tatolab-stream` name)
+## Distribution & versioning — IN-FLIGHT (→ optional-accelerators; unbuilt: the Rust crate's `tatolab-stream` name)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
