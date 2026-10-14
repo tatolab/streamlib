@@ -28,6 +28,10 @@ if [ "${1:-}" != "--inside-manylinux" ]; then
 	output_directory="${1:?usage: build_linux_runtime_release_tarball.sh <output-directory>}"
 	mkdir -p "$output_directory"
 	output_directory="$(cd "$output_directory" && pwd)"
+	# In a container of its own, so the pinned LLVM it installs never meets the
+	# toolchain this build installs below; inside, build-runtime's staging is
+	# then a cache hit.
+	bash "$workspace_root/scripts/stage_linux_bundled_vulkan_driver.sh"
 	exec docker run --rm \
 		--volume "$workspace_root:/workspace" \
 		--volume "$output_directory:/output" \
