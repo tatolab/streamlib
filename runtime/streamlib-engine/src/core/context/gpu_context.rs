@@ -8107,12 +8107,136 @@ mod tests {
         live_service.stop();
     }
 
+    /// Where the device exports no DMA-BUF, a pooled pixel buffer registers as
+    /// OPAQUE_FD stating its memory type index and exporting device; where it
+    /// does, it still registers as DMA-BUF stating neither.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_pixel_buffer_registers_as_opaque_fd_with_its_memory_type_index_where_dma_buf_is_absent() {
+        let Ok(gpu) = GpuContext::init_for_platform() else {
+            tracing::warn!("no GPU device, so the pixel-buffer registration flavour test skips");
+            return;
+        };
+        let live_service =
+            crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let (published_frame_id, pixel_buffer) = gpu
+            .acquire_pixel_buffer(
+                LEASE_TEST_SURFACE_WIDTH,
+                LEASE_TEST_SURFACE_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("a pooled pixel buffer");
+        let published_frame_id = published_frame_id.to_string();
+        let registration = live_service
+            .state
+            .get_surface_planes(pool_slot_key_of_surface_id(&published_frame_id))
+            .expect("the pool registered its slot");
+
+        let host_device = &gpu.device().inner;
+        let device_name = host_device.name();
+        if host_device.supports_dma_buf_export() {
+            assert_eq!(registration.handle_type, "dma_buf", "{device_name}");
+            assert_eq!(registration.vk_memory_type_index, None, "{device_name}");
+            assert_eq!(registration.exporting_device_uuid, None, "{device_name}");
+        } else {
+            let exporting_device_uuid_in_lowercase_hex: String = host_device
+                .physical_device_uuid()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(registration.handle_type, "opaque_fd", "{device_name}");
+            assert_eq!(
+                registration.vk_memory_type_index,
+                pixel_buffer
+                    .buffer_ref()
+                    .inner
+                    .vma_allocation_memory_type_index(),
+                "the registration states the slot's own memory type on {device_name}"
+            );
+            assert_eq!(
+                registration.exporting_device_uuid.as_deref(),
+                Some(exporting_device_uuid_in_lowercase_hex.as_str()),
+                "{device_name}"
+            );
+        }
+        live_service.stop();
+    }
+
+    /// A pooled pixel buffer the service registered resolves through the
+    /// store's `lookup_buffer` into an import of the same memory, holding the
+    /// bytes the producer wrote — over DMA-BUF where the device exports it,
+    /// over OPAQUE_FD at the stated memory type index where it does not.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_pooled_pixel_buffer_reads_back_through_lookup_buffer_with_its_bytes_intact() {
+        let Ok(gpu) = GpuContext::init_for_platform() else {
+            tracing::warn!("no GPU device, so the lookup_buffer read-back test skips");
+            return;
+        };
+        let live_service =
+            crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let slot_bytes = (LEASE_TEST_SURFACE_WIDTH * LEASE_TEST_SURFACE_HEIGHT * 4) as usize;
+        let producer_pattern_byte = |index: usize| (index.wrapping_mul(31).wrapping_add(7)) as u8;
+
+        let (published_frame_id, pixel_buffer) = gpu
+            .acquire_pixel_buffer(
+                LEASE_TEST_SURFACE_WIDTH,
+                LEASE_TEST_SURFACE_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("a pooled pixel buffer");
+        let producer_bytes = unsafe {
+            std::slice::from_raw_parts_mut(pixel_buffer.buffer_ref().inner.mapped_ptr(), slot_bytes)
+        };
+        for (index, byte) in producer_bytes.iter_mut().enumerate() {
+            *byte = producer_pattern_byte(index);
+        }
+
+        let published_frame_id = published_frame_id.to_string();
+        let looked_up = gpu
+            .surface_store()
+            .expect("the engine's store")
+            .lookup_buffer(pool_slot_key_of_surface_id(&published_frame_id))
+            .unwrap_or_else(|refusal| {
+                panic!(
+                    "lookup_buffer resolves the slot on {}: {refusal}",
+                    gpu.device().inner.name()
+                )
+            });
+        assert_ne!(
+            looked_up.buffer_ref().inner.mapped_ptr(),
+            pixel_buffer.buffer_ref().inner.mapped_ptr(),
+            "the lookup imports the memory rather than handing back the producer's own mapping"
+        );
+        let imported_bytes = unsafe {
+            std::slice::from_raw_parts(looked_up.buffer_ref().inner.mapped_ptr(), slot_bytes)
+        };
+        assert!(
+            imported_bytes
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| *byte == producer_pattern_byte(index)),
+            "the imported buffer holds the producer's bytes"
+        );
+        drop(looked_up);
+        live_service.stop();
+    }
+
     /// With a swapchain live and presenting, every exportable flavour the
-    /// shared pools allocate — the DMA-BUF buffer, DMA-BUF image, tiled
-    /// DMA-BUF image and OPAQUE_FD image — allocates again after a stopped
-    /// stream's entries of it were all freed. NVIDIA refuses the first
-    /// export allocation of a flavour with none live after a swapchain;
-    /// the device's sentinels keep each above zero.
+    /// device offers allocates again after a stopped stream's entries of it
+    /// were all freed: the pixel buffer in whichever flavour the device gives
+    /// it, the sampled image, the OPAQUE_FD image, and — only on a device that
+    /// exports DMA-BUF — the tiled DMA-BUF image. NVIDIA refuses the first
+    /// export allocation of a flavour with none live after a swapchain; the
+    /// device's sentinels keep each above zero.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -8162,35 +8286,35 @@ mod tests {
         }
 
         let host_device = &gpu.device().inner;
-        assert!(host_device.dma_buf_buffer_pool().is_some());
-        assert!(host_device.dma_buf_image_pool().is_some());
-        assert!(host_device.dma_buf_image_pool_tiled().is_some());
+        let device_name = host_device.name();
+        let device_exports_dma_buf = host_device.supports_dma_buf_export();
+        if device_exports_dma_buf {
+            assert!(host_device.dma_buf_buffer_pool().is_some());
+            assert!(host_device.dma_buf_image_pool().is_some());
+            assert!(host_device.dma_buf_image_pool_tiled().is_some());
+            assert!(
+                host_device
+                    .has_render_target_modifier_for_texture_format(TextureFormat::Rgba8Unorm),
+                "the device advertises no render-target modifier, so the tiled flavour is untested"
+            );
+        } else {
+            assert!(host_device.dma_buf_buffer_pool().is_none(), "{device_name}");
+            assert!(host_device.dma_buf_image_pool().is_none(), "{device_name}");
+            assert!(
+                host_device.dma_buf_image_pool_tiled().is_none(),
+                "{device_name}"
+            );
+        }
         assert!(host_device.opaque_fd_image_pool().is_some());
-        assert!(
-            host_device.has_render_target_modifier_for_texture_format(TextureFormat::Rgba8Unorm),
-            "the device advertises no render-target modifier, so the tiled flavour is untested"
-        );
-        let texture_flavours = [
+        let mut texture_flavours = vec![
             (
-                "DMA-BUF image",
+                "sampled image",
                 TexturePoolDescriptor::new(
                     FLAVOUR_TEST_EXTENT,
                     FLAVOUR_TEST_EXTENT,
                     TextureFormat::Rgba8Unorm,
                 )
                 .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
-            ),
-            (
-                "tiled DMA-BUF image",
-                TexturePoolDescriptor::new(
-                    FLAVOUR_TEST_EXTENT,
-                    FLAVOUR_TEST_EXTENT,
-                    TextureFormat::Rgba8Unorm,
-                )
-                .with_usage(TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING)
-                .with_cross_process_importability(
-                    super::super::texture_pool::TextureCrossProcessImportability::RenderTargetDmaBuf,
-                ),
             ),
             (
                 "OPAQUE_FD image",
@@ -8205,6 +8329,20 @@ mod tests {
                 ),
             ),
         ];
+        if device_exports_dma_buf {
+            texture_flavours.push((
+                "tiled DMA-BUF image",
+                TexturePoolDescriptor::new(
+                    FLAVOUR_TEST_EXTENT,
+                    FLAVOUR_TEST_EXTENT,
+                    TextureFormat::Rgba8Unorm,
+                )
+                .with_usage(TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING)
+                .with_cross_process_importability(
+                    super::super::texture_pool::TextureCrossProcessImportability::RenderTargetDmaBuf,
+                ),
+            ));
+        }
 
         let stopped_stream = crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1);
         let stopped_streams_view =
@@ -8216,7 +8354,7 @@ mod tests {
                     LEASE_TEST_SURFACE_HEIGHT,
                     PixelFormat::Rgba32,
                 )
-                .expect("a DMA-BUF buffer with the swapchain live"),
+                .expect("a pixel buffer with the swapchain live"),
         );
         for (flavour, descriptor) in &texture_flavours {
             drop(
@@ -8232,7 +8370,7 @@ mod tests {
         gpu.free_every_unheld_shared_pool_entry_the_stream_last_acquired(stopped_stream);
         assert!(
             shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
-            "the stopped stream's DMA-BUF buffers outlived its stop"
+            "the stopped stream's pixel buffers outlived its stop"
         );
         for (flavour, descriptor) in &texture_flavours {
             assert_eq!(
@@ -8242,12 +8380,30 @@ mod tests {
             );
         }
 
-        gpu.acquire_pixel_buffer(
-            LEASE_TEST_SURFACE_WIDTH,
-            LEASE_TEST_SURFACE_HEIGHT,
-            PixelFormat::Rgba32,
-        )
-        .expect("a DMA-BUF buffer allocates again after its pool was freed");
+        let (_, reacquired_pixel_buffer) = gpu
+            .acquire_pixel_buffer(
+                LEASE_TEST_SURFACE_WIDTH,
+                LEASE_TEST_SURFACE_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("a pixel buffer allocates again after its pool was freed");
+        match (
+            reacquired_pixel_buffer
+                .buffer_ref()
+                .inner
+                .export_external_handle(),
+            device_exports_dma_buf,
+        ) {
+            (Ok(crate::core::rhi::RhiExternalHandle::DmaBuf { fd, .. }), true)
+            | (Ok(crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, .. }), false) => unsafe {
+                libc::close(fd);
+            },
+            (other, _) => panic!(
+                "the re-acquired pixel buffer on {device_name} exported the wrong flavour: \
+                 {other:?}"
+            ),
+        }
+        drop(reacquired_pixel_buffer);
         for (flavour, descriptor) in &texture_flavours {
             gpu.acquire_texture(descriptor).unwrap_or_else(|refusal| {
                 panic!("a {flavour} did not allocate again after its pool was freed: {refusal}")
