@@ -3138,8 +3138,8 @@ mod pixel_buffer_registration_payload_tests {
         }
     }
 
-    /// A DMA-BUF payload is exactly what it was before the OPAQUE_FD contract
-    /// existed: neither field, every other key in its old order.
+    /// A DMA-BUF payload carries neither OPAQUE_FD contract field, and its
+    /// keys keep their order.
     #[test]
     fn a_dma_buf_pixel_buffer_payload_carries_neither_contract_field() {
         let [check_in, register, register_with_a_timeline] = every_pixel_buffer_payload(

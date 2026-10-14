@@ -204,7 +204,7 @@ pub struct HostVulkanTexture {
     /// HostVulkanDevice reference for tracked allocation/free through the RHI.
     vulkan_device: Option<Arc<HostVulkanDevice>>,
     image: Option<vk::Image>,
-    /// VMA allocation (always allocated with DMA-BUF export flags via HostVulkanDevice).
+    /// VMA allocation, carrying whatever export flavour the pool it came from declares.
     allocation: Option<vma::Allocation>,
     /// Raw device memory for the paths VMA cannot serve — a DMA-BUF import, or
     /// the binding an IOSurface-backed image takes.

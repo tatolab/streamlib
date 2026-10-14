@@ -1876,10 +1876,11 @@ mod tests {
         }
     }
 
-    /// The loopback door is unchanged on a device without DMA-BUF, and its
-    /// no-permission refusal stops offering the PipeWire door as a stopgap.
+    /// On a device without DMA-BUF the loopback door is taken as on any
+    /// device, and its no-permission refusal offers no PipeWire door.
     #[test]
-    fn the_loopback_door_on_a_device_without_dma_buf_is_unchanged_and_offers_no_pipewire_stopgap() {
+    fn the_loopback_door_on_a_device_without_dma_buf_is_taken_and_its_refusal_offers_no_pipewire_door()
+     {
         for door in [VirtualCameraDoor::Auto, VirtualCameraDoor::V4l2Loopback] {
             assert_eq!(
                 decide_door(

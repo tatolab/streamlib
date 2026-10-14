@@ -8109,7 +8109,7 @@ mod tests {
 
     /// Where the device exports no DMA-BUF, a pooled pixel buffer registers as
     /// OPAQUE_FD stating its memory type index and exporting device; where it
-    /// does, it still registers as DMA-BUF stating neither.
+    /// does, it registers as DMA-BUF stating neither.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),

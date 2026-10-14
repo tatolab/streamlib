@@ -409,8 +409,9 @@ pub(crate) struct EscalateRequestOpenDeviceExportStaging {
     /// device-export staging buffer if it has none, registers the staging plus
     /// its `refill_done` timeline with the surface-share service, and answers
     /// with the id they are registered under. Pool allocations are DMA-BUF-
-    /// flavoured and external device APIs import OPAQUE_FD; one allocation
-    /// cannot export both on NVIDIA, which is why the staging exists at all.
+    /// flavoured wherever the device exports DMA-BUF, external device APIs
+    /// import OPAQUE_FD, and on NVIDIA one allocation cannot export both,
+    /// which is why the staging exists at all.
     /// The `ok` response carries `handle_id` (the surface-share id to check
     /// out), `width`, `height`, `format`, `staging_byte_size`, `bytes_per_row`,
     /// `writable`, and `exporting_device_uuid`. The staging fd and the timeline

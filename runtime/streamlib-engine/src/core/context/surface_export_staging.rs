@@ -5,9 +5,9 @@
 //! away — the "one GPU blit into an exportable staging buffer" the plan
 //! decides.
 //!
-//! Why a blit at all: pool allocations are DMA-BUF-flavoured, external
-//! device APIs import OPAQUE_FD, and on NVIDIA one allocation cannot
-//! export both — `vkGetPhysicalDeviceExternalBufferProperties` reports
+//! Why a blit at all: pool allocations are DMA-BUF-flavoured wherever
+//! the device exports DMA-BUF, external device APIs import OPAQUE_FD,
+//! and on NVIDIA one allocation cannot export both — `vkGetPhysicalDeviceExternalBufferProperties` reports
 //! the two handle types in disjoint `compatibleHandleTypes` sets, so a
 //! dual-flavour allocation is spec-invalid (VUID-VkExportMemoryAllocateInfo-
 //! handleTypes-00656). The staging buffer is the bridge: OPAQUE_FD,

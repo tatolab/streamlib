@@ -205,8 +205,8 @@ fn a_format_cuda_cannot_map_stays_not_importable_without_render_attachment() {
 }
 
 /// The software device builds no DMA-BUF pool and takes no EGL modifier
-/// table, so it never offers the render-target modifier; its OPAQUE_FD image
-/// pool is still there. A CUDA-mappable request inside the fixed usage set
+/// table, so it never offers the render-target modifier; it does build its
+/// OPAQUE_FD image pool. A CUDA-mappable request inside the fixed usage set
 /// keeps OPAQUE_FD, and everything that needed the modifier — every
 /// render-attachment request — is not importable at all.
 #[cfg(target_os = "linux")]
