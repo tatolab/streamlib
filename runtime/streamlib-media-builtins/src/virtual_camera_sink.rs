@@ -762,10 +762,10 @@ impl std::fmt::Display for LatchedRefusal {
                   is taken whatever the control node says, refusing by name where no PipeWire \
                   session answers, or where the device the runtime built on exports no DMA-BUF \
                   (the software device never does) — there only the loopback door serves, and \
-                  `auto` without its permission refuses too. One instance is never on both doors: a session \
-                  manager mirrors every V4L2 capture device into the portal's camera set, so it \
-                  would list the same camera twice. The engine never loads a module or asks for \
-                  elevation.\n\n\
+                  `auto` without its permission refuses too. One instance is never on both \
+                  doors: a session manager mirrors every V4L2 capture device into the portal's \
+                  camera set, so it would list the same camera twice. The engine never loads a \
+                  module or asks for elevation.\n\n\
                   A loopback device a reader still holds at teardown is left in place and \
                   reclaimed by name at the next setup; a PipeWire node is gone with its stream. \
                   Frames are stamped with their monotonic timestamp on both doors, and the \
@@ -823,14 +823,19 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
 
         let capabilities_of_the_device_this_runtime_built_on =
             ctx.gpu_full_access().gpu_capabilities()?;
-        let device = TheDeviceThisRuntimeBuiltOn {
+        let the_device_this_runtime_built_on = TheDeviceThisRuntimeBuiltOn {
             device_name: &capabilities_of_the_device_this_runtime_built_on.device_name,
             supports_dma_buf_export: capabilities_of_the_device_this_runtime_built_on
                 .supports_dma_buf_export,
         };
         let node = LoopbackControlNodeOnDisk;
         let access = node.access();
-        match decide_door(self.config.door, &self.camera_name, access, device) {
+        match decide_door(
+            self.config.door,
+            &self.camera_name,
+            access,
+            the_device_this_runtime_built_on,
+        ) {
             DoorDecision::Loopback => {}
             DoorDecision::PipeWire(reason) => return self.open_the_pipewire_door(ctx, reason),
             DoorDecision::Refused(message) => {
@@ -1810,9 +1815,8 @@ mod tests {
     }
 
     /// The software device exports no DMA-BUF by rule, so the PipeWire door
-    /// refuses at setup naming the camera and the device — never reaching an
-    /// allocation that fails at the first frame — and points at the loopback
-    /// door this device can serve.
+    /// refuses at setup naming the camera and the device, and points at the
+    /// loopback door this device can serve.
     #[test]
     fn a_pipewire_door_on_a_device_without_dma_buf_refuses_naming_the_camera_and_the_device() {
         let DoorDecision::Refused(named_with_permission) = decide_door(
