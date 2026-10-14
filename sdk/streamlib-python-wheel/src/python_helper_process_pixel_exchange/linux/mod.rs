@@ -509,6 +509,8 @@ impl HelperProcessGpuExchangeClient {
         let vulkan_device = self.consumer_vulkan_device()?;
         let (consumer_buffer, memory_flavour) = match pixel_buffer_handle_type {
             CheckedOutPixelBufferHandleType::DmaBuf { plane_fds } => {
+                // Refused before the dups exist: a multi-plane refusal from the
+                // RHI leaves its dups unclosed (see `close_single_plane_dup_vulkan_refused`).
                 if !vulkan_device.supports_dma_buf_memory_import() {
                     return Err(PyRuntimeError::new_err(format!(
                         "surface {surface_id:?} crosses as dma_buf, and this helper's device \
