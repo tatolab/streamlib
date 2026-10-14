@@ -2404,12 +2404,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **OPEN** — Retiring the runtime's windows. Direction (owner, 2026-10-14, not decided): the
   runtime opens no windows. `DisplayWindow`, processor-owned windows (`NodeOwnedWindow` and its
   events), the window event pump and the present loop are retired; a person sees a stream by
-  opening it in a browser, which shows the same thing and leaves the runtime simpler.
-  Undecided: the order against the sharing step, whose relays and viewer page are the
-  replacement; and what replaces a window where an entry leans on one — the codec blocks'
-  camera → encode → decode → display proof and the rig's live verification, the scaffold's
-  and `camera-display`'s display, and the Linux unit's restart for a display at login.
-  [window-retirement]
+  opening it in a browser, which shows the same thing and leaves the runtime simpler: a
+  stream's one output off its graph is MoQ through a relay. The retirement belongs to the
+  sharing step (§Networking): its align decides this OPEN with the rest, and the change that
+  builds the relays and the viewer page deletes the windows, inventorying every window site in
+  the tree and these entries' tests in the same change, so no window path outlives the
+  browser path. Undecided: what replaces a window where an entry leans on one — the codec
+  blocks' camera → encode → decode → display proof and the rig's live verification, the
+  scaffold's and `camera-display`'s display, and the Linux unit's restart for a display at
+  login. [window-retirement]
 - **DECIDED** — Camera → GPU transport: zero-copy import of the device's own memory when
   the driver takes it, transparent CPU upload otherwise, selected automatically — no
   configuration dial. Both arms land frames through one stage: the device's NV12 or YUYV
@@ -3795,7 +3798,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   a browser on the machine brings up a stream through `localhost` in a player or the
   user's own scripts and views. A user adds a relay from their own account in the app;
   signing in to a provider and provisioning a relay live in the app or the private service,
-  never the runtime. Known
+  never the runtime. The sharing step also takes up §Media I/O's windows OPEN: the runtime's
+  windows are retired in favour of the browser, so a relay is a stream's one output. Known
   (2026-10-04): `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet
   address itself; changing serve settings needs root, Tailscale's operator user or, on macOS,
   the admin group, and HTTPS must be switched on for the tailnet; Funnel carries TCP only, on
