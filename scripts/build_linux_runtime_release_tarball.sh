@@ -18,12 +18,11 @@
 
 set -euo pipefail
 
-# manylinux_2_28 as of 2026-08-04, pinned so a release builds against the image
-# its gate last passed on.
-MANYLINUX_2_28_IMAGE="quay.io/pypa/manylinux_2_28_x86_64@sha256:012f4a50472412f18bb2b450c1cce7158434cfae4ae878591c2748a13a30c2be"
 RUNTIME_UNIT_GLIBC_FLOOR="2.28"
 
 workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=manylinux_2_28_image.sh
+. "$workspace_root/scripts/manylinux_2_28_image.sh"
 
 if [ "${1:-}" != "--inside-manylinux" ]; then
 	output_directory="${1:?usage: build_linux_runtime_release_tarball.sh <output-directory>}"
@@ -33,6 +32,7 @@ if [ "${1:-}" != "--inside-manylinux" ]; then
 		--volume "$workspace_root:/workspace" \
 		--volume "$output_directory:/output" \
 		--workdir /workspace \
+		--env STREAMLIB_RUNNING_IN_MANYLINUX_2_28_IMAGE="$MANYLINUX_2_28_IMAGE" \
 		"$MANYLINUX_2_28_IMAGE" \
 		bash /workspace/scripts/build_linux_runtime_release_tarball.sh --inside-manylinux /output
 fi
