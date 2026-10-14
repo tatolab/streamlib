@@ -139,40 +139,110 @@ fn releasing_an_adoption_removes_the_registration() {
     );
 }
 
-/// The construction-side guard `export_dma_buf` relies on: an
-/// OPAQUE_FD pixel registration never becomes a checked-out pixel
-/// surface, so the DMA-BUF export name can never hand out an
-/// OPAQUE_FD-flavoured fd. Lives here because it drives the same
-/// register-then-checkout wire this module owns; no Vulkan runs — the
-/// refusal fires before the import.
-#[test]
-fn an_opaque_fd_pixel_registration_refuses_checkout_before_any_export_exists() {
-    let share = SurfaceShareUnderTest::start("opaque-pixel-guard");
-    let exchange_client = exchange_client_on(&share);
-    let backing_fd = a_foreign_memory_fd();
-
-    let mut opaque_check_in = check_in_request();
-    opaque_check_in["handle_type"] = "opaque_fd".into();
+/// Register `plane_count` memfd planes under `handle_type` with the extra
+/// registration fields `extra_fields`, and return the minted surface id.
+///
+/// No Vulkan runs on these paths: every refusal below fires before the
+/// helper creates its import device, so they hold on a box with no GPU.
+fn a_pixel_registration_of(
+    exchange_client: &HelperProcessGpuExchangeClient,
+    handle_type: &str,
+    plane_count: usize,
+    extra_fields: serde_json::Value,
+) -> String {
+    let backing_fds: Vec<OwnedFd> = (0..plane_count).map(|_| a_foreign_memory_fd()).collect();
+    let mut check_in = check_in_request();
+    check_in["handle_type"] = handle_type.into();
+    check_in["plane_sizes"] = vec![ADOPTED_BYTE_SIZE; plane_count].into();
+    check_in["plane_offsets"] = vec![0u64; plane_count].into();
+    check_in["plane_strides"] =
+        vec![ADOPTED_BYTE_SIZE / u64::from(ADOPTED_HEIGHT); plane_count].into();
+    for (field, value) in extra_fields.as_object().into_iter().flatten() {
+        check_in[field] = value.clone();
+    }
+    let raw_backing_fds: Vec<_> = backing_fds.iter().map(|fd| fd.as_raw_fd()).collect();
     let (check_in_response, _no_fds) = exchange_client
-        .surface_share_request_with_fds(&opaque_check_in, &[backing_fd.as_raw_fd()])
+        .surface_share_request_with_fds(&check_in, &raw_backing_fds)
         .expect("the check_in round trip completes");
-    let opaque_surface_id = check_in_response
+    check_in_response
         .get("surface_id")
         .and_then(|value| value.as_str())
-        .expect("check_in answers with a surface_id")
-        .to_string();
+        .unwrap_or_else(|| panic!("check_in answers with a surface_id: {check_in_response}"))
+        .to_string()
+}
+
+/// Every pooled frame is one RGBA allocation, so a multi-plane OPAQUE_FD
+/// pixel buffer has no producer; it is refused naming the surface and the
+/// plane count rather than imported as its first plane.
+#[test]
+fn a_multi_plane_opaque_fd_pixel_buffer_is_refused_by_name() {
+    let share = SurfaceShareUnderTest::start("opaque-pixel-multi-plane");
+    let exchange_client = exchange_client_on(&share);
+    let surface_id = a_pixel_registration_of(
+        &exchange_client,
+        "opaque_fd",
+        2,
+        serde_json::json!({ "vk_memory_type_index": 3u32 }),
+    );
 
     let refusal = exchange_client
-        .check_out_and_import(&opaque_surface_id)
+        .check_out_and_import(&surface_id)
         .err()
-        .expect("an opaque_fd pixel registration must refuse the pixel checkout")
+        .expect("a two-plane opaque_fd pixel buffer must be refused")
         .to_string();
     assert!(
-        refusal.contains("opaque_fd"),
-        "the refusal must name the flavour: {refusal:?}"
+        refusal.contains(&format!("{surface_id:?}")),
+        "the refusal must name the surface: {refusal:?}"
     );
     assert!(
-        refusal.contains("device-export"),
-        "the refusal must point at the path that serves this flavour: {refusal:?}"
+        refusal.contains("opaque_fd") && refusal.contains("2 planes"),
+        "the refusal must name the flavour and the plane count: {refusal:?}"
+    );
+}
+
+/// A single-plane OPAQUE_FD pixel buffer imports at the memory type index
+/// its exporter allocated from; a registration that does not state one is
+/// refused naming the field rather than imported at a guessed index.
+#[test]
+fn an_opaque_fd_pixel_buffer_without_a_memory_type_index_is_refused_by_name() {
+    let share = SurfaceShareUnderTest::start("opaque-pixel-no-index");
+    let exchange_client = exchange_client_on(&share);
+    let surface_id =
+        a_pixel_registration_of(&exchange_client, "opaque_fd", 1, serde_json::json!({}));
+
+    let refusal = exchange_client
+        .check_out_and_import(&surface_id)
+        .err()
+        .expect("an opaque_fd pixel buffer without its memory type index must be refused")
+        .to_string();
+    assert!(
+        refusal.contains(&format!("{surface_id:?}")),
+        "the refusal must name the surface: {refusal:?}"
+    );
+    assert!(
+        refusal.contains("vk_memory_type_index"),
+        "the refusal must name the missing field: {refusal:?}"
+    );
+}
+
+#[test]
+fn a_pixel_buffer_of_an_unknown_handle_type_is_refused_by_name() {
+    let share = SurfaceShareUnderTest::start("unknown-pixel-handle");
+    let exchange_client = exchange_client_on(&share);
+    let surface_id = a_pixel_registration_of(
+        &exchange_client,
+        "win32_kmt",
+        1,
+        serde_json::json!({ "vk_memory_type_index": 3u32 }),
+    );
+
+    let refusal = exchange_client
+        .check_out_and_import(&surface_id)
+        .err()
+        .expect("a pixel buffer of a handle type this consumer does not know must be refused")
+        .to_string();
+    assert!(
+        refusal.contains(&format!("{surface_id:?}")) && refusal.contains("\"win32_kmt\""),
+        "the refusal must name the surface and the handle type: {refusal:?}"
     );
 }

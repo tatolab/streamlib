@@ -21,8 +21,8 @@ use crate::python_processor_context::{ExportedVkImageCreationRecipe, OpaqueFdExp
 
 use super::{
     close_single_plane_dup_vulkan_refused, duplicate_first_plane_fd_for_export,
-    duplicate_plane_fds_for_import, parse_device_uuid, plane_u64_array_check_out_metadata_field,
-    response_field,
+    duplicate_plane_fds_for_import, memory_type_index_stated_by_an_opaque_fd_registration,
+    parse_device_uuid, plane_u64_array_check_out_metadata_field, response_field,
 };
 
 /// The refusal both export spellings share for a device texture acquired
@@ -147,17 +147,14 @@ impl TextureCheckOutRegistrationMetadata {
                  usage set)"
             )));
         }
-        let vk_memory_type_index = response
-            .get("vk_memory_type_index")
-            .and_then(|value| value.as_u64())
-            .and_then(|value| u32::try_from(value).ok());
-        if handle_is_opaque_fd && vk_memory_type_index.is_none() {
-            return Err(PyRuntimeError::new_err(format!(
-                "texture {surface_id:?} was registered without its exporter's memory type \
-                 index; a conforming OPAQUE_FD import binds a stated memory type, never a \
-                 guessed one"
-            )));
-        }
+        let vk_memory_type_index = handle_is_opaque_fd
+            .then(|| {
+                memory_type_index_stated_by_an_opaque_fd_registration(
+                    format_args!("texture {surface_id:?}"),
+                    response,
+                )
+            })
+            .transpose()?;
         let exporting_device_uuid = response
             .get("exporting_device_uuid")
             .and_then(|value| value.as_str())

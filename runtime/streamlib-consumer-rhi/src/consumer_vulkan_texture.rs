@@ -102,6 +102,9 @@ impl ConsumerVulkanTexture {
     /// fd ownership: the consumer transfers ownership to Vulkan on
     /// success (the driver dups internally and releases on
     /// `vkFreeMemory`). On error the caller still owns `fds[0]`.
+    ///
+    /// Refused by name, before any Vulkan call, on a device without
+    /// `VK_EXT_external_memory_dma_buf` or `VK_EXT_image_drm_format_modifier`.
     pub fn import_render_target_dma_buf(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
@@ -113,6 +116,16 @@ impl ConsumerVulkanTexture {
         format: TextureFormat,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanTexture::import_render_target_dma_buf",
+            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION,
+            "no DMA-BUF can be imported",
+        )?;
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanTexture::import_render_target_dma_buf",
+            vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION,
+            "no image with an explicit DRM format modifier can be created",
+        )?;
         if fds.is_empty() {
             return Err(ConsumerRhiError::Gpu(
                 "ConsumerVulkanTexture::import_render_target_dma_buf: empty fd vec".into(),
@@ -375,7 +388,8 @@ impl ConsumerVulkanTexture {
     ///
     /// Use [`Self::import_render_target_dma_buf`] when the consumer
     /// will render INTO the imported image — LINEAR is sampler-only on
-    /// NVIDIA.
+    /// NVIDIA. Refused by name, before any Vulkan call, on a device without
+    /// `VK_EXT_external_memory_dma_buf`.
     pub fn from_dma_buf_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fd: std::os::unix::io::RawFd,
@@ -384,6 +398,11 @@ impl ConsumerVulkanTexture {
         format: TextureFormat,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanTexture::from_dma_buf_fd",
+            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION,
+            "no DMA-BUF can be imported",
+        )?;
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
         let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
