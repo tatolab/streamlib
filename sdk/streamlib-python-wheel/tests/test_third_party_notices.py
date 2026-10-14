@@ -35,7 +35,9 @@ import pytest
 # them have their notices checked in under `vendor/bundled-vulkan-driver-notices/`
 # and appended the same way: Vulkan-Loader and its cJSON on both; MoltenVK,
 # SPIRV-Cross and cereal on macOS; Mesa, the LLVM it links statically, and the
-# Zstandard and zlib LLVM links on Linux.
+# Zstandard and zlib LLVM links on Linux. Mesa's tree carries xxHash, Berkeley
+# SoftFloat and Fuchsia's radix sort under terms of their own, and LLVM's
+# carries OpenBSD's regex and strlcpy and two Unicode-licensed pieces.
 NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "shaderc",
     "glslang",
@@ -51,7 +53,14 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "Vulkan-Loader",
     "cJSON",
     "Mesa",
+    "xxHash",
+    "Berkeley SoftFloat",
+    "Fuchsia radix sort",
     "LLVM",
+    "OpenBSD regex",
+    "OpenBSD strlcpy",
+    "Unicode ConvertUTF",
+    "Unicode Character Database",
     "Zstandard",
     "zlib",
 )

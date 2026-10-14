@@ -337,10 +337,11 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughOpusicSys,
     },
-    // The nine below are what `scripts/stage_macos_bundled_vulkan_driver.sh`
+    // The projects below are what `scripts/stage_macos_bundled_vulkan_driver.sh`
     // and `scripts/stage_linux_bundled_vulkan_driver.sh` put in the wheel, each
     // notice checked in at the revision the pinned MoltenVK, Vulkan-Loader,
-    // Mesa, LLVM, zstd and manylinux_2_28 zlib build from.
+    // Mesa, LLVM, zstd and manylinux_2_28 zlib build from. A project Mesa or
+    // LLVM carries in its own tree under terms of its own has its own entry.
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "MoltenVK",
         upstream_repository_url: "https://github.com/KhronosGroup/MoltenVK",
@@ -391,11 +392,48 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Mesa",
         upstream_repository_url: "https://gitlab.freedesktop.org/mesa/mesa",
-        // Mesa's own `licenses/MIT`: its sources carry their copyright lines
-        // and SPDX identifiers file by file rather than in one notice.
+        // Mesa states its copyright file by file, never in one notice, so this
+        // is three verbatim parts in order: `docs/license.rst` from its
+        // "License / Copyright Information" heading on, every distinct
+        // copyright line in the first 60 lines of a C or C++ source under the
+        // directories lavapipe's build compiles (tests and the three projects
+        // below excepted), and `licenses/MIT`.
         license_summary: "MIT",
         notice_source: NoticeSource::VendoredLicenseFile {
-            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Mesa/MIT",
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Mesa/NOTICE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "xxHash",
+        upstream_repository_url: "https://github.com/Cyan4973/xxHash",
+        // The block heading Mesa's `src/util/xxhash.h`. LLVM's
+        // `lib/Support/xxhash.cpp` carries the same notice from the same
+        // author, differing only in punctuation and the URLs' scheme.
+        license_summary: "BSD-2-Clause",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/xxHash/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Berkeley SoftFloat",
+        upstream_repository_url: "https://github.com/ucb-bar/berkeley-softfloat-3",
+        // The block heading Mesa's `src/util/softfloat.h`.
+        license_summary: "BSD-3-Clause",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Berkeley-SoftFloat/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Fuchsia radix sort",
+        upstream_repository_url: "https://fuchsia.googlesource.com/fuchsia",
+        // Mesa's `src/vulkan/runtime/radix_sort/LICENSE`, which lavapipe's
+        // acceleration-structure build compiles in.
+        license_summary: "BSD-3-Clause",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Fuchsia-radix-sort/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
     },
@@ -405,6 +443,51 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         license_summary: "Apache-2.0 WITH LLVM-exception",
         notice_source: NoticeSource::VendoredLicenseFile {
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/LLVM/LICENSE.TXT",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "OpenBSD regex",
+        upstream_repository_url: "https://github.com/openbsd/src",
+        // LLVM's `lib/Support/COPYRIGHT.regex`, covering the Henry Spencer
+        // regex sources libLLVMSupport compiles: `regcomp.c`, `regexec.c`,
+        // `regerror.c` and `regfree.c`.
+        license_summary: "Spencer-94 and BSD-3-Clause",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/OpenBSD-regex/COPYRIGHT.regex",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "OpenBSD strlcpy",
+        upstream_repository_url: "https://github.com/openbsd/src",
+        // The block heading LLVM's `lib/Support/regstrlcpy.c`.
+        license_summary: "ISC",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/OpenBSD-strlcpy/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Unicode ConvertUTF",
+        upstream_repository_url: "https://www.unicode.org",
+        // The Unicode block in LLVM's `include/llvm/Support/ConvertUTF.h`,
+        // which `lib/Support/ConvertUTF.cpp` repeats.
+        license_summary: "Unicode-DFS-2015",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Unicode-ConvertUTF/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Unicode Character Database",
+        upstream_repository_url: "https://www.unicode.org/ucd/",
+        // The block heading LLVM's
+        // `lib/Support/UnicodeNameToCodepointGenerated.cpp`, a table generated
+        // from the database's character names.
+        license_summary: "Unicode-DFS-2016",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Unicode-Character-Database/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
     },
@@ -948,6 +1031,27 @@ mod tests {
         assert!(appendix.contains("Advanced Micro Devices"));
         assert!(appendix.contains("The Khronos Group Inc"));
         assert!(appendix.contains("Wim Taymans"));
+        assert!(appendix.contains("Yann Collet"));
+        assert!(appendix.contains("The Fuchsia Authors"));
+        assert!(appendix.contains("Henry Spencer"));
+        assert!(appendix.contains("Todd C. Miller"));
+        assert!(appendix.contains("Unicode, Inc."));
+    }
+
+    /// `licenses/MIT` alone reads "Copyright (c) <year> <copyright holders>",
+    /// which passes the copyright-line check while naming nobody.
+    #[test]
+    fn the_mesa_notice_names_copyright_holders_beyond_the_mit_template() {
+        let (_fixture, source_trees) = notice_source_trees_fixture();
+        let mesa = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
+            .iter()
+            .find(|project| project.display_name == "Mesa")
+            .expect("Mesa is on the roster");
+        let notice = read_one_notice(mesa, &source_trees).expect("read");
+
+        assert!(notice.contains("Copyright © 2019 Red Hat."));
+        assert!(notice.contains("Copyright 2008 VMware, Inc."));
+        assert!(notice.contains("Permission is hereby granted, free of charge"));
     }
 
     #[test]

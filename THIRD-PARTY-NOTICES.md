@@ -11993,7 +11993,7 @@ driver the macOS or Linux wheel carries. These sections are appended by
 - Checked into this repository as headers, compiled into the engine by `runtime/streamlib-engine/build.rs`: PipeWire
 - In the macOS and Linux wheels, compiled into the Vulkan loader library each carries beside the engine: Vulkan-Loader and cJSON
 - In the macOS wheel only, compiled into the MoltenVK library it carries beside the engine (SPIRV-Tools, SPIRV-Headers and Vulkan-Headers reach MoltenVK too, under the notices above): MoltenVK, SPIRV-Cross and cereal
-- In the Linux wheel only, compiled into the lavapipe library it carries beside the engine (SPIRV-Headers and Vulkan-Headers reach lavapipe too, under the notices above): Mesa, LLVM, Zstandard and zlib
+- In the Linux wheel only, compiled into the lavapipe library it carries beside the engine (SPIRV-Headers and Vulkan-Headers reach lavapipe too, under the notices above): Mesa, xxHash, Berkeley SoftFloat, Fuchsia radix sort, LLVM, OpenBSD regex, OpenBSD strlcpy, Unicode ConvertUTF, Unicode Character Database, Zstandard and zlib
 
 ### shaderc (Apache-2.0)
 
@@ -14757,6 +14757,367 @@ THE SOFTWARE.
 Upstream: <https://gitlab.freedesktop.org/mesa/mesa>
 
 ````text
+License / Copyright Information
+-------------------------------
+
+The Mesa distribution consists of several components. Different
+copyrights and licenses apply to different components. For example, the
+GLX client code uses the SGI Free Software License B, and some of the
+Mesa device drivers are copyrighted by their authors. See below for a
+list of Mesa's main components and the license for each.
+
+The core Mesa library is licensed according to the terms of the MIT
+license.
+
+Most of the Mesa code is licensed under MIT license,
+but individual files may have their own licenses.
+
+You may find all the licenses used within this project in the licenses/ directory.
+
+Attention, Contributors
+-----------------------
+
+When contributing to the Mesa project you must agree to the licensing
+terms of the component to which you're contributing. The following
+section lists the primary components of the Mesa distribution and their
+respective licenses.
+
+Mesa Component Licenses
+-----------------------
+
+In general, consult each source file SPDX identifier for license terms.
+
+(C) Copyright IBM Corporation 2004
+(C) Copyright yohhoy 2012.
+Copyright (C) 1999 Wittawat Yamwong
+Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+Copyright (C) 1999-2006  Brian Paul  All Rights Reserved.
+Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
+Copyright (C) 2003 Felix Kuehling
+Copyright (C) 2004  Roland Scheidegger   All Rights Reserved.
+Copyright (C) 2005-2007  Brian Paul   All Rights Reserved.
+Copyright (C) 2006  Brian Paul   All Rights Reserved.
+Copyright (C) 2008  VMware, Inc.   All Rights Reserved.
+Copyright (C) 2009  VMware, Inc.  All Rights Reserved.
+Copyright (C) 2010 LunarG Inc.
+Copyright (C) 2010-2011 Chia-I Wu <olvaffe@gmail.com>
+Copyright (C) 2010-2011 LunarG Inc.
+Copyright (C) 2011 LunarG, Inc.
+Copyright (C) 2011 Marek Olšák <maraeo@gmail.com>
+Copyright (C) 2011 Red Hat Inc.
+Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
+Copyright (C) 2013 Rob Clark <robclark@freedesktop.org>
+Copyright (C) 2014  Intel Corporation  All Rights Reserved.
+Copyright (C) 2014 Intel Corporation
+Copyright (C) 2014 Rob Clark <robclark@freedesktop.org>
+Copyright (C) 2016 Christian Gmeiner <christian.gmeiner@gmail.com>
+Copyright (C) 2016 Intel Corporation
+Copyright (C) 2016 Linaro, Ltd., Rob Herring <robh@kernel.org>
+Copyright (C) 2016 Steven Toth <stoth@kernellabs.com>
+Copyright (C) 2016 Zodiac Inflight Innovations
+Copyright (C) 2018 Collabora, Robert Foss <robert.foss@collabora.com>
+Copyright (C) 2018 Stefan Schake <stschake@gmail.com>
+Copyright (C) 2018-2019 Intel Corporation
+Copyright (C) 2019 Alyssa Rosenzweig
+Copyright (C) 2019 Andreas Baierl
+Copyright (C) 2019 Collabora, Ltd.
+Copyright (C) 2019-2021 Collabora, Ltd.
+Copyright (C) 2020 Google, Inc.
+Copyright (C) 2020-2021 Collabora, Ltd.
+Copyright (C) 2021 Advanced Micro Devices, Inc.
+Copyright (C) 2021 GlobalLogic Ukraine
+Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+Copyright (C) 2022  Yongang Luo       All Rights Reserved.
+Copyright (C) 2022 Collabora, Ltd.
+Copyright (C) 2022 Roman Stratiienko (r.stratiienko@gmail.com)
+Copyright (C) 2023 Roman Stratiienko (r.stratiienko@gmail.com)
+Copyright (C) 2025 Arm Ltd.
+Copyright (C) 2025 Google LLC
+Copyright (C) 2025 Valve Corporation
+Copyright (c) 1999-2000 Pawel W. Olszta. All Rights Reserved.
+Copyright (c) 2008 VMware, Inc.
+Copyright (c) 2008-2016 VMware, Inc.
+Copyright (c) 2012 - 2023 Krzysztof Gabis
+Copyright (c) 2012-2019 Christian Rau <rauy@users.sourceforge.net>
+Copyright (c) 2014-2016 The Khronos Group Inc.
+Copyright (c) 2015 Intel Corporation
+Copyright (c) 2017-2022 Advanced Micro Devices, Inc.
+Copyright (c) 2017-2022 Hans-Kristian Arntzen
+Copyright (c) 2017-2023 Hans-Kristian Arntzen
+Copyright (c) 2022 Alex Fan <alex.fan.q@gmail.com>
+Copyright (c) 2022 Collabora Ltd.
+Copyright (c) 2022 Red Hat
+Copyright (c) 2025 Yonggang Luo
+Copyright (c) 2026 Collabora Ltd.
+Copyright (c) Microsoft Corporation
+Copyright 1998-1999 Precision Insight, Inc., Cedar Park, Texas.
+Copyright 1999-2006 Brian Paul
+Copyright 1999-2008  Brian Paul
+Copyright 2003 VMware, Inc.
+Copyright 2006 VMware, Inc.
+Copyright 2006 VMware, Inc., Bismarck, ND. USA.
+Copyright 2006-2008 VMware, Inc., USA
+Copyright 2007 VMware, Inc.
+Copyright 2007-2008 Red Hat, Inc.
+Copyright 2007-2008 VMware, Inc.
+Copyright 2007-2009 VMware, Inc.
+Copyright 2007-2010 VMware, Inc.
+Copyright 2007-2018 VMware, Inc.
+Copyright 2007-2021 VMware, Inc.
+Copyright 2007-2023 VMware, Inc.
+Copyright 2008  VMware, Inc.  All rights reserved.
+Copyright 2008 Corbin Simpson <MostAwesomeDude@gmail.com>
+Copyright 2008 Dennis Smit
+Copyright 2008 VMware, Inc.
+Copyright 2008 VMware, Inc.  All rights Reserved.
+Copyright 2008 VMware, Inc.  All rights reserved.
+Copyright 2008-2010 VMware, Inc.
+Copyright 2008-2021 VMware, Inc.
+Copyright 2009 Marek Olšák <maraeo@gmail.com>
+Copyright 2009 VMware, Inc.
+Copyright 2009 VMware, Inc.  All Rights Reserved.
+Copyright 2009 Younes Manton.
+Copyright 2009, VMware, Inc.
+Copyright 2009-2010 VMware, Inc.
+Copyright 2009-2010 VMware, Inc.  All Rights Reserved.
+Copyright 2009-2010 VMware, Inc.  All rights Reserved.
+Copyright 2009-2011 VMware, Inc.
+Copyright 2009-2021 VMware, Inc.
+Copyright 2010 Christian König
+Copyright 2010 George Sapountzis <gsapountzis@gmail.com>
+Copyright 2010 Luca Barbieri
+Copyright 2010 Marek Olšák <maraeo@gmail.com>
+Copyright 2010 Red Hat Inc.
+Copyright 2010 VMware, Inc.
+Copyright 2010 VMware, Inc.  All Rights Reserved.
+Copyright 2010 VMware, Inc.  All rights reserved.
+Copyright 2010 VMware.
+Copyright 2010, VMware Inc.
+Copyright 2010, VMware, inc.
+Copyright 2010-2012 VMware, Inc.
+Copyright 2010-2018 VMware, Inc.
+Copyright 2010-2021 VMWare, Inc.
+Copyright 2010-2021 VMware, Inc.
+Copyright 2011 Christian König
+Copyright 2011 Christian König.
+Copyright 2011 Intel Corporation
+Copyright 2011 LunarG, Inc.
+Copyright 2011 Maarten Lankhorst
+Copyright 2011 Marek Olšák <maraeo@gmail.com>
+Copyright 2011 Red Hat Inc.
+Copyright 2011 VMware, Inc.
+Copyright 2011-2012 Advanced Micro Devices, Inc.
+Copyright 2012 Francisco Jerez
+Copyright 2012 Google, Inc
+Copyright 2012 Marek Olšák <maraeo@gmail.com>
+Copyright 2012 VMware, Inc.
+Copyright 2013
+Copyright 2013 Advanced Micro Devices, Inc.
+Copyright 2013 Grigori Goronzy <greg@chown.ath.cx>
+Copyright 2013 Grigori Goronzy <greg@chown.ath.cx>.
+Copyright 2013 Marek Olšák <maraeo@gmail.com>
+Copyright 2013 VMware, Inc.
+Copyright 2014 Advanced Micro Devices, Inc.
+Copyright 2014 Connor Abbott
+Copyright 2014 Intel Corporation
+Copyright 2014 VMware, Inc.
+Copyright 2015 Advanced Micro Devices, Inc.
+Copyright 2015 Philip Taylor <philip@zaynar.co.uk>
+Copyright 2015 Red Hat
+Copyright 2015 Red Hat Inc.
+Copyright 2015 VMware, Inc.
+Copyright 2015-2016 Collabora Ltd.
+Copyright 2016 Advanced Micro Devices, Inc.
+Copyright 2016 Ilia Mirkin.
+Copyright 2017 Advanced Micro Devices, Inc.
+Copyright 2017 Google
+Copyright 2017 Timothy Arceri
+Copyright 2017 Valve Corporation
+Copyright 2018 Advanced Micro Devices, Inc.
+Copyright 2018 Collabora Ltd.
+Copyright 2018 VMware, Inc.
+Copyright 2018-2019 Collabora Ltd.
+Copyright 2019 Advanced Micro Devices, Inc.
+Copyright 2019 Collabora, Ltd.
+Copyright 2019 Intel Corporation
+Copyright 2019 Red Hat
+Copyright 2019 Red Hat.
+Copyright 2020 Collabora, Ltd.
+Copyright 2020 Google, Inc.
+Copyright 2020 Intel Corporation
+Copyright 2020 Lag Free Games, LLC
+Copyright 2020 Raspberry Pi Ltd
+Copyright 2020 Red Hat
+Copyright 2020 Red Hat.
+Copyright 2020 Serge Martin
+Copyright 2021 Advanced Micro Devices, Inc.
+Copyright 2021 Alyssa Rosenzweig
+Copyright 2021 Collabora Ltd.
+Copyright 2021 Google LLC
+Copyright 2021 Intel Corporation
+Copyright 2021 Red Hat, Inc.
+Copyright 2021 Snap Inc.
+Copyright 2021-2022 Collabora, Ltd.
+Copyright 2022 Advanced Micro Devices, Inc.
+Copyright 2022 Alyssa Rosenzweig
+Copyright 2022 Collabora Ltd
+Copyright 2022 Google LLC
+Copyright 2022 Red Hat
+Copyright 2022 Red Hat.
+Copyright 2022 Yonggang Luo
+Copyright 2023 Advanced Micro Devices, Inc.
+Copyright 2023 Alyssa Rosenzweig
+Copyright 2023 Bas Nieuwenhuizen
+Copyright 2023 Google LLC
+Copyright 2023 Intel Corporation
+Copyright 2023 Red Hat
+Copyright 2023 Red Hat.
+Copyright 2023 Valve Corpoation
+Copyright 2023 Valve Corporation
+Copyright 2024 Advanced Micro Devices, Inc.
+Copyright 2024 Autodesk, Inc.
+Copyright 2024 Google LLC
+Copyright 2024 Intel Corporation
+Copyright 2024 Valve Corpoation
+Copyright 2024 Valve Corporation
+Copyright 2025 Advanced Micro Devices, Inc.
+Copyright 2025 Autodesk, Inc.
+Copyright 2025 Collabora Ltd
+Copyright 2025 Igalia S.L.
+Copyright 2025 Intel Corporation
+Copyright 2025 Valve Corporation
+Copyright 2026 Advanced Micro Devices, Inc.
+Copyright 2026 Google LLC
+Copyright 2026 Igalia S.L.
+Copyright 2026 Pavel Ondračka <pavel.ondracka@gmail.com>
+Copyright 2026 Valve Corporation
+Copyright yohhoy 2012.
+Copyright © 1988-2004 Keith Packard and Bart Massey.
+Copyright © 2003 Felix Kuehling
+Copyright © 2008, 2010 Intel Corporation
+Copyright © 2009 Intel Corporation
+Copyright © 2009,2012 Intel Corporation
+Copyright © 2009-2012 Intel Corporation
+Copyright © 2010 Intel Corporation
+Copyright © 2010 Valve Software
+Copyright © 2012 Collabora, Ltd.
+Copyright © 2013 Intel Corporation
+Copyright © 2014 - 2015 Collabora, Ltd.
+Copyright © 2014 Broadcom
+Copyright © 2014 Connor Abbott
+Copyright © 2014 Intel Corporation
+Copyright © 2014 Red Hat
+Copyright © 2014-2015 Broadcom
+Copyright © 2015 Broadcom
+Copyright © 2015 Connor Abbott
+Copyright © 2015 Intel
+Copyright © 2015 Intel Corporation
+Copyright © 2015 Red Hat
+Copyright © 2015 Thomas Helland
+Copyright © 2015-2023 Intel Corporation
+Copyright © 2016 Advanced Micro Devices, Inc.
+Copyright © 2016 Bas Nieuwenhuizen
+Copyright © 2016 Broadcom
+Copyright © 2016 Intel Corporation
+Copyright © 2016 Red Hat
+Copyright © 2016 Red Hat.
+Copyright © 2017 Connor Abbott
+Copyright © 2017 Faith Ekstrand
+Copyright © 2017 Google, Inc.
+Copyright © 2017 Gražvydas Ignotas
+Copyright © 2017 Intel Corporation
+Copyright © 2017 Keith Packard
+Copyright © 2017 Red Hat
+Copyright © 2017 Thomas Helland
+Copyright © 2017 Timothy Arceri
+Copyright © 2018 Advanced Micro Devices, Inc.
+Copyright © 2018 Broadcom
+Copyright © 2018 Intel Corporation
+Copyright © 2018 Red Hat
+Copyright © 2018 Red Hat Inc.
+Copyright © 2018 Valve Corporation
+Copyright © 2018, Google Inc.
+Copyright © 2019 Alyssa Rosenzweig
+Copyright © 2019 Broadcom
+Copyright © 2019 Google LLC
+Copyright © 2019 Google, Inc.
+Copyright © 2019 Intel Corporation
+Copyright © 2019 Raspberry Pi Ltd
+Copyright © 2019 Red Hat.
+Copyright © 2019 Valve Corporation
+Copyright © 2019 Vasily Khoruzhick <anarsoul@gmail.com>
+Copyright © 2020 Advanced Micro Devices, Inc.
+Copyright © 2020 Collabora Ltd.
+Copyright © 2020 Collabora, Ltd.
+Copyright © 2020 Google LLC
+Copyright © 2020 Google, Inc.
+Copyright © 2020 Igalia S.L.
+Copyright © 2020 Intel Corporation
+Copyright © 2020 Jonathan Marek
+Copyright © 2020 Julian Winkler
+Copyright © 2020 Microsoft Corporation
+Copyright © 2020 Mike Blumenkrantz
+Copyright © 2020 Red Hat Inc.
+Copyright © 2020 Valve Corporation
+Copyright © 2021 Advanced Micro Devices, Inc.
+Copyright © 2021 Bas Nieuwenhuizen
+Copyright © 2021 Collabora Ltd.
+Copyright © 2021 Google
+Copyright © 2021 Google LLC
+Copyright © 2021 Google, Inc.
+Copyright © 2021 Igalia S.L.
+Copyright © 2021 Intel Corporation
+Copyright © 2021 Red Hat
+Copyright © 2021 Valve Corporation
+Copyright © 2021, Google Inc.
+Copyright © 2022 Advanced Micro Devices, Inc.
+Copyright © 2022 Collabora Ltc.
+Copyright © 2022 Collabora Ltd
+Copyright © 2022 Collabora Ltd.
+Copyright © 2022 Collabora, LTD
+Copyright © 2022 Collabora, Ltd
+Copyright © 2022 Collabora, Ltd.
+Copyright © 2022 Friedrich Vock
+Copyright © 2022 Google LLC
+Copyright © 2022 Google, Inc.
+Copyright © 2022 Intel Corporation
+Copyright © 2022 Konstantin Seurer
+Copyright © 2022 Valve Corporation
+Copyright © 2022 Yonggang Luo
+Copyright © 2023 Advanced Micro Devices, Inc.
+Copyright © 2023 Collabora Ltd.
+Copyright © 2023 Collabora, Ltd
+Copyright © 2023 Collabora, Ltd.
+Copyright © 2023 Google LLC
+Copyright © 2023 Google, Inc.
+Copyright © 2023 Intel Corporation
+Copyright © 2023 Timothy Arceri <tarceri@itsqueeze.com>
+Copyright © 2023 Valve Corporation
+Copyright © 2024 Advanced Micro Devices, Inc.
+Copyright © 2024 Collabora, Ltd.
+Copyright © 2024 Google, Inc.
+Copyright © 2024 Igalia
+Copyright © 2024 Valve Corporation
+Copyright © 2024, Google Inc.
+Copyright © 2025 Advanced Micro Devices, Inc.
+Copyright © 2025 Arm Ltd
+Copyright © 2025 Collabora Ltd
+Copyright © 2025 Collabora Ltd.
+Copyright © 2025 Collabora Ltd. and Igalia S.L.
+Copyright © 2025 Collabora, Ltd.
+Copyright © 2025 Igalia S.L.
+Copyright © 2025 Igalia SL
+Copyright © 2025 Imagination Technologies Ltd.
+Copyright © 2025 Intel Corporation
+Copyright © 2025 Red Hat
+Copyright © 2025 Red Hat Inc.
+Copyright © 2025 Valve Corporation
+Copyright © 2026 NXP
+Copyright © 2026 Valve Corporation
+Copyright © Microsoft Corporation
+Copyright: 2014-2024 The Khronos Group Inc.
+
 Valid-License-Identifier: MIT
 SPDX-URL: https://spdx.org/licenses/MIT.html
 Usage-Guide:
@@ -14787,6 +15148,122 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+````
+
+### xxHash (BSD-2-Clause)
+
+Upstream: <https://github.com/Cyan4973/xxHash>
+
+````text
+xxHash - Extremely Fast Hash algorithm
+Header File
+Copyright (C) 2012-2023 Yann Collet
+
+BSD 2-Clause License (https://www.opensource.org/licenses/bsd-license.php)
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+     copyright notice, this list of conditions and the following disclaimer
+     in the documentation and/or other materials provided with the
+     distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+You can contact the author at:
+  - xxHash homepage: https://www.xxhash.com
+  - xxHash source repository: https://github.com/Cyan4973/xxHash
+````
+
+### Berkeley SoftFloat (BSD-3-Clause)
+
+Upstream: <https://github.com/ucb-bar/berkeley-softfloat-3>
+
+````text
+License for Berkeley SoftFloat Release 3e
+
+John R. Hauser
+2018 January 20
+
+The following applies to the whole of SoftFloat Release 3e as well as to
+each source file individually.
+
+Copyright 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018 The Regents of the
+University of California.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+ 1. Redistributions of source code must retain the above copyright notice,
+    this list of conditions, and the following disclaimer.
+
+ 2. Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions, and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+
+ 3. Neither the name of the University nor the names of its contributors
+    may be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS "AS IS", AND ANY
+EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, ARE
+DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+The functions listed in this file are modified versions of the ones
+from the Berkeley SoftFloat 3e Library.
+````
+
+### Fuchsia radix sort (BSD-3-Clause)
+
+Upstream: <https://fuchsia.googlesource.com/fuchsia>
+
+````text
+Copyright 2019 The Fuchsia Authors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ````
 
 ### LLVM (Apache-2.0 WITH LLVM-exception)
@@ -15072,6 +15549,184 @@ CONTRIBUTORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS WITH THE
 SOFTWARE.
+````
+
+### OpenBSD regex (Spencer-94 and BSD-3-Clause)
+
+Upstream: <https://github.com/openbsd/src>
+
+````text
+$OpenBSD: COPYRIGHT,v 1.3 2003/06/02 20:18:36 millert Exp $
+
+Copyright 1992, 1993, 1994 Henry Spencer.  All rights reserved.
+This software is not subject to any license of the American Telephone
+and Telegraph Company or of the Regents of the University of California.
+
+Permission is granted to anyone to use this software for any purpose on
+any computer system, and to alter it and redistribute it, subject
+to the following restrictions:
+
+1. The author is not responsible for the consequences of use of this
+   software, no matter how awful, even if they arise from flaws in it.
+
+2. The origin of this software must not be misrepresented, either by
+   explicit claim or by omission.  Since few users ever read sources,
+   credits must appear in the documentation.
+
+3. Altered versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.  Since few users
+   ever read sources, credits must appear in the documentation.
+
+4. This notice may not be removed or altered.
+
+=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+/*-
+ * Copyright (c) 1994
+ *	The Regents of the University of California.  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ *	@(#)COPYRIGHT	8.1 (Berkeley) 3/16/94
+ */
+````
+
+### OpenBSD strlcpy (ISC)
+
+Upstream: <https://github.com/openbsd/src>
+
+````text
+This code is derived from OpenBSD's libc, original license follows:
+
+Copyright (c) 1998 Todd C. Miller <Todd.Miller@courtesan.com>
+
+Permission to use, copy, modify, and distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+````
+
+### Unicode ConvertUTF (Unicode-DFS-2015)
+
+Upstream: <https://www.unicode.org>
+
+````text
+Copyright © 1991-2015 Unicode, Inc. All rights reserved.
+Distributed under the Terms of Use in
+http://www.unicode.org/copyright.html.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Unicode data files and any associated documentation
+(the "Data Files") or Unicode software and any associated documentation
+(the "Software") to deal in the Data Files or Software
+without restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, and/or sell copies of
+the Data Files or Software, and to permit persons to whom the Data Files
+or Software are furnished to do so, provided that
+(a) this copyright and permission notice appear with all copies
+of the Data Files or Software,
+(b) this copyright and permission notice appear in associated
+documentation, and
+(c) there is clear notice in each modified Data File or in the Software
+as well as in the documentation associated with the Data File(s) or
+Software that the data or software has been modified.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT OF THIRD PARTY RIGHTS.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS
+NOTICE BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL
+DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
+DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THE DATA FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder
+shall not be used in advertising or otherwise to promote the sale,
+use or other dealings in these Data Files or Software without prior
+written authorization of the copyright holder.
+````
+
+### Unicode Character Database (Unicode-DFS-2016)
+
+Upstream: <https://www.unicode.org/ucd/>
+
+````text
+UNICODE, INC. LICENSE AGREEMENT - DATA FILES AND SOFTWARE
+
+See Terms of Use <https://www.unicode.org/copyright.html>
+for definitions of Unicode Inc.’s Data Files and Software.
+
+NOTICE TO USER: Carefully read the following legal agreement.
+BY DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING UNICODE INC.'S
+DATA FILES ("DATA FILES"), AND/OR SOFTWARE ("SOFTWARE"),
+YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT.
+IF YOU DO NOT AGREE, DO NOT DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE
+THE DATA FILES OR SOFTWARE.
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 1991-2022 Unicode, Inc. All rights reserved.
+Distributed under the Terms of Use in https://www.unicode.org/copyright.html.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Unicode data files and any associated documentation
+(the "Data Files") or Unicode software and any associated documentation
+(the "Software") to deal in the Data Files or Software
+without restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, and/or sell copies of
+the Data Files or Software, and to permit persons to whom the Data Files
+or Software are furnished to do so, provided that either
+(a) this copyright and permission notice appear with all copies
+of the Data Files or Software, or
+(b) this copyright and permission notice appear in associated
+Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT OF THIRD PARTY RIGHTS.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS
+NOTICE BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL
+DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
+DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THE DATA FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder
+shall not be used in advertising or otherwise to promote the sale,
+use or other dealings in these Data Files or Software without prior
+written authorization of the copyright holder.
 ````
 
 ### Zstandard (BSD-3-Clause)
