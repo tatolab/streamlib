@@ -475,10 +475,19 @@ pub(crate) fn rerun_this_test_in_a_child_process(
     environment_variable: &str,
     value: &std::ffi::OsStr,
 ) -> std::process::Output {
+    rerun_this_test_in_a_child_process_with_environment(test_path, &[(environment_variable, value)])
+}
+
+/// [`rerun_this_test_in_a_child_process`] with every variable in
+/// `environment` set in the child.
+pub(crate) fn rerun_this_test_in_a_child_process_with_environment(
+    test_path: &str,
+    environment: &[(&str, &std::ffi::OsStr)],
+) -> std::process::Output {
     let child_process_output = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(
         std::process::Command::new(std::env::current_exe().expect("the test binary's own path"))
             .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
-            .env(environment_variable, value)
+            .envs(environment.iter().copied())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped()),

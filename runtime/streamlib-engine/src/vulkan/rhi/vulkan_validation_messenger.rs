@@ -336,10 +336,8 @@ impl VulkanValidationMessenger {
     /// `vkDestroyInstance` has valid `pUserData`.
     ///
     /// Not a `Drop` impl: the handle must die before the instance while the
-    /// state must outlive it, an ordering no `Drop` can express. A
-    /// `HostVulkanDevice::new` that fails after this messenger is installed
-    /// leaks the handle — as it already leaks the instance itself, which
-    /// `vulkanalia::Instance` never destroys on drop.
+    /// state must outlive it, an ordering no `Drop` can express;
+    /// `HostVulkanInstance`'s `Drop` makes the call.
     ///
     /// # Safety
     /// `instance` must be the instance the messenger was installed on, and
