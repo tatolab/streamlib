@@ -28,9 +28,9 @@ use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::
 use crate::core::context::{
     CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,
     DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
-    GpuContextLimitedAccess, OneOffAcquisitionCountedForItsNode, VideoCaptureDevice,
-    VideoCaptureInstantResolver, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
-    VideoDeviceStreamRequest, refusal_for_a_named_camera_that_is_not_attached,
+    GpuCapabilitiesSnapshot, GpuContextLimitedAccess, OneOffAcquisitionCountedForItsNode,
+    VideoCaptureDevice, VideoCaptureInstantResolver, VideoCaptureStream, VideoCaptureStreamFormat,
+    VideoDeviceBackend, VideoDeviceStreamRequest, refusal_for_a_named_camera_that_is_not_attached,
 };
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{PixelFormat, SourceLayoutInfo, StorageBuffer};
@@ -484,6 +484,43 @@ impl CaptureFormat {
     }
 }
 
+/// How a V4L2 capture's buffers reach the GPU converter, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum V4l2CaptureBufferPathToTheGpu {
+    /// Export each driver buffer with `VIDIOC_EXPBUF` and try importing it as
+    /// a DMA-BUF; a refused export or import still falls back to MMAP.
+    ProbeTheDmaBufImportOfEveryExportedDriverBuffer,
+    /// MMAP + memcpy: the Vulkan device has no external-memory extensions.
+    MmapBecauseTheVulkanDeviceHasNoExternalMemory,
+    /// MMAP + memcpy: the Vulkan device exports no DMA-BUF — never on a
+    /// software device, whatever its extensions say.
+    MmapBecauseTheVulkanDeviceExportsNoDmaBuf,
+    /// MMAP + memcpy: the capture driver is virtual and keeps its buffers in
+    /// system memory, where an import can succeed and read incoherent bytes.
+    MmapBecauseTheCaptureDeviceIsVirtual,
+    /// MMAP + memcpy: the Vulkan driver is blocklisted for cross-device
+    /// DMA-BUF imports (#638).
+    MmapBecauseTheVulkanDriverIsBlocklistedForCrossDeviceImports,
+}
+
+/// Choose how a V4L2 capture's buffers reach the GPU converter.
+fn choose_v4l2_capture_buffer_path_to_the_gpu(
+    capabilities_of_the_vulkan_device: &GpuCapabilitiesSnapshot,
+    capture_device_is_virtual: bool,
+) -> V4l2CaptureBufferPathToTheGpu {
+    if !capabilities_of_the_vulkan_device.supports_external_memory {
+        V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDeviceHasNoExternalMemory
+    } else if !capabilities_of_the_vulkan_device.supports_dma_buf_export {
+        V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDeviceExportsNoDmaBuf
+    } else if capture_device_is_virtual {
+        V4l2CaptureBufferPathToTheGpu::MmapBecauseTheCaptureDeviceIsVirtual
+    } else if !capabilities_of_the_vulkan_device.supports_cross_device_dma_buf_probe {
+        V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDriverIsBlocklistedForCrossDeviceImports
+    } else {
+        V4l2CaptureBufferPathToTheGpu::ProbeTheDmaBufImportOfEveryExportedDriverBuffer
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn capture_thread_loop(
     mut stream: v4l::io::mmap::Stream,
@@ -653,9 +690,24 @@ fn capture_thread_loop(
         // The import side is privileged (allocates VkDeviceMemory + binds) so
         // it stays inside the escalation; failure falls through to MMAP.
         let probe_skipped = !caps.supports_cross_device_dma_buf_probe;
+        let buffer_path_to_the_gpu =
+            choose_v4l2_capture_buffer_path_to_the_gpu(&caps, is_virtual_device);
+        if buffer_path_to_the_gpu
+            == V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDeviceExportsNoDmaBuf
+        {
+            tracing::info!(
+                camera = camera_name,
+                device = %vulkan_device_name,
+                device_is_software = caps.device_is_software,
+                "the Vulkan device {vulkan_device_name} exports no DMA-BUF, so the capture's \
+                 buffers cannot be imported — using MMAP + memcpy"
+            );
+        }
         let mut use_dmabuf = false;
         let mut dmabuf_imported_buffers: Vec<StorageBuffer> = Vec::new();
-        if caps.supports_external_memory && !is_virtual_device && !probe_skipped {
+        if buffer_path_to_the_gpu
+            == V4l2CaptureBufferPathToTheGpu::ProbeTheDmaBufImportOfEveryExportedDriverBuffer
+        {
             let mut imported: Vec<StorageBuffer> = Vec::with_capacity(V4L2_BUFFER_COUNT as usize);
             for i in 0..V4L2_BUFFER_COUNT as usize {
                 let fd: i32 = unsafe {
@@ -1074,6 +1126,86 @@ mod tests {
                 "{timestamp_type:?}"
             );
         }
+    }
+
+    fn capabilities_of_a_hardware_device_that_exports_dma_buf() -> GpuCapabilitiesSnapshot {
+        GpuCapabilitiesSnapshot {
+            device_name: "AMD Radeon RX 7900 XTX (RADV NAVI31)".to_string(),
+            supports_external_memory: true,
+            device_is_software: false,
+            supports_dma_buf_export: true,
+            supports_semaphore_export: true,
+            supports_cross_device_dma_buf_probe: true,
+            supports_ray_tracing_pipeline: true,
+        }
+    }
+
+    #[test]
+    fn a_hardware_device_that_exports_dma_buf_probes_the_import_of_a_physical_camera() {
+        assert_eq!(
+            choose_v4l2_capture_buffer_path_to_the_gpu(
+                &capabilities_of_a_hardware_device_that_exports_dma_buf(),
+                false
+            ),
+            V4l2CaptureBufferPathToTheGpu::ProbeTheDmaBufImportOfEveryExportedDriverBuffer
+        );
+    }
+
+    /// The software device advertises the DMA-BUF extensions where
+    /// `/dev/udmabuf` is reachable, and still exports no DMA-BUF by rule.
+    #[test]
+    fn a_software_device_takes_mmap_because_it_exports_no_dma_buf() {
+        let lavapipe = GpuCapabilitiesSnapshot {
+            device_name: "llvmpipe (LLVM 20.1.2, 256 bits)".to_string(),
+            device_is_software: true,
+            supports_dma_buf_export: false,
+            supports_semaphore_export: false,
+            ..capabilities_of_a_hardware_device_that_exports_dma_buf()
+        };
+        for capture_device_is_virtual in [false, true] {
+            assert_eq!(
+                choose_v4l2_capture_buffer_path_to_the_gpu(&lavapipe, capture_device_is_virtual),
+                V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDeviceExportsNoDmaBuf,
+                "capture device virtual: {capture_device_is_virtual}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_virtual_capture_device_takes_mmap_on_a_device_that_exports_dma_buf() {
+        assert_eq!(
+            choose_v4l2_capture_buffer_path_to_the_gpu(
+                &capabilities_of_a_hardware_device_that_exports_dma_buf(),
+                true
+            ),
+            V4l2CaptureBufferPathToTheGpu::MmapBecauseTheCaptureDeviceIsVirtual
+        );
+    }
+
+    #[test]
+    fn a_driver_blocklisted_for_cross_device_imports_takes_mmap() {
+        let nvidia = GpuCapabilitiesSnapshot {
+            device_name: "NVIDIA GeForce RTX 3090".to_string(),
+            supports_cross_device_dma_buf_probe: false,
+            ..capabilities_of_a_hardware_device_that_exports_dma_buf()
+        };
+        assert_eq!(
+            choose_v4l2_capture_buffer_path_to_the_gpu(&nvidia, false),
+            V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDriverIsBlocklistedForCrossDeviceImports
+        );
+    }
+
+    #[test]
+    fn a_device_without_external_memory_takes_mmap() {
+        let without_external_memory = GpuCapabilitiesSnapshot {
+            supports_external_memory: false,
+            supports_dma_buf_export: false,
+            ..capabilities_of_a_hardware_device_that_exports_dma_buf()
+        };
+        assert_eq!(
+            choose_v4l2_capture_buffer_path_to_the_gpu(&without_external_memory, false),
+            V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDeviceHasNoExternalMemory
+        );
     }
 
     #[test]
