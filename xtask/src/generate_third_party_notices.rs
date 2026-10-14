@@ -130,16 +130,20 @@ enum NoticeRosterCargoAboutCannotProduce {
     LinkedThroughOpusicSys,
     CompiledByTheVulkanaliaVmaForksBuildScript,
     CompiledByTheEnginesBuildScript,
+    CarriedPrebuiltInTheBundledVulkanLoader,
     CarriedPrebuiltByTheMacOSWheel,
+    CarriedPrebuiltByTheLinuxWheel,
 }
 
 impl NoticeRosterCargoAboutCannotProduce {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 7] = [
         Self::LinkedThroughShadercSys,
         Self::LinkedThroughOpusicSys,
         Self::CompiledByTheVulkanaliaVmaForksBuildScript,
         Self::CompiledByTheEnginesBuildScript,
+        Self::CarriedPrebuiltInTheBundledVulkanLoader,
         Self::CarriedPrebuiltByTheMacOSWheel,
+        Self::CarriedPrebuiltByTheLinuxWheel,
     ];
 
     /// How the bullet introduces the projects it then names.
@@ -160,10 +164,19 @@ impl NoticeRosterCargoAboutCannotProduce {
                 "Checked into this repository as headers, compiled into the engine by \
                  `runtime/streamlib-engine/build.rs`"
             }
+            Self::CarriedPrebuiltInTheBundledVulkanLoader => {
+                "In the macOS and Linux wheels, compiled into the Vulkan loader library \
+                 each carries beside the engine"
+            }
             Self::CarriedPrebuiltByTheMacOSWheel => {
-                "In the macOS wheel only, compiled into the Vulkan loader and MoltenVK \
-                 libraries it carries beside the engine (SPIRV-Tools, SPIRV-Headers and \
-                 Vulkan-Headers reach MoltenVK too, under the notices above)"
+                "In the macOS wheel only, compiled into the MoltenVK library it carries \
+                 beside the engine (SPIRV-Tools, SPIRV-Headers and Vulkan-Headers reach \
+                 MoltenVK too, under the notices above)"
+            }
+            Self::CarriedPrebuiltByTheLinuxWheel => {
+                "In the Linux wheel only, compiled into the lavapipe library it carries \
+                 beside the engine (SPIRV-Headers and Vulkan-Headers reach lavapipe too, \
+                 under the notices above)"
             }
         }
     }
@@ -324,15 +337,16 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughOpusicSys,
     },
-    // The five below are what `scripts/stage_macos_bundled_vulkan_driver.sh`
-    // puts in the macOS wheel, each notice checked in at the revision the
-    // pinned MoltenVK and Vulkan-Loader build from.
+    // The nine below are what `scripts/stage_macos_bundled_vulkan_driver.sh`
+    // and `scripts/stage_linux_bundled_vulkan_driver.sh` put in the wheel, each
+    // notice checked in at the revision the pinned MoltenVK, Vulkan-Loader,
+    // Mesa, LLVM, zstd and manylinux_2_28 zlib build from.
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "MoltenVK",
         upstream_repository_url: "https://github.com/KhronosGroup/MoltenVK",
         license_summary: "Apache-2.0",
         notice_source: NoticeSource::VendoredLicenseFile {
-            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/MoltenVK/LICENSE",
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/MoltenVK/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
     },
@@ -341,7 +355,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Cross",
         license_summary: "Apache-2.0",
         notice_source: NoticeSource::VendoredLicenseFile {
-            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/SPIRV-Cross/LICENSE",
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/SPIRV-Cross/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
     },
@@ -350,7 +364,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         upstream_repository_url: "https://github.com/USCiLab/cereal",
         license_summary: "BSD-3-Clause",
         notice_source: NoticeSource::VendoredLicenseFile {
-            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/cereal/LICENSE",
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/cereal/LICENSE",
         },
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
     },
@@ -359,9 +373,9 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         upstream_repository_url: "https://github.com/KhronosGroup/Vulkan-Loader",
         license_summary: "Apache-2.0",
         notice_source: NoticeSource::VendoredLicenseFile {
-            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/Vulkan-Loader/LICENSE.txt",
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Vulkan-Loader/LICENSE.txt",
         },
-        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheBundledVulkanLoader,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "cJSON",
@@ -370,9 +384,50 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         // under a licence other than Apache-2.0.
         license_summary: "MIT",
         notice_source: NoticeSource::VendoredLicenseFile {
-            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/cJSON/LICENSE",
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/cJSON/LICENSE",
         },
-        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheBundledVulkanLoader,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Mesa",
+        upstream_repository_url: "https://gitlab.freedesktop.org/mesa/mesa",
+        // Mesa's own `licenses/MIT`: its sources carry their copyright lines
+        // and SPDX identifiers file by file rather than in one notice.
+        license_summary: "MIT",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Mesa/MIT",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "LLVM",
+        upstream_repository_url: "https://github.com/llvm/llvm-project",
+        license_summary: "Apache-2.0 WITH LLVM-exception",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/LLVM/LICENSE.TXT",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Zstandard",
+        upstream_repository_url: "https://github.com/facebook/zstd",
+        // Dual-licensed BSD-3-Clause or GPL-2.0-only; distributed under the former.
+        license_summary: "BSD-3-Clause",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/zstd/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "zlib",
+        upstream_repository_url: "https://github.com/madler/zlib",
+        // 1.2.11 ships no licence file; its terms head `zlib.h`, reproduced
+        // here verbatim.
+        license_summary: "Zlib",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/zlib/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
     },
 ];
 
@@ -637,8 +692,8 @@ fn render_the_appendix_cargo_about_cannot_produce(
          \n\
          Every project below ships inside the wheel and owes terms the generated half above\n\
          cannot carry: most are compiled in from vendored sources and so appear in no resolve\n\
-         graph `cargo about` walks, and some ship only in the macOS wheel inside the\n\
-         prebuilt Vulkan driver it carries. These sections are appended by\n\
+         graph `cargo about` walks, and some ship inside the prebuilt Vulkan loader and\n\
+         driver the macOS or Linux wheel carries. These sections are appended by\n\
          `cargo xtask generate-third-party-notices`.\n\
          \n\
          {}",

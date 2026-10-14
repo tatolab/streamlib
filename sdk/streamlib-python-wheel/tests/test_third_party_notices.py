@@ -30,10 +30,12 @@ import pytest
 # binary. `cargo about` reads `cargo metadata`, and none of those is a package
 # in that graph, so tooling cannot find them.
 #
-# The macOS wheel carries a prebuilt Vulkan loader and MoltenVK, so the projects
-# compiled into those two dylibs — MoltenVK, SPIRV-Cross, cereal, Vulkan-Loader
-# and the loader's cJSON — have their notices checked in under
-# `vendor/macos-bundled-vulkan-driver-notices/` and appended the same way.
+# The macOS and Linux wheels carry a prebuilt Vulkan loader and a driver —
+# MoltenVK on macOS, Mesa's lavapipe on Linux — so the projects compiled into
+# them have their notices checked in under `vendor/bundled-vulkan-driver-notices/`
+# and appended the same way: Vulkan-Loader and its cJSON on both; MoltenVK,
+# SPIRV-Cross and cereal on macOS; Mesa, the LLVM it links statically, and the
+# Zstandard and zlib LLVM links on Linux.
 NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "shaderc",
     "glslang",
@@ -48,6 +50,10 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "cereal",
     "Vulkan-Loader",
     "cJSON",
+    "Mesa",
+    "LLVM",
+    "Zstandard",
+    "zlib",
 )
 
 # A thin sample of the Rust closure, one per link shape: the same-host IPC
