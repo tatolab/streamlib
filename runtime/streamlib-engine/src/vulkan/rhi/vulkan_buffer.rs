@@ -1137,7 +1137,8 @@ impl HostVulkanBuffer {
     /// binding the memory type index the exporter allocated from.
     ///
     /// `stated_memory_type_index` is the registration's
-    /// `vk_memory_type_index`. Refused by name, before the driver sees it, when
+    /// `vk_memory_type_index`. Refused by name before any Vulkan call on a
+    /// device without external memory, and before the driver sees the fd when
     /// the buffer cannot bind that type or the type is not HOST_VISIBLE and
     /// HOST_COHERENT, which a mapped read needs. Same fd ownership as
     /// [`HostVulkanDevice::import_opaque_fd_memory_at_stated_memory_type_index`]:
@@ -1155,6 +1156,13 @@ impl HostVulkanBuffer {
     ) -> Result<Self> {
         const CONSTRUCTOR_LABEL: &str =
             "HostVulkanBuffer::from_opaque_fd_at_stated_memory_type_index";
+        if !vulkan_device.supports_external_memory() {
+            return Err(Error::NotSupported(format!(
+                "{CONSTRUCTOR_LABEL}: {} did not enable VK_KHR_external_memory_fd, so no \
+                 OPAQUE_FD can be imported",
+                vulkan_device.name()
+            )));
+        }
         if allocation_size == 0 {
             return Err(Error::Configuration(format!(
                 "{CONSTRUCTOR_LABEL}: allocation_size must be > 0"
