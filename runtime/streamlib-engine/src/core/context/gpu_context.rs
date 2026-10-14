@@ -1136,9 +1136,15 @@ fn warn_of_no_shared_ring_to_take_back_slots_lent_to_a_native_node(
 pub struct GpuCapabilitiesSnapshot {
     /// UTF-8 device name (vendor + model).
     pub device_name: String,
-    /// Whether the GPU exposes `VK_KHR_external_memory_fd` +
-    /// `VK_EXT_external_memory_dma_buf`.
+    /// Whether the GPU exposes `VK_KHR_external_memory` +
+    /// `VK_KHR_external_memory_fd`.
     pub supports_external_memory: bool,
+    /// Whether the device is a CPU-type software rasterizer.
+    pub device_is_software: bool,
+    /// Whether frames can cross as DMA-BUF; never on a software device.
+    pub supports_dma_buf_export: bool,
+    /// Whether a timeline semaphore can be exported as an OPAQUE_FD.
+    pub supports_semaphore_export: bool,
     /// Whether cross-device DMA-BUF probe is supported (false on
     /// NVIDIA Linux per the engine capability guard).
     pub supports_cross_device_dma_buf_probe: bool,
@@ -3194,6 +3200,9 @@ impl GpuContext {
         GpuCapabilitiesSnapshot {
             device_name: dev.name(),
             supports_external_memory: dev.supports_external_memory(),
+            device_is_software: dev.device_is_software(),
+            supports_dma_buf_export: dev.supports_dma_buf_export(),
+            supports_semaphore_export: dev.supports_semaphore_export(),
             supports_cross_device_dma_buf_probe: dev.supports_cross_device_dma_buf_probe(),
             supports_ray_tracing_pipeline: dev.supports_ray_tracing_pipeline(),
         }

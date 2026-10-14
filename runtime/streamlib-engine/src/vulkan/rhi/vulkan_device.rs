@@ -3,12 +3,11 @@
 
 //! Vulkan device implementation for RHI.
 
-use std::ffi::{CStr, c_char};
+use std::ffi::c_char;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use vma::Alloc as _;
-use vulkanalia::loader::LibloadingLoader;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk::{self, KhrSwapchainExtensionDeviceCommands};
 use vulkanalia_vma as vma;
@@ -16,9 +15,7 @@ use vulkanalia_vma as vma;
 use crate::core::rhi::TextureDescriptor;
 use crate::core::{Error, Result};
 
-use streamlib_consumer_rhi::{
-    REQUESTED_VULKAN_INSTANCE_API_VERSION, vulkan_extension_names_borrowed_from_properties,
-};
+use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::VulkanTextureLike;
@@ -45,9 +42,12 @@ use super::vulkan_queue_submission_completion::{
     HostVulkanQueueSubmissionCompletionTimelines, HostVulkanQueueSubmissionsSnapshot,
     HostVulkanSubmissionQueue,
 };
-use super::vulkan_validation_messenger::{
-    VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
+use super::vulkan_device_selection::{
+    VulkanDevicePassOverReason, VulkanPhysicalDeviceCandidate,
+    build_on_the_first_candidate_that_accepts, candidates_in_the_loaders_order_with_cpu_type_last,
 };
+use super::vulkan_instance::HostVulkanInstance;
+use super::vulkan_validation_messenger::VulkanValidationMessenger;
 use super::{
     HostMarker, HostVulkanTexture, VulkanCommandQueue, VulkanRhiDevice,
     VulkanValidationMessageCounts,
@@ -162,8 +162,9 @@ fn probe_nvjpeg_loadable() -> bool {
 /// Wraps the Vulkan instance, physical device, and logical device.
 /// On macOS/iOS, uses MoltenVK to provide Vulkan API on top of Metal.
 pub struct HostVulkanDevice {
-    entry: vulkanalia::Entry,
-    instance: vulkanalia::Instance,
+    /// Shared with device selection, so a candidate refused after its
+    /// logical device was created drops without destroying the instance.
+    vulkan_instance: Arc<HostVulkanInstance>,
     physical_device: vk::PhysicalDevice,
     /// Memory types and heaps: the raw `vkAllocateMemory` paths pick a type
     /// from them, and the frame-allocation budget maps a type to its heap.
@@ -194,6 +195,14 @@ pub struct HostVulkanDevice {
     #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
+    /// Whether the device is `VK_PHYSICAL_DEVICE_TYPE_CPU` — a software
+    /// rasterizer such as lavapipe.
+    device_is_software: bool,
+    /// Whether frames can cross as DMA-BUF: `VK_EXT_external_memory_dma_buf`
+    /// and `VK_EXT_image_drm_format_modifier`, never on a software device.
+    supports_dma_buf_export: bool,
+    /// Whether a timeline semaphore can be exported as an OPAQUE_FD.
+    supports_semaphore_export: bool,
     /// Best-effort hint about which third-party GPU compute libraries
     /// (nvJPEG, etc.) are available to integrate against this device.
     /// Probed at construction; see [`ThirdPartyGpuCapabilities`].
@@ -353,12 +362,6 @@ pub struct HostVulkanDevice {
     /// [`HostVulkanTexture::new_render_target_dma_buf`].
     #[cfg(target_os = "linux")]
     drm_modifier_table: Arc<DrmModifierTable>,
-    /// Khronos-validation-layer messenger, present only when the layer
-    /// loaded and `VK_EXT_debug_utils` was available. Holds the tally the
-    /// layer writes findings into; must outlive `destroy_instance`, whose
-    /// own findings reach the pNext-chained messenger using the same
-    /// user-data pointer.
-    validation_messenger: Option<VulkanValidationMessenger>,
     /// Live raw `vkAllocateMemory` allocations, which VMA never sees: DMA-BUF
     /// and host-pointer imports, and IOSurface-backed image memory.
     live_allocation_count: AtomicUsize,
@@ -544,38 +547,67 @@ impl Drop for ExportPoolSentinel {
     }
 }
 
-/// What to install when the loader opened but no ICD behind it is usable.
-const NO_USABLE_VULKAN_DRIVER_GUIDANCE: &str = if cfg!(any(target_os = "macos", target_os = "ios"))
-{
-    "No usable Vulkan driver (ICD) was found. MoltenVK is the Vulkan driver on Apple \
-     hardware; check that its ICD manifest is on the loader's search path."
-} else {
-    "No usable Vulkan driver (ICD) was found. Install your GPU vendor's Vulkan \
-     driver — the proprietary NVIDIA driver, or `mesa-vulkan-drivers` for \
-     AMD/Intel — then check `vulkaninfo` runs."
-};
+/// A logical device destroyed on drop unless the built device takes it, so an
+/// early return while a candidate is being built leaks no `VkDevice`.
+struct VulkanLogicalDeviceDestroyedUnlessTaken {
+    device: Option<vulkanalia::Device>,
+}
 
-/// What to install when no loader library opened at all.
-const NO_VULKAN_LOADER_LIBRARY_GUIDANCE: &str = if cfg!(any(target_os = "macos", target_os = "ios"))
-{
-    "No Vulkan loader library could be opened. Apple hardware reaches the GPU through \
-     the Vulkan loader and MoltenVK, and neither was found at any of these paths:"
-} else {
-    "No Vulkan loader library could be opened. Install your GPU vendor's Vulkan \
-     driver and the loader (`libvulkan1` / `vulkan-loader`), then check `vulkaninfo` \
-     runs. Tried:"
-};
+impl VulkanLogicalDeviceDestroyedUnlessTaken {
+    fn device(&self) -> &vulkanalia::Device {
+        self.device
+            .as_ref()
+            .expect("the logical device is held until it is taken")
+    }
 
-/// Open the first Vulkan loader library on the shared search list, or refuse
-/// naming every candidate tried so the failure says where it looked.
-fn load_the_first_vulkan_loader_library_that_opens() -> Result<LibloadingLoader> {
-    streamlib_consumer_rhi::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
-        Error::GpuError(format!("{NO_VULKAN_LOADER_LIBRARY_GUIDANCE}\n{not_found}"))
-    })
+    fn take_the_logical_device(mut self) -> vulkanalia::Device {
+        self.device
+            .take()
+            .expect("the logical device is held until it is taken")
+    }
+}
+
+impl Drop for VulkanLogicalDeviceDestroyedUnlessTaken {
+    fn drop(&mut self) {
+        if let Some(device) = self.device.take() {
+            // SAFETY: every object created on the device was a local of the
+            // refused build and has already dropped.
+            unsafe { device.destroy_device(None) };
+        }
+    }
+}
+
+/// Whether `physical_device` can export a timeline semaphore as an OPAQUE_FD.
+#[cfg(target_os = "linux")]
+fn physical_device_exports_an_opaque_fd_timeline_semaphore(
+    instance: &vulkanalia::Instance,
+    physical_device: vk::PhysicalDevice,
+) -> bool {
+    let mut timeline_semaphore_type = vk::SemaphoreTypeCreateInfo::builder()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0)
+        .build();
+    let external_semaphore_info = vk::PhysicalDeviceExternalSemaphoreInfo::builder()
+        .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
+        .push_next(&mut timeline_semaphore_type)
+        .build();
+    let mut external_semaphore_properties = vk::ExternalSemaphoreProperties::default();
+    unsafe {
+        instance.get_physical_device_external_semaphore_properties(
+            physical_device,
+            &external_semaphore_info,
+            &mut external_semaphore_properties,
+        )
+    };
+    external_semaphore_properties
+        .external_semaphore_features
+        .contains(vk::ExternalSemaphoreFeatureFlags::EXPORTABLE)
 }
 
 impl HostVulkanDevice {
-    /// Create a new Vulkan device.
+    /// Create the engine's Vulkan device on the first physical device it can
+    /// build on, in the loader's order with CPU-type devices last, logging
+    /// every device passed over and why.
     ///
     /// On macOS/iOS, this loads MoltenVK and enables VK_EXT_metal_objects
     /// for Metal interoperability.
@@ -591,180 +623,9 @@ impl HostVulkanDevice {
     /// and `nvidia-opaque-fd-after-swapchain.md`); pre-warming here
     /// removes that footgun for every consumer at the engine layer.
     pub fn new() -> Result<Arc<Self>> {
-        // 1. Load Vulkan entry points via libloading
-        let loader = load_the_first_vulkan_loader_library_that_opens()?;
-        let entry = unsafe { vulkanalia::Entry::new(loader) }
-            .map_err(|e| Error::GpuError(format!("Failed to load Vulkan entry points: {e}")))?;
+        let vulkan_instance = Arc::new(HostVulkanInstance::new()?);
 
-        // 2. Enumerate available instance extensions
-        let available_extensions =
-            unsafe { entry.enumerate_instance_extension_properties(None) }
-                .map_err(|e| Error::GpuError(format!("Failed to enumerate extensions: {e}")))?;
-
-        let available_ext_names: Vec<&CStr> = available_extensions
-            .iter()
-            .map(|ext| ext.extension_name.as_cstr())
-            .collect();
-
-        // 3. Build extension list
-        let mut instance_extensions: Vec<*const c_char> = Vec::new();
-
-        // The platform-agnostic half of WSI. Probed, so a host without a display
-        // stack simply does not get it; the platform surface extensions below
-        // are what differ.
-        let surface_ext = c"VK_KHR_surface";
-        if available_ext_names.contains(&surface_ext) {
-            instance_extensions.push(surface_ext.as_ptr());
-            tracing::info!("VK_KHR_surface enabled");
-        }
-
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
-            // MoltenVK is a non-conformant portability implementation: the loader
-            // hides it from enumeration unless this is asked for, together with
-            // ENUMERATE_PORTABILITY_KHR on the create flags below.
-            let portability_enum = c"VK_KHR_portability_enumeration";
-            if available_ext_names.contains(&portability_enum) {
-                instance_extensions.push(portability_enum.as_ptr());
-                tracing::info!("VK_KHR_portability_enumeration enabled");
-            }
-
-            // The Metal WSI surface, for a swapchain over a CAMetalLayer.
-            // VK_EXT_metal_objects is a *device* extension — its commands are
-            // device-level — and is requested with the device, not here.
-            let metal_surface_ext = c"VK_EXT_metal_surface";
-            if available_ext_names.contains(&metal_surface_ext) {
-                instance_extensions.push(metal_surface_ext.as_ptr());
-                tracing::info!("VK_EXT_metal_surface enabled");
-            } else {
-                tracing::warn!(
-                    "VK_EXT_metal_surface not available - no window surface can be created"
-                );
-            }
-        }
-
-        // On Linux, enable the platform surface extensions for windowed display
-        #[cfg(target_os = "linux")]
-        {
-            // Enable all available platform surface extensions
-            let wayland_ext = c"VK_KHR_wayland_surface";
-            if available_ext_names.contains(&wayland_ext) {
-                instance_extensions.push(wayland_ext.as_ptr());
-                tracing::info!("VK_KHR_wayland_surface available");
-            }
-            let xcb_ext = c"VK_KHR_xcb_surface";
-            if available_ext_names.contains(&xcb_ext) {
-                instance_extensions.push(xcb_ext.as_ptr());
-                tracing::info!("VK_KHR_xcb_surface available");
-            }
-            let xlib_ext = c"VK_KHR_xlib_surface";
-            if available_ext_names.contains(&xlib_ext) {
-                instance_extensions.push(xlib_ext.as_ptr());
-                tracing::info!("VK_KHR_xlib_surface available");
-            }
-
-            // VK_EXT_headless_surface — enables creating a Vulkan surface without
-            // a window. Used by unit tests to exercise the swapchain code path
-            // without requiring a display server.
-            let headless_ext = c"VK_EXT_headless_surface";
-            if available_ext_names.contains(&headless_ext) {
-                instance_extensions.push(headless_ext.as_ptr());
-                tracing::info!("VK_EXT_headless_surface available");
-            }
-        }
-
-        // VK_EXT_swapchain_colorspace — exposes the wide-gamut + HDR
-        // VkColorSpaceKHR enumerants (HDR10_ST2084_EXT,
-        // EXTENDED_SRGB_LINEAR_EXT, DISPLAY_P3_*, BT709_*, etc.)
-        // through `vkGetPhysicalDeviceSurfaceFormatsKHR`. Without it,
-        // every WSI surface advertises only `SRGB_NONLINEAR_KHR` and
-        // the swapchain colorspace priority walk has nothing to walk.
-        let swapchain_colorspace_ext = c"VK_EXT_swapchain_colorspace";
-        if available_ext_names.contains(&swapchain_colorspace_ext) {
-            instance_extensions.push(swapchain_colorspace_ext.as_ptr());
-            tracing::info!("VK_EXT_swapchain_colorspace enabled");
-        }
-
-        // 4. Create Vulkan instance at API version 1.4
-        let app_info = vk::ApplicationInfo::builder()
-            .application_name(b"StreamLib\0")
-            .application_version(vk::make_version(0, 1, 0))
-            .engine_name(b"StreamLib\0")
-            .engine_version(vk::make_version(0, 1, 0))
-            .api_version(REQUESTED_VULKAN_INSTANCE_API_VERSION)
-            .build();
-
-        #[allow(unused_mut)]
-        let mut instance_create_flags = vk::InstanceCreateFlags::empty();
-
-        // On macOS/iOS, enable portability enumeration flag
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
-            instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
-        }
-
-        // Optional Khronos validation layer — opt-in so it doesn't bloat
-        // the production deviceless path. Enabled via the
-        // `STREAMLIB_VULKAN_VALIDATION=1` env var; a sibling alternative
-        // to `VK_LOADER_LAYERS_ENABLE` for cases where the loader-side
-        // hook is shadowed (notably some Bazel / Docker / cargo-test
-        // configurations).
-        let validation_setup = VulkanValidationInstanceSetup::resolve(
-            &entry,
-            VulkanValidationConfiguration::from_environment(),
-            &available_ext_names,
-        );
-        instance_extensions.extend_from_slice(&validation_setup.enabled_extension_names);
-
-        let mut instance_creation_messenger_info =
-            validation_setup.instance_creation_messenger_info();
-        let mut validation_features = vk::ValidationFeaturesEXT::builder()
-            .enabled_validation_features(&validation_setup.enabled_validation_features)
-            .build();
-
-        let mut instance_info = vk::InstanceCreateInfo::builder()
-            .application_info(&app_info)
-            .enabled_extension_names(&instance_extensions)
-            .enabled_layer_names(&validation_setup.enabled_layer_names)
-            .flags(instance_create_flags);
-        let mut layer_settings = vk::LayerSettingsCreateInfoEXT::builder()
-            .settings(&validation_setup.enabled_layer_settings)
-            .build();
-        if !validation_setup.enabled_validation_features.is_empty() {
-            instance_info = instance_info.push_next(&mut validation_features);
-        }
-        if !validation_setup.enabled_layer_settings.is_empty() {
-            instance_info = instance_info.push_next(&mut layer_settings);
-        }
-        if let Some(messenger_info) = instance_creation_messenger_info.as_mut() {
-            instance_info = instance_info.push_next(messenger_info);
-        }
-        // VK_EXT_metal_objects exports the device's MTLDevice only from an
-        // instance created with this in its pNext chain
-        // (VUID-VkExportMetalObjectsInfoEXT-pNext-06791); the registry makes
-        // it extend VkInstanceCreateInfo, not VkDeviceCreateInfo.
-        #[cfg(target_os = "macos")]
-        let mut metal_device_export_declaration = vk::ExportMetalObjectCreateInfoEXT::builder()
-            .export_object_type(vk::ExportMetalObjectTypeFlagsEXT::METAL_DEVICE)
-            .build();
-        #[cfg(target_os = "macos")]
-        {
-            instance_info = instance_info.push_next(&mut metal_device_export_declaration);
-        }
-        let instance_info = instance_info.build();
-
-        let instance = unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| {
-            Error::GpuError(if e == vk::ErrorCode::INCOMPATIBLE_DRIVER {
-                NO_USABLE_VULKAN_DRIVER_GUIDANCE.to_string()
-            } else {
-                format!("Failed to create Vulkan instance: {e}")
-            })
-        })?;
-
-        let validation_messenger = validation_setup.into_installed_messenger(&instance);
-
-        // 5. Select physical device
-        let physical_devices = unsafe { instance.enumerate_physical_devices() }
+        let physical_devices = unsafe { vulkan_instance.instance.enumerate_physical_devices() }
             .map_err(|e| Error::GpuError(format!("Failed to enumerate devices: {e}")))?;
 
         if physical_devices.is_empty() {
@@ -775,18 +636,46 @@ impl HostVulkanDevice {
             ));
         }
 
-        // Prefer discrete GPU, fall back to first available
-        let physical_device = physical_devices
-            .iter()
-            .find(|&&pd| {
-                let props = unsafe { instance.get_physical_device_properties(pd) };
-                props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
+        let candidates = physical_devices
+            .into_iter()
+            .map(|physical_device| {
+                let properties = unsafe {
+                    vulkan_instance
+                        .instance
+                        .get_physical_device_properties(physical_device)
+                };
+                VulkanPhysicalDeviceCandidate {
+                    physical_device,
+                    device_name: properties
+                        .device_name
+                        .as_cstr()
+                        .to_string_lossy()
+                        .into_owned(),
+                    device_type: properties.device_type,
+                }
             })
-            .copied()
-            .unwrap_or(physical_devices[0]);
+            .collect();
+
+        let selection = build_on_the_first_candidate_that_accepts(
+            candidates_in_the_loaders_order_with_cpu_type_last(candidates),
+            |candidate| Self::build_on_physical_device(&vulkan_instance, candidate),
+        )?;
+        Ok(selection.log_the_chosen_device_beside_every_pass_over())
+    }
+
+    /// Build the logical device, its queues, allocator and export pools on
+    /// one candidate. A refusal drops only what this candidate created; the
+    /// instance stays for the next.
+    fn build_on_physical_device(
+        vulkan_instance: &Arc<HostVulkanInstance>,
+        candidate: &VulkanPhysicalDeviceCandidate,
+    ) -> std::result::Result<Arc<Self>, VulkanDevicePassOverReason> {
+        let instance = &vulkan_instance.instance;
+        let physical_device = candidate.physical_device;
+        let device_is_software = candidate.device_type == vk::PhysicalDeviceType::CPU;
 
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_name = device_props.device_name.as_cstr().to_string_lossy();
+        let device_name = candidate.device_name.clone();
         let min_storage_buffer_offset_alignment =
             device_props.limits.min_storage_buffer_offset_alignment;
         let max_memory_allocation_count = device_props.limits.max_memory_allocation_count;
@@ -845,18 +734,6 @@ impl HostVulkanDevice {
         // impl to land in plain-array shape.
         let physical_device_uuid: [u8; 16] = id_props.device_uuid.into();
 
-        let device_type_str = match device_props.device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => "Discrete GPU",
-            vk::PhysicalDeviceType::INTEGRATED_GPU => "Integrated GPU",
-            vk::PhysicalDeviceType::VIRTUAL_GPU => "Virtual GPU",
-            vk::PhysicalDeviceType::CPU => "CPU",
-            _ => "Other",
-        };
-        tracing::info!(
-            "Selected Vulkan device: {} (type: {})",
-            device_name,
-            device_type_str
-        );
 
         // 6. Find graphics queue family
         let queue_families =
@@ -867,7 +744,7 @@ impl HostVulkanDevice {
             .enumerate()
             .find(|(_, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS))
             .map(|(idx, _)| idx as u32)
-            .ok_or_else(|| Error::GpuError("No graphics queue family found".into()))?;
+            .ok_or(VulkanDevicePassOverReason::NoGraphicsQueueFamily)?;
 
         // 6b. Find dedicated transfer queue family (TRANSFER-only, no GRAPHICS/COMPUTE).
         //     Dedicated transfer queues use independent DMA engines for parallel data movement.
@@ -1078,6 +955,12 @@ impl HostVulkanDevice {
         #[cfg(target_os = "linux")]
         let mut has_external_memory_host = false;
         #[cfg(target_os = "linux")]
+        let mut has_external_memory_dma_buf = false;
+        #[cfg(target_os = "linux")]
+        let mut has_image_drm_format_modifier = false;
+        #[cfg(target_os = "linux")]
+        let mut has_external_semaphore_fd = false;
+        #[cfg(target_os = "linux")]
         let has_external_memory = {
             let external_memory_ext = c"VK_KHR_external_memory";
             let external_memory_fd_ext = c"VK_KHR_external_memory_fd";
@@ -1092,12 +975,14 @@ impl HostVulkanDevice {
 
                 if available_device_ext_names.contains(&external_memory_dmabuf_ext) {
                     device_extensions.push(external_memory_dmabuf_ext.as_ptr());
+                    has_external_memory_dma_buf = true;
                     tracing::info!("VK_EXT_external_memory_dma_buf available");
                 }
 
                 let drm_format_modifier_ext = c"VK_EXT_image_drm_format_modifier";
                 if available_device_ext_names.contains(&drm_format_modifier_ext) {
                     device_extensions.push(drm_format_modifier_ext.as_ptr());
+                    has_image_drm_format_modifier = true;
                     tracing::info!("VK_EXT_image_drm_format_modifier available");
                 }
 
@@ -1110,6 +995,7 @@ impl HostVulkanDevice {
                 let external_semaphore_fd_ext = c"VK_KHR_external_semaphore_fd";
                 if available_device_ext_names.contains(&external_semaphore_fd_ext) {
                     device_extensions.push(external_semaphore_fd_ext.as_ptr());
+                    has_external_semaphore_fd = true;
                     tracing::info!("VK_KHR_external_semaphore_fd available");
                 }
 
@@ -1315,6 +1201,22 @@ impl HostVulkanDevice {
         #[cfg(not(target_os = "linux"))]
         let supports_external_memory = false;
 
+        // DMA-BUF on a software device exists only where the process may open
+        // `/dev/udmabuf`, a container's permissions; it is absent by rule.
+        #[cfg(target_os = "linux")]
+        let supports_dma_buf_export = has_external_memory
+            && has_external_memory_dma_buf
+            && has_image_drm_format_modifier
+            && !device_is_software;
+        #[cfg(not(target_os = "linux"))]
+        let supports_dma_buf_export = false;
+
+        #[cfg(target_os = "linux")]
+        let supports_semaphore_export = has_external_semaphore_fd
+            && physical_device_exports_an_opaque_fd_timeline_semaphore(instance, physical_device);
+        #[cfg(not(target_os = "linux"))]
+        let supports_semaphore_export = false;
+
         #[cfg(not(target_os = "linux"))]
         let has_acquire_unmodified = false;
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
@@ -1480,14 +1382,21 @@ impl HostVulkanDevice {
             builder.build()
         };
 
-        let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
-            .map_err(|e| Error::GpuError(format!("Failed to create logical device: {e}")))?;
+        let logical_device_destroyed_unless_taken = VulkanLogicalDeviceDestroyedUnlessTaken {
+            device: Some(
+                unsafe { instance.create_device(physical_device, &device_create_info, None) }
+                    .map_err(|e| VulkanDevicePassOverReason::LogicalDeviceCreationRefused {
+                        vulkan_error: e.to_string(),
+                    })?,
+            ),
+        };
+        let device = logical_device_destroyed_unless_taken.device();
 
         #[cfg(target_os = "macos")]
         let metal_working_set_of_the_device = {
             let metal_device =
                 match MetalDeviceWhoseWorkingSetBoundsFrameAllocations::exported_from_moltenvk(
-                    &device,
+                    device,
                 ) {
                     Some(metal_device) => Some(metal_device),
                     None => {
@@ -1537,7 +1446,7 @@ impl HostVulkanDevice {
 
         // 8e. One completion timeline per queue
         let queue_submission_completion_timelines =
-            HostVulkanQueueSubmissionCompletionTimelines::new(&device)?;
+            HostVulkanQueueSubmissionCompletionTimelines::new(device)?;
 
         // 9. Query memory properties (raw-allocation type choice, heap of a type)
         let memory_properties =
@@ -1553,7 +1462,7 @@ impl HostVulkanDevice {
         //     rejects new DMA-BUF exportable DEVICE_LOCAL block allocations after
         //     swapchain creation, so keeping internal allocations export-free is the
         //     correct fix.
-        let mut alloc_options = vma::AllocatorOptions::new(&instance, &device, physical_device);
+        let mut alloc_options = vma::AllocatorOptions::new(instance, device, physical_device);
         alloc_options.version = vulkanalia::Version::new(1, 4, 0);
         // BUFFER_DEVICE_ADDRESS — required so buffers created with
         // `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` (acceleration-
@@ -1581,21 +1490,24 @@ impl HostVulkanDevice {
         // missing) is non-fatal: the table stays empty and the tiled pool
         // is skipped, which makes render-target DMA-BUF allocations refuse
         // with an error rather than silently picking a sampler-only modifier.
-        // See `docs/learnings/nvidia-egl-dmabuf-render-target.md`.
+        // See `docs/learnings/nvidia-egl-dmabuf-render-target.md`. The table
+        // is the EGL default display's, not this device's, so a device that
+        // exports no DMA-BUF takes none of it.
         #[cfg(target_os = "linux")]
-        let default_display_probe_result =
-            drm_modifier_probe::default_display_drm_modifier_table_probed_once_per_process();
-        #[cfg(target_os = "linux")]
-        let drm_modifier_table = match default_display_probe_result {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(
-                    "EGL DRM modifier probe failed: {e} — render-target DMA-BUF \
-                     pool will be unavailable; only sampler-only / linear DMA-BUF \
-                     allocations will succeed"
-                );
-                Arc::new(DrmModifierTable::empty())
+        let drm_modifier_table = if supports_dma_buf_export {
+            match drm_modifier_probe::default_display_drm_modifier_table_probed_once_per_process() {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(
+                        "EGL DRM modifier probe failed: {e} — render-target DMA-BUF \
+                         pool will be unavailable; only sampler-only / linear DMA-BUF \
+                         allocations will succeed"
+                    );
+                    Arc::new(DrmModifierTable::empty())
+                }
             }
+        } else {
+            Arc::new(DrmModifierTable::empty())
         };
 
         // Build the OPAQUE_FD buffer pool — used by CUDA / OpenCL interop
@@ -1711,7 +1623,7 @@ impl HostVulkanDevice {
                 drm_modifier_table.rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
             match Self::create_dma_buf_pools(
                 &allocator,
-                &device,
+                device,
                 &memory_properties,
                 bgra_modifiers,
             ) {
@@ -1754,8 +1666,7 @@ impl HostVulkanDevice {
         let frame_allocation_device_memory_budget_gate =
             FrameAllocationDeviceMemoryBudgetGate::new();
         let device = Self {
-            entry,
-            instance,
+            vulkan_instance: Arc::clone(vulkan_instance),
             physical_device,
             memory_properties,
             max_memory_allocation_count,
@@ -1766,13 +1677,16 @@ impl HostVulkanDevice {
             device_memory_budget_fresh_fetch_frame_index: std::sync::atomic::AtomicU32::new(0),
             #[cfg(target_os = "macos")]
             metal_working_set_of_the_device,
-            device,
+            device: logical_device_destroyed_unless_taken.take_the_logical_device(),
             queue,
             queue_family_index,
             transfer_queue_family_index,
             transfer_queue,
-            device_name: device_name.into_owned(),
+            device_name,
             supports_external_memory,
+            device_is_software,
+            supports_dma_buf_export,
+            supports_semaphore_export,
             third_party_gpu_capabilities,
             supports_cross_device_dma_buf_probe,
             has_acquire_unmodified,
@@ -1823,7 +1737,6 @@ impl HostVulkanDevice {
             min_storage_buffer_offset_alignment,
             #[cfg(target_os = "linux")]
             drm_modifier_table,
-            validation_messenger,
             live_allocation_count: AtomicUsize::new(0),
             queue_submission_count: AtomicUsize::new(0),
             recorder_and_compute_kernel_fence_wait_count: AtomicUsize::new(0),
@@ -1847,7 +1760,11 @@ impl HostVulkanDevice {
         #[cfg(target_os = "linux")]
         let device = {
             let mut device = Arc::new(device);
-            let sentinels = Self::allocate_one_sentinel_per_export_pool(&device)?;
+            let sentinels = Self::allocate_one_sentinel_per_export_pool(&device).map_err(
+                |refusal| VulkanDevicePassOverReason::ExportPoolSentinelAllocationFailed {
+                    refusal: refusal.to_string(),
+                },
+            )?;
             // Sentinels hold the allocator, not `Arc<HostVulkanDevice>`
             // clones, so the Arc strong count is still 1 here and
             // `get_mut` succeeds.
@@ -3092,13 +3009,13 @@ impl HostVulkanDevice {
 
     /// Get the Vulkan entry point loader.
     pub fn entry(&self) -> &vulkanalia::Entry {
-        &self.entry
+        &self.vulkan_instance.entry
     }
 
     /// Get the Vulkan instance.
     #[allow(dead_code)]
     pub fn instance(&self) -> &vulkanalia::Instance {
-        &self.instance
+        &self.vulkan_instance.instance
     }
 
     /// Get the Vulkan physical device.
@@ -3135,9 +3052,25 @@ impl HostVulkanDevice {
         self.transfer_queue
     }
 
-    /// Whether DMA-BUF external memory extensions are available.
+    /// Whether `VK_KHR_external_memory` and `VK_KHR_external_memory_fd` are
+    /// enabled.
     pub fn supports_external_memory(&self) -> bool {
         self.supports_external_memory
+    }
+
+    /// Whether the device is a CPU-type software rasterizer.
+    pub fn device_is_software(&self) -> bool {
+        self.device_is_software
+    }
+
+    /// Whether frames can cross as DMA-BUF; never on a software device.
+    pub fn supports_dma_buf_export(&self) -> bool {
+        self.supports_dma_buf_export
+    }
+
+    /// Whether a timeline semaphore can be exported as an OPAQUE_FD.
+    pub fn supports_semaphore_export(&self) -> bool {
+        self.supports_semaphore_export
     }
 
     /// Whether the driver tolerates a failed cross-device DMA-BUF import
@@ -3383,7 +3316,8 @@ impl HostVulkanDevice {
     /// `VK_EXT_debug_utils` unavailable. A test asserting zero findings
     /// must treat `None` as "not measured", never as zero.
     pub fn validation_layer_message_counts(&self) -> Option<VulkanValidationMessageCounts> {
-        self.validation_messenger
+        self.vulkan_instance
+            .validation_messenger
             .as_ref()
             .and_then(VulkanValidationMessenger::counts)
     }
@@ -3455,7 +3389,7 @@ impl VulkanRhiDevice for HostVulkanDevice {
     type Privilege = HostMarker;
 
     fn instance(&self) -> &vulkanalia::Instance {
-        &self.instance
+        &self.vulkan_instance.instance
     }
 
     fn physical_device(&self) -> vk::PhysicalDevice {
@@ -4817,7 +4751,7 @@ impl Drop for HostVulkanDevice {
         //  1. DMA-BUF + OPAQUE_FD pools — release Arc<Allocator> refs and call vmaDestroyPool
         //  2. Allocator — call vmaDestroyAllocator (only after all Arc refs gone)
         //  3. Export info Boxes — VMA no longer references them after pool destruction
-        //  4. Device + instance — Vulkan handles
+        //  4. Device — the instance goes with the last `HostVulkanInstance` holder
         #[cfg(target_os = "linux")]
         {
             self.export_pool_sentinels.clear();
@@ -4843,16 +4777,7 @@ impl Drop for HostVulkanDevice {
             drop(self._opaque_fd_image_export_info.take());
         }
 
-        unsafe {
-            self.device.destroy_device(None);
-            // The messenger handle goes before the instance it belongs to;
-            // its tally stays alive in `self` so the pNext-chained
-            // messenger still has valid user data at destroy_instance.
-            if let Some(messenger) = self.validation_messenger.as_mut() {
-                messenger.destroy_handle(&self.instance);
-            }
-            self.instance.destroy_instance(None);
-        }
+        unsafe { self.device.destroy_device(None) };
     }
 }
 
@@ -5512,48 +5437,6 @@ mod tests {
         unsafe { device.allocator().destroy_buffer(buffer, allocation) };
     }
 
-    /// The floor that makes the promoted 1.3 entry points resolve. Asserted on
-    /// the request the engine makes, never on what a device reports back: the
-    /// reported value is clamped to the request under MoltenVK, so a device
-    /// probe would pass for the wrong reason on every driver.
-    #[test]
-    fn the_requested_instance_api_version_clears_the_promoted_entry_point_floor() {
-        let requested = REQUESTED_VULKAN_INSTANCE_API_VERSION;
-        let major = vk::version_major(requested);
-        let minor = vk::version_minor(requested);
-
-        assert!(
-            major > 1 || (major == 1 && minor >= 3),
-            "cmd_pipeline_barrier2, cmd_begin_rendering, queue_submit2 and wait_semaphores are \
-             promoted into core 1.3 and resolve only because the instance asks for at least \
-             that; the request is {major}.{minor}"
-        );
-    }
-
-    /// The runtime unit's lend carries the loader and MoltenVK (#2362), so nothing
-    /// a user can read may send them to a third-party package manager; a
-    /// contributor who happens to have them from Homebrew or the LunarG SDK is
-    /// served by the search list, which is not text anybody reads. Owner,
-    /// 2026-09-20.
-    #[test]
-    fn the_guidance_a_user_reads_never_names_a_third_party_package_manager() {
-        const THIRD_PARTY_PACKAGE_MANAGERS: &[&str] = &["brew", "homebrew", "port ", "macports"];
-
-        for (label, guidance) in [
-            ("no-loader", NO_VULKAN_LOADER_LIBRARY_GUIDANCE),
-            ("no-driver", NO_USABLE_VULKAN_DRIVER_GUIDANCE),
-        ] {
-            let lowercased = guidance.to_lowercase();
-            for package_manager in THIRD_PARTY_PACKAGE_MANAGERS {
-                assert!(
-                    !lowercased.contains(package_manager),
-                    "the {label} guidance sends a user to `{package_manager}`; the runtime \
-                     unit's lend carries the driver: {guidance}"
-                );
-            }
-        }
-    }
-
     /// The device this milestone exists to bring up. Unlike [`try_create_device`]
     /// this refuses to pass by skipping: under `hardware-tests` the rig is
     /// asserted to exist, and a MoltenVK that cannot produce a device is the
@@ -6021,6 +5904,173 @@ mod tests {
             "heap {}'s budget fell by {heap_budget_fall} bytes while another process held \
              {child_cuda_allocation_bytes} bytes of CUDA memory",
             heap_before.heap_index
+        );
+    }
+
+    /// Set in the child process a device-selection test re-runs in; names the
+    /// device the child must build on.
+    #[cfg(target_os = "linux")]
+    const EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_EXPECTED_SELECTED_VULKAN_DEVICE";
+
+    /// The ICD manifest whose file name starts with `manifest_file_name_prefix`,
+    /// from the loader variables this process carries, else the loader's
+    /// system search directories.
+    #[cfg(target_os = "linux")]
+    fn an_icd_manifest_named(manifest_file_name_prefix: &str) -> Option<std::path::PathBuf> {
+        let named_by_a_loader_variable = ["VK_ADD_DRIVER_FILES", "VK_DRIVER_FILES"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>());
+        let in_a_system_search_directory = [
+            "/etc/vulkan/icd.d",
+            "/usr/local/share/vulkan/icd.d",
+            "/usr/share/vulkan/icd.d",
+        ]
+        .into_iter()
+        .filter_map(|directory| std::fs::read_dir(directory).ok())
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()));
+        named_by_a_loader_variable
+            .chain(in_a_system_search_directory)
+            .find(|manifest| {
+                manifest
+                    .file_name()
+                    .and_then(|file_name| file_name.to_str())
+                    .is_some_and(|file_name| file_name.starts_with(manifest_file_name_prefix))
+                    && manifest.is_file()
+            })
+    }
+
+    /// In the child: build the device under the `VK_DRIVER_FILES` the parent
+    /// set and hold it to what the parent expects of it.
+    #[cfg(target_os = "linux")]
+    fn the_device_this_process_builds_on_is_the_expected_one(expected_device: &std::ffi::OsStr) {
+        let device = HostVulkanDevice::new().expect("a device builds under these driver files");
+        let device_name = device.name();
+        match expected_device.to_str() {
+            Some("the-hardware-device") => {
+                assert!(
+                    !device.device_is_software(),
+                    "the engine built on {device_name}, a software device, with a hardware \
+                     device visible"
+                );
+                assert!(
+                    device.supports_semaphore_export(),
+                    "{device_name} exports a timeline semaphore"
+                );
+                assert!(
+                    device.supports_dma_buf_export(),
+                    "{device_name} exports DMA-BUF"
+                );
+            }
+            Some("the-software-device") => {
+                assert!(
+                    device.device_is_software(),
+                    "{device_name} must report itself software"
+                );
+                assert!(
+                    device_name.contains("llvmpipe"),
+                    "the only visible device is lavapipe, got {device_name}"
+                );
+                assert!(
+                    !device.supports_semaphore_export(),
+                    "lavapipe exports no semaphore"
+                );
+                assert!(
+                    !device.supports_dma_buf_export(),
+                    "a software device exports no DMA-BUF, whatever /dev/udmabuf permits"
+                );
+                assert!(
+                    device
+                        .drm_modifier_table()
+                        .rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888)
+                        .is_empty(),
+                    "a device that exports no DMA-BUF takes no EGL modifier table"
+                );
+            }
+            unexpected => panic!("no expectation named {unexpected:?}"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn rerun_expecting_the_selected_device(
+        test_path: &str,
+        vulkan_driver_files: &[std::path::PathBuf],
+        expected_device: &str,
+    ) {
+        let vulkan_driver_files =
+            std::env::join_paths(vulkan_driver_files).expect("ICD manifest paths join");
+        let child = crate::core::test_support::rerun_this_test_in_a_child_process_with_environment(
+            test_path,
+            &[
+                ("VK_DRIVER_FILES", vulkan_driver_files.as_os_str()),
+                (
+                    EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE,
+                    std::ffi::OsStr::new(expected_device),
+                ),
+            ],
+        );
+        assert!(
+            child.status.success(),
+            "the child process built on the wrong device or refused: {}\n{}\n{}",
+            child.status,
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr),
+        );
+    }
+
+    /// Lavapipe is listed first, the loader's own type sort aside; the engine
+    /// still builds on the hardware device, which exports DMA-BUF and a
+    /// timeline semaphore.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn with_lavapipe_listed_before_the_nvidia_driver_the_engine_builds_on_the_nvidia_device() {
+        if let Some(expected_device) =
+            std::env::var_os(EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE)
+        {
+            the_device_this_process_builds_on_is_the_expected_one(&expected_device);
+            return;
+        }
+        let lavapipe_manifest =
+            an_icd_manifest_named("lvp_icd").expect("the rig carries Mesa's lavapipe");
+        let nvidia_manifest =
+            an_icd_manifest_named("nvidia_icd").expect("the rig carries the NVIDIA driver");
+
+        rerun_expecting_the_selected_device(
+            "vulkan::rhi::vulkan_device::tests::with_lavapipe_listed_before_the_nvidia_driver_the_engine_builds_on_the_nvidia_device",
+            &[lavapipe_manifest, nvidia_manifest],
+            "the-hardware-device",
+        );
+    }
+
+    /// With lavapipe the only driver the engine builds on it, and the
+    /// snapshot says software, no DMA-BUF and no semaphore export.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn with_only_lavapipe_visible_the_engine_builds_on_a_software_device_that_exports_neither_dma_buf_nor_a_semaphore()
+     {
+        if let Some(expected_device) =
+            std::env::var_os(EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE)
+        {
+            the_device_this_process_builds_on_is_the_expected_one(&expected_device);
+            return;
+        }
+        let lavapipe_manifest =
+            an_icd_manifest_named("lvp_icd").expect("the rig carries Mesa's lavapipe");
+
+        rerun_expecting_the_selected_device(
+            "vulkan::rhi::vulkan_device::tests::with_only_lavapipe_visible_the_engine_builds_on_a_software_device_that_exports_neither_dma_buf_nor_a_semaphore",
+            &[lavapipe_manifest],
+            "the-software-device",
         );
     }
 }

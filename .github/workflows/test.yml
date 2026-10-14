@@ -668,6 +668,13 @@ jobs:
             core::context::surface_store::fd_ownership_tests::a_buffer_lookup_that_cannot_import_closes_the_planes_it_received \
             core::rhi::external_handle::tests::a_refused_opaque_fd_import_closes_every_plane_fd_it_was_handed \
             vulkan::rhi::vulkan_device::tests::a_file_descriptor_that_is_not_a_dma_buf_is_refused_and_closed \
+            vulkan::rhi::vulkan_device_selection::tests::a_cpu_type_device_goes_last_and_every_other_keeps_the_loaders_order \
+            vulkan::rhi::vulkan_device_selection::tests::the_first_device_the_engine_can_build_on_wins_and_a_cpu_type_device_is_last \
+            vulkan::rhi::vulkan_device_selection::tests::a_hardware_device_that_accepts_is_taken_before_the_software_device_is_tried \
+            vulkan::rhi::vulkan_device_selection::tests::a_device_passed_over_is_named_with_its_reason \
+            vulkan::rhi::vulkan_device_selection::tests::every_candidate_refused_refuses_naming_each_pass_over_and_the_loaders_guidance \
+            vulkan::rhi::vulkan_instance::tests::the_guidance_a_user_reads_never_names_a_third_party_package_manager \
+            vulkan::rhi::vulkan_instance::tests::the_requested_instance_api_version_clears_the_promoted_entry_point_floor \
             core::context::surface_store::plane_fd_ownership_tests::a_reply_announcing_no_edges_keeps_every_fd_as_a_plane \
             core::context::surface_store::plane_fd_ownership_tests::each_announced_edge_is_peeled_off_the_end_and_closed \
             core::context::surface_store::plane_fd_ownership_tests::a_reply_shorter_than_its_flags_promise_is_refused_and_closes_what_it_carried \
