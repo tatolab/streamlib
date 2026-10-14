@@ -15,6 +15,19 @@ pub(crate) struct VulkanPhysicalDeviceCandidate {
     pub(crate) physical_device: vk::PhysicalDevice,
     pub(crate) device_name: String,
     pub(crate) device_type: vk::PhysicalDeviceType,
+    /// `vkGetPhysicalDeviceProperties`, read once at enumeration.
+    pub(crate) device_properties: vk::PhysicalDeviceProperties,
+}
+
+impl std::fmt::Display for VulkanPhysicalDeviceCandidate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} (type: {})",
+            self.device_name,
+            vulkan_physical_device_type_name(self.device_type)
+        )
+    }
 }
 
 /// Why the engine could not build its logical device on a candidate.
@@ -22,9 +35,8 @@ pub(crate) struct VulkanPhysicalDeviceCandidate {
 pub(crate) enum VulkanDevicePassOverReason {
     /// No queue family serves graphics.
     NoGraphicsQueueFamily,
-    /// `vkCreateDevice` refused — a feature or extension the engine
-    /// requests is absent.
-    LogicalDeviceCreationRefused { vulkan_error: String },
+    /// `vkCreateDevice` returned an error.
+    LogicalDeviceCreationRefused { vulkan_error: vk::ErrorCode },
     /// A sentinel allocation failed in an export flavour the device
     /// advertises.
     ExportPoolSentinelAllocationFailed { refusal: String },
@@ -36,10 +48,19 @@ impl std::fmt::Display for VulkanDevicePassOverReason {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoGraphicsQueueFamily => write!(formatter, "it has no graphics queue family"),
-            Self::LogicalDeviceCreationRefused { vulkan_error } => write!(
-                formatter,
-                "vkCreateDevice refused a feature or extension the engine requests: {vulkan_error}"
-            ),
+            Self::LogicalDeviceCreationRefused { vulkan_error }
+                if *vulkan_error == vk::ErrorCode::FEATURE_NOT_PRESENT
+                    || *vulkan_error == vk::ErrorCode::EXTENSION_NOT_PRESENT =>
+            {
+                write!(
+                    formatter,
+                    "vkCreateDevice refused a feature or extension the engine requests: \
+                     {vulkan_error}"
+                )
+            }
+            Self::LogicalDeviceCreationRefused { vulkan_error } => {
+                write!(formatter, "vkCreateDevice failed: {vulkan_error}")
+            }
             Self::ExportPoolSentinelAllocationFailed { refusal } => write!(
                 formatter,
                 "a sentinel allocation failed in an export flavour the device advertises: {refusal}"
@@ -60,22 +81,15 @@ impl From<Error> for VulkanDevicePassOverReason {
 }
 
 /// A candidate the engine passed over, named with its reason.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct VulkanDevicePassedOver {
-    pub(crate) device_name: String,
-    pub(crate) device_type: vk::PhysicalDeviceType,
+    pub(crate) candidate: VulkanPhysicalDeviceCandidate,
     pub(crate) reason: VulkanDevicePassOverReason,
 }
 
 impl std::fmt::Display for VulkanDevicePassedOver {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "{} (type: {}): {}",
-            self.device_name,
-            vulkan_physical_device_type_name(self.device_type),
-            self.reason
-        )
+        write!(formatter, "{}: {}", self.candidate, self.reason)
     }
 }
 
@@ -88,7 +102,9 @@ pub(crate) struct VulkanDeviceSelection<BuiltDevice> {
 }
 
 /// The name the log gives a physical-device type.
-pub(crate) fn vulkan_physical_device_type_name(device_type: vk::PhysicalDeviceType) -> &'static str {
+pub(crate) fn vulkan_physical_device_type_name(
+    device_type: vk::PhysicalDeviceType,
+) -> &'static str {
     match device_type {
         vk::PhysicalDeviceType::DISCRETE_GPU => "Discrete GPU",
         vk::PhysicalDeviceType::INTEGRATED_GPU => "Integrated GPU",
@@ -101,23 +117,27 @@ pub(crate) fn vulkan_physical_device_type_name(device_type: vk::PhysicalDeviceTy
 /// The loader's order with every CPU-type device moved last, otherwise
 /// untouched. The loader sorts by type only from 1.3.204; this pins the
 /// software device last whatever loader runs.
-pub(crate) fn candidates_in_the_loaders_order_with_cpu_type_last(
+fn candidates_in_the_loaders_order_with_cpu_type_last(
     mut candidates: Vec<VulkanPhysicalDeviceCandidate>,
 ) -> Vec<VulkanPhysicalDeviceCandidate> {
     candidates.sort_by_key(|candidate| candidate.device_type == vk::PhysicalDeviceType::CPU);
     candidates
 }
 
-/// Build on each candidate in turn and keep the first that accepts. Refuses
-/// naming each pass-over when none accepts.
+/// Build on each candidate, in the loader's order with CPU-type devices last,
+/// and keep the first that accepts. Refuses naming each pass-over when none
+/// accepts.
 pub(crate) fn build_on_the_first_candidate_that_accepts<BuiltDevice>(
-    candidates: Vec<VulkanPhysicalDeviceCandidate>,
+    candidates_in_the_loaders_order: Vec<VulkanPhysicalDeviceCandidate>,
     mut build_on_candidate: impl FnMut(
         &VulkanPhysicalDeviceCandidate,
-    ) -> std::result::Result<BuiltDevice, VulkanDevicePassOverReason>,
+    )
+        -> std::result::Result<BuiltDevice, VulkanDevicePassOverReason>,
 ) -> Result<VulkanDeviceSelection<BuiltDevice>> {
     let mut passed_over_candidates = Vec::new();
-    for candidate in candidates {
+    for candidate in
+        candidates_in_the_loaders_order_with_cpu_type_last(candidates_in_the_loaders_order)
+    {
         match build_on_candidate(&candidate) {
             Ok(built_device) => {
                 return Ok(VulkanDeviceSelection {
@@ -126,11 +146,9 @@ pub(crate) fn build_on_the_first_candidate_that_accepts<BuiltDevice>(
                     passed_over_candidates,
                 });
             }
-            Err(reason) => passed_over_candidates.push(VulkanDevicePassedOver {
-                device_name: candidate.device_name,
-                device_type: candidate.device_type,
-                reason,
-            }),
+            Err(reason) => {
+                passed_over_candidates.push(VulkanDevicePassedOver { candidate, reason })
+            }
         }
     }
     let every_pass_over = passed_over_candidates
@@ -156,9 +174,8 @@ impl<BuiltDevice> VulkanDeviceSelection<BuiltDevice> {
         }
         tracing::info!(
             passed_over_device_count = self.passed_over_candidates.len(),
-            "Selected Vulkan device: {} (type: {})",
-            self.chosen_candidate.device_name,
-            vulkan_physical_device_type_name(self.chosen_candidate.device_type)
+            "Selected Vulkan device: {}",
+            self.chosen_candidate
         );
         self.built_device
     }
@@ -177,6 +194,7 @@ mod tests {
             physical_device: vk::PhysicalDevice::null(),
             device_name: device_name.to_owned(),
             device_type,
+            device_properties: vk::PhysicalDeviceProperties::default(),
         }
     }
 
@@ -206,57 +224,62 @@ mod tests {
         );
     }
 
-    /// A fake builder refuses the hardware device for each named reason in
-    /// turn; the software device behind it is taken and the refusal is
-    /// reported with the device that gave it.
+    /// The loader lists the software device first. A fake builder refuses the
+    /// hardware device for each named reason in turn; the software device
+    /// behind it is taken and the refusal is reported with the device that
+    /// gave it.
     #[test]
     fn the_first_device_the_engine_can_build_on_wins_and_a_cpu_type_device_is_last() {
         for refusal in [
             VulkanDevicePassOverReason::LogicalDeviceCreationRefused {
-                vulkan_error: "ERROR_FEATURE_NOT_PRESENT".into(),
+                vulkan_error: vk::ErrorCode::FEATURE_NOT_PRESENT,
             },
             VulkanDevicePassOverReason::NoGraphicsQueueFamily,
             VulkanDevicePassOverReason::ExportPoolSentinelAllocationFailed {
                 refusal: "OUT_OF_DEVICE_MEMORY on opaque_fd_device_local".into(),
             },
         ] {
-            let candidates = candidates_in_the_loaders_order_with_cpu_type_last(vec![
+            let candidates_in_the_loaders_order = vec![
                 candidate("llvmpipe", vk::PhysicalDeviceType::CPU),
                 candidate("RTX 3090", vk::PhysicalDeviceType::DISCRETE_GPU),
-            ]);
+            ];
             let mut attempted = Vec::new();
-            let selection = build_on_the_first_candidate_that_accepts(candidates, |candidate| {
-                attempted.push(candidate.device_name.clone());
-                if candidate.device_type == vk::PhysicalDeviceType::CPU {
-                    Ok(candidate.device_name.clone())
-                } else {
-                    Err(refusal.clone())
-                }
-            })
+            let selection = build_on_the_first_candidate_that_accepts(
+                candidates_in_the_loaders_order,
+                |candidate| {
+                    attempted.push(candidate.device_name.clone());
+                    if candidate.device_type == vk::PhysicalDeviceType::CPU {
+                        Ok(candidate.device_name.clone())
+                    } else {
+                        Err(refusal.clone())
+                    }
+                },
+            )
             .expect("the software device accepts");
 
             assert_eq!(attempted, ["RTX 3090", "llvmpipe"]);
             assert_eq!(selection.built_device, "llvmpipe");
             assert_eq!(selection.chosen_candidate.device_name, "llvmpipe");
+            let [passed_over] = selection.passed_over_candidates.as_slice() else {
+                panic!("exactly the hardware device is passed over");
+            };
+            assert_eq!(passed_over.candidate.device_name, "RTX 3090");
             assert_eq!(
-                selection.passed_over_candidates,
-                [VulkanDevicePassedOver {
-                    device_name: "RTX 3090".into(),
-                    device_type: vk::PhysicalDeviceType::DISCRETE_GPU,
-                    reason: refusal.clone(),
-                }]
+                passed_over.candidate.device_type,
+                vk::PhysicalDeviceType::DISCRETE_GPU
             );
+            assert_eq!(passed_over.reason, refusal);
         }
     }
 
-    /// The software device sits behind the hardware one and is never built
-    /// on when the hardware one accepts.
+    /// The software device, listed first, sits behind the hardware one and is
+    /// never built on when the hardware one accepts.
     #[test]
     fn a_hardware_device_that_accepts_is_taken_before_the_software_device_is_tried() {
-        let candidates = candidates_in_the_loaders_order_with_cpu_type_last(vec![
+        let candidates = vec![
             candidate("llvmpipe", vk::PhysicalDeviceType::CPU),
             candidate("RTX 3090", vk::PhysicalDeviceType::DISCRETE_GPU),
-        ]);
+        ];
         let mut attempted = Vec::new();
         let selection = build_on_the_first_candidate_that_accepts(candidates, |candidate| {
             attempted.push(candidate.device_name.clone());
@@ -271,17 +294,30 @@ mod tests {
 
     #[test]
     fn a_device_passed_over_is_named_with_its_reason() {
-        let passed_over = VulkanDevicePassedOver {
-            device_name: "RTX 3090".into(),
-            device_type: vk::PhysicalDeviceType::DISCRETE_GPU,
-            reason: VulkanDevicePassOverReason::LogicalDeviceCreationRefused {
-                vulkan_error: "ERROR_FEATURE_NOT_PRESENT".into(),
-            },
+        let passed_over_for = |vulkan_error| VulkanDevicePassedOver {
+            candidate: candidate("RTX 3090", vk::PhysicalDeviceType::DISCRETE_GPU),
+            reason: VulkanDevicePassOverReason::LogicalDeviceCreationRefused { vulkan_error },
         };
 
-        let named = passed_over.to_string();
-        assert!(named.starts_with("RTX 3090 (type: Discrete GPU): "), "{named}");
-        assert!(named.contains("ERROR_FEATURE_NOT_PRESENT"), "{named}");
+        let missing_feature = passed_over_for(vk::ErrorCode::FEATURE_NOT_PRESENT).to_string();
+        assert!(
+            missing_feature.starts_with("RTX 3090 (type: Discrete GPU): "),
+            "{missing_feature}"
+        );
+        assert!(
+            missing_feature.contains("refused a feature or extension"),
+            "{missing_feature}"
+        );
+
+        let broken_driver = passed_over_for(vk::ErrorCode::INITIALIZATION_FAILED).to_string();
+        assert!(
+            broken_driver.contains("vkCreateDevice failed: "),
+            "{broken_driver}"
+        );
+        assert!(
+            !broken_driver.contains("feature"),
+            "a failure that is not a missing feature must not name one: {broken_driver}"
+        );
     }
 
     /// With every candidate refused the start is refused, naming each
@@ -307,10 +343,16 @@ mod tests {
         let Error::GpuError(message) = refusal else {
             panic!("the refusal must be the engine's typed GPU error, got {refusal:?}");
         };
-        assert!(message.contains("RTX 3090 (type: Discrete GPU)"), "{message}");
+        assert!(
+            message.contains("RTX 3090 (type: Discrete GPU)"),
+            "{message}"
+        );
         assert!(message.contains("allocator refused"), "{message}");
         assert!(message.contains("llvmpipe (type: CPU)"), "{message}");
         assert!(message.contains("no graphics queue family"), "{message}");
-        assert!(message.contains(NO_USABLE_VULKAN_DRIVER_GUIDANCE), "{message}");
+        assert!(
+            message.contains(NO_USABLE_VULKAN_DRIVER_GUIDANCE),
+            "{message}"
+        );
     }
 }

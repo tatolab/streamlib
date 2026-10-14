@@ -21,6 +21,10 @@ use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
 use super::VulkanTextureLike;
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
+use super::vulkan_device_selection::{
+    VulkanDevicePassOverReason, VulkanPhysicalDeviceCandidate,
+    build_on_the_first_candidate_that_accepts,
+};
 use super::vulkan_frame_allocation_device_memory_budget::{
     DeviceMemoryAllocationCountReading, DeviceMemoryBudgetAdmission, FrameAllocationBudgetReading,
     FrameAllocationDeviceMemoryBudgetGate, FrameAllocationDeviceMemoryReading,
@@ -31,6 +35,7 @@ use super::vulkan_frame_allocation_device_memory_budget::{
 use super::vulkan_frame_allocation_device_memory_budget::{
     DeviceMemoryHeapBudgetReading, heap_budget_without_the_memory_budget_extension,
 };
+use super::vulkan_instance::HostVulkanInstance;
 use super::vulkan_kernel_capability_refusal::{
     VulkanSubgroupOperationSupport, ray_tracing_tier_absent_refusal,
 };
@@ -42,11 +47,6 @@ use super::vulkan_queue_submission_completion::{
     HostVulkanQueueSubmissionCompletionTimelines, HostVulkanQueueSubmissionsSnapshot,
     HostVulkanSubmissionQueue,
 };
-use super::vulkan_device_selection::{
-    VulkanDevicePassOverReason, VulkanPhysicalDeviceCandidate,
-    build_on_the_first_candidate_that_accepts, candidates_in_the_loaders_order_with_cpu_type_last,
-};
-use super::vulkan_instance::HostVulkanInstance;
 use super::vulkan_validation_messenger::VulkanValidationMessenger;
 use super::{
     HostMarker, HostVulkanTexture, VulkanCommandQueue, VulkanRhiDevice,
@@ -550,30 +550,26 @@ impl Drop for ExportPoolSentinel {
 /// A logical device destroyed on drop unless the built device takes it, so an
 /// early return while a candidate is being built leaks no `VkDevice`.
 struct VulkanLogicalDeviceDestroyedUnlessTaken {
-    device: Option<vulkanalia::Device>,
+    device: vulkanalia::Device,
 }
 
 impl VulkanLogicalDeviceDestroyedUnlessTaken {
     fn device(&self) -> &vulkanalia::Device {
-        self.device
-            .as_ref()
-            .expect("the logical device is held until it is taken")
+        &self.device
     }
 
-    fn take_the_logical_device(mut self) -> vulkanalia::Device {
-        self.device
-            .take()
-            .expect("the logical device is held until it is taken")
+    /// Hand the device on without destroying it; `vulkanalia::Device` is a
+    /// handle plus its command table and destroys nothing on drop.
+    fn take_the_logical_device(self) -> vulkanalia::Device {
+        std::mem::ManuallyDrop::new(self).device.clone()
     }
 }
 
 impl Drop for VulkanLogicalDeviceDestroyedUnlessTaken {
     fn drop(&mut self) {
-        if let Some(device) = self.device.take() {
-            // SAFETY: every object created on the device was a local of the
-            // refused build and has already dropped.
-            unsafe { device.destroy_device(None) };
-        }
+        // SAFETY: every object created on the device was a local of the
+        // refused build and has already dropped.
+        unsafe { self.device.destroy_device(None) };
     }
 }
 
@@ -652,14 +648,14 @@ impl HostVulkanDevice {
                         .to_string_lossy()
                         .into_owned(),
                     device_type: properties.device_type,
+                    device_properties: properties,
                 }
             })
             .collect();
 
-        let selection = build_on_the_first_candidate_that_accepts(
-            candidates_in_the_loaders_order_with_cpu_type_last(candidates),
-            |candidate| Self::build_on_physical_device(&vulkan_instance, candidate),
-        )?;
+        let selection = build_on_the_first_candidate_that_accepts(candidates, |candidate| {
+            Self::build_on_physical_device(&vulkan_instance, candidate)
+        })?;
         Ok(selection.log_the_chosen_device_beside_every_pass_over())
     }
 
@@ -674,7 +670,7 @@ impl HostVulkanDevice {
         let physical_device = candidate.physical_device;
         let device_is_software = candidate.device_type == vk::PhysicalDeviceType::CPU;
 
-        let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
+        let device_props = candidate.device_properties;
         let device_name = candidate.device_name.clone();
         let min_storage_buffer_offset_alignment =
             device_props.limits.min_storage_buffer_offset_alignment;
@@ -733,7 +729,6 @@ impl HostVulkanDevice {
         // around `[u8; 16]`); use the upstream `From<ByteArray<N>> for [u8; N]`
         // impl to land in plain-array shape.
         let physical_device_uuid: [u8; 16] = id_props.device_uuid.into();
-
 
         // 6. Find graphics queue family
         let queue_families =
@@ -1204,10 +1199,8 @@ impl HostVulkanDevice {
         // DMA-BUF on a software device exists only where the process may open
         // `/dev/udmabuf`, a container's permissions; it is absent by rule.
         #[cfg(target_os = "linux")]
-        let supports_dma_buf_export = has_external_memory
-            && has_external_memory_dma_buf
-            && has_image_drm_format_modifier
-            && !device_is_software;
+        let supports_dma_buf_export =
+            has_external_memory_dma_buf && has_image_drm_format_modifier && !device_is_software;
         #[cfg(not(target_os = "linux"))]
         let supports_dma_buf_export = false;
 
@@ -1383,12 +1376,10 @@ impl HostVulkanDevice {
         };
 
         let logical_device_destroyed_unless_taken = VulkanLogicalDeviceDestroyedUnlessTaken {
-            device: Some(
-                unsafe { instance.create_device(physical_device, &device_create_info, None) }
-                    .map_err(|e| VulkanDevicePassOverReason::LogicalDeviceCreationRefused {
-                        vulkan_error: e.to_string(),
-                    })?,
-            ),
+            device: unsafe { instance.create_device(physical_device, &device_create_info, None) }
+                .map_err(|vulkan_error| {
+                VulkanDevicePassOverReason::LogicalDeviceCreationRefused { vulkan_error }
+            })?,
         };
         let device = logical_device_destroyed_unless_taken.device();
 
@@ -1621,12 +1612,8 @@ impl HostVulkanDevice {
             // BGRA8_UNORM in Vulkan = ARGB8888 in DRM.
             let bgra_modifiers =
                 drm_modifier_table.rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
-            match Self::create_dma_buf_pools(
-                &allocator,
-                device,
-                &memory_properties,
-                bgra_modifiers,
-            ) {
+            match Self::create_dma_buf_pools(&allocator, device, &memory_properties, bgra_modifiers)
+            {
                 Ok((bp, ip, tp, bi, ii, ti)) => (Some(bp), Some(ip), tp, Some(bi), Some(ii), ti),
                 Err(e) => {
                     tracing::warn!(
@@ -1760,11 +1747,12 @@ impl HostVulkanDevice {
         #[cfg(target_os = "linux")]
         let device = {
             let mut device = Arc::new(device);
-            let sentinels = Self::allocate_one_sentinel_per_export_pool(&device).map_err(
-                |refusal| VulkanDevicePassOverReason::ExportPoolSentinelAllocationFailed {
-                    refusal: refusal.to_string(),
-                },
-            )?;
+            let sentinels =
+                Self::allocate_one_sentinel_per_export_pool(&device).map_err(|refusal| {
+                    VulkanDevicePassOverReason::ExportPoolSentinelAllocationFailed {
+                        refusal: refusal.to_string(),
+                    }
+                })?;
             // Sentinels hold the allocator, not `Arc<HostVulkanDevice>`
             // clones, so the Arc strong count is still 1 here and
             // `get_mut` succeeds.
@@ -5913,6 +5901,34 @@ mod tests {
     const EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE: &str =
         "STREAMLIB_TEST_EXPECTED_SELECTED_VULKAN_DEVICE";
 
+    /// The device a device-selection test's child process must build on.
+    #[cfg(target_os = "linux")]
+    #[derive(Clone, Copy)]
+    enum ExpectedSelectedVulkanDevice {
+        /// The hardware device, though the loader lists lavapipe first.
+        HardwareListedAfterLavapipe,
+        /// Lavapipe, the only device visible.
+        LavapipeAlone,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl ExpectedSelectedVulkanDevice {
+        fn as_environment_value(self) -> &'static str {
+            match self {
+                Self::HardwareListedAfterLavapipe => "hardware-listed-after-lavapipe",
+                Self::LavapipeAlone => "lavapipe-alone",
+            }
+        }
+
+        fn from_this_process_environment() -> Option<Self> {
+            let value = std::env::var_os(EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE)?;
+            [Self::HardwareListedAfterLavapipe, Self::LavapipeAlone]
+                .into_iter()
+                .find(|expected| value == expected.as_environment_value())
+                .or_else(|| panic!("no expected device is named {value:?}"))
+        }
+    }
+
     /// The ICD manifest whose file name starts with `manifest_file_name_prefix`,
     /// from the loader variables this process carries, else the loader's
     /// system search directories.
@@ -5945,11 +5961,32 @@ mod tests {
     /// In the child: build the device under the `VK_DRIVER_FILES` the parent
     /// set and hold it to what the parent expects of it.
     #[cfg(target_os = "linux")]
-    fn the_device_this_process_builds_on_is_the_expected_one(expected_device: &std::ffi::OsStr) {
+    fn the_device_this_process_builds_on_is_the_expected_one(
+        expected_device: ExpectedSelectedVulkanDevice,
+    ) {
+        if let ExpectedSelectedVulkanDevice::HardwareListedAfterLavapipe = expected_device {
+            let vulkan_instance = HostVulkanInstance::new().expect("the instance creates");
+            let first_listed_device = unsafe {
+                let physical_devices = vulkan_instance
+                    .instance
+                    .enumerate_physical_devices()
+                    .expect("the loader enumerates");
+                vulkan_instance
+                    .instance
+                    .get_physical_device_properties(physical_devices[0])
+            };
+            assert_eq!(
+                first_listed_device.device_type,
+                vk::PhysicalDeviceType::CPU,
+                "the loader must list lavapipe first for this test to prove the engine's own \
+                 CPU-type-last order"
+            );
+        }
+
         let device = HostVulkanDevice::new().expect("a device builds under these driver files");
         let device_name = device.name();
-        match expected_device.to_str() {
-            Some("the-hardware-device") => {
+        match expected_device {
+            ExpectedSelectedVulkanDevice::HardwareListedAfterLavapipe => {
                 assert!(
                     !device.device_is_software(),
                     "the engine built on {device_name}, a software device, with a hardware \
@@ -5964,7 +6001,7 @@ mod tests {
                     "{device_name} exports DMA-BUF"
                 );
             }
-            Some("the-software-device") => {
+            ExpectedSelectedVulkanDevice::LavapipeAlone => {
                 assert!(
                     device.device_is_software(),
                     "{device_name} must report itself software"
@@ -5989,25 +6026,32 @@ mod tests {
                     "a device that exports no DMA-BUF takes no EGL modifier table"
                 );
             }
-            unexpected => panic!("no expectation named {unexpected:?}"),
         }
     }
 
+    /// Re-run `test_path` in a child process that sees only
+    /// `vulkan_driver_files`, in the order the loader enumerates them, and
+    /// expects `expected_device`.
     #[cfg(target_os = "linux")]
     fn rerun_expecting_the_selected_device(
         test_path: &str,
         vulkan_driver_files: &[std::path::PathBuf],
-        expected_device: &str,
+        expected_device: ExpectedSelectedVulkanDevice,
     ) {
         let vulkan_driver_files =
             std::env::join_paths(vulkan_driver_files).expect("ICD manifest paths join");
+        // Both switches off the reordering a loader and Mesa's implicit
+        // device-select layer apply, so the engine sees the drivers in the
+        // order the loader enumerates them: the reverse of the list.
         let child = crate::core::test_support::rerun_this_test_in_a_child_process_with_environment(
             test_path,
             &[
                 ("VK_DRIVER_FILES", vulkan_driver_files.as_os_str()),
+                ("VK_LOADER_DISABLE_SELECT", std::ffi::OsStr::new("1")),
+                ("NODEVICE_SELECT", std::ffi::OsStr::new("1")),
                 (
                     EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE,
-                    std::ffi::OsStr::new(expected_device),
+                    std::ffi::OsStr::new(expected_device.as_environment_value()),
                 ),
             ],
         );
@@ -6020,9 +6064,9 @@ mod tests {
         );
     }
 
-    /// Lavapipe is listed first, the loader's own type sort aside; the engine
-    /// still builds on the hardware device, which exports DMA-BUF and a
-    /// timeline semaphore.
+    /// The loader lists lavapipe first, its own sorting switched off; the
+    /// engine still builds on the hardware device, which exports DMA-BUF and
+    /// a timeline semaphore.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -6030,10 +6074,9 @@ mod tests {
     )]
     #[test]
     fn with_lavapipe_listed_before_the_nvidia_driver_the_engine_builds_on_the_nvidia_device() {
-        if let Some(expected_device) =
-            std::env::var_os(EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE)
+        if let Some(expected_device) = ExpectedSelectedVulkanDevice::from_this_process_environment()
         {
-            the_device_this_process_builds_on_is_the_expected_one(&expected_device);
+            the_device_this_process_builds_on_is_the_expected_one(expected_device);
             return;
         }
         let lavapipe_manifest =
@@ -6043,8 +6086,8 @@ mod tests {
 
         rerun_expecting_the_selected_device(
             "vulkan::rhi::vulkan_device::tests::with_lavapipe_listed_before_the_nvidia_driver_the_engine_builds_on_the_nvidia_device",
-            &[lavapipe_manifest, nvidia_manifest],
-            "the-hardware-device",
+            &[nvidia_manifest, lavapipe_manifest],
+            ExpectedSelectedVulkanDevice::HardwareListedAfterLavapipe,
         );
     }
 
@@ -6058,10 +6101,9 @@ mod tests {
     #[test]
     fn with_only_lavapipe_visible_the_engine_builds_on_a_software_device_that_exports_neither_dma_buf_nor_a_semaphore()
      {
-        if let Some(expected_device) =
-            std::env::var_os(EXPECTED_SELECTED_VULKAN_DEVICE_ENVIRONMENT_VARIABLE)
+        if let Some(expected_device) = ExpectedSelectedVulkanDevice::from_this_process_environment()
         {
-            the_device_this_process_builds_on_is_the_expected_one(&expected_device);
+            the_device_this_process_builds_on_is_the_expected_one(expected_device);
             return;
         }
         let lavapipe_manifest =
@@ -6070,7 +6112,7 @@ mod tests {
         rerun_expecting_the_selected_device(
             "vulkan::rhi::vulkan_device::tests::with_only_lavapipe_visible_the_engine_builds_on_a_software_device_that_exports_neither_dma_buf_nor_a_semaphore",
             &[lavapipe_manifest],
-            "the-software-device",
+            ExpectedSelectedVulkanDevice::LavapipeAlone,
         );
     }
 }
