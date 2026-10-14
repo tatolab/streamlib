@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.4](https://github.com/tatolab/streamlib/compare/v0.46.3...v0.46.4) (2026-10-14)
+
+
+### Features
+
+* **engine:** build the GpuContext on the first device that accepts, CPU-type last, naming every pass-over ([#2763](https://github.com/tatolab/streamlib/issues/2763)) ([771af10](https://github.com/tatolab/streamlib/commit/771af1064b16e9045eae881554bbf9291636816e))
+
 ## [0.46.3](https://github.com/tatolab/streamlib/compare/v0.46.2...v0.46.3) (2026-10-14)
 
 
