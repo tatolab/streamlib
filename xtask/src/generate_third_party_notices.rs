@@ -431,7 +431,7 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         upstream_repository_url: "https://fuchsia.googlesource.com/fuchsia",
         // Mesa's `src/vulkan/runtime/radix_sort/LICENSE`, which lavapipe's
         // acceleration-structure build compiles in.
-        license_summary: "BSD-3-Clause",
+        license_summary: "BSD-2-Clause",
         notice_source: NoticeSource::VendoredLicenseFile {
             path_relative_to_workspace_root: "vendor/bundled-vulkan-driver-notices/Fuchsia-radix-sort/LICENSE",
         },

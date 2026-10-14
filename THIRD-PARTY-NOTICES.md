@@ -15235,7 +15235,7 @@ The functions listed in this file are modified versions of the ones
 from the Berkeley SoftFloat 3e Library.
 ````
 
-### Fuchsia radix sort (BSD-3-Clause)
+### Fuchsia radix sort (BSD-2-Clause)
 
 Upstream: <https://fuchsia.googlesource.com/fuchsia>
 
