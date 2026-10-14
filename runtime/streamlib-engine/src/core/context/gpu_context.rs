@@ -3258,10 +3258,10 @@ impl GpuContext {
     /// exposing any Vulkan.
     ///
     /// Only a DMA-BUF-flavoured allocation can answer — pixel-buffer pool
-    /// buffers, which are allocated that way. An OPAQUE_FD allocation
-    /// has no DMA-BUF export path under VMA's per-pool memory
-    /// configuration (and none at all on NVIDIA), so this fails rather
-    /// than returning a handle the importer cannot use.
+    /// buffers on a device that exports DMA-BUF. An OPAQUE_FD allocation,
+    /// which is what a pool buffer is on a device that does not, has no
+    /// DMA-BUF export path, so this is refused by name rather than returning
+    /// a handle the importer cannot use.
     #[cfg(target_os = "linux")]
     pub fn export_pixel_buffer_dma_buf_fd(
         &self,

@@ -4867,6 +4867,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
         let source =
             crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 4096)
                 .expect("source buffer allocation failed");
@@ -4952,6 +4959,13 @@ mod tests {
             tracing::warn!("skipping — no Vulkan device available");
             return;
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
         let source =
             crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 4096)
                 .expect("source buffer allocation failed");

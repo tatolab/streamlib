@@ -2029,6 +2029,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
 
         let source =
             crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 4096)
@@ -2272,6 +2279,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
         let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
@@ -2294,6 +2308,13 @@ mod tests {
                 return None;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return None;
+        }
         let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
         Some(HostVulkanTexture::new(&device, &desc).expect("texture creation failed"))
     }
@@ -2853,6 +2874,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Rgba8Unorm)
             .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);

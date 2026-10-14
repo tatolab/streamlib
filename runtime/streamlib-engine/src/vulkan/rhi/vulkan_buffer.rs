@@ -1702,6 +1702,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
 
         let buf = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
             .expect("buffer creation failed");
@@ -2174,6 +2181,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
 
         // Create source buffer and write a known pattern
         let width = 64u32;
@@ -2239,6 +2253,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
 
         let width = 64u32;
         let height = 4u32;
@@ -2447,6 +2468,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
 
         let byte_size: u64 = 8192;
         let src = HostVulkanBuffer::new_storage_buffer_host_visible(&device, byte_size)
@@ -2559,6 +2587,13 @@ mod tests {
                 return;
             }
         };
+        if !device.supports_dma_buf_export() {
+            tracing::warn!(
+                device = %device.name(),
+                "the device exports no DMA-BUF, so this DMA-BUF test skips"
+            );
+            return;
+        }
 
         // Allocate a small source DMA-BUF (4 KB). Its kernel-side
         // backing is one page; asking to import it at 16 MB must
