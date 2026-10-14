@@ -32,7 +32,14 @@ someone asks why a runtime with no GPU still builds a Vulkan device.
 6. **The Linux CI lane runs the engine on the software device.** Rig-only narrows to what a
    runner cannot give: Vulkan Video, DMA-BUF modifiers, CUDA, a real camera, display or audio
    device.
-7. **The adapter crates stay where they are.** The earlier "do they move" item had no driver
+7. **No window on the software device** (owner, 2026-10-13, resolving the change proposal's
+   fork). The bundled lavapipe is built without window-system code so it links only what any
+   Linux has and loads in a bare container; `DisplayWindow` refuses by name on the software
+   device, offscreen rendering is untouched, and a stream there is viewed from outside the
+   runtime — by its URL once the sharing step lands, or by a node reading its frames into a
+   window of its own. The owner's framing: streams are pipelines; a window is the viewer's,
+   not the stream's.
+8. **The adapter crates stay where they are.** The earlier "do they move" item had no driver
    behind it: nothing about optional accelerators touches where an in-process Rust crate
    lives, and only the CUDA adapter ships at all, compiled into the runtime portion.
 
@@ -87,6 +94,11 @@ Checked against the tree on 2026-10-13:
   at the first stream start; a per-node speed warning would be a judgement the engine cannot
   make for a stream it does not know.
 - **An engine dial for device selection.** The Vulkan loader and Mesa already ship one.
+- **A lavapipe built with window-system support.** It links libxcb, its extension libraries
+  and the Wayland client, which a minimal container lacks, so the driver would fail to load
+  exactly where the software device is needed; a window on a driverless desktop is rare and
+  has a named remedy. **Both builds, chosen at start** was rejected with it as roughly
+  doubling the driver bytes.
 - **A separate accelerated distribution.** Already rejected by `one-runtime-per-machine.md`:
   an extra cannot change the runtime's native module.
 

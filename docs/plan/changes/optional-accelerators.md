@@ -108,8 +108,10 @@ Mesa 25.2.8). `E` = `runtime/streamlib-engine/src`, `V` = `E/vulkan/rhi`, `C` =
 
 The entry stands, with two clauses replaced:
 - "Camera capture takes its MMAP path, display presents through the device's own swapchain,
-  …" → "Camera capture takes its MMAP path, [the window clause the decision below settles],
-  …".
+  …" → "Camera capture takes its MMAP path; a window needs a hardware device — the bundled
+  driver carries no window-system code, so `DisplayWindow` refuses by name on the software
+  device, and a stream there is viewed from outside the runtime, by its URL or by a node that
+  reads its frames; …".
 - After "the virtual camera's loopback door takes the host-pointer import tier." add: "A device
   that exports no semaphore — the software device does not — crosses no timeline: a texture
   or staging registration carries none, a processor interpreter waits on none, and every copy
@@ -150,7 +152,7 @@ a tarball without the driver's manifest"; both pointers fold.
   at a pinned tag with a pinned SHA-256 of the tarball, build with
   `-Dvulkan-drivers=swrast -Dgallium-drivers=llvmpipe -Dshared-llvm=disabled`, zstd and
   xmlconfig disabled, no libdrm in the build environment (so no DMA-BUF, no sync file, no
-  `libdrm` `NEEDED`), platforms per the decision below; build the loader from the same
+  `libdrm` `NEEDED`), `-Dplatforms=` (no window system); build the loader from the same
   `VULKAN_LOADER_TAG` the macOS script uses; write `libvulkan.so.1`, `libvulkan_lvp.so` and
   `lvp_icd.x86_64.json` with `library_path` relative. Runs inside the tarball script's
   manylinux step (meson from pip, `llvm-static` and `ninja-build` from dnf) so the driver
@@ -271,24 +273,21 @@ a tarball without the driver's manifest"; both pointers fold.
 - **The size cost is measured, not estimated**: the slice-1 PR records the tarball's growth
   against 19,620,571 bytes.
 
-## [NEEDS DECISION] — a window on the software device
+## Decided in review — a window on the software device (owner, 2026-10-13)
 
 A lavapipe built with window-system support links libxcb, its six extension libraries,
 libX11-xcb, libxshmfence and libwayland-client as `NEEDED`. A minimal container or a headless
 server has none of them, and then the loader cannot open the bundled driver at all: no device,
-every stream refused — in exactly the environments the software device is for. The aligned
-entry's "display presents through the device's own swapchain" assumed otherwise.
-
-- **(a) Build with window-system support.** A window works on a desktop with no hardware
-  driver; a container must install the X11/Wayland client libraries first, or has no device.
-- **(b) Build headless (recommended).** The driver links only libc, libm, libstdc++, libgcc_s,
-  libdl and libpthread, loads anywhere, and `DisplayWindow` refuses by name on the software
-  device, pointing at the vendor driver. The §Graphics clause becomes "a window needs a
-  hardware device: `DisplayWindow` refuses on the software device naming it". Every use the
-  owner named — headless, containers, CI, a Pi — has no window; a desktop with no Vulkan
-  driver is rare (distro desktops ship Mesa's) and already has a named remedy.
-- **(c) Both builds, chosen by `tatolabd` at start** by whether the window-system build loads.
-  Roughly doubles the driver bytes the owner accepted.
+every stream refused — in exactly the environments the software device is for. The owner chose
+the headless build: the driver links only libc, libm, libstdc++, libgcc_s, libdl and
+libpthread and loads anywhere; `DisplayWindow` refuses by name on the software device, pointing
+at the vendor driver; offscreen rendering is untouched. Streams are pipelines, and viewing is
+the viewer's job — by URL once the sharing step lands, or by a node reading the frames into a
+window of its own. The rationale is in the ADR.
+Rejected: a desktop-linked build — a window on a driverless desktop, no device in a bare
+container (owner, 2026-10-13). Rejected: both builds chosen at start — roughly doubles the
+driver bytes (owner, 2026-10-13). A user who wants a window on a GPU-less box points
+`VK_DRIVER_FILES` at their distro's own lavapipe, which carries the window-system code.
 
 ## Tickets
 
