@@ -9,9 +9,37 @@ use crate::core::{Error, Result};
 
 use super::{HostVulkanBuffer, HostVulkanDevice};
 
+/// The memory a Linux pool slot is allocated from on a given device.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinuxPixelBufferPoolSlotMemory {
+    /// The DMA-BUF export pool; the slot crosses as `dma_buf`.
+    DmaBufExportable,
+    /// The OPAQUE_FD host-visible export pool; the slot crosses as `opaque_fd`.
+    OpaqueFdExportable,
+    /// A plain host-visible allocation that no process boundary can carry; the
+    /// slot's export refusals name why.
+    HostVisibleInThisProcessOnly,
+}
+
+/// Which memory a Linux pool slot takes, from what the device can export.
+#[cfg(target_os = "linux")]
+fn linux_pixel_buffer_pool_slot_memory_for_device(
+    device_supports_dma_buf_export: bool,
+    device_has_opaque_fd_host_visible_export_pool: bool,
+) -> LinuxPixelBufferPoolSlotMemory {
+    if device_supports_dma_buf_export {
+        LinuxPixelBufferPoolSlotMemory::DmaBufExportable
+    } else if device_has_opaque_fd_host_visible_export_pool {
+        LinuxPixelBufferPoolSlotMemory::OpaqueFdExportable
+    } else {
+        LinuxPixelBufferPoolSlotMemory::HostVisibleInThisProcessOnly
+    }
+}
+
 /// One pool slot's memory in the flavour the surface-share wire carries: on
-/// Linux a DMA-BUF-exportable allocation where the device exports DMA-BUF and
-/// an OPAQUE_FD-exportable one where it does not, a private IOSurface on macOS.
+/// Linux the flavour [`linux_pixel_buffer_pool_slot_memory_for_device`] picks,
+/// a private IOSurface on macOS.
 fn allocate_pool_slot_buffer(
     device: &Arc<HostVulkanDevice>,
     width: u32,
@@ -33,10 +61,17 @@ fn allocate_pool_slot_buffer(
     {
         let _ = format;
         let slot_byte_size = (width as u64) * (height as u64) * (bytes_per_pixel as u64);
-        if device.supports_dma_buf_export() {
-            HostVulkanBuffer::new(device, slot_byte_size)
-        } else {
-            HostVulkanBuffer::new_opaque_fd_export(device, slot_byte_size)
+        match linux_pixel_buffer_pool_slot_memory_for_device(
+            device.supports_dma_buf_export(),
+            device.opaque_fd_buffer_pool().is_some(),
+        ) {
+            LinuxPixelBufferPoolSlotMemory::DmaBufExportable
+            | LinuxPixelBufferPoolSlotMemory::HostVisibleInThisProcessOnly => {
+                HostVulkanBuffer::new(device, slot_byte_size)
+            }
+            LinuxPixelBufferPoolSlotMemory::OpaqueFdExportable => {
+                HostVulkanBuffer::new_opaque_fd_export(device, slot_byte_size)
+            }
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -231,6 +266,28 @@ unsafe impl Sync for VulkanPixelBufferPool {}
 mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_pool_slot_takes_dma_buf_then_opaque_fd_then_in_process_host_visible_memory() {
+        use LinuxPixelBufferPoolSlotMemory::*;
+        assert_eq!(
+            linux_pixel_buffer_pool_slot_memory_for_device(true, true),
+            DmaBufExportable
+        );
+        assert_eq!(
+            linux_pixel_buffer_pool_slot_memory_for_device(true, false),
+            DmaBufExportable
+        );
+        assert_eq!(
+            linux_pixel_buffer_pool_slot_memory_for_device(false, true),
+            OpaqueFdExportable
+        );
+        assert_eq!(
+            linux_pixel_buffer_pool_slot_memory_for_device(false, false),
+            HostVisibleInThisProcessOnly
+        );
+    }
 
     #[cfg_attr(
         not(feature = "hardware-tests"),

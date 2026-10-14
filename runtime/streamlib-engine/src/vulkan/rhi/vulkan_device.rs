@@ -4753,7 +4753,7 @@ impl HostVulkanDevice {
         self.live_allocation_count.fetch_sub(1, Ordering::Relaxed);
     }
 
-    /// Map imported device memory for CPU access (DMA-BUF import path only).
+    /// Map imported device memory for CPU access (DMA-BUF and OPAQUE_FD imports).
     pub fn map_imported_memory(
         &self,
         memory: vk::DeviceMemory,
@@ -4772,8 +4772,8 @@ impl HostVulkanDevice {
         unsafe { self.device.unmap_memory(memory) };
     }
 
-    /// Live raw `vkAllocateMemory` allocations: DMA-BUF and host-pointer
-    /// imports, and IOSurface-backed image memory.
+    /// Live raw `vkAllocateMemory` allocations: DMA-BUF, OPAQUE_FD and
+    /// host-pointer imports, and IOSurface-backed image memory.
     pub fn live_import_allocation_count(&self) -> usize {
         self.live_allocation_count.load(Ordering::Relaxed)
     }
