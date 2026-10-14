@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.5](https://github.com/tatolab/streamlib/compare/v0.46.4...v0.46.5) (2026-10-14)
+
+
+### Features
+
+* **engine:** DMA-BUF is a device capability — the software device's pooled frames cross to processor interpreters as OPAQUE_FD ([#2766](https://github.com/tatolab/streamlib/issues/2766)) ([de3b3b4](https://github.com/tatolab/streamlib/commit/de3b3b4c60df6bfcf4300072e0a7c0ec486dec5d))
+
 ## [0.46.4](https://github.com/tatolab/streamlib/compare/v0.46.3...v0.46.4) (2026-10-14)
 
 
