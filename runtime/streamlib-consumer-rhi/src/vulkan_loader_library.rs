@@ -4,42 +4,57 @@
 //! Where the Vulkan loader library is looked for — one list for the engine's
 //! device and a helper process's consumer device.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::runtime_unit_layout::{
     BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME, VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME,
+    bundled_vulkan_driver_directory_in_the_lend, lend_directory_in_the_runtime_unit,
+};
+#[cfg(target_os = "macos")]
+use crate::runtime_unit_layout::{
     app_bundle_contents_directory_holding_the_executable_directory,
     bundled_vulkan_driver_directory_in_the_app_bundle_contents,
-    bundled_vulkan_driver_directory_in_the_lend, lend_directory_in_the_runtime_unit,
 };
 use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 
 /// Dynamic libraries the Vulkan loader may live in, in the order they are tried.
 ///
 /// vulkanalia's own [`LIBRARY`] name is first on every platform, so a host that
-/// already resolves it loads exactly that. Apple needs the rest: dyld's default
+/// already resolves it loads exactly that. Apple needs more: dyld's default
 /// search path does not include Homebrew's prefix on Apple Silicon, so a bare
 /// `libvulkan.dylib` resolves nothing on a stock machine even with the loader
 /// installed. `VULKAN_SDK` is the LunarG SDK's own variable, read to honour that
 /// convention rather than as a StreamLib dial — there is no setting for which
 /// loader to use, and the order is fixed.
 ///
-/// The runtime unit carries its own loader, which is what a stock machine
-/// opens: beside the wheel's `_engine`, in the lend a binary linking the engine
-/// finds relative to its own directory, or in the `Frameworks/` of the app
-/// bundle whose `Contents/MacOS` holds that binary. The Homebrew prefixes after it
-/// are developer-machine fallbacks, and a package manager must never appear in
-/// anything a user reads.
+/// The runtime unit carries its own loader on macOS and Linux, which is what a
+/// machine without one opens: beside the wheel's `_engine`, in the lend a
+/// binary linking the engine finds relative to its own directory, or, on
+/// macOS, in the `Frameworks/` of the app bundle whose `Contents/MacOS` holds
+/// that binary. The Homebrew prefixes after it are macOS developer-machine
+/// fallbacks, and a package manager must never appear in anything a user reads.
 pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
-    candidate_paths.extend(macos_vulkan_loader_library_candidate_paths());
+    candidate_paths.extend(platform_vulkan_loader_library_candidate_paths());
     candidate_paths
 }
 
 #[cfg(target_os = "macos")]
-fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+fn platform_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     macos_vulkan_loader_library_candidate_paths_for_the_image_in(
         directory_of_the_image_this_code_is_in().as_deref(),
     )
+}
+
+#[cfg(target_os = "linux")]
+fn platform_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+    linux_vulkan_loader_library_candidate_paths_for_the_image_in(
+        directory_of_the_image_this_code_is_in().as_deref(),
+    )
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn platform_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+    Vec::new()
 }
 
 /// The macOS-only tail of the search list, for code in an image whose
@@ -60,15 +75,11 @@ fn macos_vulkan_loader_library_candidate_paths_for_the_image_in(
         candidate_paths.push(sdk_library_path.into_os_string());
     }
     if let Some(directory_of_the_image) = directory_of_the_image {
-        candidate_paths.push(
-            vulkan_loader_library_bundled_beside_the_image_in(directory_of_the_image)
-                .into_os_string(),
+        candidate_paths.extend(
+            vulkan_loader_libraries_the_runtime_unit_carries_for_the_image_in(
+                directory_of_the_image,
+            ),
         );
-        if let Some(lent_loader_path) =
-            vulkan_loader_library_in_the_lend_beside_the_binary_directory(directory_of_the_image)
-        {
-            candidate_paths.push(lent_loader_path.into_os_string());
-        }
         if let Some(app_bundle_loader_path) =
             vulkan_loader_library_in_the_app_bundle_holding_the_image_directory(
                 directory_of_the_image,
@@ -82,12 +93,42 @@ fn macos_vulkan_loader_library_candidate_paths_for_the_image_in(
     candidate_paths
 }
 
+/// The Linux-only tail of the search list, for code in an image whose
+/// directory is `directory_of_the_image`: the loader the wheel carries, then
+/// the loader the lend beside a binary's directory carries. The bare name
+/// before it is already the versioned soname, and the dynamic linker's own
+/// search covers every prefix a distribution installs a loader to.
+#[cfg(target_os = "linux")]
+fn linux_vulkan_loader_library_candidate_paths_for_the_image_in(
+    directory_of_the_image: Option<&std::path::Path>,
+) -> Vec<std::ffi::OsString> {
+    directory_of_the_image
+        .map(vulkan_loader_libraries_the_runtime_unit_carries_for_the_image_in)
+        .unwrap_or_default()
+}
+
+/// The loader beside the image whose directory is `directory_of_the_image`,
+/// then the loader the lend beside that directory carries.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn vulkan_loader_libraries_the_runtime_unit_carries_for_the_image_in(
+    directory_of_the_image: &std::path::Path,
+) -> Vec<std::ffi::OsString> {
+    let mut candidate_paths: Vec<std::ffi::OsString> =
+        vec![vulkan_loader_library_bundled_beside_the_image_in(directory_of_the_image).into()];
+    if let Some(lent_loader_path) =
+        vulkan_loader_library_in_the_lend_beside_the_binary_directory(directory_of_the_image)
+    {
+        candidate_paths.push(lent_loader_path.into_os_string());
+    }
+    candidate_paths
+}
+
 /// The loader the wheel carries, beside the image whose directory is
 /// `directory_of_the_image`.
 ///
-/// A path with a slash, so dlopen takes it verbatim and no `@rpath` or install
-/// name is consulted.
-#[cfg(target_os = "macos")]
+/// A path with a slash, so dlopen takes it verbatim and no `@rpath`, install
+/// name or library search path is consulted.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn vulkan_loader_library_bundled_beside_the_image_in(
     directory_of_the_image: &std::path::Path,
 ) -> std::path::PathBuf {
@@ -99,7 +140,7 @@ fn vulkan_loader_library_bundled_beside_the_image_in(
 /// The loader the lend carries, for an image in a runtime unit's `bin/` — the
 /// runtime unit `tatolabd` finds its lend in. `None` for an image at the
 /// filesystem root.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn vulkan_loader_library_in_the_lend_beside_the_binary_directory(
     directory_of_the_image: &std::path::Path,
 ) -> Option<std::path::PathBuf> {
@@ -131,45 +172,94 @@ fn vulkan_loader_library_in_the_app_bundle_holding_the_image_directory(
 
 /// The canonical directory of the image this code was linked into — the
 /// wheel's `_engine`, or a binary that links the engine statically. `None`
-/// only if dyld cannot name the image.
+/// only if the dynamic linker cannot name the image.
 ///
 /// Canonical because `tatolabd` finds its lend from its own canonical path: a
 /// `tatolabd` started through a symlink must find the lent loader in the same
-/// runtime unit. A path that cannot be canonicalized is taken as dyld gave it.
-#[cfg(target_os = "macos")]
+/// runtime unit. A path that cannot be canonicalized is taken as given.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn directory_of_the_image_this_code_is_in() -> Option<std::path::PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-
-    // SAFETY: `Dl_info` is plain C data; all-zero is a valid value to overwrite.
-    let mut image_containing_this_function: libc::Dl_info = unsafe { std::mem::zeroed() };
-    // SAFETY: `dladdr` only reads the address it is given and writes the struct
-    // it is handed, which outlives the call.
-    let dladdr_named_the_image_containing_this_function = unsafe {
-        libc::dladdr(
-            directory_of_the_image_this_code_is_in as *const libc::c_void,
-            &mut image_containing_this_function,
-        )
-    };
-    if dladdr_named_the_image_containing_this_function == 0
-        || image_containing_this_function.dli_fname.is_null()
-    {
-        return None;
-    }
-    // SAFETY: `dli_fname` is a NUL-terminated path dyld owns for as long as the
-    // image stays loaded, which is at least as long as this function exists.
-    let image_path_bytes =
-        unsafe { std::ffi::CStr::from_ptr(image_containing_this_function.dli_fname) }.to_bytes();
-    let image_path = std::path::Path::new(std::ffi::OsStr::from_bytes(image_path_bytes));
+    let image_path = path_of_the_image_this_code_is_in()?;
     let canonical_image_path =
-        std::fs::canonicalize(image_path).unwrap_or_else(|_| image_path.to_path_buf());
+        std::fs::canonicalize(&image_path).unwrap_or_else(|_| image_path.clone());
     canonical_image_path
         .parent()
         .map(std::path::Path::to_path_buf)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    Vec::new()
+/// The path dyld names the image containing this function by.
+#[cfg(target_os = "macos")]
+fn path_of_the_image_this_code_is_in() -> Option<std::path::PathBuf> {
+    image_containing_the_address(path_of_the_image_this_code_is_in as *const libc::c_void)
+        .map(|image| image.path_as_the_dynamic_linker_names_it)
+}
+
+/// The path of the image containing this function: the one the dynamic
+/// linker opened it by, or `/proc/self/exe` for the main executable.
+///
+/// glibc's `dladdr` names the main executable by its `argv[0]`, which may be
+/// relative to a directory the process has since left, or a bare name `PATH`
+/// resolved; only the kernel's own link names the file.
+#[cfg(target_os = "linux")]
+fn path_of_the_image_this_code_is_in() -> Option<std::path::PathBuf> {
+    let image =
+        image_containing_the_address(path_of_the_image_this_code_is_in as *const libc::c_void)?;
+    if load_base_of_the_main_executable() == Some(image.load_base) {
+        return std::env::current_exe().ok();
+    }
+    Some(image.path_as_the_dynamic_linker_names_it)
+}
+
+/// Where the main executable is mapped, found through the program headers the
+/// kernel names in every process's auxiliary vector.
+#[cfg(target_os = "linux")]
+fn load_base_of_the_main_executable() -> Option<usize> {
+    // SAFETY: `getauxval` only reads the process's auxiliary vector.
+    let main_executable_program_headers = unsafe { libc::getauxval(libc::AT_PHDR) };
+    if main_executable_program_headers == 0 {
+        return None;
+    }
+    image_containing_the_address(main_executable_program_headers as *const libc::c_void)
+        .map(|image| image.load_base)
+}
+
+/// The loaded image `dladdr` reports as containing an address.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct LoadedImageContainingAnAddress {
+    path_as_the_dynamic_linker_names_it: std::path::PathBuf,
+    #[cfg(target_os = "linux")]
+    load_base: usize,
+}
+
+/// The loaded image containing `address`, or `None` if `dladdr` names none.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn image_containing_the_address(
+    address: *const libc::c_void,
+) -> Option<LoadedImageContainingAnAddress> {
+    use std::os::unix::ffi::OsStrExt;
+
+    // SAFETY: `Dl_info` is plain C data; all-zero is a valid value to overwrite.
+    let mut image_containing_the_address: libc::Dl_info = unsafe { std::mem::zeroed() };
+    // SAFETY: `dladdr` only reads the address it is given and writes the struct
+    // it is handed, which outlives the call.
+    let dladdr_named_the_image_containing_the_address =
+        unsafe { libc::dladdr(address, &mut image_containing_the_address) };
+    if dladdr_named_the_image_containing_the_address == 0
+        || image_containing_the_address.dli_fname.is_null()
+    {
+        return None;
+    }
+    // SAFETY: `dli_fname` is a NUL-terminated path the dynamic linker owns for
+    // as long as the image stays loaded; it is copied before this returns.
+    let image_path_bytes =
+        unsafe { std::ffi::CStr::from_ptr(image_containing_the_address.dli_fname) }.to_bytes();
+    Some(LoadedImageContainingAnAddress {
+        path_as_the_dynamic_linker_names_it: std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+            image_path_bytes,
+        )),
+        #[cfg(target_os = "linux")]
+        load_base: image_containing_the_address.dli_fbase as usize,
+    })
 }
 
 /// No Vulkan loader library opened: why each candidate on the search list
@@ -279,11 +369,11 @@ mod tests {
 
     /// The bundled loader is looked for beside the image this crate is linked
     /// into — for the wheel, `_engine`'s own directory.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_bundled_loader_is_looked_for_beside_the_image_this_code_is_in() {
         let directory_of_this_image = directory_of_the_image_this_code_is_in()
-            .expect("dyld names the image a function of this test binary is in");
+            .expect("the dynamic linker names the image a function of this test binary is in");
         let bundled_loader_path =
             vulkan_loader_library_bundled_beside_the_image_in(&directory_of_this_image);
         let running_test_binary = std::env::current_exe().expect("the test binary has a path");
@@ -307,11 +397,11 @@ mod tests {
     /// A binary that links the engine statically, in a runtime unit's `bin/`,
     /// finds the loader in the lend beside `bin/`, right after the one beside
     /// the image itself — the same rule `tatolabd` finds its lend by.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_lent_loader_is_looked_for_in_the_lend_beside_the_binary_directory_of_this_image() {
         let directory_of_this_image = directory_of_the_image_this_code_is_in()
-            .expect("dyld names the image a function of this test binary is in");
+            .expect("the dynamic linker names the image a function of this test binary is in");
         let lent_loader_path =
             vulkan_loader_library_in_the_lend_beside_the_binary_directory(&directory_of_this_image)
                 .expect("the test binary's directory has a parent");
@@ -421,11 +511,11 @@ mod tests {
 
     /// The image's directory is canonical, as `tatolabd`'s own path is when it
     /// finds its lend, so both name the same runtime unit.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_directory_of_this_image_is_canonical() {
         let directory_of_this_image = directory_of_the_image_this_code_is_in()
-            .expect("dyld names the image a function of this test binary is in");
+            .expect("the dynamic linker names the image a function of this test binary is in");
 
         assert_eq!(
             std::fs::canonicalize(&directory_of_this_image).expect("the image's directory exists"),
@@ -433,15 +523,105 @@ mod tests {
         );
     }
 
-    /// Linux keeps exactly one candidate — the search list must not change what
-    /// a Linux host loads.
+    /// Linux tries the bare soname, then the loader beside the image, then the
+    /// lend's beside `bin/` — and nothing else, so no package manager's prefix
+    /// is ever named.
     #[cfg(target_os = "linux")]
     #[test]
-    fn the_vulkan_loader_search_list_is_unchanged_on_linux() {
+    fn the_linux_search_list_is_the_bare_soname_then_the_loader_beside_the_image_then_the_lends() {
+        assert_eq!(LIBRARY, VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME);
         assert_eq!(
-            vulkan_loader_library_candidate_paths().len(),
-            1,
-            "Linux loads the platform default and nothing else"
+            linux_vulkan_loader_library_candidate_paths_for_the_image_in(Some(
+                std::path::Path::new("/opt/tatolab-runtime/bin")
+            )),
+            [
+                "/opt/tatolab-runtime/bin/_vulkan_driver/libvulkan.so.1",
+                "/opt/tatolab-runtime/lib/tatolab/lend/tatolab/runtime/_vulkan_driver/libvulkan.so.1",
+            ]
+            .map(std::ffi::OsString::from)
+        );
+        assert!(linux_vulkan_loader_library_candidate_paths_for_the_image_in(None).is_empty());
+
+        let directory_of_this_image = directory_of_the_image_this_code_is_in()
+            .expect("the dynamic linker names the image a function of this test binary is in");
+        let mut expected_candidate_paths = vec![std::ffi::OsString::from(LIBRARY)];
+        expected_candidate_paths.extend(
+            vulkan_loader_libraries_the_runtime_unit_carries_for_the_image_in(
+                &directory_of_this_image,
+            ),
+        );
+        assert_eq!(
+            vulkan_loader_library_candidate_paths(),
+            expected_candidate_paths
+        );
+    }
+
+    /// Carries the `argv[0]` the parent test started this test binary with.
+    #[cfg(target_os = "linux")]
+    const SUBSTITUTED_ARGV0_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_VULKAN_LOADER_SEARCH_TEST_SUBSTITUTED_ARGV0";
+
+    /// A `tatolabd` started by a bare name or a relative path still finds the
+    /// lend beside its own `bin/`: the main executable's directory comes from
+    /// the kernel, not from the `argv[0]` glibc's `dladdr` reports.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_main_executables_directory_is_its_own_whatever_argv0_started_it() {
+        use std::os::unix::process::CommandExt;
+
+        let substituted_argv0 = "a-bare-name-no-directory-holds";
+        let child_test_run = std::process::Command::new(
+            std::env::current_exe().expect("the test binary has a path"),
+        )
+        .arg0(substituted_argv0)
+        .args([
+            "--exact",
+            "--ignored",
+            "vulkan_loader_library::tests::the_main_executables_directory_under_a_substituted_argv0",
+        ])
+        .env(SUBSTITUTED_ARGV0_ENVIRONMENT_VARIABLE, substituted_argv0)
+        .current_dir(std::env::temp_dir())
+        .output()
+        .expect("the test binary starts again");
+        let child_test_output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&child_test_run.stdout),
+            String::from_utf8_lossy(&child_test_run.stderr)
+        );
+
+        assert!(child_test_run.status.success(), "{child_test_output}");
+        assert!(
+            child_test_output.contains("1 passed"),
+            "the child test did not run: {child_test_output}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "run by the_main_executables_directory_is_its_own_whatever_argv0_started_it"]
+    fn the_main_executables_directory_under_a_substituted_argv0() {
+        if let Some(substituted_argv0) = std::env::var_os(SUBSTITUTED_ARGV0_ENVIRONMENT_VARIABLE) {
+            let image_containing_this_code = image_containing_the_address(
+                path_of_the_image_this_code_is_in as *const libc::c_void,
+            )
+            .expect("dladdr names the image");
+            assert_eq!(
+                image_containing_this_code
+                    .path_as_the_dynamic_linker_names_it
+                    .as_os_str(),
+                substituted_argv0,
+                "glibc names the main executable by its argv[0]"
+            );
+        }
+
+        assert_eq!(
+            directory_of_the_image_this_code_is_in(),
+            std::env::current_exe()
+                .expect("the test binary has a path")
+                .parent()
+                .map(std::fs::canonicalize)
+                .transpose()
+                .expect("the test binary's directory exists")
         );
     }
 }
