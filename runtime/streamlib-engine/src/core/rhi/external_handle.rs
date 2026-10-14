@@ -323,15 +323,17 @@ impl RhiPixelBufferImport for super::PixelBuffer {
                 exporting_allocation_memory_type_index,
                 ..
             }) => {
-                let only_plane_fd = plane_fds.pop().ok_or_else(|| {
-                    crate::core::Error::Configuration(
-                        "pixel buffer import: an OPAQUE_FD plane without its fd".into(),
-                    )
-                })?;
+                let (Some(only_plane_fd), Some(only_plane_size)) =
+                    (plane_fds.pop(), plane_sizes.first().copied())
+                else {
+                    return Err(crate::core::Error::Configuration(
+                        "pixel buffer import: an OPAQUE_FD plane without its fd or its size".into(),
+                    ));
+                };
                 crate::vulkan::rhi::HostVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
                     vulkan_device,
                     only_plane_fd,
-                    plane_sizes[0],
+                    only_plane_size,
                     *exporting_allocation_memory_type_index,
                 )?
             }

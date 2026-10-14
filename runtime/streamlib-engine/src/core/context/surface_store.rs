@@ -447,6 +447,41 @@ fn leave_plane_fds_to_the_import(plane_fds: Vec<OwnedFd>) {
     }
 }
 
+/// Import the pixel buffer a surface-share `operation` reply carries, under
+/// the external-handle flavour the service says it registered; a reply
+/// naming an error is refused under `operation`'s name.
+#[cfg(target_os = "linux")]
+fn pixel_buffer_imported_from_surface_share_reply(
+    operation: &str,
+    response: &serde_json::Value,
+    reply_fds: Vec<OwnedFd>,
+) -> Result<PixelBuffer> {
+    use crate::core::rhi::{PixelFormat, RhiPixelBufferImport};
+
+    if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
+        return Err(Error::Configuration(format!("{operation}: {error}")));
+    }
+    let plane_fds = plane_fds_of_reply(operation, response, reply_fds)?;
+
+    // The two flavours are different Vulkan external-handle types, so
+    // importing an OPAQUE_FD fd as DMA-BUF is a driver-level wrong-import
+    // rather than a clean failure.
+    let plane_sizes = plane_sizes_of_reply(response, plane_fds.len());
+    let raw_plane_fds: Vec<std::os::fd::RawFd> = plane_fds.iter().map(OwnedFd::as_raw_fd).collect();
+    let handles = external_plane_handles_for_flavour(
+        operation,
+        response
+            .get("handle_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF),
+        &raw_plane_fds,
+        &plane_sizes,
+        vk_memory_type_index_of_reply(response),
+    )?;
+    leave_plane_fds_to_the_import(plane_fds);
+    PixelBuffer::from_external_plane_handles(handles, 0, 0, PixelFormat::default())
+}
+
 /// The id a `check_in` answer names for the surface it registered.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn surface_id_of_check_in_answer(answer: &serde_json::Value) -> Result<String> {
@@ -799,38 +834,11 @@ impl SurfaceStoreInner {
             streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
         )
         .map_err(|e| Error::Configuration(format!("Unix socket check_out failed: {}", e)))?;
-        let reply_fds = adopt_reply_fds(received_fds);
-
-        if let Some(error) = response
-            .get("error")
-            .and_then(|v: &serde_json::Value| v.as_str())
-        {
-            return Err(Error::Configuration(format!("check_out: {}", error)));
-        }
-        let plane_fds = plane_fds_of_reply("check_out", &response, reply_fds)?;
-
-        // Import every plane under the flavour the service says it registered.
-        // The two flavours are different Vulkan external-handle types, so
-        // importing an OPAQUE_FD fd as DMA-BUF is a driver-level wrong-import
-        // rather than a clean failure.
-        use crate::core::rhi::{PixelFormat, RhiPixelBufferImport};
-
-        let plane_sizes = plane_sizes_of_reply(&response, plane_fds.len());
-        let raw_plane_fds: Vec<std::os::fd::RawFd> =
-            plane_fds.iter().map(OwnedFd::as_raw_fd).collect();
-        let handles = external_plane_handles_for_flavour(
+        let pixel_buffer = pixel_buffer_imported_from_surface_share_reply(
             "check_out",
-            response
-                .get("handle_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF),
-            &raw_plane_fds,
-            &plane_sizes,
-            vk_memory_type_index_of_reply(&response),
+            &response,
+            adopt_reply_fds(received_fds),
         )?;
-        leave_plane_fds_to_the_import(plane_fds);
-        let pixel_buffer =
-            PixelBuffer::from_external_plane_handles(handles, 0, 0, PixelFormat::default())?;
 
         // Cache for future use
         self.cache
@@ -1291,33 +1299,11 @@ impl SurfaceStoreInner {
             streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
         )
         .map_err(|e| Error::Configuration(format!("Unix socket lookup failed: {}", e)))?;
-        let reply_fds = adopt_reply_fds(received_fds);
-
-        if let Some(error) = response
-            .get("error")
-            .and_then(|v: &serde_json::Value| v.as_str())
-        {
-            return Err(Error::Configuration(format!("lookup: {}", error)));
-        }
-        let plane_fds = plane_fds_of_reply("lookup", &response, reply_fds)?;
-
-        use crate::core::rhi::{PixelFormat, RhiPixelBufferImport};
-
-        let plane_sizes = plane_sizes_of_reply(&response, plane_fds.len());
-        let raw_plane_fds: Vec<std::os::fd::RawFd> =
-            plane_fds.iter().map(OwnedFd::as_raw_fd).collect();
-        let handles = external_plane_handles_for_flavour(
+        pixel_buffer_imported_from_surface_share_reply(
             "lookup",
-            response
-                .get("handle_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF),
-            &raw_plane_fds,
-            &plane_sizes,
-            vk_memory_type_index_of_reply(&response),
-        )?;
-        leave_plane_fds_to_the_import(plane_fds);
-        PixelBuffer::from_external_plane_handles(handles, 0, 0, PixelFormat::default())
+            &response,
+            adopt_reply_fds(received_fds),
+        )
     }
 
     /// Publish a producer's post-release `VkImageLayout` for the given
