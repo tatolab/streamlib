@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.3](https://github.com/tatolab/streamlib/compare/v0.46.2...v0.46.3) (2026-10-14)
+
+
+### Features
+
+* **unit:** the Linux runtime unit carries the Vulkan loader and a headless lavapipe ([#2761](https://github.com/tatolab/streamlib/issues/2761)) ([d401992](https://github.com/tatolab/streamlib/commit/d40199213d3375db7f7e5e622bdddbf936d5a9d1))
+
 ## [0.46.2](https://github.com/tatolab/streamlib/compare/v0.46.1...v0.46.2) (2026-10-13)
 
 
