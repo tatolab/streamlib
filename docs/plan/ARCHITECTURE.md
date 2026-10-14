@@ -39,8 +39,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   app bundle to obtain them would. Every ticket traces to this sentence or does not exist.
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
   SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
-  runtime-hosting — SHIPPED #2721, #2722; amended by one-runtime-per-machine: "with an NVIDIA
-  GPU" (accelerators are optional)]
+  runtime-hosting — SHIPPED #2721, #2722; amended by optional-accelerators: "with an NVIDIA
+  GPU" — a GPU is optional, the Linux unit carrying a software device (§Graphics)]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
@@ -95,7 +95,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the boot-session file, X11/Wayland, SIGHUP and SIGINT hand-back). A test red on macOS
   for any other reason is a parity bug, never a skip.
   [macos-capability-parity — SHIPPED #2400, #2403, #2405; package-split-and-lend — SHIPPED
-  #2671, #2686]
+  #2671, #2686; amended by optional-accelerators: "their `requires_gpu` halves on each floor's
+  rig" — the Linux lane runs the engine on the bundled software device, and rig-only is only
+  what a runner cannot give (§Graphics)]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
   <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py::test_the_engine_conforms_to_tatolab_stream_and_its_stub -->
@@ -172,7 +174,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   end. The division is structural, not a lint: each CI job installs only what its suite may
   touch, so a stream test reaching for the runtime fails to import. `requires_gpu` halves
   stay rig-only. Testing a user's stream without a runtime is separate work. Owner,
-  2026-10-02. [package-split-and-lend — SHIPPED #2686, #2689, #2693]
+  2026-10-02. [package-split-and-lend — SHIPPED #2686, #2689, #2693; amended by
+  optional-accelerators: "`requires_gpu` halves stay rig-only" — only what a runner cannot
+  give stays rig-only, the rest runs on the bundled software device (§Graphics)]
   <!-- verify: grep -n -e "stream-suite:" -e "integration-suite:" .github/workflows/python-wheel.yml -->
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
@@ -1854,7 +1858,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — Compute, graphics, ray tracing, and CPU readback are always-present
   capabilities of `GpuContext`, reached the same way by every caller. No kernel capability
   can be absent at runtime, and no application glue supplies one.
-  [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777; amended by one-runtime-per-machine: accelerators are optional]
+  [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-22-python-kernel-surface.md -->
 - **DECIDED** — GLSL is the shader source contract: Python passes GLSL text and the
   engine compiles it at kernel construction, and re-creating an identical kernel is free —
@@ -2094,17 +2098,48 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 - **DECIDED** — Accelerators are optional: a stream that needs no GPU runs on a machine without
-  one. [one-runtime-per-machine]
-- **OPEN** — What optional accelerators mean for the engine: how the runtime starts with no
-  device, and what a stream that needs one gets on a machine without one. Direction (review,
-  not decided): a runtime property, never a package — an extra cannot change the runtime's
-  native module, and a second engine-linking distribution would reverse "no process ever holds
-  two streamlib engines" and the deleted bridge traits. The smallest shape is the owner's
-  2026-09-26 preference: one runtime artifact; device selection takes the first device meeting
-  the floor, with a bundled software Vulkan last; absent tiers refused by name; `start()` no
-  longer initialising the GPU unconditionally. Exactly one `GpuContext` per runtime, shared by
-  every stream. Undecided: whether the adapter crates move anywhere, and what the
-  software-Vulkan bundle costs the Linux wheel. [one-runtime-per-machine]
+  one, and the engine never runs without a device. The Linux runtime unit carries the Vulkan
+  loader and a software device — Mesa's lavapipe, built with LLVM linked in — in
+  `tatolab/runtime/_vulkan_driver/` beside `tatolabd`, named to the loader additively as the
+  macOS unit names MoltenVK, both opened by the engine and by every processor interpreter;
+  macOS is unchanged, every Apple Silicon machine having a GPU behind MoltenVK. The runtime
+  starts and serves with no device built; the first stream to start builds the one
+  `GpuContext`, shared by every stream, on the first device the engine can build on in the
+  loader's order — discrete, integrated, virtual, then CPU-type — so the software device is
+  taken only when no hardware device builds. A device the engine cannot build on — a required
+  feature absent, no graphics queue, a sentinel allocation failing in a flavour the device
+  advertises — is passed over, and the runtime's log names the device it built on and why each
+  device before it was passed over; the loader's own device-selection variables are the one
+  override, the engine adding no dial. A runtime that can build no device at all — with the
+  bundle, a broken install — keeps serving and refuses each stream's start by name, as today.
+  The adapter crates stay under `adapters/`; nothing here moves one. Owner, 2026-10-13.
+  [one-runtime-per-machine; optional-accelerators]
+  Rejected: a device-less engine mode — CPU pixel buffers and a CPU path in every built-in — a
+  second path beside every GPU one (owner, 2026-09-26, reaffirmed 2026-10-13).
+  Rejected: SwiftShader as the software device — a 2 GiB heap, no memory-budget extension, no
+  exportable timeline semaphore, no tagged release (owner, 2026-10-13).
+- **DECIDED** — What a stream gets on the software device. Every stream starts and every node
+  runs; a capability the software device lacks is an absent tier refused by name at the node
+  that asks, as on any device, never at the stream's start: Vulkan Video, so the codec
+  built-ins refuse at setup; the CUDA device tensor and the CUDA Array Interface, refused
+  naming the device while `cpu()` reads; the GL adapter and every DMA-BUF-shaped handle. The
+  DMA-BUF flavour is absent on the software device by rule, never by what `/dev/udmabuf`
+  permits: its frames cross to processor interpreters as OPAQUE_FD, the pixel-buffer pool
+  taking that flavour where DMA-BUF is absent, and the virtual camera's loopback door takes
+  the host-pointer import tier. Camera capture takes its MMAP path, display presents through
+  the device's own swapchain, and compute, graphics, ray tracing and pixel effects run at the
+  speed the CPU gives; the runtime names the device once and warns no further. A processor
+  interpreter imports on the runtime's device: the runtime hands each interpreter the device
+  it built on and the loader environment reaching the bundled driver at spawn, and an
+  interpreter that resolves another device refuses by name. The memory budget on the software
+  device is the extension's reading of the system-memory heap, as the budget entry above
+  states for any device. Owner, 2026-10-13. [optional-accelerators]
+- **DECIDED** — The Linux CI lane runs the engine on the bundled software device. A test is
+  rig-only only when it needs what a GitHub runner cannot give — a capability the software
+  device lacks (Vulkan Video, DMA-BUF modifiers, CUDA) or a real camera, display or audio
+  device — and its marker's reason says which; every other engine, runtime and integration
+  test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
+  ruling. [optional-accelerators]
 
 ## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
@@ -3840,7 +3875,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   macOS no newer than the wheel's tag. A binary it cannot parse, a fat binary, or a
   `.so`/`.dylib` that is neither format fails rather than skips.
   [importable-python-library — SHIPPED #1691, #1692; python-kernel-surface — SHIPPED #1775;
-  macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2689, #2693]
+  macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2689, #2693;
+  amended by optional-accelerators: "On Linux … the Vulkan loader … dlopen'd at runtime" — the
+  Linux lend carries the loader and the software device in `_vulkan_driver/` as the macOS
+  lend carries MoltenVK, still dlopen'd and never linked (§Graphics)]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
@@ -3886,7 +3924,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `linux_only_capability(reason=…)`, held to the closed list §Product states. The Python
   suite's `requires_gpu` half does not run on the macOS lane — it runs on each floor's rig;
   the runner's paravirtual Metal device serves the in-process adapter tests below.
-  [macos-capability-parity — SHIPPED #2400]
+  [macos-capability-parity — SHIPPED #2400; amended by optional-accelerators: the Linux lane's
+  `requires_gpu` half runs on the bundled software device, rig-only narrowed to what a runner
+  cannot give (§Graphics)]
   <!-- verify: cargo run -p xtask -- check-no-inheritable-descriptor -->
   <!-- verify: cargo test -p xtask check_no_inheritable_descriptor::tests::the_portable_std_pipe_is_accepted_and_a_refused_pipe_names_it -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
@@ -3935,7 +3975,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   (`WantedBy=graphical-session.target`) when a desktop session starts. Re-running upgrades in
   place and restarts the service, a failed restart keeping the previous release; `--uninstall`
   removes the service and the files, never the state directory. On macOS the script refuses,
-  pointing at the app. Owner, 2026-10-11. [runtime-hosting — SHIPPED #2722]
+  pointing at the app. Owner, 2026-10-11. [runtime-hosting — SHIPPED #2722; amended by
+  optional-accelerators: the tarball carries the Vulkan loader and the software device in
+  `tatolab/runtime/_vulkan_driver/` (§Graphics)]
   <!-- verify: bash installer/tests/run_install_sh_test_in_a_systemd_container.sh -->
   <!-- verify: grep -n "GET_TATOLAB_COM_URL: https://get.tatolab.com" .github/workflows/release-wheel.yml -->
 - **DECIDED** — `Tatolab.app`, a menu-bar app carrying the runtime, lives in the private
@@ -4167,7 +4209,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   — and the caller needs no Vulkan device, no surface
   socket and no runtime link.
   [control-plane-surface-pixel-exchange — SHIPPED #1972; macos-capability-parity — SHIPPED
-  #2406; amended by one-runtime-per-machine: accelerators are optional; amended by moq-on-the-tailnet: `exchange` is deleted at the sharing step, the repo's
+  #2406; amended by moq-on-the-tailnet: `exchange` is deleted at the sharing step, the repo's
   verification reading a private port's snapshot instead]
   <!-- verify: cargo test -p streamlib-engine --lib a_pooled_rgba_frame_exchanges_for_the_pixels_the_bag_published -->
   <!-- verify: cargo test -p streamlib-engine --lib a_texture_backed_frame_exchanges_for_the_pixels_its_producer_rendered -->
