@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::os::fd::{FromRawFd as _, OwnedFd};
-
+use streamlib::sdk::context::SurfaceStore;
 use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanDevice};
+use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
 
 use super::*;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
@@ -25,16 +25,10 @@ fn exchange_client_on(share: &SurfaceShareUnderTest) -> Arc<HelperProcessGpuExch
     })
 }
 
-fn hex_of_device_uuid(device_uuid: [u8; 16]) -> String {
-    device_uuid
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 /// An engine-exported OPAQUE_FD pixel buffer — what a pooled frame is on a
-/// device without DMA-BUF export — checks out through the helper's pixel arm,
-/// maps at the memory type index the exporter states, and reads the bytes the
+/// device without DMA-BUF export — published through the engine's own
+/// `SurfaceStore::check_in`, checks out through the helper's pixel arm, maps
+/// at the memory type index the check-in states, and reads the bytes the
 /// engine wrote. Needs a Vulkan device; skips where none comes up.
 #[test]
 fn an_opaque_fd_pixel_buffer_imports_at_its_stated_memory_type_index_and_reads_the_engines_bytes() {
@@ -63,46 +57,26 @@ fn an_opaque_fd_pixel_buffer_imports_at_its_stated_memory_type_index_and_reads_t
             PIXEL_BUFFER_BYTE_SIZE as usize,
         )
     };
-    let stated_memory_type_index = exported
-        .vma_allocation_memory_type_index()
-        .expect("the exporter states its memory type index");
-    // SAFETY: a fresh fd the export just minted; ours alone.
-    let exported_memory_fd =
-        unsafe { OwnedFd::from_raw_fd(exported.export_opaque_fd_memory().expect("export")) };
+    let engine_pixel_buffer = PixelBuffer::from_host_vulkan_buffer(
+        Arc::new(exported),
+        PIXEL_BUFFER_WIDTH,
+        PIXEL_BUFFER_HEIGHT,
+        4,
+        PixelFormat::Bgra32,
+    );
 
     let share = SurfaceShareUnderTest::start("opaque-pixel-import");
-    let exchange_client = exchange_client_on(&share);
-    // `register`, the op the engine's own pool slots publish through, carries
-    // the OPAQUE_FD contract fields a pixel buffer's import binds by.
-    let surface_id = "opaque-fd-pixel-buffer-under-test".to_string();
-    let (register_response, _no_fds) = exchange_client
-        .surface_share_request_with_fds(
-            &serde_json::json!({
-                "op": "register",
-                "surface_id": surface_id,
-                "runtime_id": "helper:opaque-fd-pixel-buffer-under-test",
-                "width": PIXEL_BUFFER_WIDTH,
-                "height": PIXEL_BUFFER_HEIGHT,
-                "format": "bgra32",
-                "resource_type": "pixel_buffer",
-                "handle_type": "opaque_fd",
-                "plane_sizes": [PIXEL_BUFFER_BYTE_SIZE],
-                "plane_offsets": [0u64],
-                "plane_strides": [PIXEL_BUFFER_BYTE_SIZE / u64::from(PIXEL_BUFFER_HEIGHT)],
-                "vk_memory_type_index": stated_memory_type_index,
-                "exporting_device_uuid": hex_of_device_uuid(host_device.physical_device_uuid()),
-            }),
-            &[std::os::fd::AsRawFd::as_raw_fd(&exported_memory_fd)],
-        )
-        .expect("the register round trip completes");
-    drop(exported_memory_fd);
-    assert_eq!(
-        register_response
-            .get("success")
-            .and_then(|value| value.as_bool()),
-        Some(true),
-        "the registration must succeed: {register_response}"
+    let engine_surface_store = SurfaceStore::new(
+        share.socket_path.to_string_lossy().into_owned(),
+        "engine:opaque-fd-pixel-buffer-under-test".to_string(),
     );
+    engine_surface_store
+        .connect()
+        .expect("the engine's store connects");
+    let surface_id = engine_surface_store
+        .check_in(&engine_pixel_buffer)
+        .expect("the engine checks the OPAQUE_FD pixel buffer in");
+    let exchange_client = exchange_client_on(&share);
 
     let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = exchange_client
         .check_out_and_import(&surface_id)

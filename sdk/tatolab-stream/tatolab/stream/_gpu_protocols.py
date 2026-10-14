@@ -377,13 +377,14 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         over SCM_RIGHTS when the surface was checked out, and they are the same
         ones a host-side export would mint.
 
-        Refuses by name for an OPAQUE_FD-flavoured texture — that fd imports
-        through Vulkan or CUDA external memory, not as a DMA-BUF; export it
-        through `export_opaque_fd` instead — for an OPAQUE_FD pixel buffer,
-        what a pooled frame is on a device without DMA-BUF export, whose
-        pixels are reached through the CPU door, and for a pooled-texture
-        handle whose memory was never checked out into this process (resolve
-        the surface id first).
+        Refuses by name for:
+
+        - an OPAQUE_FD-flavoured texture. Its fd imports through Vulkan or
+          CUDA external memory, not as a DMA-BUF; use `export_opaque_fd`.
+        - an OPAQUE_FD pixel buffer, which is what a pooled frame is on a
+          device without DMA-BUF export. Read its pixels through the CPU door.
+        - a pooled-texture handle whose memory was never checked out into
+          this process. Resolve the surface id first.
         """
         ...
 
