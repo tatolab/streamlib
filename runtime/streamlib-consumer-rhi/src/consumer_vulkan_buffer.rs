@@ -104,7 +104,8 @@ impl ConsumerVulkanBuffer {
     /// `stated_memory_type_index` is the surface-share registration's
     /// `vk_memory_type_index`; a value the imported buffer cannot bind is
     /// refused here by name rather than tripping
-    /// VUID-vkBindBufferMemory-memory-01035 inside the driver.
+    /// VUID-vkBindBufferMemory-memory-01035 inside the driver, and so is a
+    /// type that is not HOST_VISIBLE, which the mapping could not reach.
     ///
     /// Same fd-ownership rule as [`Self::from_opaque_fd`]: never close
     /// `fd` on error.
@@ -155,13 +156,19 @@ impl ConsumerVulkanBuffer {
     ///
     /// Partial-failure semantics: every plane that succeeded is torn
     /// down before the error is returned. fd ownership transfers to
-    /// the Vulkan driver on success per plane.
+    /// the Vulkan driver on success per plane. Refused by name, before any
+    /// Vulkan call, on a device without `VK_EXT_external_memory_dma_buf`.
     #[tracing::instrument(level = "trace", skip(vulkan_device, fds, plane_sizes), fields(plane_count = fds.len()))]
     pub fn from_dma_buf_fds(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
         plane_sizes: &[vk::DeviceSize],
     ) -> Result<Self> {
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanBuffer::from_dma_buf_fds",
+            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION,
+            "no DMA-BUF can be imported",
+        )?;
         if fds.is_empty() {
             return Err(ConsumerRhiError::Configuration(
                 "ConsumerVulkanBuffer: fd vec must be non-empty".into(),
@@ -483,6 +490,11 @@ fn import_single_plane_with_handle_type(
                     requirements.memory_type_bits,
                     stated_memory_type_index,
                 )?;
+                refuse_unless_the_stated_memory_type_is_host_visible(
+                    vulkan_device.memory_type_property_flags(stated_memory_type_index),
+                    stated_memory_type_index,
+                    vulkan_device.name(),
+                )?;
                 vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
                     fd,
                     alloc_size,
@@ -577,6 +589,32 @@ fn refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
          (memoryTypeBits=0x{memory_type_bits:x}) — the exporter and importer disagree \
          on the buffer's shape, and binding anyway is undefined behaviour"
     )))
+}
+
+/// Refuse a stated memory type the host cannot map: every import here maps
+/// its memory, and `vkMapMemory` on a type without HOST_VISIBLE is invalid
+/// usage rather than a Vulkan error.
+#[cfg(target_os = "linux")]
+fn refuse_unless_the_stated_memory_type_is_host_visible(
+    stated_memory_type_property_flags: Option<vk::MemoryPropertyFlags>,
+    stated_memory_type_index: u32,
+    importing_device_name: &str,
+) -> Result<()> {
+    match stated_memory_type_property_flags {
+        Some(property_flags) if property_flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE) => {
+            Ok(())
+        }
+        Some(property_flags) => Err(ConsumerRhiError::Configuration(format!(
+            "ConsumerVulkanBuffer: the exporter states memory type index \
+             {stated_memory_type_index}, which is not HOST_VISIBLE on this device \
+             ({importing_device_name}; flags {property_flags:?}), so this import cannot map it"
+        ))),
+        None => Err(ConsumerRhiError::Configuration(format!(
+            "ConsumerVulkanBuffer: the exporter states memory type index \
+             {stated_memory_type_index}, which this device ({importing_device_name}) does not \
+             have, so this import cannot map it"
+        ))),
+    }
 }
 
 fn teardown_plane(vulkan_device: &Arc<ConsumerVulkanDevice>, plane: ConsumerImportedPlane) {
@@ -680,6 +718,66 @@ mod stated_memory_type_index_tests {
                 "index {past_the_end} names no memory type even when every bit is set"
             );
         }
+    }
+
+    #[test]
+    fn a_host_visible_stated_memory_type_is_accepted() {
+        for host_visible_flags in [
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT
+                | vk::MemoryPropertyFlags::HOST_CACHED,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL
+                | vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+        ] {
+            assert!(
+                refuse_unless_the_stated_memory_type_is_host_visible(
+                    Some(host_visible_flags),
+                    2,
+                    "device under test"
+                )
+                .is_ok(),
+                "{host_visible_flags:?} maps"
+            );
+        }
+    }
+
+    /// A device-local-only type would reach `vkMapMemory` as invalid usage;
+    /// the refusal names the index, the device and the flags instead.
+    #[test]
+    fn a_stated_memory_type_the_host_cannot_see_is_refused_naming_the_index_and_device() {
+        let refusal = refuse_unless_the_stated_memory_type_is_host_visible(
+            Some(vk::MemoryPropertyFlags::DEVICE_LOCAL),
+            4,
+            "device under test",
+        )
+        .expect_err("a DEVICE_LOCAL-only type cannot be mapped")
+        .to_string();
+        assert!(
+            refusal.contains("memory type index 4"),
+            "names the index: {refusal}"
+        );
+        assert!(
+            refusal.contains("HOST_VISIBLE"),
+            "names the missing property: {refusal}"
+        );
+        assert!(
+            refusal.contains("device under test"),
+            "names the device: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_stated_memory_type_the_device_does_not_have_is_refused() {
+        let refusal =
+            refuse_unless_the_stated_memory_type_is_host_visible(None, 9, "device under test")
+                .expect_err("no such type")
+                .to_string();
+        assert!(
+            refusal.contains("memory type index 9") && refusal.contains("device under test"),
+            "names the index and the device: {refusal}"
+        );
     }
 
     /// The refusal has to be actionable: it names the index the exporter

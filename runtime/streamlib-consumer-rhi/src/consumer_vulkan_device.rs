@@ -55,21 +55,61 @@ fn default_color_subresource_range() -> vk::ImageSubresourceRange {
     }
 }
 
-/// Device extensions the platform's imports need; the device refuses to
-/// construct without any of them.
+/// Device extensions every import on the platform needs; the device refuses
+/// to construct without any of them.
 #[cfg(target_os = "linux")]
-const REQUIRED_DEVICE_EXTENSIONS: &[&CStr] = &[
-    c"VK_KHR_external_memory",
-    c"VK_KHR_external_memory_fd",
-    c"VK_EXT_external_memory_dma_buf",
-    c"VK_EXT_image_drm_format_modifier",
-    c"VK_KHR_external_semaphore_fd",
-];
+const REQUIRED_DEVICE_EXTENSIONS: &[&CStr] =
+    &[c"VK_KHR_external_memory", c"VK_KHR_external_memory_fd"];
 
 /// Device extensions the platform's imports need. MoltenVK has no fd
 /// handles; an IOSurface's pages import as host memory.
 #[cfg(target_os = "macos")]
 const REQUIRED_DEVICE_EXTENSIONS: &[&CStr] = &[c"VK_EXT_external_memory_host"];
+
+/// Device extensions enabled where the driver advertises them, short of
+/// [`PROBED_DEVICE_EXTENSIONS_WITHHELD_FROM_A_SOFTWARE_DEVICE`]. Each arm that
+/// needs one refuses by name on a device without it rather than the whole
+/// device refusing.
+#[cfg(target_os = "linux")]
+const PROBED_DEVICE_EXTENSIONS: &[&CStr] = &[
+    c"VK_EXT_external_memory_dma_buf",
+    c"VK_EXT_image_drm_format_modifier",
+    c"VK_KHR_external_semaphore_fd",
+];
+
+/// Device extensions enabled where the driver advertises them.
+#[cfg(target_os = "macos")]
+const PROBED_DEVICE_EXTENSIONS: &[&CStr] = &[];
+
+/// Probed extensions a CPU-type device never enables, whatever it advertises:
+/// DMA-BUF is absent on the software device by rule, so whether `/dev/udmabuf`
+/// is reachable never decides what a helper there can import.
+const PROBED_DEVICE_EXTENSIONS_WITHHELD_FROM_A_SOFTWARE_DEVICE: &[&CStr] = &[
+    c"VK_EXT_external_memory_dma_buf",
+    c"VK_EXT_image_drm_format_modifier",
+];
+
+/// The import extensions to enable out of `advertised`: every `required` one,
+/// then each `probed` one the driver advertises and `withheld` does not name.
+/// `Err` carries the first required extension the driver lacks.
+fn import_device_extensions_to_enable<'extension_name>(
+    advertised: &[&CStr],
+    required: &[&'extension_name CStr],
+    probed: &[&'extension_name CStr],
+    withheld: &[&CStr],
+) -> std::result::Result<Vec<&'extension_name CStr>, &'extension_name CStr> {
+    let mut enabled = Vec::with_capacity(required.len() + probed.len());
+    for required_extension in required {
+        if !advertised.contains(required_extension) {
+            return Err(required_extension);
+        }
+        enabled.push(*required_extension);
+    }
+    enabled.extend(probed.iter().copied().filter(|probed_extension| {
+        advertised.contains(probed_extension) && !withheld.contains(probed_extension)
+    }));
+    Ok(enabled)
+}
 
 /// Consumer-only Vulkan device — see module docs.
 pub struct ConsumerVulkanDevice {
@@ -80,8 +120,9 @@ pub struct ConsumerVulkanDevice {
     device: vulkanalia::Device,
     queue: vk::Queue,
     queue_family_index: u32,
-    #[allow(dead_code)]
     device_name: String,
+    /// Whether the physical device is CPU-type — a software rasterizer.
+    device_is_software: bool,
     /// Whether `VK_EXT_external_memory_acquire_unmodified` was enabled
     /// at device creation. Lets the consumer's acquire barrier chain
     /// `VkExternalMemoryAcquireUnmodifiedEXT` so the producer's
@@ -121,12 +162,11 @@ impl ConsumerVulkanDevice {
     /// system's preferred discrete GPU.
     ///
     /// Enables only the extensions / features the carve-out needs — the
-    /// platform's import extensions ([`REQUIRED_DEVICE_EXTENSIONS`]) plus
-    /// the Vulkan 1.3 sync-2 and timeline-semaphore features. Every
-    /// required device extension is *required* — failure surfaces as
-    /// [`ConsumerRhiError::Gpu`] rather than a silent capability
-    /// downgrade, so cdylib code never tries an import the driver cannot
-    /// serve.
+    /// platform's import extensions plus the Vulkan 1.3 sync-2 and
+    /// timeline-semaphore features. A missing [`REQUIRED_DEVICE_EXTENSIONS`]
+    /// entry refuses the device with [`ConsumerRhiError::Gpu`]; a missing
+    /// [`PROBED_DEVICE_EXTENSIONS`] entry is left disabled, and the import
+    /// arm that needs it refuses by name.
     pub fn new() -> Result<Self> {
         let loader =
             crate::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
@@ -215,9 +255,6 @@ impl ConsumerVulkanDevice {
                 ConsumerRhiError::Gpu("No graphics queue family on consumer device".into())
             })?;
 
-        // Required device extensions — refusing to construct the device on
-        // a driver that doesn't expose them is the right shape (see module
-        // docs).
         let available_device_extension_properties = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)
@@ -228,17 +265,26 @@ impl ConsumerVulkanDevice {
         let available_device_ext_names =
             vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
 
-        let mut device_extensions: Vec<*const c_char> =
-            Vec::with_capacity(REQUIRED_DEVICE_EXTENSIONS.len() + 2);
-        for ext in REQUIRED_DEVICE_EXTENSIONS {
-            if !available_device_ext_names.contains(ext) {
-                return Err(ConsumerRhiError::Gpu(format!(
-                    "ConsumerVulkanDevice: required extension {} not available on this driver",
-                    ext.to_string_lossy()
-                )));
-            }
-            device_extensions.push(ext.as_ptr());
-        }
+        let device_is_software = device_props.device_type == vk::PhysicalDeviceType::CPU;
+        let mut device_extensions: Vec<*const c_char> = import_device_extensions_to_enable(
+            &available_device_ext_names,
+            REQUIRED_DEVICE_EXTENSIONS,
+            PROBED_DEVICE_EXTENSIONS,
+            if device_is_software {
+                PROBED_DEVICE_EXTENSIONS_WITHHELD_FROM_A_SOFTWARE_DEVICE
+            } else {
+                &[]
+            },
+        )
+        .map_err(|missing_required_extension| {
+            ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanDevice: required extension {} not available on {device_name}",
+                missing_required_extension.to_string_lossy()
+            ))
+        })?
+        .into_iter()
+        .map(CStr::as_ptr)
+        .collect();
 
         // Optional extension for spec-correct cross-process layout
         // coordination (#633). `VK_EXT_external_memory_acquire_unmodified`
@@ -333,11 +379,21 @@ impl ConsumerVulkanDevice {
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
         tracing::info!(
-            "ConsumerVulkanDevice initialized: {} (queue family {}, {} memory types, acquire_unmodified={})",
+            "ConsumerVulkanDevice initialized: {} (software={}, queue family {}, {} memory types, acquire_unmodified={}, dma_buf_import={}, drm_format_modifier_import={}, semaphore_fd_import={})",
             device_name,
+            device_is_software,
             queue_family_index,
             memory_properties.memory_type_count,
             has_acquire_unmodified,
+            device
+                .extensions()
+                .contains(&vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION.name),
+            device
+                .extensions()
+                .contains(&vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION.name),
+            device
+                .extensions()
+                .contains(&vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION.name),
         );
 
         Ok(Self {
@@ -349,6 +405,7 @@ impl ConsumerVulkanDevice {
             queue,
             queue_family_index,
             device_name,
+            device_is_software,
             has_acquire_unmodified,
             physical_device_uuid,
             imported_host_pointer_alignment,
@@ -372,9 +429,65 @@ impl ConsumerVulkanDevice {
     }
 
     /// Device label from `VkPhysicalDeviceProperties::deviceName`.
-    #[allow(dead_code)]
     pub fn name(&self) -> &str {
         &self.device_name
+    }
+
+    /// Whether the physical device is a CPU-type software rasterizer.
+    pub fn device_is_software(&self) -> bool {
+        self.device_is_software
+    }
+
+    /// Whether `VK_EXT_external_memory_dma_buf` was enabled — what every
+    /// DMA-BUF memory import needs; never on a software device.
+    pub fn supports_dma_buf_memory_import(&self) -> bool {
+        self.device
+            .extensions()
+            .contains(&vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION.name)
+    }
+
+    /// Whether `VK_EXT_image_drm_format_modifier` was enabled — what an
+    /// image over a DMA-BUF with an explicit DRM modifier needs.
+    pub fn supports_drm_format_modifier_image_import(&self) -> bool {
+        self.device
+            .extensions()
+            .contains(&vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION.name)
+    }
+
+    /// Whether `VK_KHR_external_semaphore_fd` was enabled — what importing a
+    /// timeline semaphore's OPAQUE_FD needs.
+    pub fn supports_opaque_fd_timeline_semaphore_import(&self) -> bool {
+        self.device
+            .extensions()
+            .contains(&vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION.name)
+    }
+
+    /// Refuse `refusing_operation` by name, naming this device, unless
+    /// `device_extension` was enabled on it.
+    pub(crate) fn refuse_unless_device_extension_is_enabled(
+        &self,
+        refusing_operation: &str,
+        device_extension: vk::Extension,
+        what_cannot_happen_without_it: &str,
+    ) -> Result<()> {
+        if self.device.extensions().contains(&device_extension.name) {
+            return Ok(());
+        }
+        Err(ConsumerRhiError::Gpu(format!(
+            "{refusing_operation}: {} is not enabled on this device ({}), so \
+             {what_cannot_happen_without_it}",
+            device_extension.name, self.device_name
+        )))
+    }
+
+    /// The property flags of memory type `memory_type_index`, or `None` when
+    /// the device has no such type.
+    pub fn memory_type_property_flags(
+        &self,
+        memory_type_index: u32,
+    ) -> Option<vk::MemoryPropertyFlags> {
+        (memory_type_index < self.memory_properties.memory_type_count)
+            .then(|| self.memory_properties.memory_types[memory_type_index as usize].property_flags)
     }
 
     /// Loaded Vulkan entry points.
@@ -458,7 +571,8 @@ impl ConsumerVulkanDevice {
     ///
     /// fd ownership transfers to the Vulkan driver on success — caller
     /// must NOT close `fd` afterwards. On error the caller still owns
-    /// `fd`.
+    /// `fd`. Refused by name on a device without
+    /// `VK_EXT_external_memory_dma_buf`.
     pub fn import_dma_buf_memory(
         &self,
         fd: i32,
@@ -466,6 +580,11 @@ impl ConsumerVulkanDevice {
         memory_type_bits: u32,
         preferred_flags: vk::MemoryPropertyFlags,
     ) -> Result<vk::DeviceMemory> {
+        self.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanDevice::import_dma_buf_memory",
+            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION,
+            "no DMA-BUF can be imported",
+        )?;
         let memory_type_index = self.find_memory_type(memory_type_bits, preferred_flags)?;
 
         let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
@@ -1010,6 +1129,97 @@ unsafe impl Send for ConsumerVulkanDevice {}
 unsafe impl Sync for ConsumerVulkanDevice {}
 
 #[cfg(test)]
+mod import_device_extension_partition_tests {
+    use super::*;
+
+    const REQUIRED: &[&CStr] = &[c"VK_KHR_external_memory", c"VK_KHR_external_memory_fd"];
+    const PROBED: &[&CStr] = &[
+        c"VK_EXT_external_memory_dma_buf",
+        c"VK_EXT_image_drm_format_modifier",
+        c"VK_KHR_external_semaphore_fd",
+    ];
+
+    /// A driver advertising the fd extensions but no DMA-BUF still yields a
+    /// device; the DMA-BUF arms refuse later, by name.
+    #[test]
+    fn a_driver_without_dma_buf_enables_only_the_required_extensions() {
+        let advertised = [
+            c"VK_KHR_external_memory",
+            c"VK_KHR_external_memory_fd",
+            c"VK_KHR_swapchain",
+        ];
+        assert_eq!(
+            import_device_extensions_to_enable(&advertised, REQUIRED, PROBED, &[]),
+            Ok(REQUIRED.to_vec())
+        );
+    }
+
+    /// Lavapipe advertises DMA-BUF and modifiers where `/dev/udmabuf` is
+    /// reachable; a software device enables neither, so the rig and a
+    /// container import the same flavours.
+    #[test]
+    fn a_software_device_advertising_dma_buf_enables_neither_dma_buf_nor_modifiers() {
+        let advertised = [
+            c"VK_KHR_external_memory",
+            c"VK_KHR_external_memory_fd",
+            c"VK_EXT_external_memory_dma_buf",
+            c"VK_EXT_image_drm_format_modifier",
+            c"VK_KHR_external_semaphore_fd",
+        ];
+        assert_eq!(
+            import_device_extensions_to_enable(
+                &advertised,
+                REQUIRED,
+                PROBED,
+                PROBED_DEVICE_EXTENSIONS_WITHHELD_FROM_A_SOFTWARE_DEVICE
+            ),
+            Ok(vec![
+                c"VK_KHR_external_memory",
+                c"VK_KHR_external_memory_fd",
+                c"VK_KHR_external_semaphore_fd",
+            ])
+        );
+    }
+
+    #[test]
+    fn every_advertised_probed_extension_is_enabled_and_no_other() {
+        let advertised = [
+            c"VK_KHR_external_semaphore_fd",
+            c"VK_KHR_external_memory_fd",
+            c"VK_EXT_external_memory_dma_buf",
+            c"VK_KHR_external_memory",
+        ];
+        assert_eq!(
+            import_device_extensions_to_enable(&advertised, REQUIRED, PROBED, &[]),
+            Ok(vec![
+                c"VK_KHR_external_memory",
+                c"VK_KHR_external_memory_fd",
+                c"VK_EXT_external_memory_dma_buf",
+                c"VK_KHR_external_semaphore_fd",
+            ])
+        );
+    }
+
+    #[test]
+    fn a_missing_required_extension_is_named_as_the_refusal() {
+        let advertised = [c"VK_KHR_external_memory", c"VK_EXT_external_memory_dma_buf"];
+        assert_eq!(
+            import_device_extensions_to_enable(&advertised, REQUIRED, PROBED, &[]),
+            Err(c"VK_KHR_external_memory_fd")
+        );
+    }
+
+    /// The platform partition itself: the DMA-BUF, modifier and semaphore-fd
+    /// extensions are never what decides whether a Linux device exists.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn on_linux_only_the_external_memory_fd_extensions_are_required() {
+        assert_eq!(REQUIRED_DEVICE_EXTENSIONS, REQUIRED);
+        assert_eq!(PROBED_DEVICE_EXTENSIONS, PROBED);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
@@ -1068,6 +1278,31 @@ mod tests {
             inherent, device.has_acquire_unmodified,
             "supports_qfot_acquire_unmodified must equal has_acquire_unmodified \
              (VK_QUEUE_FAMILY_EXTERNAL is core 1.1 and always available)"
+        );
+    }
+
+    /// The rule holds on the live device, not just in the partition: a
+    /// software device imports no DMA-BUF whatever its driver advertises,
+    /// while still coming up with the OPAQUE_FD import every pooled frame
+    /// there takes.
+    #[test]
+    fn a_software_device_comes_up_without_dma_buf_or_modifier_import() {
+        let device = match try_create() {
+            Some(d) => d,
+            None => return,
+        };
+        if !device.device_is_software() {
+            return;
+        }
+        assert!(!device.supports_dma_buf_memory_import());
+        assert!(!device.supports_drm_format_modifier_image_import());
+        let refusal = device
+            .import_dma_buf_memory(-1, 4096, u32::MAX, vk::MemoryPropertyFlags::HOST_VISIBLE)
+            .expect_err("a software device imports no DMA-BUF")
+            .to_string();
+        assert!(
+            refusal.contains("VK_EXT_external_memory_dma_buf") && refusal.contains(device.name()),
+            "the refusal names the extension and the device: {refusal}"
         );
     }
 
