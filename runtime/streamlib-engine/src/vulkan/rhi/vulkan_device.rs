@@ -4838,6 +4838,8 @@ unsafe impl Sync for HostVulkanDevice {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
 
     #[cfg(target_os = "linux")]
     fn inode_of(fd: std::os::unix::io::RawFd) -> Option<u64> {
@@ -4860,20 +4862,11 @@ mod tests {
     fn a_memory_type_refusal_before_the_import_closes_the_fd_it_was_handed() {
         use std::os::fd::{FromRawFd as _, OwnedFd};
 
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) = a_device_that_exports_dma_buf_or_skip(
+            "a_memory_type_refusal_before_the_import_closes_the_fd_it_was_handed",
+        ) else {
             return;
-        }
+        };
         let source =
             crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 4096)
                 .expect("source buffer allocation failed");
@@ -4955,17 +4948,11 @@ mod tests {
     fn an_exported_dma_buf_passes_the_dma_buf_check_as_the_same_fd() {
         use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 
-        let Ok(device) = HostVulkanDevice::new() else {
-            tracing::warn!("skipping — no Vulkan device available");
+        let Some(device) = a_device_that_exports_dma_buf_or_skip(
+            "an_exported_dma_buf_passes_the_dma_buf_check_as_the_same_fd",
+        ) else {
             return;
         };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
-            return;
-        }
         let source =
             crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 4096)
                 .expect("source buffer allocation failed");

@@ -528,7 +528,7 @@ struct SurfaceCache {
 
 /// The wire spelling of a device UUID: 32 lowercase hex characters.
 #[cfg(target_os = "linux")]
-fn lowercase_hex_of_device_uuid(device_uuid: [u8; 16]) -> String {
+pub(crate) fn lowercase_hex_of_device_uuid(device_uuid: [u8; 16]) -> String {
     use std::fmt::Write;
     device_uuid
         .iter()

@@ -8143,11 +8143,10 @@ mod tests {
             assert_eq!(registration.vk_memory_type_index, None, "{device_name}");
             assert_eq!(registration.exporting_device_uuid, None, "{device_name}");
         } else {
-            let exporting_device_uuid_in_lowercase_hex: String = host_device
-                .physical_device_uuid()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect();
+            let exporting_device_uuid_in_lowercase_hex =
+                crate::core::context::surface_store::lowercase_hex_of_device_uuid(
+                    host_device.physical_device_uuid(),
+                );
             assert_eq!(registration.handle_type, "opaque_fd", "{device_name}");
             assert_eq!(
                 registration.vk_memory_type_index,

@@ -266,6 +266,8 @@ unsafe impl Sync for VulkanPixelBufferPool {}
 mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_no_dma_buf_or_skip;
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -419,32 +421,6 @@ mod tests {
             pool.acquire().is_err(),
             "the forgotten buffer was handed out again"
         );
-    }
-
-    /// The device to run a DMA-BUF-absent arm on, or `None` — logged, naming
-    /// the device — where there is no device or it exports DMA-BUF.
-    #[cfg(target_os = "linux")]
-    fn a_device_that_exports_no_dma_buf_or_skip(test_name: &str) -> Option<Arc<HostVulkanDevice>> {
-        let device = match HostVulkanDevice::new() {
-            Ok(device) => device,
-            Err(no_device) => {
-                tracing::warn!(
-                    test_name,
-                    "no Vulkan device, so the test skips: {no_device}"
-                );
-                return None;
-            }
-        };
-        if device.supports_dma_buf_export() {
-            tracing::warn!(
-                test_name,
-                device = %device.name(),
-                "the device exports DMA-BUF, so this DMA-BUF-absent arm skips; pin \
-                 VK_DRIVER_FILES to lavapipe to run it"
-            );
-            return None;
-        }
-        Some(device)
     }
 
     /// On a device that exports no DMA-BUF the engine builds no DMA-BUF pool,

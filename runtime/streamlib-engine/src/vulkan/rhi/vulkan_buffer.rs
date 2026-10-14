@@ -1614,6 +1614,8 @@ unsafe impl Sync for HostVulkanBuffer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
     use std::os::fd::{FromRawFd as _, OwnedFd};
 
     /// A pipe's read end stands in for a plane fd a refusal must close;
@@ -1702,20 +1704,9 @@ mod tests {
     )]
     #[test]
     fn test_dma_buf_export() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) = a_device_that_exports_dma_buf_or_skip("test_dma_buf_export") else {
             return;
-        }
+        };
 
         let buf = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
             .expect("buffer creation failed");
@@ -2220,20 +2211,10 @@ mod tests {
     )]
     #[test]
     fn test_dma_buf_import_round_trip() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) = a_device_that_exports_dma_buf_or_skip("test_dma_buf_import_round_trip")
+        else {
             return;
-        }
+        };
 
         // Create source buffer and write a known pattern
         let width = 64u32;
@@ -2292,20 +2273,11 @@ mod tests {
     )]
     #[test]
     fn test_dma_buf_import_multi_plane_round_trip() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) =
+            a_device_that_exports_dma_buf_or_skip("test_dma_buf_import_multi_plane_round_trip")
+        else {
             return;
-        }
+        };
 
         let width = 64u32;
         let height = 4u32;
@@ -2507,20 +2479,11 @@ mod tests {
     )]
     #[test]
     fn storage_buffer_from_dma_buf_fd_round_trip() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) =
+            a_device_that_exports_dma_buf_or_skip("storage_buffer_from_dma_buf_fd_round_trip")
+        else {
             return;
-        }
+        };
 
         let byte_size: u64 = 8192;
         let src = HostVulkanBuffer::new_storage_buffer_host_visible(&device, byte_size)
@@ -2626,20 +2589,11 @@ mod tests {
     )]
     #[test]
     fn storage_buffer_from_dma_buf_fd_drops_on_failure() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) = a_device_that_exports_dma_buf_or_skip(
+            "storage_buffer_from_dma_buf_fd_drops_on_failure",
+        ) else {
             return;
-        }
+        };
 
         // Allocate a small source DMA-BUF (4 KB). Its kernel-side
         // backing is one page; asking to import it at 16 MB must

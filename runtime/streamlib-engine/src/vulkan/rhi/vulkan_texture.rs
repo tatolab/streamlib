@@ -1850,6 +1850,8 @@ impl super::VulkanTextureLike for HostVulkanTexture {
 mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
 
     /// The bytes an IOSurface-backed image's surface holds, row by row at
     /// the surface's own stride, trimmed to the image's width.
@@ -2020,20 +2022,11 @@ mod tests {
     fn a_texture_import_the_driver_refuses_leaves_no_fd_behind_and_closes_none_twice() {
         use std::os::fd::{FromRawFd as _, OwnedFd};
 
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) = a_device_that_exports_dma_buf_or_skip(
+            "a_texture_import_the_driver_refuses_leaves_no_fd_behind_and_closes_none_twice",
+        ) else {
             return;
-        }
+        };
 
         let source =
             crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 4096)
@@ -2270,20 +2263,9 @@ mod tests {
     )]
     #[test]
     fn test_dma_buf_export() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) = a_device_that_exports_dma_buf_or_skip("test_dma_buf_export") else {
             return;
-        }
+        };
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
         let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
@@ -2299,20 +2281,7 @@ mod tests {
     /// there is no Vulkan device to build one on.
     #[cfg(target_os = "linux")]
     fn dma_buf_exportable_texture_or_skip() -> Option<HostVulkanTexture> {
-        let device = match HostVulkanDevice::new() {
-            Ok(device) => device,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return None;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
-            return None;
-        }
+        let device = a_device_that_exports_dma_buf_or_skip("dma_buf_exportable_texture_or_skip")?;
         let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
         Some(HostVulkanTexture::new(&device, &desc).expect("texture creation failed"))
     }
@@ -2865,20 +2834,10 @@ mod tests {
     )]
     #[test]
     fn test_ring_texture_lifecycle() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
-        };
-        if !device.supports_dma_buf_export() {
-            tracing::warn!(
-                device = %device.name(),
-                "the device exports no DMA-BUF, so this DMA-BUF test skips"
-            );
+        let Some(device) = a_device_that_exports_dma_buf_or_skip("test_ring_texture_lifecycle")
+        else {
             return;
-        }
+        };
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Rgba8Unorm)
             .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
