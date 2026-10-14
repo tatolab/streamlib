@@ -1857,6 +1857,7 @@ mod tests {
     )]
     #[test]
     fn a_stated_memory_type_index_the_importer_cannot_bind_is_refused_by_name() {
+        use crate::core::rhi::plane_fd_under_test::PlaneFdUnderTest;
         use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
 
         let consumer_device = match ConsumerVulkanDevice::new() {
@@ -1868,10 +1869,12 @@ mod tests {
         };
 
         const NOT_A_MEMORY_TYPE_INDEX: u32 = 99;
-        let (memfd, memfd_number) = a_memfd_and_its_number();
+        let handed_fd = PlaneFdUnderTest::mint();
         let refusal = match ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
             &consumer_device,
-            memfd,
+            // SAFETY: the pipe's read end, handed over; the fixture closes it
+            // only if this import did not.
+            unsafe { OwnedFd::from_raw_fd(handed_fd.plane_fd) },
             4096,
             NOT_A_MEMORY_TYPE_INDEX,
         ) {
@@ -1883,47 +1886,24 @@ mod tests {
             "the refusal must name the stated index and what the buffer can bind, \
              got: {refusal}"
         );
-        assert_the_fd_number_is_closed(memfd_number, "the memoryTypeBits refusal");
+        assert!(
+            handed_fd.was_closed(),
+            "the memoryTypeBits refusal must close the fd it was handed"
+        );
 
-        let (memfd, memfd_number) = a_memfd_and_its_number();
+        let handed_fd = PlaneFdUnderTest::mint();
         ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
             &consumer_device,
-            memfd,
+            // SAFETY: as above.
+            unsafe { OwnedFd::from_raw_fd(handed_fd.plane_fd) },
             0,
             0,
         )
         .err()
         .expect("a zero-size import is refused");
-        assert_the_fd_number_is_closed(memfd_number, "the zero-size refusal");
-    }
-
-    /// A memfd to hand an import that must refuse it, and the number it holds.
-    #[cfg(target_os = "linux")]
-    fn a_memfd_and_its_number() -> (OwnedFd, std::os::fd::RawFd) {
-        use std::os::fd::AsRawFd as _;
-        // SAFETY: a NUL-terminated name; the returned fd is checked and owned.
-        let raw_fd = unsafe { libc::memfd_create(c"refused-opaque-fd-import".as_ptr(), 0) };
         assert!(
-            raw_fd >= 0,
-            "memfd_create: {}",
-            std::io::Error::last_os_error()
-        );
-        // SAFETY: the fd memfd_create just returned; nothing else holds it.
-        let memfd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
-        let memfd_number = memfd.as_raw_fd();
-        (memfd, memfd_number)
-    }
-
-    /// The number is closed in this process — exact under `--test-threads=1`,
-    /// where no other test can open a descriptor that reuses it in between.
-    #[cfg(target_os = "linux")]
-    fn assert_the_fd_number_is_closed(fd_number: std::os::fd::RawFd, refusing_path: &str) {
-        // SAFETY: F_GETFD reads descriptor flags and touches nothing else.
-        let flags = unsafe { libc::fcntl(fd_number, libc::F_GETFD) };
-        let errno = std::io::Error::last_os_error().raw_os_error();
-        assert!(
-            flags == -1 && errno == Some(libc::EBADF),
-            "{refusing_path} must close the fd it was handed; fd {fd_number} is still open"
+            handed_fd.was_closed(),
+            "the zero-size refusal must close the fd it was handed"
         );
     }
 

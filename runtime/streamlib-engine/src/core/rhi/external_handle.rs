@@ -359,6 +359,7 @@ impl RhiPixelBufferImport for super::PixelBuffer {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use crate::core::rhi::plane_fd_under_test::PlaneFdUnderTest;
 
     #[test]
     fn opaque_fd_and_dma_buf_with_same_fields_are_not_equal() {
@@ -390,55 +391,6 @@ mod tests {
             s.contains("exporting_allocation_memory_type_index: 3"),
             "got: {s}"
         );
-    }
-
-    /// A pipe stands in for a plane fd: each pipe has its own inode, and
-    /// holding the write end keeps that inode alive after the read end
-    /// closes, so "was it closed?" is answered without racing a parallel
-    /// test thread for the recycled number.
-    struct PlaneFdUnderTest {
-        plane_fd: std::os::unix::io::RawFd,
-        write_end_fd: std::os::unix::io::RawFd,
-        inode: u64,
-    }
-
-    fn inode_of(fd: std::os::unix::io::RawFd) -> Option<u64> {
-        let mut file_status = std::mem::MaybeUninit::<libc::stat>::uninit();
-        if unsafe { libc::fstat(fd, file_status.as_mut_ptr()) } != 0 {
-            return None;
-        }
-        Some(unsafe { file_status.assume_init() }.st_ino as u64)
-    }
-
-    impl PlaneFdUnderTest {
-        fn mint() -> Self {
-            let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
-            assert_eq!(
-                unsafe { libc::pipe2(pipe_ends.as_mut_ptr(), libc::O_CLOEXEC) },
-                0
-            );
-            let inode = inode_of(pipe_ends[0]).expect("a fresh pipe must stat");
-            Self {
-                plane_fd: pipe_ends[0],
-                write_end_fd: pipe_ends[1],
-                inode,
-            }
-        }
-
-        fn was_closed(&self) -> bool {
-            inode_of(self.plane_fd) != Some(self.inode)
-        }
-    }
-
-    impl Drop for PlaneFdUnderTest {
-        fn drop(&mut self) {
-            unsafe {
-                if !self.was_closed() {
-                    libc::close(self.plane_fd);
-                }
-                libc::close(self.write_end_fd);
-            }
-        }
     }
 
     /// An OPAQUE_FD pixel buffer imports as one plane; a handle set with an
