@@ -73,26 +73,27 @@ impl ConsumerVulkanBuffer {
     /// Single-FD only: OPAQUE_FD has no multi-plane semantics (CUDA imports
     /// flat memory; multi-plane DMA-BUFs go through [`Self::from_dma_buf_fds`]).
     ///
-    /// **Never close `fd` on error.** Ownership transfers to the driver
-    /// at the successful `vkAllocateMemory` inside this call, not at the
-    /// call's own success: every failure up to and including the import
-    /// leaves `fd` with the caller, but the bind and the mapping run
-    /// after it and free the imported memory — which closes the fd —
-    /// before returning. The two groups share error variants, so a caller
-    /// cannot tell them apart; closing on error is therefore a
-    /// double-close on the arms that already handed it over, and the only
-    /// safe rule is to leave it alone.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
+    /// Always consumes `opaque_fd`: every exit before `vkAllocateMemory`
+    /// closes it here, and from that call on it is the driver's whatever the
+    /// call returns. The spec leaves a failed import's fd with the caller,
+    /// but a driver that closes it anyway — as NVIDIA does a DMA-BUF — would
+    /// make a close here land on whatever the kernel has since handed that
+    /// number to, so a failed import leaks the fd rather than risk that.
+    #[tracing::instrument(
+        level = "trace",
+        skip(vulkan_device, opaque_fd),
+        fields(allocation_size)
+    )]
     pub fn from_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
-        fd: std::os::unix::io::RawFd,
+        opaque_fd: std::os::fd::OwnedFd,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
-        Self::from_opaque_fd_with_handle_type(
+        Self::from_opaque_fd_at_memory_type(
             vulkan_device,
-            fd,
+            opaque_fd,
             allocation_size,
-            ImportHandleType::OpaqueFdAtFirstMatchingMemoryType,
+            OpaqueFdImportMemoryType::FirstMatchingHostVisible,
         )
     }
 
@@ -104,30 +105,36 @@ impl ConsumerVulkanBuffer {
     /// `stated_memory_type_index` is the surface-share registration's
     /// `vk_memory_type_index`; a value the imported buffer cannot bind is
     /// refused here by name rather than tripping
-    /// VUID-vkBindBufferMemory-memory-01035 inside the driver.
+    /// VUID-vkBindBufferMemory-memory-01035 inside the driver, and so is a
+    /// type that is not HOST_VISIBLE | HOST_COHERENT, which the mapped read
+    /// needs.
     ///
-    /// Same fd-ownership rule as [`Self::from_opaque_fd`]: never close
-    /// `fd` on error.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
+    /// Same fd ownership as [`Self::from_opaque_fd`]: always consumes
+    /// `opaque_fd`, closing it on any exit before `vkAllocateMemory`.
+    #[tracing::instrument(
+        level = "trace",
+        skip(vulkan_device, opaque_fd),
+        fields(allocation_size)
+    )]
     pub fn from_opaque_fd_at_stated_memory_type_index(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
-        fd: std::os::unix::io::RawFd,
+        opaque_fd: std::os::fd::OwnedFd,
         allocation_size: vk::DeviceSize,
         stated_memory_type_index: u32,
     ) -> Result<Self> {
-        Self::from_opaque_fd_with_handle_type(
+        Self::from_opaque_fd_at_memory_type(
             vulkan_device,
-            fd,
+            opaque_fd,
             allocation_size,
-            ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index),
+            OpaqueFdImportMemoryType::StatedByTheExporter(stated_memory_type_index),
         )
     }
 
-    fn from_opaque_fd_with_handle_type(
+    fn from_opaque_fd_at_memory_type(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
-        fd: std::os::unix::io::RawFd,
+        opaque_fd: std::os::fd::OwnedFd,
         allocation_size: vk::DeviceSize,
-        handle_type: ImportHandleType,
+        memory_type: OpaqueFdImportMemoryType,
     ) -> Result<Self> {
         if allocation_size == 0 {
             return Err(ConsumerRhiError::Configuration(
@@ -136,7 +143,7 @@ impl ConsumerVulkanBuffer {
         }
 
         let plane =
-            import_single_plane_with_handle_type(vulkan_device, fd, allocation_size, handle_type)?;
+            import_single_opaque_fd_plane(vulkan_device, opaque_fd, allocation_size, memory_type)?;
         Ok(Self {
             vulkan_device: Arc::clone(vulkan_device),
             buffer: plane.buffer,
@@ -155,13 +162,19 @@ impl ConsumerVulkanBuffer {
     ///
     /// Partial-failure semantics: every plane that succeeded is torn
     /// down before the error is returned. fd ownership transfers to
-    /// the Vulkan driver on success per plane.
+    /// the Vulkan driver on success per plane. Refused by name, before any
+    /// Vulkan call, on a device without `VK_EXT_external_memory_dma_buf`.
     #[tracing::instrument(level = "trace", skip(vulkan_device, fds, plane_sizes), fields(plane_count = fds.len()))]
     pub fn from_dma_buf_fds(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
         plane_sizes: &[vk::DeviceSize],
     ) -> Result<Self> {
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanBuffer::from_dma_buf_fds",
+            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION,
+            "no DMA-BUF can be imported",
+        )?;
         if fds.is_empty() {
             return Err(ConsumerRhiError::Configuration(
                 "ConsumerVulkanBuffer: fd vec must be non-empty".into(),
@@ -415,19 +428,17 @@ impl ConsumerVulkanBuffer {
     }
 }
 
-/// Which `vkImportMemoryFdInfoKHR.handleType` to chain through when
-/// importing a plane, and how the memory type index is arrived at.
+/// How an OPAQUE_FD import arrives at the memory type index it binds.
 #[cfg(target_os = "linux")]
 #[derive(Copy, Clone, Debug)]
-enum ImportHandleType {
-    DmaBuf,
-    /// The importer searches for a memory type itself. Correct for
-    /// DMA-BUF-shaped negotiation, and a guess for OPAQUE_FD — it agrees
-    /// with the exporter only where both land on the same type.
-    OpaqueFdAtFirstMatchingMemoryType,
+enum OpaqueFdImportMemoryType {
+    /// The importer searches for a HOST_VISIBLE type itself — a guess for
+    /// OPAQUE_FD, which agrees with the exporter only where both land on the
+    /// same type.
+    FirstMatchingHostVisible,
     /// The exporter's own memory type index, as published on the
     /// surface-share wire.
-    OpaqueFdAtStatedMemoryTypeIndex(u32),
+    StatedByTheExporter(u32),
 }
 
 #[cfg(target_os = "linux")]
@@ -436,59 +447,64 @@ fn import_single_plane(
     fd: std::os::unix::io::RawFd,
     effective_size: vk::DeviceSize,
 ) -> Result<ConsumerImportedPlane> {
-    import_single_plane_with_handle_type(
-        vulkan_device,
-        fd,
-        effective_size,
-        ImportHandleType::DmaBuf,
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn import_single_plane_with_handle_type(
-    vulkan_device: &Arc<ConsumerVulkanDevice>,
-    fd: std::os::unix::io::RawFd,
-    effective_size: vk::DeviceSize,
-    handle_type: ImportHandleType,
-) -> Result<ConsumerImportedPlane> {
-    let vk_handle_type = match handle_type {
-        ImportHandleType::DmaBuf => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-        ImportHandleType::OpaqueFdAtFirstMatchingMemoryType
-        | ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(_) => {
-            vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD
-        }
-    };
-    let host_visible =
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
     create_bind_and_map_imported_plane(
         vulkan_device,
         effective_size,
-        vk_handle_type,
-        |requirements, alloc_size| match handle_type {
-            ImportHandleType::DmaBuf => vulkan_device.import_dma_buf_memory(
+        vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+        |requirements, alloc_size| {
+            vulkan_device.import_dma_buf_memory(
                 fd,
                 alloc_size,
                 requirements.memory_type_bits,
-                host_visible,
-            ),
-            ImportHandleType::OpaqueFdAtFirstMatchingMemoryType => vulkan_device
-                .import_opaque_fd_memory(
-                    fd,
-                    alloc_size,
-                    requirements.memory_type_bits,
-                    host_visible,
-                ),
-            ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index) => {
-                refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
-                    requirements.memory_type_bits,
-                    stated_memory_type_index,
-                )?;
-                vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
-                    fd,
-                    alloc_size,
-                    stated_memory_type_index,
-                )
-            }
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+        },
+    )
+}
+
+/// Import one OPAQUE_FD plane, consuming `opaque_fd`: the import closure owns
+/// it, so a `vkCreateBuffer` failure that never runs the closure, and every
+/// refusal inside it, closes it; it leaves this process's ownership only as
+/// `vkAllocateMemory`'s import info.
+#[cfg(target_os = "linux")]
+fn import_single_opaque_fd_plane(
+    vulkan_device: &Arc<ConsumerVulkanDevice>,
+    opaque_fd: std::os::fd::OwnedFd,
+    effective_size: vk::DeviceSize,
+    memory_type: OpaqueFdImportMemoryType,
+) -> Result<ConsumerImportedPlane> {
+    use std::os::fd::IntoRawFd as _;
+
+    create_bind_and_map_imported_plane(
+        vulkan_device,
+        effective_size,
+        vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+        move |requirements, alloc_size| {
+            let memory_type_index = match memory_type {
+                OpaqueFdImportMemoryType::FirstMatchingHostVisible => vulkan_device
+                    .find_memory_type(
+                        requirements.memory_type_bits,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )?,
+                OpaqueFdImportMemoryType::StatedByTheExporter(stated_memory_type_index) => {
+                    refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
+                        requirements.memory_type_bits,
+                        stated_memory_type_index,
+                    )?;
+                    refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+                        vulkan_device.property_flags_of_memory_type_index(stated_memory_type_index),
+                        stated_memory_type_index,
+                        vulkan_device.name(),
+                    )?;
+                    stated_memory_type_index
+                }
+            };
+            vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
+                opaque_fd.into_raw_fd(),
+                alloc_size,
+                memory_type_index,
+            )
         },
     )
 }
@@ -577,6 +593,34 @@ fn refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
          (memoryTypeBits=0x{memory_type_bits:x}) — the exporter and importer disagree \
          on the buffer's shape, and binding anyway is undefined behaviour"
     )))
+}
+
+/// Refuse a stated memory type the host cannot read through a mapping:
+/// `vkMapMemory` on a type without HOST_VISIBLE is invalid usage, and no
+/// flush or invalidate exists on this path, so a type without HOST_COHERENT
+/// would read stale bytes.
+#[cfg(target_os = "linux")]
+fn refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+    stated_memory_type_property_flags: Option<vk::MemoryPropertyFlags>,
+    stated_memory_type_index: u32,
+    importing_device_name: &str,
+) -> Result<()> {
+    let mapped_read_property_flags =
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    match stated_memory_type_property_flags {
+        Some(property_flags) if property_flags.contains(mapped_read_property_flags) => Ok(()),
+        Some(property_flags) => Err(ConsumerRhiError::Configuration(format!(
+            "ConsumerVulkanBuffer: the exporter states memory type index \
+             {stated_memory_type_index}, which is not HOST_VISIBLE | HOST_COHERENT on this \
+             device ({importing_device_name}; flags {property_flags:?}), so this import cannot \
+             read it through a mapping"
+        ))),
+        None => Err(ConsumerRhiError::Configuration(format!(
+            "ConsumerVulkanBuffer: the exporter states memory type index \
+             {stated_memory_type_index}, which this device ({importing_device_name}) does not \
+             have, so this import cannot map it"
+        ))),
+    }
 }
 
 fn teardown_plane(vulkan_device: &Arc<ConsumerVulkanDevice>, plane: ConsumerImportedPlane) {
@@ -680,6 +724,84 @@ mod stated_memory_type_index_tests {
                 "index {past_the_end} names no memory type even when every bit is set"
             );
         }
+    }
+
+    #[test]
+    fn a_host_visible_stated_memory_type_is_accepted() {
+        for host_visible_flags in [
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT
+                | vk::MemoryPropertyFlags::HOST_CACHED,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL
+                | vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+        ] {
+            assert!(
+                refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+                    Some(host_visible_flags),
+                    2,
+                    "device under test"
+                )
+                .is_ok(),
+                "{host_visible_flags:?} maps"
+            );
+        }
+    }
+
+    /// A device-local-only type would reach `vkMapMemory` as invalid usage;
+    /// the refusal names the index, the device and the flags instead.
+    #[test]
+    fn a_stated_memory_type_the_host_cannot_see_is_refused_naming_the_index_and_device() {
+        let refusal = refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+            Some(vk::MemoryPropertyFlags::DEVICE_LOCAL),
+            4,
+            "device under test",
+        )
+        .expect_err("a DEVICE_LOCAL-only type cannot be mapped")
+        .to_string();
+        assert!(
+            refusal.contains("memory type index 4"),
+            "names the index: {refusal}"
+        );
+        assert!(
+            refusal.contains("HOST_VISIBLE"),
+            "names the missing property: {refusal}"
+        );
+        assert!(
+            refusal.contains("device under test"),
+            "names the device: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_host_visible_stated_memory_type_without_host_coherent_is_refused() {
+        let refusal = refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+            Some(vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_CACHED),
+            3,
+            "device under test",
+        )
+        .expect_err("a non-coherent type would read stale bytes without an invalidate")
+        .to_string();
+        assert!(
+            refusal.contains("memory type index 3") && refusal.contains("HOST_COHERENT"),
+            "names the index and the missing property: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_stated_memory_type_the_device_does_not_have_is_refused() {
+        let refusal = refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+            None,
+            9,
+            "device under test",
+        )
+        .expect_err("no such type")
+        .to_string();
+        assert!(
+            refusal.contains("memory type index 9") && refusal.contains("device under test"),
+            "names the index and the device: {refusal}"
+        );
     }
 
     /// The refusal has to be actionable: it names the index the exporter

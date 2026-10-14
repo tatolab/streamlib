@@ -8,12 +8,14 @@
 //! socket carries the request (the parent allocates, checks the buffer into
 //! its surface-share service, and answers with the minted surface id), and
 //! the surface-share socket carries the memory itself — the checkout's
-//! `recvmsg` lands the DMA-BUF plane fds in this process's fd table via
+//! `recvmsg` lands the memory fds in this process's fd table via
 //! SCM_RIGHTS, and the consumer-side Vulkan import maps them. The escalate
 //! socket never carries fds.
 //!
-//! Pool allocations are DMA-BUF-flavoured, and external device APIs
-//! import OPAQUE_FD — one allocation cannot export both on NVIDIA. So
+//! Pool allocations are DMA-BUF-flavoured where the device exports
+//! DMA-BUF and OPAQUE_FD where it does not — the software device — and a
+//! pixel buffer of either flavour imports and maps here. External device
+//! APIs import OPAQUE_FD, and one allocation cannot export both on NVIDIA. So
 //! the device side goes through the parent's per-surface staging buffer:
 //! `open_device_export_staging` has the parent publish that staging and
 //! its refill timeline, the checkout delivers both fds, CUDA imports the
@@ -64,6 +66,8 @@ pub(crate) use gpu_kernels::{
     HelperProcessRayTracingKernelRegistration, compute_dispatch_wire_entry,
 };
 
+#[cfg(target_os = "linux")]
+use linux::HelperPixelBufferMemoryFlavour;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
     CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutStorageBuffer,
@@ -349,13 +353,10 @@ pub(crate) struct HelperCheckedOutPixelSurface {
         reason = "settled by its own Drop; nothing reads it, and that is the point"
     )]
     pub(crate) release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
-    /// The plane fds this checkout was delivered, kept so
-    /// `export_dma_buf` can answer from them. They are the same fds a
-    /// host-side export would mint — the check-out is a kernel dup of
-    /// that export — so the child answers locally instead of asking for
-    /// something it already holds.
+    /// Which handle type the memory crossed as, and for a DMA-BUF the plane
+    /// fds `export_dma_buf` answers from.
     #[cfg(target_os = "linux")]
-    exported_plane_fds: Vec<OwnedFd>,
+    memory_flavour: HelperPixelBufferMemoryFlavour,
     /// The client this surface was checked out through, and the one its
     /// device export goes back to.
     #[cfg(target_os = "linux")]

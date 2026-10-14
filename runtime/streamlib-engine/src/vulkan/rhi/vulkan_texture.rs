@@ -204,7 +204,7 @@ pub struct HostVulkanTexture {
     /// HostVulkanDevice reference for tracked allocation/free through the RHI.
     vulkan_device: Option<Arc<HostVulkanDevice>>,
     image: Option<vk::Image>,
-    /// VMA allocation (always allocated with DMA-BUF export flags via HostVulkanDevice).
+    /// VMA allocation, carrying whatever export flavour the pool it came from declares.
     allocation: Option<vma::Allocation>,
     /// Raw device memory for the paths VMA cannot serve — a DMA-BUF import, or
     /// the binding an IOSurface-backed image takes.
@@ -228,7 +228,6 @@ pub struct HostVulkanTexture {
     /// must NOT call the OPAQUE_FD export accessor because the underlying
     /// memory carries `DMA_BUF_EXT` (or no) export handle types, and
     /// `vkGetMemoryFdKHR` with `OPAQUE_FD` would fail at the driver.
-    /// Mirrors `HostVulkanBuffer::is_opaque_fd_export`.
     #[cfg(target_os = "linux")]
     is_opaque_fd_export: bool,
     /// DRM format modifier the driver picked for this image. Meaningful
@@ -250,8 +249,9 @@ pub struct HostVulkanTexture {
 }
 
 impl HostVulkanTexture {
-    /// Create a new DMA-BUF exportable Vulkan texture via the device's
-    /// dedicated VMA export pool.
+    /// Create a Vulkan texture — DMA-BUF exportable through the device's
+    /// dedicated VMA export pool on a device that exports DMA-BUF, a local
+    /// allocation on one that does not.
     ///
     /// The export pool is configured with `pMemoryAllocateNext` set to
     /// `VkExportMemoryAllocateInfo::DMA_BUF_EXT`, isolating exportable
@@ -277,9 +277,9 @@ impl HostVulkanTexture {
 
         // Declare DMA-BUF handle type at image creation — required by Vulkan spec
         // (VUID-vkBindImageMemory-memory-02728) when memory will be allocated with
-        // VkExportMemoryAllocateInfo. Omitted where the handle type does not
-        // exist, or vkCreateImage refuses every allocation; see
-        // `CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM`.
+        // VkExportMemoryAllocateInfo. Omitted on a device that exports no
+        // DMA-BUF: there no DMA-BUF pool exists, and a driver without the
+        // handle type refuses the image outright with FEATURE_NOT_PRESENT.
         let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
             .build();
@@ -299,7 +299,7 @@ impl HostVulkanTexture {
             .usage(usage_flags)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED);
-        let image_info = if super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM {
+        let image_info = if vulkan_device.supports_dma_buf_export() {
             image_info.push_next(&mut external_image_info)
         } else {
             image_info
@@ -312,7 +312,7 @@ impl HostVulkanTexture {
         };
 
         // Prefer the DMA-BUF image pool; fall back to default allocator (no export)
-        // if the pool isn't available (e.g., external memory unsupported).
+        // if the pool isn't available (a device that exports no DMA-BUF).
         #[cfg(target_os = "linux")]
         let allocation_source = VmaFrameAllocationSource::export_pool_or_the_default_allocator(
             vulkan_device.dma_buf_image_pool_pinned_to_one_memory_type(),
@@ -1157,8 +1157,7 @@ impl HostVulkanTexture {
 
     /// True iff this texture was allocated via
     /// [`Self::new_opaque_fd_export`]. Gates the OPAQUE_FD export
-    /// accessor; the buffer-side mirror is
-    /// `HostVulkanBuffer::is_opaque_fd_export`.
+    /// accessor.
     pub fn is_opaque_fd_export(&self) -> bool {
         self.is_opaque_fd_export
     }
@@ -1256,10 +1255,27 @@ impl HostVulkanTexture {
     /// transferring ownership via SCM_RIGHTS / an external-memory import,
     /// both of which `dup` again on receipt). The texture keeps no copy and
     /// will never close it.
+    ///
+    /// Refused by name for an allocation that carries no DMA-BUF export: an
+    /// OPAQUE_FD image, and any image this engine allocated on a device that
+    /// exports no DMA-BUF.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
             Error::GpuError("Cannot export DMA-BUF: no HostVulkanDevice stored".into())
         })?;
+        if self.imported_memory.is_none() && self.is_opaque_fd_export {
+            return Err(Error::NotSupported(format!(
+                "HostVulkanTexture::export_dma_buf_fd: this texture's memory on {} is an \
+                 OPAQUE_FD allocation, which exports no DMA-BUF",
+                vk_dev.name()
+            )));
+        }
+        if self.imported_memory.is_none() && !vk_dev.supports_dma_buf_export() {
+            return Err(Error::NotSupported(format!(
+                "HostVulkanTexture::export_dma_buf_fd: {} exports no DMA-BUF",
+                vk_dev.name()
+            )));
+        }
 
         // Get DeviceMemory from raw allocation (export/import path) or VMA allocation
         let device_memory = if let Some(memory) = self.imported_memory {
@@ -1834,6 +1850,8 @@ impl super::VulkanTextureLike for HostVulkanTexture {
 mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
 
     /// The bytes an IOSurface-backed image's surface holds, row by row at
     /// the surface's own stride, trimmed to the image's width.
@@ -2004,12 +2022,10 @@ mod tests {
     fn a_texture_import_the_driver_refuses_leaves_no_fd_behind_and_closes_none_twice() {
         use std::os::fd::{FromRawFd as _, OwnedFd};
 
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
+        let Some(device) = a_device_that_exports_dma_buf_or_skip(
+            "a_texture_import_the_driver_refuses_leaves_no_fd_behind_and_closes_none_twice",
+        ) else {
+            return;
         };
 
         let source =
@@ -2247,12 +2263,8 @@ mod tests {
     )]
     #[test]
     fn test_dma_buf_export() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
+        let Some(device) = a_device_that_exports_dma_buf_or_skip("test_dma_buf_export") else {
+            return;
         };
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
@@ -2269,13 +2281,7 @@ mod tests {
     /// there is no Vulkan device to build one on.
     #[cfg(target_os = "linux")]
     fn dma_buf_exportable_texture_or_skip() -> Option<HostVulkanTexture> {
-        let device = match HostVulkanDevice::new() {
-            Ok(device) => device,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return None;
-            }
-        };
+        let device = a_device_that_exports_dma_buf_or_skip("dma_buf_exportable_texture_or_skip")?;
         let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
         Some(HostVulkanTexture::new(&device, &desc).expect("texture creation failed"))
     }
@@ -2828,12 +2834,9 @@ mod tests {
     )]
     #[test]
     fn test_ring_texture_lifecycle() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
+        let Some(device) = a_device_that_exports_dma_buf_or_skip("test_ring_texture_lifecycle")
+        else {
+            return;
         };
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Rgba8Unorm)

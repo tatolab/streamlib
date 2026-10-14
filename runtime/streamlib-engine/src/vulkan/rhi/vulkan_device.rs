@@ -53,18 +53,6 @@ use super::{
     VulkanValidationMessageCounts,
 };
 
-/// Whether cross-process export through a file descriptor exists on this
-/// platform.
-///
-/// DMA-BUF and OPAQUE_FD are Linux mechanisms. Declaring either handle type on a
-/// driver that has neither makes `vkCreateBuffer` / `vkCreateImage` refuse the
-/// allocation outright with `FEATURE_NOT_PRESENT`, and reaching
-/// `vkGetSemaphoreFdKHR` takes vulkanalia's panicking stub for a command the
-/// loader never resolved. Where the mechanism does not exist the export
-/// declaration is omitted and the allocation is local.
-pub(crate) const CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM: bool =
-    cfg!(target_os = "linux");
-
 /// Best-effort hint about which third-party GPU compute libraries are
 /// **available to integrate against this device**. Probed once at
 /// device construction; each field is `true` when the matching vendor
@@ -1599,7 +1587,7 @@ impl HostVulkanDevice {
             (None, None)
         };
 
-        // Build DMA-BUF export pools on Linux when external memory is supported.
+        // Build DMA-BUF export pools only on a device that exports DMA-BUF.
         // The tiled pool is built only when the EGL probe found at least one
         // RT-capable modifier for BGRA — that's the probe shape.
         #[cfg(target_os = "linux")]
@@ -1610,7 +1598,7 @@ impl HostVulkanDevice {
             dma_buf_buffer_export_info,
             dma_buf_image_export_info,
             dma_buf_image_tiled_export_info,
-        ) = if supports_external_memory {
+        ) = if supports_dma_buf_export {
             // BGRA8_UNORM in Vulkan = ARGB8888 in DRM.
             let bgra_modifiers =
                 drm_modifier_table.rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
@@ -3967,27 +3955,18 @@ impl HostVulkanDevice {
         memory_type_bits: u32,
         preferred_flags: vk::MemoryPropertyFlags,
     ) -> Result<vk::DeviceMemory> {
-        use std::os::fd::IntoRawFd as _;
-
         #[cfg(target_os = "linux")]
         let dma_buf_fd = refuse_a_file_descriptor_that_is_not_a_dma_buf(dma_buf_fd)?;
         let memory_type_index = self.find_memory_type(memory_type_bits, preferred_flags)?;
 
-        let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
-            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-            .fd(dma_buf_fd.into_raw_fd())
-            .build();
-
-        let alloc_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(allocation_size)
-            .memory_type_index(memory_type_index)
-            .push_next(&mut import_info)
-            .build();
-
-        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }
+        let (memory, count) = self
+            .allocate_device_memory_importing_the_fd(
+                dma_buf_fd,
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                allocation_size,
+                memory_type_index,
+            )
             .map_err(|e| Error::GpuError(format!("Failed to import DMA-BUF memory: {e}")))?;
-
-        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::debug!(
             "HostVulkanDevice: DMA-BUF memory imported ({} bytes, type={}, live={})",
             allocation_size,
@@ -3996,6 +3975,99 @@ impl HostVulkanDevice {
         );
 
         Ok(memory)
+    }
+
+    /// The `vkAllocateMemory` import both fd import paths share, after each
+    /// has made its own refusals. The fd is the driver's from the call on,
+    /// whatever it returns; a success counts one more live allocation, and
+    /// the new count comes back with the memory.
+    fn allocate_device_memory_importing_the_fd(
+        &self,
+        imported_fd: std::os::fd::OwnedFd,
+        handle_type: vk::ExternalMemoryHandleTypeFlags,
+        allocation_size: vk::DeviceSize,
+        memory_type_index: u32,
+    ) -> std::result::Result<(vk::DeviceMemory, usize), vk::ErrorCode> {
+        use std::os::fd::IntoRawFd as _;
+
+        let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
+            .handle_type(handle_type)
+            .fd(imported_fd.into_raw_fd())
+            .build();
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(allocation_size)
+            .memory_type_index(memory_type_index)
+            .push_next(&mut import_info)
+            .build();
+
+        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }?;
+        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
+        Ok((memory, count))
+    }
+
+    /// Import an OPAQUE_FD as device memory at the memory type index the
+    /// exporter allocated from — OPAQUE_FD has no fd-properties query, so
+    /// the exporter's stated index is the only conforming one.
+    ///
+    /// Takes the fd by value. Every exit before `vkAllocateMemory` closes
+    /// it; from that call on it is the driver's whatever the call returns.
+    /// The spec leaves a failed import's fd with the caller, but a driver
+    /// that closes it anyway — as NVIDIA does a DMA-BUF — would make a close
+    /// here land on whatever the kernel has since handed that number to, so
+    /// a failed import leaks the fd rather than risk that.
+    #[cfg(target_os = "linux")]
+    pub fn import_opaque_fd_memory_at_stated_memory_type_index(
+        &self,
+        opaque_fd: std::os::fd::OwnedFd,
+        allocation_size: vk::DeviceSize,
+        stated_memory_type_index: u32,
+    ) -> Result<vk::DeviceMemory> {
+        if !self.supports_external_memory {
+            return Err(Error::NotSupported(format!(
+                "OPAQUE_FD import: {} did not enable VK_KHR_external_memory_fd",
+                self.device_name
+            )));
+        }
+        if stated_memory_type_index >= self.memory_properties.memory_type_count {
+            return Err(Error::Configuration(format!(
+                "OPAQUE_FD import: the stated memory type index {stated_memory_type_index} is not \
+                 one of the {} memory types {} has",
+                self.memory_properties.memory_type_count, self.device_name
+            )));
+        }
+
+        let (memory, count) = self
+            .allocate_device_memory_importing_the_fd(
+                opaque_fd,
+                vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+                allocation_size,
+                stated_memory_type_index,
+            )
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "OPAQUE_FD import of {allocation_size} bytes at memory type \
+                     {stated_memory_type_index} on {} failed: {e}",
+                    self.device_name
+                ))
+            })?;
+        tracing::debug!(
+            allocation_size,
+            stated_memory_type_index,
+            live = count,
+            "HostVulkanDevice: OPAQUE_FD memory imported"
+        );
+        Ok(memory)
+    }
+
+    /// The property flags of the memory type at `memory_type_index`, or
+    /// `None` past the device's memory type count.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn property_flags_of_memory_type_index(
+        &self,
+        memory_type_index: u32,
+    ) -> Option<vk::MemoryPropertyFlags> {
+        (memory_type_index < self.memory_properties.memory_type_count)
+            .then(|| self.memory_properties.memory_types[memory_type_index as usize].property_flags)
     }
 
     /// Import a caller-owned host range as device memory through
@@ -4056,7 +4128,7 @@ impl HostVulkanDevice {
     }
 
     /// Get the VMA pool for DMA-BUF exportable HOST_VISIBLE buffers.
-    /// Returns None if external memory is not supported on this device.
+    /// Returns None on a device that exports no DMA-BUF.
     #[cfg(target_os = "linux")]
     pub fn dma_buf_buffer_pool(&self) -> Option<&vma::Pool> {
         self.dma_buf_buffer_pool
@@ -4065,7 +4137,7 @@ impl HostVulkanDevice {
     }
 
     /// Get the VMA pool for DMA-BUF exportable DEVICE_LOCAL images.
-    /// Returns None if external memory is not supported on this device.
+    /// Returns None on a device that exports no DMA-BUF.
     #[cfg(target_os = "linux")]
     pub fn dma_buf_image_pool(&self) -> Option<&vma::Pool> {
         self.dma_buf_image_pool
@@ -4693,7 +4765,7 @@ impl HostVulkanDevice {
         self.live_allocation_count.fetch_sub(1, Ordering::Relaxed);
     }
 
-    /// Map imported device memory for CPU access (DMA-BUF import path only).
+    /// Map imported device memory for CPU access (DMA-BUF and OPAQUE_FD imports).
     pub fn map_imported_memory(
         &self,
         memory: vk::DeviceMemory,
@@ -4712,8 +4784,8 @@ impl HostVulkanDevice {
         unsafe { self.device.unmap_memory(memory) };
     }
 
-    /// Live raw `vkAllocateMemory` allocations: DMA-BUF and host-pointer
-    /// imports, and IOSurface-backed image memory.
+    /// Live raw `vkAllocateMemory` allocations: DMA-BUF, OPAQUE_FD and
+    /// host-pointer imports, and IOSurface-backed image memory.
     pub fn live_import_allocation_count(&self) -> usize {
         self.live_allocation_count.load(Ordering::Relaxed)
     }
@@ -4778,6 +4850,8 @@ unsafe impl Sync for HostVulkanDevice {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
 
     #[cfg(target_os = "linux")]
     fn inode_of(fd: std::os::unix::io::RawFd) -> Option<u64> {
@@ -4800,12 +4874,10 @@ mod tests {
     fn a_memory_type_refusal_before_the_import_closes_the_fd_it_was_handed() {
         use std::os::fd::{FromRawFd as _, OwnedFd};
 
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
+        let Some(device) = a_device_that_exports_dma_buf_or_skip(
+            "a_memory_type_refusal_before_the_import_closes_the_fd_it_was_handed",
+        ) else {
+            return;
         };
         let source =
             crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 4096)
@@ -4888,8 +4960,9 @@ mod tests {
     fn an_exported_dma_buf_passes_the_dma_buf_check_as_the_same_fd() {
         use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 
-        let Ok(device) = HostVulkanDevice::new() else {
-            tracing::warn!("skipping — no Vulkan device available");
+        let Some(device) = a_device_that_exports_dma_buf_or_skip(
+            "an_exported_dma_buf_passes_the_dma_buf_check_as_the_same_fd",
+        ) else {
             return;
         };
         let source =

@@ -64,6 +64,31 @@ fn parse_device_uuid(as_hex: &str) -> PyResult<[u8; 16]> {
     Ok(uuid)
 }
 
+/// The memory type index an OPAQUE_FD registration states, or the refusal
+/// naming `registered_subject`.
+///
+/// Mandatory, not defensive: a conforming OPAQUE_FD import binds the index
+/// the *exporter* allocated from, and the handle type has no fd-properties
+/// query to discover it with. A registration without one would leave the
+/// import guessing, and a guess binds the wrong memory type rather than
+/// failing — silently, until the pixels are wrong.
+fn memory_type_index_stated_by_an_opaque_fd_registration(
+    registered_subject: std::fmt::Arguments<'_>,
+    registration: &serde_json::Value,
+) -> PyResult<u32> {
+    registration
+        .get("vk_memory_type_index")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|index| u32::try_from(index).ok())
+        .ok_or_else(|| {
+            crate::python_processor_context::gpu_operation_error(format!(
+                "{registered_subject} was registered without a usable vk_memory_type_index; an \
+                 OPAQUE_FD import must bind the memory type index the exporter allocated from, \
+                 and guessing one binds the wrong memory instead of failing"
+            ))
+        })
+}
+
 /// A `u64` array field of a checkout's registration metadata; absent or
 /// malformed entries collapse to an empty array the caller length-checks.
 fn plane_u64_array_check_out_metadata_field(response: &serde_json::Value, field: &str) -> Vec<u64> {
@@ -126,20 +151,64 @@ fn duplicate_first_plane_fd_for_export(
     })
 }
 
+/// Which handle type a checked-out pixel buffer's memory crossed as.
+pub(crate) enum HelperPixelBufferMemoryFlavour {
+    /// DMA-BUF planes. The delivered fds are kept so `export_dma_buf`
+    /// answers from them: they are the same fds a host-side export would
+    /// mint — the check-out is a kernel dup of that export — so the child
+    /// answers locally instead of asking for something it already holds.
+    DmaBuf { exportable_plane_fds: Vec<OwnedFd> },
+    /// One OPAQUE_FD allocation — what a pooled frame is on a device without
+    /// DMA-BUF export. Its fd went to the Vulkan import, which owns it.
+    OpaqueFd,
+}
+
+/// The refusal both doors that would hand an OPAQUE_FD pixel buffer's
+/// memory to native code give it.
+fn an_opaque_fd_pixel_buffer_exports_no_memory_fd_error(surface_id: &str) -> PyErr {
+    PyRuntimeError::new_err(format!(
+        "surface {surface_id:?} is an OPAQUE_FD pixel buffer — what a pooled frame is on a \
+         device without DMA-BUF export — so it has no DMA-BUF fd to hand out, and \
+         `export_opaque_fd` hands out texture memory only; reach its pixels through the CPU \
+         door"
+    ))
+}
+
 impl HelperCheckedOutPixelSurface {
     /// A DMA-BUF fd for the first plane, and the plane's byte size.
     ///
     /// The fd is a `dup` of the one this process was handed at check-out,
     /// so the caller owns it and closing it does not disturb this
-    /// surface's own mapping. Always a genuine DMA-BUF: the pixel
-    /// checkout refuses every other flavour before this surface can
-    /// exist, so this name never mislabels an fd.
+    /// surface's own mapping. Refused by name for an OPAQUE_FD pixel
+    /// buffer, so this name never mislabels an fd.
     pub(crate) fn export_dma_buf(&self) -> PyResult<(RawFd, u64)> {
-        let exported = duplicate_first_plane_fd_for_export(&self.exported_plane_fds, "surface")?;
+        let HelperPixelBufferMemoryFlavour::DmaBuf {
+            exportable_plane_fds,
+        } = &self.memory_flavour
+        else {
+            return Err(an_opaque_fd_pixel_buffer_exports_no_memory_fd_error(
+                &self.surface_id,
+            ));
+        };
+        let exported = duplicate_first_plane_fd_for_export(exportable_plane_fds, "surface")?;
         Ok((
             exported.into_raw_fd(),
             self.bytes_per_row * u64::from(self.height),
         ))
+    }
+
+    /// The refusal `export_opaque_fd` gives a pixel buffer, pointing at the
+    /// door its flavour does have.
+    fn export_opaque_fd_refusal(&self) -> PyErr {
+        match self.memory_flavour {
+            HelperPixelBufferMemoryFlavour::DmaBuf { .. } => PyRuntimeError::new_err(
+                "this surface is a DMA-BUF pixel buffer, not a texture; its memory fd exports \
+                 through `export_dma_buf`",
+            ),
+            HelperPixelBufferMemoryFlavour::OpaqueFd => {
+                an_opaque_fd_pixel_buffer_exports_no_memory_fd_error(&self.surface_id)
+            }
+        }
     }
 }
 
@@ -170,10 +239,7 @@ impl HelperCheckedOutSurface {
     /// or the refusal naming the right door.
     pub(crate) fn export_opaque_fd(&self) -> PyResult<OpaqueFdTextureExportDescription> {
         match self {
-            Self::PixelBuffer(_) => Err(PyRuntimeError::new_err(
-                "this surface is a pixel buffer, not a texture; its memory fd exports \
-                 through `export_dma_buf`",
-            )),
+            Self::PixelBuffer(pixel_surface) => Err(pixel_surface.export_opaque_fd_refusal()),
             Self::Texture(texture_surface) => texture_surface.export_opaque_fd(),
             Self::AcquiredDeviceTexture(_) => {
                 Err(an_acquired_device_texture_carries_no_exportable_fd_error())
@@ -181,6 +247,19 @@ impl HelperCheckedOutSurface {
             Self::StorageBuffer(_) => Err(super::a_tensor_surface_is_not_a_pixel_surface()),
         }
     }
+}
+
+/// The handle type a pixel-buffer checkout's registration names, with the
+/// plane fds it delivered, decided before any fd is duplicated or any device
+/// is created.
+enum CheckedOutPixelBufferHandleType {
+    DmaBuf {
+        plane_fds: Vec<OwnedFd>,
+    },
+    OpaqueFdAtStatedMemoryTypeIndex {
+        opaque_memory_fd: OwnedFd,
+        stated_memory_type_index: u32,
+    },
 }
 
 /// How many connections a helper sets aside after a timeout before it stops
@@ -362,17 +441,43 @@ impl HelperProcessGpuExchangeClient {
             }
         }
 
-        let handle_type = response
+        let delivered_plane_fd_count = plane_fds.len();
+        let pixel_buffer_handle_type = match response
             .get("handle_type")
             .and_then(|value| value.as_str())
-            .unwrap_or("dma_buf");
-        if handle_type != "dma_buf" {
-            return Err(PyRuntimeError::new_err(format!(
-                "surface {surface_id:?} is registered as {handle_type:?}, which is not a \
-                 host-mappable pixel buffer: an opaque_fd surface belongs to the device-export \
-                 path and imports through CUDA, not a CPU mapping"
-            )));
-        }
+            .unwrap_or("dma_buf")
+        {
+            "dma_buf" => CheckedOutPixelBufferHandleType::DmaBuf { plane_fds },
+            "opaque_fd" => {
+                // Refused before any dup exists to leak or any device is
+                // needed: every pooled frame is one RGBA allocation today.
+                let [opaque_memory_fd] = <[OwnedFd; 1]>::try_from(plane_fds).map_err(
+                    |delivered_plane_fds: Vec<OwnedFd>| {
+                        PyRuntimeError::new_err(format!(
+                            "pixel buffer {surface_id:?} is registered as opaque_fd with {} \
+                             planes; an OPAQUE_FD pixel buffer imports as one allocation at its \
+                             stated memory type index, so only a single-plane one is accepted",
+                            delivered_plane_fds.len()
+                        ))
+                    },
+                )?;
+                CheckedOutPixelBufferHandleType::OpaqueFdAtStatedMemoryTypeIndex {
+                    opaque_memory_fd,
+                    stated_memory_type_index:
+                        memory_type_index_stated_by_an_opaque_fd_registration(
+                            format_args!("opaque_fd pixel buffer {surface_id:?}"),
+                            response,
+                        )?,
+                }
+            }
+            other => {
+                return Err(PyRuntimeError::new_err(format!(
+                    "pixel buffer {surface_id:?} is registered with handle type {other:?}, \
+                     which this consumer does not know; a pixel buffer crosses as dma_buf or \
+                     opaque_fd"
+                )));
+            }
+        };
 
         let width = required_positive_u32_check_out_metadata_field(response, surface_id, "width")?;
         let height =
@@ -383,10 +488,10 @@ impl HelperProcessGpuExchangeClient {
             .unwrap_or("unknown");
         let format = crate::python_processor_context::parse_pixel_format_name(format_name)?;
         let plane_sizes = plane_u64_array_check_out_metadata_field(response, "plane_sizes");
-        if plane_sizes.len() != plane_fds.len() {
+        if plane_sizes.len() != delivered_plane_fd_count {
             return Err(PyRuntimeError::new_err(format!(
-                "check_out of {surface_id:?} returned {} plane fds but {} plane sizes",
-                plane_fds.len(),
+                "check_out of {surface_id:?} returned {delivered_plane_fd_count} plane fds but {} \
+                 plane sizes",
                 plane_sizes.len(),
             )));
         }
@@ -402,9 +507,24 @@ impl HelperProcessGpuExchangeClient {
         let bytes_per_row = plane0_size / u64::from(height);
 
         let vulkan_device = self.consumer_vulkan_device()?;
-        let dup_raw_fds = duplicate_plane_fds_for_import(&plane_fds)?;
-        let consumer_buffer =
-            ConsumerVulkanBuffer::from_dma_buf_fds(&vulkan_device, &dup_raw_fds, &plane_sizes)
+        let (consumer_buffer, memory_flavour) = match pixel_buffer_handle_type {
+            CheckedOutPixelBufferHandleType::DmaBuf { plane_fds } => {
+                // Refused before the dups exist: a multi-plane refusal from the
+                // RHI leaves its dups unclosed (see `close_single_plane_dup_vulkan_refused`).
+                if !vulkan_device.supports_dma_buf_memory_import() {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "surface {surface_id:?} crosses as dma_buf, and this helper's device \
+                         ({}) did not enable VK_EXT_external_memory_dma_buf, so it cannot \
+                         import it",
+                        vulkan_device.name()
+                    )));
+                }
+                let dup_raw_fds = duplicate_plane_fds_for_import(&plane_fds)?;
+                let consumer_buffer = ConsumerVulkanBuffer::from_dma_buf_fds(
+                    &vulkan_device,
+                    &dup_raw_fds,
+                    &plane_sizes,
+                )
                 .map_err(|import_failure| {
                     close_single_plane_dup_vulkan_refused(&dup_raw_fds);
                     PyRuntimeError::new_err(format!(
@@ -412,6 +532,39 @@ impl HelperProcessGpuExchangeClient {
                          {import_failure}"
                     ))
                 })?;
+                (
+                    consumer_buffer,
+                    HelperPixelBufferMemoryFlavour::DmaBuf {
+                        exportable_plane_fds: plane_fds,
+                    },
+                )
+            }
+            CheckedOutPixelBufferHandleType::OpaqueFdAtStatedMemoryTypeIndex {
+                opaque_memory_fd,
+                stated_memory_type_index,
+            } => {
+                let consumer_buffer =
+                    ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+                        &vulkan_device,
+                        opaque_memory_fd,
+                        plane0_size,
+                        stated_memory_type_index,
+                    )
+                    .map_err(|import_failure| {
+                        PyRuntimeError::new_err(format!(
+                            "Vulkan could not import opaque_fd pixel buffer {surface_id:?} at \
+                             memory type index {stated_memory_type_index}: {import_failure}"
+                        ))
+                    })?;
+                if consumer_buffer.mapped_ptr().is_null() {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "opaque_fd pixel buffer {surface_id:?} imported without a host mapping; \
+                         the CPU doors read the mapping, so there is nothing to hand out"
+                    )));
+                }
+                (consumer_buffer, HelperPixelBufferMemoryFlavour::OpaqueFd)
+            }
+        };
 
         Ok(HelperCheckedOutSurface::PixelBuffer(
             HelperCheckedOutPixelSurface {
@@ -427,7 +580,7 @@ impl HelperProcessGpuExchangeClient {
                     exchange_client: Arc::clone(self),
                     surface_id: surface_id.to_string(),
                 },
-                exported_plane_fds: plane_fds,
+                memory_flavour,
                 exchange_client: Arc::clone(self),
             },
         ))
@@ -436,3 +589,9 @@ impl HelperProcessGpuExchangeClient {
 
 #[cfg(test)]
 mod surface_share_response_timeout_tests;
+
+/// The OPAQUE_FD pixel-buffer arm against an engine-exported allocation. Needs
+/// a Vulkan device and skips where none comes up — the rig runs it on NVIDIA
+/// and on lavapipe.
+#[cfg(test)]
+mod opaque_fd_pixel_buffer_import_tests;

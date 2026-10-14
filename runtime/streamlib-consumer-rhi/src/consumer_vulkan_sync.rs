@@ -36,11 +36,17 @@ impl ConsumerVulkanTimelineSemaphore {
     ///
     /// fd ownership transfers to the Vulkan driver on success — caller
     /// must NOT close `fd` afterwards. On error the caller still owns
-    /// it.
+    /// it. Refused by name, before any Vulkan call, on a device without
+    /// `VK_KHR_external_semaphore_fd`.
     pub fn from_imported_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fd: std::os::unix::io::RawFd,
     ) -> Result<Self> {
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd",
+            vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION,
+            "no timeline semaphore can be imported from an OPAQUE_FD",
+        )?;
         let device = vulkan_device.device();
         let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
             .semaphore_type(vk::SemaphoreType::TIMELINE)

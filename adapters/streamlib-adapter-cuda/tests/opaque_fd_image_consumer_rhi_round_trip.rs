@@ -57,6 +57,7 @@
 #[path = "common.rs"]
 mod common;
 
+use std::os::fd::FromRawFd as _;
 use std::sync::Arc;
 
 use serial_test::serial;
@@ -205,14 +206,12 @@ fn opaque_fd_image_carve_out_round_trip() {
         }
     };
 
+    // SAFETY: the fd the export just returned; nothing else holds it.
+    let dest_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(dest_fd) };
     let consumer_dest_buf =
         match ConsumerVulkanBuffer::from_opaque_fd(&consumer_device, dest_fd, host_dest_size) {
             Ok(b) => Arc::new(b),
-            Err(e) => {
-                // Image fd ownership already transferred to its driver.
-                unsafe { libc::close(dest_fd) };
-                panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}");
-            }
+            Err(e) => panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}"),
         };
 
     // Phase 5b: assert imported metadata matches.
@@ -410,13 +409,12 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
             panic!("ConsumerVulkanTexture::from_opaque_fd failed: {e}");
         }
     };
+    // SAFETY: the fd the export just returned; nothing else holds it.
+    let dest_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(dest_fd) };
     let consumer_dest_buf =
         match ConsumerVulkanBuffer::from_opaque_fd(&consumer_device, dest_fd, host_dest_size) {
             Ok(b) => Arc::new(b),
-            Err(e) => {
-                unsafe { libc::close(dest_fd) };
-                panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}");
-            }
+            Err(e) => panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}"),
         };
 
     // The teardown under probe: the exporting side destroys its source

@@ -157,6 +157,17 @@ pub struct HostVulkanTimelineSemaphore {
     metal_shared_event_export_was_declared: bool,
 }
 
+/// Whether `device` enabled `VK_KHR_external_semaphore_fd`. Declaring an
+/// OPAQUE_FD export without it makes `vkCreateSemaphore` refuse, and
+/// `vkGetSemaphoreFdKHR` is then vulkanalia's panicking stub for a command the
+/// loader never resolved.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn device_enables_semaphore_export_by_file_descriptor(device: &vulkanalia::Device) -> bool {
+    device
+        .extensions()
+        .contains(&vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION.name)
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl HostVulkanTimelineSemaphore {
     /// Create an in-process timeline semaphore (no export).
@@ -210,7 +221,7 @@ impl HostVulkanTimelineSemaphore {
         // builder's pNext takes `&mut` and would borrow `type_info` for the
         // struct's life.
         let info = if cross_process_export_was_requested
-            && super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
+            && device_enables_semaphore_export_by_file_descriptor(device)
         {
             export_info.next = (&mut type_info as *mut _) as *mut std::ffi::c_void;
             vk::SemaphoreCreateInfo::builder()
@@ -307,14 +318,17 @@ impl HostVulkanTimelineSemaphore {
                 "HostVulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
             ));
         }
-        if !super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM {
-            return Err(Error::GpuError(
-                "HostVulkanTimelineSemaphore::export_opaque_fd: OPAQUE_FD semaphore export is \
-                 a Linux mechanism and this platform has no vkGetSemaphoreFdKHR — the Apple \
-                 cross-process timeline is a Metal shared event \
-                 (export_metal_shared_event_mach_send_right)"
-                    .into(),
-            ));
+        if !device_enables_semaphore_export_by_file_descriptor(&self.device) {
+            #[cfg(target_os = "linux")]
+            let refusal = "HostVulkanTimelineSemaphore::export_opaque_fd: the device did not \
+                 enable VK_KHR_external_semaphore_fd, so it has no vkGetSemaphoreFdKHR and its \
+                 timelines cannot cross a process boundary";
+            #[cfg(target_os = "macos")]
+            let refusal = "HostVulkanTimelineSemaphore::export_opaque_fd: the device did not \
+                 enable VK_KHR_external_semaphore_fd, so it has no vkGetSemaphoreFdKHR — the \
+                 Apple cross-process timeline is a Metal shared event \
+                 (export_metal_shared_event_mach_send_right)";
+            return Err(Error::GpuError(refusal.into()));
         }
         let info = vk::SemaphoreGetFdInfoKHR::builder()
             .semaphore(self.semaphore)
@@ -595,7 +609,9 @@ mod tests {
             .export_opaque_fd()
             .expect_err("a platform without vkGetSemaphoreFdKHR must refuse the export");
         assert!(
-            refusal.to_string().contains("Linux mechanism"),
+            refusal
+                .to_string()
+                .contains("did not enable VK_KHR_external_semaphore_fd"),
             "the refusal must say why rather than blaming the caller: {refusal}"
         );
     }

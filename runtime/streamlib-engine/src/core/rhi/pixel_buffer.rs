@@ -177,7 +177,7 @@ impl PixelBuffer {
         unsafe { &*(self.handle as *const PixelBufferRef) }
     }
 
-    /// Number of DMA-BUF planes backing this pixel buffer. Always `>= 1`.
+    /// Number of memory planes backing this pixel buffer. Always `>= 1`.
     /// Mirror of `slpn_gpu_surface_plane_count` on the polyglot shims.
     /// Cached at construction; pure field read.
     pub fn plane_count(&self) -> u32 {

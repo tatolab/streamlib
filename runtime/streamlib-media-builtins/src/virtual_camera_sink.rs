@@ -24,7 +24,9 @@
 //! The engine never loads the module, never writes a udev rule and never
 //! asks for elevation. Without the one-time permission `auto` takes the
 //! PipeWire door and says so, and `door = "v4l2loopback"` refuses at `setup()`
-//! by name while the runtime keeps running.
+//! by name while the runtime keeps running. On a device that exports no
+//! DMA-BUF — the software device, by rule — the PipeWire door refuses at
+//! `setup()` naming the device, and the loopback door is the one it serves.
 
 use std::ffi::{CStr, c_ulong};
 use std::os::fd::RawFd;
@@ -399,14 +401,62 @@ pub(crate) enum PipeWireDoorReason {
     TheDoorWasNamedInTheConfig,
 }
 
+/// What the door rule reads of the Vulkan device this runtime built on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TheDeviceThisRuntimeBuiltOn<'a> {
+    /// The device's name, as a refusal names it.
+    pub(crate) device_name: &'a str,
+    /// Whether the device exports DMA-BUF, which the PipeWire door shares
+    /// every frame as; never on a software device.
+    pub(crate) supports_dma_buf_export: bool,
+}
+
 /// The refusal text for a loopback door with no permission behind it.
-fn no_permission_refusal(camera_name: &str, access: ControlNodeAccess) -> String {
+fn no_permission_refusal(
+    camera_name: &str,
+    access: ControlNodeAccess,
+    device: TheDeviceThisRuntimeBuiltOn<'_>,
+) -> String {
+    let meanwhile = if device.supports_dma_buf_export {
+        "; or set door=\"auto\" to use the PipeWire door meanwhile"
+    } else {
+        ""
+    };
     format!(
         "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": no permission to create a \
          v4l2loopback camera: {V4L2LOOPBACK_CONTROL_NODE_PATH} is {}. Run \
-         `{ENABLE_VIRTUAL_CAMERA_VERB}` once (it asks for your password), then re-run; or set \
-         door=\"auto\" to use the PipeWire door meanwhile.",
+         `{ENABLE_VIRTUAL_CAMERA_VERB}` once (it asks for your password), then re-run{meanwhile}.",
         access.describe()
+    )
+}
+
+/// The refusal text for a PipeWire door on a device that exports no DMA-BUF;
+/// the loopback door copies through a host staging where the device declines
+/// its import, so it is the remedy.
+fn pipewire_door_without_dma_buf_refusal(
+    camera_name: &str,
+    access: ControlNodeAccess,
+    reason: PipeWireDoorReason,
+    device: TheDeviceThisRuntimeBuiltOn<'_>,
+) -> String {
+    let remedy = match (reason, access) {
+        (PipeWireDoorReason::TheLoopbackDoorHasNoPermission(_), _) => format!(
+            "Run `{ENABLE_VIRTUAL_CAMERA_VERB}` once (it asks for your password), then re-run."
+        ),
+        (PipeWireDoorReason::TheDoorWasNamedInTheConfig, ControlNodeAccess::Writable) => {
+            "Set door=\"v4l2loopback\" or door=\"auto\".".to_string()
+        }
+        (PipeWireDoorReason::TheDoorWasNamedInTheConfig, absent_or_locked) => format!(
+            "{V4L2LOOPBACK_CONTROL_NODE_PATH} is {}: run `{ENABLE_VIRTUAL_CAMERA_VERB}` once (it \
+             asks for your password), then set door=\"v4l2loopback\" or door=\"auto\".",
+            absent_or_locked.describe()
+        ),
+    };
+    format!(
+        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": the PipeWire camera door shares \
+         DMA-BUF frames, and the device this runtime built on ({}) exports no DMA-BUF. The \
+         v4l2loopback door serves this device. {remedy}",
+        device.device_name
     )
 }
 
@@ -427,20 +477,33 @@ pub(crate) fn decide_door(
     door: VirtualCameraDoor,
     camera_name: &str,
     access: ControlNodeAccess,
+    device: TheDeviceThisRuntimeBuiltOn<'_>,
 ) -> DoorDecision {
+    let pipewire_door_for = |reason: PipeWireDoorReason| {
+        if device.supports_dma_buf_export {
+            DoorDecision::PipeWire(reason)
+        } else {
+            DoorDecision::Refused(pipewire_door_without_dma_buf_refusal(
+                camera_name,
+                access,
+                reason,
+                device,
+            ))
+        }
+    };
     match (door, access) {
         (VirtualCameraDoor::PipeWire, _) => {
-            DoorDecision::PipeWire(PipeWireDoorReason::TheDoorWasNamedInTheConfig)
+            pipewire_door_for(PipeWireDoorReason::TheDoorWasNamedInTheConfig)
         }
         (
             VirtualCameraDoor::Auto | VirtualCameraDoor::V4l2Loopback,
             ControlNodeAccess::Writable,
         ) => DoorDecision::Loopback,
-        (VirtualCameraDoor::Auto, absent_or_locked) => DoorDecision::PipeWire(
+        (VirtualCameraDoor::Auto, absent_or_locked) => pipewire_door_for(
             PipeWireDoorReason::TheLoopbackDoorHasNoPermission(absent_or_locked),
         ),
         (VirtualCameraDoor::V4l2Loopback, absent_or_locked) => {
-            DoorDecision::Refused(no_permission_refusal(camera_name, absent_or_locked))
+            DoorDecision::Refused(no_permission_refusal(camera_name, absent_or_locked, device))
         }
     }
 }
@@ -696,11 +759,13 @@ impl std::fmt::Display for LatchedRefusal {
                   names `tatolab enable-virtual-camera`, the one-time command that grants it \
                   behind your desktop's password prompt. The `v4l2loopback` door refuses by name \
                   at `setup()` in that case, and the runtime keeps running. The `pipewire` door \
-                  is taken whatever the control node says, refusing by name only where no \
-                  PipeWire session answers. One instance is never on both doors: a session \
-                  manager mirrors every V4L2 capture device into the portal's camera set, so it \
-                  would list the same camera twice. The engine never loads a module or asks for \
-                  elevation.\n\n\
+                  is taken whatever the control node says, refusing by name where no PipeWire \
+                  session answers, or where the device the runtime built on exports no DMA-BUF \
+                  (the software device never does) — there only the loopback door serves, and \
+                  `auto` without its permission refuses too. One instance is never on both \
+                  doors: a session manager mirrors every V4L2 capture device into the portal's \
+                  camera set, so it would list the same camera twice. The engine never loads a \
+                  module or asks for elevation.\n\n\
                   A loopback device a reader still holds at teardown is left in place and \
                   reclaimed by name at the next setup; a PipeWire node is gone with its stream. \
                   Frames are stamped with their monotonic timestamp on both doors, and the \
@@ -756,9 +821,21 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
 
         self.gpu = Some(ctx.gpu_limited_access().clone());
 
+        let capabilities_of_the_device_this_runtime_built_on =
+            ctx.gpu_full_access().gpu_capabilities()?;
+        let the_device_this_runtime_built_on = TheDeviceThisRuntimeBuiltOn {
+            device_name: &capabilities_of_the_device_this_runtime_built_on.device_name,
+            supports_dma_buf_export: capabilities_of_the_device_this_runtime_built_on
+                .supports_dma_buf_export,
+        };
         let node = LoopbackControlNodeOnDisk;
         let access = node.access();
-        match decide_door(self.config.door, &self.camera_name, access) {
+        match decide_door(
+            self.config.door,
+            &self.camera_name,
+            access,
+            the_device_this_runtime_built_on,
+        ) {
             DoorDecision::Loopback => {}
             DoorDecision::PipeWire(reason) => return self.open_the_pipewire_door(ctx, reason),
             DoorDecision::Refused(message) => {
@@ -1646,13 +1723,19 @@ mod tests {
             decide_door(
                 VirtualCameraDoor::Auto,
                 "Desk cam",
-                ControlNodeAccess::Writable
+                ControlNodeAccess::Writable,
+                A_DEVICE_THAT_EXPORTS_DMA_BUF
             ),
             DoorDecision::Loopback
         );
         for access in [ControlNodeAccess::Absent, ControlNodeAccess::NotWritable] {
             assert_eq!(
-                decide_door(VirtualCameraDoor::Auto, "Desk cam", access),
+                decide_door(
+                    VirtualCameraDoor::Auto,
+                    "Desk cam",
+                    access,
+                    A_DEVICE_THAT_EXPORTS_DMA_BUF
+                ),
                 DoorDecision::PipeWire(PipeWireDoorReason::TheLoopbackDoorHasNoPermission(access)),
                 "auto falls back rather than refusing"
             );
@@ -1683,7 +1766,12 @@ mod tests {
             ControlNodeAccess::NotWritable,
         ] {
             assert_eq!(
-                decide_door(VirtualCameraDoor::PipeWire, "Desk cam", access),
+                decide_door(
+                    VirtualCameraDoor::PipeWire,
+                    "Desk cam",
+                    access,
+                    A_DEVICE_THAT_EXPORTS_DMA_BUF
+                ),
                 DoorDecision::PipeWire(PipeWireDoorReason::TheDoorWasNamedInTheConfig)
             );
         }
@@ -1695,6 +1783,7 @@ mod tests {
             VirtualCameraDoor::V4l2Loopback,
             "Desk cam",
             ControlNodeAccess::Absent,
+            A_DEVICE_THAT_EXPORTS_DMA_BUF,
         ) else {
             panic!("refused");
         };
@@ -1709,6 +1798,7 @@ mod tests {
             VirtualCameraDoor::V4l2Loopback,
             "Desk cam",
             ControlNodeAccess::NotWritable,
+            A_DEVICE_THAT_EXPORTS_DMA_BUF,
         ) else {
             panic!("refused");
         };
@@ -1717,11 +1807,117 @@ mod tests {
             decide_door(
                 VirtualCameraDoor::V4l2Loopback,
                 "Desk cam",
-                ControlNodeAccess::Writable
+                ControlNodeAccess::Writable,
+                A_DEVICE_THAT_EXPORTS_DMA_BUF
             ),
             DoorDecision::Loopback
         );
     }
+
+    /// The software device exports no DMA-BUF by rule, so the PipeWire door
+    /// refuses at setup naming the camera and the device, and points at the
+    /// loopback door this device can serve.
+    #[test]
+    fn a_pipewire_door_on_a_device_without_dma_buf_refuses_naming_the_camera_and_the_device() {
+        let DoorDecision::Refused(named_with_permission) = decide_door(
+            VirtualCameraDoor::PipeWire,
+            "Desk cam",
+            ControlNodeAccess::Writable,
+            A_SOFTWARE_DEVICE,
+        ) else {
+            panic!("refused");
+        };
+        assert_eq!(
+            named_with_permission,
+            "VirtualCameraSink \"Desk cam\": the PipeWire camera door shares DMA-BUF frames, and \
+             the device this runtime built on (llvmpipe (LLVM 20.1.2, 256 bits)) exports no \
+             DMA-BUF. The v4l2loopback door serves this device. Set door=\"v4l2loopback\" or \
+             door=\"auto\"."
+        );
+
+        let DoorDecision::Refused(named_without_permission) = decide_door(
+            VirtualCameraDoor::PipeWire,
+            "Desk cam",
+            ControlNodeAccess::Absent,
+            A_SOFTWARE_DEVICE,
+        ) else {
+            panic!("refused");
+        };
+        assert!(
+            named_without_permission.starts_with(
+                "VirtualCameraSink \"Desk cam\": the PipeWire camera door shares DMA-BUF \
+                 frames, and the device this runtime built on (llvmpipe (LLVM 20.1.2, 256 \
+                 bits)) exports no DMA-BUF."
+            ),
+            "{named_without_permission}"
+        );
+        assert!(
+            named_without_permission.contains("/dev/v4l2loopback is absent")
+                && named_without_permission.contains(ENABLE_VIRTUAL_CAMERA_VERB),
+            "{named_without_permission}"
+        );
+
+        for access in [ControlNodeAccess::Absent, ControlNodeAccess::NotWritable] {
+            let DoorDecision::Refused(auto_fallback) = decide_door(
+                VirtualCameraDoor::Auto,
+                "Desk cam",
+                access,
+                A_SOFTWARE_DEVICE,
+            ) else {
+                panic!("auto refuses rather than falling back to a door the device cannot serve");
+            };
+            assert!(
+                auto_fallback.contains("\"Desk cam\"")
+                    && auto_fallback
+                        .contains("(llvmpipe (LLVM 20.1.2, 256 bits)) exports no DMA-BUF")
+                    && auto_fallback.contains(ENABLE_VIRTUAL_CAMERA_VERB),
+                "{auto_fallback}"
+            );
+        }
+    }
+
+    /// On a device without DMA-BUF the loopback door is taken as on any
+    /// device, and its no-permission refusal offers no PipeWire door.
+    #[test]
+    fn the_loopback_door_on_a_device_without_dma_buf_is_taken_and_its_refusal_offers_no_pipewire_door()
+     {
+        for door in [VirtualCameraDoor::Auto, VirtualCameraDoor::V4l2Loopback] {
+            assert_eq!(
+                decide_door(
+                    door,
+                    "Desk cam",
+                    ControlNodeAccess::Writable,
+                    A_SOFTWARE_DEVICE
+                ),
+                DoorDecision::Loopback
+            );
+        }
+        let DoorDecision::Refused(forced_without_permission) = decide_door(
+            VirtualCameraDoor::V4l2Loopback,
+            "Desk cam",
+            ControlNodeAccess::Absent,
+            A_SOFTWARE_DEVICE,
+        ) else {
+            panic!("refused");
+        };
+        assert_eq!(
+            forced_without_permission,
+            "VirtualCameraSink \"Desk cam\": no permission to create a v4l2loopback camera: \
+             /dev/v4l2loopback is absent. Run `tatolab enable-virtual-camera` once (it asks \
+             for your password), then re-run."
+        );
+    }
+
+    const A_DEVICE_THAT_EXPORTS_DMA_BUF: TheDeviceThisRuntimeBuiltOn<'static> =
+        TheDeviceThisRuntimeBuiltOn {
+            device_name: "AMD Radeon RX 7900 XTX (RADV NAVI31)",
+            supports_dma_buf_export: true,
+        };
+
+    const A_SOFTWARE_DEVICE: TheDeviceThisRuntimeBuiltOn<'static> = TheDeviceThisRuntimeBuiltOn {
+        device_name: "llvmpipe (LLVM 20.1.2, 256 bits)",
+        supports_dma_buf_export: false,
+    };
 
     /// A control node answering from a table: which numbers the module
     /// owns and what each is labelled, plus a log of what was added.

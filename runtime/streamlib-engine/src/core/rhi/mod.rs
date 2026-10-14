@@ -19,6 +19,8 @@ mod kernel_binding_names;
 mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod plane_fd_under_test;
 mod ray_tracing_kernel;
 #[cfg(test)]
 pub(crate) mod spirv_module_rewriting_for_tests;

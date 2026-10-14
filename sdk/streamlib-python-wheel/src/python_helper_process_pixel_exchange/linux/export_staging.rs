@@ -17,7 +17,10 @@ use crate::python_helper_process_pixel_exchange::{
     refuse_check_out_the_service_declined,
 };
 
-use super::{decimal_string_field, parse_device_uuid, response_field};
+use super::{
+    decimal_string_field, memory_type_index_stated_by_an_opaque_fd_registration, parse_device_uuid,
+    response_field,
+};
 
 /// What the parent answered when asked to open a surface's device export.
 ///
@@ -36,32 +39,6 @@ struct DeviceExportStagingDescription {
     format: PixelFormat,
     bytes_per_row: u64,
     writable: bool,
-}
-
-/// The memory type index an OPAQUE_FD staging registration states.
-///
-/// Mandatory, not defensive: a conforming OPAQUE_FD import binds the
-/// index the *exporter* allocated from, and the handle type has no
-/// fd-properties query to discover it with. A registration without one
-/// would leave the import guessing, and a guess binds the wrong memory
-/// type rather than failing — silently, until the pixels are wrong.
-fn memory_type_index_stated_by_a_staging_registration(
-    staging_kind: &str,
-    staging_share_id: &str,
-    registration: &serde_json::Value,
-) -> PyResult<u32> {
-    registration
-        .get("vk_memory_type_index")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|index| u32::try_from(index).ok())
-        .ok_or_else(|| {
-            crate::python_processor_context::gpu_operation_error(format!(
-                "the {staging_kind} staging {staging_share_id:?} was registered without a usable \
-                 vk_memory_type_index; an OPAQUE_FD import must bind the memory type index the \
-                 exporter allocated from, and guessing one binds the wrong memory instead of \
-                 failing"
-            ))
-        })
 }
 
 /// A published export staging, checked out and validated, with its copy
@@ -447,13 +424,9 @@ impl HelperProcessGpuExchangeClient {
 
         let vulkan_device = self.consumer_vulkan_device()?;
         let stated_memory_type_index = checked_out.stated_memory_type_index;
-        // The staging fd is handed over here and never closed on the error
-        // path: ownership passes to the driver inside the call, and the
-        // failure arms that keep it are indistinguishable from the ones
-        // that do not (see `ConsumerVulkanBuffer::from_opaque_fd`).
         let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
             &vulkan_device,
-            checked_out.staging_fd.into_raw_fd(),
+            checked_out.staging_fd,
             described.staging_byte_size,
             stated_memory_type_index,
         )
@@ -556,9 +529,8 @@ impl HelperProcessGpuExchangeClient {
                 ),
             ));
         }
-        let stated_memory_type_index = memory_type_index_stated_by_a_staging_registration(
-            staging_kind,
-            staging_share_id,
+        let stated_memory_type_index = memory_type_index_stated_by_an_opaque_fd_registration(
+            format_args!("the {staging_kind} staging {staging_share_id:?}"),
             &registration,
         )?;
         // The staging's memory fd, then the copy timeline's — the order

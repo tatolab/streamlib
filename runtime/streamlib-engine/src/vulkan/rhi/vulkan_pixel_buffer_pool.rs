@@ -9,8 +9,37 @@ use crate::core::{Error, Result};
 
 use super::{HostVulkanBuffer, HostVulkanDevice};
 
-/// One pool slot's memory in the flavour the surface-share wire carries: a
-/// DMA-BUF-exportable allocation on Linux, a private IOSurface on macOS.
+/// The memory a Linux pool slot is allocated from on a given device.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinuxPixelBufferPoolSlotMemory {
+    /// The DMA-BUF export pool; the slot crosses as `dma_buf`.
+    DmaBufExportable,
+    /// The OPAQUE_FD host-visible export pool; the slot crosses as `opaque_fd`.
+    OpaqueFdExportable,
+    /// A plain host-visible allocation that no process boundary can carry; the
+    /// slot's export refusals name why.
+    HostVisibleInThisProcessOnly,
+}
+
+/// Which memory a Linux pool slot takes, from what the device can export.
+#[cfg(target_os = "linux")]
+fn linux_pixel_buffer_pool_slot_memory_for_device(
+    device_supports_dma_buf_export: bool,
+    device_has_opaque_fd_host_visible_export_pool: bool,
+) -> LinuxPixelBufferPoolSlotMemory {
+    if device_supports_dma_buf_export {
+        LinuxPixelBufferPoolSlotMemory::DmaBufExportable
+    } else if device_has_opaque_fd_host_visible_export_pool {
+        LinuxPixelBufferPoolSlotMemory::OpaqueFdExportable
+    } else {
+        LinuxPixelBufferPoolSlotMemory::HostVisibleInThisProcessOnly
+    }
+}
+
+/// One pool slot's memory in the flavour the surface-share wire carries: on
+/// Linux the flavour [`linux_pixel_buffer_pool_slot_memory_for_device`] picks,
+/// a private IOSurface on macOS.
 fn allocate_pool_slot_buffer(
     device: &Arc<HostVulkanDevice>,
     width: u32,
@@ -28,7 +57,24 @@ fn allocate_pool_slot_buffer(
             format,
         )
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        let _ = format;
+        let slot_byte_size = (width as u64) * (height as u64) * (bytes_per_pixel as u64);
+        match linux_pixel_buffer_pool_slot_memory_for_device(
+            device.supports_dma_buf_export(),
+            device.opaque_fd_buffer_pool().is_some(),
+        ) {
+            LinuxPixelBufferPoolSlotMemory::DmaBufExportable
+            | LinuxPixelBufferPoolSlotMemory::HostVisibleInThisProcessOnly => {
+                HostVulkanBuffer::new(device, slot_byte_size)
+            }
+            LinuxPixelBufferPoolSlotMemory::OpaqueFdExportable => {
+                HostVulkanBuffer::new_opaque_fd_export(device, slot_byte_size)
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = format;
         HostVulkanBuffer::new(
@@ -220,6 +266,30 @@ unsafe impl Sync for VulkanPixelBufferPool {}
 mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_no_dma_buf_or_skip;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_pool_slot_takes_dma_buf_then_opaque_fd_then_in_process_host_visible_memory() {
+        use LinuxPixelBufferPoolSlotMemory::*;
+        assert_eq!(
+            linux_pixel_buffer_pool_slot_memory_for_device(true, true),
+            DmaBufExportable
+        );
+        assert_eq!(
+            linux_pixel_buffer_pool_slot_memory_for_device(true, false),
+            DmaBufExportable
+        );
+        assert_eq!(
+            linux_pixel_buffer_pool_slot_memory_for_device(false, true),
+            OpaqueFdExportable
+        );
+        assert_eq!(
+            linux_pixel_buffer_pool_slot_memory_for_device(false, false),
+            HostVisibleInThisProcessOnly
+        );
+    }
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -350,6 +420,144 @@ mod tests {
         assert!(
             pool.acquire().is_err(),
             "the forgotten buffer was handed out again"
+        );
+    }
+
+    /// On a device that exports no DMA-BUF the engine builds no DMA-BUF pool,
+    /// a texture and an exportable host-visible buffer still allocate — local,
+    /// with no DMA-BUF create-info — and refuse a DMA-BUF export by name, and
+    /// a pool slot is an OPAQUE_FD allocation.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_software_device_builds_no_dma_buf_pool_and_chains_no_dma_buf_create_info() {
+        use crate::core::rhi::{
+            RhiExternalHandle, TextureDescriptor, TextureFormat, TextureUsages,
+        };
+        use crate::vulkan::rhi::HostVulkanTexture;
+
+        let Some(device) = a_device_that_exports_no_dma_buf_or_skip(
+            "a_software_device_builds_no_dma_buf_pool_and_chains_no_dma_buf_create_info",
+        ) else {
+            return;
+        };
+        let device_name = device.name();
+        assert!(device.dma_buf_buffer_pool().is_none(), "{device_name}");
+        assert!(device.dma_buf_image_pool().is_none(), "{device_name}");
+        assert!(device.dma_buf_image_pool_tiled().is_none(), "{device_name}");
+
+        let texture = HostVulkanTexture::new(
+            &device,
+            &TextureDescriptor::new(64, 64, TextureFormat::Rgba8Unorm).with_usage(
+                TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+            ),
+        )
+        .expect("a texture allocates without the DMA-BUF create-info");
+        match texture.export_dma_buf_fd() {
+            Err(Error::NotSupported(refusal)) => {
+                assert!(refusal.contains(&device_name), "{refusal}");
+                assert!(refusal.contains("exports no DMA-BUF"), "{refusal}");
+            }
+            other => panic!("{device_name} must refuse a texture's DMA-BUF export, got {other:?}"),
+        }
+
+        let host_visible_buffer = HostVulkanBuffer::new(&device, 64 * 64 * 4)
+            .expect("an exportable-intent buffer allocates locally");
+        assert!(!host_visible_buffer.mapped_ptr().is_null());
+        match host_visible_buffer.export_dma_buf_fd() {
+            Err(Error::NotSupported(refusal)) => {
+                assert!(refusal.contains(&device_name), "{refusal}");
+            }
+            other => panic!("{device_name} must refuse a buffer's DMA-BUF export, got {other:?}"),
+        }
+
+        let pool =
+            VulkanPixelBufferPool::new(Arc::clone(&device), 64, 64, 4, PixelFormat::Rgba32, 1)
+                .expect("a pool builds without DMA-BUF");
+        let (_, pool_slot) = pool.acquire().expect("the pool hands out its slot");
+        match pool_slot.buffer_ref().inner.export_external_handle() {
+            Ok(RhiExternalHandle::OpaqueFd { fd, size, .. }) => {
+                assert_eq!(size, 64 * 64 * 4);
+                unsafe { libc::close(fd) };
+            }
+            other => panic!("a pool slot on {device_name} must export OPAQUE_FD, got {other:?}"),
+        }
+    }
+
+    /// An engine-exported OPAQUE_FD pool slot, imported by a consumer device at
+    /// the memory type index the export states, maps the bytes the engine
+    /// wrote.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn an_opaque_fd_pool_slot_reads_back_in_a_consumer_import_at_its_stated_memory_type_index() {
+        use crate::core::rhi::RhiExternalHandle;
+        use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+
+        const WIDTH: u32 = 64;
+        const HEIGHT: u32 = 32;
+        const SLOT_BYTES: usize = (WIDTH * HEIGHT * 4) as usize;
+        let engine_pattern_byte = |index: usize| (index.wrapping_mul(29).wrapping_add(11)) as u8;
+
+        let Some(device) = a_device_that_exports_no_dma_buf_or_skip(
+            "an_opaque_fd_pool_slot_reads_back_in_a_consumer_import_at_its_stated_memory_type_index",
+        ) else {
+            return;
+        };
+        let consumer_device = Arc::new(
+            ConsumerVulkanDevice::new().expect("a consumer device on the same driver files"),
+        );
+
+        let pool = VulkanPixelBufferPool::new(
+            Arc::clone(&device),
+            WIDTH,
+            HEIGHT,
+            4,
+            PixelFormat::Rgba32,
+            1,
+        )
+        .expect("a pool");
+        let (_, pool_slot) = pool.acquire().expect("the pool hands out its slot");
+        let engine_bytes = unsafe {
+            std::slice::from_raw_parts_mut(pool_slot.buffer_ref().inner.mapped_ptr(), SLOT_BYTES)
+        };
+        for (index, byte) in engine_bytes.iter_mut().enumerate() {
+            *byte = engine_pattern_byte(index);
+        }
+
+        let Ok(RhiExternalHandle::OpaqueFd {
+            fd,
+            size,
+            exporting_allocation_memory_type_index,
+        }) = pool_slot.buffer_ref().inner.export_external_handle()
+        else {
+            panic!("a pool slot on {} must export OPAQUE_FD", device.name());
+        };
+        // SAFETY: a fresh fd the export just returned; nothing else holds it.
+        let fd = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) };
+        let imported = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+            &consumer_device,
+            fd,
+            size as vulkanalia::vk::DeviceSize,
+            exporting_allocation_memory_type_index,
+        )
+        .unwrap_or_else(|failure| {
+            panic!("the consumer imports the slot at its stated index: {failure}")
+        });
+        let consumer_bytes =
+            unsafe { std::slice::from_raw_parts(imported.mapped_ptr(), SLOT_BYTES) };
+        assert!(
+            consumer_bytes
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| *byte == engine_pattern_byte(index)),
+            "the consumer maps the bytes the engine wrote"
         );
     }
 }

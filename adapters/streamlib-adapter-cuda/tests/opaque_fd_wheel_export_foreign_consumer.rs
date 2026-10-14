@@ -563,8 +563,9 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
             return;
         }
     };
-    // Both imports adopt their fd on success and leave it owned here on
-    // failure, so each is released only at its call.
+    // The texture import adopts its fd on success and leaves it owned here on
+    // failure, so it is released only at its call; the staging import always
+    // consumes its fd.
     let imported_texture = match ConsumerVulkanTexture::from_opaque_fd(
         &consumer_vulkan_device,
         exported_texture_fd.as_raw_fd(),
@@ -586,13 +587,10 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     };
     let imported_staging = match ConsumerVulkanBuffer::from_opaque_fd(
         &consumer_vulkan_device,
-        local_staging_fd.as_raw_fd(),
+        local_staging_fd,
         IMAGE_BYTES as vk::DeviceSize,
     ) {
-        Ok(buffer) => {
-            let _adopted_by_vulkan = local_staging_fd.into_raw_fd();
-            Arc::new(buffer)
-        }
+        Ok(buffer) => Arc::new(buffer),
         Err(import_failure) => {
             panic!(
                 "the local staging fd would not import: {import_failure}\n{}",

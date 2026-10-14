@@ -40,6 +40,7 @@
 
 #![cfg(target_os = "linux")]
 
+use std::os::fd::FromRawFd as _;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -261,8 +262,10 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
         }
     };
 
-    // FD ownership semantics: `from_opaque_fd` and `from_imported_opaque_fd`
-    // transfer fd ownership to the Vulkan driver on success.
+    // `from_opaque_fd` always consumes the memory fd; `from_imported_opaque_fd`
+    // transfers its fd to the Vulkan driver on success.
+    // SAFETY: the fd the lookup just delivered; nothing else holds it.
+    let consumer_memory_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(consumer_memory_fd) };
     let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd(
         &consumer_device,
         consumer_memory_fd,
@@ -271,9 +274,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     let consumer_buffer = match consumer_buffer {
         Ok(b) => Arc::new(b),
         Err(e) => {
-            // FD ownership did NOT transfer on error — close it.
             unsafe {
-                libc::close(consumer_memory_fd);
                 libc::close(consumer_produce_done_fd);
                 libc::close(consumer_consume_done_fd);
             }

@@ -204,6 +204,61 @@ fn a_format_cuda_cannot_map_stays_not_importable_without_render_attachment() {
     }
 }
 
+/// The software device builds no DMA-BUF pool and takes no EGL modifier
+/// table, so it never offers the render-target modifier; it does build its
+/// OPAQUE_FD image pool. A CUDA-mappable request inside the fixed usage set
+/// keeps OPAQUE_FD, and everything that needed the modifier — every
+/// render-attachment request — is not importable at all.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_the_software_device_only_the_opaque_fd_flavour_remains() {
+    const SOFTWARE_DEVICE_HAS_A_RENDER_TARGET_MODIFIER: bool = false;
+    const SOFTWARE_DEVICE_HAS_THE_OPAQUE_FD_IMAGE_POOL: bool = true;
+    let derive_on_the_software_device = |format, usage| {
+        derive_texture_cross_process_importability(
+            format,
+            usage,
+            SOFTWARE_DEVICE_HAS_A_RENDER_TARGET_MODIFIER,
+            SOFTWARE_DEVICE_HAS_THE_OPAQUE_FD_IMAGE_POOL,
+        )
+    };
+
+    for format in [
+        TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba16Float,
+        TextureFormat::Rgba32Float,
+    ] {
+        assert_eq!(
+            derive_on_the_software_device(
+                format,
+                TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::STORAGE_BINDING
+                    | TextureUsages::COPY_SRC
+                    | TextureUsages::COPY_DST,
+            ),
+            TextureCrossProcessImportability::OpaqueFd,
+        );
+        assert_eq!(
+            derive_on_the_software_device(
+                format,
+                TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+            ),
+            TextureCrossProcessImportability::NotImportable,
+        );
+    }
+    for format in [
+        TextureFormat::Bgra8Unorm,
+        TextureFormat::Bgra8UnormSrgb,
+        TextureFormat::Rgba8UnormSrgb,
+        TextureFormat::Nv12,
+    ] {
+        assert_eq!(
+            derive_on_the_software_device(format, TextureUsages::TEXTURE_BINDING),
+            TextureCrossProcessImportability::NotImportable,
+        );
+    }
+}
+
 #[test]
 fn texture_usages_to_wire_is_stable_order() {
     let usage =

@@ -5,18 +5,6 @@ use super::*;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
 use std::io::Write as _;
 
-fn exchange_client_on(share: &SurfaceShareUnderTest) -> Arc<HelperProcessGpuExchangeClient> {
-    Python::initialize();
-    Python::attach(|python| {
-        Arc::new(HelperProcessGpuExchangeClient::new(
-            python.None(),
-            python.None(),
-            share.channel_name_for_the_helper(),
-            "helper:iosurface-import-under-test".to_string(),
-        ))
-    })
-}
-
 fn a_vulkan_device_is_available() -> bool {
     match ConsumerVulkanDevice::new() {
         Ok(_) => true,
@@ -54,7 +42,7 @@ fn a_held_frame_pins_its_slot_and_a_cached_slot_does_not() {
     let share = SurfaceShareUnderTest::start("use-count");
     share.publish_pool_slot_frame("pool-slot-held", 1);
     let iosurface = share.iosurface_registered_as("pool-slot-held");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("iosurface-import-under-test");
 
     let held_frame = check_out_pixel_surface(&exchange_client, "pool-slot-held#1");
     assert!(
@@ -91,7 +79,7 @@ fn a_later_frame_over_a_cached_slot_reuses_the_slots_import() {
     let share = SurfaceShareUnderTest::start("slot-reuse");
     share.publish_pool_slot_frame("pool-slot-reused", 1);
     let iosurface = share.iosurface_registered_as("pool-slot-reused");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("iosurface-import-under-test");
 
     let first_frame = check_out_pixel_surface(&exchange_client, "pool-slot-reused#1");
     let first_import = Arc::clone(&first_frame.iosurface_pool_slot_import);
@@ -121,7 +109,7 @@ fn the_service_going_away_releases_every_cached_slot() {
     }
     let share = SurfaceShareUnderTest::start("service-gone");
     share.publish_pool_slot_frame("pool-slot-orphaned", 1);
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("iosurface-import-under-test");
     let still_held_view = check_out_pixel_surface(&exchange_client, "pool-slot-orphaned#1");
     assert_eq!(
         exchange_client.iosurface_imports_by_pool_slot.lock().len(),
@@ -274,7 +262,7 @@ fn cpu_access_locks_the_iosurface_and_a_dropped_frame_unlocks_it() {
     let share = SurfaceShareUnderTest::start("cpu-lock");
     share.publish_pool_slot_frame("pool-slot-locked", 1);
     let iosurface = share.iosurface_registered_as("pool-slot-locked");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("iosurface-import-under-test");
 
     let frame = check_out_pixel_surface(&exchange_client, "pool-slot-locked#1");
     frame

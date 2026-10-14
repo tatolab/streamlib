@@ -17,7 +17,7 @@ use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
 
 /// Video frame bag: references a GPU surface by id — pixels never ride the
 /// link. `surface_id` is the handoff contract (texture cache in-process,
-/// surface-share DMA-BUF cross-process, pixel buffer for CPU readback);
+/// surface-share memory fd cross-process, pixel buffer for CPU readback);
 /// `timestamp_ns` is the ordering primitive; nothing else. Consumers that
 /// need "frame N" semantics derive it from timestamps, never from a
 /// cross-processor counter.
