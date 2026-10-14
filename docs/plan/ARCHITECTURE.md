@@ -3729,7 +3729,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   any relay from an address and a credential and holds nothing else about relays — no account,
   team, directory, signed link or billing, which belong to a separate private service. No relay
   is written or bundled here; a person who wants their own runs an existing open-source relay
-  program. The relay is never a role of the runtime. Owner, 2026-10-04. [moq-on-the-tailnet]
+  program. The relay is never a role of the runtime. Owner, 2026-10-04. [moq-on-the-tailnet;
+  reopened by relay-adapters: "joins any relay from an address and a credential and holds
+  nothing else about relays" — a machine joins several relays, each through a relay adapter
+  (the sharing step's OPEN below)]
 - **DECIDED** — HTTP carries only what is not real time: the listing of exposed ports, a
   read-only MCP, snapshots, small samples and the viewer page — never live media, in any
   browser and for any tool. `tatolabd` asks Tailscale to serve its HTTP, on a port of its own,
@@ -3765,7 +3768,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   taken on another machine's clock is marked. Direction (session's, not decided): a bag stands alone, so each may open
   its own group, video cutting at its keyframes; machine to machine needs no certificate from
   Tailscale, a tailnet address being authenticated already; `tailscale serve` supplies the
-  HTTPS certificate for what it fronts, so the runtime requests and renews none. Known
+  HTTPS certificate for what it fronts, so the runtime requests and renews none. Direction
+  (owner, 2026-10-14, from customer feedback; not decided): a machine may join several relays
+  at once, and each joins through a relay adapter — the adapter pattern, one interface any
+  relay can implement. One publisher reads each public port once and fans out to every joined
+  relay that has a subscriber; the adapter carries what differs between relays: authentication
+  and credential refresh, the MoQ version spoken, how a machine's ports are named there, and
+  each relay's quirks. The first adapters are a local relay, Cloudflare, moq.pro and Red5, Red5
+  on hold while its cost is weighed. A user adds a relay from their own account in the app;
+  signing in to a provider and provisioning a relay live in the app or the private service,
+  never the runtime. Known
   (2026-10-04): `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet
   address itself; changing serve settings needs root, Tailscale's operator user or, on macOS,
   the admin group, and HTTPS must be switched on for the tailnet; Funnel carries TCP only, on
