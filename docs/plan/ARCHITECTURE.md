@@ -2405,7 +2405,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   runtime opens no windows. `DisplayWindow`, processor-owned windows (`NodeOwnedWindow` and its
   events), the window event pump and the present loop are retired; a person sees a stream by
   opening it in a browser, which shows the same thing and leaves the runtime simpler: a
-  stream's one output off its graph is MoQ through a relay. The retirement belongs to the
+  stream's one output off its graph is MoQ, through a relay or straight over the tailnet. The retirement belongs to the
   sharing step (§Networking): its align decides this OPEN with the rest, and the change that
   builds the relays and the viewer page deletes the windows, inventorying every window site in
   the tree and these entries' tests in the same change, so no window path outlives the
@@ -3746,8 +3746,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   program. The relay is never a role of the runtime. Owner, 2026-10-04. [moq-on-the-tailnet;
   reopened by relay-adapters: "joins any relay from an address and a credential and holds
   nothing else about relays" — a machine joins several relays, each through a relay adapter;
-  "No relay is written or bundled here" — the app ships a relay for the local adapter (the sharing step's
-  OPEN below)]
+  "No relay is written or bundled here" — the app ships a relay for the local adapter (the
+  sharing step's OPEN below)]
 - **DECIDED** — HTTP carries only what is not real time: the listing of exposed ports, a
   read-only MCP, snapshots, small samples and the viewer page — never live media, in any
   browser and for any tool. `tatolabd` asks Tailscale to serve its HTTP, on a port of its own,
@@ -3799,7 +3799,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   user's own scripts and views. A user adds a relay from their own account in the app;
   signing in to a provider and provisioning a relay live in the app or the private service,
   never the runtime. The sharing step also takes up §Media I/O's windows OPEN: the runtime's
-  windows are retired in favour of the browser, so a relay is a stream's one output. Known
+  windows are retired in favour of the browser, so MoQ is a stream's one output. Known
   (2026-10-04): `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet
   address itself; changing serve settings needs root, Tailscale's operator user or, on macOS,
   the admin group, and HTTPS must be switched on for the tailnet; Funnel carries TCP only, on
