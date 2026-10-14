@@ -25,8 +25,8 @@ use super::surface_check_out_lease_registry::SurfaceCheckOutLeaseRegistry;
 use crate::host_rhi::HostTextureExt;
 
 /// Every plane of a pixel buffer exported for the surface-share wire: the
-/// fds to attach, the metadata arrays describing them, and the one
-/// handle-type discriminator the checkout importer dispatches on.
+/// fds to attach, the metadata arrays describing them, and the one flavour
+/// the checkout importer dispatches on.
 ///
 /// The plane fds are owned, never observed: an exporter mints a fresh fd per
 /// call and surrenders it, so adoption here is what closes each one exactly
@@ -36,9 +36,26 @@ struct ExportedPlaneWireHandles {
     plane_fds: Vec<OwnedFd>,
     plane_sizes: Vec<u64>,
     plane_offsets: Vec<u64>,
-    handle_type: &'static str,
-    /// `Some` exactly when `handle_type` is OPAQUE_FD.
-    opaque_fd_export_contract: Option<OpaqueFdExportContract>,
+    plane_flavour: ExportedPlaneFlavourOnTheWire,
+}
+
+/// The external-handle flavour every plane of one export shares.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExportedPlaneFlavourOnTheWire {
+    DmaBuf,
+    OpaqueFd(OpaqueFdExportContract),
+}
+
+#[cfg(target_os = "linux")]
+impl ExportedPlaneFlavourOnTheWire {
+    /// The `handle_type` wire value this flavour registers under.
+    fn wire_handle_type(&self) -> &'static str {
+        match self {
+            Self::DmaBuf => SURFACE_HANDLE_TYPE_DMA_BUF,
+            Self::OpaqueFd(_) => SURFACE_HANDLE_TYPE_OPAQUE_FD,
+        }
+    }
 }
 
 /// What an OPAQUE_FD registration states beside its fd, because a
@@ -79,7 +96,9 @@ fn state_the_opaque_fd_export_contract_of_the_planes(
     payload: &mut serde_json::Value,
     exported_planes: &ExportedPlaneWireHandles,
 ) {
-    if let Some(opaque_fd_export_contract) = &exported_planes.opaque_fd_export_contract {
+    if let ExportedPlaneFlavourOnTheWire::OpaqueFd(opaque_fd_export_contract) =
+        &exported_planes.plane_flavour
+    {
         payload["vk_memory_type_index"] = opaque_fd_export_contract.vk_memory_type_index.into();
         payload["exporting_device_uuid"] = opaque_fd_export_contract
             .exporting_device_uuid
@@ -102,7 +121,7 @@ fn pixel_buffer_check_in_payload(
         "width": pixel_buffer_shape.width,
         "height": pixel_buffer_shape.height,
         "format": pixel_buffer_shape.format.wire_name(),
-        "handle_type": exported_planes.handle_type,
+        "handle_type": exported_planes.plane_flavour.wire_handle_type(),
         "plane_sizes": exported_planes.plane_sizes,
         "plane_offsets": exported_planes.plane_offsets,
     });
@@ -157,7 +176,7 @@ fn pixel_buffer_registration_payload(
         "height": pixel_buffer_shape.height,
         "format": pixel_buffer_shape.format.wire_name(),
         "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
-        "handle_type": exported_planes.handle_type,
+        "handle_type": exported_planes.plane_flavour.wire_handle_type(),
         "plane_sizes": exported_planes.plane_sizes,
         "plane_offsets": exported_planes.plane_offsets,
     });
@@ -176,7 +195,8 @@ fn pixel_buffer_registration_payload(
 /// One registration carries one flavour — a buffer whose planes export under
 /// two is refused rather than published under whichever flavour happened to
 /// come last, which would import the other planes through the wrong Vulkan
-/// external-handle type.
+/// external-handle type. For the same reason OPAQUE_FD planes stating
+/// different memory type indices are refused: the registration states one.
 ///
 /// Every `exported_planes` fd must come from an export that minted it for
 /// this process: they are adopted, not borrowed. `RhiExternalHandle` also
@@ -191,23 +211,29 @@ fn adopt_exported_planes_into_wire_handles(
 ) -> Result<ExportedPlaneWireHandles> {
     use crate::core::rhi::RhiExternalHandle;
 
+    let exporting_device_uuid = lowercase_hex_of_device_uuid(exporting_device_uuid);
     let mut plane_fds: Vec<OwnedFd> = Vec::with_capacity(exported_planes.len());
     let mut plane_sizes: Vec<u64> = Vec::with_capacity(exported_planes.len());
     let mut plane_offsets: Vec<u64> = Vec::with_capacity(exported_planes.len());
-    let mut plane_flavours: Vec<&'static str> = Vec::with_capacity(exported_planes.len());
-    let mut first_opaque_fd_plane_memory_type_index: Option<u32> = None;
+    let mut plane_flavours: Vec<ExportedPlaneFlavourOnTheWire> =
+        Vec::with_capacity(exported_planes.len());
     for exported_plane in exported_planes {
         let (exported_plane_fd, size, this_plane_flavour) = match exported_plane {
-            RhiExternalHandle::DmaBuf { fd, size } => (fd, size, SURFACE_HANDLE_TYPE_DMA_BUF),
+            RhiExternalHandle::DmaBuf { fd, size } => {
+                (fd, size, ExportedPlaneFlavourOnTheWire::DmaBuf)
+            }
             RhiExternalHandle::OpaqueFd {
                 fd,
                 size,
                 exporting_allocation_memory_type_index,
-            } => {
-                first_opaque_fd_plane_memory_type_index
-                    .get_or_insert(exporting_allocation_memory_type_index);
-                (fd, size, SURFACE_HANDLE_TYPE_OPAQUE_FD)
-            }
+            } => (
+                fd,
+                size,
+                ExportedPlaneFlavourOnTheWire::OpaqueFd(OpaqueFdExportContract {
+                    vk_memory_type_index: exporting_allocation_memory_type_index,
+                    exporting_device_uuid: exporting_device_uuid.clone(),
+                }),
+            ),
         };
         // SAFETY: the export minted this fd for us and handed it to no one
         // else.
@@ -216,33 +242,46 @@ fn adopt_exported_planes_into_wire_handles(
         plane_offsets.push(0);
         plane_flavours.push(this_plane_flavour);
     }
-    // Validated after every fd is adopted, so the refusal closes all of them
+    // Validated after every fd is adopted, so a refusal closes all of them
     // rather than only the ones the loop reached.
-    let handle_type = plane_flavours
+    let plane_flavour = plane_flavours
         .first()
-        .copied()
-        .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF);
-    if plane_flavours
-        .iter()
-        .any(|plane_flavour| *plane_flavour != handle_type)
-    {
+        .cloned()
+        .unwrap_or(ExportedPlaneFlavourOnTheWire::DmaBuf);
+    if plane_flavours.iter().any(|this_plane_flavour| {
+        this_plane_flavour.wire_handle_type() != plane_flavour.wire_handle_type()
+    }) {
+        let plane_handle_types: Vec<&'static str> = plane_flavours
+            .iter()
+            .map(ExportedPlaneFlavourOnTheWire::wire_handle_type)
+            .collect();
         return Err(Error::Configuration(format!(
-            "pixel buffer exports mixed external-handle flavours ({plane_flavours:?})"
+            "pixel buffer exports mixed external-handle flavours ({plane_handle_types:?})"
         )));
     }
-    let opaque_fd_export_contract =
-        first_opaque_fd_plane_memory_type_index.map(|vk_memory_type_index| {
-            OpaqueFdExportContract {
-                vk_memory_type_index,
-                exporting_device_uuid: lowercase_hex_of_device_uuid(exporting_device_uuid),
-            }
-        });
+    if plane_flavours
+        .iter()
+        .any(|this_plane_flavour| *this_plane_flavour != plane_flavour)
+    {
+        let plane_memory_type_indices: Vec<u32> = plane_flavours
+            .iter()
+            .filter_map(|this_plane_flavour| match this_plane_flavour {
+                ExportedPlaneFlavourOnTheWire::OpaqueFd(contract) => {
+                    Some(contract.vk_memory_type_index)
+                }
+                ExportedPlaneFlavourOnTheWire::DmaBuf => None,
+            })
+            .collect();
+        return Err(Error::Configuration(format!(
+            "pixel buffer exports OPAQUE_FD planes at different memory type indices \
+             ({plane_memory_type_indices:?}); one registration states one"
+        )));
+    }
     Ok(ExportedPlaneWireHandles {
         plane_fds,
         plane_sizes,
         plane_offsets,
-        handle_type,
-        opaque_fd_export_contract,
+        plane_flavour,
     })
 }
 
@@ -2715,7 +2754,10 @@ mod plane_fd_ownership_tests {
         )
         .expect("a single-flavour export must be accepted");
 
-        assert_eq!(wire_handles.handle_type, SURFACE_HANDLE_TYPE_DMA_BUF);
+        assert_eq!(
+            wire_handles.plane_flavour,
+            ExportedPlaneFlavourOnTheWire::DmaBuf
+        );
         assert_eq!(wire_handles.plane_sizes, vec![4096, 2048]);
         assert_eq!(wire_handles.plane_offsets, vec![0, 0]);
         assert!(
@@ -2750,10 +2792,9 @@ mod plane_fd_ownership_tests {
             exporting_device_uuid,
         )
         .expect("a single OPAQUE_FD plane is accepted");
-        assert_eq!(wire_handles.handle_type, SURFACE_HANDLE_TYPE_OPAQUE_FD);
         assert_eq!(
-            wire_handles.opaque_fd_export_contract,
-            Some(OpaqueFdExportContract {
+            wire_handles.plane_flavour,
+            ExportedPlaneFlavourOnTheWire::OpaqueFd(OpaqueFdExportContract {
                 vk_memory_type_index: 0,
                 exporting_device_uuid: "00112233445566778899aabbccddeeff".to_string(),
             })
@@ -2770,7 +2811,10 @@ mod plane_fd_ownership_tests {
             exporting_device_uuid,
         )
         .expect("a DMA-BUF plane is accepted");
-        assert_eq!(wire_handles.opaque_fd_export_contract, None);
+        assert_eq!(
+            wire_handles.plane_flavour,
+            ExportedPlaneFlavourOnTheWire::DmaBuf
+        );
     }
 
     /// The refusal path obeys the same rule as the send path. A plane fd
@@ -2813,6 +2857,44 @@ mod plane_fd_ownership_tests {
         assert!(
             second_plane.was_closed(),
             "the refusal left plane 1 open — no owner remains to close it"
+        );
+    }
+
+    /// One registration states one memory type index, so OPAQUE_FD planes
+    /// exported at two are refused by name, and every plane adopted closes.
+    #[test]
+    fn opaque_fd_planes_at_different_memory_type_indices_are_refused_and_close_every_plane() {
+        let first_plane = ExportedPlaneFdUnderTest::mint();
+        let second_plane = ExportedPlaneFdUnderTest::mint();
+
+        let refusal = match adopt_exported_planes_into_wire_handles(
+            vec![
+                RhiExternalHandle::OpaqueFd {
+                    fd: first_plane.plane_fd,
+                    size: 4096,
+                    exporting_allocation_memory_type_index: 0,
+                },
+                RhiExternalHandle::OpaqueFd {
+                    fd: second_plane.plane_fd,
+                    size: 4096,
+                    exporting_allocation_memory_type_index: 3,
+                },
+            ],
+            [0; 16],
+        ) {
+            Ok(_) => panic!("OPAQUE_FD planes at two memory type indices must be refused"),
+            Err(refusal) => refusal,
+        };
+
+        assert!(
+            refusal
+                .to_string()
+                .contains("OPAQUE_FD planes at different memory type indices ([0, 3])"),
+            "the refusal must name what it got: {refusal}"
+        );
+        assert!(
+            first_plane.was_closed() && second_plane.was_closed(),
+            "the refusal must close every plane fd it adopted"
         );
     }
 
@@ -3042,28 +3124,25 @@ mod pixel_buffer_registration_payload_tests {
     const EXPORTING_DEVICE_UUID: &str = "00112233445566778899aabbccddeeff";
 
     fn exported_planes_of_flavour(
-        handle_type: &'static str,
-        opaque_fd_export_contract: Option<OpaqueFdExportContract>,
+        plane_flavour: ExportedPlaneFlavourOnTheWire,
     ) -> ExportedPlaneWireHandles {
         ExportedPlaneWireHandles {
             plane_fds: Vec::new(),
             plane_sizes: vec![64 * 32 * 4],
             plane_offsets: vec![0],
-            handle_type,
-            opaque_fd_export_contract,
+            plane_flavour,
         }
     }
 
     fn opaque_fd_exported_planes_at_memory_type_index(
         vk_memory_type_index: u32,
     ) -> ExportedPlaneWireHandles {
-        exported_planes_of_flavour(
-            SURFACE_HANDLE_TYPE_OPAQUE_FD,
-            Some(OpaqueFdExportContract {
+        exported_planes_of_flavour(ExportedPlaneFlavourOnTheWire::OpaqueFd(
+            OpaqueFdExportContract {
                 vk_memory_type_index,
                 exporting_device_uuid: EXPORTING_DEVICE_UUID.to_string(),
-            }),
-        )
+            },
+        ))
     }
 
     fn shape() -> PixelBufferShapeOnTheWire {
@@ -3143,7 +3222,7 @@ mod pixel_buffer_registration_payload_tests {
     #[test]
     fn a_dma_buf_pixel_buffer_payload_carries_neither_contract_field() {
         let [check_in, register, register_with_a_timeline] = every_pixel_buffer_payload(
-            &exported_planes_of_flavour(SURFACE_HANDLE_TYPE_DMA_BUF, None),
+            &exported_planes_of_flavour(ExportedPlaneFlavourOnTheWire::DmaBuf),
         );
         assert_eq!(
             check_in.1.to_string(),

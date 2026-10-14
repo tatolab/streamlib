@@ -853,6 +853,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::context::surface_store::plane_fd_ownership_tests::each_announced_edge_is_peeled_off_the_end_and_closed",
                 "core::context::surface_store::plane_fd_ownership_tests::a_reply_shorter_than_its_flags_promise_is_refused_and_closes_what_it_carried",
                 "core::context::surface_store::plane_fd_ownership_tests::an_opaque_fd_export_states_the_handles_memory_type_index_and_the_exporting_device",
+                "core::context::surface_store::plane_fd_ownership_tests::opaque_fd_planes_at_different_memory_type_indices_are_refused_and_close_every_plane",
                 "core::context::surface_store::external_handle_flavour_tests",
                 "core::context::surface_store::pixel_buffer_registration_payload_tests",
                 "vulkan::rhi::vulkan_pixel_buffer_pool::tests::a_linux_pool_slot_takes_dma_buf_then_opaque_fd_then_in_process_host_visible_memory",
