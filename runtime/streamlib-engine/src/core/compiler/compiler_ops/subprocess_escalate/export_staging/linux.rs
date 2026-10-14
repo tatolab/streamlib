@@ -124,11 +124,9 @@ pub(super) fn handle_open_surface_export_staging(
             bytes_per_row: Some(staging.bytes_per_row().to_string()),
             writable: Some(staging.writable()),
             exporting_device_uuid: Some(
-                staging
-                    .exporting_device_uuid()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect(),
+                streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+                    staging.exporting_device_uuid(),
+                ),
             ),
             ..Default::default()
         })

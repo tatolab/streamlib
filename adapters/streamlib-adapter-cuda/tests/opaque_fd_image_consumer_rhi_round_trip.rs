@@ -183,7 +183,7 @@ fn opaque_fd_image_carve_out_round_trip() {
                 libc::close(dest_fd);
             }
             println!(
-                "opaque_fd image carve-out: ConsumerVulkanDevice::new failed: {e:?} — skipping \
+                "opaque_fd image carve-out: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {e:?} — skipping \
                  (likely a UUID mismatch on a multi-GPU rig)"
             );
             return;
@@ -390,7 +390,7 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
                 libc::close(dest_fd);
             }
             println!(
-                "opaque_fd teardown probe: ConsumerVulkanDevice::new failed: {e:?} — skipping \
+                "opaque_fd teardown probe: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {e:?} — skipping \
                  (likely a UUID mismatch on a multi-GPU rig)"
             );
             return;

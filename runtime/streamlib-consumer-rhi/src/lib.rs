@@ -82,7 +82,8 @@ pub use formats::{TextureFormat, TextureUsages};
 pub use pixel_format::PixelFormat;
 pub use runtime_vulkan_device_named_at_spawn::{
     RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE, lowercase_hex_of_vulkan_device_uuid,
-    runtime_vulkan_device_uuid_named_at_spawn, vulkan_device_uuid_from_hex,
+    name_the_runtime_vulkan_device_to_a_spawned_process, runtime_vulkan_device_uuid_named_at_spawn,
+    vulkan_device_uuid_from_hex,
 };
 
 /// This crate's package version, captured at compile time. Folded into
@@ -96,7 +97,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_device::{
-    ConsumerVulkanDevice, VulkanDeviceTheLoaderEnumerates, vulkan_devices_the_loader_enumerates,
+    ConsumerVulkanDevice, VulkanDeviceTheLoaderEnumerates,
+    vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
+    vulkan_devices_the_loader_enumerates,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;

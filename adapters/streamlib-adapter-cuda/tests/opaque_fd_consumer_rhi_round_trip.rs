@@ -256,7 +256,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
                 libc::close(consumer_consume_done_fd);
             }
             println!(
-                "stage6: ConsumerVulkanDevice::new failed: {e:?} — skipping \
+                "stage6: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {e:?} — skipping \
                  (likely a UUID mismatch on a multi-GPU rig)"
             );
             return;

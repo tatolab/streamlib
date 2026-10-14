@@ -195,17 +195,16 @@ struct SpawnedHelperProcess {
 
 impl SpawnedHelperProcess {
     fn read_back(engine: &EngineWithOneRegisteredTexture) -> Self {
-        let mut child = Command::new(HELPER_BINARY)
+        let mut command = Command::new(HELPER_BINARY);
+        streamlib_consumer_rhi::name_the_runtime_vulkan_device_to_a_spawned_process(
+            &mut command,
+            engine._gpu.device().vulkan_device().physical_device_uuid(),
+        );
+        let mut child = command
             .args(["read-back", &engine.surface_id])
             .env(
                 SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
                 engine.service.service_name(),
-            )
-            .env(
-                streamlib_consumer_rhi::RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
-                streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
-                    engine._gpu.device().vulkan_device().physical_device_uuid(),
-                ),
             )
             .stdout(Stdio::piped())
             .spawn()

@@ -302,11 +302,9 @@ impl ProcessorInterpreterSpawnHostProcessor {
             );
         }
         if let Some(runtime_vulkan_device_uuid) = runtime_vulkan_device_uuid {
-            command.env(
-                streamlib_consumer_rhi::RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
-                streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
-                    runtime_vulkan_device_uuid,
-                ),
+            streamlib_consumer_rhi::name_the_runtime_vulkan_device_to_a_spawned_process(
+                &mut command,
+                runtime_vulkan_device_uuid,
             );
         }
         detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
@@ -703,11 +701,10 @@ impl ProcessorInterpreterSpawnHostProcessor {
         // OPAQUE_FD import binds only on the exporting `deviceUUID`.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let runtime_vulkan_device_uuid = Some(
-            ctx.gpu_limited_access()
-                .host_inner()
-                .device()
-                .inner
-                .physical_device_uuid(),
+            crate::host_rhi::HostGpuDeviceExt::vulkan_device(
+                ctx.gpu_limited_access().host_inner().device().as_ref(),
+            )
+            .physical_device_uuid(),
         );
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let runtime_vulkan_device_uuid = None;

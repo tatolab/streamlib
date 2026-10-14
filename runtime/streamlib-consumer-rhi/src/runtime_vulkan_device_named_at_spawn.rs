@@ -48,6 +48,18 @@ pub fn vulkan_device_uuid_from_hex(vulkan_device_uuid_as_hex: &str) -> Option<[u
     Some(vulkan_device_uuid)
 }
 
+/// Name `vulkan_device_uuid` to the process `command` spawns, as
+/// [`runtime_vulkan_device_uuid_named_at_spawn`] reads it there.
+pub fn name_the_runtime_vulkan_device_to_a_spawned_process(
+    command: &mut std::process::Command,
+    vulkan_device_uuid: [u8; 16],
+) {
+    command.env(
+        RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
+        lowercase_hex_of_vulkan_device_uuid(vulkan_device_uuid),
+    );
+}
+
 /// The runtime's Vulkan `deviceUUID` from this process's environment, refused
 /// by name when the variable is absent or does not spell one.
 pub fn runtime_vulkan_device_uuid_named_at_spawn() -> Result<[u8; 16]> {
@@ -123,6 +135,22 @@ mod tests {
                 "94105c9d1e3f6946c6657e58e820300e".into()
             ))
             .expect("a well-formed device UUID"),
+            A_DEVICE_UUID
+        );
+    }
+
+    #[test]
+    fn a_spawned_process_is_named_the_device_in_the_spelling_its_reader_takes() {
+        let mut command = std::process::Command::new("true");
+        name_the_runtime_vulkan_device_to_a_spawned_process(&mut command, A_DEVICE_UUID);
+        let named_value = command
+            .get_envs()
+            .find(|(name, _)| *name == RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE)
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_owned());
+        assert_eq!(
+            runtime_vulkan_device_uuid_from_the_environment_value(named_value)
+                .expect("the reader takes what the writer named"),
             A_DEVICE_UUID
         );
     }

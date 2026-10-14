@@ -176,17 +176,16 @@ struct SpawnedHelperProcess {
 
 impl SpawnedHelperProcess {
     fn spawn(engine: &EngineWithOneFrameAndItsTimelinePair, arguments: &[&str]) -> Self {
-        let mut child = Command::new(HELPER_BINARY)
+        let mut command = Command::new(HELPER_BINARY);
+        streamlib_consumer_rhi::name_the_runtime_vulkan_device_to_a_spawned_process(
+            &mut command,
+            engine.device.physical_device_uuid(),
+        );
+        let mut child = command
             .args(arguments)
             .env(
                 SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
                 engine.service.service_name(),
-            )
-            .env(
-                streamlib_consumer_rhi::RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
-                streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
-                    engine.device.physical_device_uuid(),
-                ),
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

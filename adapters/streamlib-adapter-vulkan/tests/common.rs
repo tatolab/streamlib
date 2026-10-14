@@ -151,14 +151,12 @@ pub fn spawn_helper(role: &str, host: &HostFixture) -> (Child, UnixStream) {
 
     let bin_path = vulkan_adapter_subprocess_helper_path();
     let mut cmd = Command::new(bin_path);
+    streamlib_consumer_rhi::name_the_runtime_vulkan_device_to_a_spawned_process(
+        &mut cmd,
+        host.adapter.device().physical_device_uuid(),
+    );
     cmd.arg(role)
         .env("STREAMLIB_HELPER_SOCKET_FD", child_fd.to_string())
-        .env(
-            streamlib_consumer_rhi::RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE,
-            streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
-                host.adapter.device().physical_device_uuid(),
-            ),
-        )
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     let child_proc = cmd.spawn().expect("spawn subprocess helper");

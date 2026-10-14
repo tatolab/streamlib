@@ -37,7 +37,8 @@ use serial_test::serial;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
 use streamlib_consumer_rhi::{
-    ConsumerVulkanDevice, VulkanRhiDevice, vulkan_devices_the_loader_enumerates,
+    ConsumerVulkanDevice, VulkanRhiDevice,
+    vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
 };
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -45,14 +46,13 @@ use vulkanalia::vk;
 /// A consumer device on the first device the loader enumerates — these tests
 /// have no runtime to name one.
 fn try_consumer() -> Option<Arc<ConsumerVulkanDevice>> {
-    let first_enumerated_device = match vulkan_devices_the_loader_enumerates() {
-        Ok(enumerated_devices) => enumerated_devices.into_iter().next()?,
+    match vulkan_device_uuid_of_the_first_device_the_loader_enumerates() {
+        Ok(vulkan_device_uuid) => try_consumer_on(vulkan_device_uuid),
         Err(e) => {
-            println!("skip: vulkan_devices_the_loader_enumerates failed: {e}");
-            return None;
+            println!("skip: no Vulkan device enumerates: {e}");
+            None
         }
-    };
-    try_consumer_on(first_enumerated_device.device_uuid)
+    }
 }
 
 fn try_consumer_on(vulkan_device_uuid: [u8; 16]) -> Option<Arc<ConsumerVulkanDevice>> {

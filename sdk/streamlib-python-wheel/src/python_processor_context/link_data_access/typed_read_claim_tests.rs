@@ -105,7 +105,7 @@ fn wire_one_link_into_a_reader(
         python.None(),
         python.None(),
         share.socket_path.clone(),
-        crate::python_surface_share_service_for_tests::vulkan_device_uuid_for_a_test_with_no_runtime(),
+        streamlib_consumer_rhi::vulkan_device_uuid_of_the_first_device_the_loader_enumerates(),
         "helper:read-under-test".to_string(),
     ));
     ReadUnderTest {

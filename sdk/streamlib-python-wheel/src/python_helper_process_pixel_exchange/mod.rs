@@ -604,7 +604,7 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// none — what its import device is built on, and the refusal of every
     /// import when it is absent.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    vulkan_device_uuid_the_runtime_named_at_spawn: std::result::Result<[u8; 16], String>,
+    vulkan_device_uuid_the_runtime_named_at_spawn: streamlib_consumer_rhi::Result<[u8; 16]>,
     /// One Vulkan device per child, created at first import.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     consumer_vulkan_device: Mutex<Option<Arc<ConsumerVulkanDevice>>>,
@@ -664,7 +664,7 @@ impl HelperProcessGpuExchangeClient {
         escalate_request_to_parent: Py<PyAny>,
         release_to_parent_without_waiting: Py<PyAny>,
         surface_share_channel_name: impl Into<std::ffi::OsString>,
-        vulkan_device_uuid_the_runtime_named_at_spawn: std::result::Result<[u8; 16], String>,
+        vulkan_device_uuid_the_runtime_named_at_spawn: streamlib_consumer_rhi::Result<[u8; 16]>,
         foreign_surface_registration_runtime_id: String,
     ) -> Self {
         let surface_share_channel_name: std::ffi::OsString = surface_share_channel_name.into();
@@ -868,21 +868,23 @@ impl HelperProcessGpuExchangeClient {
         if let Some(existing_device) = device.as_ref() {
             return Ok(Arc::clone(existing_device));
         }
+        let could_not_create_the_import_device = |device_failure: &dyn std::fmt::Display| {
+            PyRuntimeError::new_err(format!(
+                "this helper process could not create its Vulkan import device: {device_failure}"
+            ))
+        };
+        let vulkan_device_uuid_the_runtime_named =
+            match &self.vulkan_device_uuid_the_runtime_named_at_spawn {
+                Ok(vulkan_device_uuid_the_runtime_named) => *vulkan_device_uuid_the_runtime_named,
+                Err(absent_or_malformed) => {
+                    return Err(could_not_create_the_import_device(absent_or_malformed));
+                }
+            };
         let created = Arc::new(
-            self.vulkan_device_uuid_the_runtime_named_at_spawn
-                .clone()
-                .and_then(|vulkan_device_uuid_the_runtime_named| {
-                    ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
-                        vulkan_device_uuid_the_runtime_named,
-                    )
-                    .map_err(|device_failure| device_failure.to_string())
-                })
-                .map_err(|device_failure| {
-                    PyRuntimeError::new_err(format!(
-                        "this helper process could not create its Vulkan import device: \
-                         {device_failure}"
-                    ))
-                })?,
+            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+                vulkan_device_uuid_the_runtime_named,
+            )
+            .map_err(|device_failure| could_not_create_the_import_device(&device_failure))?,
         );
         *device = Some(Arc::clone(&created));
         Ok(created)

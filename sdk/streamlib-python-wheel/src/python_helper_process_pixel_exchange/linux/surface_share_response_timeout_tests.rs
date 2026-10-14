@@ -18,7 +18,7 @@ fn exchange_client_reaching(socket_path: PathBuf) -> HelperProcessGpuExchangeCli
             python.None(),
             python.None(),
             socket_path,
-            crate::python_surface_share_service_for_tests::vulkan_device_uuid_for_a_test_with_no_runtime(),
+            streamlib_consumer_rhi::vulkan_device_uuid_of_the_first_device_the_loader_enumerates(),
             "helper:response-timeout-under-test".to_string(),
         )
     })

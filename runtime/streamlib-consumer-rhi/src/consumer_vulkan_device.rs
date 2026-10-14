@@ -179,18 +179,51 @@ pub struct VulkanDeviceTheLoaderEnumerates {
 /// the loader's order.
 pub fn vulkan_devices_the_loader_enumerates() -> Result<Vec<VulkanDeviceTheLoaderEnumerates>> {
     let (_entry, instance) = create_the_consumer_vulkan_instance()?;
-    let enumerated = physical_devices_the_loader_enumerates_on(&instance);
-    unsafe { instance.destroy_instance(None) };
-    Ok(enumerated?
+    Ok(physical_devices_the_loader_enumerates_on(&instance)?
         .into_iter()
         .map(|(_physical_device, enumerated_device)| enumerated_device)
         .collect())
 }
 
+/// A `VkInstance` destroyed when dropped unless [`Self::keep`] hands it on, so
+/// every early return of a device's construction tears it down.
+struct VulkanInstanceDestroyedUnlessKept(vulkanalia::Instance);
+
+impl VulkanInstanceDestroyedUnlessKept {
+    fn keep(self) -> vulkanalia::Instance {
+        std::mem::ManuallyDrop::new(self).0.clone()
+    }
+}
+
+impl std::ops::Deref for VulkanInstanceDestroyedUnlessKept {
+    type Target = vulkanalia::Instance;
+
+    fn deref(&self) -> &vulkanalia::Instance {
+        &self.0
+    }
+}
+
+impl Drop for VulkanInstanceDestroyedUnlessKept {
+    fn drop(&mut self) {
+        unsafe { self.0.destroy_instance(None) };
+    }
+}
+
+/// The `deviceUUID` of the first device the loader enumerates — for a process
+/// with no runtime to name one, such as a test.
+pub fn vulkan_device_uuid_of_the_first_device_the_loader_enumerates() -> Result<[u8; 16]> {
+    vulkan_devices_the_loader_enumerates()?
+        .into_iter()
+        .next()
+        .map(|first_enumerated_device| first_enumerated_device.device_uuid)
+        .ok_or_else(|| ConsumerRhiError::Gpu("No Vulkan physical devices found".into()))
+}
+
 /// The loader's library, entry and the minimal instance a consumer device
 /// enumerates on: no surface extensions, since the consumer never renders to
 /// a window.
-fn create_the_consumer_vulkan_instance() -> Result<(vulkanalia::Entry, vulkanalia::Instance)> {
+fn create_the_consumer_vulkan_instance()
+-> Result<(vulkanalia::Entry, VulkanInstanceDestroyedUnlessKept)> {
     let loader = crate::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
         ConsumerRhiError::Gpu(format!(
             "Failed to load the Vulkan loader library; tried:\n{not_found}"
@@ -225,7 +258,7 @@ fn create_the_consumer_vulkan_instance() -> Result<(vulkanalia::Entry, vulkanali
 
     let instance = unsafe { entry.create_instance(&instance_info, None) }
         .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create Vulkan instance: {e}")))?;
-    Ok((entry, instance))
+    Ok((entry, VulkanInstanceDestroyedUnlessKept(instance)))
 }
 
 /// Each physical device `instance` enumerates, in the loader's order, with
@@ -313,26 +346,14 @@ impl ConsumerVulkanDevice {
         vulkan_device_uuid_the_runtime_named: [u8; 16],
     ) -> Result<Self> {
         let (entry, instance) = create_the_consumer_vulkan_instance()?;
-        let enumerated_physical_devices = match physical_devices_the_loader_enumerates_on(&instance)
-        {
-            Ok(enumerated_physical_devices) => enumerated_physical_devices,
-            Err(enumeration_failure) => {
-                unsafe { instance.destroy_instance(None) };
-                return Err(enumeration_failure);
-            }
-        };
         let (physical_devices, mut enumerated_devices): (Vec<_>, Vec<_>) =
-            enumerated_physical_devices.into_iter().unzip();
-        let index = match index_of_the_device_the_runtime_named(
+            physical_devices_the_loader_enumerates_on(&instance)?
+                .into_iter()
+                .unzip();
+        let index = index_of_the_device_the_runtime_named(
             &enumerated_devices,
             vulkan_device_uuid_the_runtime_named,
-        ) {
-            Ok(index) => index,
-            Err(refusal) => {
-                unsafe { instance.destroy_instance(None) };
-                return Err(refusal);
-            }
-        };
+        )?;
         let physical_device = physical_devices[index];
         let VulkanDeviceTheLoaderEnumerates {
             device_name,
@@ -492,7 +513,7 @@ impl ConsumerVulkanDevice {
 
         Ok(Self {
             entry,
-            instance,
+            instance: instance.keep(),
             physical_device,
             memory_properties,
             device,
@@ -1214,11 +1235,9 @@ impl Drop for ConsumerVulkanDevice {
 #[cfg(test)]
 pub(crate) fn consumer_vulkan_device_on_the_first_device_the_loader_enumerates()
 -> Result<ConsumerVulkanDevice> {
-    let first_enumerated_device = vulkan_devices_the_loader_enumerates()?
-        .into_iter()
-        .next()
-        .ok_or_else(|| ConsumerRhiError::Gpu("No Vulkan physical devices found".into()))?;
-    ConsumerVulkanDevice::new_on_the_device_the_runtime_named(first_enumerated_device.device_uuid)
+    ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        vulkan_device_uuid_of_the_first_device_the_loader_enumerates()?,
+    )
 }
 
 // Vulkan handles are thread-safe behind external synchronization which
@@ -1345,8 +1364,7 @@ mod selection_by_the_device_uuid_the_runtime_named_tests {
     }
 
     /// The device the runtime named wins wherever the loader put it — the
-    /// software device second, behind a discrete GPU the old
-    /// first-discrete rule would have taken.
+    /// software device second, behind a discrete GPU.
     #[test]
     fn the_device_carrying_the_named_uuid_is_chosen_wherever_it_is_enumerated() {
         let enumerated_devices = a_discrete_gpu_then_a_software_device();
