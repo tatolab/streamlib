@@ -106,7 +106,8 @@ impl ConsumerVulkanBuffer {
     /// `vk_memory_type_index`; a value the imported buffer cannot bind is
     /// refused here by name rather than tripping
     /// VUID-vkBindBufferMemory-memory-01035 inside the driver, and so is a
-    /// type that is not HOST_VISIBLE, which the mapping could not reach.
+    /// type that is not HOST_VISIBLE | HOST_COHERENT, which the mapped read
+    /// needs.
     ///
     /// Same fd ownership as [`Self::from_opaque_fd`]: always consumes
     /// `opaque_fd`, closing it on any exit before `vkAllocateMemory`.
@@ -491,8 +492,8 @@ fn import_single_opaque_fd_plane(
                         requirements.memory_type_bits,
                         stated_memory_type_index,
                     )?;
-                    refuse_unless_the_stated_memory_type_is_host_visible(
-                        vulkan_device.memory_type_property_flags(stated_memory_type_index),
+                    refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+                        vulkan_device.property_flags_of_memory_type_index(stated_memory_type_index),
                         stated_memory_type_index,
                         vulkan_device.name(),
                     )?;
@@ -594,23 +595,25 @@ fn refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
     )))
 }
 
-/// Refuse a stated memory type the host cannot map: every import here maps
-/// its memory, and `vkMapMemory` on a type without HOST_VISIBLE is invalid
-/// usage rather than a Vulkan error.
+/// Refuse a stated memory type the host cannot read through a mapping:
+/// `vkMapMemory` on a type without HOST_VISIBLE is invalid usage, and no
+/// flush or invalidate exists on this path, so a type without HOST_COHERENT
+/// would read stale bytes.
 #[cfg(target_os = "linux")]
-fn refuse_unless_the_stated_memory_type_is_host_visible(
+fn refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
     stated_memory_type_property_flags: Option<vk::MemoryPropertyFlags>,
     stated_memory_type_index: u32,
     importing_device_name: &str,
 ) -> Result<()> {
+    let mapped_read_property_flags =
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
     match stated_memory_type_property_flags {
-        Some(property_flags) if property_flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE) => {
-            Ok(())
-        }
+        Some(property_flags) if property_flags.contains(mapped_read_property_flags) => Ok(()),
         Some(property_flags) => Err(ConsumerRhiError::Configuration(format!(
             "ConsumerVulkanBuffer: the exporter states memory type index \
-             {stated_memory_type_index}, which is not HOST_VISIBLE on this device \
-             ({importing_device_name}; flags {property_flags:?}), so this import cannot map it"
+             {stated_memory_type_index}, which is not HOST_VISIBLE | HOST_COHERENT on this \
+             device ({importing_device_name}; flags {property_flags:?}), so this import cannot \
+             read it through a mapping"
         ))),
         None => Err(ConsumerRhiError::Configuration(format!(
             "ConsumerVulkanBuffer: the exporter states memory type index \
@@ -735,7 +738,7 @@ mod stated_memory_type_index_tests {
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
         ] {
             assert!(
-                refuse_unless_the_stated_memory_type_is_host_visible(
+                refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
                     Some(host_visible_flags),
                     2,
                     "device under test"
@@ -750,7 +753,7 @@ mod stated_memory_type_index_tests {
     /// the refusal names the index, the device and the flags instead.
     #[test]
     fn a_stated_memory_type_the_host_cannot_see_is_refused_naming_the_index_and_device() {
-        let refusal = refuse_unless_the_stated_memory_type_is_host_visible(
+        let refusal = refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
             Some(vk::MemoryPropertyFlags::DEVICE_LOCAL),
             4,
             "device under test",
@@ -772,11 +775,29 @@ mod stated_memory_type_index_tests {
     }
 
     #[test]
+    fn a_host_visible_stated_memory_type_without_host_coherent_is_refused() {
+        let refusal = refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+            Some(vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_CACHED),
+            3,
+            "device under test",
+        )
+        .expect_err("a non-coherent type would read stale bytes without an invalidate")
+        .to_string();
+        assert!(
+            refusal.contains("memory type index 3") && refusal.contains("HOST_COHERENT"),
+            "names the index and the missing property: {refusal}"
+        );
+    }
+
+    #[test]
     fn a_stated_memory_type_the_device_does_not_have_is_refused() {
-        let refusal =
-            refuse_unless_the_stated_memory_type_is_host_visible(None, 9, "device under test")
-                .expect_err("no such type")
-                .to_string();
+        let refusal = refuse_unless_the_stated_memory_type_is_host_visible_and_coherent(
+            None,
+            9,
+            "device under test",
+        )
+        .expect_err("no such type")
+        .to_string();
         assert!(
             refusal.contains("memory type index 9") && refusal.contains("device under test"),
             "names the index and the device: {refusal}"

@@ -475,7 +475,7 @@ impl ConsumerVulkanDevice {
 
     /// The property flags of memory type `memory_type_index`, or `None` when
     /// the device has no such type.
-    pub fn memory_type_property_flags(
+    pub fn property_flags_of_memory_type_index(
         &self,
         memory_type_index: u32,
     ) -> Option<vk::MemoryPropertyFlags> {
