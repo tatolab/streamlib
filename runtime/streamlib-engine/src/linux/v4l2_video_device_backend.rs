@@ -464,7 +464,8 @@ struct CameraGpuResources {
     use_dmabuf: bool,
     dmabuf_imported_buffers: Vec<StorageBuffer>,
     vulkan_device_name: String,
-    probe_skipped: bool,
+    vulkan_device_is_software: bool,
+    buffer_path_to_the_gpu: V4l2CaptureBufferPathToTheGpu,
 }
 
 /// The two V4L2 capture formats the GPU converter has shaders for.
@@ -689,20 +690,8 @@ fn capture_thread_loop(
         // DMA-BUF probe — VIDIOC_EXPBUF on each V4L2 buffer + Vulkan import.
         // The import side is privileged (allocates VkDeviceMemory + binds) so
         // it stays inside the escalation; failure falls through to MMAP.
-        let probe_skipped = !caps.supports_cross_device_dma_buf_probe;
         let buffer_path_to_the_gpu =
             choose_v4l2_capture_buffer_path_to_the_gpu(&caps, is_virtual_device);
-        if buffer_path_to_the_gpu
-            == V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDeviceExportsNoDmaBuf
-        {
-            tracing::info!(
-                camera = camera_name,
-                device = %vulkan_device_name,
-                device_is_software = caps.device_is_software,
-                "the Vulkan device {vulkan_device_name} exports no DMA-BUF, so the capture's \
-                 buffers cannot be imported — using MMAP + memcpy"
-            );
-        }
         let mut use_dmabuf = false;
         let mut dmabuf_imported_buffers: Vec<StorageBuffer> = Vec::new();
         if buffer_path_to_the_gpu
@@ -773,7 +762,8 @@ fn capture_thread_loop(
             use_dmabuf,
             dmabuf_imported_buffers,
             vulkan_device_name,
-            probe_skipped,
+            vulkan_device_is_software: caps.device_is_software,
+            buffer_path_to_the_gpu,
         })
     });
 
@@ -784,7 +774,8 @@ fn capture_thread_loop(
         use_dmabuf,
         dmabuf_imported_buffers,
         vulkan_device_name,
-        probe_skipped,
+        vulkan_device_is_software,
+        buffer_path_to_the_gpu,
     } = match setup_result {
         Ok(resources) => resources,
         Err(e) => {
@@ -796,13 +787,41 @@ fn capture_thread_loop(
         }
     };
 
-    if probe_skipped {
-        tracing::info!(
-            camera = camera_name,
-            device = %vulkan_device_name,
-            "DMA-BUF probe skipped — driver blocklisted for cross-device imports (#638). \
-             Using MMAP + memcpy."
-        );
+    match buffer_path_to_the_gpu {
+        V4l2CaptureBufferPathToTheGpu::ProbeTheDmaBufImportOfEveryExportedDriverBuffer => {}
+        V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDeviceHasNoExternalMemory => {
+            tracing::info!(
+                camera = camera_name,
+                device = %vulkan_device_name,
+                "the Vulkan device {vulkan_device_name} has no external-memory extensions, so \
+                 the capture's buffers cannot be imported — using MMAP + memcpy"
+            );
+        }
+        V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDeviceExportsNoDmaBuf => {
+            tracing::info!(
+                camera = camera_name,
+                device = %vulkan_device_name,
+                device_is_software = vulkan_device_is_software,
+                "the Vulkan device {vulkan_device_name} exports no DMA-BUF, so the capture's \
+                 buffers cannot be imported — using MMAP + memcpy"
+            );
+        }
+        V4l2CaptureBufferPathToTheGpu::MmapBecauseTheCaptureDeviceIsVirtual => {
+            tracing::info!(
+                camera = camera_name,
+                device = %vulkan_device_name,
+                "the capture driver is virtual and keeps its buffers in system memory, where \
+                 an import can read incoherent bytes — using MMAP + memcpy"
+            );
+        }
+        V4l2CaptureBufferPathToTheGpu::MmapBecauseTheVulkanDriverIsBlocklistedForCrossDeviceImports => {
+            tracing::info!(
+                camera = camera_name,
+                device = %vulkan_device_name,
+                "DMA-BUF probe skipped — driver blocklisted for cross-device imports (#638). \
+                 Using MMAP + memcpy."
+            );
+        }
     }
     if use_dmabuf {
         tracing::info!(
