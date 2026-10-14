@@ -3731,8 +3731,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   is written or bundled here; a person who wants their own runs an existing open-source relay
   program. The relay is never a role of the runtime. Owner, 2026-10-04. [moq-on-the-tailnet;
   reopened by relay-adapters: "joins any relay from an address and a credential and holds
-  nothing else about relays" — a machine joins several relays, each through a relay adapter
-  (the sharing step's OPEN below)]
+  nothing else about relays" — a machine joins several relays, each through a relay adapter;
+  "No relay is written or bundled here" — the app carries a local relay (the sharing step's
+  OPEN below)]
 - **DECIDED** — HTTP carries only what is not real time: the listing of exposed ports, a
   read-only MCP, snapshots, small samples and the viewer page — never live media, in any
   browser and for any tool. `tatolabd` asks Tailscale to serve its HTTP, on a port of its own,
@@ -3775,7 +3776,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   relay that has a subscriber; the adapter carries what differs between relays: authentication
   and credential refresh, the MoQ version spoken, how a machine's ports are named there, and
   each relay's quirks. The first adapters are a local relay, Cloudflare, moq.pro and Red5, Red5
-  on hold while its cost is weighed. A user adds a relay from their own account in the app;
+  on hold while its cost is weighed. The local relay is built into the app, never the runtime,
+  and lets a browser on the machine bring up a stream through `localhost` in a player or the
+  user's own scripts and views. A user adds a relay from their own account in the app;
   signing in to a provider and provisioning a relay live in the app or the private service,
   never the runtime. Known
   (2026-10-04): `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet
