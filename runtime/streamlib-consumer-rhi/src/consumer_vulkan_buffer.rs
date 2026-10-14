@@ -73,26 +73,27 @@ impl ConsumerVulkanBuffer {
     /// Single-FD only: OPAQUE_FD has no multi-plane semantics (CUDA imports
     /// flat memory; multi-plane DMA-BUFs go through [`Self::from_dma_buf_fds`]).
     ///
-    /// **Never close `fd` on error.** Ownership transfers to the driver
-    /// at the successful `vkAllocateMemory` inside this call, not at the
-    /// call's own success: every failure up to and including the import
-    /// leaves `fd` with the caller, but the bind and the mapping run
-    /// after it and free the imported memory — which closes the fd —
-    /// before returning. The two groups share error variants, so a caller
-    /// cannot tell them apart; closing on error is therefore a
-    /// double-close on the arms that already handed it over, and the only
-    /// safe rule is to leave it alone.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
+    /// Always consumes `opaque_fd`: every exit before `vkAllocateMemory`
+    /// closes it here, and from that call on it is the driver's whatever the
+    /// call returns. The spec leaves a failed import's fd with the caller,
+    /// but a driver that closes it anyway — as NVIDIA does a DMA-BUF — would
+    /// make a close here land on whatever the kernel has since handed that
+    /// number to, so a failed import leaks the fd rather than risk that.
+    #[tracing::instrument(
+        level = "trace",
+        skip(vulkan_device, opaque_fd),
+        fields(allocation_size)
+    )]
     pub fn from_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
-        fd: std::os::unix::io::RawFd,
+        opaque_fd: std::os::fd::OwnedFd,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
-        Self::from_opaque_fd_with_handle_type(
+        Self::from_opaque_fd_at_memory_type(
             vulkan_device,
-            fd,
+            opaque_fd,
             allocation_size,
-            ImportHandleType::OpaqueFdAtFirstMatchingMemoryType,
+            OpaqueFdImportMemoryType::FirstMatchingHostVisible,
         )
     }
 
@@ -107,28 +108,32 @@ impl ConsumerVulkanBuffer {
     /// VUID-vkBindBufferMemory-memory-01035 inside the driver, and so is a
     /// type that is not HOST_VISIBLE, which the mapping could not reach.
     ///
-    /// Same fd-ownership rule as [`Self::from_opaque_fd`]: never close
-    /// `fd` on error.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
+    /// Same fd ownership as [`Self::from_opaque_fd`]: always consumes
+    /// `opaque_fd`, closing it on any exit before `vkAllocateMemory`.
+    #[tracing::instrument(
+        level = "trace",
+        skip(vulkan_device, opaque_fd),
+        fields(allocation_size)
+    )]
     pub fn from_opaque_fd_at_stated_memory_type_index(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
-        fd: std::os::unix::io::RawFd,
+        opaque_fd: std::os::fd::OwnedFd,
         allocation_size: vk::DeviceSize,
         stated_memory_type_index: u32,
     ) -> Result<Self> {
-        Self::from_opaque_fd_with_handle_type(
+        Self::from_opaque_fd_at_memory_type(
             vulkan_device,
-            fd,
+            opaque_fd,
             allocation_size,
-            ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index),
+            OpaqueFdImportMemoryType::StatedByTheExporter(stated_memory_type_index),
         )
     }
 
-    fn from_opaque_fd_with_handle_type(
+    fn from_opaque_fd_at_memory_type(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
-        fd: std::os::unix::io::RawFd,
+        opaque_fd: std::os::fd::OwnedFd,
         allocation_size: vk::DeviceSize,
-        handle_type: ImportHandleType,
+        memory_type: OpaqueFdImportMemoryType,
     ) -> Result<Self> {
         if allocation_size == 0 {
             return Err(ConsumerRhiError::Configuration(
@@ -137,7 +142,7 @@ impl ConsumerVulkanBuffer {
         }
 
         let plane =
-            import_single_plane_with_handle_type(vulkan_device, fd, allocation_size, handle_type)?;
+            import_single_opaque_fd_plane(vulkan_device, opaque_fd, allocation_size, memory_type)?;
         Ok(Self {
             vulkan_device: Arc::clone(vulkan_device),
             buffer: plane.buffer,
@@ -422,19 +427,17 @@ impl ConsumerVulkanBuffer {
     }
 }
 
-/// Which `vkImportMemoryFdInfoKHR.handleType` to chain through when
-/// importing a plane, and how the memory type index is arrived at.
+/// How an OPAQUE_FD import arrives at the memory type index it binds.
 #[cfg(target_os = "linux")]
 #[derive(Copy, Clone, Debug)]
-enum ImportHandleType {
-    DmaBuf,
-    /// The importer searches for a memory type itself. Correct for
-    /// DMA-BUF-shaped negotiation, and a guess for OPAQUE_FD — it agrees
-    /// with the exporter only where both land on the same type.
-    OpaqueFdAtFirstMatchingMemoryType,
+enum OpaqueFdImportMemoryType {
+    /// The importer searches for a HOST_VISIBLE type itself — a guess for
+    /// OPAQUE_FD, which agrees with the exporter only where both land on the
+    /// same type.
+    FirstMatchingHostVisible,
     /// The exporter's own memory type index, as published on the
     /// surface-share wire.
-    OpaqueFdAtStatedMemoryTypeIndex(u32),
+    StatedByTheExporter(u32),
 }
 
 #[cfg(target_os = "linux")]
@@ -443,64 +446,64 @@ fn import_single_plane(
     fd: std::os::unix::io::RawFd,
     effective_size: vk::DeviceSize,
 ) -> Result<ConsumerImportedPlane> {
-    import_single_plane_with_handle_type(
-        vulkan_device,
-        fd,
-        effective_size,
-        ImportHandleType::DmaBuf,
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn import_single_plane_with_handle_type(
-    vulkan_device: &Arc<ConsumerVulkanDevice>,
-    fd: std::os::unix::io::RawFd,
-    effective_size: vk::DeviceSize,
-    handle_type: ImportHandleType,
-) -> Result<ConsumerImportedPlane> {
-    let vk_handle_type = match handle_type {
-        ImportHandleType::DmaBuf => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-        ImportHandleType::OpaqueFdAtFirstMatchingMemoryType
-        | ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(_) => {
-            vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD
-        }
-    };
-    let host_visible =
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
     create_bind_and_map_imported_plane(
         vulkan_device,
         effective_size,
-        vk_handle_type,
-        |requirements, alloc_size| match handle_type {
-            ImportHandleType::DmaBuf => vulkan_device.import_dma_buf_memory(
+        vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+        |requirements, alloc_size| {
+            vulkan_device.import_dma_buf_memory(
                 fd,
                 alloc_size,
                 requirements.memory_type_bits,
-                host_visible,
-            ),
-            ImportHandleType::OpaqueFdAtFirstMatchingMemoryType => vulkan_device
-                .import_opaque_fd_memory(
-                    fd,
-                    alloc_size,
-                    requirements.memory_type_bits,
-                    host_visible,
-                ),
-            ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index) => {
-                refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
-                    requirements.memory_type_bits,
-                    stated_memory_type_index,
-                )?;
-                refuse_unless_the_stated_memory_type_is_host_visible(
-                    vulkan_device.memory_type_property_flags(stated_memory_type_index),
-                    stated_memory_type_index,
-                    vulkan_device.name(),
-                )?;
-                vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
-                    fd,
-                    alloc_size,
-                    stated_memory_type_index,
-                )
-            }
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+        },
+    )
+}
+
+/// Import one OPAQUE_FD plane, consuming `opaque_fd`: the import closure owns
+/// it, so a `vkCreateBuffer` failure that never runs the closure, and every
+/// refusal inside it, closes it; it leaves this process's ownership only as
+/// `vkAllocateMemory`'s import info.
+#[cfg(target_os = "linux")]
+fn import_single_opaque_fd_plane(
+    vulkan_device: &Arc<ConsumerVulkanDevice>,
+    opaque_fd: std::os::fd::OwnedFd,
+    effective_size: vk::DeviceSize,
+    memory_type: OpaqueFdImportMemoryType,
+) -> Result<ConsumerImportedPlane> {
+    use std::os::fd::IntoRawFd as _;
+
+    create_bind_and_map_imported_plane(
+        vulkan_device,
+        effective_size,
+        vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+        move |requirements, alloc_size| {
+            let memory_type_index = match memory_type {
+                OpaqueFdImportMemoryType::FirstMatchingHostVisible => vulkan_device
+                    .find_memory_type(
+                        requirements.memory_type_bits,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )?,
+                OpaqueFdImportMemoryType::StatedByTheExporter(stated_memory_type_index) => {
+                    refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
+                        requirements.memory_type_bits,
+                        stated_memory_type_index,
+                    )?;
+                    refuse_unless_the_stated_memory_type_is_host_visible(
+                        vulkan_device.memory_type_property_flags(stated_memory_type_index),
+                        stated_memory_type_index,
+                        vulkan_device.name(),
+                    )?;
+                    stated_memory_type_index
+                }
+            };
+            vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
+                opaque_fd.into_raw_fd(),
+                alloc_size,
+                memory_type_index,
+            )
         },
     )
 }

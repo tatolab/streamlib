@@ -526,7 +526,7 @@ impl ConsumerVulkanDevice {
 
     /// Find the first memory type whose bit is set in `type_filter` and
     /// satisfies `required_properties`.
-    fn find_memory_type(
+    pub(crate) fn find_memory_type(
         &self,
         type_filter: u32,
         required_properties: vk::MemoryPropertyFlags,

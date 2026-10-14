@@ -424,13 +424,9 @@ impl HelperProcessGpuExchangeClient {
 
         let vulkan_device = self.consumer_vulkan_device()?;
         let stated_memory_type_index = checked_out.stated_memory_type_index;
-        // The staging fd is handed over here and never closed on the error
-        // path: ownership passes to the driver inside the call, and the
-        // failure arms that keep it are indistinguishable from the ones
-        // that do not (see `ConsumerVulkanBuffer::from_opaque_fd`).
         let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
             &vulkan_device,
-            checked_out.staging_fd.into_raw_fd(),
+            checked_out.staging_fd,
             described.staging_byte_size,
             stated_memory_type_index,
         )

@@ -1831,19 +1831,15 @@ mod tests {
             .expect("the exporter states its memory type index");
         let fd = exported.export_opaque_fd_memory().expect("export the fd");
 
-        // fd ownership transfers to the driver on success.
+        // SAFETY: a fresh fd the export just returned; nothing else holds it.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
         let imported = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
             &consumer_device,
             fd,
             SIZE as vk::DeviceSize,
             stated_memory_type_index,
-        );
-        // No close on the error arm: the import consumes the fd at its
-        // successful vkAllocateMemory, and the bind and mapping that can
-        // still fail run after it. Closing here would double-close.
-        let imported = imported.unwrap_or_else(|failure| {
-            panic!("a conforming stated-index import must bind: {failure}")
-        });
+        )
+        .unwrap_or_else(|failure| panic!("a conforming stated-index import must bind: {failure}"));
 
         let seen = unsafe { std::slice::from_raw_parts(imported.mapped_ptr(), SIZE as usize) };
         assert!(
@@ -1854,8 +1850,8 @@ mod tests {
 
     /// An index the imported buffer cannot bind is refused by name
     /// rather than handed to `vkBindBufferMemory`, which would violate
-    /// VUID-vkBindBufferMemory-memory-01035 inside the driver. The fd is
-    /// never touched on this path, so the caller still owns it.
+    /// VUID-vkBindBufferMemory-memory-01035 inside the driver, and the
+    /// refusal closes the fd it was handed — as does a zero-size refusal.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -1874,9 +1870,10 @@ mod tests {
         };
 
         const NOT_A_MEMORY_TYPE_INDEX: u32 = 99;
+        let (memfd, memfd_number) = a_memfd_and_its_number();
         let refusal = match ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
             &consumer_device,
-            -1,
+            memfd,
             4096,
             NOT_A_MEMORY_TYPE_INDEX,
         ) {
@@ -1887,6 +1884,48 @@ mod tests {
             refusal.contains("99") && refusal.contains("memoryTypeBits"),
             "the refusal must name the stated index and what the buffer can bind, \
              got: {refusal}"
+        );
+        assert_the_fd_number_is_closed(memfd_number, "the memoryTypeBits refusal");
+
+        let (memfd, memfd_number) = a_memfd_and_its_number();
+        ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+            &consumer_device,
+            memfd,
+            0,
+            0,
+        )
+        .err()
+        .expect("a zero-size import is refused");
+        assert_the_fd_number_is_closed(memfd_number, "the zero-size refusal");
+    }
+
+    /// A memfd to hand an import that must refuse it, and the number it holds.
+    #[cfg(target_os = "linux")]
+    fn a_memfd_and_its_number() -> (OwnedFd, std::os::fd::RawFd) {
+        use std::os::fd::AsRawFd as _;
+        // SAFETY: a NUL-terminated name; the returned fd is checked and owned.
+        let raw_fd = unsafe { libc::memfd_create(c"refused-opaque-fd-import".as_ptr(), 0) };
+        assert!(
+            raw_fd >= 0,
+            "memfd_create: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: the fd memfd_create just returned; nothing else holds it.
+        let memfd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        let memfd_number = memfd.as_raw_fd();
+        (memfd, memfd_number)
+    }
+
+    /// The number is closed in this process — exact under `--test-threads=1`,
+    /// where no other test can open a descriptor that reuses it in between.
+    #[cfg(target_os = "linux")]
+    fn assert_the_fd_number_is_closed(fd_number: std::os::fd::RawFd, refusing_path: &str) {
+        // SAFETY: F_GETFD reads descriptor flags and touches nothing else.
+        let flags = unsafe { libc::fcntl(fd_number, libc::F_GETFD) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert!(
+            flags == -1 && errno == Some(libc::EBADF),
+            "{refusing_path} must close the fd it was handed; fd {fd_number} is still open"
         );
     }
 

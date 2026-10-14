@@ -563,7 +563,8 @@ mod tests {
         else {
             panic!("a pool slot on {} must export OPAQUE_FD", device.name());
         };
-        // fd ownership transfers to the driver at the import's vkAllocateMemory.
+        // SAFETY: a fresh fd the export just returned; nothing else holds it.
+        let fd = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) };
         let imported = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
             &consumer_device,
             fd,
