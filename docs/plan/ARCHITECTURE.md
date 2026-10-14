@@ -278,9 +278,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — IN-FLIGHT (→ shared-pools-bounded-by-memory-budget)
+## Packages & extension model — SHIPPED
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-08-package-split-and-lend.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-07-authoring-names.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-13-shared-pools-bounded-by-memory-budget.md -->
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -486,13 +487,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   does an untyped read: the strictness dial is also the safety dial — depth bounds
   the window, and outwaiting it is an error, never somebody else's pixels. The
   engine inspects no bag content anywhere. The producer never waits on a consumer:
-  the pool skips leased slots and grows to its cap; at cap the producer drops its
-  own frame — a slow consumer costs memory, then its own frames, never another
-  processor's cadence. A producer-internal transient (a frames-in-flight ring
+  its node's output pool skips leased slots and grows to its cap; at the cap, or past
+  the runtime's memory budget (§Graphics), the producer drops its own frame — a slow
+  consumer costs memory, then its own node's frames, never another processor's
+  cadence; only the runtime's memory budget is shared between nodes. A
+  producer-internal transient (a frames-in-flight ring
   texture) never backs a cross-process export: the export blit sources the
   surface's pooled backing whenever one exists, read-only; texture-backed export
   remains for surfaces with no pooled backing (kernel outputs).
-  [surface-id-lifetime-contract — SHIPPED #1868, #1869, #1871, #1877]
+  [surface-id-lifetime-contract — SHIPPED #1868, #1869, #1871, #1877;
+  shared-pools-bounded-by-memory-budget — SHIPPED #2741]
   <!-- verify: cargo test -p streamlib-engine a_checkout_of_a_retired_frame_id_is_refused_naming_the_recycling -->
   <!-- verify: cargo test -p streamlib-python-wheel claiming_a_recycled_frame_is_refused_naming_the_recycling -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-16-surface-id-lifetime-contract.md -->
@@ -1614,7 +1618,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_records_a_stream_that_keeps_crashing_it_failed a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start_retries_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_hosts_a_stream_on_the_gpu a_clean_restart_between_two_crashes_resets_the_count -->
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ shared-pools-bounded-by-memory-budget; unbuilt: accelerators optional, pivot step 5)
+## Graphics (RHI / GPU) — DECIDED (unbuilt: accelerators optional, pivot step 5)
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-13-shared-pools-bounded-by-memory-budget.md -->
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the
@@ -1965,9 +1970,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `acquire_storage_buffer_from_processor_output_pool` on both GPU capabilities, riding an
   optional `processor_output_pool {pool_key, rotation_depth}` on the two acquire ops. It
   rotates through `rotation_depth` slots, grows while consumers hold frames to a cap of 16,
-  and at the cap refuses by name so the producer drops its own frame; a descriptor change
-  replaces the pool, bridge teardown releases every slot, and a retired id is refused as
-  recycled at resolve. `ProcessorOutputTextureRing` keeps its spelling and asks this pool for
+  and at the cap refuses by name so the producer drops its own frame; this cap is the only
+  count on a node's pooled frames, the shared pools below capping no shape. A descriptor
+  change replaces the pool, bridge teardown releases every slot and frees each one no holder
+  still has, and a retired id is refused as recycled at resolve. `ProcessorOutputTextureRing` keeps its spelling and asks this pool for
   every frame; `ModelInputTensorKernel` asks its tensor side directly. Handing out a reused
   slot is bookkeeping only — a lease scan and a generation mint, entering neither the
   escalate gate nor a device-idle wait; only growth allocates under the gate. Nothing
@@ -1976,7 +1982,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the compute path's entry scope does, so it waits on the one queue for a display's in-flight
   compose of that slot. Owner, 2026-09-22, over a wheel ring asking a "still held?" op per
   rotation, which would be a second system deciding slot reuse.
-  [engine-steps — SHIPPED #2427, #2429, #2503, #2546; amended by
+  [engine-steps — SHIPPED #2427, #2429, #2503, #2546; shared-pools-bounded-by-memory-budget —
+  SHIPPED #2741, #2743; amended by
   tatolab-names: on the Python surface the two acquire methods become
   `…_from_node_output_pool` and the ring `NodeOutputTextureRing` (§Packages, no public Python
   name says "processor")]
@@ -1988,6 +1995,52 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest tests/stream-on-runtime/test_texture_ring_producer.py::test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces -->
   <!-- verify: pytest tests/stream-on-runtime/test_texture_ring_producer.py::test_the_same_schedule_with_no_claim_recycles_the_first_frame -->
   <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_tensor_a_consumer_holds_is_never_rewritten -->
+- **DECIDED** — Frame count is per node; memory is per runtime. A node's frames are limited by
+  the node alone: its pooled frames by the cap of each output pool it keys, its one-off
+  acquisitions — a texture, storage buffer, pixel buffer or image taken outside that pool — by
+  a count of 16 held per shape, kept for the node and refused by name at that count, for a
+  processor interpreter and a native node alike. A native built-in's per-frame acquisitions
+  draw from an output pool of its own on the same terms. The runtime's shared texture and
+  pixel-buffer pools reuse allocations by shape and cap no shape by count. What bounds them is
+  device memory, read per heap from the allocator's budget with `VK_EXT_memory_budget` enabled
+  wherever the device advertises it: every frame allocation — pooled, one-off, or unpooled (a
+  kernel output, a render target) — is refused by name before it allocates when the heap's
+  reported usage plus the request would pass its budget less a small headroom, or when the
+  process nears the device's `maxMemoryAllocationCount`; the check and the allocation are one
+  step, so concurrent allocations never pass on one reading. A refusal reads a fresh budget and
+  names the heap, its budget, its usage and the bytes the pools hold; the node drops that
+  frame. Without the extension the budget is the allocator's estimate of 80% of the heap, also
+  capped by the system's available memory for a heap that is not `DEVICE_LOCAL`, and the
+  runtime says once that its bound is an estimate. On macOS the bound is Metal's
+  `recommendedMaxWorkingSetSize`, and usage is the Metal device's `currentAllocatedSize`,
+  which counts the IOSurfaces the runtime mints. On Linux, memory a helper process allocates
+  reaches the runtime only as a smaller budget; on macOS it does not reach the bound, since
+  `currentAllocatedSize` is per process and the working-set size is fixed. A smaller budget
+  never takes back a held frame. No acquisition waits on another holder. Memory is shared, so
+  a stream that grows into the budget can cost another stream its frames; isolation is by
+  count, per node. [shared-pools-bounded-by-memory-budget — SHIPPED #2741, #2748]
+  Rejected: raising the shared pool's per-shape cap — any count shared across nodes lets one
+  node's held frames drop another node's frames (owner, 2026-10-12).
+  Rejected: bounding the shared pools only by the driver's allocation failure — NVIDIA reports
+  a fake out-of-memory, and nothing would return an ended stream's memory (owner, 2026-10-12).
+  <!-- verify: cargo test -p streamlib-engine one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape -->
+  <!-- verify: cargo test -p streamlib-engine a_frame_allocation_past_the_heap_budget_is_refused_naming_the_heap -->
+  <!-- verify: cargo test -p streamlib-engine a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name -->
+  <!-- verify: cargo test -p streamlib-engine a_native_nodes_seventeenth_held_one_off_of_one_shape_is_refused_by_name_before_it_allocates -->
+  <!-- verify: cargo test -p streamlib-engine an_acquisition_at_the_budget_refuses_at_once_and_never_waits -->
+- **DECIDED** — The shared pools give memory back. A pooled entry is freed once it is unheld —
+  no in-process handle, no checkout lease, on macOS no kernel in-use count, and every
+  submission made before its release has completed — and either its stream has stopped, its
+  node's output pool was torn down, or it has sat unused past an idle window of a few seconds.
+  Freeing releases the entry's surface-share registration and the parent's caches and retires
+  its id in the same step. Idle entries are found on acquire and on release, a bounded number
+  per call, so freeing never stalls a producer. Freeing never takes an exportable memory
+  flavour to zero live allocations. An allocation an exported raw handle still names stays
+  counted against the budget until that handle's holder drops it.
+  [shared-pools-bounded-by-memory-budget — SHIPPED #2743]
+  <!-- verify: cargo test -p streamlib-engine a_stopped_streams_pool_entries_are_freed_and_their_ids_retired -->
+  <!-- verify: cargo test -p streamlib-engine an_entry_unused_past_the_idle_window_is_freed_and_releases_its_registration -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests every_exportable_flavour_reacquires_after_its_pool_is_freed_with_a_swapchain_live -->
 - **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, pure wheel
   Python over `create_compute_kernel`, the processor output texture ring,
   `copy_surface_to_surface` and dispatch, with no engine, wire or stub change. The user writes
