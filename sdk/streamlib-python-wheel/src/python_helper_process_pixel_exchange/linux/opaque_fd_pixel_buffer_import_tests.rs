@@ -64,7 +64,10 @@ fn an_opaque_fd_pixel_buffer_imports_at_its_stated_memory_type_index_and_reads_t
     let surface_id = engine_surface_store
         .check_in(&engine_pixel_buffer)
         .expect("the engine checks the OPAQUE_FD pixel buffer in");
-    let exchange_client = share.exchange_client_labelled("opaque-fd-pixel-buffer-under-test");
+    let exchange_client = share.exchange_client_labelled_importing_on(
+        "opaque-fd-pixel-buffer-under-test",
+        Ok(host_device.physical_device_uuid()),
+    );
 
     let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = exchange_client
         .check_out_and_import(&surface_id)

@@ -428,11 +428,27 @@ impl SurfaceShareUnderTest {
     }
 
     /// A helper's exchange client on this service, registering foreign
-    /// surfaces as `helper:{label}`. Its escalate callables are `None`: the
-    /// paths under test speak only to the surface-share channel.
+    /// surfaces as `helper:{label}` and importing on the first device the
+    /// loader enumerates — for a test whose surfaces no engine device
+    /// exported. Its escalate callables are `None`: the paths under test speak
+    /// only to the surface-share channel.
     pub(crate) fn exchange_client_labelled(
         &self,
         label: &str,
+    ) -> Arc<crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient> {
+        self.exchange_client_labelled_importing_on(
+            label,
+            streamlib_consumer_rhi::vulkan_device_uuid_of_the_first_device_the_loader_enumerates(),
+        )
+    }
+
+    /// A helper's exchange client on this service importing on
+    /// `vulkan_device_uuid_the_runtime_named` — the device that exported the
+    /// surfaces the test checks out, as the runtime names it at spawn.
+    pub(crate) fn exchange_client_labelled_importing_on(
+        &self,
+        label: &str,
+        vulkan_device_uuid_the_runtime_named: streamlib_consumer_rhi::Result<[u8; 16]>,
     ) -> Arc<crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient> {
         use pyo3::prelude::*;
 
@@ -443,7 +459,7 @@ impl SurfaceShareUnderTest {
                     python.None(),
                     python.None(),
                     self.channel_name_for_the_helper(),
-                    streamlib_consumer_rhi::vulkan_device_uuid_of_the_first_device_the_loader_enumerates(),
+                    vulkan_device_uuid_the_runtime_named,
                     format!("helper:{label}"),
                 ),
             )

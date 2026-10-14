@@ -166,18 +166,16 @@ pub struct ConsumerVulkanDevice {
 /// A physical device the Vulkan loader enumerates, as selection by
 /// `deviceUUID` sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VulkanDeviceTheLoaderEnumerates {
-    /// `VkPhysicalDeviceProperties::deviceName`.
-    pub device_name: String,
-    /// `VkPhysicalDeviceIDProperties::deviceUUID`.
-    pub device_uuid: [u8; 16],
-    /// `VkPhysicalDeviceProperties::deviceType`.
-    pub device_type: vk::PhysicalDeviceType,
+pub(crate) struct VulkanDeviceTheLoaderEnumerates {
+    pub(crate) device_name: String,
+    pub(crate) device_uuid: [u8; 16],
+    pub(crate) device_type: vk::PhysicalDeviceType,
 }
 
 /// Every physical device the Vulkan loader enumerates for this process, in
 /// the loader's order.
-pub fn vulkan_devices_the_loader_enumerates() -> Result<Vec<VulkanDeviceTheLoaderEnumerates>> {
+pub(crate) fn vulkan_devices_the_loader_enumerates() -> Result<Vec<VulkanDeviceTheLoaderEnumerates>>
+{
     let (_entry, instance) = create_the_consumer_vulkan_instance()?;
     Ok(physical_devices_the_loader_enumerates_on(&instance)?
         .into_iter()
@@ -209,8 +207,10 @@ impl Drop for VulkanInstanceDestroyedUnlessKept {
     }
 }
 
-/// The `deviceUUID` of the first device the loader enumerates — for a process
-/// with no runtime to name one, such as a test.
+/// The `deviceUUID` of the first device the loader enumerates, for a test with
+/// no runtime to name one; a processor interpreter imports only on the device
+/// the runtime named.
+#[doc(hidden)]
 pub fn vulkan_device_uuid_of_the_first_device_the_loader_enumerates() -> Result<[u8; 16]> {
     vulkan_devices_the_loader_enumerates()?
         .into_iter()

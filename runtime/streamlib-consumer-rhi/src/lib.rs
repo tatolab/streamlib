@@ -97,9 +97,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_device::{
-    ConsumerVulkanDevice, VulkanDeviceTheLoaderEnumerates,
-    vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
-    vulkan_devices_the_loader_enumerates,
+    ConsumerVulkanDevice, vulkan_device_uuid_of_the_first_device_the_loader_enumerates,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;

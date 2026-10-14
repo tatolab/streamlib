@@ -768,6 +768,7 @@ jobs:
             core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_handed_the_parents_iceoryx2_domain_root \
             core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_handed_the_engine_build_id_it_must_match \
             core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_handed_the_surface_share_channel_under_its_variable \
+            core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_handed_the_vulkan_device_the_runtime_built_on \
             core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_helper_that_died_while_setting_up_is_refused_naming_what_it_wrote_to_standard_error \
             core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_standard_error_left_open_bounds_the_wait_and_keeps_what_arrived \
             core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::only_the_first_bytes_of_a_long_standard_output_are_kept_and_read_without_its_close \
