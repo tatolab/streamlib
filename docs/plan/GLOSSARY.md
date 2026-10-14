@@ -299,7 +299,16 @@ pixel buffer" (a pixel buffer is image-shaped).
 
 **Floor**: a supported platform the product promises the same capabilities on — Linux +
 NVIDIA, and Apple Silicon. A capability absent on one floor is on a closed list and refuses
-by name. _Avoid_: "target", "backend" (a floor is the promise, not the driver).
+by name. _Avoid_: "target", "backend" (a floor is the promise, not the driver), "floor" for
+what the engine requires of a device (that is a device the engine can build on).
+
+**Software device** _(engine)_: the CPU-run Vulkan driver the Linux runtime unit carries so
+a device always exists — taken only when no hardware device builds. _Avoid_: "software
+rendering", "CPU mode", "fallback mode", "headless mode" (it is a device, not a mode).
+
+**Absent tier** _(engine)_: a capability the device the runtime built on does not
+implement — refused by name at the node that asks for it, never a start failure. _Avoid_:
+"unsupported", "missing feature", "degraded".
 
 **Cross-floor check**: the source-reading check that names what binds a Python processor
 to one floor and the portable spelling for it. _Avoid_: "portability check" (that word

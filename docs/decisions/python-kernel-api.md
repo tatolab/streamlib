@@ -42,6 +42,9 @@ SPIR-V, or when someone asks why the four GPU bridge traits were deleted.
    > Amended 2026-09-30 by `one-runtime-per-machine.md`: accelerators are optional, so a stream that needs no GPU
    > runs on a machine without one. How that squares with these always-present capabilities is
    > OPEN in the plan.
+   > Resolved 2026-10-13 by `optional-accelerators.md`: a device is always present — the
+   > Linux unit carries a software device taken last — so the capabilities stay always-present
+   > on it, and what that device lacks is an absent tier refused by name.
 6. **Dispatch is synchronous**, with batching for multi-pass work.
 7. **Rust converges on the same spelling** — bindings at dispatch, nothing persisting on the
    kernel — as its own change, sequenced after the Python surface.

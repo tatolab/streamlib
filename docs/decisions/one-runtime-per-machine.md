@@ -171,7 +171,8 @@ from what the owner said. A struck item has since been decided, and the plan hol
 - ~~Several streams in one runtime process: what must stop being process-wide, and how streams
   reach each other.~~ — Decided 2026-10-01 (runtime-hosting, #2580).
 - Resources across streams.
-- What optional accelerators mean for the engine.
+- ~~What optional accelerators mean for the engine.~~ — Decided 2026-10-13
+  (`optional-accelerators.md`).
 - ~~Camera and microphone permission on Apple when the product starts the runtime.~~ — Decided
   2026-10-01 (#2580, on #2560's research).
 - ~~The collision rules behind the address: machine names unique per mesh, stream names per
@@ -300,7 +301,8 @@ step needs decided first, so that `/plan` and every session read one sequence. E
    per-stream bookkeeping, `run` / `run -d` / `stop` / `streams` / `dev`, the state directory and
    re-load after a crash, the `<machine>/` address segment. Milestone #58. Re-proposed after
    step 3; the withdrawn proposal's recon (PR #2581) is reused.
-5. **Accelerators optional** — align what optional accelerators mean for the engine.
+5. **Accelerators optional** — align what optional accelerators mean for the engine. Aligned
+   2026-10-13 (`optional-accelerators.md`).
 6. **Resources across streams** — align the resources OPEN.
 7. **Packs and the registry** — align packs, a registry, `add <pack>` and `run <url-or-zip>`;
    after hosting, whose state directory and runtime-managed default project they load into.
