@@ -85,6 +85,10 @@ features = ["extension-module"]
 # and maturin globs the directory — without this an incremental build ships
 # one interpreter's stale `.pyc` files inside an abi3 wheel.
 exclude = ["**/__pycache__/**"]
+# maturin drops every `*.so` it finds under `python-source`, taking it for a
+# stale develop build of `_engine`; the bundled Vulkan driver on Linux is one,
+# so it is named here, where the glob is relative to `python-source`.
+include = [{ path = "tatolab/runtime/_vulkan_driver/*.so", format = "wheel" }]
 
 # Apple Silicon only, and the newest macOS the pinned `macos-15` builder can
 # both build against and run the wheel on. Every Apple Silicon Mac can run it,

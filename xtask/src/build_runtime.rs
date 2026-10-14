@@ -22,8 +22,7 @@ use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
 };
 use runtime_unit_layout::{
-    BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, BUNDLED_VULKAN_DRIVER_FILE_NAMES,
-    LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND, bundled_vulkan_driver_directory_in_the_lend,
+    BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND,
     lend_directory_in_the_runtime_unit,
 };
 use std::path::{Path, PathBuf};
@@ -88,27 +87,35 @@ const RUNTIME_UNIT_MATURIN_PROJECT_RELATIVE_TO_WORKSPACE: &str = "sdk/streamlib-
 /// The one maturin pin for building the runtime unit, as `uvx` resolves it.
 pub const PINNED_MATURIN_REQUIREMENT_FOR_UVX: &str = "maturin@1.9.6";
 
-/// The script that writes MoltenVK and the Vulkan loader into the maturin
-/// project's package tree, relative to the workspace.
 #[cfg(target_os = "macos")]
-const BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE: &str =
-    "scripts/stage_macos_bundled_vulkan_driver.sh";
+mod bundled_vulkan_driver_on_this_host {
+    /// The script that writes MoltenVK and the Vulkan loader into the maturin
+    /// project's package tree, relative to the workspace.
+    pub const BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE: &str =
+        "scripts/stage_macos_bundled_vulkan_driver.sh";
 
-/// The script that writes lavapipe and the Vulkan loader into the maturin
-/// project's package tree, relative to the workspace.
+    /// Why a lend without the bundled Vulkan driver is refused.
+    pub const WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE: &str =
+        "a stock Mac has no Vulkan driver of its own";
+}
+
 #[cfg(target_os = "linux")]
-const BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE: &str =
-    "scripts/stage_linux_bundled_vulkan_driver.sh";
+mod bundled_vulkan_driver_on_this_host {
+    /// The script that writes lavapipe and the Vulkan loader into the maturin
+    /// project's package tree, relative to the workspace.
+    pub const BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE: &str =
+        "scripts/stage_linux_bundled_vulkan_driver.sh";
 
-/// Why a lend without the bundled Vulkan driver is refused.
-#[cfg(target_os = "macos")]
-const WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE: &str =
-    "a stock Mac has no Vulkan driver of its own";
+    /// Why a lend without the bundled Vulkan driver is refused.
+    pub const WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE: &str = "a machine with no GPU driver installed — a bare container, a headless server — has \
+         no Vulkan driver of its own";
+}
 
-/// Why a lend without the bundled Vulkan driver is refused.
-#[cfg(target_os = "linux")]
-const WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE: &str = "a machine with no GPU driver installed — a bare container, a headless server — has no \
-     Vulkan driver of its own";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use bundled_vulkan_driver_on_this_host::{
+    BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE,
+    WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE,
+};
 
 /// Left in the lend so the namespace gate refuses it by path.
 const TATOLAB_NAMESPACE_PACKAGE_INIT_MEMBER: &str = "tatolab/__init__.py";
@@ -196,6 +203,7 @@ pub fn run(
     )?;
     let runtime_unit_wheel = the_one_wheel_in(&wheel_directory)?;
     replace_lend_directory_with_wheel_contents(&runtime_unit_wheel, &lend_directory)?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     ensure_lend_carries_the_bundled_vulkan_driver(&lend_directory)?;
     tracing::info!(
         "build-runtime: {} unpacked into the lend at {}",
@@ -399,6 +407,7 @@ pub fn replace_runtime_unit_binaries_in(
 
 /// Run the platform's staging script, which writes the Vulkan loader, the
 /// driver and its ICD manifest into the maturin project's package tree.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn stage_bundled_vulkan_driver(workspace_root: &Path) -> Result<()> {
     let staging_script =
         workspace_root.join(BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE);
@@ -414,6 +423,13 @@ fn stage_bundled_vulkan_driver(workspace_root: &Path) -> Result<()> {
         staging_script.display()
     );
     Ok(())
+}
+
+/// The runtime unit carries a bundled Vulkan driver on macOS and Linux only,
+/// so no other host builds one.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn stage_bundled_vulkan_driver(_workspace_root: &Path) -> Result<()> {
+    anyhow::bail!("`cargo xtask build-runtime` builds the runtime unit on macOS and Linux only")
 }
 
 /// maturin writes this into the wheel's tag but does not hand it to the link,
@@ -603,10 +619,11 @@ fn ensure_wheel_members_are_the_runtime_package_and_its_dist_info(
 }
 
 /// Refuse a lend missing any file of the bundled Vulkan driver.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn ensure_lend_carries_the_bundled_vulkan_driver(lend_directory: &Path) -> Result<()> {
     let bundled_vulkan_driver_directory =
-        bundled_vulkan_driver_directory_in_the_lend(lend_directory);
-    let missing_driver_files: Vec<&str> = BUNDLED_VULKAN_DRIVER_FILE_NAMES
+        runtime_unit_layout::bundled_vulkan_driver_directory_in_the_lend(lend_directory);
+    let missing_driver_files: Vec<&str> = runtime_unit_layout::BUNDLED_VULKAN_DRIVER_FILE_NAMES
         .iter()
         .copied()
         .filter(|driver_file_name| {
@@ -1010,14 +1027,16 @@ mod tests {
         macos_deployment_target_from_maturin_pyproject(&maturin_pyproject).unwrap();
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn a_lend_missing_any_bundled_vulkan_driver_file_is_refused_naming_it() {
-        for missing_driver_file_name in BUNDLED_VULKAN_DRIVER_FILE_NAMES {
+        for missing_driver_file_name in runtime_unit_layout::BUNDLED_VULKAN_DRIVER_FILE_NAMES {
             let lend_directory = tempfile::TempDir::new().unwrap();
-            let driver_directory =
-                bundled_vulkan_driver_directory_in_the_lend(lend_directory.path());
+            let driver_directory = runtime_unit_layout::bundled_vulkan_driver_directory_in_the_lend(
+                lend_directory.path(),
+            );
             std::fs::create_dir_all(&driver_directory).unwrap();
-            for carried_driver_file_name in BUNDLED_VULKAN_DRIVER_FILE_NAMES
+            for carried_driver_file_name in runtime_unit_layout::BUNDLED_VULKAN_DRIVER_FILE_NAMES
                 .iter()
                 .filter(|driver_file_name| **driver_file_name != missing_driver_file_name)
             {

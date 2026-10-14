@@ -4,7 +4,6 @@
 //! Where the Vulkan loader library is looked for — one list for the engine's
 //! device and a helper process's consumer device.
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::runtime_unit_layout::{
     BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME, VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME,
     bundled_vulkan_driver_directory_in_the_lend, lend_directory_in_the_runtime_unit,
@@ -50,11 +49,6 @@ fn platform_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     linux_vulkan_loader_library_candidate_paths_for_the_image_in(
         directory_of_the_image_this_code_is_in().as_deref(),
     )
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn platform_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    Vec::new()
 }
 
 /// The macOS-only tail of the search list, for code in an image whose
@@ -109,7 +103,6 @@ fn linux_vulkan_loader_library_candidate_paths_for_the_image_in(
 
 /// The loader beside the image whose directory is `directory_of_the_image`,
 /// then the loader the lend beside that directory carries.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn vulkan_loader_libraries_the_runtime_unit_carries_for_the_image_in(
     directory_of_the_image: &std::path::Path,
 ) -> Vec<std::ffi::OsString> {
@@ -128,7 +121,6 @@ fn vulkan_loader_libraries_the_runtime_unit_carries_for_the_image_in(
 ///
 /// A path with a slash, so dlopen takes it verbatim and no `@rpath`, install
 /// name or library search path is consulted.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn vulkan_loader_library_bundled_beside_the_image_in(
     directory_of_the_image: &std::path::Path,
 ) -> std::path::PathBuf {
@@ -140,7 +132,6 @@ fn vulkan_loader_library_bundled_beside_the_image_in(
 /// The loader the lend carries, for an image in a runtime unit's `bin/` — the
 /// runtime unit `tatolabd` finds its lend in. `None` for an image at the
 /// filesystem root.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn vulkan_loader_library_in_the_lend_beside_the_binary_directory(
     directory_of_the_image: &std::path::Path,
 ) -> Option<std::path::PathBuf> {
@@ -177,11 +168,9 @@ fn vulkan_loader_library_in_the_app_bundle_holding_the_image_directory(
 /// Canonical because `tatolabd` finds its lend from its own canonical path: a
 /// `tatolabd` started through a symlink must find the lent loader in the same
 /// runtime unit. A path that cannot be canonicalized is taken as given.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn directory_of_the_image_this_code_is_in() -> Option<std::path::PathBuf> {
     let image_path = path_of_the_image_this_code_is_in()?;
-    let canonical_image_path =
-        std::fs::canonicalize(&image_path).unwrap_or_else(|_| image_path.clone());
+    let canonical_image_path = std::fs::canonicalize(&image_path).unwrap_or(image_path);
     canonical_image_path
         .parent()
         .map(std::path::Path::to_path_buf)
@@ -224,7 +213,6 @@ fn load_base_of_the_main_executable() -> Option<usize> {
 }
 
 /// The loaded image `dladdr` reports as containing an address.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 struct LoadedImageContainingAnAddress {
     path_as_the_dynamic_linker_names_it: std::path::PathBuf,
     #[cfg(target_os = "linux")]
@@ -232,7 +220,6 @@ struct LoadedImageContainingAnAddress {
 }
 
 /// The loaded image containing `address`, or `None` if `dladdr` names none.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn image_containing_the_address(
     address: *const libc::c_void,
 ) -> Option<LoadedImageContainingAnAddress> {
@@ -369,7 +356,6 @@ mod tests {
 
     /// The bundled loader is looked for beside the image this crate is linked
     /// into — for the wheel, `_engine`'s own directory.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_bundled_loader_is_looked_for_beside_the_image_this_code_is_in() {
         let directory_of_this_image = directory_of_the_image_this_code_is_in()
@@ -397,7 +383,6 @@ mod tests {
     /// A binary that links the engine statically, in a runtime unit's `bin/`,
     /// finds the loader in the lend beside `bin/`, right after the one beside
     /// the image itself — the same rule `tatolabd` finds its lend by.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_lent_loader_is_looked_for_in_the_lend_beside_the_binary_directory_of_this_image() {
         let directory_of_this_image = directory_of_the_image_this_code_is_in()
@@ -511,7 +496,6 @@ mod tests {
 
     /// The image's directory is canonical, as `tatolabd`'s own path is when it
     /// finds its lend, so both name the same runtime unit.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_directory_of_this_image_is_canonical() {
         let directory_of_this_image = directory_of_the_image_this_code_is_in()
