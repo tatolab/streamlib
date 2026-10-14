@@ -31,7 +31,6 @@ mod vulkan_upload_resources;
 pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
-pub(crate) use vulkan_device::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_device::PixelBufferUploadFinalTextureLayout;
 pub use vulkan_device::{

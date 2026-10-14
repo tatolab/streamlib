@@ -37,18 +37,138 @@ struct ExportedPlaneWireHandles {
     plane_sizes: Vec<u64>,
     plane_offsets: Vec<u64>,
     handle_type: &'static str,
+    /// `Some` exactly when `handle_type` is OPAQUE_FD.
+    opaque_fd_export_contract: Option<OpaqueFdExportContract>,
+}
+
+/// What an OPAQUE_FD registration states beside its fd, because a
+/// conforming importer cannot derive either from the fd: the handle type has
+/// no fd-properties query, and it is bound to the device that exported it.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpaqueFdExportContract {
+    vk_memory_type_index: u32,
+    exporting_device_uuid: String,
 }
 
 /// Export every plane of `pixel_buffer` for a surface-share registration.
 ///
 /// Single-plane pixel buffers return a one-element vec; multi-plane
 /// DMA-BUFs (e.g. NV12 under DRM format modifiers) one fd per plane;
-/// OPAQUE_FD-flavored buffers (CUDA targets) a single OPAQUE_FD handle.
+/// OPAQUE_FD-flavored buffers (a device that exports no DMA-BUF, CUDA
+/// targets) a single OPAQUE_FD handle.
 #[cfg(target_os = "linux")]
 fn exported_plane_wire_handles(pixel_buffer: &PixelBuffer) -> Result<ExportedPlaneWireHandles> {
     use crate::core::rhi::RhiPixelBufferExport;
 
-    adopt_exported_planes_into_wire_handles(pixel_buffer.export_plane_handles()?)
+    let exporting_device_uuid = pixel_buffer
+        .buffer_ref()
+        .inner
+        .vulkan_device()
+        .physical_device_uuid();
+    adopt_exported_planes_into_wire_handles(
+        pixel_buffer.export_plane_handles()?,
+        exporting_device_uuid,
+    )
+}
+
+/// Write the OPAQUE_FD export contract into a pixel-buffer registration or
+/// check-in `payload`; a DMA-BUF payload is left as it was.
+#[cfg(target_os = "linux")]
+fn state_the_opaque_fd_export_contract_of_the_planes(
+    payload: &mut serde_json::Value,
+    exported_planes: &ExportedPlaneWireHandles,
+) {
+    if let Some(opaque_fd_export_contract) = &exported_planes.opaque_fd_export_contract {
+        payload["vk_memory_type_index"] = opaque_fd_export_contract.vk_memory_type_index.into();
+        payload["exporting_device_uuid"] = opaque_fd_export_contract
+            .exporting_device_uuid
+            .clone()
+            .into();
+    }
+}
+
+/// The `check_in` payload for a pixel buffer whose planes were exported as
+/// `exported_planes`.
+#[cfg(target_os = "linux")]
+fn pixel_buffer_check_in_payload(
+    runtime_id: &str,
+    pixel_buffer_shape: PixelBufferShapeOnTheWire,
+    exported_planes: &ExportedPlaneWireHandles,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "op": "check_in",
+        "runtime_id": runtime_id,
+        "width": pixel_buffer_shape.width,
+        "height": pixel_buffer_shape.height,
+        "format": pixel_buffer_shape.format.wire_name(),
+        "handle_type": exported_planes.handle_type,
+        "plane_sizes": exported_planes.plane_sizes,
+        "plane_offsets": exported_planes.plane_offsets,
+    });
+    state_the_opaque_fd_export_contract_of_the_planes(&mut payload, exported_planes);
+    payload
+}
+
+/// The extent and format a pixel-buffer registration or check-in states.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+struct PixelBufferShapeOnTheWire {
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+}
+
+#[cfg(target_os = "linux")]
+impl PixelBufferShapeOnTheWire {
+    fn of(pixel_buffer: &PixelBuffer) -> Self {
+        Self {
+            width: pixel_buffer.width,
+            height: pixel_buffer.height,
+            format: pixel_buffer.format(),
+        }
+    }
+}
+
+/// Which timeline edges a pixel-buffer registration announces it carries.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+struct AnnouncedTimelineEdges {
+    has_produce_done_fd: bool,
+    has_consume_done_fd: bool,
+}
+
+/// The `register` payload for a pixel buffer whose planes were exported as
+/// `exported_planes`; `announced_timeline_edges` is `None` for a registration
+/// that carries no timeline at all.
+#[cfg(target_os = "linux")]
+fn pixel_buffer_registration_payload(
+    surface_id: &str,
+    runtime_id: &str,
+    pixel_buffer_shape: PixelBufferShapeOnTheWire,
+    exported_planes: &ExportedPlaneWireHandles,
+    announced_timeline_edges: Option<AnnouncedTimelineEdges>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "op": "register",
+        "surface_id": surface_id,
+        "runtime_id": runtime_id,
+        "width": pixel_buffer_shape.width,
+        "height": pixel_buffer_shape.height,
+        "format": pixel_buffer_shape.format.wire_name(),
+        "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+        "handle_type": exported_planes.handle_type,
+        "plane_sizes": exported_planes.plane_sizes,
+        "plane_offsets": exported_planes.plane_offsets,
+    });
+    if let Some(announced_timeline_edges) = announced_timeline_edges {
+        payload[SURFACE_REPLY_HAS_PRODUCE_DONE_FD] =
+            announced_timeline_edges.has_produce_done_fd.into();
+        payload[SURFACE_REPLY_HAS_CONSUME_DONE_FD] =
+            announced_timeline_edges.has_consume_done_fd.into();
+    }
+    state_the_opaque_fd_export_contract_of_the_planes(&mut payload, exported_planes);
+    payload
 }
 
 /// Adopt one export's worth of plane handles into the wire shape.
@@ -62,9 +182,12 @@ fn exported_plane_wire_handles(pixel_buffer: &PixelBuffer) -> Result<ExportedPla
 /// this process: they are adopted, not borrowed. `RhiExternalHandle` also
 /// carries kernel-delivered fds on the import side (see
 /// [`external_plane_handles_for_flavour`]), and those must never reach here.
+/// `exporting_device_uuid` is the device the planes' memory lives on, stated
+/// on an OPAQUE_FD registration.
 #[cfg(target_os = "linux")]
 fn adopt_exported_planes_into_wire_handles(
     exported_planes: Vec<crate::core::rhi::RhiExternalHandle>,
+    exporting_device_uuid: [u8; 16],
 ) -> Result<ExportedPlaneWireHandles> {
     use crate::core::rhi::RhiExternalHandle;
 
@@ -72,10 +195,19 @@ fn adopt_exported_planes_into_wire_handles(
     let mut plane_sizes: Vec<u64> = Vec::with_capacity(exported_planes.len());
     let mut plane_offsets: Vec<u64> = Vec::with_capacity(exported_planes.len());
     let mut plane_flavours: Vec<&'static str> = Vec::with_capacity(exported_planes.len());
+    let mut first_opaque_fd_plane_memory_type_index: Option<u32> = None;
     for exported_plane in exported_planes {
         let (exported_plane_fd, size, this_plane_flavour) = match exported_plane {
             RhiExternalHandle::DmaBuf { fd, size } => (fd, size, SURFACE_HANDLE_TYPE_DMA_BUF),
-            RhiExternalHandle::OpaqueFd { fd, size } => (fd, size, SURFACE_HANDLE_TYPE_OPAQUE_FD),
+            RhiExternalHandle::OpaqueFd {
+                fd,
+                size,
+                exporting_allocation_memory_type_index,
+            } => {
+                first_opaque_fd_plane_memory_type_index
+                    .get_or_insert(exporting_allocation_memory_type_index);
+                (fd, size, SURFACE_HANDLE_TYPE_OPAQUE_FD)
+            }
         };
         // SAFETY: the export minted this fd for us and handed it to no one
         // else.
@@ -98,11 +230,19 @@ fn adopt_exported_planes_into_wire_handles(
             "pixel buffer exports mixed external-handle flavours ({plane_flavours:?})"
         )));
     }
+    let opaque_fd_export_contract =
+        first_opaque_fd_plane_memory_type_index.map(|vk_memory_type_index| {
+            OpaqueFdExportContract {
+                vk_memory_type_index,
+                exporting_device_uuid: lowercase_hex_of_device_uuid(exporting_device_uuid),
+            }
+        });
     Ok(ExportedPlaneWireHandles {
         plane_fds,
         plane_sizes,
         plane_offsets,
         handle_type,
+        opaque_fd_export_contract,
     })
 }
 
@@ -181,12 +321,16 @@ const SURFACE_REPLY_HAS_CONSUME_DONE_FD: &str = "has_consume_done_fd";
 /// The two flavours are distinct Vulkan external-handle types. Importing an
 /// OPAQUE_FD fd through the DMA-BUF type does not fail cleanly — it hands the
 /// driver a handle of the wrong type — so the wire's discriminator is honoured
-/// rather than assumed.
+/// rather than assumed. An OPAQUE_FD surface must state the exporter's
+/// `vk_memory_type_index`, the only index a conforming import may bind; one
+/// that does not is refused by name.
 #[cfg(target_os = "linux")]
 fn external_plane_handles_for_flavour(
+    operation: &str,
     handle_type: &str,
     received_fds: &[std::os::fd::RawFd],
     plane_sizes: &[u64],
+    stated_vk_memory_type_index: Option<u32>,
 ) -> Result<Vec<crate::core::rhi::RhiExternalHandle>> {
     use crate::core::rhi::RhiExternalHandle;
 
@@ -199,16 +343,26 @@ fn external_plane_handles_for_flavour(
                 size: *size as usize,
             })
             .collect()),
-        SURFACE_HANDLE_TYPE_OPAQUE_FD => Ok(received_fds
-            .iter()
-            .zip(plane_sizes.iter())
-            .map(|(fd, size)| RhiExternalHandle::OpaqueFd {
-                fd: *fd,
-                size: *size as usize,
-            })
-            .collect()),
+        SURFACE_HANDLE_TYPE_OPAQUE_FD => {
+            let exporting_allocation_memory_type_index =
+                stated_vk_memory_type_index.ok_or_else(|| {
+                    Error::Configuration(format!(
+                        "{operation}: an OPAQUE_FD surface was registered without the exporter's \
+                         vk_memory_type_index, so no conforming import can bind it"
+                    ))
+                })?;
+            Ok(received_fds
+                .iter()
+                .zip(plane_sizes.iter())
+                .map(|(fd, size)| RhiExternalHandle::OpaqueFd {
+                    fd: *fd,
+                    size: *size as usize,
+                    exporting_allocation_memory_type_index,
+                })
+                .collect())
+        }
         unknown => Err(Error::Configuration(format!(
-            "check_out: surface registered with unknown handle type {unknown:?}; the wire \
+            "{operation}: surface registered with unknown handle type {unknown:?}; the wire \
              carries {SURFACE_HANDLE_TYPE_DMA_BUF:?} or {SURFACE_HANDLE_TYPE_OPAQUE_FD:?}"
         ))),
     }
@@ -270,6 +424,16 @@ fn plane_sizes_of_reply(response: &serde_json::Value, plane_count: usize) -> Vec
         .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
         .filter(|v: &Vec<u64>| v.len() == plane_count)
         .unwrap_or_else(|| vec![0u64; plane_count])
+}
+
+/// The exporter's `vk_memory_type_index` a lookup reply states, if any —
+/// never defaulted, because `0` is a real index.
+#[cfg(target_os = "linux")]
+fn vk_memory_type_index_of_reply(response: &serde_json::Value) -> Option<u32> {
+    response
+        .get("vk_memory_type_index")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|vk_memory_type_index| u32::try_from(vk_memory_type_index).ok())
 }
 
 /// Release the plane fds to the pixel-buffer import about to take them,
@@ -576,16 +740,11 @@ impl SurfaceStoreInner {
     pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
         let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
 
-        let request = serde_json::json!({
-            "op": "check_in",
-            "runtime_id": self.runtime_id,
-            "width": pixel_buffer.width,
-            "height": pixel_buffer.height,
-            "format": pixel_buffer.format().wire_name(),
-            "handle_type": exported_planes.handle_type,
-            "plane_sizes": exported_planes.plane_sizes,
-            "plane_offsets": exported_planes.plane_offsets,
-        });
+        let request = pixel_buffer_check_in_payload(
+            &self.runtime_id,
+            PixelBufferShapeOnTheWire::of(pixel_buffer),
+            &exported_planes,
+        );
 
         let response = self.send_surface_share_request_owning_fds(
             "check_in",
@@ -660,12 +819,14 @@ impl SurfaceStoreInner {
         let raw_plane_fds: Vec<std::os::fd::RawFd> =
             plane_fds.iter().map(OwnedFd::as_raw_fd).collect();
         let handles = external_plane_handles_for_flavour(
+            "check_out",
             response
                 .get("handle_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF),
             &raw_plane_fds,
             &plane_sizes,
+            vk_memory_type_index_of_reply(&response),
         )?;
         leave_plane_fds_to_the_import(plane_fds);
         let pixel_buffer =
@@ -774,18 +935,13 @@ impl SurfaceStoreInner {
     pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
         let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
 
-        let request = serde_json::json!({
-            "op": "register",
-            "surface_id": pool_id,
-            "runtime_id": self.runtime_id,
-            "width": pixel_buffer.width,
-            "height": pixel_buffer.height,
-            "format": pixel_buffer.format().wire_name(),
-            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
-            "handle_type": exported_planes.handle_type,
-            "plane_sizes": exported_planes.plane_sizes,
-            "plane_offsets": exported_planes.plane_offsets,
-        });
+        let request = pixel_buffer_registration_payload(
+            pool_id,
+            &self.runtime_id,
+            PixelBufferShapeOnTheWire::of(pixel_buffer),
+            &exported_planes,
+            None,
+        );
 
         self.send_surface_share_registration("register", &request, exported_planes.plane_fds)?;
         tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
@@ -798,9 +954,9 @@ impl SurfaceStoreInner {
     /// mapping it, according to the residency it was minted at.
     ///
     /// The staging is one flat OPAQUE_FD allocation, never a pixel
-    /// buffer: pool allocations are DMA-BUF-flavoured, external device
-    /// APIs import OPAQUE_FD, and on NVIDIA one allocation cannot export
-    /// both. That is why this cannot go through
+    /// buffer: pool allocations are DMA-BUF-flavoured wherever the device
+    /// exports DMA-BUF, external device APIs import OPAQUE_FD, and on NVIDIA
+    /// one allocation cannot export both. That is why this cannot go through
     /// [`Self::register_pixel_buffer_with_timeline`], which takes a
     /// [`PixelBuffer`] and its plane handles.
     ///
@@ -1036,6 +1192,8 @@ impl SurfaceStoreInner {
     /// staging `VkBuffer` per plane and an exportable timeline; the
     /// subprocess `check_out`s the bundle once at registration time and
     /// imports each plane via [`streamlib_consumer_rhi::ConsumerVulkanBuffer::from_dma_buf_fds`]
+    /// (or its one OPAQUE_FD plane via
+    /// [`streamlib_consumer_rhi::ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index`])
     /// + the timeline via [`streamlib_consumer_rhi::ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`].
     ///
     /// Per-acquire IPC after registration is a thin trigger that
@@ -1075,20 +1233,16 @@ impl SurfaceStoreInner {
             })
             .transpose()?;
 
-        let request = serde_json::json!({
-            "op": "register",
-            "surface_id": surface_id,
-            "runtime_id": self.runtime_id,
-            "width": pixel_buffer.width,
-            "height": pixel_buffer.height,
-            "format": pixel_buffer.format().wire_name(),
-            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
-            "handle_type": exported_planes.handle_type,
-            "plane_sizes": exported_planes.plane_sizes,
-            "plane_offsets": exported_planes.plane_offsets,
-            SURFACE_REPLY_HAS_PRODUCE_DONE_FD: produce_done_fd.is_some(),
-            SURFACE_REPLY_HAS_CONSUME_DONE_FD: consume_done_fd.is_some(),
-        });
+        let request = pixel_buffer_registration_payload(
+            surface_id,
+            &self.runtime_id,
+            PixelBufferShapeOnTheWire::of(pixel_buffer),
+            &exported_planes,
+            Some(AnnouncedTimelineEdges {
+                has_produce_done_fd: produce_done_fd.is_some(),
+                has_consume_done_fd: consume_done_fd.is_some(),
+            }),
+        );
 
         let mut wire_fds_in_published_order = exported_planes.plane_fds;
         wire_fds_in_published_order.extend(produce_done_fd);
@@ -1147,38 +1301,21 @@ impl SurfaceStoreInner {
         }
         let plane_fds = plane_fds_of_reply("lookup", &response, reply_fds)?;
 
-        // Dispatch on the wire-level handle type. OPAQUE_FD lookups can't
-        // construct a host-side `PixelBuffer` (that import path is
-        // DMA-BUF-only — see `RhiPixelBufferImport::from_external_plane_handles`).
-        // Subprocess consumers go through `streamlib-surface-client` directly
-        // and import via `streamlib_consumer_rhi::ConsumerVulkanBuffer::from_opaque_fd`.
-        let handle_type = response
-            .get("handle_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF);
-
-        if handle_type == SURFACE_HANDLE_TYPE_OPAQUE_FD {
-            return Err(Error::NotSupported(
-                "SurfaceStore::lookup_buffer: surface registered with \
-                 handle_type=\"opaque_fd\"; the host-side PixelBuffer \
-                 import path is DMA-BUF-only. Subprocess consumers should \
-                 use streamlib-surface-client directly + \
-                 ConsumerVulkanBuffer::from_opaque_fd."
-                    .into(),
-            ));
-        }
-
-        use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
+        use crate::core::rhi::{PixelFormat, RhiPixelBufferImport};
 
         let plane_sizes = plane_sizes_of_reply(&response, plane_fds.len());
-        let handles: Vec<RhiExternalHandle> = plane_fds
-            .iter()
-            .zip(plane_sizes.iter())
-            .map(|(fd, size)| RhiExternalHandle::DmaBuf {
-                fd: fd.as_raw_fd(),
-                size: *size as usize,
-            })
-            .collect();
+        let raw_plane_fds: Vec<std::os::fd::RawFd> =
+            plane_fds.iter().map(OwnedFd::as_raw_fd).collect();
+        let handles = external_plane_handles_for_flavour(
+            "lookup",
+            response
+                .get("handle_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF),
+            &raw_plane_fds,
+            &plane_sizes,
+            vk_memory_type_index_of_reply(&response),
+        )?;
         leave_plane_fds_to_the_import(plane_fds);
         PixelBuffer::from_external_plane_handles(handles, 0, 0, PixelFormat::default())
     }
@@ -2420,23 +2557,60 @@ mod external_handle_flavour_tests {
     /// and the failure it prevents is a wrong-type import inside the driver
     /// rather than an error the caller could see.
     #[test]
-    fn an_opaque_fd_surface_imports_as_opaque_fd() {
-        let handles =
-            external_plane_handles_for_flavour(SURFACE_HANDLE_TYPE_OPAQUE_FD, &[7, 8], &[64, 128])
-                .unwrap();
+    fn an_opaque_fd_surface_imports_as_opaque_fd_at_the_stated_memory_type_index() {
+        let handles = external_plane_handles_for_flavour(
+            "check_out",
+            SURFACE_HANDLE_TYPE_OPAQUE_FD,
+            &[7, 8],
+            &[64, 128],
+            Some(0),
+        )
+        .unwrap();
         assert!(matches!(
             handles.as_slice(),
             [
-                RhiExternalHandle::OpaqueFd { fd: 7, size: 64 },
-                RhiExternalHandle::OpaqueFd { fd: 8, size: 128 },
+                RhiExternalHandle::OpaqueFd {
+                    fd: 7,
+                    size: 64,
+                    exporting_allocation_memory_type_index: 0
+                },
+                RhiExternalHandle::OpaqueFd {
+                    fd: 8,
+                    size: 128,
+                    exporting_allocation_memory_type_index: 0
+                },
             ]
         ));
     }
 
+    /// OPAQUE_FD has no fd-properties query, so a surface that never stated
+    /// the exporter's memory type index has no conforming import; it is
+    /// refused by name rather than imported at a guessed type.
+    #[test]
+    fn an_opaque_fd_surface_without_a_stated_memory_type_index_is_refused_by_name() {
+        let refusal = external_plane_handles_for_flavour(
+            "lookup",
+            SURFACE_HANDLE_TYPE_OPAQUE_FD,
+            &[7],
+            &[64],
+            None,
+        )
+        .unwrap_err();
+        let refusal = refusal.to_string();
+        assert!(refusal.contains("lookup"), "{refusal}");
+        assert!(refusal.contains("vk_memory_type_index"), "{refusal}");
+    }
+
     #[test]
     fn a_dma_buf_surface_imports_as_dma_buf() {
-        let handles =
-            external_plane_handles_for_flavour(SURFACE_HANDLE_TYPE_DMA_BUF, &[3], &[4096]).unwrap();
+        let handles = external_plane_handles_for_flavour(
+            "check_out",
+            SURFACE_HANDLE_TYPE_DMA_BUF,
+            &[3],
+            &[4096],
+            None,
+        )
+        .unwrap();
         assert!(matches!(
             handles.as_slice(),
             [RhiExternalHandle::DmaBuf { fd: 3, size: 4096 }]
@@ -2448,8 +2622,14 @@ mod external_handle_flavour_tests {
     /// such surface keeps importing exactly as it did.
     #[test]
     fn the_absent_flavour_default_is_dma_buf() {
-        let handles =
-            external_plane_handles_for_flavour(SURFACE_HANDLE_TYPE_DMA_BUF, &[3], &[0]).unwrap();
+        let handles = external_plane_handles_for_flavour(
+            "check_out",
+            SURFACE_HANDLE_TYPE_DMA_BUF,
+            &[3],
+            &[0],
+            None,
+        )
+        .unwrap();
         assert!(matches!(
             handles.as_slice(),
             [RhiExternalHandle::DmaBuf { fd: 3, .. }]
@@ -2458,7 +2638,9 @@ mod external_handle_flavour_tests {
 
     #[test]
     fn an_unknown_flavour_is_refused_by_name() {
-        let refusal = external_plane_handles_for_flavour("io_surface", &[3], &[0]).unwrap_err();
+        let refusal =
+            external_plane_handles_for_flavour("check_out", "io_surface", &[3], &[0], None)
+                .unwrap_err();
         assert!(
             refusal.to_string().contains("io_surface"),
             "the refusal must name what it got: {refusal}"
@@ -2532,16 +2714,19 @@ mod plane_fd_ownership_tests {
         let first_plane = ExportedPlaneFdUnderTest::mint();
         let second_plane = ExportedPlaneFdUnderTest::mint();
 
-        let wire_handles = adopt_exported_planes_into_wire_handles(vec![
-            RhiExternalHandle::DmaBuf {
-                fd: first_plane.plane_fd,
-                size: 4096,
-            },
-            RhiExternalHandle::DmaBuf {
-                fd: second_plane.plane_fd,
-                size: 2048,
-            },
-        ])
+        let wire_handles = adopt_exported_planes_into_wire_handles(
+            vec![
+                RhiExternalHandle::DmaBuf {
+                    fd: first_plane.plane_fd,
+                    size: 4096,
+                },
+                RhiExternalHandle::DmaBuf {
+                    fd: second_plane.plane_fd,
+                    size: 2048,
+                },
+            ],
+            [0; 16],
+        )
         .expect("a single-flavour export must be accepted");
 
         assert_eq!(wire_handles.handle_type, SURFACE_HANDLE_TYPE_DMA_BUF);
@@ -2560,6 +2745,48 @@ mod plane_fd_ownership_tests {
         );
     }
 
+    /// An OPAQUE_FD export carries its contract onto the wire: the memory
+    /// type index the handle stated and the exporting device's UUID in hex. A
+    /// DMA-BUF export carries none.
+    #[test]
+    fn an_opaque_fd_export_states_the_handles_memory_type_index_and_the_exporting_device() {
+        let opaque_fd_plane = ExportedPlaneFdUnderTest::mint();
+        let exporting_device_uuid: [u8; 16] = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+        let wire_handles = adopt_exported_planes_into_wire_handles(
+            vec![RhiExternalHandle::OpaqueFd {
+                fd: opaque_fd_plane.plane_fd,
+                size: 4096,
+                exporting_allocation_memory_type_index: 0,
+            }],
+            exporting_device_uuid,
+        )
+        .expect("a single OPAQUE_FD plane is accepted");
+        assert_eq!(wire_handles.handle_type, SURFACE_HANDLE_TYPE_OPAQUE_FD);
+        assert_eq!(
+            wire_handles.opaque_fd_export_contract,
+            Some(OpaqueFdExportContract {
+                vk_memory_type_index: 0,
+                exporting_device_uuid: "00112233445566778899aabbccddeeff".to_string(),
+            })
+        );
+        drop(wire_handles);
+        assert!(opaque_fd_plane.was_closed());
+
+        let dma_buf_plane = ExportedPlaneFdUnderTest::mint();
+        let wire_handles = adopt_exported_planes_into_wire_handles(
+            vec![RhiExternalHandle::DmaBuf {
+                fd: dma_buf_plane.plane_fd,
+                size: 4096,
+            }],
+            exporting_device_uuid,
+        )
+        .expect("a DMA-BUF plane is accepted");
+        assert_eq!(wire_handles.opaque_fd_export_contract, None);
+    }
+
     /// The refusal path obeys the same rule as the send path. A plane fd
     /// left open here is one no owner ever closes; a plane fd closed twice
     /// corrupts whichever subsystem the kernel hands the number to next,
@@ -2569,16 +2796,20 @@ mod plane_fd_ownership_tests {
         let first_plane = ExportedPlaneFdUnderTest::mint();
         let second_plane = ExportedPlaneFdUnderTest::mint();
 
-        let refusal = match adopt_exported_planes_into_wire_handles(vec![
-            RhiExternalHandle::DmaBuf {
-                fd: first_plane.plane_fd,
-                size: 4096,
-            },
-            RhiExternalHandle::OpaqueFd {
-                fd: second_plane.plane_fd,
-                size: 4096,
-            },
-        ]) {
+        let refusal = match adopt_exported_planes_into_wire_handles(
+            vec![
+                RhiExternalHandle::DmaBuf {
+                    fd: first_plane.plane_fd,
+                    size: 4096,
+                },
+                RhiExternalHandle::OpaqueFd {
+                    fd: second_plane.plane_fd,
+                    size: 4096,
+                    exporting_allocation_memory_type_index: 0,
+                },
+            ],
+            [0; 16],
+        ) {
             Ok(_) => panic!("a buffer exporting two flavours must be refused"),
             Err(refusal) => refusal,
         };
@@ -2814,6 +3045,167 @@ mod surface_export_staging_registration_payload_tests {
                 .get("vk_memory_type_index")
                 .and_then(|value| value.as_u64()),
             Some(0),
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod pixel_buffer_registration_payload_tests {
+    use super::*;
+
+    const EXPORTING_DEVICE_UUID: &str = "00112233445566778899aabbccddeeff";
+
+    fn exported_planes_of_flavour(
+        handle_type: &'static str,
+        opaque_fd_export_contract: Option<OpaqueFdExportContract>,
+    ) -> ExportedPlaneWireHandles {
+        ExportedPlaneWireHandles {
+            plane_fds: Vec::new(),
+            plane_sizes: vec![64 * 32 * 4],
+            plane_offsets: vec![0],
+            handle_type,
+            opaque_fd_export_contract,
+        }
+    }
+
+    fn opaque_fd_exported_planes_at_memory_type_index(
+        vk_memory_type_index: u32,
+    ) -> ExportedPlaneWireHandles {
+        exported_planes_of_flavour(
+            SURFACE_HANDLE_TYPE_OPAQUE_FD,
+            Some(OpaqueFdExportContract {
+                vk_memory_type_index,
+                exporting_device_uuid: EXPORTING_DEVICE_UUID.to_string(),
+            }),
+        )
+    }
+
+    fn shape() -> PixelBufferShapeOnTheWire {
+        PixelBufferShapeOnTheWire {
+            width: 64,
+            height: 32,
+            format: PixelFormat::Rgba32,
+        }
+    }
+
+    /// Every pixel-buffer payload the store sends, for one set of planes.
+    fn every_pixel_buffer_payload(
+        exported_planes: &ExportedPlaneWireHandles,
+    ) -> [(&'static str, serde_json::Value); 3] {
+        [
+            (
+                "check_in",
+                pixel_buffer_check_in_payload("runtime-under-test", shape(), exported_planes),
+            ),
+            (
+                "register",
+                pixel_buffer_registration_payload(
+                    "slot-under-test",
+                    "runtime-under-test",
+                    shape(),
+                    exported_planes,
+                    None,
+                ),
+            ),
+            (
+                "register with a timeline",
+                pixel_buffer_registration_payload(
+                    "slot-under-test",
+                    "runtime-under-test",
+                    shape(),
+                    exported_planes,
+                    Some(AnnouncedTimelineEdges {
+                        has_produce_done_fd: true,
+                        has_consume_done_fd: false,
+                    }),
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn an_opaque_fd_pixel_buffer_payload_states_its_memory_type_index_and_exporting_device() {
+        for vk_memory_type_index in [0u32, 5] {
+            for (payload_name, payload) in every_pixel_buffer_payload(
+                &opaque_fd_exported_planes_at_memory_type_index(vk_memory_type_index),
+            ) {
+                assert_eq!(
+                    payload["handle_type"], SURFACE_HANDLE_TYPE_OPAQUE_FD,
+                    "{payload_name}"
+                );
+                assert_eq!(
+                    payload
+                        .get("vk_memory_type_index")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(u64::from(vk_memory_type_index)),
+                    "the {payload_name} payload must state index {vk_memory_type_index}, zero \
+                     included"
+                );
+                assert_eq!(
+                    payload
+                        .get("exporting_device_uuid")
+                        .and_then(serde_json::Value::as_str),
+                    Some(EXPORTING_DEVICE_UUID),
+                    "{payload_name}"
+                );
+            }
+        }
+    }
+
+    /// A DMA-BUF payload is exactly what it was before the OPAQUE_FD contract
+    /// existed: neither field, every other key in its old order.
+    #[test]
+    fn a_dma_buf_pixel_buffer_payload_carries_neither_contract_field() {
+        let [check_in, register, register_with_a_timeline] = every_pixel_buffer_payload(
+            &exported_planes_of_flavour(SURFACE_HANDLE_TYPE_DMA_BUF, None),
+        );
+        assert_eq!(
+            check_in.1.to_string(),
+            serde_json::json!({
+                "op": "check_in",
+                "runtime_id": "runtime-under-test",
+                "width": 64,
+                "height": 32,
+                "format": PixelFormat::Rgba32.wire_name(),
+                "handle_type": "dma_buf",
+                "plane_sizes": [64 * 32 * 4],
+                "plane_offsets": [0],
+            })
+            .to_string()
+        );
+        assert_eq!(
+            register.1.to_string(),
+            serde_json::json!({
+                "op": "register",
+                "surface_id": "slot-under-test",
+                "runtime_id": "runtime-under-test",
+                "width": 64,
+                "height": 32,
+                "format": PixelFormat::Rgba32.wire_name(),
+                "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+                "handle_type": "dma_buf",
+                "plane_sizes": [64 * 32 * 4],
+                "plane_offsets": [0],
+            })
+            .to_string()
+        );
+        assert_eq!(
+            register_with_a_timeline.1.to_string(),
+            serde_json::json!({
+                "op": "register",
+                "surface_id": "slot-under-test",
+                "runtime_id": "runtime-under-test",
+                "width": 64,
+                "height": 32,
+                "format": PixelFormat::Rgba32.wire_name(),
+                "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+                "handle_type": "dma_buf",
+                "plane_sizes": [64 * 32 * 4],
+                "plane_offsets": [0],
+                SURFACE_REPLY_HAS_PRODUCE_DONE_FD: true,
+                SURFACE_REPLY_HAS_CONSUME_DONE_FD: false,
+            })
+            .to_string()
         );
     }
 }

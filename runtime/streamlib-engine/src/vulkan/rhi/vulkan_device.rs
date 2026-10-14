@@ -53,18 +53,6 @@ use super::{
     VulkanValidationMessageCounts,
 };
 
-/// Whether cross-process export through a file descriptor exists on this
-/// platform.
-///
-/// DMA-BUF and OPAQUE_FD are Linux mechanisms. Declaring either handle type on a
-/// driver that has neither makes `vkCreateBuffer` / `vkCreateImage` refuse the
-/// allocation outright with `FEATURE_NOT_PRESENT`, and reaching
-/// `vkGetSemaphoreFdKHR` takes vulkanalia's panicking stub for a command the
-/// loader never resolved. Where the mechanism does not exist the export
-/// declaration is omitted and the allocation is local.
-pub(crate) const CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM: bool =
-    cfg!(target_os = "linux");
-
 /// Best-effort hint about which third-party GPU compute libraries are
 /// **available to integrate against this device**. Probed once at
 /// device construction; each field is `true` when the matching vendor
@@ -1599,7 +1587,7 @@ impl HostVulkanDevice {
             (None, None)
         };
 
-        // Build DMA-BUF export pools on Linux when external memory is supported.
+        // Build DMA-BUF export pools only on a device that exports DMA-BUF.
         // The tiled pool is built only when the EGL probe found at least one
         // RT-capable modifier for BGRA — that's the probe shape.
         #[cfg(target_os = "linux")]
@@ -1610,7 +1598,7 @@ impl HostVulkanDevice {
             dma_buf_buffer_export_info,
             dma_buf_image_export_info,
             dma_buf_image_tiled_export_info,
-        ) = if supports_external_memory {
+        ) = if supports_dma_buf_export {
             // BGRA8_UNORM in Vulkan = ARGB8888 in DRM.
             let bgra_modifiers =
                 drm_modifier_table.rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
@@ -3998,6 +3986,78 @@ impl HostVulkanDevice {
         Ok(memory)
     }
 
+    /// Import an OPAQUE_FD as device memory at the memory type index the
+    /// exporter allocated from — OPAQUE_FD has no fd-properties query, so
+    /// the exporter's stated index is the only conforming one.
+    ///
+    /// Takes the fd by value. Every exit before `vkAllocateMemory` closes
+    /// it; from that call on it is the driver's whatever the call returns.
+    /// The spec leaves a failed import's fd with the caller, but a driver
+    /// that closes it anyway — as NVIDIA does a DMA-BUF — would make a close
+    /// here land on whatever the kernel has since handed that number to, so
+    /// a failed import leaks the fd rather than risk that.
+    #[cfg(target_os = "linux")]
+    pub fn import_opaque_fd_memory_at_stated_memory_type_index(
+        &self,
+        opaque_fd: std::os::fd::OwnedFd,
+        allocation_size: vk::DeviceSize,
+        stated_memory_type_index: u32,
+    ) -> Result<vk::DeviceMemory> {
+        use std::os::fd::IntoRawFd as _;
+
+        if !self.supports_external_memory {
+            return Err(Error::NotSupported(format!(
+                "OPAQUE_FD import: {} did not enable VK_KHR_external_memory_fd",
+                self.device_name
+            )));
+        }
+        if stated_memory_type_index >= self.memory_properties.memory_type_count {
+            return Err(Error::Configuration(format!(
+                "OPAQUE_FD import: the stated memory type index {stated_memory_type_index} is not \
+                 one of the {} memory types {} has",
+                self.memory_properties.memory_type_count, self.device_name
+            )));
+        }
+
+        let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .fd(opaque_fd.into_raw_fd())
+            .build();
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(allocation_size)
+            .memory_type_index(stated_memory_type_index)
+            .push_next(&mut import_info)
+            .build();
+
+        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
+            Error::GpuError(format!(
+                "OPAQUE_FD import of {allocation_size} bytes at memory type \
+                 {stated_memory_type_index} on {} failed: {e}",
+                self.device_name
+            ))
+        })?;
+
+        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::debug!(
+            allocation_size,
+            stated_memory_type_index,
+            live = count,
+            "HostVulkanDevice: OPAQUE_FD memory imported"
+        );
+        Ok(memory)
+    }
+
+    /// The property flags of the memory type at `memory_type_index`, or
+    /// `None` past the device's memory type count.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn property_flags_of_memory_type_index(
+        &self,
+        memory_type_index: u32,
+    ) -> Option<vk::MemoryPropertyFlags> {
+        (memory_type_index < self.memory_properties.memory_type_count)
+            .then(|| self.memory_properties.memory_types[memory_type_index as usize].property_flags)
+    }
+
     /// Import a caller-owned host range as device memory through
     /// `VK_EXT_external_memory_host`, raw `vkAllocateMemory` like the
     /// DMA-BUF import above. `memory_type_bits` is the intersection of the
@@ -4056,7 +4116,7 @@ impl HostVulkanDevice {
     }
 
     /// Get the VMA pool for DMA-BUF exportable HOST_VISIBLE buffers.
-    /// Returns None if external memory is not supported on this device.
+    /// Returns None on a device that exports no DMA-BUF.
     #[cfg(target_os = "linux")]
     pub fn dma_buf_buffer_pool(&self) -> Option<&vma::Pool> {
         self.dma_buf_buffer_pool
@@ -4065,7 +4125,7 @@ impl HostVulkanDevice {
     }
 
     /// Get the VMA pool for DMA-BUF exportable DEVICE_LOCAL images.
-    /// Returns None if external memory is not supported on this device.
+    /// Returns None on a device that exports no DMA-BUF.
     #[cfg(target_os = "linux")]
     pub fn dma_buf_image_pool(&self) -> Option<&vma::Pool> {
         self.dma_buf_image_pool

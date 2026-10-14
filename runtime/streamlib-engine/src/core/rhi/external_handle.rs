@@ -34,14 +34,19 @@ pub enum RhiExternalHandle {
     ///
     /// Source-side allocation is via
     /// [`crate::vulkan::rhi::HostVulkanBuffer::new_opaque_fd_export`].
-    /// Consumer-side import is via
-    /// `streamlib_consumer_rhi::ConsumerVulkanBuffer::from_opaque_fd`
+    /// Import is at the exporter's memory type index, via
+    /// [`crate::vulkan::rhi::HostVulkanBuffer::from_opaque_fd_at_stated_memory_type_index`]
+    /// or `streamlib_consumer_rhi::ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index`,
     /// or, in CUDA's case, `cudaImportExternalMemory` with
     /// `cudaExternalMemoryHandleTypeOpaqueFd` directly.
     #[cfg(target_os = "linux")]
     OpaqueFd {
         fd: std::os::unix::io::RawFd,
         size: usize,
+        /// `vmaGetAllocationInfo().memoryType` of the exporting allocation —
+        /// OPAQUE_FD has no fd-properties query, so a conforming import must
+        /// be told it.
+        exporting_allocation_memory_type_index: u32,
     },
 
     /// Windows: DXGI shared handle.
@@ -233,7 +238,8 @@ impl RhiPixelBufferImport for super::PixelBuffer {
         Self::from_external_plane_handles(vec![handle], width, height, format)
     }
 
-    /// Import one DMA-BUF fd per plane; see the trait for the fd contract.
+    /// Import one DMA-BUF fd per plane, or one single-plane OPAQUE_FD at the
+    /// exporter's memory type index; see the trait for the fd contract.
     fn from_external_plane_handles(
         handles: Vec<RhiExternalHandle>,
         width: u32,
@@ -245,12 +251,12 @@ impl RhiPixelBufferImport for super::PixelBuffer {
         // Adopted before anything is validated, so a refusal closes every
         // fd rather than only the ones a loop reached.
         let mut plane_fds: Vec<OwnedFd> = Vec::with_capacity(handles.len());
-        let mut handles_include_an_opaque_fd_plane = false;
+        let mut opaque_fd_plane_count = 0usize;
         for handle in &handles {
             let fd = match *handle {
                 RhiExternalHandle::DmaBuf { fd, .. } => fd,
                 RhiExternalHandle::OpaqueFd { fd, .. } => {
-                    handles_include_an_opaque_fd_plane = true;
+                    opaque_fd_plane_count += 1;
                     fd
                 }
             };
@@ -261,21 +267,20 @@ impl RhiPixelBufferImport for super::PixelBuffer {
 
         if plane_fds.is_empty() {
             return Err(crate::core::Error::Configuration(
-                "DMA-BUF import: empty plane vec".into(),
+                "pixel buffer import: empty plane vec".into(),
             ));
         }
 
-        // OPAQUE_FD is refused before the global Vulkan device or the
-        // pixel-format machinery is touched, so the contract is
-        // unit-testable without a live `HostVulkanDevice`.
-        if handles_include_an_opaque_fd_plane {
-            return Err(crate::core::Error::NotSupported(
-                "RhiPixelBufferImport::from_external_plane_handles: \
-                 OPAQUE_FD handles must be imported via \
-                 ConsumerVulkanBuffer::from_opaque_fd, not \
-                 this host-side DMA-BUF constructor"
-                    .into(),
-            ));
+        // Refused before the global Vulkan device or the pixel-format
+        // machinery is touched, so the contract is unit-testable without a
+        // live `HostVulkanDevice`.
+        if opaque_fd_plane_count > 0 && plane_fds.len() > 1 {
+            return Err(crate::core::Error::NotSupported(format!(
+                "RhiPixelBufferImport::from_external_plane_handles: an OPAQUE_FD pixel buffer \
+                 imports as one plane, and this one has {} planes ({opaque_fd_plane_count} \
+                 OPAQUE_FD)",
+                plane_fds.len()
+            )));
         }
 
         let vulkan_device =
@@ -283,7 +288,7 @@ impl RhiPixelBufferImport for super::PixelBuffer {
                 .get()
                 .ok_or_else(|| {
                     crate::core::Error::NotSupported(
-                        "DMA-BUF import: HostVulkanDevice not initialized (GpuDevice::new() not called)"
+                        "pixel buffer import: HostVulkanDevice not initialized (GpuDevice::new() not called)"
                             .into(),
                     )
                 })?;
@@ -291,7 +296,7 @@ impl RhiPixelBufferImport for super::PixelBuffer {
         let bytes_per_pixel = format.bits_per_pixel() / 8;
         if bytes_per_pixel == 0 {
             return Err(crate::core::Error::Configuration(
-                "DMA-BUF import: unsupported pixel format (0 bits per pixel)".into(),
+                "pixel buffer import: unsupported pixel format (0 bits per pixel)".into(),
             ));
         }
 
@@ -306,18 +311,36 @@ impl RhiPixelBufferImport for super::PixelBuffer {
                 (width as u64) * (height as u64) * (bytes_per_pixel as u64)
             } else {
                 return Err(crate::core::Error::Configuration(format!(
-                    "DMA-BUF import: plane {} has size=0 and cannot be derived",
+                    "pixel buffer import: plane {} has size=0 and cannot be derived",
                     idx
                 )));
             };
             plane_sizes.push(effective);
         }
 
-        let vulkan_buffer = crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fds(
-            vulkan_device,
-            plane_fds,
-            &plane_sizes,
-        )?;
+        let vulkan_buffer = match handles.first() {
+            Some(RhiExternalHandle::OpaqueFd {
+                exporting_allocation_memory_type_index,
+                ..
+            }) => {
+                let only_plane_fd = plane_fds.pop().ok_or_else(|| {
+                    crate::core::Error::Configuration(
+                        "pixel buffer import: an OPAQUE_FD plane without its fd".into(),
+                    )
+                })?;
+                crate::vulkan::rhi::HostVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+                    vulkan_device,
+                    only_plane_fd,
+                    plane_sizes[0],
+                    *exporting_allocation_memory_type_index,
+                )?
+            }
+            _ => crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fds(
+                vulkan_device,
+                plane_fds,
+                &plane_sizes,
+            )?,
+        };
 
         let pixel_buffer_ref = super::PixelBufferRef {
             inner: std::sync::Arc::new(vulkan_buffer),
@@ -341,18 +364,30 @@ mod tests {
         // when fd + size are byte-identical — the consumer side dispatches
         // on the variant, not the fields.
         let dma = RhiExternalHandle::DmaBuf { fd: 42, size: 4096 };
-        let opaque = RhiExternalHandle::OpaqueFd { fd: 42, size: 4096 };
+        let opaque = RhiExternalHandle::OpaqueFd {
+            fd: 42,
+            size: 4096,
+            exporting_allocation_memory_type_index: 0,
+        };
         assert_ne!(dma, opaque);
     }
 
     #[test]
     fn opaque_fd_debug_includes_variant_name() {
         // Tracing relies on Debug to disambiguate handle types in logs.
-        let opaque = RhiExternalHandle::OpaqueFd { fd: 7, size: 128 };
+        let opaque = RhiExternalHandle::OpaqueFd {
+            fd: 7,
+            size: 128,
+            exporting_allocation_memory_type_index: 3,
+        };
         let s = format!("{opaque:?}");
         assert!(s.contains("OpaqueFd"), "got: {s}");
         assert!(s.contains("fd: 7"), "got: {s}");
         assert!(s.contains("size: 128"), "got: {s}");
+        assert!(
+            s.contains("exporting_allocation_memory_type_index: 3"),
+            "got: {s}"
+        );
     }
 
     /// A pipe stands in for a plane fd: each pipe has its own inode, and
@@ -404,50 +439,62 @@ mod tests {
         }
     }
 
-    /// OPAQUE_FD takes a different path (`ConsumerVulkanBuffer::from_opaque_fd`)
-    /// and is refused up-front rather than miscoerced through the DMA-BUF
-    /// import — and the refusal owns what it was handed: every plane fd,
-    /// the DMA-BUF one included, is closed rather than left to no one.
+    /// An OPAQUE_FD pixel buffer imports as one plane; a handle set with an
+    /// OPAQUE_FD plane among several is refused by name before any device is
+    /// reached, and the refusal owns what it was handed: every plane fd, the
+    /// DMA-BUF one included, is closed rather than left to no one.
     #[test]
-    fn a_refused_opaque_fd_import_closes_every_plane_fd_it_was_handed() {
-        let dma_buf_plane = PlaneFdUnderTest::mint();
-        let opaque_plane = PlaneFdUnderTest::mint();
-        let result =
-            <super::super::PixelBuffer as RhiPixelBufferImport>::from_external_plane_handles(
-                vec![
-                    RhiExternalHandle::DmaBuf {
-                        fd: dma_buf_plane.plane_fd,
-                        size: 4096,
-                    },
-                    RhiExternalHandle::OpaqueFd {
-                        fd: opaque_plane.plane_fd,
-                        size: 4096,
-                    },
-                ],
-                1,
-                1,
-                super::super::PixelFormat::Bgra32,
-            );
-        match result {
-            Err(crate::core::Error::NotSupported(msg)) => {
-                assert!(
-                    msg.contains("OPAQUE_FD"),
-                    "error message must mention OPAQUE_FD: {msg}"
+    fn a_multi_plane_opaque_fd_import_is_refused_by_name_and_closes_every_plane_fd() {
+        for second_plane_is_opaque_fd in [false, true] {
+            let first_plane = PlaneFdUnderTest::mint();
+            let second_plane = PlaneFdUnderTest::mint();
+            let second_handle = if second_plane_is_opaque_fd {
+                RhiExternalHandle::OpaqueFd {
+                    fd: second_plane.plane_fd,
+                    size: 4096,
+                    exporting_allocation_memory_type_index: 0,
+                }
+            } else {
+                RhiExternalHandle::DmaBuf {
+                    fd: second_plane.plane_fd,
+                    size: 4096,
+                }
+            };
+            let result =
+                <super::super::PixelBuffer as RhiPixelBufferImport>::from_external_plane_handles(
+                    vec![
+                        RhiExternalHandle::OpaqueFd {
+                            fd: first_plane.plane_fd,
+                            size: 4096,
+                            exporting_allocation_memory_type_index: 0,
+                        },
+                        second_handle,
+                    ],
+                    1,
+                    1,
+                    super::super::PixelFormat::Bgra32,
                 );
-                assert!(
-                    msg.contains("ConsumerVulkanBuffer::from_opaque_fd"),
-                    "error must point at the right alternative: {msg}"
-                );
+            match result {
+                Err(crate::core::Error::NotSupported(msg)) => {
+                    assert!(
+                        msg.contains("OPAQUE_FD pixel buffer imports as one plane"),
+                        "the refusal must name the rule: {msg}"
+                    );
+                    assert!(
+                        msg.contains("2 planes"),
+                        "the refusal must name the count: {msg}"
+                    );
+                }
+                other => panic!("expected NotSupported, got: {other:?}"),
             }
-            other => panic!("expected NotSupported, got: {other:?}"),
+            assert!(
+                first_plane.was_closed(),
+                "the refusal left plane 0 open — no owner remains to close it"
+            );
+            assert!(
+                second_plane.was_closed(),
+                "the refusal left plane 1 open — no owner remains to close it"
+            );
         }
-        assert!(
-            dma_buf_plane.was_closed(),
-            "the refusal left the DMA-BUF plane fd open — no owner remains to close it"
-        );
-        assert!(
-            opaque_plane.was_closed(),
-            "the refusal left the OPAQUE_FD plane fd open — no owner remains to close it"
-        );
     }
 }

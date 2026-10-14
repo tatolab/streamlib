@@ -9,8 +9,9 @@ use crate::core::{Error, Result};
 
 use super::{HostVulkanBuffer, HostVulkanDevice};
 
-/// One pool slot's memory in the flavour the surface-share wire carries: a
-/// DMA-BUF-exportable allocation on Linux, a private IOSurface on macOS.
+/// One pool slot's memory in the flavour the surface-share wire carries: on
+/// Linux a DMA-BUF-exportable allocation where the device exports DMA-BUF and
+/// an OPAQUE_FD-exportable one where it does not, a private IOSurface on macOS.
 fn allocate_pool_slot_buffer(
     device: &Arc<HostVulkanDevice>,
     width: u32,
@@ -28,7 +29,17 @@ fn allocate_pool_slot_buffer(
             format,
         )
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        let _ = format;
+        let slot_byte_size = (width as u64) * (height as u64) * (bytes_per_pixel as u64);
+        if device.supports_dma_buf_export() {
+            HostVulkanBuffer::new(device, slot_byte_size)
+        } else {
+            HostVulkanBuffer::new_opaque_fd_export(device, slot_byte_size)
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = format;
         HostVulkanBuffer::new(

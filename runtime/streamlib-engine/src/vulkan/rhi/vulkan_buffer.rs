@@ -125,6 +125,10 @@ pub struct HostVulkanBuffer {
     /// Whether this buffer was imported from a DMA-BUF fd.
     #[cfg(target_os = "linux")]
     imported_from_dma_buf: bool,
+    /// Whether this buffer was imported from an OPAQUE_FD at the exporter's
+    /// stated memory type index.
+    #[cfg(target_os = "linux")]
+    imported_from_opaque_fd: bool,
     /// Whether this buffer's memory is a caller-owned host range imported
     /// through `VK_EXT_external_memory_host`. Never mapped by the driver:
     /// `mapped_ptr` is the caller's own pointer, and teardown frees the
@@ -171,14 +175,13 @@ enum HostVisibleAllocationIntent {
 }
 
 impl HostVisibleAllocationIntent {
-    /// Whether the allocation declares a DMA-BUF export handle type.
+    /// Whether the allocation declares a DMA-BUF export handle type on
+    /// `vulkan_device`.
     ///
-    /// An exportable intent on a platform without the handle type degrades to a
-    /// local allocation rather than failing — see
-    /// [`CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM`].
-    fn declares_dma_buf_export(self) -> bool {
-        super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
-            && matches!(self, Self::SequentialWriteExportable)
+    /// An exportable intent on a device that exports no DMA-BUF degrades to
+    /// a local allocation rather than failing.
+    fn declares_dma_buf_export_on_device(self, vulkan_device: &HostVulkanDevice) -> bool {
+        vulkan_device.supports_dma_buf_export() && matches!(self, Self::SequentialWriteExportable)
     }
 
     fn vma_allocation_create_flags(self) -> vma::AllocationCreateFlags {
@@ -203,9 +206,10 @@ impl HostVisibleAllocationIntent {
 }
 
 impl HostVulkanBuffer {
-    /// Create a HOST_VISIBLE, DMA-BUF exportable `VkBuffer` with
+    /// Create a HOST_VISIBLE `VkBuffer` with
     /// `STORAGE_BUFFER | TRANSFER_SRC | TRANSFER_DST` usage, allocated
-    /// through the device's DMA-BUF export VMA pool.
+    /// through the device's DMA-BUF export VMA pool on a device that exports
+    /// DMA-BUF and locally on one that does not.
     ///
     /// Thin alias for [`Self::new_storage_buffer_host_visible`] for the
     /// "default DMA-BUF storage buffer" use case. Callers that need
@@ -277,7 +281,8 @@ impl HostVulkanBuffer {
             .size(size)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        if intent.declares_dma_buf_export() {
+        let declares_dma_buf_export = intent.declares_dma_buf_export_on_device(vulkan_device);
+        if declares_dma_buf_export {
             buffer_info = buffer_info.push_next(&mut external_buffer_info);
         }
 
@@ -293,7 +298,7 @@ impl HostVulkanBuffer {
         let allocation_source = VmaFrameAllocationSource::export_pool_or_the_default_allocator(
             vulkan_device
                 .dma_buf_buffer_pool_pinned_to_one_memory_type()
-                .filter(|_| intent.declares_dma_buf_export()),
+                .filter(|_| declares_dma_buf_export),
         );
         #[cfg(not(target_os = "linux"))]
         let allocation_source = VmaFrameAllocationSource::DefaultAllocator;
@@ -325,6 +330,8 @@ impl HostVulkanBuffer {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            imported_from_opaque_fd: false,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_from_host_pointer: false,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -345,7 +352,7 @@ impl HostVulkanBuffer {
     /// Sibling of [`Self::new`] for callers that have raw bytes rather than
     /// formatted pixel data (V4L2 MMAP frames, audio→GPU compute, ML upload).
     /// Same memory shape — HOST_VISIBLE | HOST_COHERENT, persistently mapped,
-    /// DMA-BUF exportable via the device's existing `dma_buf_buffer_pool` —
+    /// DMA-BUF exportable via the device's `dma_buf_buffer_pool` where it has one —
     /// but `byte_size` is taken flat: no `PixelFormat` interrogation, no
     /// `width * height * bpp` derivation.
     ///
@@ -690,6 +697,7 @@ impl HostVulkanBuffer {
             allocation: Some(allocation),
             imported_memory: None,
             imported_from_dma_buf: false,
+            imported_from_opaque_fd: false,
             imported_from_host_pointer: false,
             imported_host_range_owner: None,
             is_opaque_fd_export: true,
@@ -776,6 +784,7 @@ impl HostVulkanBuffer {
             allocation: Some(allocation),
             imported_memory: None,
             imported_from_dma_buf: false,
+            imported_from_opaque_fd: false,
             imported_from_host_pointer: false,
             imported_host_range_owner: None,
             is_opaque_fd_export: true,
@@ -875,6 +884,7 @@ impl HostVulkanBuffer {
             allocation: Some(allocation),
             imported_memory: None,
             imported_from_dma_buf: false,
+            imported_from_opaque_fd: false,
             imported_from_host_pointer: false,
             imported_host_range_owner: None,
             is_opaque_fd_export: false,
@@ -925,8 +935,24 @@ impl HostVulkanBuffer {
     }
 
     /// Export the buffer's memory as a DMA-BUF file descriptor.
+    ///
+    /// Refused by name for memory that carries no DMA-BUF export: an
+    /// OPAQUE_FD allocation or import, and any allocation on a device that
+    /// exports no DMA-BUF.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
-        // Determine which DeviceMemory to export from
+        if self.is_opaque_fd_export || self.imported_from_opaque_fd {
+            return Err(Error::NotSupported(format!(
+                "HostVulkanBuffer::export_dma_buf_fd: this buffer's memory on {} is an \
+                 OPAQUE_FD allocation, which exports no DMA-BUF; its handle is the OPAQUE_FD",
+                self.vulkan_device.name()
+            )));
+        }
+        if !self.imported_from_dma_buf && !self.vulkan_device.supports_dma_buf_export() {
+            return Err(Error::NotSupported(format!(
+                "HostVulkanBuffer::export_dma_buf_fd: {} exports no DMA-BUF",
+                self.vulkan_device.name()
+            )));
+        }
         let device_memory = if let Some(allocation) = &self.allocation {
             let alloc_info = self
                 .vulkan_device
@@ -958,7 +984,8 @@ impl HostVulkanBuffer {
     /// for its allocation flavor.
     ///
     /// - Buffers from [`Self::new_opaque_fd_export`] yield
-    ///   [`crate::core::rhi::RhiExternalHandle::OpaqueFd`].
+    ///   [`crate::core::rhi::RhiExternalHandle::OpaqueFd`], stating the
+    ///   allocation's memory type index.
     /// - All other buffers yield
     ///   [`crate::core::rhi::RhiExternalHandle::DmaBuf`].
     ///
@@ -971,8 +998,20 @@ impl HostVulkanBuffer {
     pub fn export_external_handle(&self) -> Result<crate::core::rhi::RhiExternalHandle> {
         let size = self.size() as usize;
         if self.is_opaque_fd_export {
+            let exporting_allocation_memory_type_index =
+                self.vma_allocation_memory_type_index().ok_or_else(|| {
+                    Error::GpuError(
+                        "HostVulkanBuffer::export_external_handle: an OPAQUE_FD export has no \
+                         VMA allocation to state a memory type index from"
+                            .into(),
+                    )
+                })?;
             let fd = self.export_opaque_fd_memory()?;
-            Ok(crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size })
+            Ok(crate::core::rhi::RhiExternalHandle::OpaqueFd {
+                fd,
+                size,
+                exporting_allocation_memory_type_index,
+            })
         } else {
             let fd = self.export_dma_buf_fd()?;
             Ok(crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size })
@@ -1069,12 +1108,127 @@ impl HostVulkanBuffer {
             allocation: None,
             imported_memory: Some(plane0.memory),
             imported_from_dma_buf: true,
+            imported_from_opaque_fd: false,
             imported_from_host_pointer: false,
             imported_host_range_owner: None,
             is_opaque_fd_export: false,
             mapped_ptr: plane0.mapped_ptr,
             extra_imported_planes: imported,
             size: plane0.size,
+        })
+    }
+
+    /// Import a single-plane OPAQUE_FD as a mapped HOST_VISIBLE `VkBuffer`,
+    /// binding the memory type index the exporter allocated from.
+    ///
+    /// `stated_memory_type_index` is the registration's
+    /// `vk_memory_type_index`. Refused by name, before the driver sees it, when
+    /// the buffer cannot bind that type or the type is not HOST_VISIBLE and
+    /// HOST_COHERENT, which a mapped read needs. Same fd ownership as
+    /// [`HostVulkanDevice::import_opaque_fd_memory_at_stated_memory_type_index`]:
+    /// closed here on any exit before `vkAllocateMemory`, the driver's from it on.
+    #[tracing::instrument(
+        level = "trace",
+        skip(vulkan_device, opaque_fd),
+        fields(allocation_size)
+    )]
+    pub fn from_opaque_fd_at_stated_memory_type_index(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        opaque_fd: std::os::fd::OwnedFd,
+        allocation_size: vk::DeviceSize,
+        stated_memory_type_index: u32,
+    ) -> Result<Self> {
+        const CONSTRUCTOR_LABEL: &str =
+            "HostVulkanBuffer::from_opaque_fd_at_stated_memory_type_index";
+        if allocation_size == 0 {
+            return Err(Error::Configuration(format!(
+                "{CONSTRUCTOR_LABEL}: allocation_size must be > 0"
+            )));
+        }
+        let mapped_read_property_flags =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        match vulkan_device.property_flags_of_memory_type_index(stated_memory_type_index) {
+            Some(property_flags) if property_flags.contains(mapped_read_property_flags) => {}
+            Some(property_flags) => {
+                return Err(Error::Configuration(format!(
+                    "{CONSTRUCTOR_LABEL}: memory type {stated_memory_type_index} on {} is \
+                     {property_flags:?}, not HOST_VISIBLE | HOST_COHERENT, so the import could \
+                     not be mapped for reading",
+                    vulkan_device.name()
+                )));
+            }
+            None => {
+                return Err(Error::Configuration(format!(
+                    "{CONSTRUCTOR_LABEL}: {} has no memory type {stated_memory_type_index}",
+                    vulkan_device.name()
+                )));
+            }
+        }
+
+        let device = vulkan_device.device();
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .build();
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(allocation_size)
+            .usage(
+                vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut external_buffer_info)
+            .build();
+        let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
+            Error::GpuError(format!("{CONSTRUCTOR_LABEL}: vkCreateBuffer failed: {e}"))
+        })?;
+
+        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+        if requirements.memory_type_bits & (1u32 << stated_memory_type_index) == 0 {
+            unsafe { device.destroy_buffer(buffer, None) };
+            return Err(Error::Configuration(format!(
+                "{CONSTRUCTOR_LABEL}: the imported buffer cannot bind memory type \
+                 {stated_memory_type_index} on {} (memoryTypeBits {:#x})",
+                vulkan_device.name(),
+                requirements.memory_type_bits
+            )));
+        }
+        let imported_allocation_size = allocation_size.max(requirements.size);
+
+        let memory = vulkan_device
+            .import_opaque_fd_memory_at_stated_memory_type_index(
+                opaque_fd,
+                imported_allocation_size,
+                stated_memory_type_index,
+            )
+            .inspect_err(|_| unsafe { device.destroy_buffer(buffer, None) })?;
+        unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
+            vulkan_device.free_imported_memory(memory);
+            unsafe { device.destroy_buffer(buffer, None) };
+            Error::GpuError(format!(
+                "{CONSTRUCTOR_LABEL}: vkBindBufferMemory failed: {e}"
+            ))
+        })?;
+        let mapped_ptr = vulkan_device
+            .map_imported_memory(memory, allocation_size)
+            .inspect_err(|_| {
+                vulkan_device.free_imported_memory(memory);
+                unsafe { device.destroy_buffer(buffer, None) };
+            })?;
+
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer,
+            allocation: None,
+            imported_memory: Some(memory),
+            imported_from_dma_buf: false,
+            imported_from_opaque_fd: true,
+            imported_from_host_pointer: false,
+            imported_host_range_owner: None,
+            is_opaque_fd_export: false,
+            mapped_ptr,
+            extra_imported_planes: Vec::new(),
+            size: allocation_size,
         })
     }
 
@@ -1116,6 +1270,7 @@ impl HostVulkanBuffer {
             allocation: None,
             imported_memory: Some(plane.memory),
             imported_from_dma_buf: true,
+            imported_from_opaque_fd: false,
             imported_from_host_pointer: false,
             imported_host_range_owner: None,
             is_opaque_fd_export: false,
@@ -1261,6 +1416,8 @@ impl HostVulkanBuffer {
             imported_memory: Some(memory),
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            imported_from_opaque_fd: false,
             imported_from_host_pointer: true,
             imported_host_range_owner: host_range_owner,
             #[cfg(target_os = "linux")]
@@ -1413,8 +1570,8 @@ impl Drop for HostVulkanBuffer {
             return;
         }
         #[cfg(target_os = "linux")]
-        if self.imported_from_dma_buf {
-            // DMA-BUF import path: raw DeviceMemory, not VMA.
+        if self.imported_from_dma_buf || self.imported_from_opaque_fd {
+            // File-descriptor import path: raw DeviceMemory, not VMA.
             unsafe {
                 self.vulkan_device
                     .device()
@@ -1842,16 +1999,25 @@ mod tests {
             }
         };
 
-        // DMA-BUF flavor → DmaBuf variant.
+        // DMA-BUF flavor → DmaBuf variant, on a device that exports DMA-BUF;
+        // a refusal naming the device on one that does not.
         let dma_buf = HostVulkanBuffer::new(&device, (64 as u64) * (64 as u64) * (4 as u64))
             .expect("dma-buf buffer failed");
         match dma_buf.export_external_handle() {
-            Ok(RhiExternalHandle::DmaBuf { fd, size }) => {
+            Ok(RhiExternalHandle::DmaBuf { fd, size }) if device.supports_dma_buf_export() => {
                 assert!(fd >= 0, "DMA-BUF fd must be non-negative, got {fd}");
                 assert_eq!(size, (64 * 64 * 4) as usize);
                 unsafe { libc::close(fd) };
             }
-            other => panic!("expected DmaBuf, got: {other:?}"),
+            Err(Error::NotSupported(refusal)) if !device.supports_dma_buf_export() => {
+                assert!(refusal.contains(&device.name()), "{refusal}");
+                assert!(refusal.contains("exports no DMA-BUF"), "{refusal}");
+            }
+            other => panic!(
+                "expected DmaBuf on a DMA-BUF device, a refusal elsewhere (supports_dma_buf_export \
+                 = {}), got: {other:?}",
+                device.supports_dma_buf_export()
+            ),
         }
 
         // OPAQUE_FD flavor → OpaqueFd variant. Skip if the pool isn't
@@ -1863,12 +2029,28 @@ mod tests {
             )
             .expect("new_opaque_fd_export failed");
             match opaque_buf.export_external_handle() {
-                Ok(RhiExternalHandle::OpaqueFd { fd, size }) => {
+                Ok(RhiExternalHandle::OpaqueFd {
+                    fd,
+                    size,
+                    exporting_allocation_memory_type_index,
+                }) => {
                     assert!(fd >= 0, "OPAQUE_FD fd must be non-negative, got {fd}");
                     assert_eq!(size, (64 * 64 * 4) as usize);
+                    assert_eq!(
+                        Some(exporting_allocation_memory_type_index),
+                        opaque_buf.vma_allocation_memory_type_index(),
+                        "the handle states the allocation's own memory type"
+                    );
                     unsafe { libc::close(fd) };
                 }
                 other => panic!("expected OpaqueFd, got: {other:?}"),
+            }
+            match opaque_buf.export_dma_buf_fd() {
+                Err(Error::NotSupported(refusal)) => {
+                    assert!(refusal.contains(&device.name()), "{refusal}");
+                    assert!(refusal.contains("exports no DMA-BUF"), "{refusal}");
+                }
+                other => panic!("an OPAQUE_FD buffer must refuse a DMA-BUF export, got {other:?}"),
             }
         }
     }
