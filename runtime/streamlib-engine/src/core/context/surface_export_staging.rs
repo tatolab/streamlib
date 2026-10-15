@@ -52,9 +52,11 @@
 //! the same timeline: [`GpuContext::share_surface_export_staging`]
 //! publishes both to the surface-share service once, and the child
 //! triggers refills through the escalate ops that wrap the methods
-//! below. The bounded host wait after each submit is a convenience for
-//! callers already in this process; the exportable timeline is the
-//! contract, and it is what a child waits on.
+//! below. Every copy is retired on the host before it returns. Where the
+//! device exports a timeline semaphore, the child also waits on the
+//! exported timeline; where it exports none (the software device), the
+//! timeline stays in this process and that host retirement is the whole
+//! ordering contract, as on macOS.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -142,8 +144,8 @@ struct RefillSubmission {
 }
 
 /// One surface's export staging: the OPAQUE_FD buffer a consumer one hop
-/// away imports, the exportable timeline that orders refills, and the
-/// recorder that reuses one command pool across them.
+/// away imports, the timeline that orders refills, and the recorder that
+/// reuses one command pool across them.
 pub struct SurfaceExportStaging {
     /// The slot-normalized key of the surface this staging exports —
     /// stable across the frames a pool slot publishes, which is what lets
@@ -157,6 +159,9 @@ pub struct SurfaceExportStaging {
     residency: SurfaceExportStagingResidency,
     staging_buffer: Arc<HostVulkanBuffer>,
     refill_done_timeline: Arc<HostVulkanTimelineSemaphore>,
+    /// Whether `refill_done_timeline` was minted exportable — true exactly
+    /// where the device exports a timeline semaphore as an OPAQUE_FD.
+    refill_done_timeline_crosses_processes: bool,
     /// One recorder, reused: per-refill pool creation is the exact churn
     /// `docs/learnings/nvidia-opaque-fd-after-swapchain.md` warns about.
     refill_submission: Mutex<RefillSubmission>,
@@ -244,10 +249,21 @@ impl SurfaceExportStaging {
         &self.staging_buffer
     }
 
-    /// The timeline a consumer waits on; each refill signals the value
-    /// [`GpuContext::refill_surface_export_staging`] returns.
-    pub fn refill_done_timeline(&self) -> &Arc<HostVulkanTimelineSemaphore> {
-        &self.refill_done_timeline
+    /// The exported timeline a consumer in another process waits on, or
+    /// `None` where the device exports no timeline semaphore and every copy
+    /// is retired on the host before it returns.
+    pub fn refill_done_timeline_another_process_waits_on(
+        &self,
+    ) -> Option<&Arc<HostVulkanTimelineSemaphore>> {
+        self.refill_done_timeline_crosses_processes
+            .then_some(&self.refill_done_timeline)
+    }
+
+    /// The value a consumer in another process waits for after the copy
+    /// that signalled `signalled_value`; `None` where no timeline crosses.
+    fn value_another_process_waits_for(&self, signalled_value: u64) -> Option<u64> {
+        self.refill_done_timeline_crosses_processes
+            .then_some(signalled_value)
     }
 
     /// UUID of the Vulkan device that owns the staging allocation. An
@@ -414,7 +430,15 @@ impl GpuContext {
                 )?
             }
         });
-        let refill_done_timeline = self.create_exportable_timeline_semaphore(0)?;
+        // A device that exports no timeline (the software device) refuses an
+        // exportable one at creation; its copies are retired on the host
+        // before they return, so an in-process timeline is all it needs.
+        let refill_done_timeline_crosses_processes = vulkan_device.supports_semaphore_export();
+        let refill_done_timeline = if refill_done_timeline_crosses_processes {
+            self.create_exportable_timeline_semaphore(0)?
+        } else {
+            Arc::new(HostVulkanTimelineSemaphore::new(vulkan_device.device(), 0)?)
+        };
         let refill_submission = Mutex::new(RefillSubmission {
             recorder: self.create_command_recorder("surface_export_staging_refill")?,
             next_signal_value: 1,
@@ -425,6 +449,7 @@ impl GpuContext {
             residency,
             staging_buffer,
             refill_done_timeline,
+            refill_done_timeline_crosses_processes,
             refill_submission,
             staging_byte_size: shape.staging_byte_size,
             surface_width: shape.surface_width,
@@ -453,9 +478,10 @@ impl GpuContext {
     /// service, and answer with the id they are registered under.
     ///
     /// This is how a consumer one process away reaches the export: it
-    /// checks the id out, receives the staging's OPAQUE_FD and the
-    /// timeline's fd over SCM_RIGHTS, imports or maps the memory, and
-    /// waits on the timeline for the value each refill returns. The
+    /// checks the id out, receives the staging's OPAQUE_FD — and the
+    /// timeline's fd where the device exports one — over SCM_RIGHTS,
+    /// imports or maps the memory, and waits on the timeline for the value
+    /// each refill returns. The
     /// published id is derived from the source surface's *and* the
     /// residency, so three registrations never collide — the source is
     /// already registered under its own id with its DMA-BUF planes, and
@@ -505,7 +531,9 @@ impl GpuContext {
             staging.surface_width,
             staging.surface_height,
             pixel_format,
-            &staging.refill_done_timeline,
+            staging
+                .refill_done_timeline_another_process_waits_on()
+                .map(Arc::as_ref),
         )?;
         *registration_id = Some(shared_id.clone());
         Ok((shared_id, pixel_format))
@@ -690,20 +718,21 @@ impl GpuContext {
     /// Resolves the source fresh — a rotating producer's latest
     /// registration, not a snapshot — and refuses an id whose frame the
     /// producer has recycled, because the slot's bytes are then somebody
-    /// else's picture. Returns the signalled timeline value a
-    /// cross-process consumer would wait on instead of relying on the
-    /// in-process host wait.
+    /// else's picture. The copy is retired on the host before this
+    /// returns; the answer is the timeline value a consumer in another
+    /// process waits for, `None` where the device exports no timeline.
     pub fn refill_surface_export_staging(
         &self,
         staging: &SurfaceExportStaging,
         surface_id: &str,
-    ) -> Result<u64> {
+    ) -> Result<Option<u64>> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        Self::submit_staging_copy_and_wait(
+        let signalled_value = Self::submit_staging_copy_and_wait(
             staging,
             FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
             |recorder| Self::record_refill(staging, &source, recorder),
-        )
+        )?;
+        Ok(staging.value_another_process_waits_for(signalled_value))
     }
 
     /// The guards every refill runs, plus the freshly-resolved source.
@@ -805,13 +834,14 @@ impl GpuContext {
         &self,
         staging: &SurfaceExportStaging,
         surface_id: &str,
-    ) -> Result<u64> {
+    ) -> Result<Option<u64>> {
         let destination = self.resolve_write_back_destination(staging, surface_id)?;
-        Self::submit_staging_copy_and_wait(
+        let signalled_value = Self::submit_staging_copy_and_wait(
             staging,
             FrameThisStagingHoldsAfterTheCopy::WhateverItAlreadyHeld,
             |recorder| Self::record_write_back(staging, &destination, recorder),
-        )
+        )?;
+        Ok(staging.value_another_process_waits_for(signalled_value))
     }
 
     /// Refuse publishing a staging that holds no frame, or another frame
@@ -1006,7 +1036,7 @@ impl crate::core::context::GpuContextLimitedAccess {
         &self,
         staging: &SurfaceExportStaging,
         surface_id: &str,
-    ) -> Result<u64> {
+    ) -> Result<Option<u64>> {
         self.host_inner()
             .refill_surface_export_staging(staging, surface_id)
     }
@@ -1016,7 +1046,7 @@ impl crate::core::context::GpuContextLimitedAccess {
         &self,
         staging: &SurfaceExportStaging,
         surface_id: &str,
-    ) -> Result<u64> {
+    ) -> Result<Option<u64>> {
         self.host_inner()
             .copy_surface_export_staging_back_to_surface(staging, surface_id)
     }
@@ -2117,5 +2147,68 @@ mod tests {
         );
         gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
             .expect("a staging naming this frame may publish back into it");
+    }
+
+    /// A staging's surface-share registration carries its refill timeline
+    /// exactly where the device exports one. On the software device it
+    /// registers the staging alone — creating the exportable timeline there
+    /// is refused by the driver, so minting one anyway would fail every
+    /// `cpu()` over a texture — and its copies answer with no value to wait
+    /// for.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_staging_registration_carries_a_timeline_edge_exactly_where_the_device_exports_one() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let device_exports_a_timeline = gpu.gpu_capabilities().supports_semaphore_export;
+        let surface_share =
+            crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let (pool_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire a frame to export");
+        stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
+        let surface_id = pool_id.to_string();
+
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("the staging mints on any device");
+        let (shared_id, _) = gpu
+            .share_surface_export_staging(&staging)
+            .expect("the staging registers on any device");
+        let registered = surface_share
+            .state
+            .get_surface_planes(&shared_id)
+            .expect("the service holds the staging's registration");
+        assert_eq!(
+            registered.produce_done_fd.is_some(),
+            device_exports_a_timeline,
+            "the refill timeline crosses exactly where the device exports one"
+        );
+        assert!(
+            registered.consume_done_fd.is_none(),
+            "a staging never carries a consumer-side drain edge"
+        );
+        assert_eq!(
+            staging
+                .refill_done_timeline_another_process_waits_on()
+                .is_some(),
+            device_exports_a_timeline
+        );
+
+        let value_another_process_waits_for = gpu
+            .refill_surface_export_staging(&staging, &surface_id)
+            .expect("the refill runs on any device");
+        assert_eq!(
+            value_another_process_waits_for.is_some(),
+            device_exports_a_timeline,
+            "a refill answers a value to wait for only where a timeline crossed"
+        );
+        assert_every_byte_is(
+            &read_cpu_readback_staging_through_its_mapping(&staging),
+            PUBLISHED_FRAME_STAMP,
+            "the refill, read off the mapping the moment it returns",
+        );
+        surface_share.stop();
     }
 }

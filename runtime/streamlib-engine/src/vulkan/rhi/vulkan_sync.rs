@@ -560,34 +560,41 @@ mod tests {
         sem.wait(7, 0).expect("wait on already-reached value");
     }
 
-    /// `new_exportable` plus `export_opaque_fd` returns a valid kernel
-    /// fd. Sufficient to confirm `VK_KHR_external_semaphore_fd` is wired.
-    /// Cross-process import is exercised by the surface-adapter
-    /// integration tests in `streamlib-adapter-vulkan`.
+    /// The device's `supports_semaphore_export` is the gate every engine
+    /// minter of a cross-process timeline asks first, so it must be exact:
+    /// where it says yes, an exportable timeline creates and exports a valid
+    /// kernel fd; where it says no (lavapipe), the driver refuses or the
+    /// export refuses by name — never an fd, and never vulkanalia's
+    /// panicking stub for an unloaded `vkGetSemaphoreFdKHR`. Cross-process
+    /// import is exercised by the surface-adapter integration tests in
+    /// `streamlib-adapter-vulkan`.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
     )]
     #[test]
-    fn timeline_semaphore_exports_valid_opaque_fd() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping test - Vulkan not available");
-                return;
-            }
-        };
-        let sem = match HostVulkanTimelineSemaphore::new_exportable(device.device(), 0) {
-            Ok(s) => s,
-            Err(_) => {
-                println!("Skipping — VK_KHR_external_semaphore_fd unavailable on this driver");
-                return;
-            }
-        };
-        let fd = sem.export_opaque_fd().expect("export_opaque_fd");
-        assert!(fd >= 0, "exported sync fd should be a valid kernel fd");
-        unsafe { libc::close(fd) };
+    fn a_timeline_exports_as_an_opaque_fd_exactly_where_the_device_says_it_can() {
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        let device_name = device.name();
+        let exportable = HostVulkanTimelineSemaphore::new_exportable(device.device(), 0);
+        if device.supports_semaphore_export() {
+            let semaphore = exportable.unwrap_or_else(|creation_failure| {
+                panic!(
+                    "{device_name} says it exports a timeline but refused one: {creation_failure}"
+                )
+            });
+            let fd = semaphore
+                .export_opaque_fd()
+                .expect("a device that exports a timeline exports its fd");
+            assert!(fd >= 0, "exported sync fd should be a valid kernel fd");
+            unsafe { libc::close(fd) };
+        } else if let Ok(semaphore) = exportable {
+            assert!(
+                semaphore.export_opaque_fd().is_err(),
+                "{device_name} says it exports no timeline, yet handed one out as an fd"
+            );
+        }
     }
 
     /// Where the fd handle type does not exist, export refuses by name. Without

@@ -102,9 +102,9 @@ pub(in super::super) fn handle_open_device_export_staging(
 /// whether a write-back is possible, and the UUID of the GPU that owns
 /// it.
 ///
-/// No fd travels on this socket. The staging's OPAQUE_FD and the
-/// timeline's fd reach the child through the surface-share check-out it
-/// makes with the returned id.
+/// No fd travels on this socket. The staging's OPAQUE_FD, and the
+/// timeline's fd where the device exports one, reach the child through the
+/// surface-share check-out it makes with the returned id.
 pub(super) fn handle_open_surface_export_staging(
     sandbox: &GpuContextLimitedAccess,
     request_id: String,
@@ -143,10 +143,11 @@ pub(super) fn handle_open_surface_export_staging(
 /// Run one surface-export staging copy on behalf of a helper process and
 /// answer with the timeline value it signalled.
 ///
-/// The child waits for that value on its imported copy of the staging's
-/// `refill_done` timeline before touching the memory — the host's own
-/// bounded wait orders the submit for callers in this process, but it
-/// says nothing to a consumer one process away.
+/// The copy is retired on the host before this answers. Where the device
+/// exports a timeline the child still waits for the answered value on its
+/// imported copy of the staging's `refill_done` before touching the memory;
+/// where it exports none the answer carries no value and the host
+/// retirement is the whole ordering contract.
 ///
 /// Always available at either residency: the staging is a `GpuContext`
 /// capability, minted on first ask, with no installation step and
@@ -173,10 +174,10 @@ pub(super) fn handle_surface_export_staging_copy(
             }
         });
     match copied {
-        Ok(signalled) => EscalateResponse::Ok(EscalateResponseOk {
+        Ok(value_another_process_waits_for) => EscalateResponse::Ok(EscalateResponseOk {
             request_id,
             handle_id: surface_id.to_string(),
-            timeline_value: Some(signalled.to_string()),
+            timeline_value: value_another_process_waits_for.map(|value| value.to_string()),
             ..Default::default()
         }),
         Err(failure) => EscalateResponse::Err(EscalateResponseErr {
