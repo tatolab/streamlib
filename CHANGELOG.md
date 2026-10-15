@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.10](https://github.com/tatolab/streamlib/compare/v0.46.9...v0.46.10) (2026-10-15)
+
+
+### Features
+
+* **ci:** the engine's hardware tests run on the unit's bundled driver, and a kernel reflects SPIR-V whose debug strings an older glslc mis-encoded ([#2780](https://github.com/tatolab/streamlib/issues/2780)) ([d40e0ea](https://github.com/tatolab/streamlib/commit/d40e0eaae296c5182a76e1817aabe48282c66fe8))
+
 ## [0.46.9](https://github.com/tatolab/streamlib/compare/v0.46.8...v0.46.9) (2026-10-15)
 
 
