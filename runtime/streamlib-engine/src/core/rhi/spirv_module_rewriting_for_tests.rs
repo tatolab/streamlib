@@ -9,14 +9,13 @@
 //! that produces them. Each is reached by editing the debug and decoration
 //! instructions of a real compiled module.
 
-/// A SPIR-V module opens with five header words, then a stream of
-/// instructions whose first word packs word count and opcode (SPIR-V 1.6
-/// §2.3).
-const SPIRV_HEADER_WORD_COUNT: usize = 5;
-const OP_SOURCE_CONTINUED: u16 = 2;
-const OP_SOURCE: u16 = 3;
-const OP_NAME: u16 = 5;
-const OP_DECORATE: u16 = 71;
+use super::kernel_binding_names::{
+    OP_SOURCE, OP_SOURCE_CONTINUED, OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT, OP_STRING,
+    SPIRV_HEADER_WORD_COUNT,
+};
+
+const OP_NAME: u32 = 5;
+const OP_DECORATE: u32 = 71;
 const DECORATION_BINDING: u32 = 33;
 const DECORATION_DESCRIPTOR_SET: u32 = 34;
 
@@ -44,7 +43,7 @@ pub(crate) fn rename_binding_in_spirv_module(
         }
         let mut rewritten = vec![0, instruction[1]];
         rewritten.extend(encode_spirv_literal_string(replacement_name));
-        rewritten[0] = ((rewritten.len() as u32) << 16) | u32::from(OP_NAME);
+        rewritten[0] = ((rewritten.len() as u32) << 16) | OP_NAME;
         Some(rewritten)
     });
     assert!(
@@ -106,23 +105,49 @@ pub(crate) fn move_binding_to_another_descriptor_set_in_spirv_module(
     moved
 }
 
-/// Give the module's `OpSource` source text, and an `OpSourceContinued` after
-/// it, bytes that are not UTF-8, as Ubuntu 24.04's `glslc -g` emits where a
-/// shader's source holds a multi-byte character.
-pub(crate) fn give_the_embedded_source_text_bytes_that_are_not_utf8(spirv: &[u8]) -> Vec<u8> {
-    const A_MULTI_BYTE_CHARACTER_CUT_AFTER_ITS_FIRST_BYTE: [u8; 4] = [b'/', b'/', 0xe2, 0];
-    const THE_REST_OF_THAT_CHARACTER: [u8; 4] = [0x80, 0x94, 0, 0];
+/// Give the module's `OpSource` source text and its `OpString` file name the
+/// bytes Ubuntu 24.04's `glslc -g` packs for a non-ASCII character: each of its
+/// bytes sign-extended, so the rest of that word reads `0xFF`.
+pub(crate) fn pack_the_debug_source_strings_as_ubuntu_24_04_glslc_does_for_a_non_ascii_character(
+    spirv: &[u8],
+) -> Vec<u8> {
+    const SOURCE_TEXT_AFTER_AN_EM_DASH: &[u8] = b"// \xe2\xff\xff\xff the";
+    const FILE_NAME_AFTER_AN_E_ACUTE: &[u8] = b"caf\xc3\xa9\xff\xff\xffcomp";
+    let (rewritten, rewritten_count) =
+        rewrite_spirv_instructions(spirv, |opcode, instruction| match opcode {
+            OP_SOURCE if instruction.len() >= OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT => {
+                Some(with_literal_bytes(
+                    &instruction[..OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT],
+                    SOURCE_TEXT_AFTER_AN_EM_DASH,
+                ))
+            }
+            OP_STRING => Some(with_literal_bytes(
+                &instruction[..2],
+                FILE_NAME_AFTER_AN_E_ACUTE,
+            )),
+            _ => None,
+        });
+    assert!(
+        rewritten_count >= 2,
+        "the module carries an OpSource naming its file and that file's OpString"
+    );
+    rewritten
+}
+
+/// Split one multi-byte character between the module's `OpSource` source text
+/// and an `OpSourceContinued` after it, so neither literal is UTF-8 alone.
+pub(crate) fn split_a_multi_byte_character_across_op_source_and_op_source_continued(
+    spirv: &[u8],
+) -> Vec<u8> {
     let (rewritten, rewritten_count) = rewrite_spirv_instructions(spirv, |opcode, instruction| {
-        if opcode != OP_SOURCE || instruction.len() < 4 {
+        if opcode != OP_SOURCE || instruction.len() < OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT {
             return None;
         }
-        let source_text = spirv_module_words(&A_MULTI_BYTE_CHARACTER_CUT_AFTER_ITS_FIRST_BYTE);
-        let continued_text = spirv_module_words(&THE_REST_OF_THAT_CHARACTER);
-        let mut rewritten = instruction[..4].to_vec();
-        rewritten.extend(source_text);
-        rewritten[0] = ((rewritten.len() as u32) << 16) | u32::from(OP_SOURCE);
-        rewritten.push(((1 + continued_text.len() as u32) << 16) | u32::from(OP_SOURCE_CONTINUED));
-        rewritten.extend(continued_text);
+        let mut rewritten = with_literal_bytes(
+            &instruction[..OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT],
+            b"// \xe2",
+        );
+        rewritten.extend(with_literal_bytes(&[OP_SOURCE_CONTINUED], b"\x80\x94 the"));
         Some(rewritten)
     });
     assert!(
@@ -132,12 +157,26 @@ pub(crate) fn give_the_embedded_source_text_bytes_that_are_not_utf8(spirv: &[u8]
     rewritten
 }
 
+/// `leading_words` with its header's opcode kept, `literal` packed after it as
+/// a null-terminated, zero-padded string, and the word count set to fit.
+fn with_literal_bytes(leading_words: &[u32], literal: &[u8]) -> Vec<u32> {
+    let mut literal_bytes = literal.to_vec();
+    literal_bytes.push(0);
+    while literal_bytes.len() % 4 != 0 {
+        literal_bytes.push(0);
+    }
+    let mut instruction = leading_words.to_vec();
+    instruction.extend(spirv_module_words(&literal_bytes));
+    instruction[0] = ((instruction.len() as u32) << 16) | (leading_words[0] & 0xffff);
+    instruction
+}
+
 /// Walk a module instruction by instruction, replacing each one the rewriter
 /// returns words for and dropping each one it returns no words for; reports how
 /// many instructions it touched.
 fn rewrite_spirv_instructions(
     spirv: &[u8],
-    mut rewrite_instruction: impl FnMut(u16, &[u32]) -> Option<Vec<u32>>,
+    mut rewrite_instruction: impl FnMut(u32, &[u32]) -> Option<Vec<u32>>,
 ) -> (Vec<u8>, usize) {
     let words = spirv_module_words(spirv);
     let mut rewritten: Vec<u32> = words[..SPIRV_HEADER_WORD_COUNT].to_vec();
@@ -145,7 +184,7 @@ fn rewrite_spirv_instructions(
     let mut at = SPIRV_HEADER_WORD_COUNT;
     while at < words.len() {
         let word_count = (words[at] >> 16) as usize;
-        let opcode = (words[at] & 0xffff) as u16;
+        let opcode = words[at] & 0xffff;
         assert!(word_count > 0, "malformed SPIR-V instruction");
         let instruction = &words[at..at + word_count];
         match rewrite_instruction(opcode, instruction) {

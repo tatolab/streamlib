@@ -42,8 +42,6 @@ use vulkanalia::vk;
 
 use rspirv_reflect::DescriptorType as RDescriptorType;
 
-use crate::core::rhi::reflect_spirv_without_its_embedded_source_text;
-
 use std::ffi::c_void;
 
 use crate::core::rhi::{
@@ -52,8 +50,9 @@ use crate::core::rhi::{
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, IndexType, PolygonMode,
     PrimitiveTopology, ScissorRect, Texture, TextureFormat, VertexAttributeFormat, VertexInputRate,
-    VertexInputState, Viewport, refuse_a_binding_the_shader_left_unnamed,
-    refuse_a_descriptor_set_other_than_set_0, refuse_one_binding_name_that_identifies_two_slots,
+    VertexInputState, Viewport, reflect_spirv_without_its_debug_source_strings,
+    refuse_a_binding_the_shader_left_unnamed, refuse_a_descriptor_set_other_than_set_0,
+    refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently,
 };
 use crate::core::{Error, Result};
@@ -1498,7 +1497,7 @@ fn validate_against_spirv(
     for stage in descriptor.stages {
         let stage_flag = stage_to_flag(stage.stage);
         let reflection =
-            reflect_spirv_without_its_embedded_source_text(stage.spv).map_err(|e| {
+            reflect_spirv_without_its_debug_source_strings(stage.spv).map_err(|e| {
                 Error::GpuError(format!(
                     "Graphics kernel '{}': failed to reflect SPIR-V for {:?} stage: {e:?}",
                     descriptor.label, stage.stage

@@ -24,13 +24,11 @@ use vulkanalia::vk;
 
 use rspirv_reflect::DescriptorType as RDescriptorType;
 
-use crate::core::rhi::reflect_spirv_without_its_embedded_source_text;
-
 use std::ffi::{CStr, c_void};
 
 use crate::core::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture,
-    refuse_a_descriptor_set_other_than_set_0,
+    reflect_spirv_without_its_debug_source_strings, refuse_a_descriptor_set_other_than_set_0,
 };
 use crate::core::{Error, Result};
 
@@ -1273,7 +1271,7 @@ fn validate_against_spirv(
     subgroup_operation_support: &VulkanSubgroupOperationSupport,
 ) -> Result<Vec<ComputeBindingSpec>> {
     let reflection =
-        reflect_spirv_without_its_embedded_source_text(descriptor.spv).map_err(|e| {
+        reflect_spirv_without_its_debug_source_strings(descriptor.spv).map_err(|e| {
             Error::GpuError(format!(
                 "Compute kernel '{}': failed to reflect SPIR-V: {e:?}",
                 descriptor.label

@@ -21,7 +21,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::rhi::reflect_spirv_without_its_embedded_source_text;
 use parking_lot::Mutex;
 use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
@@ -34,8 +33,9 @@ use std::ffi::c_void;
 use crate::core::rhi::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingShaderGroup, RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
-    Texture, ray_tracing_spirv_type_to_kind, refuse_a_binding_the_shader_left_unnamed,
-    refuse_a_descriptor_set_other_than_set_0, refuse_one_binding_name_that_identifies_two_slots,
+    Texture, ray_tracing_spirv_type_to_kind, reflect_spirv_without_its_debug_source_strings,
+    refuse_a_binding_the_shader_left_unnamed, refuse_a_descriptor_set_other_than_set_0,
+    refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently, validate_shader_groups,
 };
 use crate::core::{Error, Result};
@@ -1096,7 +1096,7 @@ fn validate_bindings_against_spirv(
 
     for stage in descriptor.stages {
         let reflection =
-            reflect_spirv_without_its_embedded_source_text(stage.spv).map_err(|e| {
+            reflect_spirv_without_its_debug_source_strings(stage.spv).map_err(|e| {
                 Error::GpuError(format!(
                     "Ray-tracing kernel '{}': failed to reflect SPIR-V for stage {:?}: {e:?}",
                     descriptor.label, stage.stage
@@ -1220,7 +1220,7 @@ fn validate_push_constants_against_spirv(
 ) -> Result<()> {
     let mut max_size = 0u32;
     for stage in descriptor.stages {
-        let reflection = reflect_spirv_without_its_embedded_source_text(stage.spv).map_err(|e| {
+        let reflection = reflect_spirv_without_its_debug_source_strings(stage.spv).map_err(|e| {
             Error::GpuError(format!(
                 "Ray-tracing kernel '{}': failed to reflect SPIR-V (push) for stage {:?}: {e:?}",
                 descriptor.label, stage.stage
