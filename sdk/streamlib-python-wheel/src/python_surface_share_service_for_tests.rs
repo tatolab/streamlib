@@ -453,10 +453,30 @@ impl SurfaceShareUnderTest {
         use pyo3::prelude::*;
 
         Python::initialize();
+        let no_parent = Python::attach(|python| python.None());
+        self.exchange_client_labelled_importing_on_answered_by(
+            label,
+            vulkan_device_uuid_the_runtime_named,
+            no_parent,
+        )
+    }
+
+    /// As [`Self::exchange_client_labelled_importing_on`], with
+    /// `escalate_request_to_parent` standing in for the parent's escalate
+    /// channel — for a path that asks the parent before it checks out.
+    pub(crate) fn exchange_client_labelled_importing_on_answered_by(
+        &self,
+        label: &str,
+        vulkan_device_uuid_the_runtime_named: streamlib_consumer_rhi::Result<[u8; 16]>,
+        escalate_request_to_parent: pyo3::Py<pyo3::PyAny>,
+    ) -> Arc<crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient> {
+        use pyo3::prelude::*;
+
+        Python::initialize();
         Python::attach(|python| {
             Arc::new(
                 crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient::new(
-                    python.None(),
+                    escalate_request_to_parent,
                     python.None(),
                     self.channel_name_for_the_helper(),
                     vulkan_device_uuid_the_runtime_named,

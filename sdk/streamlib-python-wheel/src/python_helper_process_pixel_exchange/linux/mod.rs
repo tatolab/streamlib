@@ -33,8 +33,28 @@ pub(crate) use texture::{
 /// A u64 the wire carries as a decimal string, because JSON has no 64-bit
 /// integer. Host-side counterpart: `EscalateResponseOk::staging_byte_size`.
 fn decimal_string_field(response: &Bound<'_, PyAny>, field: &str) -> PyResult<u64> {
-    let as_written: String = response_field(response, field)?.extract()?;
-    as_written.parse().map_err(|_| {
+    optional_decimal_string_field(response, field)?.ok_or_else(|| {
+        crate::python_processor_context::gpu_operation_error(format!(
+            "the parent's response carried no {field}"
+        ))
+    })
+}
+
+/// A decimal-string u64 the parent may leave out of its response; `None`
+/// when it did.
+fn optional_decimal_string_field(
+    response: &Bound<'_, PyAny>,
+    field: &str,
+) -> PyResult<Option<u64>> {
+    let Some(as_written) = response
+        .get_item(field)
+        .ok()
+        .filter(|value| !value.is_none())
+    else {
+        return Ok(None);
+    };
+    let as_written: String = as_written.extract()?;
+    as_written.parse().map(Some).map_err(|_| {
         crate::python_processor_context::gpu_operation_error(format!(
             "the parent's {field} was {as_written:?}, which is not a decimal u64"
         ))
