@@ -3952,10 +3952,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: grep -n "runs-on: macos-15" .github/workflows/reusable-macos-runtime-unit.yml -->
   <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
-  it. `Test (macOS)` compiles the whole workspace with the wheel in it (clippy on
-  default targets, `check --all-targets`) and runs the wheel crate's unit tests; it then
-  `maturin develop`s the wheel, gates `_engine.pyi` with `stubtest` against the macOS
-  binary — one stub for both floors — and runs the Python suite's GPU-free half. The test
+  it. On every PR `Build (macOS)` compiles the whole workspace with the wheel in it
+  (clippy on default targets, `check --all-targets`); on `main` it also runs the Rust
+  suites and the wheel crate's unit tests, and `Integration test (macOS)` gates
+  `_engine.pyi` with `stubtest` against the macOS binary — one stub for both floors — and
+  runs the Python suite's GPU-free half. The test
   target's pipe is `std::io::pipe()`, and `check-no-inheritable-descriptor` accepts that
   portable spelling for its two pipe entries, with every Linux flag it accepts or refuses
   unchanged; on Darwin that pipe is `pipe` then `fcntl`, not atomic, and the spawn-side

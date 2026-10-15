@@ -14,7 +14,8 @@ name: CI
 #                              runtime binaries those tests drive (a test fixture,
 #                              never shipped), then the stream package, wheel,
 #                              extension and end-to-end stream tests
-#   Test (macOS)               the Apple path: clippy and the Rust test suites
+#   Build (macOS)              the Apple path compiles and is lint-clean; its test
+#                              suites run on `main`
 #   Integration test (macOS)   the same end-to-end tests on macOS; `main` only
 #
 # A change that touches only prose or code CI never builds runs nothing. Caches
@@ -208,6 +209,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Restore the compile-fail tests' build
+        if: github.event_name != 'pull_request'
         id: restore-trybuild
         uses: actions/cache/restore@v5
         with:
@@ -251,9 +253,13 @@ jobs:
           echo "VK_ADD_DRIVER_FILES=$bundled_vulkan_driver_directory/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$bundled_vulkan_driver_directory" >> "$GITHUB_ENV"
 
+      # The compile-fail test builds the engine a second time, in trybuild's
+      # own target directory; it runs on `main` and in the merge queue.
       - name: Unit, integration and hardware tests
+        env:
+          TEST_FILTER: ${{ github.event_name == 'pull_request' && 'not binary_id(streamlib-engine::compile_fail_config_without_json_schema)' || 'all()' }}
         run: >-
-          cargo nextest run --locked --profile ci
+          cargo nextest run --locked --profile ci -E "$TEST_FILTER"
           -p streamlib -p streamlib-macros -p streamlib-processor-schema
           -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-error
           -p streamlib-runtime-client-contract -p streamlib-engine
@@ -544,8 +550,8 @@ jobs:
   # `macos-15`, not `macos-latest`: the image decides the SDK the Apple
   # frameworks link against. GPU work runs last and narrow, on the runner's
   # paravirtual Metal device through MoltenVK.
-  test-macos:
-    name: Test (macOS)
+  build-macos:
+    name: Build (macOS)
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -580,6 +586,7 @@ jobs:
         run: cargo check --locked --workspace --all-targets
 
       - name: Run unit tests
+        if: github.event_name != 'pull_request'
         run: |
           cargo test --locked -p streamlib -p streamlib-macros \
             -p streamlib-processor-schema -p streamlib-ipc-types \
@@ -634,15 +641,18 @@ jobs:
           cargo run --locked -q -p xtask -- check-no-inheritable-descriptor
 
       - name: Wheel crate unit tests
+        if: github.event_name != 'pull_request'
         run: cargo test --locked -p streamlib-python-wheel --lib -- --test-threads=1
 
       - name: Install MoltenVK and find the Metal device under it
+        if: github.event_name != 'pull_request'
         run: |
           system_profiler SPDisplaysDataType
           brew install molten-vk vulkan-loader vulkan-tools
           vulkaninfo --summary
 
       - name: In-process adapter tests
+        if: github.event_name != 'pull_request'
         run: |
           set -o pipefail
           cargo test --locked -p streamlib-adapter-vulkan \
@@ -655,6 +665,7 @@ jobs:
           fi
 
       - name: Frame-allocation budget on the Metal device
+        if: github.event_name != 'pull_request'
         run: |
           set -o pipefail
           CARGO_TERM_COLOR=never cargo test --locked -p streamlib-engine -p streamlib-media-builtins \

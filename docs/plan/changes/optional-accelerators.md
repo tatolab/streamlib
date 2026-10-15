@@ -247,7 +247,7 @@ a tarball without the driver's manifest"; both pointers fold.
   real camera, display, audio device, Vulkan Video, modifiers or CUDA gaining the marker; the
   `requires_gpu` definitions stop naming DMA-BUF. Rust: one helper,
   `skip_unless_the_device_has(…)` over the snapshot, whose reason is the same closed list, and
-  the lane fails on a skip line it cannot name — the shape `ci.yml`'s `test-macos` job already uses
+  the lane fails on a skip line it cannot name — the shape `ci.yml`'s `build-macos` job already uses
   for the macOS adapter tests. The 204 boilerplate `ignore` reasons are left as they are; a
   test that needs a tier says so through the helper, the rest simply run.
 - The no-driver fixture keeps working (its variables replace the bundle by the existing rule);

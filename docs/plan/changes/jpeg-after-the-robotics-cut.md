@@ -79,7 +79,7 @@ three keys and only the stub's transport sentence changes.
   - The shader evaluates a full 64-term IDCT with two `cos()` per term
     (`jpeg_decode.comp:94-165`). Its own comment targets 640×360 at 30 Hz.
 - **No CI step runs its tests.** Linux clippy builds the lib only (`ci.yml`'s `lint` job), and
-  macOS checks `--all-targets` without running them (`ci.yml`'s `test-macos` job). The ADR's line saying they run
+  macOS checks `--all-targets` without running them (`ci.yml`'s `build-macos` job). The ADR's line saying they run
   is corrected in this PR.
 
 **The V4L2 arm, today**
