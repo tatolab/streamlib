@@ -2995,6 +2995,9 @@ mod plane_fd_ownership_tests {
 mod dma_buf_registration_payload_tests {
     use super::*;
     use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+    use crate::core::test_support::rig_only_capability_skip::{
+        RigOnlyCapability, skip_because_this_machine_lacks, skip_unless_this_machine_has,
+    };
     use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTexture};
 
     /// The wire half of #1915: a surface whose driver-chosen modifier is
@@ -3019,8 +3022,10 @@ mod dma_buf_registration_payload_tests {
                 return;
             }
         };
-        if device.dma_buf_image_pool_tiled().is_none() {
-            println!("Skipping — tiled DMA-BUF pool not created");
+        if skip_unless_this_machine_has(
+            RigOnlyCapability::DmaBufModifiers,
+            device.dma_buf_image_pool_tiled().is_some(),
+        ) {
             return;
         }
         let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm).with_usage(
@@ -3033,7 +3038,8 @@ mod dma_buf_registration_payload_tests {
         ) {
             Ok(t) => t,
             Err(e) => {
-                println!("Skipping — allocation against DRM_FORMAT_MOD_LINEAR refused: {e}");
+                println!("the driver refused DRM_FORMAT_MOD_LINEAR: {e}");
+                skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
                 return;
             }
         };

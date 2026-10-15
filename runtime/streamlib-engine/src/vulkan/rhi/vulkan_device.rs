@@ -4885,6 +4885,10 @@ unsafe impl Sync for HostVulkanDevice {}
 mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
+    use crate::core::test_support::rig_only_capability_skip::{
+        RigOnlyCapability, skip_because_this_machine_lacks,
+    };
+    #[cfg(target_os = "linux")]
     use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
 
     #[cfg(target_os = "linux")]
@@ -5507,7 +5511,7 @@ mod tests {
         // straight from `allocator()` — the default pool — yields memory that
         // cannot legally be exported.
         let Some(export_pool) = device.dma_buf_buffer_pool() else {
-            println!("Skipping test — DMA-BUF buffer export pool unavailable on this driver");
+            skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
             return;
         };
 
@@ -5591,7 +5595,7 @@ mod tests {
 
     /// Ray tracing is an absent tier on MoltenVK, not a failure: construction
     /// refuses by name rather than reaching an entry point that never loaded.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -5849,6 +5853,14 @@ mod tests {
                             .device_memory_heap_of_memory_type(memory_type_index)
                             .expect("the allocation's memory type is one of the device's"),
                     )),
+                    Err(e)
+                        if frame_allocation_site.contains("dma_buf")
+                            && !device.supports_dma_buf_export() =>
+                    {
+                        println!("{frame_allocation_site} does not allocate here: {e}");
+                        skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
+                        None
+                    }
                     Err(e) => {
                         println!(
                             "skipping {frame_allocation_site}: it does not allocate here: {e}"
@@ -5920,9 +5932,7 @@ mod tests {
         const CHILD_HOLDS_ITS_ALLOCATION_WITHIN: Duration = Duration::from_secs(120);
 
         let Ok(python_with_cuda_torch) = std::env::var(PYTHON_WITH_CUDA_TORCH_VARIABLE) else {
-            println!(
-                "Skipping - {PYTHON_WITH_CUDA_TORCH_VARIABLE} names no python whose torch has CUDA"
-            );
+            skip_because_this_machine_lacks(RigOnlyCapability::Cuda);
             return;
         };
         let Some(device) = try_create_device() else {
@@ -6224,8 +6234,12 @@ mod tests {
         }
         let lavapipe_manifest =
             an_icd_manifest_named("lvp_icd").expect("the rig carries Mesa's lavapipe");
-        let nvidia_manifest =
-            an_icd_manifest_named("nvidia_icd").expect("the rig carries the NVIDIA driver");
+        // The hardware device this asserts on is the one that exports DMA-BUF
+        // with modifiers; a machine with no hardware driver has none to list.
+        let Some(nvidia_manifest) = an_icd_manifest_named("nvidia_icd") else {
+            skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
+            return;
+        };
 
         rerun_expecting_the_selected_device(
             "vulkan::rhi::vulkan_device::tests::with_lavapipe_listed_before_the_nvidia_driver_the_engine_builds_on_the_nvidia_device",

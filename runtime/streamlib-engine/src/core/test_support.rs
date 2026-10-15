@@ -23,6 +23,9 @@ use crate::core::processors::PROCESSOR_REGISTRY;
 #[path = "../../tests/support/links_between_streams_harness.rs"]
 pub(crate) mod links_between_streams_harness;
 
+#[path = "../../tests/support/rig_only_capability_skip.rs"]
+pub(crate) mod rig_only_capability_skip;
+
 /// Mock processor with two input ports + two output ports.
 #[crate::processor(
     execution = manual,
@@ -684,4 +687,98 @@ pub(crate) fn wait_for_every_gpu_submission_made_so_far(gpu: &crate::core::conte
             .expect("the GPU's queue completion reads"),
         "the GPU work made before the test did not complete"
     );
+}
+
+#[cfg(test)]
+mod rig_only_capability_skip_closed_list_tests {
+    use super::rig_only_capability_skip::{
+        HARDWARE_TEST_SKIP_LINE_PREFIX, RigOnlyCapability, skip_unless_this_machine_has,
+    };
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    fn repository_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn every_closed_list_reason_the_helper_names() -> BTreeSet<String> {
+        RigOnlyCapability::EVERY_RIG_ONLY_CAPABILITY
+            .iter()
+            .map(|capability| capability.closed_list_reason().to_owned())
+            .collect()
+    }
+
+    /// The quoted strings of the Python set literal assigned to `set_name`.
+    fn python_set_literal_strings(python_source: &str, set_name: &str) -> BTreeSet<String> {
+        let after_name = python_source
+            .split_once(&format!("{set_name} = {{"))
+            .unwrap_or_else(|| panic!("{set_name} is assigned a set literal"))
+            .1;
+        let set_body = after_name
+            .split_once('}')
+            .expect("the set literal closes")
+            .0;
+        set_body
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix('"'))
+            .filter_map(|line| line.split_once('"').map(|(reason, _)| reason.to_owned()))
+            .collect()
+    }
+
+    /// The value the workflow gives `variable_name`, from its `name: "value"` line.
+    fn workflow_environment_value(workflow_source: &str, variable_name: &str) -> String {
+        workflow_source
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(&format!("{variable_name}: ")))
+            .unwrap_or_else(|| panic!("the workflow sets {variable_name}"))
+            .trim_matches('"')
+            .to_owned()
+    }
+
+    #[test]
+    fn the_helpers_reasons_are_the_python_rig_only_closed_list() {
+        let platform_markers_test = std::fs::read_to_string(
+            repository_root().join("sdk/tatolab-stream/tests/test_platform_markers.py"),
+        )
+        .expect("the stream suite's platform-marker test reads");
+        assert_eq!(
+            every_closed_list_reason_the_helper_names(),
+            python_set_literal_strings(
+                &platform_markers_test,
+                "RIG_ONLY_CAPABILITY_CLOSED_LIST_REASONS"
+            ),
+        );
+    }
+
+    #[test]
+    fn the_lanes_skip_line_check_accepts_exactly_the_helpers_line_and_reasons() {
+        let workflow =
+            std::fs::read_to_string(repository_root().join(".github/workflows/python-wheel.yml"))
+                .expect("the wheel workflow reads");
+        assert_eq!(
+            workflow_environment_value(&workflow, "HARDWARE_TEST_SKIP_LINE_PREFIX"),
+            HARDWARE_TEST_SKIP_LINE_PREFIX,
+        );
+        let reasons_the_lane_accepts: BTreeSet<String> =
+            workflow_environment_value(&workflow, "HARDWARE_TEST_SKIP_LINE_REASONS")
+                .split('|')
+                .map(str::to_owned)
+                .collect();
+        assert_eq!(
+            reasons_the_lane_accepts,
+            every_closed_list_reason_the_helper_names()
+        );
+    }
+
+    #[test]
+    fn a_capability_this_machine_has_is_not_skipped_and_one_it_lacks_is() {
+        assert!(!skip_unless_this_machine_has(
+            RigOnlyCapability::Camera,
+            true
+        ));
+        assert!(skip_unless_this_machine_has(
+            RigOnlyCapability::Camera,
+            false
+        ));
+    }
 }

@@ -1813,6 +1813,10 @@ impl super::VulkanTextureLike for HostVulkanTexture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::core::test_support::rig_only_capability_skip::{
+        RigOnlyCapability, skip_because_this_machine_lacks, skip_unless_this_machine_has,
+    };
     use crate::vulkan::rhi::HostVulkanDevice;
     #[cfg(target_os = "linux")]
     use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
@@ -2627,12 +2631,12 @@ mod tests {
         };
         let table = device.drm_modifier_table();
         let modifiers = table.rt_modifiers(fourcc::DRM_FORMAT_ARGB8888);
-        if modifiers.is_empty() {
-            println!("Skipping — EGL probe returned no RT-capable modifiers for ARGB8888");
-            return;
-        }
-        if device.dma_buf_image_pool_tiled().is_none() {
-            println!("Skipping — tiled DMA-BUF pool not created");
+        if skip_unless_this_machine_has(RigOnlyCapability::DmaBufModifiers, !modifiers.is_empty())
+            || skip_unless_this_machine_has(
+                RigOnlyCapability::DmaBufModifiers,
+                device.dma_buf_image_pool_tiled().is_some(),
+            )
+        {
             return;
         }
 
@@ -2711,8 +2715,10 @@ mod tests {
             );
             return;
         }
-        if device.dma_buf_image_pool_tiled().is_none() {
-            println!("Skipping — tiled DMA-BUF pool not created");
+        if skip_unless_this_machine_has(
+            RigOnlyCapability::DmaBufModifiers,
+            device.dma_buf_image_pool_tiled().is_some(),
+        ) {
             return;
         }
 
@@ -2730,7 +2736,8 @@ mod tests {
                 // under `VkImageDrmFormatModifierListCreateInfoEXT` for this
                 // usage set. The aspect-mask contract is what is under test,
                 // not the allocator's modifier acceptance.
-                println!("Skipping — allocation against DRM_FORMAT_MOD_LINEAR refused: {e}");
+                println!("the driver refused DRM_FORMAT_MOD_LINEAR: {e}");
+                skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
                 return;
             }
         };
@@ -3116,8 +3123,10 @@ mod tests {
             }
         };
         for direction in [VideoDpbDirection::Decode, VideoDpbDirection::Encode] {
-            if !device_supports_h264_for_dpb_direction(&device, direction) {
-                println!("Skipping {direction:?} - device has no H.264 support in that direction");
+            if skip_unless_this_machine_has(
+                RigOnlyCapability::VulkanVideo,
+                device_supports_h264_for_dpb_direction(&device, direction),
+            ) {
                 continue;
             }
             let additional_usage = match direction {

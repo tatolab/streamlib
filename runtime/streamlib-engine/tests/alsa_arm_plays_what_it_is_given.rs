@@ -22,6 +22,8 @@ use streamlib_engine::core::context::{
 use streamlib_engine::linux_alsa_audio_device_backend::AlsaAudioDeviceBackend;
 
 mod audio_arm_playback_contract;
+#[path = "support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
 use audio_arm_playback_contract::{
     assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one,
     assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off,
@@ -59,6 +61,9 @@ fn alsa_arm() -> Option<AlsaAudioDeviceBackend> {
 )]
 fn the_default_device_asks_for_whole_periods_of_the_format_it_negotiated() {
     let Some(backend) = alsa_arm() else {
+        rig_only_capability_skip::skip_because_this_machine_lacks(
+            rig_only_capability_skip::RigOnlyCapability::AudioDevice,
+        );
         return;
     };
     assert_the_device_asks_for_whole_periods_of_its_own_format(&backend, None);
@@ -74,6 +79,9 @@ fn the_default_device_asks_for_whole_periods_of_the_format_it_negotiated() {
 )]
 fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
     let Some(backend) = alsa_arm() else {
+        rig_only_capability_skip::skip_because_this_machine_lacks(
+            rig_only_capability_skip::RigOnlyCapability::AudioDevice,
+        );
         return;
     };
     assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(&backend, None);
@@ -88,6 +96,9 @@ fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
 )]
 fn a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one() {
     let Some(backend) = alsa_arm() else {
+        rig_only_capability_skip::skip_because_this_machine_lacks(
+            rig_only_capability_skip::RigOnlyCapability::AudioDevice,
+        );
         return;
     };
     assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one(&backend, None);

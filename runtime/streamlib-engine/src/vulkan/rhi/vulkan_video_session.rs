@@ -1149,13 +1149,10 @@ mod tests {
     }
 
     // ----- Hardware-gated --------------------------------------------------
-    //
-    // Construct a real `HostVulkanVideoSession` against the host's
-    // Vulkan device when the device exposes an H.264 decode queue
-    // family. Gated by `--features streamlib/hardware-tests` so CI
-    // (which has no GPU per `project_ci_strategy_no_gpu` memory)
-    // doesn't try to run it.
 
+    use crate::core::test_support::rig_only_capability_skip::{
+        RigOnlyCapability, skip_because_this_machine_lacks,
+    };
     use crate::vulkan::rhi::HostVulkanDevice;
 
     #[cfg_attr(
@@ -1171,12 +1168,9 @@ mod tests {
                 return;
             }
         };
-        let queue_family = match device.video_decode_queue_family_index() {
-            Some(idx) => idx,
-            None => {
-                eprintln!("Skipping — device exposes no video decode queue family");
-                return;
-            }
+        let Some(queue_family) = device.video_decode_queue_family_index() else {
+            skip_because_this_machine_lacks(RigOnlyCapability::VulkanVideo);
+            return;
         };
         let mut h264_profile = vk::VideoDecodeH264ProfileInfoKHR::builder()
             .std_profile_idc(vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH)

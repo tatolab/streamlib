@@ -18,6 +18,8 @@
 //! and the source needs a `/dev/video*` capture device (vivid acceptable) —
 //! so CI compiles this binary and the rig runs it.
 
+#[path = "../../streamlib-engine/tests/support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
 use std::sync::{Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -145,6 +147,23 @@ fn h264_nal_unit_types(access_unit: &[u8]) -> Vec<u8> {
 /// notices.
 #[test]
 fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
+    use streamlib::sdk::context::probe_video_device_backend;
+    let this_machine_has_a_camera = probe_video_device_backend()
+        .list_capture_devices()
+        .is_ok_and(|cameras| !cameras.is_empty());
+    let this_device_encodes_vulkan_video =
+        streamlib::sdk::engine::host_rhi::HostVulkanDevice::new()
+            .expect("a Vulkan device comes up on this machine")
+            .supports_video_encode();
+    if rig_only_capability_skip::skip_unless_this_machine_has(
+        rig_only_capability_skip::RigOnlyCapability::Camera,
+        this_machine_has_a_camera,
+    ) || rig_only_capability_skip::skip_unless_this_machine_has(
+        rig_only_capability_skip::RigOnlyCapability::VulkanVideo,
+        this_device_encodes_vulkan_video,
+    ) {
+        return;
+    }
     ensure_every_processor_type_is_registered();
 
     let project_directory = tempfile::tempdir().expect("a project directory");

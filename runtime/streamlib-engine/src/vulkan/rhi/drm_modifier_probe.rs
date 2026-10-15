@@ -429,6 +429,9 @@ fn probe_with_formats(formats: &[u32]) -> Result<DrmModifierTable, ProbeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::test_support::rig_only_capability_skip::{
+        RigOnlyCapability, skip_because_this_machine_lacks,
+    };
 
     /// Empty table reports zero RT modifiers for any format and an empty
     /// slice on lookup — the no-EGL fallback shape.
@@ -513,7 +516,8 @@ mod tests {
         let table = match default_display_drm_modifier_table_probed_once_per_process() {
             Ok(t) => t,
             Err(e) => {
-                println!("EGL probe skipped: {e}");
+                println!("the EGL probe refused: {e}");
+                skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
                 return;
             }
         };
@@ -546,7 +550,7 @@ mod tests {
                 // the assertion.
             }
             Err(e) => {
-                println!("EGL probe skipped: {e}");
+                println!("the EGL probe refused cleanly: {e}");
             }
         }
     }

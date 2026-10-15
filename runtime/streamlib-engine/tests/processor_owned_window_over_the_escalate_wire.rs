@@ -18,6 +18,9 @@
 
 #![cfg(target_os = "linux")]
 
+#[path = "support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
+
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
@@ -153,6 +156,12 @@ fn wait_until_the_pump_routes_to_exactly(expected_window_count: usize) {
 )]
 #[test]
 fn a_helper_process_mints_names_polls_and_closes_a_window_entirely_over_the_wire() {
+    if rig_only_capability_skip::skip_unless_this_machine_has(
+        rig_only_capability_skip::RigOnlyCapability::Display,
+        rig_only_capability_skip::this_process_can_reach_a_display_server(),
+    ) {
+        return;
+    }
     let gpu_context = GpuContext::init_for_platform().expect("a GPU is required for this tier");
     let gpu_context_limited_access = gpu_context.limited_access();
 
