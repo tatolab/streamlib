@@ -67,12 +67,12 @@ WHAT_AN_UNLISTED_REASON_HIDES_BY_REASONED_MARKER_NAME = {
 REASONED_MARKER_NAME_ALTERNATION = "|".join(
     map(re.escape, CLOSED_LIST_REASONS_BY_REASONED_MARKER_NAME)
 )
-# `\bmark\.` rather than `pytest\.mark\.`, so `from pytest import mark` is held too.
+# Any `.<marker>` attribute, so `from pytest import mark` and any alias of it are held too.
 MARKER_USE = re.compile(
-    rf"\bmark\.({REASONED_MARKER_NAME_ALTERNATION}|awaiting_macos_parity)\s*\(([^)]*)\)"
+    rf"\.({REASONED_MARKER_NAME_ALTERNATION}|awaiting_macos_parity)\s*\(([^)]*)\)"
 )
 BARE_REASONED_MARKER_USE = re.compile(
-    rf"\bmark\.({REASONED_MARKER_NAME_ALTERNATION})\b(?!\s*\()"
+    rf"\.({REASONED_MARKER_NAME_ALTERNATION})\b(?!\s*\()"
 )
 REASONED_MARKER_ARGUMENTS = re.compile(r'^reason="([^"]+)"$')
 AWAITING_MACOS_PARITY_ARGUMENTS = re.compile(r"^issue=(\d+)$")
