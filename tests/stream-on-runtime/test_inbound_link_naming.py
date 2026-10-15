@@ -8,11 +8,9 @@ that names the link a bag arrived on is how a processor tells which producer
 sent what. This drives that read over real links, from a real child
 interpreter: two Python feeders into the one port, and a reporter on its output.
 
-Rig-only, and run nowhere in CI: running a stream brings up a GPU context whose
-DMA-BUF pool pre-warm needs a driver that can allocate exportable device
-memory. The same contract is gated GPU-free at the engine seam by
+The same contract is gated at the engine seam by
 `iceoryx2::input::tests::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on`
-and its four neighbours, which CI does run.
+and its four neighbours.
 """
 
 from __future__ import annotations

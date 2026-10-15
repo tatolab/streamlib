@@ -1033,7 +1033,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   processor author ever names. The engine half of the
   proof is CI-run; the end-to-end wheel arm — an overrun helper, a ceiling refusal and a
   SIGKILL'd helper's last counts, all read off a running node's `graph` — is
-  `requires_gpu` and therefore rig-only.
+  `requires_gpu`, run on the Linux CI lane on the bundled software device.
   [loss-visibility — SHIPPED #2270]
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_renders_the_counts_its_helper_wrote_on_its_slot -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::helper_process_loss_count_board::tests::the_parent_reads_each_entry_only_for_the_wiring_it_assigned -->
@@ -3385,7 +3385,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib core::annex_b_access_unit -->
   <!-- verify: cargo test -p xtask mp4_inspect -->
   <!-- verify: cargo test -p xtask mp4_inspect::tests::a_real_sink_recording_reports_both_tracks_under_their_link_names -->
-- **DECIDED** — Rig-only, `requires_gpu` and said in the module docstring:
+- **DECIDED** — `requires_gpu` and said in the module docstring:
   `test_opus_blocks.py` — a Python known-signal source → `OpusEncoder` → probes →
   `OpusDecoder` → probes: every bag casts, `sequence_index` advances by one,
   `sample_count` is 960, decoded blocks are 48 kHz `f32` in the source's channels;

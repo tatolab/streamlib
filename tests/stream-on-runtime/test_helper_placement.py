@@ -11,10 +11,6 @@ module, and the pid a bag was produced in is not `tatolabd`'s.
 `cargo xtask check-no-in-process-placement` gates the vocabulary; this gates
 the behaviour. A change that reintroduces the banned model without using any
 of the banned words still turns these red.
-
-Rig-only: every scenario here runs a stream, which initialises a GPU context
-whose DMA-BUF pool pre-warm needs a driver that can allocate exportable device
-memory.
 """
 
 from __future__ import annotations

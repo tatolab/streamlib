@@ -4,9 +4,9 @@
 """The Opus codec pair, built-in class to decoded audio block.
 
 The load tests need no device: `tatolabd` loads the graph and its start is
-then refused at the GPU, which is why they run in CI. The graph tests start the engine, so
-they carry `requires_gpu` like every other graph test here and run nowhere in
-CI: libopus needs no device, but a running processor does.
+then refused at the GPU. The graph tests start the engine, so they carry
+`requires_gpu` like every other graph test here: libopus needs no device, but a
+running processor does.
 
 No microphone: a Python source publishes a stereo tone at a stated rate, so
 the channel count the encoder follows and the rate the decoder reconstructs at

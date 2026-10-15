@@ -320,6 +320,6 @@ also #2754) start in parallel; the blocked-by edges are on the issues.
 - REMOVED: test_the_lend_carries_the_driver_beside_the_engine_on_macos_and_none_elsewhere
 - REMOVED: CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
 - REMOVED: needs a Vulkan device that can allocate exportable DMA-BUF memory
-- REMOVED: a software rasterizer (lavapipe) cannot
+- REMOVED: lavapipe) cannot
 - REMOVED: path and imports through CUDA, not a CPU mapping
 - REMOVED: it carries exactly the staging's memory and its copy timeline

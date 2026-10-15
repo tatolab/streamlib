@@ -305,7 +305,9 @@ class ReportingInvertingEffect:
     """The scaffold's edit, reporting what the frame must read afterwards.
 
     It claims its first frame for the rest of its life, so the verifier
-    downstream resolves the same pixels whatever the producer does next.
+    downstream resolves the same pixels whatever the producer does next, and
+    sends that frame's bag on every call: no link promises delivery, and a bag
+    written before the verifier's interpreter subscribed is lost.
     `skip_edit` makes it the negative control: it reports the inverted digest
     and leaves the pixels alone.
     """
@@ -319,10 +321,14 @@ class ReportingInvertingEffect:
     def __init__(self, config: ReportingInvertingEffectConfig) -> None:
         self.skip_edit = config.get("skip_edit", False)
         self.claim_on_the_edited_frame = None
+        self.edited_frame_bag = None
 
     def process(self, ctx) -> None:
         bag = ctx.inputs.read("video_from_upstream")
-        if bag is None or self.claim_on_the_edited_frame is not None:
+        if self.edited_frame_bag is not None:
+            ctx.outputs.write("video_to_downstream", self.edited_frame_bag)
+            return
+        if bag is None:
             return
         frame = VideoFrame.from_bag(bag)
         self.claim_on_the_edited_frame = (
@@ -345,6 +351,7 @@ class ReportingInvertingEffect:
             }
 
         _report(edit)
+        self.edited_frame_bag = bag
         ctx.outputs.write("video_to_downstream", bag)
 
 

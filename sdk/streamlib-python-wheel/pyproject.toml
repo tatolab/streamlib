@@ -59,11 +59,8 @@ dev = [
 # own tests run only where a lend is named on `PYTHONPATH`.
 testpaths = ["tests"]
 markers = [
-    # A runtime's first stream start initializes a GPU context, and the engine's DMA-BUF
-    # pool pre-warm needs a driver that can actually allocate exportable
-    # device memory. A software rasterizer (lavapipe) cannot, so a GPU-less
-    # runner deselects these with `-m "not requires_gpu"`.
-    "requires_gpu: needs a Vulkan device that can allocate exportable DMA-BUF memory",
+    # A runtime's first stream start builds its GPU context on a Vulkan device.
+    "requires_gpu: needs a Vulkan device",
     # The closed list of what macOS does not have, each with its reason:
     # ray-tracing kernels, VirtualCameraSink, the CUDA Array Interface, the
     # fd-shaped raw handles, and a test whose body is a Linux mechanism.
