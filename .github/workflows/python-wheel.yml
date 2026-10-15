@@ -388,6 +388,7 @@ jobs:
       # engine's lib tests too, which resolve the runtime directory from
       # XDG_RUNTIME_DIR.
       - name: tatolabd hardware tests
+        if: ${{ !cancelled() }}
         run: |
           set -o pipefail
           TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)" \
@@ -414,6 +415,19 @@ jobs:
           if [ -s "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt" ]; then
             echo "::error::a hardware test skipped without naming a closed-list reason"
             cat "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt"
+            exit 1
+          fi
+          # A lane whose device never came up would pass as a lane of skips.
+          if ! grep -q "Selected Vulkan device: llvmpipe" \
+              "$RUNNER_TEMP/engine-and-media-builtins-hardware-tests-output.txt"; then
+            echo "::error::the engine never selected the bundled lavapipe"
+            exit 1
+          fi
+          if grep -h "Selected Vulkan device: " \
+              "$RUNNER_TEMP/engine-and-media-builtins-hardware-tests-output.txt" \
+              "$RUNNER_TEMP/tatolabd-hardware-tests-output.txt" \
+            | grep -v "Selected Vulkan device: llvmpipe"; then
+            echo "::error::the engine selected a device other than the bundled lavapipe"
             exit 1
           fi
           grep -hoE "${HARDWARE_TEST_SKIP_LINE_PREFIX}(${HARDWARE_TEST_SKIP_LINE_REASONS}): .*" \

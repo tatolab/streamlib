@@ -10,7 +10,9 @@
 
 use std::borrow::Cow;
 
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use rspirv_reflect::DescriptorType as RDescriptorType;
+
+use crate::core::rhi::reflect_spirv_without_its_embedded_source_text;
 
 use crate::core::{Error, Result};
 
@@ -219,7 +221,7 @@ pub struct ComputeKernelDescriptor<'a> {
 /// dispatch: bindings are resolved by name in one spelling for both
 /// languages, so an unnamed binding cannot be bound at all.
 pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>, u32)> {
-    let reflection = Reflection::new_from_spirv(spv)
+    let reflection = reflect_spirv_without_its_embedded_source_text(spv)
         .map_err(|e| Error::GpuError(format!("Failed to reflect SPIR-V: {e:?}")))?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {
@@ -288,6 +290,7 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<ComputeBindingKind> {
 mod tests {
     use super::*;
     use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        give_the_embedded_source_text_bytes_that_are_not_utf8,
         move_binding_to_another_descriptor_set_in_spirv_module,
         strip_every_debug_name_from_spirv_module,
     };
@@ -493,6 +496,24 @@ mod tests {
         assert!(
             message.contains("only descriptor set 0 is supported") && message.contains('1'),
             "the refusal must name the unsupported set: {message}"
+        );
+    }
+
+    /// Mental revert: reflect with `Reflection::new_from_spirv` directly and
+    /// the module is refused with `DecodeStringFailed`.
+    #[test]
+    fn a_module_whose_embedded_source_text_is_not_utf8_reflects_the_same_bindings() {
+        let module_as_ubuntu_24_04_glslc_emits_it =
+            give_the_embedded_source_text_bytes_that_are_not_utf8(blend_spv(2));
+        assert!(
+            rspirv_reflect::Reflection::new_from_spirv(&module_as_ubuntu_24_04_glslc_emits_it)
+                .is_err(),
+            "the rewritten module reproduces what rspirv refuses"
+        );
+        assert_eq!(
+            derive_bindings_from_spirv(&module_as_ubuntu_24_04_glslc_emits_it)
+                .expect("the module reflects with its source text left out"),
+            derive_bindings_from_spirv(blend_spv(2)).expect("the built module reflects"),
         );
     }
 

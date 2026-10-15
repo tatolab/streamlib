@@ -14,9 +14,82 @@
 
 use std::collections::BTreeMap;
 
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use std::borrow::Cow;
+
+use rspirv_reflect::{DescriptorType as RDescriptorType, ReflectError, Reflection};
 
 use crate::core::{Error, Result};
+
+/// The SPIR-V magic number, read in the module's own byte order (SPIR-V 1.6 §2.3).
+const SPIRV_MAGIC_NUMBER: u32 = 0x0723_0203;
+/// A SPIR-V module opens with five header words, then a stream of
+/// instructions whose first word packs word count and opcode (SPIR-V 1.6 §2.3).
+const SPIRV_HEADER_WORD_COUNT: usize = 5;
+const OP_SOURCE_CONTINUED: u32 = 2;
+const OP_SOURCE: u32 = 3;
+/// `OpSource`'s opcode word, source language, version and file id; its
+/// optional source text follows them.
+const OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT: usize = 4;
+
+/// Reflect a SPIR-V module with its embedded shader source text left out.
+///
+/// `glslc -g` embeds the shader's source in `OpSource` and `OpSourceContinued`.
+/// Ubuntu 24.04's `glslc` (shaderc 2023.8, SPIRV-Tools 2023.6) emits that text
+/// as invalid UTF-8 where the source holds a multi-byte character, and `rspirv`
+/// then refuses the whole module. Reflection reads no source text.
+pub(crate) fn reflect_spirv_without_its_embedded_source_text(
+    spirv: &[u8],
+) -> std::result::Result<Reflection, ReflectError> {
+    Reflection::new_from_spirv(&spirv_without_its_embedded_source_text(spirv))
+}
+
+/// `spirv` with every `OpSourceContinued` dropped and every `OpSource` cut
+/// before its source text; a module that is not well-formed SPIR-V is handed
+/// back unchanged, for reflection to refuse.
+fn spirv_without_its_embedded_source_text(spirv: &[u8]) -> Cow<'_, [u8]> {
+    if spirv.len() % 4 != 0 || spirv.len() < SPIRV_HEADER_WORD_COUNT * 4 {
+        return Cow::Borrowed(spirv);
+    }
+    let magic_bytes = [spirv[0], spirv[1], spirv[2], spirv[3]];
+    let (read_word, write_word): (fn([u8; 4]) -> u32, fn(u32) -> [u8; 4]) =
+        if u32::from_le_bytes(magic_bytes) == SPIRV_MAGIC_NUMBER {
+            (u32::from_le_bytes, u32::to_le_bytes)
+        } else if u32::from_be_bytes(magic_bytes) == SPIRV_MAGIC_NUMBER {
+            (u32::from_be_bytes, u32::to_be_bytes)
+        } else {
+            return Cow::Borrowed(spirv);
+        };
+    let words: Vec<u32> = spirv
+        .chunks_exact(4)
+        .map(|word| read_word([word[0], word[1], word[2], word[3]]))
+        .collect();
+
+    let mut kept: Vec<u32> = words[..SPIRV_HEADER_WORD_COUNT].to_vec();
+    let mut source_text_was_dropped = false;
+    let mut at = SPIRV_HEADER_WORD_COUNT;
+    while at < words.len() {
+        let word_count = (words[at] >> 16) as usize;
+        let opcode = words[at] & 0xffff;
+        if word_count == 0 || at + word_count > words.len() {
+            return Cow::Borrowed(spirv);
+        }
+        let instruction = &words[at..at + word_count];
+        if opcode == OP_SOURCE_CONTINUED {
+            source_text_was_dropped = true;
+        } else if opcode == OP_SOURCE && word_count > OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT {
+            kept.push(((OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT as u32) << 16) | OP_SOURCE);
+            kept.extend_from_slice(&instruction[1..OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT]);
+            source_text_was_dropped = true;
+        } else {
+            kept.extend_from_slice(instruction);
+        }
+        at += word_count;
+    }
+    if !source_text_was_dropped {
+        return Cow::Borrowed(spirv);
+    }
+    Cow::Owned(kept.into_iter().flat_map(write_word).collect())
+}
 
 /// Render a shader's declared binding names for an error message.
 pub fn quote_declared_shader_binding_names(names: &[&str]) -> String {
@@ -345,11 +418,12 @@ where
     for module in stage_modules {
         let stage = module.stage;
         let stage_flag = stage_flag_of(stage);
-        let reflection = Reflection::new_from_spirv(module.spirv).map_err(|e| {
-            Error::GpuError(format!(
-                "{kernel_kind_label}: failed to reflect SPIR-V for {stage:?} stage: {e:?}"
-            ))
-        })?;
+        let reflection =
+            reflect_spirv_without_its_embedded_source_text(module.spirv).map_err(|e| {
+                Error::GpuError(format!(
+                    "{kernel_kind_label}: failed to reflect SPIR-V for {stage:?} stage: {e:?}"
+                ))
+            })?;
         let sets = reflection.get_descriptor_sets().map_err(|e| {
             Error::GpuError(format!(
                 "{kernel_kind_label}: failed to extract descriptor sets for {stage:?} stage: {e:?}"

@@ -13,6 +13,8 @@
 /// instructions whose first word packs word count and opcode (SPIR-V 1.6
 /// §2.3).
 const SPIRV_HEADER_WORD_COUNT: usize = 5;
+const OP_SOURCE_CONTINUED: u16 = 2;
+const OP_SOURCE: u16 = 3;
 const OP_NAME: u16 = 5;
 const OP_DECORATE: u16 = 71;
 const DECORATION_BINDING: u32 = 33;
@@ -102,6 +104,32 @@ pub(crate) fn move_binding_to_another_descriptor_set_in_spirv_module(
         "the module decorates nothing with descriptor set {current_set}"
     );
     moved
+}
+
+/// Give the module's `OpSource` source text, and an `OpSourceContinued` after
+/// it, bytes that are not UTF-8, as Ubuntu 24.04's `glslc -g` emits where a
+/// shader's source holds a multi-byte character.
+pub(crate) fn give_the_embedded_source_text_bytes_that_are_not_utf8(spirv: &[u8]) -> Vec<u8> {
+    const A_MULTI_BYTE_CHARACTER_CUT_AFTER_ITS_FIRST_BYTE: [u8; 4] = [b'/', b'/', 0xe2, 0];
+    const THE_REST_OF_THAT_CHARACTER: [u8; 4] = [0x80, 0x94, 0, 0];
+    let (rewritten, rewritten_count) = rewrite_spirv_instructions(spirv, |opcode, instruction| {
+        if opcode != OP_SOURCE || instruction.len() < 4 {
+            return None;
+        }
+        let source_text = spirv_module_words(&A_MULTI_BYTE_CHARACTER_CUT_AFTER_ITS_FIRST_BYTE);
+        let continued_text = spirv_module_words(&THE_REST_OF_THAT_CHARACTER);
+        let mut rewritten = instruction[..4].to_vec();
+        rewritten.extend(source_text);
+        rewritten[0] = ((rewritten.len() as u32) << 16) | u32::from(OP_SOURCE);
+        rewritten.push(((1 + continued_text.len() as u32) << 16) | u32::from(OP_SOURCE_CONTINUED));
+        rewritten.extend(continued_text);
+        Some(rewritten)
+    });
+    assert!(
+        rewritten_count > 0,
+        "the module carries no OpSource naming its file"
+    );
+    rewritten
 }
 
 /// Walk a module instruction by instruction, replacing each one the rewriter

@@ -68,6 +68,7 @@ pub use graphics_kernel::{
 pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use index_buffer::IndexBuffer;
+pub(crate) use kernel_binding_names::reflect_spirv_without_its_embedded_source_text;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use kernel_binding_names::{
     KernelShaderStageMask, quote_declared_shader_binding_names, quote_shader_stage_names,

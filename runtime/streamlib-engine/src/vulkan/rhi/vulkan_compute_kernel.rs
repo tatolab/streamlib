@@ -22,7 +22,9 @@ use sha2::{Digest, Sha256};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use rspirv_reflect::DescriptorType as RDescriptorType;
+
+use crate::core::rhi::reflect_spirv_without_its_embedded_source_text;
 
 use std::ffi::{CStr, c_void};
 
@@ -1270,12 +1272,13 @@ fn validate_against_spirv(
     descriptor: &ComputeKernelDescriptor<'_>,
     subgroup_operation_support: &VulkanSubgroupOperationSupport,
 ) -> Result<Vec<ComputeBindingSpec>> {
-    let reflection = Reflection::new_from_spirv(descriptor.spv).map_err(|e| {
-        Error::GpuError(format!(
-            "Compute kernel '{}': failed to reflect SPIR-V: {e:?}",
-            descriptor.label
-        ))
-    })?;
+    let reflection =
+        reflect_spirv_without_its_embedded_source_text(descriptor.spv).map_err(|e| {
+            Error::GpuError(format!(
+                "Compute kernel '{}': failed to reflect SPIR-V: {e:?}",
+                descriptor.label
+            ))
+        })?;
     subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
         &format!("Compute kernel '{}'", descriptor.label),
         vk::ShaderStageFlags::COMPUTE,
