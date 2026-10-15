@@ -58,6 +58,16 @@ impl TextureFormat {
         }
     }
 
+    /// Whether `cudaExternalMemoryGetMappedMipmappedArray` maps an image of
+    /// this format — four channels of 8-bit unorm or 16/32-bit float, never
+    /// sRGB, BGR channel order or multi-plane.
+    pub fn is_cuda_mappable(&self) -> bool {
+        matches!(
+            self,
+            Self::Rgba8Unorm | Self::Rgba16Float | Self::Rgba32Float
+        )
+    }
+
     /// Parse the wire spelling — the inverse of [`Self::wire_name`], and the
     /// one vocabulary the escalate wire, the surface-share registration and
     /// the Python surface all speak.
@@ -128,6 +138,11 @@ impl TextureUsages {
     pub const STORAGE_BINDING: Self = Self(1 << 3);
     /// Can be used as a render target.
     pub const RENDER_ATTACHMENT: Self = Self(1 << 4);
+    /// What an image CUDA maps always carries: the copies that fill and
+    /// read it back, and the texture- and surface-object bindings.
+    pub const EVERY_USAGE_A_CUDA_MAPPED_IMAGE_CARRIES: Self = Self(
+        Self::COPY_SRC.0 | Self::COPY_DST.0 | Self::TEXTURE_BINDING.0 | Self::STORAGE_BINDING.0,
+    );
 
     pub fn contains(&self, other: Self) -> bool {
         (self.0 & other.0) == other.0
@@ -159,6 +174,26 @@ impl std::ops::BitOr for TextureUsages {
 impl std::ops::BitOrAssign for TextureUsages {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
+    }
+}
+
+#[cfg(test)]
+mod cuda_mappable_format_tests {
+    use super::TextureFormat;
+
+    #[test]
+    fn the_four_channel_unorm_and_float_formats_are_cuda_mappable() {
+        assert!(TextureFormat::Rgba8Unorm.is_cuda_mappable());
+        assert!(TextureFormat::Rgba16Float.is_cuda_mappable());
+        assert!(TextureFormat::Rgba32Float.is_cuda_mappable());
+    }
+
+    #[test]
+    fn srgb_bgr_and_multi_plane_formats_are_not_cuda_mappable() {
+        assert!(!TextureFormat::Rgba8UnormSrgb.is_cuda_mappable());
+        assert!(!TextureFormat::Bgra8Unorm.is_cuda_mappable());
+        assert!(!TextureFormat::Bgra8UnormSrgb.is_cuda_mappable());
+        assert!(!TextureFormat::Nv12.is_cuda_mappable());
     }
 }
 

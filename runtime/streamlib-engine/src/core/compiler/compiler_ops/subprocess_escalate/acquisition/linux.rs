@@ -39,8 +39,12 @@ pub(super) fn allocate_registered_texture_for_helper(
             Ok(device) => derive_texture_cross_process_importability(
                 parsed_format,
                 parsed_usage,
-                device.has_render_target_modifier_for_texture_format(parsed_format),
-                device.opaque_fd_image_pool().is_some(),
+                TextureExportCapabilitiesOfTheDevice {
+                    exports_dma_buf: device.supports_dma_buf_export(),
+                    has_a_render_target_modifier_for_the_format: device
+                        .has_render_target_modifier_for_texture_format(parsed_format),
+                    has_the_opaque_fd_image_pool: device.opaque_fd_image_pool().is_some(),
+                },
             ),
             Err(_) => TextureCrossProcessImportability::NotImportable,
         });
@@ -256,41 +260,55 @@ fn timeline_edge_pair_where_the_device_exports_one(
     )))
 }
 
+/// What a device offers a texture that must cross to another process.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TextureExportCapabilitiesOfTheDevice {
+    /// The device exports DMA-BUF — never so on the software device.
+    pub(super) exports_dma_buf: bool,
+    /// The render-target probe found an explicit DRM modifier for the
+    /// requested format.
+    pub(super) has_a_render_target_modifier_for_the_format: bool,
+    /// The device built its OPAQUE_FD image pool.
+    pub(super) has_the_opaque_fd_image_pool: bool,
+}
+
 /// Which cross-process-importable allocation flavor an `acquire_texture`
-/// request can take, derived from the request alone — never a Python dial.
+/// request can take, derived from the request and the device alone — never
+/// a Python dial.
 ///
-/// Render-attachment requests need the explicit-modifier DMA-BUF flavor (the
-/// OPAQUE_FD constructor's fixed usage set has no COLOR_ATTACHMENT), and only
-/// single-plane formats take it — a multi-plane registration ships one fd
-/// against N plane offsets, which every consumer import rejects. Requests
-/// whose format is CUDA-mappable and whose usage fits the fixed set take
-/// OPAQUE_FD when the device has the pool for it. Everything else keeps
-/// today's non-importable allocation — a flavor the device or format cannot
-/// take falls back rather than failing the acquire, and a later
+/// Where the device exports no DMA-BUF, OPAQUE_FD is the one flavor that
+/// crosses a process, and every single-plane request takes it whatever its
+/// format and usage. Where it does, render-attachment requests need the
+/// explicit-modifier DMA-BUF flavor, and OPAQUE_FD is kept to the
+/// CUDA-mappable formats within its fixed usage set. Only single-plane
+/// formats cross either way — a multi-plane registration ships one fd
+/// against N plane offsets, which every consumer import rejects. Everything
+/// else keeps the non-importable allocation: a flavor the device or format
+/// cannot take falls back rather than failing the acquire, and a later
 /// cross-process import refuses by naming the flavor.
 pub(super) fn derive_texture_cross_process_importability(
     format: TextureFormat,
     usage: TextureUsages,
-    render_target_modifier_available: bool,
-    opaque_fd_image_pool_available: bool,
+    device: TextureExportCapabilitiesOfTheDevice,
 ) -> TextureCrossProcessImportability {
+    let format_is_single_plane = format.plane_count() == 1;
+    if !device.exports_dma_buf {
+        return if device.has_the_opaque_fd_image_pool && format_is_single_plane {
+            TextureCrossProcessImportability::OpaqueFd
+        } else {
+            TextureCrossProcessImportability::NotImportable
+        };
+    }
     if usage.contains(TextureUsages::RENDER_ATTACHMENT) {
-        let format_is_single_plane = format.plane_count() == 1;
-        return if render_target_modifier_available && format_is_single_plane {
+        return if device.has_a_render_target_modifier_for_the_format && format_is_single_plane {
             TextureCrossProcessImportability::RenderTargetDmaBuf
         } else {
             TextureCrossProcessImportability::NotImportable
         };
     }
-    let cuda_mappable = matches!(
-        format,
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float
-    );
-    let opaque_fd_fixed_usage_set = TextureUsages::COPY_SRC
-        | TextureUsages::COPY_DST
-        | TextureUsages::TEXTURE_BINDING
-        | TextureUsages::STORAGE_BINDING;
-    if cuda_mappable && opaque_fd_image_pool_available && opaque_fd_fixed_usage_set.contains(usage)
+    if format.is_cuda_mappable()
+        && device.has_the_opaque_fd_image_pool
+        && TextureUsages::EVERY_USAGE_A_CUDA_MAPPED_IMAGE_CARRIES.contains(usage)
     {
         return TextureCrossProcessImportability::OpaqueFd;
     }

@@ -123,8 +123,8 @@ pub struct SurfaceMetadata {
     pub vk_image_tiling: i32,
     /// `VkImageUsageFlags` (raw `u32` bitfield). Defaults to
     /// `TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE = 0x0F` when
-    /// absent — the usage set [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]
-    /// emits and the consumer side hardcodes today.
+    /// absent — the usage [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]
+    /// gives a CUDA-mappable texture that asks for nothing beyond it.
     pub vk_image_usage: u32,
     /// Host-side `VkMemoryRequirements::size` (i.e. `vmaGetAllocationInfo().size`)
     /// of the imported VkImage's backing memory. Required for the

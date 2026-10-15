@@ -470,6 +470,31 @@ fn frame_device_memory_request_on_a_vulkan_memory_type(
     })
 }
 
+/// Refuse, naming the image's format and usage, an image whose
+/// `memory_type_bits` exclude the one memory type an export pool is pinned
+/// to — the pool was probed with one image shape, and an image of another
+/// may not bind its type.
+#[cfg(target_os = "linux")]
+fn refuse_an_image_the_export_pools_memory_type_cannot_bind(
+    image_memory_type_bits: u32,
+    export_pool_memory_type_index: u32,
+    image_create_info: &vk::ImageCreateInfo,
+    frame_allocation_site: &'static str,
+) -> Result<()> {
+    let export_pool_memory_type_bit = 1u32.checked_shl(export_pool_memory_type_index).unwrap_or(0);
+    if image_memory_type_bits & export_pool_memory_type_bit != 0 {
+        return Ok(());
+    }
+    Err(Error::GpuError(format!(
+        "{frame_allocation_site}: a {:?} image with usage {:?} cannot bind memory type {} its \
+         export pool is pinned to (the image's memory_type_bits are {:#x})",
+        image_create_info.format,
+        image_create_info.usage,
+        export_pool_memory_type_index,
+        image_memory_type_bits,
+    )))
+}
+
 /// Internal anti-decay sentinel for an export-capable VMA pool.
 ///
 /// Frees its allocation on drop, so it must drop before the pool it was
@@ -2923,7 +2948,7 @@ impl HostVulkanDevice {
     /// (a helper child's Vulkan import, CUDA) can adopt whole.
     ///
     /// Thin wrapper over [`HostVulkanTexture::new_opaque_fd_export`]; that
-    /// constructor's fixed usage set and CUDA-mappable format subset apply.
+    /// constructor's usage and format rules apply.
     #[cfg(target_os = "linux")]
     pub fn create_texture_opaque_fd_export(
         self: &Arc<Self>,
@@ -4317,12 +4342,20 @@ impl HostVulkanDevice {
         // caller's, valid on this device.
         match allocation_source {
             #[cfg(target_os = "linux")]
-            VmaFrameAllocationSource::ExportPool(export_pool) => self
-                .allocate_as_the_device_memory_budget_admits(
+            VmaFrameAllocationSource::ExportPool(export_pool) => {
+                let memory_requirements =
+                    self.memory_requirements_of_an_image_create_info(image_create_info)?;
+                refuse_an_image_the_export_pools_memory_type_cannot_bind(
+                    memory_requirements.memory_type_bits,
+                    export_pool.memory_type_index,
+                    image_create_info,
+                    frame_allocation_site,
+                )?;
+                self.allocate_as_the_device_memory_budget_admits(
                     admission,
                     || {
                         frame_device_memory_request_on_a_vulkan_memory_type(
-                            self.memory_requirements_of_an_image_create_info(image_create_info)?,
+                            memory_requirements,
                             Ok(export_pool.memory_type_index),
                             frame_allocation_site,
                         )
@@ -4335,7 +4368,8 @@ impl HostVulkanDevice {
                         }
                         .map_err(describe_the_allocators_refusal)
                     },
-                ),
+                )
+            }
             VmaFrameAllocationSource::DefaultAllocator => self
                 .allocate_as_the_device_memory_budget_admits(
                     admission,
@@ -4852,6 +4886,40 @@ mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
     use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_image_that_cannot_bind_the_export_pools_memory_type_is_refused_naming_its_shape() {
+        let image_create_info = vk::ImageCreateInfo::builder()
+            .format(vk::Format::B8G8R8A8_UNORM)
+            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .build();
+        const EXPORT_POOL_MEMORY_TYPE_INDEX: u32 = 2;
+
+        let refusal = refuse_an_image_the_export_pools_memory_type_cannot_bind(
+            0b1011,
+            EXPORT_POOL_MEMORY_TYPE_INDEX,
+            &image_create_info,
+            "an allocation site under test",
+        )
+        .expect_err("memory_type_bits without bit 2 cannot bind type 2")
+        .to_string();
+        assert!(
+            refusal.contains("an allocation site under test"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("B8G8R8A8_UNORM"), "{refusal}");
+        assert!(refusal.contains("COLOR_ATTACHMENT"), "{refusal}");
+        assert!(refusal.contains("memory type 2"), "{refusal}");
+
+        refuse_an_image_the_export_pools_memory_type_cannot_bind(
+            0b0100,
+            EXPORT_POOL_MEMORY_TYPE_INDEX,
+            &image_create_info,
+            "an allocation site under test",
+        )
+        .expect("memory_type_bits with bit 2 bind type 2");
+    }
 
     #[cfg(target_os = "linux")]
     fn inode_of(fd: std::os::unix::io::RawFd) -> Option<u64> {
