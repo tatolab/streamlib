@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.7](https://github.com/tatolab/streamlib/compare/v0.46.6...v0.46.7) (2026-10-15)
+
+
+### Features
+
+* **engine:** a device that exports no semaphore crosses no timeline, and a device tensor refuses on a software device ([#2772](https://github.com/tatolab/streamlib/issues/2772)) ([b28274b](https://github.com/tatolab/streamlib/commit/b28274b4d4cf68cfab87e8fdec27a188ccdd449b))
+
 ## [0.46.6](https://github.com/tatolab/streamlib/compare/v0.46.5...v0.46.6) (2026-10-15)
 
 
