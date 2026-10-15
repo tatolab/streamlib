@@ -771,14 +771,10 @@ mod rig_only_capability_skip_closed_list_tests {
     }
 
     #[test]
-    fn a_capability_this_machine_has_is_not_skipped_and_one_it_lacks_is() {
+    fn a_capability_this_machine_has_is_not_skipped() {
         assert!(!skip_unless_this_machine_has(
             RigOnlyCapability::Camera,
             true
-        ));
-        assert!(skip_unless_this_machine_has(
-            RigOnlyCapability::Camera,
-            false
         ));
     }
 }

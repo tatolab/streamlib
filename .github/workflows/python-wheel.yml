@@ -315,7 +315,8 @@ jobs:
           persist-credentials: false
 
       # The engine build set test.yml's Linux job installs. `libvulkan-dev`
-      # brings the system loader's headers and no driver.
+      # brings the system loader's headers and no driver. `strace` is what the
+      # engine's write()-syscall regression test traces itself with.
       - name: Install system dependencies
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -329,6 +330,7 @@ jobs:
             glslc
             cmake
             ninja-build
+            strace
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -386,8 +388,8 @@ jobs:
 
       # libtest opens a line with `test <name> ... `, and a name may say
       # "skip", so that is cut first. Exempt by name: the validation tests,
-      # which need the layer a run turns on rather than a capability, and one
-      # engine log line that skips no test.
+      # which need the layer a run turns on rather than a capability, and two
+      # engine log lines that skip no test.
       - name: Every skip names what this machine lacks from the closed list
         if: ${{ !cancelled() }}
         run: |
@@ -397,7 +399,7 @@ jobs:
             | grep -iE '\bskip(s|ped|ping)?\b' \
             | grep -vE "${HARDWARE_TEST_SKIP_LINE_PREFIX}(${HARDWARE_TEST_SKIP_LINE_REASONS}): " \
             | grep -vE 'Skipping — no validation messenger installed\.|Skipping — only synchronization validation can see this hazard\.' \
-            | grep -vE 'Manual mode: skipping thread priority' \
+            | grep -vE 'Manual mode: skipping thread priority|; it is skipped and left in place$' \
             > "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt" || true
           if [ -s "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt" ]; then
             echo "::error::a hardware test skipped without naming a closed-list reason"
