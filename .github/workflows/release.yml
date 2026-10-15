@@ -133,8 +133,9 @@ jobs:
           # reports `completed` / `action_required` with no jobs, and its
           # `pull_requests` list is empty, so it is matched by the release
           # branch and the PR's own commits instead.
-          export RELEASE_BRANCH=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+          RELEASE_BRANCH=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --json headRefName --jq '.headRefName')
+          export RELEASE_BRANCH
           for head_sha in $(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --json commits --jq '.commits[].oid'); do
             for run_id in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$head_sha&event=pull_request&status=action_required" \
@@ -165,7 +166,7 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # `trigger-schemas` is deliberately not called, and `schemas.yml` no longer
+  # `trigger-schemas` is deliberately not called, and `control-plane-client.yml` no longer
   # offers a `workflow_call` to call. The half that failed on every release since
   # 2026-01-08 — TypeScript and Zod generated off the JTD schema layer — is gone;
   # the OpenAPI client survives, dispatch-only, because nothing in the tree
@@ -177,7 +178,7 @@ jobs:
   #
   # Every distribution this repository publishes releases on the one tag, so
   # one call builds and uploads them all. This call alone passes
-  # `dry_run: false`; any other run of release-wheel.yml is a dry run unless
+  # `dry_run: false`; any other run of reusable-distributions.yml is a dry run unless
   # dispatched with `dry_run` unticked.
   publish-release-to-pypi:
     needs: release-please
@@ -185,7 +186,7 @@ jobs:
     # Write, for attaching the Linux runtime tarball to the release just cut.
     permissions:
       contents: write
-    uses: ./.github/workflows/release-wheel.yml
+    uses: ./.github/workflows/reusable-distributions.yml
     with:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
       dry_run: false

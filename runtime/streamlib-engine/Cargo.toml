@@ -305,7 +305,7 @@ name = "surface_share_mach_helper"
 path = "tests/bin/surface_share_mach_helper.rs"
 
 # The raw-Mach surface-share proof across processes. No GPU, so it runs on the
-# macOS CI runner; named in `.github/workflows/test.yml`'s macOS job.
+# macOS CI runner; named in `.github/workflows/ci.yml`'s macOS job.
 [[test]]
 name = "surface_share_over_raw_mach"
 path = "tests/surface_share_over_raw_mach.rs"

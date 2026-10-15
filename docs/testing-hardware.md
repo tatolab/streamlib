@@ -13,9 +13,9 @@ is allowed to require a GPU device or any other exclusive system
 resource. Tier 1 should always pass cleanly in parallel; if it doesn't,
 the offending test is mis-classified.
 
-The **CI** tier-1 gate is the minimal per-crate `--lib` run defined by
-`.github/workflows/test.yml` (the CI config is the source of truth for
-what CI enforces). The broader **local** tier-1 baseline is the whole
+The **CI** tier-1 gate is the deviceless selection in `.config/nextest.toml`'s
+`ci` profile, which `.github/workflows/ci.yml` runs (the CI config is the
+source of truth for what CI enforces). The broader **local** tier-1 baseline is the whole
 workspace:
 
 ```bash
@@ -253,7 +253,7 @@ login session's screen is locked.
 
 ## CI
 
-Tier 1 runs on every PR via `.github/workflows/test.yml`. A tier-2 CI
+Tier 1 runs on every PR via `.github/workflows/ci.yml`. A tier-2 CI
 workflow is **future work** — it requires a GPU runner that isn't wired
 yet.
 

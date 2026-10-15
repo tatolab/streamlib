@@ -24,8 +24,8 @@ jobs:
       # generate_openapi links the api-server, which pulls in streamlib-engine;
       # its build.rs compiles GLSL with glslc and links Vulkan, its dependency
       # iceoryx2-pal-posix runs bindgen — which needs libclang and clang's
-      # builtin headers — and the audio path links opus. Mirrors test.yml's
-      # Linux engine dep set.
+      # builtin headers — and the audio path links opus. The same Linux engine dep set
+      # as ci.yml.
       # `cmake` builds the engine's vendored GLSL compiler (shaderc, taken
       # `build-from-source`); `ninja-build` is what makes that ~64s instead of
       # minutes — shaderc-sys picks the Ninja generator whenever `ninja` is on
@@ -69,13 +69,17 @@ jobs:
         id: version
         run: |
           VERSION=$(grep 'version = ' Cargo.toml | head -1 | sed 's/.*version = "\(.*\)"/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Detected version: $VERSION"
 
       - name: Generate OpenAPI spec
         run: |
           cargo run --bin generate_openapi
-          python3 -m json.tool dist/schemas/openapi.json > /dev/null && echo "✓ OpenAPI spec is valid JSON" || { echo "✗ OpenAPI spec is INVALID"; exit 1; }
+          if ! python3 -m json.tool dist/schemas/openapi.json > /dev/null; then
+            echo "✗ OpenAPI spec is INVALID"
+            exit 1
+          fi
+          echo "✓ OpenAPI spec is valid JSON"
 
       - name: Create package directory
         run: mkdir -p dist/streamlib-client/src
@@ -88,11 +92,13 @@ jobs:
 
       - name: Generate API client from OpenAPI
         run: |
-          echo "// Auto-generated from OpenAPI spec - DO NOT EDIT" > dist/streamlib-client/src/api-types.ts
-          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/streamlib-client/src/api-types.ts
-          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/streamlib-client/src/api-types.ts
-          echo "" >> dist/streamlib-client/src/api-types.ts
-          openapi-typescript dist/schemas/openapi.json >> dist/streamlib-client/src/api-types.ts
+          {
+            echo "// Auto-generated from OpenAPI spec - DO NOT EDIT"
+            echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo "// Version: ${{ steps.version.outputs.version }}"
+            echo ""
+            openapi-typescript dist/schemas/openapi.json
+          } > dist/streamlib-client/src/api-types.ts
 
       - name: Create package index
         run: |

@@ -2,10 +2,10 @@ name: Linux Runtime Tarball
 
 # The tarball install.sh installs: the runtime unit built in manylinux_2_28 by
 # `scripts/build_linux_runtime_release_tarball.sh`, which also runs the
-# portability gate over it at the 2.28 glibc floor. Called by python-wheel.yml
-# on every PR — a change needing a newer glibc symbol, or a system library
-# manylinux lacks, must fail on the PR that makes it, not on release day — and
-# by release-wheel.yml, where a failure here withholds the whole release.
+# portability gate over it at the 2.28 glibc floor. Called by
+# reusable-distributions.yml: as a dry run on every push to `main`, so a change
+# needing a newer glibc symbol or a system library manylinux lacks fails on the
+# commit that made it, and at release, where a failure withholds the release.
 on:
   workflow_call:
     inputs:

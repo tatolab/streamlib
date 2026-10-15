@@ -1,4 +1,4 @@
-name: Release to PyPI
+name: Distributions
 
 # The release channel: release-please cuts a GitHub release, and this publishes
 # `tatolab-stream` and every first-party extension to PyPI at that release's
@@ -18,7 +18,7 @@ name: Release to PyPI
 # the original run's failed publish-linux-runtime job, which uploads the
 # tarball that run built again and overwrites a partial upload.
 #
-# Called from release-please.yml rather than triggered by `on: release`:
+# Called from release.yml rather than triggered by `on: release`:
 # release-please runs on the default GITHUB_TOKEN, and GitHub does not start
 # workflow runs from events that token raises. An `on: release` trigger here
 # would simply never fire.
@@ -30,7 +30,8 @@ name: Release to PyPI
 # original run's failed publish-to-pypi job instead: a new dispatch rebuilds the
 # tatolab-webrtc wheels, whose compiled `_native` differs byte for byte from the
 # files PyPI already holds, so their upload fails on a hash mismatch. A dry run
-# builds and checks every distribution and stops short of PyPI.
+# builds and checks every distribution and stops short of PyPI;
+# distribution-dry-run.yml runs one on every push to `main`.
 on:
   workflow_call:
     inputs:
@@ -211,7 +212,7 @@ jobs:
     needs: build-tatolab-stream-distribution
     permissions:
       contents: read
-    uses: ./.github/workflows/release-extension-wheel.yml
+    uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/streamlib-webrtc
       extension_distribution_name: tatolab-webrtc
@@ -225,14 +226,14 @@ jobs:
   prove-the-runtime-unit-on-macos:
     permissions:
       contents: read
-    uses: ./.github/workflows/macos-wheel.yml
+    uses: ./.github/workflows/reusable-macos-runtime-unit.yml
     with:
       ref: ${{ inputs.tag_name }}
 
   build-linux-runtime-tarball:
     permissions:
       contents: read
-    uses: ./.github/workflows/linux-runtime-tarball.yml
+    uses: ./.github/workflows/reusable-linux-runtime-tarball.yml
     with:
       ref: ${{ inputs.tag_name }}
 

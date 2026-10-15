@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # Every Rust and Python source file carries the BUSL header. Run from the
-# workspace root, by `.github/workflows/repo-gates.yml` and by
+# workspace root, by `.github/workflows/ci.yml`'s repo gates and by
 # `cargo xtask run-local-ci-gates` alike — one implementation, so a green local
 # run means a green CI run.
 #

@@ -3,8 +3,8 @@ name: Release Extension Wheel
 # One extension wheel per platform the runtime runs on — manylinux and Apple
 # Silicon — built the way a third party would build one: its own standalone
 # maturin project, its own lockfile, no engine crate linked. Both are kept as
-# this run's `pypi-distribution-*` artifacts, which release-wheel.yml uploads
-# to PyPI. Called once per extension by release-wheel.yml.
+# this run's `pypi-distribution-*` artifacts, which reusable-distributions.yml uploads
+# to PyPI. Called once per extension by reusable-distributions.yml.
 on:
   workflow_call:
     inputs:
@@ -47,7 +47,7 @@ jobs:
         include:
           - platform: manylinux
             runner: ubuntu-latest
-          # Pinned for the reason macos-wheel.yml pins it: the image decides
+          # Pinned for the reason reusable-macos-runtime-unit.yml pins it: the image decides
           # the SDK the wheel links against.
           - platform: aarch64-apple-darwin
             runner: macos-15
@@ -206,7 +206,7 @@ jobs:
           print(distribution_name, 'exports', ', '.join(exported))
           "
 
-      # release-wheel.yml uploads every `pypi-distribution-*` artifact of the run.
+      # reusable-distributions.yml uploads every `pypi-distribution-*` artifact of the run.
       - name: Keep the wheel for the upload
         uses: actions/upload-artifact@v4
         with:
