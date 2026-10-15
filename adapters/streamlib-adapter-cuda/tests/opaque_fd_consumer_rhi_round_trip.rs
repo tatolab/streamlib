@@ -34,9 +34,8 @@
 //!   cpu-readback helper's carve-out (NVIDIA dual-device crash —
 //!   `docs/learnings/nvidia-dual-vulkan-device-crash.md`).
 //!
-//! Multi-GPU rigs: this test assumes both `HostVulkanDevice::new()` and
-//! `ConsumerVulkanDevice::new()` resolve to the same physical device
-//! (UUID-matching is #589/#590's concern). On single-GPU rigs they will.
+//! The consumer device is built on the host device's `deviceUUID`, as a
+//! processor interpreter is on the runtime's.
 
 #![cfg(target_os = "linux")]
 
@@ -245,7 +244,9 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     let consumer_consume_done_fd: RawFd = lookup_fds[2];
 
     // ── Phase 5: consumer side imports through consumer-rhi ────────────
-    let consumer_device = match ConsumerVulkanDevice::new() {
+    let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        host_device.physical_device_uuid(),
+    ) {
         Ok(d) => Arc::new(d),
         Err(e) => {
             // SAFETY: import paths haven't been called yet — close all FDs.
@@ -255,7 +256,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
                 libc::close(consumer_consume_done_fd);
             }
             println!(
-                "stage6: ConsumerVulkanDevice::new failed: {e:?} — skipping \
+                "stage6: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {e:?} — skipping \
                  (likely a UUID mismatch on a multi-GPU rig)"
             );
             return;

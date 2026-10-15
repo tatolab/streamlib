@@ -189,10 +189,14 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
     // but isn't waited on here.
     let _ = &consume_done_arc;
 
-    let consumer = match ConsumerVulkanDevice::new() {
+    let consumer = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        host_device.physical_device_uuid(),
+    ) {
         Ok(d) => Arc::new(d),
         Err(e) => {
-            println!("carve-out round-trip: ConsumerVulkanDevice::new failed: {e} — skipping");
+            println!(
+                "carve-out round-trip: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {e} — skipping"
+            );
             unsafe {
                 libc::close(dma_buf_fd);
                 libc::close(sync_fd);

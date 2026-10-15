@@ -212,7 +212,8 @@ fn adopt_exported_planes_into_wire_handles(
 ) -> Result<ExportedPlaneWireHandles> {
     use crate::core::rhi::RhiExternalHandle;
 
-    let exporting_device_uuid = lowercase_hex_of_device_uuid(exporting_device_uuid);
+    let exporting_device_uuid =
+        streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(exporting_device_uuid);
     let mut plane_fds: Vec<OwnedFd> = Vec::with_capacity(exported_planes.len());
     let mut plane_sizes: Vec<u64> = Vec::with_capacity(exported_planes.len());
     let mut plane_offsets: Vec<u64> = Vec::with_capacity(exported_planes.len());
@@ -559,18 +560,6 @@ pub struct CachedSurface {
 struct SurfaceCache {
     /// Map from surface ID to cached pixel buffer.
     surfaces: HashMap<String, CachedSurface>,
-}
-
-/// The wire spelling of a device UUID: 32 lowercase hex characters.
-#[cfg(target_os = "linux")]
-pub(crate) fn lowercase_hex_of_device_uuid(device_uuid: [u8; 16]) -> String {
-    use std::fmt::Write;
-    device_uuid
-        .iter()
-        .fold(String::with_capacity(32), |mut lowercase_hex, byte| {
-            let _ = write!(lowercase_hex, "{byte:02x}");
-            lowercase_hex
-        })
 }
 
 impl SurfaceCache {
@@ -949,8 +938,9 @@ impl SurfaceStoreInner {
             surface_id,
             "OPAQUE_FD tensor storage buffer registration",
         )?;
-        let exporting_device_uuid =
-            lowercase_hex_of_device_uuid(host_buffer.vulkan_device().physical_device_uuid());
+        let exporting_device_uuid = streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+            host_buffer.vulkan_device().physical_device_uuid(),
+        );
         // SAFETY: the export mints a fresh fd this process owns and has handed
         // to no one else; adopting it closes it exactly once on every path.
         let owned_memory_fd =
@@ -1144,7 +1134,7 @@ impl SurfaceStoreInner {
                 surface_id,
                 "OPAQUE_FD texture registration",
             )?;
-            let exporting_device_uuid = lowercase_hex_of_device_uuid(
+            let exporting_device_uuid = streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
                 texture
                     .vulkan_inner()
                     .exporting_physical_device_uuid()

@@ -286,7 +286,7 @@ mod tests {
     use super::*;
 
     fn try_create_device() -> Option<Arc<ConsumerVulkanDevice>> {
-        match ConsumerVulkanDevice::new() {
+        match crate::consumer_vulkan_device::consumer_vulkan_device_on_the_first_device_the_loader_enumerates() {
             Ok(device) => Some(Arc::new(device)),
             Err(unavailable) => {
                 tracing::info!("Skipping test — ConsumerVulkanDevice unavailable: {unavailable}");

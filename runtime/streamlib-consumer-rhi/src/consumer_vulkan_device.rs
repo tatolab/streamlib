@@ -22,7 +22,8 @@
 //!   semaphores (lives on
 //!   [`crate::ConsumerVulkanTimelineSemaphore`]).
 //!
-//! Crucially, this struct is constructed via [`Self::new`], which spins
+//! Crucially, this struct is constructed via
+//! [`ConsumerVulkanDevice::new_on_the_device_the_runtime_named`], which spins
 //! up its *own* `VkInstance` + `VkDevice`. It does **not** share the
 //! host's logical device — that's load-bearing for the
 //! capability-boundary story (the cdylib never holds a reference to
@@ -162,9 +163,178 @@ pub struct ConsumerVulkanDevice {
     queue_mutex: Mutex<()>,
 }
 
+/// A physical device the Vulkan loader enumerates, as selection by
+/// `deviceUUID` sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VulkanDeviceTheLoaderEnumerates {
+    pub(crate) device_name: String,
+    pub(crate) device_uuid: [u8; 16],
+    pub(crate) device_type: vk::PhysicalDeviceType,
+}
+
+/// Every physical device the Vulkan loader enumerates for this process, in
+/// the loader's order.
+pub(crate) fn vulkan_devices_the_loader_enumerates() -> Result<Vec<VulkanDeviceTheLoaderEnumerates>>
+{
+    let (_entry, instance) = create_the_consumer_vulkan_instance()?;
+    Ok(physical_devices_the_loader_enumerates_on(&instance)?
+        .into_iter()
+        .map(|(_physical_device, enumerated_device)| enumerated_device)
+        .collect())
+}
+
+/// A `VkInstance` destroyed when dropped unless [`Self::keep`] hands it on, so
+/// every early return of a device's construction tears it down.
+struct VulkanInstanceDestroyedUnlessKept(vulkanalia::Instance);
+
+impl VulkanInstanceDestroyedUnlessKept {
+    fn keep(self) -> vulkanalia::Instance {
+        std::mem::ManuallyDrop::new(self).0.clone()
+    }
+}
+
+impl std::ops::Deref for VulkanInstanceDestroyedUnlessKept {
+    type Target = vulkanalia::Instance;
+
+    fn deref(&self) -> &vulkanalia::Instance {
+        &self.0
+    }
+}
+
+impl Drop for VulkanInstanceDestroyedUnlessKept {
+    fn drop(&mut self) {
+        unsafe { self.0.destroy_instance(None) };
+    }
+}
+
+/// The `deviceUUID` of the first device the loader enumerates, for a test with
+/// no runtime to name one; a processor interpreter imports only on the device
+/// the runtime named.
+#[doc(hidden)]
+pub fn vulkan_device_uuid_of_the_first_device_the_loader_enumerates() -> Result<[u8; 16]> {
+    vulkan_devices_the_loader_enumerates()?
+        .into_iter()
+        .next()
+        .map(|first_enumerated_device| first_enumerated_device.device_uuid)
+        .ok_or_else(|| ConsumerRhiError::Gpu("No Vulkan physical devices found".into()))
+}
+
+/// The loader's library, entry and the minimal instance a consumer device
+/// enumerates on: no surface extensions, since the consumer never renders to
+/// a window.
+fn create_the_consumer_vulkan_instance()
+-> Result<(vulkanalia::Entry, VulkanInstanceDestroyedUnlessKept)> {
+    let loader = crate::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
+        ConsumerRhiError::Gpu(format!(
+            "Failed to load the Vulkan loader library; tried:\n{not_found}"
+        ))
+    })?;
+    let entry = unsafe { vulkanalia::Entry::new(loader) }
+        .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan entry: {e}")))?;
+
+    let app_info = vk::ApplicationInfo::builder()
+        .application_name(b"StreamLibConsumer\0")
+        .application_version(vk::make_version(0, 1, 0))
+        .engine_name(b"StreamLib\0")
+        .engine_version(vk::make_version(0, 1, 0))
+        .api_version(crate::REQUESTED_VULKAN_INSTANCE_API_VERSION)
+        .build();
+
+    // MoltenVK is a non-conformant portability implementation: the loader
+    // enumerates it only for an instance that opts in.
+    #[cfg(target_os = "macos")]
+    let (instance_extensions, instance_create_flags) = (
+        [c"VK_KHR_portability_enumeration".as_ptr()],
+        vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
+    );
+    #[cfg(not(target_os = "macos"))]
+    let (instance_extensions, instance_create_flags): ([*const c_char; 0], _) =
+        ([], vk::InstanceCreateFlags::empty());
+    let instance_info = vk::InstanceCreateInfo::builder()
+        .application_info(&app_info)
+        .enabled_extension_names(&instance_extensions)
+        .flags(instance_create_flags)
+        .build();
+
+    let instance = unsafe { entry.create_instance(&instance_info, None) }
+        .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create Vulkan instance: {e}")))?;
+    Ok((entry, VulkanInstanceDestroyedUnlessKept(instance)))
+}
+
+/// Each physical device `instance` enumerates, in the loader's order, with
+/// how selection by `deviceUUID` sees it.
+fn physical_devices_the_loader_enumerates_on(
+    instance: &vulkanalia::Instance,
+) -> Result<Vec<(vk::PhysicalDevice, VulkanDeviceTheLoaderEnumerates)>> {
+    let physical_devices = unsafe { instance.enumerate_physical_devices() }
+        .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to enumerate physical devices: {e}")))?;
+    Ok(physical_devices
+        .into_iter()
+        .map(|physical_device| {
+            let mut id_properties = vk::PhysicalDeviceIDProperties::default();
+            let mut properties2 = vk::PhysicalDeviceProperties2::builder()
+                .push_next(&mut id_properties)
+                .build();
+            unsafe { instance.get_physical_device_properties2(physical_device, &mut properties2) };
+            let device_properties = properties2.properties;
+            (
+                physical_device,
+                VulkanDeviceTheLoaderEnumerates {
+                    device_name: device_properties
+                        .device_name
+                        .as_cstr()
+                        .to_string_lossy()
+                        .into_owned(),
+                    device_uuid: id_properties.device_uuid.into(),
+                    device_type: device_properties.device_type,
+                },
+            )
+        })
+        .collect())
+}
+
+/// The index in `enumerated_devices` of the one carrying
+/// `vulkan_device_uuid_the_runtime_named`, or the refusal naming that UUID and
+/// every device enumerated — never a fallback to another device, since an
+/// OPAQUE_FD import on any other reads the wrong memory.
+fn index_of_the_device_the_runtime_named(
+    enumerated_devices: &[VulkanDeviceTheLoaderEnumerates],
+    vulkan_device_uuid_the_runtime_named: [u8; 16],
+) -> Result<usize> {
+    if let Some(index) = enumerated_devices.iter().position(|enumerated_device| {
+        enumerated_device.device_uuid == vulkan_device_uuid_the_runtime_named
+    }) {
+        return Ok(index);
+    }
+    let devices_seen = if enumerated_devices.is_empty() {
+        "none".to_owned()
+    } else {
+        enumerated_devices
+            .iter()
+            .map(|enumerated_device| {
+                format!(
+                    "{} ({:?}, {})",
+                    enumerated_device.device_name,
+                    enumerated_device.device_type,
+                    crate::lowercase_hex_of_vulkan_device_uuid(enumerated_device.device_uuid)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Err(ConsumerRhiError::Gpu(format!(
+        "the runtime built on Vulkan device {}, and no device this process enumerates carries \
+         that UUID — it saw: {devices_seen}. A processor interpreter inherits the runtime's \
+         loader environment; a driver variable set for this process alone can hide the \
+         runtime's device",
+        crate::lowercase_hex_of_vulkan_device_uuid(vulkan_device_uuid_the_runtime_named)
+    )))
+}
+
 impl ConsumerVulkanDevice {
-    /// Construct a fresh consumer-only Vulkan device targeting the
-    /// system's preferred discrete GPU.
+    /// Construct a fresh consumer-only Vulkan device on the physical device
+    /// whose `deviceUUID` is `vulkan_device_uuid_the_runtime_named`, refusing
+    /// by name when no enumerated device carries it.
     ///
     /// Enables only the extensions / features the carve-out needs — the
     /// platform's import extensions plus the Vulkan 1.3 sync-2 and
@@ -172,79 +342,24 @@ impl ConsumerVulkanDevice {
     /// entry refuses the device with [`ConsumerRhiError::Gpu`]; a missing
     /// [`PROBED_DEVICE_EXTENSIONS`] entry is left disabled, and the import
     /// arm that needs it refuses by name.
-    pub fn new() -> Result<Self> {
-        let loader =
-            crate::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
-                ConsumerRhiError::Gpu(format!(
-                    "Failed to load the Vulkan loader library; tried:\n{not_found}"
-                ))
-            })?;
-        let entry = unsafe { vulkanalia::Entry::new(loader) }
-            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan entry: {e}")))?;
-
-        // Instance — minimal: just enough to enumerate physical devices.
-        // No surface extensions; the consumer doesn't render to a window.
-        let app_info = vk::ApplicationInfo::builder()
-            .application_name(b"StreamLibConsumer\0")
-            .application_version(vk::make_version(0, 1, 0))
-            .engine_name(b"StreamLib\0")
-            .engine_version(vk::make_version(0, 1, 0))
-            .api_version(crate::REQUESTED_VULKAN_INSTANCE_API_VERSION)
-            .build();
-
-        // MoltenVK is a non-conformant portability implementation: the loader
-        // enumerates it only for an instance that opts in.
-        #[cfg(target_os = "macos")]
-        let (instance_extensions, instance_create_flags) = (
-            [c"VK_KHR_portability_enumeration".as_ptr()],
-            vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
-        );
-        #[cfg(not(target_os = "macos"))]
-        let (instance_extensions, instance_create_flags): ([*const c_char; 0], _) =
-            ([], vk::InstanceCreateFlags::empty());
-        let instance_info = vk::InstanceCreateInfo::builder()
-            .application_info(&app_info)
-            .enabled_extension_names(&instance_extensions)
-            .flags(instance_create_flags)
-            .build();
-
-        let instance = unsafe { entry.create_instance(&instance_info, None) }
-            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create Vulkan instance: {e}")))?;
-
-        // Physical device — prefer DISCRETE_GPU, fall back to first available.
-        let physical_devices = unsafe { instance.enumerate_physical_devices() }.map_err(|e| {
-            ConsumerRhiError::Gpu(format!("Failed to enumerate physical devices: {e}"))
-        })?;
-        if physical_devices.is_empty() {
-            return Err(ConsumerRhiError::Gpu(
-                "No Vulkan physical devices found".into(),
-            ));
-        }
-        let physical_device = physical_devices
-            .iter()
-            .find(|&&pd| {
-                let props = unsafe { instance.get_physical_device_properties(pd) };
-                props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
-            })
-            .copied()
-            .unwrap_or(physical_devices[0]);
-
-        let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_name = device_props
-            .device_name
-            .as_cstr()
-            .to_string_lossy()
-            .into_owned();
-
-        // Extract VkPhysicalDeviceIDProperties::deviceUUID via
-        // vkGetPhysicalDeviceProperties2. Used by CUDA / OpenCL interop
-        // to pick the matching foreign-API device on multi-GPU rigs.
-        let mut id_props = vk::PhysicalDeviceIDProperties::default();
-        let mut props2 = vk::PhysicalDeviceProperties2::builder()
-            .push_next(&mut id_props)
-            .build();
-        unsafe { instance.get_physical_device_properties2(physical_device, &mut props2) };
-        let physical_device_uuid: [u8; 16] = id_props.device_uuid.into();
+    pub fn new_on_the_device_the_runtime_named(
+        vulkan_device_uuid_the_runtime_named: [u8; 16],
+    ) -> Result<Self> {
+        let (entry, instance) = create_the_consumer_vulkan_instance()?;
+        let (physical_devices, mut enumerated_devices): (Vec<_>, Vec<_>) =
+            physical_devices_the_loader_enumerates_on(&instance)?
+                .into_iter()
+                .unzip();
+        let index = index_of_the_device_the_runtime_named(
+            &enumerated_devices,
+            vulkan_device_uuid_the_runtime_named,
+        )?;
+        let physical_device = physical_devices[index];
+        let VulkanDeviceTheLoaderEnumerates {
+            device_name,
+            device_uuid: physical_device_uuid,
+            device_type,
+        } = enumerated_devices.swap_remove(index);
 
         // Pick any GRAPHICS-capable queue family (graphics implies transfer +
         // compute on every conformant Vulkan implementation, which covers
@@ -270,7 +385,7 @@ impl ConsumerVulkanDevice {
         let available_device_ext_names =
             vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
 
-        let device_is_software = device_props.device_type == vk::PhysicalDeviceType::CPU;
+        let device_is_software = device_type == vk::PhysicalDeviceType::CPU;
         let mut device_extensions: Vec<*const c_char> = import_device_extensions_to_enable(
             &available_device_ext_names,
             REQUIRED_DEVICE_EXTENSIONS,
@@ -384,8 +499,9 @@ impl ConsumerVulkanDevice {
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
         tracing::info!(
-            "ConsumerVulkanDevice initialized: {} (software={}, queue family {}, {} memory types, acquire_unmodified={}, dma_buf_import={}, drm_format_modifier_import={}, semaphore_fd_import={})",
+            "ConsumerVulkanDevice initialized on the device the runtime named: {} (uuid={}, software={}, queue family {}, {} memory types, acquire_unmodified={}, dma_buf_import={}, drm_format_modifier_import={}, semaphore_fd_import={})",
             device_name,
+            crate::lowercase_hex_of_vulkan_device_uuid(physical_device_uuid),
             device_is_software,
             queue_family_index,
             memory_properties.memory_type_count,
@@ -397,7 +513,7 @@ impl ConsumerVulkanDevice {
 
         Ok(Self {
             entry,
-            instance,
+            instance: instance.keep(),
             physical_device,
             memory_properties,
             device,
@@ -1114,6 +1230,16 @@ impl Drop for ConsumerVulkanDevice {
     }
 }
 
+/// A consumer device on the first device the loader enumerates — for a test
+/// with no runtime to name one.
+#[cfg(test)]
+pub(crate) fn consumer_vulkan_device_on_the_first_device_the_loader_enumerates()
+-> Result<ConsumerVulkanDevice> {
+    ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        vulkan_device_uuid_of_the_first_device_the_loader_enumerates()?,
+    )
+}
+
 // Vulkan handles are thread-safe behind external synchronization which
 // the per-queue mutex provides for submits.
 unsafe impl Send for ConsumerVulkanDevice {}
@@ -1211,6 +1337,83 @@ mod import_device_extension_partition_tests {
 }
 
 #[cfg(test)]
+mod selection_by_the_device_uuid_the_runtime_named_tests {
+    use super::*;
+
+    fn enumerated_device(
+        device_name: &str,
+        uuid_byte: u8,
+        device_type: vk::PhysicalDeviceType,
+    ) -> VulkanDeviceTheLoaderEnumerates {
+        VulkanDeviceTheLoaderEnumerates {
+            device_name: device_name.to_owned(),
+            device_uuid: [uuid_byte; 16],
+            device_type,
+        }
+    }
+
+    fn a_discrete_gpu_then_a_software_device() -> Vec<VulkanDeviceTheLoaderEnumerates> {
+        vec![
+            enumerated_device(
+                "NVIDIA GeForce RTX 3090",
+                0x94,
+                vk::PhysicalDeviceType::DISCRETE_GPU,
+            ),
+            enumerated_device("llvmpipe", 0x6c, vk::PhysicalDeviceType::CPU),
+        ]
+    }
+
+    /// The device the runtime named wins wherever the loader put it — the
+    /// software device second, behind a discrete GPU.
+    #[test]
+    fn the_device_carrying_the_named_uuid_is_chosen_wherever_it_is_enumerated() {
+        let enumerated_devices = a_discrete_gpu_then_a_software_device();
+        assert_eq!(
+            index_of_the_device_the_runtime_named(&enumerated_devices, [0x6c; 16])
+                .expect("llvmpipe carries the UUID"),
+            1
+        );
+        assert_eq!(
+            index_of_the_device_the_runtime_named(&enumerated_devices, [0x94; 16])
+                .expect("the discrete GPU carries the UUID"),
+            0
+        );
+    }
+
+    #[test]
+    fn a_uuid_no_enumerated_device_carries_is_refused_naming_it_and_every_device_seen() {
+        let refusal = index_of_the_device_the_runtime_named(
+            &a_discrete_gpu_then_a_software_device(),
+            [0x01; 16],
+        )
+        .expect_err("no enumerated device carries the UUID")
+        .to_string();
+        for named in [
+            "01010101010101010101010101010101",
+            "NVIDIA GeForce RTX 3090",
+            "DISCRETE_GPU",
+            "94949494949494949494949494949494",
+            "llvmpipe",
+            "CPU",
+            "6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c",
+        ] {
+            assert!(refusal.contains(named), "{named:?} is named in: {refusal}");
+        }
+    }
+
+    #[test]
+    fn a_process_that_enumerates_no_device_refuses_saying_it_saw_none() {
+        let refusal = index_of_the_device_the_runtime_named(&[], [0x94; 16])
+            .expect_err("no device carries any UUID")
+            .to_string();
+        assert!(
+            refusal.contains("94949494949494949494949494949494") && refusal.contains("saw: none"),
+            "{refusal}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
@@ -1218,7 +1421,7 @@ mod tests {
     /// Try to construct a ConsumerVulkanDevice; return None if Vulkan
     /// is unavailable in this environment (CI sandboxes, no GPU).
     fn try_create() -> Option<Arc<ConsumerVulkanDevice>> {
-        match ConsumerVulkanDevice::new() {
+        match consumer_vulkan_device_on_the_first_device_the_loader_enumerates() {
             Ok(d) => Some(Arc::new(d)),
             Err(e) => {
                 println!("Skipping test — ConsumerVulkanDevice unavailable: {e}");
@@ -1237,6 +1440,80 @@ mod tests {
         // Sanity: the trait bound is wired to ConsumerMarker, not Host.
         fn assert_consumer<D: VulkanRhiDevice<Privilege = ConsumerMarker>>(_: &D) {}
         assert_consumer(&*device);
+    }
+
+    /// Run on a machine whose loader enumerates more than one device — the
+    /// rig's NVIDIA GPU beside the system lavapipe — and every device is the
+    /// one built on when the runtime names it, proven by its UUID.
+    #[test]
+    fn a_helper_on_a_machine_with_two_devices_imports_on_the_one_the_runtime_named() {
+        let enumerated_devices = match vulkan_devices_the_loader_enumerates() {
+            Ok(enumerated_devices) if enumerated_devices.len() >= 2 => enumerated_devices,
+            Ok(enumerated_devices) => {
+                tracing::info!(
+                    "Skipping test — the loader enumerates {} device(s), not two",
+                    enumerated_devices.len()
+                );
+                return;
+            }
+            Err(unavailable) => {
+                tracing::info!("Skipping test — no Vulkan loader: {unavailable}");
+                return;
+            }
+        };
+        for named_device in &enumerated_devices {
+            let device =
+                ConsumerVulkanDevice::new_on_the_device_the_runtime_named(named_device.device_uuid)
+                    .unwrap_or_else(|refusal| {
+                        panic!("a device on {}: {refusal}", named_device.device_name)
+                    });
+            assert_eq!(device.physical_device_uuid(), named_device.device_uuid);
+            assert_eq!(device.name(), named_device.device_name);
+            assert_eq!(
+                device.device_is_software(),
+                named_device.device_type == vk::PhysicalDeviceType::CPU
+            );
+        }
+    }
+
+    #[test]
+    fn a_uuid_no_enumerated_device_carries_is_refused_before_any_device_is_built() {
+        let enumerated_devices = match vulkan_devices_the_loader_enumerates() {
+            Ok(enumerated_devices) => enumerated_devices,
+            Err(unavailable) => {
+                tracing::info!("Skipping test — no Vulkan loader: {unavailable}");
+                return;
+            }
+        };
+        let uuid_no_device_carries = (0..=u8::MAX)
+            .map(|byte| [byte; 16])
+            .find(|candidate| {
+                enumerated_devices
+                    .iter()
+                    .all(|enumerated_device| enumerated_device.device_uuid != *candidate)
+            })
+            .expect("a UUID no enumerated device carries");
+        let refusal =
+            match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(uuid_no_device_carries)
+            {
+                Ok(device) => panic!(
+                    "a UUID no device carries built a device on {}",
+                    device.name()
+                ),
+                Err(refusal) => refusal.to_string(),
+            };
+        assert!(
+            refusal.contains(&crate::lowercase_hex_of_vulkan_device_uuid(
+                uuid_no_device_carries
+            )),
+            "{refusal}"
+        );
+        for enumerated_device in &enumerated_devices {
+            assert!(
+                refusal.contains(&enumerated_device.device_name),
+                "{refusal}"
+            );
+        }
     }
 
     #[test]

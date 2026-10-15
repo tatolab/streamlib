@@ -32,7 +32,7 @@ fn host_writes_subprocess_reads_round_trip() {
     // Spawn the subprocess BEFORE the host does GPU work; cross-process
     // dual-VkDevice is fine here per the dual-device crash learning —
     // the subprocess's VkDevice creation runs concurrently with idle host.
-    let (mut child, parent_sock) = common::spawn_helper("read");
+    let (mut child, parent_sock) = common::spawn_helper("read", &host);
 
     // Host write scope: clear the image to a known color via the
     // adapter, release. Adapter advances produce_done 0 → 1.

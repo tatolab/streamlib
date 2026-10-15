@@ -63,8 +63,8 @@ fn two_subprocesses_concurrently_read_same_surface() {
     // consume_done. Under single-writer-per-edge both subprocesses
     // writing to the same consume_done timeline races VUID-03258 — this
     // is exactly the pattern the v1 model defers.
-    let (mut child_a, sock_a) = common::spawn_helper("wait-only");
-    let (mut child_b, sock_b) = common::spawn_helper("wait-only");
+    let (mut child_a, sock_a) = common::spawn_helper("wait-only", &host);
+    let (mut child_b, sock_b) = common::spawn_helper("wait-only", &host);
 
     // Each subprocess imports its own copy of both timelines + the
     // DMA-BUF — fresh fds per spawn since SCM_RIGHTS dups by the kernel.

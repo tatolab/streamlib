@@ -600,6 +600,11 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// were claimed on them.
     #[cfg(target_os = "linux")]
     surface_share_connections_set_aside_after_a_timeout: Mutex<Vec<UnixStream>>,
+    /// The `deviceUUID` the runtime named at spawn, or why this child has
+    /// none — what its import device is built on, and the refusal of every
+    /// import when it is absent.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    vulkan_device_uuid_the_runtime_named_at_spawn: streamlib_consumer_rhi::Result<[u8; 16]>,
     /// One Vulkan device per child, created at first import.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     consumer_vulkan_device: Mutex<Option<Arc<ConsumerVulkanDevice>>>,
@@ -653,17 +658,21 @@ impl HelperProcessGpuExchangeClient {
     }
 
     /// `surface_share_channel_name` is the socket path on Linux and the
-    /// Mach service name on macOS — what the parent put in the helper's
-    /// environment.
+    /// Mach service name on macOS, and `vulkan_device_uuid_the_runtime_named_at_spawn`
+    /// the runtime's device — what the parent put in the helper's environment.
     pub(crate) fn new(
         escalate_request_to_parent: Py<PyAny>,
         release_to_parent_without_waiting: Py<PyAny>,
         surface_share_channel_name: impl Into<std::ffi::OsString>,
+        vulkan_device_uuid_the_runtime_named_at_spawn: streamlib_consumer_rhi::Result<[u8; 16]>,
         foreign_surface_registration_runtime_id: String,
     ) -> Self {
         let surface_share_channel_name: std::ffi::OsString = surface_share_channel_name.into();
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        let _ = surface_share_channel_name;
+        let _ = (
+            surface_share_channel_name,
+            vulkan_device_uuid_the_runtime_named_at_spawn,
+        );
         Self {
             escalate_request_to_parent,
             release_to_parent_without_waiting,
@@ -680,6 +689,8 @@ impl HelperProcessGpuExchangeClient {
             surface_share_connection: Mutex::new(None),
             #[cfg(target_os = "linux")]
             surface_share_connections_set_aside_after_a_timeout: Mutex::new(Vec::new()),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            vulkan_device_uuid_the_runtime_named_at_spawn,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             consumer_vulkan_device: Mutex::new(None),
             #[cfg(target_os = "linux")]
@@ -857,11 +868,24 @@ impl HelperProcessGpuExchangeClient {
         if let Some(existing_device) = device.as_ref() {
             return Ok(Arc::clone(existing_device));
         }
-        let created = Arc::new(ConsumerVulkanDevice::new().map_err(|device_failure| {
+        let could_not_create_the_import_device = |device_failure: &dyn std::fmt::Display| {
             PyRuntimeError::new_err(format!(
                 "this helper process could not create its Vulkan import device: {device_failure}"
             ))
-        })?);
+        };
+        let vulkan_device_uuid_the_runtime_named =
+            match &self.vulkan_device_uuid_the_runtime_named_at_spawn {
+                Ok(vulkan_device_uuid_the_runtime_named) => *vulkan_device_uuid_the_runtime_named,
+                Err(absent_or_malformed) => {
+                    return Err(could_not_create_the_import_device(absent_or_malformed));
+                }
+            };
+        let created = Arc::new(
+            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+                vulkan_device_uuid_the_runtime_named,
+            )
+            .map_err(|device_failure| could_not_create_the_import_device(&device_failure))?,
+        );
         *device = Some(Arc::clone(&created));
         Ok(created)
     }

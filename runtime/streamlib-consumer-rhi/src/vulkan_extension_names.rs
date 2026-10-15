@@ -34,7 +34,8 @@ pub fn vulkan_extension_names_borrowed_from_properties(
 /// body spells the borrow, and nothing about call sites elsewhere: with this
 /// signature, elision ties the return to the parameter whatever the body does.
 ///
-/// The owner is a statement temporary — `ConsumerVulkanDevice::new`'s shape.
+/// The owner is a statement temporary — the shape of
+/// [`ConsumerVulkanDevice::new_on_the_device_the_runtime_named`](crate::ConsumerVulkanDevice::new_on_the_device_the_runtime_named).
 ///
 /// ```compile_fail,E0716
 /// use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;

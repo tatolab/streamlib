@@ -511,7 +511,10 @@ mod tests {
             return;
         };
         let consumer_device = Arc::new(
-            ConsumerVulkanDevice::new().expect("a consumer device on the same driver files"),
+            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+                device.physical_device_uuid(),
+            )
+            .expect("a consumer device on the engine's device"),
         );
 
         let pool = VulkanPixelBufferPool::new(

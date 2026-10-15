@@ -38,7 +38,7 @@ fn subprocess_writes_host_reads_round_trip() {
     }
     assert_eq!(surface.produce_done.current_value().unwrap(), 1);
 
-    let (mut child, parent_sock) = common::spawn_helper("write");
+    let (mut child, parent_sock) = common::spawn_helper("write", &host);
     let dma_buf_fd = surface
         .texture
         .vulkan_inner()
