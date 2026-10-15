@@ -588,8 +588,8 @@ impl HostVulkanTexture {
     /// Pairs with [`Self::export_opaque_fd_memory`] and
     /// [`streamlib_consumer_rhi::ConsumerVulkanTexture::from_opaque_fd`].
     ///
-    /// - **Format** is any single-plane format; which formats CUDA can map is
-    ///   the caller's to keep (R8G8B8A8 / R16G16B16A16F / R32G32B32A32F here).
+    /// - **Format** is any single-plane format; keeping to the ones CUDA
+    ///   maps ([`TextureFormat::is_cuda_mappable`]) is the caller's.
     /// - **Tiling** is OPTIMAL with no DRM modifier chain: LINEAR returns
     ///   `CUDA_ERROR_INVALID_VALUE` from the mipmapped-array import, and
     ///   OPAQUE_FD + `DRM_FORMAT_MODIFIER_EXT` is not valid on NVIDIA.
@@ -622,19 +622,11 @@ impl HostVulkanTexture {
         }
 
         let vk_format = texture_format_to_vk(desc.format);
-        let format_is_cuda_mappable = matches!(
-            desc.format,
-            TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float
-        );
-        let usage_every_opaque_fd_image_carries = if format_is_cuda_mappable {
-            vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::TRANSFER_DST
-                | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::STORAGE
-        } else {
-            vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST
-        };
-        let usage_flags = usage_every_opaque_fd_image_carries | texture_usages_to_vk(desc.usage);
+        let mut usage = desc.usage | TextureUsages::COPY_SRC | TextureUsages::COPY_DST;
+        if desc.format.is_cuda_mappable() {
+            usage |= TextureUsages::EVERY_USAGE_A_CUDA_MAPPED_IMAGE_CARRIES;
+        }
+        let usage_flags = texture_usages_to_vk(usage);
 
         // Declare OPAQUE_FD handle type on the image create info; the
         // matching ExportMemoryAllocateInfo lives on the pool's

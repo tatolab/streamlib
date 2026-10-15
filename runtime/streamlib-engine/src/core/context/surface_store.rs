@@ -2116,7 +2116,7 @@ fn opaque_fd_texture_registration_payload(
     const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
     const VK_SAMPLE_COUNT_1: i32 = 1;
 
-    let allocation_size = texture.vma_allocation_size() as u64;
+    let allocation_size = texture.vma_allocation_size();
     let memory_type_index = memory_type_index_stated_by_an_opaque_fd_export(
         texture.vma_allocation_memory_type_index(),
         surface_id,

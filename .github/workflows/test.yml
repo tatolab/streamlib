@@ -385,9 +385,7 @@ jobs:
             core::context::one_off_acquisitions_held_for_one_node \
             core::context::one_off_acquisitions_counted_for_one_native_node \
             core::compiler::compiler_ops::subprocess_escalate::handle_lifecycle::tests::a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name \
-            core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::parse_texture_usages \
-            core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::the_implied_copy_bits \
-            core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::on_a_device_without_dma_buf_every_single_plane_request_takes_opaque_fd \
+            core::compiler::compiler_ops::subprocess_escalate::acquisition::tests \
             core::context::audio_device_backend \
             core::context::silent_null_audio_device_backend \
             core::context::device_backend_probe_chain \

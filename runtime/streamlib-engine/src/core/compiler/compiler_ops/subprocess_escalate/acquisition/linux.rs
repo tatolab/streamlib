@@ -306,17 +306,9 @@ pub(super) fn derive_texture_cross_process_importability(
             TextureCrossProcessImportability::NotImportable
         };
     }
-    let cuda_mappable = matches!(
-        format,
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float
-    );
-    let opaque_fd_fixed_usage_set = TextureUsages::COPY_SRC
-        | TextureUsages::COPY_DST
-        | TextureUsages::TEXTURE_BINDING
-        | TextureUsages::STORAGE_BINDING;
-    if cuda_mappable
+    if format.is_cuda_mappable()
         && device.has_the_opaque_fd_image_pool
-        && opaque_fd_fixed_usage_set.contains(usage)
+        && TextureUsages::EVERY_USAGE_A_CUDA_MAPPED_IMAGE_CARRIES.contains(usage)
     {
         return TextureCrossProcessImportability::OpaqueFd;
     }
