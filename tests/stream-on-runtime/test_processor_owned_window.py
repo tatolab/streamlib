@@ -66,9 +66,14 @@ STREAM_BY_PROBE_AND_SCENARIO = {
 #: Both go: winit picks X11 off `DISPLAY` and Wayland off `WAYLAND_DISPLAY`,
 #: and leaving either behind would leave `tatolabd` able to get a window after
 #: all — the arrangement a container gives an author who never asked for one.
+#: The user manager goes too: `tatolabd` started naming no display copies one
+#: from `systemctl --user show-environment`, which finds the manager through
+#: `XDG_RUNTIME_DIR` and the session bus, so on a desktop it would get one.
 ENVIRONMENT_WITH_NO_DISPLAY_SERVER: "dict[str, str | None]" = {
     "DISPLAY": None,
     "WAYLAND_DISPLAY": None,
+    "XDG_RUNTIME_DIR": None,
+    "DBUS_SESSION_BUS_ADDRESS": None,
 }
 
 # Xlib's own constants, named here because the gesture below is the only
