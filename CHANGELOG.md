@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.8](https://github.com/tatolab/streamlib/compare/v0.46.7...v0.46.8) (2026-10-15)
+
+
+### Features
+
+* **engine:** a texture a processor acquires on a device without DMA-BUF crosses as OPAQUE_FD ([#2776](https://github.com/tatolab/streamlib/issues/2776)) ([de59d71](https://github.com/tatolab/streamlib/commit/de59d715dc65f63d24c08b3da62d5d8b1a86bc9f))
+
 ## [0.46.7](https://github.com/tatolab/streamlib/compare/v0.46.6...v0.46.7) (2026-10-15)
 
 
