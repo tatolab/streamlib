@@ -1726,9 +1726,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   it cannot tell a consumer's write from uninitialised memory and one staging spans every
   frame its pool slot publishes. Cross-process texture import is part of the capability, and
   importability is an allocation flavour the engine derives per acquisition, never a Python
-  dial. Linux: single-plane render-attachment usage takes explicit-modifier DMA-BUF where the
-  render-target modifier probes available; a CUDA-mappable format whose usage sits inside the
-  OPAQUE_FD set takes OPAQUE_FD where that image pool exists. macOS: any single-plane format
+  dial. Linux: on a device that exports no DMA-BUF, every single-plane request — render
+  targets included, whatever the format — takes OPAQUE_FD where that image pool exists. On a
+  device that exports DMA-BUF, single-plane render-attachment usage takes explicit-modifier
+  DMA-BUF where the render-target modifier probes available, and a CUDA-mappable format whose
+  usage sits inside the OPAQUE_FD set takes OPAQUE_FD where that image pool exists. macOS: any single-plane format
   on a device with `VK_EXT_metal_objects` takes an `OPTIMAL` image over a private IOSurface
   the engine creates — never `kIOSurfaceIsGlobal`, which MoltenVK's own export path sets —
   bound to a device-local memory type that is not host-visible, chosen by query; a
