@@ -105,8 +105,9 @@ pub(in super::super) fn handle_acquire_image(
                 parsed_format,
             )?;
             let (handle_id, produce_done, consume_done) = assign_image_handle_id(full, &texture)?;
-            // The timeline pair is held with the image so the FDs handed to
-            // surface-share stay valid for the registration's lifetime.
+            // The timeline pair, where the device exports one, is held with
+            // the image so the FDs handed to surface-share stay valid for the
+            // registration's lifetime.
             Ok((
                 handle_id,
                 RegisteredHandle::Image {
@@ -145,8 +146,9 @@ pub(in super::super) fn handle_acquire_image(
 ///
 /// On Linux, also allocates and registers a single-writer-per-edge
 /// timeline pair (`produce_done` + `consume_done` per
-/// `docs/architecture/adapter-timeline-single-writer.md`). The
-/// timelines are returned so the caller can stash them in the
+/// `docs/architecture/adapter-timeline-single-writer.md`) where the device
+/// exports a timeline semaphore; a device that exports none registers no
+/// edge. The timelines are returned so the caller can stash them in the
 /// [`EscalateHandleRegistry`]; the surface-share registration
 /// duplicates the FDs via SCM_RIGHTS but the host-side Arcs must
 /// outlive the registration.
@@ -167,10 +169,11 @@ pub(super) fn assign_texture_handle_id(
         // but the surface-share IPC delivers both FDs to the
         // cdylib so future consumers riding the dual-timeline
         // contract see them.
-        let produce_done =
-            new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "produce_done")?;
-        let consume_done =
-            new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "consume_done")?;
+        let (produce_done, consume_done) = timeline_edge_pair_where_the_device_exports_one(
+            &host_device,
+            "assign_texture_handle_id",
+        )?
+        .unzip();
         // UNDEFINED at registration: pooled textures sit in the
         // texture pool unowned until the first acquire. The host
         // adapter or escalate-IPC bridge transitions to its
@@ -180,11 +183,11 @@ pub(super) fn assign_texture_handle_id(
         store.register_texture(
             &handle_id,
             texture.texture(),
-            Some(produce_done.as_ref()),
-            Some(consume_done.as_ref()),
+            produce_done.as_deref(),
+            consume_done.as_deref(),
             streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
         )?;
-        Ok((handle_id, Some(produce_done), Some(consume_done)))
+        Ok((handle_id, produce_done, consume_done))
     } else {
         Ok((handle_id, None, None))
     }
@@ -197,23 +200,23 @@ pub(super) fn assign_texture_handle_id(
 /// so the subprocess can `check_out` it; the surface-share registration
 /// carries the modifier and strides the consumer-side EGL import requires.
 ///
-/// Also allocates a single-writer-per-edge timeline pair and registers
-/// it with surface-share. Returns the timelines so the caller can
-/// stash them in the [`EscalateHandleRegistry`].
+/// Also allocates a single-writer-per-edge timeline pair, where the device
+/// exports a timeline semaphore, and registers it with surface-share.
+/// Returns the timelines so the caller can stash them in the
+/// [`EscalateHandleRegistry`].
 pub(super) fn assign_image_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
     texture: &crate::core::rhi::Texture,
 ) -> crate::core::error::Result<(
     String,
-    Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
-    Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+    Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
 )> {
     let handle_id = Uuid::new_v4().to_string();
     let host_device = full.host_vulkan_device_arc()?;
-    let produce_done =
-        new_exportable_timeline_edge(&host_device, "assign_image_handle_id", "produce_done")?;
-    let consume_done =
-        new_exportable_timeline_edge(&host_device, "assign_image_handle_id", "consume_done")?;
+    let (produce_done, consume_done) =
+        timeline_edge_pair_where_the_device_exports_one(&host_device, "assign_image_handle_id")?
+            .unzip();
     if let Some(store) = full.surface_store() {
         // Render-target images are freshly allocated and unwritten at
         // registration time — declare UNDEFINED and let the first
@@ -223,12 +226,34 @@ pub(super) fn assign_image_handle_id(
         store.register_texture(
             &handle_id,
             texture,
-            Some(produce_done.as_ref()),
-            Some(consume_done.as_ref()),
+            produce_done.as_deref(),
+            consume_done.as_deref(),
             streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
         )?;
     }
     Ok((handle_id, produce_done, consume_done))
+}
+
+/// The `produce_done` / `consume_done` pair for one cross-process
+/// registration, or `None` where the device exports no timeline semaphore —
+/// the software device refuses an exportable one at creation, and crosses no
+/// edge.
+fn timeline_edge_pair_where_the_device_exports_one(
+    host_device: &crate::vulkan::rhi::HostVulkanDevice,
+    caller: &str,
+) -> crate::core::error::Result<
+    Option<(
+        Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    )>,
+> {
+    if !host_device.supports_semaphore_export() {
+        return Ok(None);
+    }
+    Ok(Some((
+        new_exportable_timeline_edge(host_device, caller, "produce_done")?,
+        new_exportable_timeline_edge(host_device, caller, "consume_done")?,
+    )))
 }
 
 /// Which cross-process-importable allocation flavor an `acquire_texture`

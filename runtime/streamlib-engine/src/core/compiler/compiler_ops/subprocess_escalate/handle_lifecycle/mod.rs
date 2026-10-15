@@ -65,13 +65,14 @@ pub(crate) enum RegisteredHandle {
     },
     /// Render-target image handed out via `AcquireImage`. The texture
     /// itself returns to its pool when the variant drops; the
-    /// timelines keep their FDs alive for surface-share consumers.
+    /// timelines keep their FDs alive for surface-share consumers, and are
+    /// absent on a device that exports no timeline semaphore.
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     Image {
         texture: crate::core::rhi::Texture,
-        produce_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
-        consume_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        produce_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+        consume_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
     },
     /// Tensor storage buffer handed out via `AcquireStorageBuffer`, registered
     /// with surface-share and the parent-wide storage buffer map.

@@ -18,6 +18,7 @@ use super::super::storage_buffer::tensor_layout_of_a_check_out;
 use super::super::{
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
 };
+use super::export_staging::device_tensor_refused_on_a_software_device;
 use super::parse_device_uuid;
 use crate::python_cuda_pixel_exchange::{CudaImportedSurface, import_opaque_fd_into_cuda};
 
@@ -48,9 +49,20 @@ pub(crate) struct HelperCheckedOutStorageBuffer {
 impl HelperCheckedOutStorageBuffer {
     /// CUDA's linear-memory import of this tensor, made on first ask. CUDA
     /// maps the tensor's exact byte size, never the allocation's rounded one.
+    /// Refused by the import device's name on a software device.
     pub(crate) fn cuda_import(&self) -> Result<Arc<CudaImportedSurface>, String> {
         if let Some(imported) = self.cuda_import.get() {
             return Ok(Arc::clone(imported));
+        }
+        let software_device_name = self
+            .exchange_client
+            .software_import_device_name()
+            .map_err(|import_device_failure| import_device_failure.to_string())?;
+        if let Some(software_device_name) = software_device_name {
+            return Err(device_tensor_refused_on_a_software_device(
+                &self.surface_id,
+                &software_device_name,
+            ));
         }
         let mut opaque_memory_fd = self.opaque_memory_fd_until_cuda_imports_it.lock();
         if let Some(imported) = self.cuda_import.get() {

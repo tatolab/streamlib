@@ -673,8 +673,9 @@ shape but **don't**:
 4. **"My adapter wants per-acquire host work on a subprocess's
    behalf."** That is not an adapter's job. Per-acquire host work
    for a subprocess is an escalate op answered by `GpuContext`,
-   which owns the staging and signals the timeline the subprocess
-   waits on — see `run_cpu_readback_copy`. Adding an installable
+   which owns the staging, retires each copy before it replies, and
+   signals the timeline the subprocess waits on where the device exports
+   one — see `run_cpu_readback_copy`. Adding an installable
    bridge would reintroduce the application-glue step the engine
    deleted.
 

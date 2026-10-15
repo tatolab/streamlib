@@ -125,9 +125,10 @@ fn the_seam_lands_a_frames_pixels_in_cpu_readable_memory() {
         panic!("expected Ok, got {response:?}");
     };
     assert_eq!(ok.request_id, "req-seam-read");
-    assert!(
+    assert_eq!(
         ok.timeline_value.is_some(),
-        "the child waits on the timeline value this op answers with"
+        gpu.gpu_capabilities().supports_semaphore_export,
+        "the child waits on a timeline value exactly where the device exports a timeline"
     );
 
     let staging = gpu
@@ -247,9 +248,10 @@ fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
     let EscalateResponse::Ok(ok) = published else {
         panic!("expected Ok, got {published:?}");
     };
-    assert!(
+    assert_eq!(
         ok.timeline_value.is_some(),
-        "a publish answers with the timeline value the child waits on"
+        gpu.gpu_capabilities().supports_semaphore_export,
+        "a publish answers a timeline value exactly where the device exports a timeline"
     );
 
     let plane = pooled_backing.plane_base_address(0);
@@ -330,5 +332,75 @@ fn a_non_numeric_surface_id_is_not_a_parse_error() {
             err.message
         ),
         other => panic!("expected Err, got {other:?}"),
+    }
+}
+
+/// Every copy an escalate op makes is retired on the host before the op
+/// answers — the whole ordering contract on a device that exports no
+/// timeline, where the child has nothing to wait on.
+///
+/// Each round stamps a 4K frame with a fresh value and reads the staging the
+/// instant the reply lands, waiting on nothing: a copy still in flight would
+/// leave the previous round's stamp somewhere in the staging. Runs the same
+/// on a device that exports a timeline, where the host retirement holds too.
+/// GPU-gated: skips when no device is present.
+#[test]
+fn a_staging_copy_without_a_timeline_is_retired_before_the_reply() {
+    const FRAME_WIDTH: u32 = 3840;
+    const FRAME_HEIGHT: u32 = 2160;
+    const ROUNDS: u8 = 8;
+    let Some(gpu) = gpu_or_skip("a_staging_copy_without_a_timeline_is_retired_before_the_reply")
+    else {
+        return;
+    };
+    let device_exports_a_timeline = gpu.gpu_capabilities().supports_semaphore_export;
+    let (pool_id, pooled_backing) = gpu
+        .acquire_pixel_buffer(FRAME_WIDTH, FRAME_HEIGHT, PixelFormat::Rgba32)
+        .expect("acquire a frame large enough that a copy takes real time");
+    let surface_id = pool_id.to_string();
+    let plane = pooled_backing.plane_base_address(0);
+    assert!(!plane.is_null(), "the pooled backing must be host-mapped");
+    let plane_size = pooled_backing.plane_size(0) as usize;
+    let sandbox = GpuContextLimitedAccess::new(gpu.clone());
+    let registry = EscalateHandleRegistry::new();
+
+    for round_stamp in 1..=ROUNDS {
+        unsafe { std::ptr::write_bytes(plane, round_stamp, plane_size) };
+        let response = handle_escalate_op(
+            &sandbox,
+            &registry,
+            EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
+                request_id: format!("req-round-{round_stamp}"),
+                surface_id: surface_id.clone(),
+                direction: EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer,
+            }),
+        )
+        .expect("run_cpu_readback_copy always produces a response");
+        let EscalateResponse::Ok(ok) = response else {
+            panic!("round {round_stamp}: expected Ok, got {response:?}");
+        };
+        assert_eq!(
+            ok.timeline_value.is_some(),
+            device_exports_a_timeline,
+            "round {round_stamp}: a timeline value is answered exactly where one crosses"
+        );
+
+        let staging = gpu
+            .surface_export_staging(
+                &surface_id,
+                crate::core::context::SurfaceExportStagingResidency::HostVisible,
+            )
+            .expect("the staging the op minted");
+        let mapped = staging.staging_buffer().mapped_ptr();
+        assert!(!mapped.is_null(), "a host-visible staging must be mapped");
+        let staged =
+            unsafe { std::slice::from_raw_parts(mapped, staging.staging_byte_size() as usize) };
+        // One scan: a copy still in flight would finish under a second one.
+        let first_byte_holding_another_stamp = staged.iter().position(|byte| *byte != round_stamp);
+        assert_eq!(
+            first_byte_holding_another_stamp, None,
+            "round {round_stamp}: the staging read the instant the reply landed must hold this \
+             round's frame — a byte still holding another stamp is a copy in flight"
+        );
     }
 }

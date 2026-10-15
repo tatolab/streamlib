@@ -981,9 +981,9 @@ impl SurfaceStoreInner {
         Ok(())
     }
 
-    /// Register a surface-export staging buffer and the timeline its
-    /// refills signal, so a helper process can check the pair out and
-    /// reach the staging — importing it into an external device API, or
+    /// Register a surface-export staging buffer and, where the device
+    /// exports one, the timeline its refills signal, so a helper process can
+    /// check them out and reach the staging — importing it into an external device API, or
     /// mapping it, according to the residency it was minted at.
     ///
     /// The staging is one flat OPAQUE_FD allocation, never a pixel
@@ -998,7 +998,10 @@ impl SurfaceStoreInner {
     /// the host produces the staging's contents and the consumer waits
     /// before reading, which is exactly the `produce_done` edge — and
     /// there is no consumer-side drain for the host to wait on, because
-    /// each refill overwrites the staging wholesale.
+    /// each refill overwrites the staging wholesale. `None` registers the
+    /// staging alone, with `produce_done` empty too: on a device that
+    /// exports no timeline every copy is retired on the host before the
+    /// escalate reply, so the consumer has nothing to wait on.
     #[cfg(target_os = "linux")]
     pub fn register_surface_export_staging(
         &self,
@@ -1008,7 +1011,7 @@ impl SurfaceStoreInner {
         width: u32,
         height: u32,
         format: PixelFormat,
-        refill_done: &crate::vulkan::rhi::HostVulkanTimelineSemaphore,
+        refill_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) -> Result<()> {
         // Read ahead of the export so a staging with no allocation to
         // state fails before an fd is minted. A conforming OPAQUE_FD
@@ -1026,11 +1029,14 @@ impl SurfaceStoreInner {
         // handed to no one; adopting it here is what closes it exactly once
         // — including on the early return the timeline export can take.
         let staging_fd = unsafe { OwnedFd::from_raw_fd(exported_staging_fd) };
-        let refill_done_fd = exported_timeline_edge_opaque_fd(
-            "register_surface_export_staging",
-            "refill_done",
-            refill_done,
-        )?;
+        let mut registered_fds = vec![staging_fd];
+        if let Some(refill_done) = refill_done {
+            registered_fds.push(exported_timeline_edge_opaque_fd(
+                "register_surface_export_staging",
+                "refill_done",
+                refill_done,
+            )?);
+        }
 
         let request = surface_export_staging_registration_payload(
             surface_id,
@@ -1040,12 +1046,13 @@ impl SurfaceStoreInner {
             height,
             format,
             memory_type_index,
+            refill_done.is_some(),
         );
 
         self.send_surface_share_registration(
             "register_surface_export_staging",
             &request,
-            vec![staging_fd, refill_done_fd],
+            registered_fds,
         )?;
         tracing::debug!(
             "SurfaceStore: Registered surface-export staging '{}' ({} bytes)",
@@ -2102,6 +2109,7 @@ fn surface_export_staging_registration_payload(
     height: u32,
     format: PixelFormat,
     memory_type_index: u32,
+    refill_done_timeline_crosses: bool,
 ) -> serde_json::Value {
     serde_json::json!({
         "op": "register",
@@ -2114,7 +2122,7 @@ fn surface_export_staging_registration_payload(
         "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
         "plane_sizes": [staging_byte_size],
         "plane_offsets": [0],
-        SURFACE_REPLY_HAS_PRODUCE_DONE_FD: true,
+        SURFACE_REPLY_HAS_PRODUCE_DONE_FD: refill_done_timeline_crosses,
         SURFACE_REPLY_HAS_CONSUME_DONE_FD: false,
         SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX: memory_type_index,
     })
@@ -3055,6 +3063,7 @@ mod surface_export_staging_registration_payload_tests {
     #[test]
     fn a_staging_registration_states_the_exporters_memory_type_index() {
         const EXPORTER_MEMORY_TYPE_INDEX: u32 = 4;
+        let refill_done_timeline_crosses = true;
 
         let payload = surface_export_staging_registration_payload(
             "surface-under-test-hostvisible",
@@ -3064,6 +3073,7 @@ mod surface_export_staging_registration_payload_tests {
             64,
             PixelFormat::Rgba32,
             EXPORTER_MEMORY_TYPE_INDEX,
+            refill_done_timeline_crosses,
         );
 
         assert_eq!(
@@ -3085,6 +3095,7 @@ mod surface_export_staging_registration_payload_tests {
     /// rather than reading as "absent" the way a defaulted field would.
     #[test]
     fn a_staging_registration_states_memory_type_index_zero_rather_than_omitting_it() {
+        let refill_done_timeline_crosses = true;
         let payload = surface_export_staging_registration_payload(
             "surface-under-test-hostvisible",
             "runtime-under-test",
@@ -3093,6 +3104,7 @@ mod surface_export_staging_registration_payload_tests {
             32,
             PixelFormat::Rgba32,
             0,
+            refill_done_timeline_crosses,
         );
         assert_eq!(
             payload
@@ -3100,6 +3112,40 @@ mod surface_export_staging_registration_payload_tests {
                 .and_then(|value| value.as_u64()),
             Some(0),
         );
+    }
+
+    /// The registration's `produce_done` flag is what tells the consumer how
+    /// many fds the check-out carries, so it follows the timeline exactly.
+    #[test]
+    fn a_staging_registration_states_a_produce_done_edge_only_when_its_timeline_crosses() {
+        let staging_registration_payload = |refill_done_timeline_crosses| {
+            surface_export_staging_registration_payload(
+                "surface-under-test-hostvisible",
+                "runtime-under-test",
+                4096,
+                32,
+                32,
+                PixelFormat::Rgba32,
+                0,
+                refill_done_timeline_crosses,
+            )
+        };
+        for refill_done_timeline_crosses in [true, false] {
+            let payload = staging_registration_payload(refill_done_timeline_crosses);
+            assert_eq!(
+                payload
+                    .get(SURFACE_REPLY_HAS_PRODUCE_DONE_FD)
+                    .and_then(|value| value.as_bool()),
+                Some(refill_done_timeline_crosses),
+            );
+            assert_eq!(
+                payload
+                    .get(SURFACE_REPLY_HAS_CONSUME_DONE_FD)
+                    .and_then(|value| value.as_bool()),
+                Some(false),
+                "a staging never carries a consumer-side drain edge"
+            );
+        }
     }
 }
 
