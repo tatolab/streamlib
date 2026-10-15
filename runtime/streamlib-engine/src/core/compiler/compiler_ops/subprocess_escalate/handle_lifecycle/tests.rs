@@ -1584,7 +1584,7 @@ fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exp
     use crate::core::rhi::TextureFormat;
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
-        println!("no GPU device — skipping");
+        tracing::warn!("no GPU device — skipping");
         return;
     };
     let device_exports_a_timeline = gpu.gpu_capabilities().supports_semaphore_export;
