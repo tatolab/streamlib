@@ -236,8 +236,8 @@ a tarball without the driver's manifest"; both pointers fold.
   (`test_video_frame_claim.py:128` and its sibling) stand.
 
 **Slice 4 — CI on the unit's driver.**
-- The Linux lanes take the driver from the unit they just built (`ci.yml`'s `linux-runtime-unit`
-  artifact), never from apt: the integration suite runs the whole of
+- The Linux lanes take the driver from the unit they just built (`ci.yml`'s `linux` job stages
+  the same driver build), never from apt: the integration suite runs the whole of
   `tests/stream-on-runtime` minus `rig_only_capability`, and a job runs
   `cargo test --features hardware-tests` for the engine, media-builtins and `tatolabd` with
   `VK_ADD_DRIVER_FILES` naming the staged manifest; the engine-lib allowlist
@@ -247,7 +247,7 @@ a tarball without the driver's manifest"; both pointers fold.
   real camera, display, audio device, Vulkan Video, modifiers or CUDA gaining the marker; the
   `requires_gpu` definitions stop naming DMA-BUF. Rust: one helper,
   `skip_unless_the_device_has(…)` over the snapshot, whose reason is the same closed list, and
-  the lane fails on a skip line it cannot name — the shape `ci.yml`'s `macos-rust` job already uses
+  the lane fails on a skip line it cannot name — the shape `ci.yml`'s `macos` job already uses
   for the macOS adapter tests. The 204 boilerplate `ignore` reasons are left as they are; a
   test that needs a tier says so through the helper, the rest simply run.
 - The no-driver fixture keeps working (its variables replace the bundle by the existing rule);

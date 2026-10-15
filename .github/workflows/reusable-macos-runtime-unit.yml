@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
           # Builds and runs PR-authored code; a persisted token would be
@@ -57,12 +57,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       # Stages the Vulkan loader and MoltenVK, builds the release wheel at the
       # deployment target the maturin project pins, lays out its lend, and
@@ -249,7 +249,7 @@ jobs:
           echo "the window showed $frames_shown frames"
 
       - name: Keep the wheel for a clean-machine run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: streamlib-macos-wheel
           path: target/tatolab-runtime/wheel/*.whl

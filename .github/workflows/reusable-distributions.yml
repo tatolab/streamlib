@@ -70,13 +70,13 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag_name }}
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.PINNED_UV_VERSION }}
 
@@ -195,7 +195,7 @@ jobs:
       # Every `pypi-distribution-*` artifact of this run is what publish-to-pypi
       # uploads.
       - name: Keep the distributions for the upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pypi-distribution-tatolab-stream
           path: |
@@ -277,14 +277,14 @@ jobs:
 
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.PINNED_UV_VERSION }}
           # No checkout and nothing to resolve, so nothing to cache.
           enable-cache: false
 
       - name: Collect every distribution this run built
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: pypi-distribution-*
           path: dist
@@ -347,7 +347,7 @@ jobs:
       GET_TATOLAB_COM_URL: https://get.tatolab.com
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag_name }}
           persist-credentials: false
@@ -355,7 +355,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Collect the tarball this run built
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: linux-runtime-tarball
           path: linux-runtime-tarball

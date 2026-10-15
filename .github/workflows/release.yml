@@ -18,11 +18,11 @@ jobs:
       tag_name: ${{ steps.tag.outputs.tag_name || steps.open.outputs.tag_name }}
       version: ${{ steps.tag.outputs.major || steps.open.outputs.major }}.${{ steps.tag.outputs.minor || steps.open.outputs.minor }}.${{ steps.tag.outputs.patch || steps.open.outputs.patch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Pass 1 — open / refresh the standing release PR (version bump + changelog)
       # for the feat/fix commits landed since the last release.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: open
         with:
           config-file: release-please-config.json
@@ -160,7 +160,7 @@ jobs:
       # sees the merged release PR, creates the git tag + GitHub Release, and sets
       # release_created so trigger-schemas publishes the client. No-op when the
       # step above merged nothing.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: tag
         with:
           config-file: release-please-config.json

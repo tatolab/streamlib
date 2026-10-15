@@ -178,7 +178,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   2026-10-02. [package-split-and-lend — SHIPPED #2686, #2689, #2693; amended by
   optional-accelerators: "`requires_gpu` halves stay rig-only" — only what a runner cannot
   give stays rig-only, the rest runs on the bundled software device (§Graphics)]
-  <!-- verify: grep -n -e "stream-suite:" -e "linux-integration-suite:" .github/workflows/ci.yml -->
+  <!-- verify: grep -n -e "Stream suite (Python 3.10 and 3.12)" -e "Integration suite (all but rig-only)" .github/workflows/ci.yml -->
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
   stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
@@ -3523,12 +3523,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   cannot be dialled again. A bag the engine refuses is the one failure not retried: it names
   its port and ends the thread, because reconnecting would spend an endpoint's session
   forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150]
-- **DECIDED** — `ci.yml` carries a `linux-extension` job, and a
-  `macos-extension` beside it, over a matrix holding `packages/streamlib-webrtc`:
-  unpack the runtime unit, build the extension into a venv holding `tatolab-stream`,
-  `cargo test` and clippy over its crate, `mypy.stubtest` over its `_native`, pyright over
-  its Python, and pytest with `-m "not requires_gpu"`, the portability gate over its `.so`
-  among them. `release-please-config.json` bumps the extension with everything else, one
+- **DECIDED** — `ci.yml`'s `linux-runtime` and `macos-runtime` jobs carry the
+  extension lane for `packages/streamlib-webrtc`: on the runtime unit they built, build
+  the extension into a venv holding `tatolab-stream`, `cargo test` and clippy over its
+  crate, `mypy.stubtest` over its `_native`, pyright over its Python, and pytest with
+  `-m "not requires_gpu"`, the portability gate over its `.so` among them.
+  `release-please-config.json` bumps the extension with everything else, one
   version (§Distribution & versioning); the release builds `tatolab-webrtc` for manylinux
   and Apple Silicon and uploads it to PyPI beside `tatolab-stream`, attaching nothing.
   [networking-extension-wheels — SHIPPED #2152; package-split-and-lend — SHIPPED #2691,

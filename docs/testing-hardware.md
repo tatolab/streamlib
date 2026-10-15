@@ -264,7 +264,7 @@ login session's screen is locked.
 
 Tier 1 runs on every PR via `.github/workflows/ci.yml`. Tier 2 runs on
 every PR too, on the Linux runtime unit's bundled lavapipe rather than a GPU:
-`ci.yml`'s `linux-rust-tests` job stages that driver, names it through
+`ci.yml`'s `linux` job stages that driver, names it through
 `VK_ADD_DRIVER_FILES`, and runs the engine's, `streamlib-media-builtins`' and
 `tatolabd`'s `hardware-tests` suites in the same cargo-nextest build as tier 1
 (`.config/nextest.toml`). A skip passes in a test harness, so the job reads
