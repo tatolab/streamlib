@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.9](https://github.com/tatolab/streamlib/compare/v0.46.8...v0.46.9) (2026-10-15)
+
+
+### Features
+
+* **ci:** the Linux integration lane runs on the unit's bundled driver; rig_only_capability(reason=…) is held to a closed list ([#2778](https://github.com/tatolab/streamlib/issues/2778)) ([f2d5834](https://github.com/tatolab/streamlib/commit/f2d583453d5ccd768c074d351bca27bcfeee44b1))
+
 ## [0.46.8](https://github.com/tatolab/streamlib/compare/v0.46.7...v0.46.8) (2026-10-15)
 
 
