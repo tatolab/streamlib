@@ -1080,12 +1080,10 @@ impl SurfaceStoreInner {
     ///   DMA-BUF FD and publishes with `handle_type: "dma_buf"`.
     /// - **OPAQUE_FD** (`HostVulkanTexture::new_opaque_fd_export` —
     ///   DEVICE_LOCAL `VkImage`, `VK_IMAGE_TILING_OPTIMAL`, no DRM
-    ///   modifier, format restricted to `Rgba8Unorm` / `Rgba16Float` /
-    ///   `Rgba32Float`) — exports the OPAQUE_FD memory handle and
-    ///   publishes with `handle_type: "opaque_fd"` plus the
-    ///   `vk_image_*` round-trip fields (#806) the consumer needs to
-    ///   rebuild a byte-for-byte matching `VkImageCreateInfo` for the
-    ///   CUDA `cudaExternalMemoryGetMappedMipmappedArray` import path.
+    ///   modifier, any single-plane format) — exports the OPAQUE_FD
+    ///   memory handle and publishes with `handle_type: "opaque_fd"` plus
+    ///   the `vk_image_*` round-trip fields (#806) the consumer needs to
+    ///   rebuild a matching `VkImageCreateInfo`, usage included.
     #[cfg(target_os = "linux")]
     pub fn register_texture(
         &self,
@@ -1126,71 +1124,17 @@ impl SurfaceStoreInner {
 
         // Per-flavor wire fields. The DMA-BUF path carries the DRM
         // modifier + per-plane layout the EGL / Vulkan import paths
-        // need. The OPAQUE_FD path carries the `vk_image_*` round-trip
-        // shape `cudaExternalMemoryGetMappedMipmappedArray` requires —
-        // matches the fixed shape `HostVulkanTexture::new_opaque_fd_export`
-        // hardcodes (2D, mipLevels=1, arrayLayers=1, samples=1,
-        // tiling=OPTIMAL, usage=TRANSFER_SRC|TRANSFER_DST|SAMPLED|STORAGE).
+        // need; the OPAQUE_FD path the `vk_image_*` shape an importer
+        // rebuilds the image with.
         let request = if is_opaque_fd {
-            let allocation_size = texture.vulkan_inner().vma_allocation_size() as u64;
-            // Raw-handle export contract fields. Both exist by
-            // construction here: the OPAQUE_FD memory export above
-            // already proved the allocation and its owning device.
-            let memory_type_index = memory_type_index_stated_by_an_opaque_fd_export(
-                texture.vulkan_inner().vma_allocation_memory_type_index(),
+            opaque_fd_texture_registration_payload(
+                texture.vulkan_inner(),
                 surface_id,
-                "OPAQUE_FD texture registration",
-            )?;
-            let exporting_device_uuid = streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
-                texture
-                    .vulkan_inner()
-                    .exporting_physical_device_uuid()
-                    .ok_or_else(|| {
-                        Error::GpuError(format!(
-                            "OPAQUE_FD texture registration for {surface_id:?} has no stored \
-                             device to read the exporting device UUID from; an import on the \
-                             wrong GPU corrupts silently instead of failing"
-                        ))
-                    })?,
-            );
-            const VK_IMAGE_TYPE_2D: i32 = 1;
-            const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
-            const VK_SAMPLE_COUNT_1: i32 = 1;
-            const VK_IMAGE_USAGE_TRANSFER_SRC_BIT: u32 = 0x0000_0001;
-            const VK_IMAGE_USAGE_TRANSFER_DST_BIT: u32 = 0x0000_0002;
-            const VK_IMAGE_USAGE_SAMPLED_BIT: u32 = 0x0000_0004;
-            const VK_IMAGE_USAGE_STORAGE_BIT: u32 = 0x0000_0008;
-            let vk_image_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-                | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-                | VK_IMAGE_USAGE_SAMPLED_BIT
-                | VK_IMAGE_USAGE_STORAGE_BIT;
-
-            serde_json::json!({
-                "op": "register",
-                "surface_id": surface_id,
-                "runtime_id": self.runtime_id,
-                "width": texture.width(),
-                "height": texture.height(),
-                "format": texture.format().wire_name(),
-                "resource_type": SURFACE_RESOURCE_TYPE_TEXTURE,
-                "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
-                "plane_sizes": [allocation_size],
-                "plane_offsets": [0u64],
-                "plane_strides": [0u64],
-                "drm_format_modifier": 0u64,
-                SURFACE_REPLY_HAS_PRODUCE_DONE_FD: produce_done_fd.is_some(),
-                SURFACE_REPLY_HAS_CONSUME_DONE_FD: consume_done_fd.is_some(),
-                "current_image_layout": current_image_layout.as_vk().as_raw(),
-                "vk_image_type": VK_IMAGE_TYPE_2D,
-                "vk_image_mip_levels": 1u32,
-                "vk_image_array_layers": 1u32,
-                "vk_image_samples": VK_SAMPLE_COUNT_1,
-                "vk_image_tiling": VK_IMAGE_TILING_OPTIMAL,
-                "vk_image_usage": vk_image_usage,
-                "vk_image_allocation_size": allocation_size,
-                SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX: memory_type_index,
-                SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID: exporting_device_uuid,
-            })
+                &self.runtime_id,
+                produce_done_fd.is_some(),
+                consume_done_fd.is_some(),
+                current_image_layout,
+            )?
         } else {
             dma_buf_texture_registration_payload(
                 texture.vulkan_inner(),
@@ -2153,6 +2097,68 @@ fn storage_buffer_registration_payload(
     payload
 }
 
+/// The `register` request for an OPAQUE_FD texture: the memory as one
+/// plane, the `vk_image_*` shape
+/// [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`] fixes with
+/// the usage the image was created with, and the exporter's memory type index
+/// and device UUID.
+#[cfg(target_os = "linux")]
+fn opaque_fd_texture_registration_payload(
+    texture: &crate::vulkan::rhi::HostVulkanTexture,
+    surface_id: &str,
+    runtime_id: &str,
+    has_produce_done_fd: bool,
+    has_consume_done_fd: bool,
+    current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+) -> Result<serde_json::Value> {
+    use crate::vulkan::rhi::VulkanTextureLike as _;
+    const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+    const VK_SAMPLE_COUNT_1: i32 = 1;
+
+    let allocation_size = texture.vma_allocation_size() as u64;
+    let memory_type_index = memory_type_index_stated_by_an_opaque_fd_export(
+        texture.vma_allocation_memory_type_index(),
+        surface_id,
+        "OPAQUE_FD texture registration",
+    )?;
+    let exporting_device_uuid = streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+        texture.exporting_physical_device_uuid().ok_or_else(|| {
+            Error::GpuError(format!(
+                "OPAQUE_FD texture registration for {surface_id:?} has no stored device to read \
+                 the exporting device UUID from; an import on the wrong GPU corrupts silently \
+                 instead of failing"
+            ))
+        })?,
+    );
+    Ok(serde_json::json!({
+        "op": "register",
+        "surface_id": surface_id,
+        "runtime_id": runtime_id,
+        "width": texture.width(),
+        "height": texture.height(),
+        "format": texture.format().wire_name(),
+        "resource_type": SURFACE_RESOURCE_TYPE_TEXTURE,
+        "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
+        "plane_sizes": [allocation_size],
+        "plane_offsets": [0u64],
+        "plane_strides": [0u64],
+        "drm_format_modifier": 0u64,
+        SURFACE_REPLY_HAS_PRODUCE_DONE_FD: has_produce_done_fd,
+        SURFACE_REPLY_HAS_CONSUME_DONE_FD: has_consume_done_fd,
+        "current_image_layout": current_image_layout.as_vk().as_raw(),
+        "vk_image_type": VK_IMAGE_TYPE_2D,
+        "vk_image_mip_levels": 1u32,
+        "vk_image_array_layers": 1u32,
+        "vk_image_samples": VK_SAMPLE_COUNT_1,
+        "vk_image_tiling": VK_IMAGE_TILING_OPTIMAL,
+        "vk_image_usage": texture.vk_image_usage_flags().bits(),
+        "vk_image_allocation_size": allocation_size,
+        SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX: memory_type_index,
+        SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID: exporting_device_uuid,
+    }))
+}
+
 /// The register-op payload a DMA-BUF-backed texture publishes.
 ///
 /// Carries the DRM format modifier and per-plane row pitch so the
@@ -3051,6 +3057,108 @@ mod dma_buf_registration_payload_tests {
             Some(VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT),
             "without this, the zero modifier above is indistinguishable on the \
              wire from an image that never carried a modifier at all"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod opaque_fd_texture_registration_payload_tests {
+    use super::*;
+    use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+    use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTexture};
+    use streamlib_consumer_rhi::{ConsumerVulkanDevice, ConsumerVulkanTexture};
+
+    const VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT: u64 = 0x10;
+
+    /// A render target of a format CUDA cannot map — what a graphics kernel
+    /// draws into on a device without DMA-BUF — registers the usage it was
+    /// created with, and a consumer device rebuilds the image from that
+    /// registration alone.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_render_target_registers_its_usage_and_imports_from_the_registration() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(e) => {
+                println!("Skipping — no Vulkan device: {e}");
+                return;
+            }
+        };
+        if device.opaque_fd_image_pool().is_none() {
+            println!(
+                "Skipping — OPAQUE_FD image pool not created on {}",
+                device.name()
+            );
+            return;
+        }
+        let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+            device.physical_device_uuid(),
+        ) {
+            Ok(d) => std::sync::Arc::new(d),
+            Err(e) => {
+                println!("Skipping — ConsumerVulkanDevice unavailable: {e}");
+                return;
+            }
+        };
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm).with_usage(
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC
+                | TextureUsages::COPY_DST,
+        );
+        let texture = HostVulkanTexture::new_opaque_fd_export(&device, &desc)
+            .expect("a bgra8 render target allocates as OPAQUE_FD");
+
+        let payload = opaque_fd_texture_registration_payload(
+            &texture,
+            "surface-under-test",
+            "runtime-under-test",
+            false,
+            false,
+            streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
+        )
+        .expect("an OPAQUE_FD texture states its export contract");
+
+        assert_eq!(payload["handle_type"], SURFACE_HANDLE_TYPE_OPAQUE_FD);
+        assert_eq!(payload["format"], TextureFormat::Bgra8Unorm.wire_name());
+        let registered_usage = payload["vk_image_usage"]
+            .as_u64()
+            .expect("the registration states vk_image_usage");
+        assert_ne!(
+            registered_usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            0,
+            "a render target must register COLOR_ATTACHMENT, got {registered_usage:#x}"
+        );
+
+        let fd = texture
+            .export_opaque_fd_memory()
+            .expect("the render target exports its memory");
+        let imported = ConsumerVulkanTexture::from_opaque_fd(
+            &consumer_device,
+            fd,
+            64,
+            64,
+            TextureFormat::Bgra8Unorm,
+            u32::try_from(registered_usage).expect("VkImageUsageFlags is 32 bits"),
+            payload["vk_image_allocation_size"]
+                .as_u64()
+                .expect("the registration states its allocation size"),
+        );
+        let imported = match imported {
+            Ok(imported) => imported,
+            Err(failure) => {
+                unsafe { libc::close(fd) };
+                panic!("the registration must rebuild the image on the consumer: {failure}");
+            }
+        };
+        assert_eq!(
+            u64::from(
+                streamlib_consumer_rhi::VulkanTextureLike::vk_image_usage_flags(&imported).bits()
+            ),
+            registered_usage
         );
     }
 }

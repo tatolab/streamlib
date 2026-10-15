@@ -526,7 +526,9 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     // The recipe constants `new_opaque_fd_export` hardcodes, read back off
     // the wire the probe crossed.
     assert_eq!(metadata_u64_field("vk_image_tiling"), 0); // OPTIMAL
-    assert_eq!(metadata_u64_field("vk_image_usage_flags"), 0x0F);
+    let vk_image_usage = u32::try_from(metadata_u64_field("vk_image_usage_flags"))
+        .expect("vk_image_usage_flags is a VkImageUsageFlags bitfield");
+    assert_eq!(vk_image_usage, 0x0F);
     assert_eq!(metadata_u64_field("vk_image_mip_levels"), 1);
     assert_eq!(metadata_u64_field("vk_image_array_layers"), 1);
     assert_eq!(metadata_u64_field("vk_image_samples"), 1);
@@ -577,6 +579,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         SURFACE_WIDTH_PIXELS,
         SURFACE_HEIGHT_PIXELS,
         ConsumerTextureFormat::Rgba8Unorm,
+        vk_image_usage,
         allocation_byte_size,
     ) {
         Ok(texture) => {

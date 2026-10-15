@@ -536,7 +536,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::subprocess_escalate::handle_lifecycle::tests::a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name",
                 "core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::parse_texture_usages",
                 "core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::the_implied_copy_bits",
-                "core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::on_the_software_device_only_the_opaque_fd_flavour_remains",
+                "core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::on_a_device_without_dma_buf_every_single_plane_request_takes_opaque_fd",
                 "core::context::audio_device_backend",
                 "core::context::silent_null_audio_device_backend",
                 "core::context::device_backend_probe_chain",

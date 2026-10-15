@@ -196,6 +196,7 @@ fn opaque_fd_image_carve_out_round_trip() {
         W,
         H,
         ConsumerTextureFormat::Rgba8Unorm,
+        host_image.vk_image_usage_flags().bits(),
         host_image_alloc_size,
     ) {
         Ok(t) => Arc::new(t),
@@ -402,6 +403,7 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
         W,
         H,
         ConsumerTextureFormat::Rgba8Unorm,
+        host_image.vk_image_usage_flags().bits(),
         host_image_alloc_size,
     ) {
         Ok(t) => Arc::new(t),

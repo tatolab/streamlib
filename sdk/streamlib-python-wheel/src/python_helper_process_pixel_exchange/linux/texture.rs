@@ -480,6 +480,7 @@ impl HelperProcessGpuExchangeClient {
                 metadata.width,
                 metadata.height,
                 metadata.format,
+                metadata.vk_image_creation_recipe.vk_image_usage_flags,
                 metadata.allocation_byte_size,
             ),
             // Unreachable past the arity refusal above; destructured rather

@@ -2923,7 +2923,7 @@ impl HostVulkanDevice {
     /// (a helper child's Vulkan import, CUDA) can adopt whole.
     ///
     /// Thin wrapper over [`HostVulkanTexture::new_opaque_fd_export`]; that
-    /// constructor's fixed usage set and CUDA-mappable format subset apply.
+    /// constructor's usage and format rules apply.
     #[cfg(target_os = "linux")]
     pub fn create_texture_opaque_fd_export(
         self: &Arc<Self>,

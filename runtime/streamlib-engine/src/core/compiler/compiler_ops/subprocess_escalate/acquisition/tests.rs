@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 #[cfg(target_os = "linux")]
-use super::linux::derive_texture_cross_process_importability;
+use super::linux::{
+    TextureExportCapabilitiesOfTheDevice, derive_texture_cross_process_importability,
+};
 use super::{parse_texture_format, parse_texture_usages};
 #[cfg(target_os = "linux")]
 use crate::core::context::TextureCrossProcessImportability;
@@ -99,6 +101,32 @@ fn the_implied_copy_bits_echo_back_on_the_wire() {
     );
 }
 
+#[cfg(target_os = "linux")]
+const A_DMA_BUF_DEVICE_WITH_A_RENDER_TARGET_MODIFIER: TextureExportCapabilitiesOfTheDevice =
+    TextureExportCapabilitiesOfTheDevice {
+        exports_dma_buf: true,
+        has_a_render_target_modifier_for_the_format: true,
+        has_the_opaque_fd_image_pool: true,
+    };
+
+#[cfg(target_os = "linux")]
+const A_DMA_BUF_DEVICE_WITHOUT_A_RENDER_TARGET_MODIFIER: TextureExportCapabilitiesOfTheDevice =
+    TextureExportCapabilitiesOfTheDevice {
+        exports_dma_buf: true,
+        has_a_render_target_modifier_for_the_format: false,
+        has_the_opaque_fd_image_pool: true,
+    };
+
+/// The software device builds no DMA-BUF pool and takes no EGL modifier
+/// table; it does build its OPAQUE_FD image pool.
+#[cfg(target_os = "linux")]
+const THE_SOFTWARE_DEVICE: TextureExportCapabilitiesOfTheDevice =
+    TextureExportCapabilitiesOfTheDevice {
+        exports_dma_buf: false,
+        has_a_render_target_modifier_for_the_format: false,
+        has_the_opaque_fd_image_pool: true,
+    };
+
 /// Implying both copy bits must not move any request off the flavour it
 /// takes today: the OPAQUE_FD fixed usage set already contains them, and
 /// the render-attachment branch answers before usage is weighed.
@@ -107,7 +135,11 @@ fn the_implied_copy_bits_echo_back_on_the_wire() {
 fn the_implied_copy_bits_leave_every_flavour_derivation_where_it_was() {
     let implied = parse_texture_usages(&["texture_binding".to_string()]).expect("known tokens");
     assert_eq!(
-        derive_texture_cross_process_importability(TextureFormat::Rgba8Unorm, implied, true, true),
+        derive_texture_cross_process_importability(
+            TextureFormat::Rgba8Unorm,
+            implied,
+            A_DMA_BUF_DEVICE_WITH_A_RENDER_TARGET_MODIFIER,
+        ),
         TextureCrossProcessImportability::OpaqueFd,
     );
 
@@ -117,8 +149,7 @@ fn the_implied_copy_bits_leave_every_flavour_derivation_where_it_was() {
         derive_texture_cross_process_importability(
             TextureFormat::Rgba8Unorm,
             implied_render_attachment,
-            true,
-            true,
+            A_DMA_BUF_DEVICE_WITH_A_RENDER_TARGET_MODIFIER,
         ),
         TextureCrossProcessImportability::RenderTargetDmaBuf,
     );
@@ -129,7 +160,11 @@ fn the_implied_copy_bits_leave_every_flavour_derivation_where_it_was() {
 fn a_render_attachment_request_takes_the_modifier_flavor_when_the_probe_has_one() {
     let usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
     assert_eq!(
-        derive_texture_cross_process_importability(TextureFormat::Rgba8Unorm, usage, true, true),
+        derive_texture_cross_process_importability(
+            TextureFormat::Rgba8Unorm,
+            usage,
+            A_DMA_BUF_DEVICE_WITH_A_RENDER_TARGET_MODIFIER,
+        ),
         TextureCrossProcessImportability::RenderTargetDmaBuf,
     );
 }
@@ -139,7 +174,11 @@ fn a_render_attachment_request_takes_the_modifier_flavor_when_the_probe_has_one(
 fn a_render_attachment_request_without_a_modifier_stays_not_importable() {
     let usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
     assert_eq!(
-        derive_texture_cross_process_importability(TextureFormat::Rgba8Unorm, usage, false, true),
+        derive_texture_cross_process_importability(
+            TextureFormat::Rgba8Unorm,
+            usage,
+            A_DMA_BUF_DEVICE_WITHOUT_A_RENDER_TARGET_MODIFIER,
+        ),
         TextureCrossProcessImportability::NotImportable,
     );
 }
@@ -149,7 +188,11 @@ fn a_render_attachment_request_without_a_modifier_stays_not_importable() {
 fn a_multi_plane_format_never_takes_the_modifier_flavor() {
     let usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
     assert_eq!(
-        derive_texture_cross_process_importability(TextureFormat::Nv12, usage, true, true),
+        derive_texture_cross_process_importability(
+            TextureFormat::Nv12,
+            usage,
+            A_DMA_BUF_DEVICE_WITH_A_RENDER_TARGET_MODIFIER,
+        ),
         TextureCrossProcessImportability::NotImportable,
     );
 }
@@ -158,10 +201,25 @@ fn a_multi_plane_format_never_takes_the_modifier_flavor() {
 #[test]
 fn a_device_without_the_opaque_fd_pool_falls_back_to_not_importable() {
     let usage = TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING;
-    assert_eq!(
-        derive_texture_cross_process_importability(TextureFormat::Rgba8Unorm, usage, false, false),
-        TextureCrossProcessImportability::NotImportable,
-    );
+    for device_without_the_pool in [
+        TextureExportCapabilitiesOfTheDevice {
+            has_the_opaque_fd_image_pool: false,
+            ..A_DMA_BUF_DEVICE_WITHOUT_A_RENDER_TARGET_MODIFIER
+        },
+        TextureExportCapabilitiesOfTheDevice {
+            has_the_opaque_fd_image_pool: false,
+            ..THE_SOFTWARE_DEVICE
+        },
+    ] {
+        assert_eq!(
+            derive_texture_cross_process_importability(
+                TextureFormat::Rgba8Unorm,
+                usage,
+                device_without_the_pool,
+            ),
+            TextureCrossProcessImportability::NotImportable,
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -177,7 +235,11 @@ fn a_cuda_mappable_format_within_the_fixed_usage_set_takes_opaque_fd() {
         TextureFormat::Rgba32Float,
     ] {
         assert_eq!(
-            derive_texture_cross_process_importability(format, usage, false, true),
+            derive_texture_cross_process_importability(
+                format,
+                usage,
+                A_DMA_BUF_DEVICE_WITHOUT_A_RENDER_TARGET_MODIFIER,
+            ),
             TextureCrossProcessImportability::OpaqueFd,
         );
     }
@@ -185,7 +247,7 @@ fn a_cuda_mappable_format_within_the_fixed_usage_set_takes_opaque_fd() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn a_format_cuda_cannot_map_stays_not_importable_without_render_attachment() {
+fn a_format_cuda_cannot_map_stays_not_importable_without_render_attachment_where_dma_buf_exports() {
     for format in [
         TextureFormat::Bgra8Unorm,
         TextureFormat::Bgra8UnormSrgb,
@@ -196,64 +258,45 @@ fn a_format_cuda_cannot_map_stays_not_importable_without_render_attachment() {
             derive_texture_cross_process_importability(
                 format,
                 TextureUsages::TEXTURE_BINDING,
-                true,
-                true,
+                A_DMA_BUF_DEVICE_WITH_A_RENDER_TARGET_MODIFIER,
             ),
             TextureCrossProcessImportability::NotImportable,
         );
     }
 }
 
-/// The software device builds no DMA-BUF pool and takes no EGL modifier
-/// table, so it never offers the render-target modifier; it does build its
-/// OPAQUE_FD image pool. A CUDA-mappable request inside the fixed usage set
-/// keeps OPAQUE_FD, and everything that needed the modifier — every
-/// render-attachment request — is not importable at all.
+/// Where the device exports no DMA-BUF, OPAQUE_FD is the one flavour that
+/// crosses a process, so every single-plane request takes it — a render
+/// target and a format CUDA cannot map alike. A multi-plane format ships
+/// one fd against N plane offsets, which no import rebuilds.
 #[cfg(target_os = "linux")]
 #[test]
-fn on_the_software_device_only_the_opaque_fd_flavour_remains() {
-    const SOFTWARE_DEVICE_HAS_A_RENDER_TARGET_MODIFIER: bool = false;
-    const SOFTWARE_DEVICE_HAS_THE_OPAQUE_FD_IMAGE_POOL: bool = true;
-    let derive_on_the_software_device = |format, usage| {
-        derive_texture_cross_process_importability(
-            format,
-            usage,
-            SOFTWARE_DEVICE_HAS_A_RENDER_TARGET_MODIFIER,
-            SOFTWARE_DEVICE_HAS_THE_OPAQUE_FD_IMAGE_POOL,
-        )
-    };
-
+fn on_a_device_without_dma_buf_every_single_plane_request_takes_opaque_fd() {
+    let render_target_usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
+    let sampled_usage = TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING;
     for format in [
         TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba8UnormSrgb,
+        TextureFormat::Bgra8Unorm,
+        TextureFormat::Bgra8UnormSrgb,
         TextureFormat::Rgba16Float,
         TextureFormat::Rgba32Float,
     ] {
-        assert_eq!(
-            derive_on_the_software_device(
-                format,
-                TextureUsages::TEXTURE_BINDING
-                    | TextureUsages::STORAGE_BINDING
-                    | TextureUsages::COPY_SRC
-                    | TextureUsages::COPY_DST,
-            ),
-            TextureCrossProcessImportability::OpaqueFd,
-        );
-        assert_eq!(
-            derive_on_the_software_device(
-                format,
-                TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-            ),
-            TextureCrossProcessImportability::NotImportable,
-        );
+        for usage in [render_target_usage, sampled_usage] {
+            assert_eq!(
+                derive_texture_cross_process_importability(format, usage, THE_SOFTWARE_DEVICE),
+                TextureCrossProcessImportability::OpaqueFd,
+                "{format:?} with {usage:?} on a device without DMA-BUF",
+            );
+        }
     }
-    for format in [
-        TextureFormat::Bgra8Unorm,
-        TextureFormat::Bgra8UnormSrgb,
-        TextureFormat::Rgba8UnormSrgb,
-        TextureFormat::Nv12,
-    ] {
+    for usage in [render_target_usage, sampled_usage] {
         assert_eq!(
-            derive_on_the_software_device(format, TextureUsages::TEXTURE_BINDING),
+            derive_texture_cross_process_importability(
+                TextureFormat::Nv12,
+                usage,
+                THE_SOFTWARE_DEVICE,
+            ),
             TextureCrossProcessImportability::NotImportable,
         );
     }
