@@ -151,7 +151,8 @@ LOCAL_API_SOCKET_POLL_INTERVAL_SECONDS = 0.05
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Item]") -> None:
-    """Turns the platform markers and the audible marker into a skip or a strict xfail."""
+    """Turns the platform markers and the audible marker into a skip or a strict xfail, and
+    refuses a reasoned marker without its reason."""
     for item in items:
         audible = item.get_closest_marker("audible_on_macos")
         if audible is not None:
@@ -175,6 +176,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Ite
                 raise pytest.UsageError(f"{item.nodeid}: linux_only_capability needs reason=")
             if sys.platform != "linux":
                 item.add_marker(pytest.mark.skip(reason=f"Linux-only: {reason}"))
+        rig_only = item.get_closest_marker("rig_only_capability")
+        if rig_only is not None and not rig_only.kwargs.get("reason"):
+            raise pytest.UsageError(f"{item.nodeid}: rig_only_capability needs reason=")
         awaiting = item.get_closest_marker("awaiting_macos_parity")
         if awaiting is not None:
             issue = awaiting.kwargs.get("issue")

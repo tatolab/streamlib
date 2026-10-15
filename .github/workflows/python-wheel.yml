@@ -216,15 +216,10 @@ jobs:
           .venv/bin/python tests/runtime_backed_protocol_conformance.py --print-stubtest-allowlist > "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
           .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
 
-      # The runner has no GPU. A runtime's first stream start initializes a GPU context whose
-      # DMA-BUF pool pre-warm needs a driver that can allocate exportable device
-      # memory, and a software rasterizer (lavapipe) cannot — verified in a
-      # GPU-less container. So this runs the half of the wheel's own suite that
-      # needs no device: the casts and the bag codec, a processor interpreter's
-      # bootstrap and helper process, and the conformance gate. Streams running
-      # on `tatolabd` are the integration suite's, in its own job below. The
-      # `requires_gpu` half is rig-only by owner decision (2026-08-03) rather
-      # than a self-hosted GPU runner.
+      # The wheel's own suite: the casts and the bag codec, a processor
+      # interpreter's bootstrap and helper process, and the conformance gate.
+      # Streams running on `tatolabd` are the integration suite's, in its own
+      # job below.
       - name: Wheel suite (GPU-free half)
         working-directory: sdk/streamlib-python-wheel
         run: |
@@ -250,7 +245,7 @@ jobs:
   # fails to import — and every processor interpreter borrows the runtime from
   # the lend.
   integration-suite:
-    name: Integration suite (stream on runtime, no GPU)
+    name: Integration suite (stream on runtime, bundled software device)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Runs PR-authored code, so it gets the read it needs and nothing else.
@@ -284,10 +279,12 @@ jobs:
         # --frozen: registry packages stay hash-pinned; the editable tatolab-stream's locked version is never read.
         run: uv sync --frozen
 
-      # The runner has no GPU, so the `requires_gpu` half runs on the rig.
-      - name: Integration suite (GPU-free half)
+      # The runner has no GPU and installs no Vulkan driver: every stream
+      # starts on the lavapipe the unit carries in its lend. What a runner
+      # cannot give at all stays on the rig, as `rig_only_capability`.
+      - name: Integration suite (all but rig-only)
         working-directory: tests/stream-on-runtime
-        run: .venv/bin/pytest -v -m "not requires_gpu"
+        run: .venv/bin/pytest -v -m "not rig_only_capability"
 
   extension-wheels:
     name: Extension wheel (${{ matrix.extension }})

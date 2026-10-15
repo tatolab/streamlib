@@ -612,7 +612,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 ):
     """What `tatolab new` writes must actually run, frame after frame.
 
-    Run exactly as scaffolded — window included, which is why this is rig-only:
+    Run exactly as scaffolded, window included:
     `dev` has the runtime compile the scaffold's `@stream` and load the graph
     it builds, so the graph the local API renders carries the stream's name and
     the exposure it declared. A listed stream alone proves almost nothing here:

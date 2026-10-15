@@ -101,6 +101,7 @@ def skip_without_the_device(observation: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_graph_frame_reaches_torch_as_a_device_tensor(start_tatolabd_running_stream):
     """The ticket's headline, in the user's own spelling.
 
@@ -125,6 +126,7 @@ def test_a_graph_frame_reaches_torch_as_a_device_tensor(start_tatolabd_running_s
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_device_side_edit_publishes_back_to_the_surface_at_unlock(
     start_tatolabd_running_stream,
 ):
@@ -141,6 +143,7 @@ def test_a_device_side_edit_publishes_back_to_the_surface_at_unlock(
     assert observation["cleared_pixel"] == [0, 0, 0, 0]
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_device_edit_survives_the_with_block_spelling(start_tatolabd_running_stream):
     """close() publishes pending device writes too.
 
@@ -157,6 +160,7 @@ def test_a_device_edit_survives_the_with_block_spelling(start_tatolabd_running_s
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_device_tensor_outliving_its_handle_keeps_a_live_mapping(
     start_tatolabd_running_stream,
 ):
@@ -182,6 +186,7 @@ def test_the_host_side_stays_reachable_on_explicit_request(start_tatolabd_runnin
     assert observation["same_host_memory"]
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_copy_request_is_refused_at_both_doors(start_tatolabd_running_stream):
     """Both doors export in place, so `copy=True` — a request for memory the
     consumer owns — is refused by name rather than answered with an alias."""
@@ -200,6 +205,7 @@ def test_a_copy_request_is_refused_at_both_doors(start_tatolabd_running_stream):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_the_device_tensor_strides_follow_the_surfaces_row_pitch(start_tatolabd_running_stream):
     """A width whose GPU-image rows pad, over both backings: the last pixel of
     a row lands where the host finds it and never shears into the next row.
@@ -235,6 +241,7 @@ def skip_without_mlx(observation: dict) -> None:
 @pytest.mark.parametrize(
     "probe", ["TorchDeviceWriteThenEngineGpuReadProbe", "MlxDeviceWriteThenEngineGpuReadProbe"]
 )
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_device_write_is_ordered_ahead_of_the_engines_next_gpu_read(
     start_tatolabd_running_stream,
     probe,
@@ -274,6 +281,7 @@ def test_an_evaluated_mlx_write_through_the_write_door_reaches_the_frame(
     assert observation["the_rest_of_the_frame_is_untouched"]
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_torch_and_mlx_scopes_alternate_in_one_helper_without_wedging_it(
     start_tatolabd_running_stream,
 ):
@@ -290,6 +298,7 @@ def test_torch_and_mlx_scopes_alternate_in_one_helper_without_wedging_it(
 @pytest.mark.parametrize(
     "probe", ["TorchTensorOutlivesTextureHandleProbe", "MlxArrayOutlivesTextureHandleProbe"]
 )
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_device_array_outliving_its_texture_handle_keeps_a_live_mapping(
     start_tatolabd_running_stream,
     probe,
@@ -328,6 +337,7 @@ def test_an_mlx_write_with_a_view_alive_misses_the_frame(start_tatolabd_running_
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.rig_only_capability(reason="a camera")
 def test_camera_device_pixels_match_host_across_ring_cycles(start_tatolabd_running_stream):
     """Regression lock on the stale-blit-source bug, and on the frame itself.
 
@@ -392,6 +402,7 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_tatolabd_runni
 
 
 @pytest.mark.linux_only_capability(reason="DMA-BUF and OPAQUE_FD are Linux file-descriptor handles")
+@pytest.mark.rig_only_capability(reason="DMA-BUF modifiers")
 def test_a_dma_buf_fd_round_trips_out_of_and_back_into_the_graph(
     start_tatolabd_running_stream,
 ):
@@ -416,6 +427,7 @@ def test_a_dma_buf_fd_round_trips_out_of_and_back_into_the_graph(
 
 
 @pytest.mark.linux_only_capability(reason="DMA-BUF and OPAQUE_FD are Linux file-descriptor handles")
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_texture_handle_round_trips_across_the_process_boundary(
     start_tatolabd_running_stream,
 ):
@@ -634,6 +646,7 @@ def test_the_privileged_capability_works_from_a_helper_process(start_tatolabd_ru
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
     start_tatolabd_running_stream,
 ):
@@ -656,6 +669,7 @@ def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
     )
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_rule(
     start_tatolabd_running_stream,
 ):
@@ -683,6 +697,7 @@ def test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_r
     assert observation["pixel_after_redispatch"] == FILL_CONSTANT_RGBA
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_raise_inside_the_pixel_buffer_scope_follows_its_floors_publication_rule(
     start_tatolabd_running_stream,
 ):
@@ -705,6 +720,7 @@ def test_a_raise_inside_the_pixel_buffer_scope_follows_its_floors_publication_ru
         )
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_pooled_texture_exports_a_device_tensor(start_tatolabd_running_stream):
     """Resurrected from #1737 (removed by #1754, carried by #1757): the
     texture-first blit arm serves an acquired pooled texture through the
@@ -719,6 +735,7 @@ def test_a_pooled_texture_exports_a_device_tensor(start_tatolabd_running_stream)
     assert observation["texture_tensor_device"].startswith(NATURAL_TORCH_DEVICE_TYPE)
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_no_acquire_texture_usage_can_close_the_device_tensor_scope(
     start_tatolabd_running_stream,
 ):

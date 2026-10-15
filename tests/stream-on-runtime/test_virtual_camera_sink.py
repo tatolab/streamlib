@@ -3,7 +3,7 @@
 
 """`VirtualCameraSink` from Python: built-in class to a camera other programs see.
 
-The load test needs no device and runs in CI: `tatolabd` loads the graph and
+The load test needs no device: `tatolabd` loads the graph and
 its start is then refused at the GPU. The camera tests start a graph on `tatolabd`, so they
 carry `requires_gpu` like every other graph test here — and they need
 the one-time permission the sink itself never takes: the v4l2loopback module
@@ -472,6 +472,7 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 @pytest.mark.requires_gpu
 @needs_a_pipewire_session
+@pytest.mark.rig_only_capability(reason="DMA-BUF modifiers")
 def test_without_the_control_node_a_pipewire_camera_node_appears(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
@@ -508,6 +509,7 @@ def test_without_the_control_node_a_pipewire_camera_node_appears(
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 @pytest.mark.requires_gpu
 @needs_the_loopback_permission
+@pytest.mark.rig_only_capability(reason="a camera")
 def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
@@ -546,6 +548,7 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 @pytest.mark.requires_gpu
 @needs_the_loopback_permission
+@pytest.mark.rig_only_capability(reason="a camera")
 def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):

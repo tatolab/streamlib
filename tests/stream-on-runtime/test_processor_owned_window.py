@@ -11,8 +11,9 @@ pip-installed processor asking for a debug window in `setup()` and naming
 frames to it from `process()`, in its own processor interpreter, beside the
 pipeline's own display, with `tatolabd` presenting both.
 
-Display tier: every test here needs a GPU *and* a window server, so they run on
-the rig only. What runs everywhere is the translation each `show()` performs,
+Display tier: every test that opens a window needs a window server on top of
+the device, so it is `rig_only_capability`; the headless arm runs wherever a
+device does. What runs everywhere is the translation each `show()` performs,
 which is the wheel crate's own Rust suite — a window this suite cannot open
 would take the colour maths with it if it lived here.
 
@@ -102,11 +103,10 @@ def a_window_server_is_reachable() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-# `requires_gpu` is the wheel's only rig marker, and most of this suite
-# needs a window server on top of the device. Skipping rather than failing
-# keeps a GPU box with no display — a container, an ssh session — reporting
-# what it actually checked. The headless arm is deliberately not gated: it
-# is the one that wants no window server.
+# Most of this suite needs a window server on top of the device. Skipping
+# rather than failing keeps a GPU box with no display — a container, an ssh
+# session — reporting what it actually checked. The headless arm is
+# deliberately not gated: it is the one that wants no window server.
 needs_a_window_server = pytest.mark.skipif(
     not a_window_server_is_reachable(),
     reason="display tier — this probe asks for a real window",
@@ -162,6 +162,7 @@ def assert_nothing_raised_after_reporting(tatolabd: RuntimeProcessUnderTest) -> 
 
 
 @needs_a_window_server
+@pytest.mark.rig_only_capability(reason="a display")
 def test_all_three_ways_of_naming_a_published_surface_reach_the_window(
     start_tatolabd_running_stream,
 ):
@@ -182,6 +183,7 @@ def test_all_three_ways_of_naming_a_published_surface_reach_the_window(
 
 
 @needs_a_window_server
+@pytest.mark.rig_only_capability(reason="a display")
 def test_the_window_reports_an_extent_of_its_own(start_tatolabd_running_stream):
     """Not the requested one: the window server is free to hand back another,
     and the owner is told what it actually got."""
@@ -198,6 +200,7 @@ def test_the_window_reports_an_extent_of_its_own(start_tatolabd_running_stream):
 
 
 @needs_a_window_server
+@pytest.mark.rig_only_capability(reason="a display")
 def test_a_closed_window_leaves_the_pipeline_running_and_every_show_a_no_op(
     start_tatolabd_running_stream,
 ):
@@ -340,6 +343,7 @@ def the_window_titled(title: str) -> str:
 
 @pytest.mark.linux_only_capability(reason="the close gesture is an X11 client message")
 @needs_a_window_server
+@pytest.mark.rig_only_capability(reason="a display")
 def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
     start_tatolabd_running_stream,
 ):
@@ -382,6 +386,7 @@ def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
 
 
 @needs_a_window_server
+@pytest.mark.rig_only_capability(reason="a display")
 def test_showing_something_that_names_no_surface_is_refused_by_the_three_shapes(
     start_tatolabd_running_stream,
 ):
@@ -401,6 +406,7 @@ def test_showing_something_that_names_no_surface_is_refused_by_the_three_shapes(
 
 
 @needs_a_window_server
+@pytest.mark.rig_only_capability(reason="a display")
 def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
     start_tatolabd_running_stream,
 ):
@@ -420,6 +426,7 @@ def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
 
 
 @needs_a_window_server
+@pytest.mark.rig_only_capability(reason="a display")
 def test_a_closed_window_still_refuses_an_argument_that_names_no_surface(
     start_tatolabd_running_stream,
 ):

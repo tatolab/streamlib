@@ -19,8 +19,7 @@ set varies per kernel, so a binding declared for a stage this kernel has no
 module for is a claim no trace could ever make true — and it is refused at the
 `create_ray_tracing_kernel` line, where the multi-stage declaration is built.
 
-These tests are `requires_gpu` and execute on the rig only; CI green is not
-proof for them. `requires_gpu` does not cover the extension chain, so a device
+`requires_gpu` does not cover the extension chain, so a device
 without `VK_KHR_ray_tracing_pipeline` reports that refusal and the test skips
 on it rather than failing on a capability the machine does not have.
 """
