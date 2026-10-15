@@ -535,6 +535,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::context::one_off_acquisitions_counted_for_one_native_node",
                 "core::compiler::compiler_ops::subprocess_escalate::handle_lifecycle::tests::a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name",
                 "core::compiler::compiler_ops::subprocess_escalate::acquisition::tests",
+                "vulkan::rhi::vulkan_device::tests::an_image_that_cannot_bind_the_export_pools_memory_type_is_refused_naming_its_shape",
                 "core::context::audio_device_backend",
                 "core::context::silent_null_audio_device_backend",
                 "core::context::device_backend_probe_chain",
