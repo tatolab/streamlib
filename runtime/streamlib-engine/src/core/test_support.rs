@@ -772,6 +772,7 @@ mod rig_only_capability_skip_closed_list_tests {
 
     #[test]
     fn a_capability_this_machine_has_is_not_skipped() {
+        println!("Skipping — a deliberately unnamed skip the lane must refuse");
         assert!(!skip_unless_this_machine_has(
             RigOnlyCapability::Camera,
             true
