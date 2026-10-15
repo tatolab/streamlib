@@ -28,11 +28,13 @@ is one with a real producer behind the frame: an edit through `writable()` or
 `cpu()` is checked by resolving the surface again from scratch, because
 published means every *other* holder observes it.
 
-Every test here is `requires_gpu`, but they do not all need the same hardware. The lifetime pair, the device-side tensor pair and the
-camera write-door pair are camera-gated; the rest drive the engine's native
-test pattern, and the host-side ones consume with plain numpy, so they need a
-GPU and nothing else. Each gate skips by name, so a missing camera or a
-CPU-only torch reads as what it is rather than as a failure of the capability.
+Every test here is `requires_gpu`, but they do not all need the same
+hardware. The lifetime pair and the camera write-door pair are camera-gated;
+the rest drive the engine's native test pattern. The device-side tensor pair,
+the GPU write door and the bare-view pair need CUDA — the bare view asserts
+the read advertises `kDLCUDA` — and the CPU write-door pair needs a device and
+nothing else. Each gate skips by name, so a missing camera or a CPU-only torch
+reads as what it is rather than as a failure of the capability.
 
 The write doors are proven against both sources deliberately. A producer that
 published an internal transient under the frame's id would leave the

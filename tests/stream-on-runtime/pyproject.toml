@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-# What only the rig-only device-tensor tests import, installed on the rig with
+# The device-tensor frameworks — torch, and MLX on macOS — installed on the rig with
 # `uv sync --group rig`. PyPI's Linux torch wheels are CUDA builds.
 rig = [
     # 2.10 is the Metal capsule's floor on macOS: 2.9 maps kDLMetal, 2.10

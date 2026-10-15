@@ -131,8 +131,8 @@ DISPLAY_WINDOW_TYPE = "tatolab.stream:DisplayWindow"
 
 def test_the_live_added_effect_written_as_a_source_string_still_declares():
     """`LiveAddedEffect` lives as a triple-quoted literal, so no import, no
-    linter and no AST sweep reaches it — running it here is the only way a bad
-    migration of it fails anywhere but on the rig."""
+    linter and no AST sweep reaches it — running it here is how a bad migration
+    of it fails without a device."""
     namespace: "dict[str, Any]" = {"__name__": LIVE_ADDED_EFFECT_MODULE}
     # `dont_inherit`: compiled as the file it is written to, not under this
     # module's `from __future__ import annotations`.

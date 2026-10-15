@@ -4,10 +4,10 @@
 """The four hardware video codec built-ins, built-in class to decoded frame.
 
 The load tests need no device: `tatolabd` loads the graph and its start is
-then refused at the GPU. The graph tests start the engine and need a hardware encoder and
-decoder — Vulkan Video queues on Linux, VideoToolbox
-on macOS — so they carry `requires_gpu` like every other graph test here, and
-`rig_only_capability` on Linux, where the software device has no Vulkan Video.
+then refused at the GPU. The graph tests start the engine and need a hardware
+encoder and decoder — Vulkan Video queues on Linux, VideoToolbox on macOS — so
+they carry `requires_gpu` like every other graph test here, and
+`rig_only_capability`, since the software device has no Vulkan Video.
 
 No camera: the test pattern is the source, at an extent both codecs pad — so
 the decoded frames arriving back at the source extent is the conformance
