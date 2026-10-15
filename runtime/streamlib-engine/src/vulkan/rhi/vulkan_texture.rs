@@ -1815,7 +1815,8 @@ mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
     use crate::core::test_support::rig_only_capability_skip::{
-        RigOnlyCapability, skip_because_this_machine_lacks, skip_unless_this_machine_has,
+        RigOnlyCapability, skip_because_this_machine_lacks_naming_the_refusal,
+        skip_unless_this_machine_has,
     };
     use crate::vulkan::rhi::HostVulkanDevice;
     #[cfg(target_os = "linux")]
@@ -2631,12 +2632,10 @@ mod tests {
         };
         let table = device.drm_modifier_table();
         let modifiers = table.rt_modifiers(fourcc::DRM_FORMAT_ARGB8888);
-        if skip_unless_this_machine_has(RigOnlyCapability::DmaBufModifiers, !modifiers.is_empty())
-            || skip_unless_this_machine_has(
-                RigOnlyCapability::DmaBufModifiers,
-                device.dma_buf_image_pool_tiled().is_some(),
-            )
-        {
+        if skip_unless_this_machine_has(
+            RigOnlyCapability::DmaBufModifiers,
+            !modifiers.is_empty() && device.dma_buf_image_pool_tiled().is_some(),
+        ) {
             return;
         }
 
@@ -2736,8 +2735,10 @@ mod tests {
                 // under `VkImageDrmFormatModifierListCreateInfoEXT` for this
                 // usage set. The aspect-mask contract is what is under test,
                 // not the allocator's modifier acceptance.
-                println!("the driver refused DRM_FORMAT_MOD_LINEAR: {e}");
-                skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
+                skip_because_this_machine_lacks_naming_the_refusal(
+                    RigOnlyCapability::DmaBufModifiers,
+                    format!("the driver refused DRM_FORMAT_MOD_LINEAR: {e}"),
+                );
                 return;
             }
         };

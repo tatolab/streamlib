@@ -270,8 +270,9 @@ every PR too, on the Linux runtime unit's bundled lavapipe rather than a GPU:
 `--test-threads=1 --nocapture`, the driver named through
 `VK_ADD_DRIVER_FILES` from the unit the workflow just built. A skip passes in
 libtest, so the job reads every line that says it skipped and fails on one
-that is not the helper's line naming a closed-list reason. The validation
-tests, which skip unless a run turns the layer on, are the one exemption.
+that is not the helper's line naming a closed-list reason. Exempt by name: the
+validation tests, which skip unless a run turns the layer on, and two engine
+log lines that skip no test.
 
 What the software device cannot exercise stays on the rig: run tier 2 there
 before merging any PR that touches `vulkan/rhi/`, encoders/decoders, display

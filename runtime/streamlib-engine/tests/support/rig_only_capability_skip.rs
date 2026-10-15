@@ -54,6 +54,7 @@ pub const HARDWARE_TEST_SKIP_LINE_PREFIX: &str = "hardware test skipped, needing
 
 /// Prints the skip line naming `capability` and returns `true` when this
 /// machine lacks it, so the caller returns; returns `false` otherwise.
+#[must_use = "the caller returns when this is true"]
 pub fn skip_unless_this_machine_has(
     capability: RigOnlyCapability,
     this_machine_has_it: bool,
@@ -64,23 +65,53 @@ pub fn skip_unless_this_machine_has(
     !this_machine_has_it
 }
 
+/// Prints the skip line naming a display and returns `true` when this process
+/// can reach no display server, so the caller returns.
+#[must_use = "the caller returns when this is true"]
+pub fn skip_unless_this_process_can_reach_a_display_server() -> bool {
+    skip_unless_this_machine_has(
+        RigOnlyCapability::Display,
+        this_process_can_reach_a_display_server(),
+    )
+}
+
 /// Prints the skip line naming `capability`, for a caller that has already
 /// found it absent and returns next.
 pub fn skip_because_this_machine_lacks(capability: RigOnlyCapability) {
+    print_the_skip_line(capability, None);
+}
+
+/// Prints the skip line naming `capability` and, after it, the refusal that
+/// showed it absent, for a caller that returns next.
+pub fn skip_because_this_machine_lacks_naming_the_refusal(
+    capability: RigOnlyCapability,
+    refusal: impl std::fmt::Display,
+) {
+    print_the_skip_line(capability, Some(&refusal));
+}
+
+fn print_the_skip_line(capability: RigOnlyCapability, refusal: Option<&dyn std::fmt::Display>) {
+    let test_name = std::thread::current()
+        .name()
+        .unwrap_or("an unnamed test thread")
+        .to_owned();
     // `println!`, not `tracing`: a test binary that has started no runtime has
     // no subscriber, and the lane reads this line from the test's own stdout.
-    println!(
-        "{HARDWARE_TEST_SKIP_LINE_PREFIX}{}: {}",
-        capability.closed_list_reason(),
-        std::thread::current()
-            .name()
-            .unwrap_or("an unnamed test thread"),
-    );
+    match refusal {
+        Some(refusal) => println!(
+            "{HARDWARE_TEST_SKIP_LINE_PREFIX}{}: {test_name}: {refusal}",
+            capability.closed_list_reason(),
+        ),
+        None => println!(
+            "{HARDWARE_TEST_SKIP_LINE_PREFIX}{}: {test_name}",
+            capability.closed_list_reason(),
+        ),
+    }
 }
 
 /// Whether this process can reach a display server: the window server on
 /// macOS, one named in the environment as winit finds it elsewhere.
-pub fn this_process_can_reach_a_display_server() -> bool {
+fn this_process_can_reach_a_display_server() -> bool {
     cfg!(target_os = "macos")
         || ["DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET"]
             .iter()

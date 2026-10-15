@@ -29,6 +29,7 @@ use audio_arm_playback_contract::{
     assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off,
     assert_the_device_asks_for_whole_periods_of_its_own_format,
 };
+use rig_only_capability_skip::{RigOnlyCapability, skip_because_this_machine_lacks};
 
 /// The arm, or `None` when this machine cannot play audio through it.
 ///
@@ -54,16 +55,22 @@ fn alsa_arm() -> Option<AlsaAudioDeviceBackend> {
     Some(backend)
 }
 
+/// [`alsa_arm`], printing the skip line naming an audio device when it is `None`.
+fn alsa_arm_or_skip() -> Option<AlsaAudioDeviceBackend> {
+    let alsa_arm = alsa_arm();
+    if alsa_arm.is_none() {
+        skip_because_this_machine_lacks(RigOnlyCapability::AudioDevice);
+    }
+    alsa_arm
+}
+
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn the_default_device_asks_for_whole_periods_of_the_format_it_negotiated() {
-    let Some(backend) = alsa_arm() else {
-        rig_only_capability_skip::skip_because_this_machine_lacks(
-            rig_only_capability_skip::RigOnlyCapability::AudioDevice,
-        );
+    let Some(backend) = alsa_arm_or_skip() else {
         return;
     };
     assert_the_device_asks_for_whole_periods_of_its_own_format(&backend, None);
@@ -78,10 +85,7 @@ fn the_default_device_asks_for_whole_periods_of_the_format_it_negotiated() {
     ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
-    let Some(backend) = alsa_arm() else {
-        rig_only_capability_skip::skip_because_this_machine_lacks(
-            rig_only_capability_skip::RigOnlyCapability::AudioDevice,
-        );
+    let Some(backend) = alsa_arm_or_skip() else {
         return;
     };
     assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(&backend, None);
@@ -95,10 +99,7 @@ fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
     ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one() {
-    let Some(backend) = alsa_arm() else {
-        rig_only_capability_skip::skip_because_this_machine_lacks(
-            rig_only_capability_skip::RigOnlyCapability::AudioDevice,
-        );
+    let Some(backend) = alsa_arm_or_skip() else {
         return;
     };
     assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one(&backend, None);

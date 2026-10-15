@@ -4887,6 +4887,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     use crate::core::test_support::rig_only_capability_skip::{
         RigOnlyCapability, skip_because_this_machine_lacks,
+        skip_because_this_machine_lacks_naming_the_refusal,
     };
     #[cfg(target_os = "linux")]
     use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
@@ -5377,7 +5378,7 @@ mod tests {
             expected_labels.push("opaque_fd_image");
         }
         if expected_labels.is_empty() {
-            tracing::warn!("Skipping — no export pools on this driver, so no sentinels expected");
+            println!("Skipping — no export pools on this driver, so no sentinels expected");
             return;
         }
 
@@ -5451,7 +5452,7 @@ mod tests {
             None => return,
         };
         let Some(pinned_pool) = device.opaque_fd_buffer_pool_pinned_to_one_memory_type() else {
-            tracing::warn!("Skipping — no OPAQUE_FD buffer pool on this driver");
+            println!("Skipping — no OPAQUE_FD buffer pool on this driver");
             return;
         };
         let live_allocations_in_pool = || {
@@ -5767,6 +5768,8 @@ mod tests {
         } else {
             "HostVulkanBuffer::new_opaque_fd_export"
         };
+        const DMA_BUF_RENDER_TARGET_FRAME_SITE: &str =
+            "HostVulkanTexture::new_render_target_dma_buf";
         let frame_constructors_by_site: Vec<(&str, MemoryTypeOfOneFreshFrameAllocation<'_>)> = vec![
             (
                 "HostVulkanTexture::new",
@@ -5783,7 +5786,7 @@ mod tests {
                 }),
             ),
             (
-                "HostVulkanTexture::new_render_target_dma_buf",
+                DMA_BUF_RENDER_TARGET_FRAME_SITE,
                 Box::new(|| {
                     HostVulkanTexture::new_render_target_dma_buf(
                         &device,
@@ -5854,11 +5857,13 @@ mod tests {
                             .expect("the allocation's memory type is one of the device's"),
                     )),
                     Err(e)
-                        if frame_allocation_site.contains("dma_buf")
+                        if *frame_allocation_site == DMA_BUF_RENDER_TARGET_FRAME_SITE
                             && !device.supports_dma_buf_export() =>
                     {
-                        println!("{frame_allocation_site} does not allocate here: {e}");
-                        skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
+                        skip_because_this_machine_lacks_naming_the_refusal(
+                            RigOnlyCapability::DmaBufModifiers,
+                            format!("{frame_allocation_site} does not allocate here: {e}"),
+                        );
                         None
                     }
                     Err(e) => {

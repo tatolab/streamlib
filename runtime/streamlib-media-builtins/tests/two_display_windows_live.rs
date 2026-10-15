@@ -52,10 +52,7 @@ fn windows_on_screen_titled(title: &str) -> usize {
 )]
 #[test]
 fn one_source_feeds_two_display_windows_at_once() {
-    if rig_only_capability_skip::skip_unless_this_machine_has(
-        rig_only_capability_skip::RigOnlyCapability::Display,
-        rig_only_capability_skip::this_process_can_reach_a_display_server(),
-    ) {
+    if rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server() {
         return;
     }
     let project_directory = tempfile::tempdir().expect("a project directory");

@@ -295,7 +295,9 @@ jobs:
   engine-hardware-tests-on-the-bundled-software-device:
     name: Engine hardware tests (bundled software device)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # A cold dependency cache on a PR builds the engine's test targets from
+    # scratch before about 2,500 engine tests run one at a time.
+    timeout-minutes: 90
     # Compiles and runs PR-authored code, so it gets the read it needs and
     # nothing else.
     permissions:
@@ -356,7 +358,15 @@ jobs:
           tar -C "$RUNNER_TEMP/tatolab-runtime" -xzf "$RUNNER_TEMP/tatolab-runtime-unit/tatolab-runtime-unit.tar.gz"
           bundled_vulkan_driver_directory="$RUNNER_TEMP/tatolab-runtime/lib/tatolab/lend/tatolab/runtime/_vulkan_driver"
           test -f "$bundled_vulkan_driver_directory/lvp_icd.x86_64.json"
-          if ls /etc/vulkan/icd.d/*.json /usr/share/vulkan/icd.d/*.json /usr/local/share/vulkan/icd.d/*.json 2>/dev/null; then
+          shopt -s nullglob
+          driver_manifests_the_runner_carries=(
+            /etc/vulkan/icd.d/*.json
+            /usr/share/vulkan/icd.d/*.json
+            /usr/local/share/vulkan/icd.d/*.json
+            "$HOME"/.local/share/vulkan/icd.d/*.json
+          )
+          if (( ${#driver_manifests_the_runner_carries[@]} )); then
+            printf '%s\n' "${driver_manifests_the_runner_carries[@]}"
             echo "::error::the runner carries a Vulkan driver of its own; the lane runs on the unit's alone"
             exit 1
           fi

@@ -18,9 +18,7 @@ use vulkanalia::vk;
 use vulkanalia_vma as vma;
 
 use super::{HostVulkanDevice, VulkanPresentTarget};
-use crate::core::test_support::rig_only_capability_skip::{
-    RigOnlyCapability, skip_unless_this_machine_has, this_process_can_reach_a_display_server,
-};
+use crate::core::test_support::rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server;
 use crate::core::window_event_pump::{
     WindowRegistrationRequestFromOwningProcessor, process_wide_window_event_pump,
 };
@@ -457,10 +455,7 @@ fn run_scenario_with_a_swapchain_live(
 )]
 #[test]
 fn test_swapchain_allocation_scenarios() {
-    if skip_unless_this_machine_has(
-        RigOnlyCapability::Display,
-        this_process_can_reach_a_display_server(),
-    ) {
+    if skip_unless_this_process_can_reach_a_display_server() {
         return;
     }
     let device = match try_create_device() {

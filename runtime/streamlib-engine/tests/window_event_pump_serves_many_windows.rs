@@ -75,10 +75,7 @@ fn every_caller_is_answered_by_the_same_pump() {
 )]
 #[test]
 fn two_windows_register_at_once_and_each_is_addressed_alone() {
-    if rig_only_capability_skip::skip_unless_this_machine_has(
-        rig_only_capability_skip::RigOnlyCapability::Display,
-        rig_only_capability_skip::this_process_can_reach_a_display_server(),
-    ) {
+    if rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server() {
         return;
     }
     let event_pump = process_wide_window_event_pump()

@@ -8246,14 +8246,8 @@ mod tests {
         const FRAMES_PRESENTED_SO_THE_COMPOSITOR_IMPORTS_THE_SWAPCHAIN: usize = 30;
         const FLAVOUR_TEST_EXTENT: u32 = 64;
 
-        use crate::core::test_support::rig_only_capability_skip::{
-            RigOnlyCapability, skip_unless_this_machine_has,
-            this_process_can_reach_a_display_server,
-        };
-        if skip_unless_this_machine_has(
-            RigOnlyCapability::Display,
-            this_process_can_reach_a_display_server(),
-        ) {
+        use crate::core::test_support::rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server;
+        if skip_unless_this_process_can_reach_a_display_server() {
             return;
         }
         let Ok(gpu) = GpuContext::init_for_platform() else {

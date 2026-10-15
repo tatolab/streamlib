@@ -2996,7 +2996,8 @@ mod dma_buf_registration_payload_tests {
     use super::*;
     use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
     use crate::core::test_support::rig_only_capability_skip::{
-        RigOnlyCapability, skip_because_this_machine_lacks, skip_unless_this_machine_has,
+        RigOnlyCapability, skip_because_this_machine_lacks_naming_the_refusal,
+        skip_unless_this_machine_has,
     };
     use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTexture};
 
@@ -3038,8 +3039,10 @@ mod dma_buf_registration_payload_tests {
         ) {
             Ok(t) => t,
             Err(e) => {
-                println!("the driver refused DRM_FORMAT_MOD_LINEAR: {e}");
-                skip_because_this_machine_lacks(RigOnlyCapability::DmaBufModifiers);
+                skip_because_this_machine_lacks_naming_the_refusal(
+                    RigOnlyCapability::DmaBufModifiers,
+                    format!("the driver refused DRM_FORMAT_MOD_LINEAR: {e}"),
+                );
                 return;
             }
         };

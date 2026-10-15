@@ -156,10 +156,7 @@ fn wait_until_the_pump_routes_to_exactly(expected_window_count: usize) {
 )]
 #[test]
 fn a_helper_process_mints_names_polls_and_closes_a_window_entirely_over_the_wire() {
-    if rig_only_capability_skip::skip_unless_this_machine_has(
-        rig_only_capability_skip::RigOnlyCapability::Display,
-        rig_only_capability_skip::this_process_can_reach_a_display_server(),
-    ) {
+    if rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server() {
         return;
     }
     let gpu_context = GpuContext::init_for_platform().expect("a GPU is required for this tier");
