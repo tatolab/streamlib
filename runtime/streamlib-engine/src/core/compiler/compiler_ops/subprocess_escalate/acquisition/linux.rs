@@ -238,7 +238,7 @@ pub(super) fn assign_image_handle_id(
 /// registration, or `None` where the device exports no timeline semaphore —
 /// the software device refuses an exportable one at creation, and crosses no
 /// edge.
-pub(super) fn timeline_edge_pair_where_the_device_exports_one(
+fn timeline_edge_pair_where_the_device_exports_one(
     host_device: &crate::vulkan::rhi::HostVulkanDevice,
     caller: &str,
 ) -> crate::core::error::Result<

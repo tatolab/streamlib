@@ -3063,6 +3063,7 @@ mod surface_export_staging_registration_payload_tests {
     #[test]
     fn a_staging_registration_states_the_exporters_memory_type_index() {
         const EXPORTER_MEMORY_TYPE_INDEX: u32 = 4;
+        let refill_done_timeline_crosses = true;
 
         let payload = surface_export_staging_registration_payload(
             "surface-under-test-hostvisible",
@@ -3072,7 +3073,7 @@ mod surface_export_staging_registration_payload_tests {
             64,
             PixelFormat::Rgba32,
             EXPORTER_MEMORY_TYPE_INDEX,
-            true,
+            refill_done_timeline_crosses,
         );
 
         assert_eq!(
@@ -3094,6 +3095,7 @@ mod surface_export_staging_registration_payload_tests {
     /// rather than reading as "absent" the way a defaulted field would.
     #[test]
     fn a_staging_registration_states_memory_type_index_zero_rather_than_omitting_it() {
+        let refill_done_timeline_crosses = true;
         let payload = surface_export_staging_registration_payload(
             "surface-under-test-hostvisible",
             "runtime-under-test",
@@ -3102,7 +3104,7 @@ mod surface_export_staging_registration_payload_tests {
             32,
             PixelFormat::Rgba32,
             0,
-            true,
+            refill_done_timeline_crosses,
         );
         assert_eq!(
             payload

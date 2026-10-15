@@ -1558,3 +1558,122 @@ fn a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name() {
         .reserve_one_off_acquisition_count(a_1280x720_rgba8_unorm_texture())
         .expect("a reservation handed back unheld makes room for one more");
 }
+
+/// A helper's texture and render-target image carry their `produce_done` /
+/// `consume_done` edges — in the surface-share registration and in the
+/// handle the registry holds — exactly where the device exports a timeline
+/// semaphore. The software device exports none, refuses an exportable one at
+/// creation, and registers both with no edge; a hardware device that exports
+/// one keeps both edges. The image arm runs where the device can make a
+/// render-target image at all, which the software device cannot.
+#[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exports_one() {
+    use super::super::handle_escalate_op;
+    use super::RegisteredHandle;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
+        EscalateRequestAcquireImage, EscalateRequestAcquireTexture,
+    };
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::TextureFormat;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let device_exports_a_timeline = gpu.gpu_capabilities().supports_semaphore_export;
+    let device_name = gpu.gpu_capabilities().device_name;
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+
+    let assert_the_registration_carries_edges_exactly_where_one_crosses =
+        |handle_id: &str, kind: &str| {
+            let registered = live_service
+                .state
+                .get_surface_planes(handle_id)
+                .unwrap_or_else(|| panic!("the {kind} is registered with the service"));
+            assert_eq!(
+                (
+                    registered.produce_done_fd.is_some(),
+                    registered.consume_done_fd.is_some()
+                ),
+                (device_exports_a_timeline, device_exports_a_timeline),
+                "{device_name}: the {kind}'s registered edges follow supports_semaphore_export"
+            );
+        };
+
+    let acquired_texture = handle_escalate_op(
+        &sandbox,
+        &registry,
+        EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+            request_id: "req-texture-edges".to_string(),
+            width: 64,
+            height: 32,
+            format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
+            processor_output_pool: None,
+            usage: vec!["texture_binding".to_string(), "storage_binding".to_string()],
+        }),
+    );
+    let texture_handle_id = match acquired_texture {
+        Some(EscalateResponse::Ok(ok)) => ok.handle_id,
+        other => panic!("{device_name}: acquire_texture failed: {other:?}"),
+    };
+    assert_the_registration_carries_edges_exactly_where_one_crosses(&texture_handle_id, "texture");
+    match registry.remove_handle(&texture_handle_id) {
+        Some(RegisteredHandle::Texture {
+            produce_done,
+            consume_done,
+            ..
+        }) => assert_eq!(
+            (produce_done.is_some(), consume_done.is_some()),
+            (device_exports_a_timeline, device_exports_a_timeline),
+            "{device_name}: the held texture's edges follow supports_semaphore_export"
+        ),
+        _ => panic!("the registry holds the acquired texture"),
+    }
+
+    let acquired_image = handle_escalate_op(
+        &sandbox,
+        &registry,
+        EscalateRequest::AcquireImage(EscalateRequestAcquireImage {
+            request_id: "req-image-edges".to_string(),
+            width: 64,
+            height: 32,
+            format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
+        }),
+    );
+    match acquired_image {
+        Some(EscalateResponse::Ok(ok)) => {
+            assert_the_registration_carries_edges_exactly_where_one_crosses(&ok.handle_id, "image");
+            match registry.remove_handle(&ok.handle_id) {
+                Some(RegisteredHandle::Image {
+                    produce_done,
+                    consume_done,
+                    ..
+                }) => assert_eq!(
+                    (produce_done.is_some(), consume_done.is_some()),
+                    (device_exports_a_timeline, device_exports_a_timeline),
+                    "{device_name}: the held image's edges follow supports_semaphore_export"
+                ),
+                _ => panic!("the registry holds the acquired image"),
+            }
+        }
+        Some(EscalateResponse::Err(refusal)) => assert!(
+            !sandbox
+                .host_inner()
+                .gpu_capabilities()
+                .supports_dma_buf_export,
+            "{device_name} exports DMA-BUF, so its render-target image must acquire: {}",
+            refusal.message
+        ),
+        other => panic!("acquire_image answered nothing usable: {other:?}"),
+    }
+    live_service.stop();
+}

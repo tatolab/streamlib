@@ -259,13 +259,6 @@ impl SurfaceExportStaging {
             .then_some(&self.refill_done_timeline)
     }
 
-    /// The value a consumer in another process waits for after the copy
-    /// that signalled `signalled_value`; `None` where no timeline crosses.
-    fn value_another_process_waits_for(&self, signalled_value: u64) -> Option<u64> {
-        self.refill_done_timeline_crosses_processes
-            .then_some(signalled_value)
-    }
-
     /// UUID of the Vulkan device that owns the staging allocation. An
     /// external device API must import onto this GPU; picking any other
     /// reads the wrong memory rather than failing.
@@ -437,7 +430,7 @@ impl GpuContext {
         let refill_done_timeline = if refill_done_timeline_crosses_processes {
             self.create_exportable_timeline_semaphore(0)?
         } else {
-            Arc::new(HostVulkanTimelineSemaphore::new(vulkan_device.device(), 0)?)
+            self.create_timeline_semaphore(0)?
         };
         let refill_submission = Mutex::new(RefillSubmission {
             recorder: self.create_command_recorder("surface_export_staging_refill")?,
@@ -575,7 +568,8 @@ impl GpuContext {
     }
 
     /// Record + submit one staging copy and wait (bounded) for it to
-    /// land, returning the signalled timeline value.
+    /// land, returning the timeline value a consumer in another process
+    /// waits for — `None` where the staging's timeline does not cross.
     ///
     /// The lock/begin/record/submit/wait choreography lives here once:
     /// the signal value must be drawn and submitted under the recorder
@@ -590,7 +584,7 @@ impl GpuContext {
         record_copy: impl FnOnce(
             &mut RhiCommandRecorder,
         ) -> Result<Option<TextureLayoutSettledByThisCopy>>,
-    ) -> Result<u64> {
+    ) -> Result<Option<u64>> {
         let mut submission = staging.refill_submission.lock();
         submission.recorder.begin()?;
         let texture_layout_settled_by_this_copy = match record_copy(&mut submission.recorder) {
@@ -628,7 +622,9 @@ impl GpuContext {
         staging
             .refill_done_timeline
             .wait(signal_value, STAGING_REFILL_WAIT_TIMEOUT_NS)?;
-        Ok(signal_value)
+        Ok(staging
+            .refill_done_timeline_crosses_processes
+            .then_some(signal_value))
     }
 
     /// Refuse a surface whose pool slot this staging was not opened for.
@@ -727,12 +723,11 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<Option<u64>> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        let signalled_value = Self::submit_staging_copy_and_wait(
+        Self::submit_staging_copy_and_wait(
             staging,
             FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
             |recorder| Self::record_refill(staging, &source, recorder),
-        )?;
-        Ok(staging.value_another_process_waits_for(signalled_value))
+        )
     }
 
     /// The guards every refill runs, plus the freshly-resolved source.
@@ -836,12 +831,11 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<Option<u64>> {
         let destination = self.resolve_write_back_destination(staging, surface_id)?;
-        let signalled_value = Self::submit_staging_copy_and_wait(
+        Self::submit_staging_copy_and_wait(
             staging,
             FrameThisStagingHoldsAfterTheCopy::WhateverItAlreadyHeld,
             |recorder| Self::record_write_back(staging, &destination, recorder),
-        )?;
-        Ok(staging.value_another_process_waits_for(signalled_value))
+        )
     }
 
     /// Refuse publishing a staging that holds no frame, or another frame
