@@ -1623,6 +1623,10 @@ unsafe impl Sync for HostVulkanBuffer {}
 mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
+    use crate::core::test_support::rig_only_capability_skip::{
+        RigOnlyCapability, skip_unless_this_machine_has,
+    };
+    #[cfg(target_os = "linux")]
     use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
     use std::os::fd::{FromRawFd as _, OwnedFd};
 
@@ -2712,8 +2716,10 @@ mod tests {
             VideoBitstreamDirection::Encode,
             VideoBitstreamDirection::Decode,
         ] {
-            if !device_supports_h264_for_bitstream_direction(&device, direction) {
-                println!("Skipping {direction:?} - device has no H.264 support in that direction");
+            if skip_unless_this_machine_has(
+                RigOnlyCapability::VulkanVideo,
+                device_supports_h264_for_bitstream_direction(&device, direction),
+            ) {
                 continue;
             }
             let profile =

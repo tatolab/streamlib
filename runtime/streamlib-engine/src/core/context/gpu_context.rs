@@ -8246,6 +8246,10 @@ mod tests {
         const FRAMES_PRESENTED_SO_THE_COMPOSITOR_IMPORTS_THE_SWAPCHAIN: usize = 30;
         const FLAVOUR_TEST_EXTENT: u32 = 64;
 
+        use crate::core::test_support::rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server;
+        if skip_unless_this_process_can_reach_a_display_server() {
+            return;
+        }
         let Ok(gpu) = GpuContext::init_for_platform() else {
             tracing::warn!("no GPU device, so the swapchain re-acquire test skips");
             return;
@@ -8262,7 +8266,7 @@ mod tests {
             }) {
             Ok(window) => window,
             Err(no_window) => panic!(
-                "the rig run needs a window for its swapchain, so it cannot skip green: {no_window}"
+                "a display server is named, so the swapchain's window must mint: {no_window}"
             ),
         };
         let (window_width, window_height) = window.physical_size_when_minted();

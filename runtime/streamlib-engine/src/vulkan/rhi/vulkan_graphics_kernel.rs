@@ -40,7 +40,7 @@ use sha2::{Digest, Sha256};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use std::ffi::c_void;
 
@@ -50,8 +50,9 @@ use crate::core::rhi::{
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, IndexType, PolygonMode,
     PrimitiveTopology, ScissorRect, Texture, TextureFormat, VertexAttributeFormat, VertexInputRate,
-    VertexInputState, Viewport, refuse_a_binding_the_shader_left_unnamed,
-    refuse_a_descriptor_set_other_than_set_0, refuse_one_binding_name_that_identifies_two_slots,
+    VertexInputState, Viewport, reflect_spirv_without_its_debug_source_strings,
+    refuse_a_binding_the_shader_left_unnamed, refuse_a_descriptor_set_other_than_set_0,
+    refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently,
 };
 use crate::core::{Error, Result};
@@ -1495,12 +1496,13 @@ fn validate_against_spirv(
 
     for stage in descriptor.stages {
         let stage_flag = stage_to_flag(stage.stage);
-        let reflection = Reflection::new_from_spirv(stage.spv).map_err(|e| {
-            Error::GpuError(format!(
-                "Graphics kernel '{}': failed to reflect SPIR-V for {:?} stage: {e:?}",
-                descriptor.label, stage.stage
-            ))
-        })?;
+        let reflection =
+            reflect_spirv_without_its_debug_source_strings(stage.spv).map_err(|e| {
+                Error::GpuError(format!(
+                    "Graphics kernel '{}': failed to reflect SPIR-V for {:?} stage: {e:?}",
+                    descriptor.label, stage.stage
+                ))
+            })?;
         subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
             &kernel_kind_label,
             graphics_stage_to_vk(stage.stage),

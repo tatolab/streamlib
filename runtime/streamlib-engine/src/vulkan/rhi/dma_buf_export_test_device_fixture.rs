@@ -10,19 +10,20 @@
 use std::sync::Arc;
 
 use super::HostVulkanDevice;
+use crate::core::test_support::rig_only_capability_skip::{
+    RigOnlyCapability, skip_unless_this_machine_has,
+};
 
-/// The device to run a DMA-BUF arm on, or `None` — logged, naming the
-/// device — where there is no device or it exports no DMA-BUF.
+/// The device to run a DMA-BUF arm on, or `None` — logged — where there is
+/// no device or it exports no DMA-BUF.
 pub(crate) fn a_device_that_exports_dma_buf_or_skip(
     test_name: &str,
 ) -> Option<Arc<HostVulkanDevice>> {
     let device = a_vulkan_device_or_skip(test_name)?;
-    if !device.supports_dma_buf_export() {
-        tracing::warn!(
-            test_name,
-            device = %device.name(),
-            "the device exports no DMA-BUF, so this DMA-BUF test skips"
-        );
+    if skip_unless_this_machine_has(
+        RigOnlyCapability::DmaBufModifiers,
+        device.supports_dma_buf_export(),
+    ) {
         return None;
     }
     Some(device)

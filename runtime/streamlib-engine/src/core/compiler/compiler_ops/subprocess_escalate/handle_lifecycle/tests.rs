@@ -4,6 +4,10 @@
 use super::EscalateHandleRegistry;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::test_support::LiveSurfaceShareServiceForATest;
+#[cfg(target_os = "linux")]
+use crate::core::test_support::rig_only_capability_skip::{
+    RigOnlyCapability, skip_unless_this_machine_has,
+};
 
 #[test]
 fn release_handle_flags_unknown_handle() {
@@ -1372,8 +1376,10 @@ fn a_render_target_image_is_held_and_counted_under_its_shape_until_the_helper_re
                 .has_render_target_modifier_for_texture_format(format))
         })
         .expect("the device answers whether it has a render-target modifier");
-    if !device_has_a_render_target_modifier_for_the_format {
-        println!("no render-target DRM modifier for {format:?} on this device — skipping");
+    if skip_unless_this_machine_has(
+        RigOnlyCapability::DmaBufModifiers,
+        device_has_a_render_target_modifier_for_the_format,
+    ) {
         return;
     }
     let registry = EscalateHandleRegistry::new();

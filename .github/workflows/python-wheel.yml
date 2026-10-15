@@ -286,6 +286,164 @@ jobs:
         working-directory: tests/stream-on-runtime
         run: .venv/bin/pytest -v -m "not rig_only_capability"
 
+  # The engine's, the media built-ins' and `tatolabd`'s `hardware-tests` suites
+  # on the lavapipe the runtime unit the first job built carries, never a
+  # distribution driver. A test that needs what this runner cannot give skips
+  # through `rig_only_capability_skip` naming one closed-list reason; any other
+  # skip fails the job. Here rather than in test.yml because the unit is this
+  # workflow's artifact.
+  engine-hardware-tests-on-the-bundled-software-device:
+    name: Engine hardware tests (bundled software device)
+    runs-on: ubuntu-latest
+    # A cold dependency cache on a PR builds the engine's test targets from
+    # scratch before about 2,500 engine tests run one at a time.
+    timeout-minutes: 90
+    # Compiles and runs PR-authored code, so it gets the read it needs and
+    # nothing else.
+    permissions:
+      contents: read
+    needs: wheel-interpreter-lifecycle
+    env:
+      # The skip line `runtime/streamlib-engine/tests/support/rig_only_capability_skip.rs`
+      # prints, and the closed list it may name; a unit test there holds both to it.
+      HARDWARE_TEST_SKIP_LINE_PREFIX: "hardware test skipped, needing "
+      HARDWARE_TEST_SKIP_LINE_REASONS: "Vulkan Video|DMA-BUF modifiers|CUDA|a camera|a display|an audio device"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Compiles and runs PR-authored code; a persisted checkout token
+          # would be readable by it.
+          persist-credentials: false
+
+      # The engine build set test.yml's Linux job installs. `libvulkan-dev`
+      # brings the system loader's headers and no driver. `strace` is what the
+      # engine's write()-syscall regression test traces itself with.
+      - name: Install system dependencies
+        timeout-minutes: 12
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            pkg-config
+            protobuf-compiler
+            libclang1-18
+            libclang-common-18-dev
+            libvulkan-dev
+            glslc
+            cmake
+            ninja-build
+            strace
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-hardware-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tatolab-runtime-unit-linux
+          path: ${{ runner.temp }}/tatolab-runtime-unit
+
+      # The unit's loader answers the bare soname the engine opens, and its
+      # lavapipe is named to that loader the way `tatolabd` names it. A driver
+      # manifest in a system search directory would put a second device in
+      # front of the one under test, so one fails the step.
+      - name: Name the unit's bundled Vulkan driver to the loader
+        run: |
+          mkdir -p "$RUNNER_TEMP/tatolab-runtime"
+          tar -C "$RUNNER_TEMP/tatolab-runtime" -xzf "$RUNNER_TEMP/tatolab-runtime-unit/tatolab-runtime-unit.tar.gz"
+          bundled_vulkan_driver_directory="$RUNNER_TEMP/tatolab-runtime/lib/tatolab/lend/tatolab/runtime/_vulkan_driver"
+          test -f "$bundled_vulkan_driver_directory/lvp_icd.x86_64.json"
+          for driver_search_replacing_variable in VK_DRIVER_FILES VK_ICD_FILENAMES; do
+            if [ -n "${!driver_search_replacing_variable:-}" ]; then
+              echo "::error::$driver_search_replacing_variable is set, so the loader would ignore the unit's driver"
+              exit 1
+            fi
+          done
+          # Every directory the loader searches for driver manifests on Linux.
+          shopt -s nullglob
+          driver_manifests_the_runner_carries=()
+          IFS=: read -r -a xdg_config_directories <<< "${XDG_CONFIG_DIRS:-/etc/xdg}"
+          IFS=: read -r -a xdg_data_directories <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+          for driver_search_directory in \
+              "${XDG_CONFIG_HOME:-$HOME/.config}" "${xdg_config_directories[@]}" /etc \
+              "${XDG_DATA_HOME:-$HOME/.local/share}" "${xdg_data_directories[@]}" \
+              /usr/local/share /usr/share; do
+            driver_manifests_the_runner_carries+=("$driver_search_directory"/vulkan/icd.d/*.json)
+          done
+          if (( ${#driver_manifests_the_runner_carries[@]} )); then
+            printf '%s\n' "${driver_manifests_the_runner_carries[@]}"
+            echo "::error::the runner carries a Vulkan driver of its own; the lane runs on the unit's alone"
+            exit 1
+          fi
+          echo "VK_ADD_DRIVER_FILES=$bundled_vulkan_driver_directory/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$bundled_vulkan_driver_directory" >> "$GITHUB_ENV"
+
+      # `--test-threads=1`: hardware tests serialize on the device
+      # (`docs/testing-hardware.md`). `--nocapture`: a skip returns early and
+      # passes, so its line is the only trace it leaves.
+      - name: Engine and media built-ins hardware tests
+        run: |
+          set -o pipefail
+          cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
+            --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
+            --no-fail-fast -- --test-threads=1 --nocapture 2>&1 \
+            | tee "$RUNNER_TEMP/engine-and-media-builtins-hardware-tests-output.txt"
+
+      # Its own invocation: the test-root feature would otherwise reach the
+      # engine's lib tests too, which resolve the runtime directory from
+      # XDG_RUNTIME_DIR.
+      - name: tatolabd hardware tests
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)" \
+            cargo test --locked -p tatolabd \
+            --features hardware-tests,machine-directories-under-a-test-root \
+            --no-fail-fast -- --test-threads=1 --nocapture 2>&1 \
+            | tee "$RUNNER_TEMP/tatolabd-hardware-tests-output.txt"
+
+      # libtest opens a line with `test <name> ... `, and a name may say
+      # "skip", so that is cut first. Exempt by name: the validation tests,
+      # which need the layer a run turns on rather than a capability, and two
+      # engine log lines that skip no test.
+      - name: Every skip names what this machine lacks from the closed list
+        if: ${{ !cancelled() }}
+        run: |
+          sed -E 's/^test [^ ]+ \.\.\. //' \
+              "$RUNNER_TEMP/engine-and-media-builtins-hardware-tests-output.txt" \
+              "$RUNNER_TEMP/tatolabd-hardware-tests-output.txt" \
+            | grep -iE '\bskip(s|ped|ping)?\b' \
+            | grep -vE "${HARDWARE_TEST_SKIP_LINE_PREFIX}(${HARDWARE_TEST_SKIP_LINE_REASONS}): " \
+            | grep -vE 'Skipping — no validation messenger installed\.|Skipping — only synchronization validation can see this hazard\.' \
+            | grep -vE 'Manual mode: skipping thread priority|; it is skipped and left in place$' \
+            > "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt" || true
+          if [ -s "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt" ]; then
+            echo "::error::a hardware test skipped without naming a closed-list reason"
+            cat "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt"
+            exit 1
+          fi
+          # A lane whose device never came up would pass as a lane of skips.
+          if ! grep -q "Selected Vulkan device: llvmpipe" \
+              "$RUNNER_TEMP/engine-and-media-builtins-hardware-tests-output.txt"; then
+            echo "::error::the engine never selected the bundled lavapipe"
+            exit 1
+          fi
+          if grep -h "Selected Vulkan device: " \
+              "$RUNNER_TEMP/engine-and-media-builtins-hardware-tests-output.txt" \
+              "$RUNNER_TEMP/tatolabd-hardware-tests-output.txt" \
+            | grep -v "Selected Vulkan device: llvmpipe"; then
+            echo "::error::the engine selected a device other than the bundled lavapipe"
+            exit 1
+          fi
+          grep -hoE "${HARDWARE_TEST_SKIP_LINE_PREFIX}(${HARDWARE_TEST_SKIP_LINE_REASONS}): .*" \
+            "$RUNNER_TEMP/engine-and-media-builtins-hardware-tests-output.txt" \
+            "$RUNNER_TEMP/tatolabd-hardware-tests-output.txt" | sort | uniq -c || true
+
   extension-wheels:
     name: Extension wheel (${{ matrix.extension }})
     runs-on: ubuntu-latest

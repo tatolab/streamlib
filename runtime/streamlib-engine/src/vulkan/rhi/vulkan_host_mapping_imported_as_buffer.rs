@@ -299,7 +299,7 @@ mod tests {
             return;
         };
         if !device.supports_host_pointer_import() {
-            tracing::warn!("skipping — VK_EXT_external_memory_host absent on this device");
+            println!("skipping — VK_EXT_external_memory_host absent on this device");
             return;
         }
         let range = PageAlignedHostRange::new(4096 * 4);

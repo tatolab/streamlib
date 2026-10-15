@@ -13,11 +13,14 @@
 use streamlib_engine::core::context::{SharedAudioDeviceBackend, probe_audio_device_backend};
 
 mod audio_arm_timestamp_contract;
+#[path = "support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
 use audio_arm_timestamp_contract::{
     assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one,
     assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off,
     assert_the_timestamp_contract_holds_on,
 };
+use rig_only_capability_skip::{RigOnlyCapability, skip_because_this_machine_lacks};
 
 /// The arm, or `None` when the chain demoted past it.
 ///
@@ -31,13 +34,22 @@ fn pipewire_arm() -> Option<SharedAudioDeviceBackend> {
     (backend.backend_name() == "pipewire").then_some(backend)
 }
 
+/// [`pipewire_arm`], printing the skip line naming an audio device when it is `None`.
+fn pipewire_arm_or_skip() -> Option<SharedAudioDeviceBackend> {
+    let pipewire_arm = pipewire_arm();
+    if pipewire_arm.is_none() {
+        skip_because_this_machine_lacks(RigOnlyCapability::AudioDevice);
+    }
+    pipewire_arm
+}
+
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_real_session_stamps_its_blocks_with_the_devices_own_timing() {
-    let Some(backend) = pipewire_arm() else {
+    let Some(backend) = pipewire_arm_or_skip() else {
         return;
     };
     assert_the_timestamp_contract_holds_on(backend.as_ref(), None);
@@ -51,7 +63,7 @@ fn a_real_session_stamps_its_blocks_with_the_devices_own_timing() {
     ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
-    let Some(backend) = pipewire_arm() else {
+    let Some(backend) = pipewire_arm_or_skip() else {
         return;
     };
     assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off(backend.as_ref(), None);
@@ -65,7 +77,7 @@ fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
     ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one() {
-    let Some(backend) = pipewire_arm() else {
+    let Some(backend) = pipewire_arm_or_skip() else {
         return;
     };
     assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one(
