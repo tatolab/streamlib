@@ -44,7 +44,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
-  <!-- verify: grep -n "The scaffolded stream runs on the driver the lend carries" .github/workflows/macos-wheel.yml -->
+  <!-- verify: grep -n "The scaffolded stream runs on the driver the lend carries" .github/workflows/reusable-macos-runtime-unit.yml .github/workflows/ci.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
 - **DECIDED** — Terms of the sentence: Tatolab is a pure-Python stream package,
   `tatolab-stream` from PyPI, beside a native runtime — `tatolabd`, the `tatolab` CLI and
@@ -74,6 +74,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
+  <!-- verify: cargo test -p streamlib --test app_sugar_test -->
 - **DECIDED** — The two floors are one product surface. A Python node written
   against `tatolab.stream` runs on both; where it cannot is a short closed
   list that refuses by name before a frame flows — at load, or in `setup()`,
@@ -99,7 +100,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   rig" — the Linux lane runs the engine on the bundled software device, and rig-only is only
   what a runner cannot give (§Graphics)]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
-  <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
+  <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/ci.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py::test_the_engine_conforms_to_tatolab_stream_and_its_stub -->
   <!-- verify: pytest tests/stream-on-runtime/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
@@ -177,7 +178,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   2026-10-02. [package-split-and-lend — SHIPPED #2686, #2689, #2693; amended by
   optional-accelerators: "`requires_gpu` halves stay rig-only" — only what a runner cannot
   give stays rig-only, the rest runs on the bundled software device (§Graphics)]
-  <!-- verify: grep -n -e "stream-suite:" -e "integration-suite:" .github/workflows/python-wheel.yml -->
+  <!-- verify: grep -n -e "Stream suite (Python 3.10)" -e "Integration suite (all but rig-only)" .github/workflows/ci.yml -->
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
   stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
@@ -3522,17 +3523,17 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   cannot be dialled again. A bag the engine refuses is the one failure not retried: it names
   its port and ends the thread, because reconnecting would spend an endpoint's session
   forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150]
-- **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job, and an
-  `extension-wheels-macos` beside it, over a matrix holding `packages/streamlib-webrtc`:
-  unpack the runtime unit, build the extension into a venv holding `tatolab-stream`,
-  `cargo test` and clippy over its crate, `mypy.stubtest` over its `_native`, pyright over
-  its Python, and pytest with `-m "not requires_gpu"`, the portability gate over its `.so`
-  among them. `release-please-config.json` bumps the extension with everything else, one
+- **DECIDED** — `ci.yml`'s `integration-test-linux` and `integration-test-macos` jobs
+  carry the extension lane for `packages/streamlib-webrtc`: on the runtime unit they built, build
+  the extension into a venv holding `tatolab-stream`, `cargo test` and clippy over its
+  crate, `mypy.stubtest` over its `_native`, pyright over its Python, and pytest with
+  `-m "not requires_gpu"`, the portability gate over its `.so` among them.
+  `release-please-config.json` bumps the extension with everything else, one
   version (§Distribution & versioning); the release builds `tatolab-webrtc` for manylinux
   and Apple Silicon and uploads it to PyPI beside `tatolab-stream`, attaching nothing.
   [networking-extension-wheels — SHIPPED #2152; package-split-and-lend — SHIPPED #2691,
   #2697]
-  <!-- verify: grep -n "build-tatolab-webrtc-distribution:" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "build-tatolab-webrtc-distribution:" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by the wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
   cases), SDP offer construction and answer parsing, and the player's bag literal checked
@@ -3865,7 +3866,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
   SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; amended by tatolab-names: the crate
   is `tatolab-stream`]
-  <!-- verify: grep -n "publish-to-pypi:" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "publish-to-pypi:" .github/workflows/reusable-distributions.yml -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index -->
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
@@ -3936,22 +3937,26 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   No notarisation and no signing identity: nothing pip delivers is quarantined. Every
   post-link rewrite of a shipped binary — `lipo -thin` on MoltenVK — is re-signed ad hoc
   (`codesign -f -s -`) in the step that rewrites it, and signatures are verified in the
-  built zip and again after install. The same workflow runs on every PR on a runner with no
-  Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
+  built zip and again after install. The same workflow runs as a dry run on every push to
+  `main`, on a runner with no Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
   and of `tatolabd` and `tatolab`, runs the portability, notices and driver-search tests
   against the lend, and in a venv holding only `tatolab-stream` runs `tatolab new
   --test-pattern` then `tatolab run` for twenty seconds, which must open the carried loader, raise
   nothing from the effect and show at least sixty frames. On release a failed macOS proof of
-  the runtime unit withholds the PyPI upload, as a failed build of any distribution does.
+  the runtime unit withholds the PyPI upload, as a failed build of any distribution does. A
+  pull request builds no distribution; on `main`, `ci.yml` also builds the debug runtime
+  unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
+  Python suite and the integration suite's GPU-free half on it.
   [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697]
   <!-- verify: grep -n 'macos-deployment-target = "15.0"' sdk/streamlib-python-wheel/pyproject.toml -->
-  <!-- verify: grep -n "runs-on: macos-15" .github/workflows/macos-wheel.yml -->
-  <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "runs-on: macos-15" .github/workflows/reusable-macos-runtime-unit.yml -->
+  <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
-  it. `Rust Build (macOS)` compiles the whole workspace with the wheel in it (clippy on
-  default targets, `check --all-targets`) and runs the wheel crate's unit tests; it then
-  `maturin develop`s the wheel, gates `_engine.pyi` with `stubtest` against the macOS
-  binary — one stub for both floors — and runs the Python suite's GPU-free half. The test
+  it. On every PR `Build (macOS)` compiles the whole workspace with the wheel in it
+  (clippy on default targets, `check --all-targets`); on `main` it also runs the Rust
+  suites and the wheel crate's unit tests, and `Integration test (macOS)` gates
+  `_engine.pyi` with `stubtest` against the macOS binary — one stub for both floors — and
+  runs the Python suite's GPU-free half. The test
   target's pipe is `std::io::pipe()`, and `check-no-inheritable-descriptor` accepts that
   portable spelling for its two pipe entries, with every Linux flag it accepts or refuses
   unchanged; on Darwin that pipe is `pipe` then `fcntl`, not atomic, and the spawn-side
@@ -3984,7 +3989,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [macos-capability-parity — SHIPPED #2415]
   <!-- verify: cargo test -p streamlib-adapter-vulkan -p streamlib-adapter-cpu-readback -->
   <!-- verify: grep -n "Absent on macOS" adapters/streamlib-adapter-opengl/src/lib.rs adapters/streamlib-adapter-cuda/src/lib.rs -->
-  <!-- verify: grep -n "p streamlib-adapter-skia" .github/workflows/test.yml -->
+  <!-- verify: grep -n "p streamlib-adapter-skia" .github/workflows/ci.yml -->
 - **DECIDED** — streamlib ships under a `tatolab.*` namespace, as a pure-Python stream package
   and a native runtime package, with support for Linux and Apple Silicon macOS and no
   streamlib-owned service (sentence 5, its "host" read as the runtime — the per-user service that
@@ -4015,7 +4020,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   optional-accelerators: the tarball carries the Vulkan loader and the software device in
   `tatolab/runtime/_vulkan_driver/` (§Graphics)]
   <!-- verify: bash installer/tests/run_install_sh_test_in_a_systemd_container.sh -->
-  <!-- verify: grep -n "GET_TATOLAB_COM_URL: https://get.tatolab.com" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "GET_TATOLAB_COM_URL: https://get.tatolab.com" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — `Tatolab.app`, a menu-bar app carrying the runtime, lives in the private
   repository `tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app
   private — and is a Tauri app registering its agent through `objc2-service-management`. On

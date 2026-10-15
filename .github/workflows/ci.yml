@@ -1,0 +1,960 @@
+name: CI
+
+# What a pull request must prove before it merges: the code is formatted and
+# lint-clean, it builds, its test suites pass, and a stream still runs end to
+# end on the runtime. It builds nothing that ships; distribution-dry-run.yml
+# builds and checks the distributables on every push to `main`, and release.yml
+# publishes them.
+#
+#   Lint                       formatting, clippy, the source gates, licences,
+#                              Python types
+#   Unit Test (Linux)          every Rust test suite, the hardware tests on a
+#                              software GPU (the lavapipe the runtime carries)
+#   Integration test (Linux)   real streams on a real `tatolabd`: builds the
+#                              runtime binaries those tests drive (a test fixture,
+#                              never shipped), then the stream package, wheel,
+#                              extension and end-to-end stream tests
+#   Build (macOS)              the Apple path compiles and is lint-clean; its test
+#                              suites run on `main`
+#   Integration test (macOS)   the same end-to-end tests on macOS; `main` only
+#
+# A change that touches only prose or code CI never builds runs nothing. Caches
+# are saved by `main` alone and restored by pull requests. A failed job cancels
+# the rest of its run, and a newer push cancels the run before it.
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.claude/**'
+      - 'LICENSES/**'
+      - 'examples/**'
+      - 'docker/**'
+      - 'installer/**'
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.claude/**'
+      - 'LICENSES/**'
+      - 'examples/**'
+      - 'docker/**'
+      - 'installer/**'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Every job compiles or runs pull-request-authored code, so the token reads and
+# does nothing else.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # A runner never rebuilds after an edit.
+  CARGO_INCREMENTAL: 0
+  # Line tables keep a panic's file and line and drop the rest of the debug
+  # info, which is most of a debug build's link time and cache size.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_BACKTRACE: 1
+  NEXTEST_VERSION: 0.9.148
+  # The runtime unit's cache entries. Bump to drop every unit cached so far.
+  RUNTIME_UNIT_CACHE_GENERATION: 1
+
+
+jobs:
+  # Everything that needs no test build.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: License headers (Rust + Python)
+        run: bash scripts/check-license-headers.sh
+
+      # The engine's build script compiles GLSL with glslc, the Linux engine
+      # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
+      # build the vendored shaderc. `timeout-minutes` is the backstop the
+      # composite action cannot declare itself.
+      - name: Install system dependencies
+        timeout-minutes: 12
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            pkg-config
+            protobuf-compiler
+            libclang1-18
+            libclang-common-18-dev
+            libvulkan-dev
+            glslc
+            cmake
+            ninja-build
+
+      - name: Install the Rust toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
+      - name: cargo xtask check-all-source-gates
+        run: cargo run --locked -q -p xtask -- check-all-source-gates
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: cargo deny check licenses
+        run: cargo deny --locked --workspace check licenses -D license-not-encountered
+
+      - name: cargo clippy (workspace, default targets)
+        run: cargo clippy --locked --workspace --exclude streamlib-adapter-skia --no-deps
+
+      - name: Generated built-in node classes match the runtime's built-ins
+        run: cargo run --locked -q -p xtask -- generate-built-in-node-classes --check
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Prepare the environment pyright resolves against
+        working-directory: sdk/streamlib-python-wheel
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy pydantic typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Type-check the wheel's Python surface
+        working-directory: sdk/streamlib-python-wheel
+        run: uvx pyright@1.1.411
+
+      # A failed job ends the run: the rest of it cannot make this change
+      # mergeable, so it stops spending runners.
+      - name: Cancel the rest of the run
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
+
+  # One test build: every test target of the packages CI tests,
+  # `hardware-tests` included, compiled once and run on the Linux runtime
+  # unit's bundled lavapipe rather than a GPU. `.config/nextest.toml` holds what
+  # runs. A test that needs what this runner cannot give skips through
+  # `rig_only_capability_skip` naming one closed-list reason; any other skip
+  # fails the job.
+  test-linux:
+    name: Unit Test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    env:
+      # The skip line `runtime/streamlib-engine/tests/support/rig_only_capability_skip.rs`
+      # prints, and the closed list it may name; a unit test there holds both to it.
+      HARDWARE_TEST_SKIP_LINE_PREFIX: "hardware test skipped, needing "
+      HARDWARE_TEST_SKIP_LINE_REASONS: "Vulkan Video|DMA-BUF modifiers|CUDA|a camera|a display|an audio device"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install system dependencies
+        timeout-minutes: 12
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            pkg-config
+            protobuf-compiler
+            libclang1-18
+            libclang-common-18-dev
+            libvulkan-dev
+            glslc
+            python3-dev
+            cmake
+            ninja-build
+            strace
+
+      - name: Install the Rust toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Restore the compile-fail tests' build
+        if: github.event_name != 'pull_request'
+        id: restore-trybuild
+        uses: actions/cache/restore@v5
+        with:
+          path: target/tests/trybuild
+          key: trybuild-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: trybuild-${{ runner.os }}-
+
+      - name: Cache the Linux bundled Vulkan driver build
+        uses: actions/cache@v5
+        with:
+          path: target/linux_bundled_vulkan_driver_cache
+          key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
+
+      - name: Name the bundled Vulkan driver to the loader
+        run: |
+          bundled_vulkan_driver_directory="$RUNNER_TEMP/bundled_vulkan_driver"
+          bash scripts/stage_linux_bundled_vulkan_driver.sh "$bundled_vulkan_driver_directory"
+          test -f "$bundled_vulkan_driver_directory/lvp_icd.x86_64.json"
+          for driver_search_replacing_variable in VK_DRIVER_FILES VK_ICD_FILENAMES; do
+            if [ -n "${!driver_search_replacing_variable:-}" ]; then
+              echo "::error::$driver_search_replacing_variable is set, so the loader would ignore the bundled driver"
+              exit 1
+            fi
+          done
+          # Every directory the loader searches for driver manifests on Linux.
+          shopt -s nullglob
+          driver_manifests_the_runner_carries=()
+          IFS=: read -r -a xdg_config_directories <<< "${XDG_CONFIG_DIRS:-/etc/xdg}"
+          IFS=: read -r -a xdg_data_directories <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+          for driver_search_directory in \
+              "${XDG_CONFIG_HOME:-$HOME/.config}" "${xdg_config_directories[@]}" /etc \
+              "${XDG_DATA_HOME:-$HOME/.local/share}" "${xdg_data_directories[@]}" \
+              /usr/local/share /usr/share; do
+            driver_manifests_the_runner_carries+=("$driver_search_directory"/vulkan/icd.d/*.json)
+          done
+          if (( ${#driver_manifests_the_runner_carries[@]} )); then
+            printf '%s\n' "${driver_manifests_the_runner_carries[@]}"
+            echo "::error::the runner carries a Vulkan driver of its own; the lane runs on the bundled one alone"
+            exit 1
+          fi
+          echo "VK_ADD_DRIVER_FILES=$bundled_vulkan_driver_directory/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$bundled_vulkan_driver_directory" >> "$GITHUB_ENV"
+
+      # The compile-fail test builds the engine a second time, in trybuild's
+      # own target directory; it runs on `main` and in the merge queue.
+      - name: Unit, integration and hardware tests
+        env:
+          TEST_FILTER: ${{ github.event_name == 'pull_request' && 'not binary_id(streamlib-engine::compile_fail_config_without_json_schema)' || 'all()' }}
+        run: >-
+          cargo nextest run --locked --profile ci -E "$TEST_FILTER"
+          -p streamlib -p streamlib-macros -p streamlib-processor-schema
+          -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-error
+          -p streamlib-runtime-client-contract -p streamlib-engine
+          -p streamlib-media-builtins -p streamlib-consumer-rhi -p tatolab-cli
+          -p streamlib-python-wheel
+          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
+          --lib --bins --tests --example codec_roundtrip_rig
+
+      - name: Save the compile-fail tests' build
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.restore-trybuild.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: target/tests/trybuild
+          key: ${{ steps.restore-trybuild.outputs.cache-primary-key }}
+
+      - name: Engine and media built-ins doctests
+        if: ${{ !cancelled() }}
+        run: >-
+          cargo test --locked --doc -p streamlib-engine -p streamlib-media-builtins
+          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
+
+      - name: Tests under a test machine root
+        if: ${{ !cancelled() }}
+        env:
+          MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_SELECTION: >-
+            -p streamlib-runtime-client-contract -p streamlib-api-server -p tatolabd -p tatolab-cli
+            --features streamlib-runtime-client-contract/machine-directories-under-a-test-root
+            --features streamlib-api-server/machine-directories-under-a-test-root
+            --features tatolabd/machine-directories-under-a-test-root,tatolabd/hardware-tests
+            --features tatolab-cli/machine-directories-under-a-test-root
+        run: |
+          set -o pipefail
+          run_status=0
+          # shellcheck disable=SC2086
+          cargo nextest run --locked --profile ci-machine-directories-under-a-test-root \
+            $MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_SELECTION \
+            -E 'package(streamlib-runtime-client-contract) | package(tatolab-cli)' || run_status=$?
+          cp target/nextest/ci-machine-directories-under-a-test-root/junit.xml "$RUNNER_TEMP/junit-without-a-test-root.xml"
+          # shellcheck disable=SC2086
+          TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)" \
+            cargo nextest run --locked --profile ci-machine-directories-under-a-test-root \
+            $MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_SELECTION \
+            -E 'package(streamlib-api-server) | package(tatolabd)' || run_status=$?
+          exit "$run_status"
+
+      - name: Every hardware-test skip names what this machine lacks from the closed list
+        if: ${{ !cancelled() }}
+        run: >-
+          python3 scripts/ci/check_hardware_test_skip_lines.py
+          --skip-line-prefix "$HARDWARE_TEST_SKIP_LINE_PREFIX"
+          --skip-line-reasons "$HARDWARE_TEST_SKIP_LINE_REASONS"
+          --expected-device llvmpipe
+          target/nextest/ci/junit.xml
+          "$RUNNER_TEMP/junit-without-a-test-root.xml"
+          target/nextest/ci-machine-directories-under-a-test-root/junit.xml
+
+      # A failed job ends the run: the rest of it cannot make this change
+      # mergeable, so it stops spending runners.
+      - name: Cancel the rest of the run
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
+
+  # The runtime unit — `tatolabd`, `tatolab`, and the lend a processor
+  # interpreter borrows `tatolab.runtime` from — and every suite that runs on
+  # it: the wheel's own, the integration suite (one `tatolabd` per test, each
+  # fixture stream loaded with `tatolab run` and driven over its local API, on
+  # the lavapipe the unit carries), and the first-party extension's.
+  integration-test-linux:
+    name: Integration test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+
+      - name: Digest of everything the unit is built from
+        id: digest
+        run: echo "digest=$(bash scripts/ci/runtime_unit_input_digest.sh "$ImageOS" debug)" >> "$GITHUB_OUTPUT"
+
+      # Restored when nothing it is built from changed: a change to an
+      # extension, a suite or the stream package runs on the unit `main` built.
+      - name: Restore the runtime unit
+        id: restore
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
+            ${{ runner.temp }}/tatolab-runtime-unit-under-a-test-root.tar.gz
+          key: runtime-unit-linux-${{ env.RUNTIME_UNIT_CACHE_GENERATION }}-${{ steps.digest.outputs.digest }}
+
+      # The engine's build script compiles GLSL with glslc, the Linux engine
+      # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
+      # build the vendored shaderc. `timeout-minutes` is the backstop the
+      # composite action cannot declare itself.
+      - name: Install system dependencies
+        timeout-minutes: 12
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            pkg-config
+            protobuf-compiler
+            libclang1-18
+            libclang-common-18-dev
+            libvulkan-dev
+            glslc
+            cmake
+            ninja-build
+            python3-dev
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-runtime
+          workspaces: |
+            . -> target
+            packages/streamlib-webrtc -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The stream package with its test group and nothing of the runtime, so a
+      # stream test that reaches for the runtime fails to import; built and
+      # installed, not editable. 3.10 is the floor `requires-python` promises.
+      # A scaffolded stream compiles and type-checks with no runtime installed.
+      - name: Stream package tests (Python 3.10)
+        run: |
+          (
+            cd sdk/tatolab-stream
+            uv venv --python 3.10 .venv
+            VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
+            .venv/bin/pytest tests -q
+            uvx pyright@1.1.411
+          )
+          cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
+          uv venv --python 3.10 "$RUNNER_TEMP/scaffold-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'
+          cd "$RUNNER_TEMP/scaffold"
+          "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
+          import importlib.util
+          import sys
+
+          import stream
+          from tatolab.stream import compile_stream_to_graph
+
+          assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
+          graph = compile_stream_to_graph(stream.main)
+          runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
+          assert runtime_modules_loaded == [], runtime_modules_loaded
+          print([node["type"] for node in graph["nodes"]])
+          EOF
+          uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
+
+      - name: Cache the Linux bundled Vulkan driver build
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache@v5
+        with:
+          path: target/linux_bundled_vulkan_driver_cache
+          key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
+
+      # Both forms, in debug: as users run it, and with the machine directories
+      # under a test root, which the integration suite requires. The second
+      # replaces the first in place, so each is packed before the next build.
+      # It refuses a wheel carrying anything beside `tatolab/runtime/` and a
+      # lend missing a driver file. Tarred, because `bin/` must stay executable.
+      - name: Build the runtime unit
+        if: steps.restore.outputs.cache-hit != 'true'
+        run: |
+          cargo xtask build-runtime
+          tar -C target/tatolab-runtime -czf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz" bin lib wheel
+          cargo xtask build-runtime --machine-directories-under-a-test-root
+          tar -C target/tatolab-runtime -czf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz" \
+            bin lib machine-directories-under-a-test-root
+
+      - name: Save the runtime unit
+        if: steps.restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
+            ${{ runner.temp }}/tatolab-runtime-unit-under-a-test-root.tar.gz
+          key: ${{ steps.restore.outputs.cache-primary-key }}
+
+      # Where every suite looks for it by default, `<repository>/target/tatolab-runtime`.
+      - name: Unpack the runtime unit
+        run: |
+          rm -rf target/tatolab-runtime
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
+
+      # The wheel's own suite on the unit's own wheel: the casts and the bag
+      # codec, a processor interpreter's bootstrap and helper process, and the
+      # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
+      # stubtest compares the rest of `_engine.pyi` to the binary.
+      - name: Wheel stubs and Python suite (GPU-free half)
+        working-directory: sdk/streamlib-python-wheel
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/target/tatolab-runtime/wheel/*.whl
+          .venv/bin/python tests/runtime_backed_protocol_conformance.py --print-stubtest-allowlist > "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
+          .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
+          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+      - name: Audio channel tap controls
+        working-directory: runtime/streamlib-engine/tests/fixtures
+        run: >-
+          "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python"
+          -m unittest test_tap_audio_channel
+
+      - name: Driver-search tests against the lend
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
+          uv venv --python 3.12 "$RUNNER_TEMP/lend-check-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/lend-check-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl pytest
+          cd sdk/streamlib-python-wheel
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            "$RUNNER_TEMP/lend-check-venv/bin/python" -m pytest -v \
+            tests_against_the_runtime_unit_lend/
+
+      # A stream's venv exactly as a third party's holds the extension:
+      # `tatolab-stream` and the extension, and no engine.
+      - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
+        working-directory: packages/streamlib-webrtc
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      # The repo-root `cargo fmt --all` and pyright do not reach a non-member.
+      # Before the venv is on PATH, so pyo3 resolves the system interpreter
+      # whose headers the apt step installed.
+      - name: "Extension: formatting, crate tests, clippy and types"
+        working-directory: packages/streamlib-webrtc
+        run: |
+          cargo fmt --all --check
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+          uvx pyright@1.1.411
+
+      # Carries the portability gate over the built `.so`, and on macOS the
+      # clock-parity test. The tests that import `tatolab.runtime` borrow it
+      # from the lend, as a processor interpreter does.
+      - name: "Extension: stubs and tests, GPU-free"
+        working-directory: packages/streamlib-webrtc
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.webrtc._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+      - name: Unpack the runtime unit under a test root
+        run: |
+          rm -rf target/tatolab-runtime
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
+
+      - name: The suite's venv, from its lockfile
+        working-directory: tests/stream-on-runtime
+        run: uv sync --frozen
+
+      - name: Integration suite (all but rig-only)
+        working-directory: tests/stream-on-runtime
+        run: .venv/bin/pytest -v -m "not rig_only_capability"
+
+      # A failed job ends the run: the rest of it cannot make this change
+      # mergeable, so it stops spending runners.
+      - name: Cancel the rest of the run
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
+
+  # The Apple path on every change that can break it: macOS is a supported
+  # floor, and an Apple-path change merges only with this lane green.
+  # `macos-15`, not `macos-latest`: the image decides the SDK the Apple
+  # frameworks link against. GPU work runs last and narrow, on the runner's
+  # paravirtual Metal device through MoltenVK.
+  build-macos:
+    name: Build (macOS)
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install glslc and the shaderc crate's build tools
+        run: brew install shaderc cmake ninja
+
+      - name: Install the Rust toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: cargo clippy (workspace, default targets)
+        run: cargo clippy --locked --workspace --no-deps
+
+      - name: cargo check (workspace, all targets)
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Run unit tests
+        if: github.event_name != 'pull_request'
+        run: |
+          cargo test --locked -p streamlib -p streamlib-macros \
+            -p streamlib-processor-schema -p streamlib-ipc-types \
+            -p streamlib-error --lib
+          # The machine runtime lock's fcntl takes, refusals and probes run here
+          # and nowhere else.
+          cargo test --locked -p streamlib-runtime-client-contract
+          cargo test --locked -p streamlib-runtime-client-contract \
+            --features machine-directories-under-a-test-root
+          cargo test --locked -p streamlib-engine --test attribute_macro_test
+          cargo test --locked -p streamlib-media-builtins --lib
+          # Where a golden names a built-in macOS compiles out, the load is
+          # refused naming the floor and the rest of it loads.
+          cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
+          cargo test --locked -p streamlib-consumer-rhi --lib
+          TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)" \
+            cargo test --locked -p streamlib-api-server --lib \
+            --features machine-directories-under-a-test-root
+          cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
+          # The runtime directory is fixed under /tmp on macOS, so the CLI's
+          # tests need the feature to isolate each test's machine.
+          cargo test --locked -p tatolab-cli \
+            --features machine-directories-under-a-test-root
+          # `--test-threads=1`: two of these open iceoryx2 nodes in child
+          # processes of this same binary and race each other in parallel.
+          cargo test --locked -p streamlib-engine --lib -- --test-threads=1
+          # The surface-share service's raw-Mach arm. IOSurface and Mach need
+          # no GPU.
+          cargo test --locked -p streamlib-surface-client
+          cargo test --locked -p streamlib-engine --test surface_share_over_raw_mach
+          # Compiled but not run: the AVFoundation, VideoToolbox and CoreAudio
+          # arms need a camera, a microphone, their access grants, a media
+          # engine and a GPU no runner has.
+          cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
+            --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
+            --lib \
+            --test avfoundation_camera_captures_through_the_video_device_seam \
+            --test videotoolbox_arm_round_trips_the_psnr_references \
+            --test camera_to_display_window_on_the_macos_window_server \
+            --test coreaudio_arm_stamps_blocks_with_the_devices_own_timing \
+            --test coreaudio_arm_plays_what_it_is_given \
+            --test coreaudio_arm_hears_the_room_through_the_built_in_microphone \
+            --test coreaudio_arm_hears_what_it_plays \
+            --test coreaudio_arm_hears_its_own_playback_through_a_muted_process_tap --no-run
+
+      # The source-walking gates evaluate `cfg` for macOS as well as Linux, so
+      # `apple/` is linted here. Their prescriptions name Linux calls Darwin
+      # lacks; the portable spelling they accept is what the macOS arms use.
+      - name: cargo xtask lint-logging and check-no-inheritable-descriptor
+        run: |
+          cargo run --locked -q -p xtask -- lint-logging
+          cargo run --locked -q -p xtask -- check-no-inheritable-descriptor
+
+      - name: Wheel crate unit tests
+        if: github.event_name != 'pull_request'
+        run: cargo test --locked -p streamlib-python-wheel --lib -- --test-threads=1
+
+      - name: Install MoltenVK and find the Metal device under it
+        if: github.event_name != 'pull_request'
+        run: |
+          system_profiler SPDisplaysDataType
+          brew install molten-vk vulkan-loader vulkan-tools
+          vulkaninfo --summary
+
+      - name: In-process adapter tests
+        if: github.event_name != 'pull_request'
+        run: |
+          set -o pipefail
+          cargo test --locked -p streamlib-adapter-vulkan \
+            -p streamlib-adapter-cpu-readback -p streamlib-adapter-skia \
+            -- --nocapture 2>&1 | tee adapter-test-output.txt
+          if grep -i "skip" adapter-test-output.txt \
+              | grep -v "no validation messenger installed"; then
+            echo "::error::an in-process adapter test skipped instead of running on the Metal device"
+            exit 1
+          fi
+
+      - name: Frame-allocation budget on the Metal device
+        if: github.event_name != 'pull_request'
+        run: |
+          set -o pipefail
+          CARGO_TERM_COLOR=never cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
+            --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
+            --lib -- --color never --test-threads=1 --nocapture \
+            vulkan::rhi::vulkan_metal_working_set_budget::tests::an_iosurface_backed_vulkan_image_is_counted_once_in_the_metal_working_set_usage \
+            vulkan::rhi::vulkan_metal_working_set_budget::tests::an_iosurface_backed_pixel_buffer_is_counted_once_in_the_metal_working_set_usage \
+            vulkan::rhi::vulkan_device::tests::a_frame_texture_past_a_budget_with_no_room_left_is_refused_while_an_engine_buffer_still_allocates \
+            core::compiler::compiler_ops::subprocess_escalate::handle_lifecycle::tests::releasing_a_one_off_pixel_buffer_evicts_its_lookup_and_leaves_its_slots_published_frame_cached \
+            2>&1 | tee frame-allocation-budget-on-metal-output.txt
+          if grep -i "skip" frame-allocation-budget-on-metal-output.txt; then
+            echo "::error::a frame-allocation budget test skipped instead of running on the Metal device"
+            exit 1
+          fi
+          sed -n '/Running unittests .*streamlib_engine-/,/^test result:/p' \
+            frame-allocation-budget-on-metal-output.txt \
+            | grep "^test result: ok. 4 passed;"
+
+      # A failed job ends the run: the rest of it cannot make this change
+      # mergeable, so it stops spending runners.
+      - name: Cancel the rest of the run
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
+
+  # The aarch64-apple-darwin runtime unit, in debug, and every suite that runs
+  # on it: the wheel's stub and Python suite on this binary, a scaffolded
+  # stream on the Vulkan driver the lend carries, the integration suite's
+  # GPU-free half, the extension, whose clock is read per platform, and the
+  # stream suite on this floor. A stock Mac has no Vulkan driver and neither
+  # does the runner image, so a stream that runs here ran on the MoltenVK
+  # inside the lend.
+  integration-test-macos:
+    name: Integration test (macOS)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+
+      # The interpreter the venvs below are built from and the extension's
+      # unit tests link: the image's own `python3` is not one the abi3-py310
+      # floor accepts.
+      - name: Install Python
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Digest of everything the unit is built from
+        id: digest
+        run: echo "digest=$(bash scripts/ci/runtime_unit_input_digest.sh "$ImageOS" debug)" >> "$GITHUB_OUTPUT"
+
+      # Restored when nothing it is built from changed: a change to an
+      # extension, a suite or the stream package runs on the unit `main` built.
+      - name: Restore the runtime unit
+        id: restore
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
+            ${{ runner.temp }}/tatolab-runtime-unit-under-a-test-root.tar.gz
+          key: runtime-unit-macos-${{ env.RUNTIME_UNIT_CACHE_GENERATION }}-${{ steps.digest.outputs.digest }}
+
+      - name: Install glslc and the C++ build tools
+        if: steps.restore.outputs.cache-hit != 'true'
+        run: brew install shaderc cmake ninja
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-runtime
+          workspaces: |
+            . -> target
+            packages/streamlib-webrtc -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Both forms, in debug: as users run it, and with the machine directories
+      # under a test root, which the integration suite requires. The second
+      # replaces the first in place, so each is packed before the next build.
+      # It refuses a wheel carrying anything beside `tatolab/runtime/` and a
+      # lend missing a driver file. Tarred, because `bin/` must stay executable.
+      - name: Build the runtime unit
+        if: steps.restore.outputs.cache-hit != 'true'
+        run: |
+          cargo xtask build-runtime
+          tar -C target/tatolab-runtime -czf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz" bin lib wheel
+          cargo xtask build-runtime --machine-directories-under-a-test-root
+          tar -C target/tatolab-runtime -czf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz" \
+            bin lib machine-directories-under-a-test-root
+
+      - name: Save the runtime unit
+        if: steps.restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
+            ${{ runner.temp }}/tatolab-runtime-unit-under-a-test-root.tar.gz
+          key: ${{ steps.restore.outputs.cache-primary-key }}
+
+      # Where every suite looks for it by default, `<repository>/target/tatolab-runtime`.
+      - name: Unpack the runtime unit
+        run: |
+          rm -rf target/tatolab-runtime
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
+
+      # The machine lock is the root-owned file Tatolab.app creates at first
+      # launch; a runner has no app.
+      - name: The machine runtime lock the app would create
+        run: |
+          machine_runtime_lock_directory="/Library/Application Support/Tatolab"
+          sudo mkdir -p "$machine_runtime_lock_directory"
+          sudo touch "$machine_runtime_lock_directory/runtime.lock"
+          sudo chown root "$machine_runtime_lock_directory" "$machine_runtime_lock_directory/runtime.lock"
+          sudo chmod 0755 "$machine_runtime_lock_directory"
+          sudo chmod 0666 "$machine_runtime_lock_directory/runtime.lock"
+
+      # The wheel's own suite on the unit's own wheel: the casts and the bag
+      # codec, a processor interpreter's bootstrap and helper process, and the
+      # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
+      # stubtest compares the rest of `_engine.pyi` to the binary.
+      - name: Wheel stubs and Python suite (GPU-free half)
+        working-directory: sdk/streamlib-python-wheel
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/target/tatolab-runtime/wheel/*.whl
+          .venv/bin/python tests/runtime_backed_protocol_conformance.py --print-stubtest-allowlist > "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
+          .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
+          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+      - name: The scaffolded stream runs on the driver the lend carries
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
+          tatolabd_executable="$GITHUB_WORKSPACE/target/tatolab-runtime/bin/tatolabd"
+          tatolab_executable="$GITHUB_WORKSPACE/target/tatolab-runtime/bin/tatolab"
+
+          "$tatolabd_executable" > /tmp/tatolabd.log 2>&1 &
+          tatolabd_pid=$!
+          trap 'kill -KILL "$tatolabd_pid" 2>/dev/null || true' EXIT
+          local_api_deadline=$((SECONDS + 60))
+          until "$tatolab_executable" streams > /dev/null 2>&1; do
+            if ! kill -0 "$tatolabd_pid" 2>/dev/null; then
+              cat /tmp/tatolabd.log
+              echo "::error::tatolabd exited before its local API socket answered"
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$local_api_deadline" ]; then
+              cat /tmp/tatolabd.log
+              echo "::error::tatolabd's local API socket did not answer within 60s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          "$tatolab_executable" new /tmp/scaffold-check --test-pattern
+          python3 -m venv /tmp/scaffold-check/.venv
+          /tmp/scaffold-check/.venv/bin/pip install --no-index --find-links "$RUNNER_TEMP/tatolab-stream-dist" tatolab-stream
+          /tmp/scaffold-check/.venv/bin/pip install 'numpy>=2.1'
+          if /tmp/scaffold-check/.venv/bin/python -c '
+          import importlib.util, sys
+          sys.exit(0 if importlib.util.find_spec("tatolab.runtime") is not None else 1)
+          '; then
+            echo "::error::the scaffold's venv can import tatolab.runtime — a stream's venv holds no runtime"
+            exit 1
+          fi
+
+          # SIGINT a process, failing the step unless it exits 0 within 30s.
+          interrupt_and_expect_a_clean_exit() {
+            process_name="$1"
+            process_pid="$2"
+            process_log="$3"
+            kill -INT "$process_pid" 2>/dev/null || true
+            stop_deadline=$((SECONDS + 30))
+            while kill -0 "$process_pid" 2>/dev/null && [ "$SECONDS" -lt "$stop_deadline" ]; do
+              sleep 1
+            done
+            if kill -0 "$process_pid" 2>/dev/null; then
+              pkill -KILL -P "$process_pid" || true
+              kill -KILL "$process_pid" || true
+              cat "$process_log"
+              echo "::error::$process_name did not stop within 30s of SIGINT"
+              exit 1
+            fi
+            process_exit_status=0
+            wait "$process_pid" || process_exit_status=$?
+            if [ "$process_exit_status" -ne 0 ]; then
+              cat "$process_log"
+              echo "::error::$process_name exited $process_exit_status after SIGINT, not 0"
+              exit 1
+            fi
+          }
+
+          cd /tmp/scaffold-check
+          "$tatolab_executable" run > /tmp/scaffold-run.log 2>&1 &
+          tatolab_pid=$!
+          sleep 20
+          interrupt_and_expect_a_clean_exit "tatolab run" "$tatolab_pid" /tmp/scaffold-run.log
+          interrupt_and_expect_a_clean_exit tatolabd "$tatolabd_pid" /tmp/tatolabd.log
+          trap - EXIT
+          echo "::group::tatolab run"
+          cat /tmp/scaffold-run.log
+          echo "::endgroup::"
+          echo "::group::tatolabd"
+          cat /tmp/tatolabd.log
+          echo "::endgroup::"
+
+          if ! grep -q 'Vulkan loader library opened.*_vulkan_driver/libvulkan.1.dylib' /tmp/tatolabd.log; then
+            echo "::error::tatolabd did not open the Vulkan loader the lend carries"
+            exit 1
+          fi
+          if grep -q 'process() failed' /tmp/tatolabd.log; then
+            echo "::error::the scaffolded effect raised on a live frame"
+            exit 1
+          fi
+          frames_shown="$(sed -n 's/.*DisplayWindow: stopped (\([0-9]*\) frames).*/\1/p' /tmp/tatolabd.log | tail -1)"
+          # Far enough to prove the graph runs end to end, not a frame-rate bar:
+          # the runner's GPU is a paravirtual device.
+          if [ -z "$frames_shown" ] || [ "$frames_shown" -lt 60 ]; then
+            echo "::error::the window showed ${frames_shown:-no} frames in 20s"
+            exit 1
+          fi
+          echo "the window showed $frames_shown frames"
+
+      # A stream's venv exactly as a third party's holds the extension:
+      # `tatolab-stream` and the extension, and no engine.
+      - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
+        working-directory: packages/streamlib-webrtc
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: "Extension: crate tests and clippy"
+        working-directory: packages/streamlib-webrtc
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          cargo test --locked --lib
+          cargo clippy --locked --lib --all-targets -- -D warnings
+
+      # Carries the portability gate over the built `.so`, and on macOS the
+      # clock-parity test. The tests that import `tatolab.runtime` borrow it
+      # from the lend, as a processor interpreter does.
+      - name: "Extension: stubs and tests, GPU-free"
+        working-directory: packages/streamlib-webrtc
+        run: |
+          .venv/bin/python -m mypy.stubtest tatolab.webrtc._native
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+      # The stream package on this floor, with nothing of the runtime installed.
+      - name: Stream suite
+        working-directory: sdk/tatolab-stream
+        run: |
+          rm -rf .venv
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
+          .venv/bin/pytest tests -q
+
+      - name: Integration suite (GPU-free half)
+        run: |
+          rm -rf target/tatolab-runtime
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
+          cd tests/stream-on-runtime
+          uv sync --frozen
+          .venv/bin/pytest -v -m "not requires_gpu"
+
+      # A failed job ends the run: the rest of it cannot make this change
+      # mergeable, so it stops spending runners.
+      - name: Cancel the rest of the run
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true

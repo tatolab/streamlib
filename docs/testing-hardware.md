@@ -13,9 +13,9 @@ is allowed to require a GPU device or any other exclusive system
 resource. Tier 1 should always pass cleanly in parallel; if it doesn't,
 the offending test is mis-classified.
 
-The **CI** tier-1 gate is the minimal per-crate `--lib` run defined by
-`.github/workflows/test.yml` (the CI config is the source of truth for
-what CI enforces). The broader **local** tier-1 baseline is the whole
+The **CI** tier-1 gate is the deviceless selection in `.config/nextest.toml`'s
+`ci` profile, which `.github/workflows/ci.yml` runs (the CI config is the
+source of truth for what CI enforces). The broader **local** tier-1 baseline is the whole
 workspace:
 
 ```bash
@@ -262,15 +262,14 @@ login session's screen is locked.
 
 ## CI
 
-Tier 1 runs on every PR via `.github/workflows/test.yml`. Tier 2 runs on
+Tier 1 runs on every PR via `.github/workflows/ci.yml`. Tier 2 runs on
 every PR too, on the Linux runtime unit's bundled lavapipe rather than a GPU:
-`.github/workflows/python-wheel.yml`'s
-`engine-hardware-tests-on-the-bundled-software-device` job runs the engine's,
-`streamlib-media-builtins`' and `tatolabd`'s `hardware-tests` suites with
-`--test-threads=1 --nocapture`, the driver named through
-`VK_ADD_DRIVER_FILES` from the unit the workflow just built. A skip passes in
-libtest, so the job reads every line that says it skipped and fails on one
-that is not the helper's line naming a closed-list reason. Exempt by name: the
+`ci.yml`'s `test-linux` job stages that driver, names it through
+`VK_ADD_DRIVER_FILES`, and runs the engine's, `streamlib-media-builtins`' and
+`tatolabd`'s `hardware-tests` suites in the same cargo-nextest build as tier 1
+(`.config/nextest.toml`). A skip passes in a test harness, so the job reads
+every line that says it skipped out of the JUnit report and fails on one that
+is not the helper's line naming a closed-list reason. Exempt by name: the
 validation tests, which skip unless a run turns the layer on, and two engine
 log lines that skip no test.
 

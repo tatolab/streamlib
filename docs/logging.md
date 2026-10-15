@@ -62,12 +62,12 @@ the grounds of redundancy.
 
 ## CI
 
-`cargo xtask lint-logging` runs in `source-gates.yml`, as one of the
+`cargo xtask lint-logging` runs in `ci.yml`'s source gates, as one of the
 consolidated source-walking gates. `cargo clippy --locked --workspace
---no-deps` runs in `test.yml`'s Linux job, which already carries the engine's
-build dependencies; default targets only, so a test's `println!` stays a test's
-business, matching layer 2's exemption. `cargo fmt --all --check` runs in
-`source-gates.yml` beside the walks.
+--no-deps` runs in `ci.yml`'s Linux lint job, which carries the engine's build
+dependencies; default targets only, so a test's `println!` stays a test's
+business, matching layer 2's exemption. `cargo fmt --all --check` runs in the
+source gates beside the walks.
 
 `cargo xtask run-local-ci-gates` runs the two static layers before you push.
 Layer 3 is a property of the running host, not a gate, so nothing runs it

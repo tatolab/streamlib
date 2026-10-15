@@ -752,9 +752,8 @@ mod rig_only_capability_skip_closed_list_tests {
 
     #[test]
     fn the_lanes_skip_line_check_accepts_exactly_the_helpers_line_and_reasons() {
-        let workflow =
-            std::fs::read_to_string(repository_root().join(".github/workflows/python-wheel.yml"))
-                .expect("the wheel workflow reads");
+        let workflow = std::fs::read_to_string(repository_root().join(".github/workflows/ci.yml"))
+            .expect("the CI workflow reads");
         assert_eq!(
             workflow_environment_value(&workflow, "HARDWARE_TEST_SKIP_LINE_PREFIX"),
             HARDWARE_TEST_SKIP_LINE_PREFIX,

@@ -1,10 +1,10 @@
-name: macOS Wheel
+name: macOS Runtime Unit (release proof)
 
 # The aarch64-apple-darwin runtime unit, built the way a release builds it and
 # then proven on a runner that has never seen a Vulkan SDK. Called by
-# python-wheel.yml on every PR — the portability proof must fail on the PR that
-# breaks it, not on release day — and by release-wheel.yml, where a failure
-# here withholds the release's upload to PyPI.
+# reusable-distributions.yml: as a dry run on every push to `main`, and at
+# release, where a failure here withholds the upload to PyPI. A pull request
+# tests the debug unit in ci.yml; this proves the artifact.
 #
 # A stock Mac has no Vulkan driver, so the wheel — and the runtime unit's lend,
 # which is that wheel unpacked — carries the loader and MoltenVK
@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
           # Builds and runs PR-authored code; a persisted token would be
@@ -57,20 +57,18 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       # Stages the Vulkan loader and MoltenVK, builds the release wheel at the
       # deployment target the maturin project pins, lays out its lend, and
       # builds `tatolabd` and `tatolab` into `bin/`. It refuses a lend missing a
       # driver file, and a wheel carrying anything beside `tatolab/runtime/`
-      # and its `.dist-info`. Every step through the uploads below runs on this
-      # release unit; the integration suite's test-root unit replaces it at the
-      # same path afterwards.
+      # and its `.dist-info`.
       - name: Build the runtime unit
         run: cargo xtask build-runtime --release
 
@@ -250,42 +248,9 @@ jobs:
           fi
           echo "the window showed $frames_shown frames"
 
-      # The unit as an install prefix, for python-wheel.yml's macOS extension
-      # lane. Tarred, because an artifact keeps no file modes.
-      - name: Pack the runtime unit
-        run: tar -C target/tatolab-runtime -czf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz" bin lib
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tatolab-runtime-unit-macos
-          path: ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
-          retention-days: 1
-          if-no-files-found: error
-
       - name: Keep the wheel for a clean-machine run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: streamlib-macos-wheel
           path: target/tatolab-runtime/wheel/*.whl
           retention-days: 14
-
-      # The integration suite drives a unit whose `tatolabd` and `tatolab` keep
-      # the machine lock, the state directory and the runtime directory under a
-      # throwaway root the harness names, so no test takes this machine's real
-      # lock; the harness refuses a unit without that build's marker. Built
-      # last: it replaces the release unit at the same path, after every step
-      # above has used that one.
-      - name: Build the integration suite's test-root runtime unit
-        run: cargo xtask build-runtime --release --machine-directories-under-a-test-root
-
-      # The integration suite's GPU-free half on this floor, run as the Linux
-      # lane runs it: the suite's own venv, holding `tatolab-stream` and nothing
-      # of the runtime, and streams on the test-root `tatolabd` built above.
-      - name: The suite's venv, from its lockfile
-        working-directory: tests/stream-on-runtime
-        # --frozen: registry packages stay hash-pinned; the editable tatolab-stream's locked version is never read.
-        run: uv sync --frozen
-
-      - name: Integration suite (GPU-free half)
-        working-directory: tests/stream-on-runtime
-        run: .venv/bin/pytest -v -m "not requires_gpu"

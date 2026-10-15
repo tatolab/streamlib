@@ -1,0 +1,58 @@
+# The test runs CI makes with cargo-nextest. `ci.yml` builds every test target
+# of the selected packages once and runs these profiles over that one build;
+# `cargo xtask run-local-ci-gates` runs the same profiles.
+
+[profile.default]
+# A hang is a finding: a test still running after five minutes is killed and
+# fails.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# trybuild compiles its fail cases against the engine in a target directory of
+# its own, shaderc's C++ included.
+[[profile.default.overrides]]
+filter = "binary_id(streamlib-engine::compile_fail_config_without_json_schema)"
+slow-timeout = { period = "60s", terminate-after = 25 }
+
+# The engine's and the media built-ins' whole suites, `hardware-tests` included,
+# on the Vulkan device the environment names — in CI, the runtime unit's
+# bundled lavapipe. A test that needs what that device or machine cannot give
+# skips through `rig_only_capability_skip`, whose line `ci.yml` reads back out
+# of the JUnit report.
+[profile.ci]
+fail-fast = false
+default-filter = """
+    package(streamlib-engine)
+  | package(streamlib-media-builtins)
+  | package(streamlib)
+  | package(streamlib-runtime-client-contract)
+  | package(tatolab-cli)
+  | (kind(lib) & (
+        package(streamlib-macros)
+      | package(streamlib-processor-schema)
+      | package(streamlib-ipc-types)
+      | package(streamlib-surface-client)
+      | package(streamlib-error)
+      | package(streamlib-consumer-rhi)
+      | package(streamlib-python-wheel)
+    ))
+"""
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = true
+
+# The crates whose test build moves the machine's runtime directory, state
+# directory and runtime lock under `TATOLAB_TEST_MACHINE_ROOT`; `tatolabd`'s
+# `hardware-tests` suite with them.
+[profile.ci-machine-directories-under-a-test-root]
+fail-fast = false
+default-filter = """
+    package(streamlib-runtime-client-contract)
+  | package(tatolabd)
+  | package(tatolab-cli)
+  | (package(streamlib-api-server) & kind(lib))
+"""
+
+[profile.ci-machine-directories-under-a-test-root.junit]
+path = "junit.xml"
+store-success-output = true

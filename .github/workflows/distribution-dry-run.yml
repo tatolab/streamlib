@@ -1,0 +1,42 @@
+name: Distribution dry run
+
+# Every distribution the release ships — the tatolab-stream wheel and sdist,
+# each extension's manylinux and macOS wheels, the macOS runtime unit's release
+# proof and the manylinux runtime tarball with its portability gate — built and
+# checked on each push to `main`, exactly as a release builds them, and
+# uploaded nowhere. A pull request builds none of them: a change that breaks
+# only an artifact (a newly linked library, a glibc-floor breach, a signing
+# slip) fails here, on the commit that made it, and the release itself rebuilds
+# and checks every one before anything is published.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**.md'
+      - 'THIRD-PARTY-NOTICES.md'
+      - '!.claude/**'
+      - '!LICENSES/**'
+      - '!examples/**'
+      - '!tests/**'
+  workflow_dispatch:
+
+# A newer commit on `main` supersedes the dry run of an older one.
+concurrency:
+  group: distribution-dry-run-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  every-distribution:
+    # The publishing job declares the write it needs to attach a tarball to a
+    # release, and a called workflow may not ask for more than its caller
+    # grants. A dry run skips every step that writes, and runs only on `main`.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/reusable-distributions.yml
+    with:
+      dry_run: true

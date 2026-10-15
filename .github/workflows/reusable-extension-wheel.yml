@@ -3,8 +3,8 @@ name: Release Extension Wheel
 # One extension wheel per platform the runtime runs on — manylinux and Apple
 # Silicon — built the way a third party would build one: its own standalone
 # maturin project, its own lockfile, no engine crate linked. Both are kept as
-# this run's `pypi-distribution-*` artifacts, which release-wheel.yml uploads
-# to PyPI. Called once per extension by release-wheel.yml.
+# this run's `pypi-distribution-*` artifacts, which reusable-distributions.yml uploads
+# to PyPI. Called once per extension by reusable-distributions.yml.
 on:
   workflow_call:
     inputs:
@@ -47,13 +47,13 @@ jobs:
         include:
           - platform: manylinux
             runner: ubuntu-latest
-          # Pinned for the reason macos-wheel.yml pins it: the image decides
+          # Pinned for the reason reusable-macos-runtime-unit.yml pins it: the image decides
           # the SDK the wheel links against.
           - platform: aarch64-apple-darwin
             runner: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
 
@@ -120,13 +120,13 @@ jobs:
       # Also the interpreter the smoke test below installs into.
       - name: Install Python
         if: runner.os == 'macOS'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install uv
         if: runner.os == 'macOS'
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       # abi3-py310 at the engine wheel's macOS 15.0 floor. maturin writes
       # `macos-deployment-target` into the wheel's tag but does not hand it to
@@ -161,7 +161,7 @@ jobs:
             -exec codesign --verify --strict --verbose=1 {} +
 
       - name: Collect the tatolab-stream this release publishes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.tatolab_stream_distribution_artifact_name }}
           path: /tmp/tatolab-stream-distribution
@@ -206,9 +206,9 @@ jobs:
           print(distribution_name, 'exports', ', '.join(exported))
           "
 
-      # release-wheel.yml uploads every `pypi-distribution-*` artifact of the run.
+      # reusable-distributions.yml uploads every `pypi-distribution-*` artifact of the run.
       - name: Keep the wheel for the upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pypi-distribution-${{ inputs.extension_distribution_name }}-${{ matrix.platform }}
           path: ${{ inputs.extension_package_directory }}/dist/*.whl
