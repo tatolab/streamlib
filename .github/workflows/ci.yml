@@ -396,6 +396,18 @@ jobs:
           shared-key: linux-rust-tests
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # trybuild compiles its fail cases against the engine in a target
+      # directory of its own, which rust-cache's cleanup discards; cold, that
+      # is about eleven minutes and the job's longest test. Saved by a step of
+      # its own, which runs before rust-cache's cleanup.
+      - name: Restore the compile-fail tests' build
+        id: restore-trybuild
+        uses: actions/cache/restore@v4
+        with:
+          path: target/tests/trybuild
+          key: trybuild-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: trybuild-${{ runner.os }}-
+
       - name: Cache the Linux bundled Vulkan driver build
         uses: actions/cache@v4
         with:
@@ -450,6 +462,13 @@ jobs:
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
           --lib --bins --tests --example codec_roundtrip_rig
 
+      - name: Save the compile-fail tests' build
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.restore-trybuild.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/tests/trybuild
+          key: ${{ steps.restore-trybuild.outputs.cache-primary-key }}
+
       # nextest does not run doctests.
       - name: Engine and media built-ins doctests
         if: ${{ !cancelled() }}
@@ -487,43 +506,18 @@ jobs:
           exit "$run_status"
 
       # A skip passes, so its line in a test's output is the only trace it
-      # leaves. Exempt by name: the validation tests, which need the layer a
-      # run turns on rather than a capability, and two engine log lines that
-      # skip no test.
-      - name: Every skip names what this machine lacks from the closed list
+      # leaves. A lane whose device never came up would pass as a lane of
+      # skips, so the selected device is checked too.
+      - name: Every hardware-test skip names what this machine lacks from the closed list
         if: ${{ !cancelled() }}
-        run: |
-          test_reports=(target/nextest/ci/junit.xml \
-            "$RUNNER_TEMP/junit-without-a-test-root.xml" \
-            target/nextest/ci-machine-directories-under-a-test-root/junit.xml)
-          for test_report in "${test_reports[@]}"; do
-            test -f "$test_report" || { echo "::error::no test report at $test_report"; exit 1; }
-          done
-          # libtest opens a line with `test <name> ... `, and a name may say
-          # "skip", so that is cut first, as are the report's own elements.
-          sed -E 's/^(<system-(out|err)>)?test [^ ]+ \.\.\. //' "${test_reports[@]}" \
-            | grep -vE '^\s*<(testcase|/?testsuites?|skipped|properties|property) ' \
-            | grep -iE '\bskip(s|ped|ping)?\b' \
-            | grep -vE "${HARDWARE_TEST_SKIP_LINE_PREFIX}(${HARDWARE_TEST_SKIP_LINE_REASONS}): " \
-            | grep -vE 'Skipping — no validation messenger installed\.|Skipping — only synchronization validation can see this hazard\.' \
-            | grep -vE 'Manual mode: skipping thread priority|; it is skipped and left in place$' \
-            > "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt" || true
-          if [ -s "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt" ]; then
-            echo "::error::a test skipped without naming a closed-list reason"
-            cat "$RUNNER_TEMP/skip-lines-naming-no-listed-reason.txt"
-            exit 1
-          fi
-          # A lane whose device never came up would pass as a lane of skips.
-          if ! grep -q "Selected Vulkan device: llvmpipe" target/nextest/ci/junit.xml; then
-            echo "::error::the engine never selected the bundled lavapipe"
-            exit 1
-          fi
-          if grep -h "Selected Vulkan device: " "${test_reports[@]}" | grep -v "Selected Vulkan device: llvmpipe"; then
-            echo "::error::the engine selected a device other than the bundled lavapipe"
-            exit 1
-          fi
-          grep -hoE "${HARDWARE_TEST_SKIP_LINE_PREFIX}(${HARDWARE_TEST_SKIP_LINE_REASONS}): [^<&]*" \
-            "${test_reports[@]}" | sort | uniq -c || true
+        run: >-
+          python3 scripts/ci/check_hardware_test_skip_lines.py
+          --skip-line-prefix "$HARDWARE_TEST_SKIP_LINE_PREFIX"
+          --skip-line-reasons "$HARDWARE_TEST_SKIP_LINE_REASONS"
+          --expected-device llvmpipe
+          target/nextest/ci/junit.xml
+          "$RUNNER_TEMP/junit-without-a-test-root.xml"
+          target/nextest/ci-machine-directories-under-a-test-root/junit.xml
 
   # The runtime unit — `tatolabd`, `tatolab`, and the lend a processor
   # interpreter borrows `tatolab.runtime` from — built once, in debug, in its
