@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.6](https://github.com/tatolab/streamlib/compare/v0.46.5...v0.46.6) (2026-10-15)
+
+
+### Features
+
+* **engine:** a processor interpreter imports on the device the runtime names at spawn ([#2770](https://github.com/tatolab/streamlib/issues/2770)) ([8d0479f](https://github.com/tatolab/streamlib/commit/8d0479fb81c0a4e312cd8f91a096b7ad16df2945))
+
 ## [0.46.5](https://github.com/tatolab/streamlib/compare/v0.46.4...v0.46.5) (2026-10-14)
 
 
