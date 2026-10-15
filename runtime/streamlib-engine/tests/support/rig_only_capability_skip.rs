@@ -10,9 +10,11 @@
 //! reason. The reasons are the Python `rig_only_capability(reason=…)` closed
 //! list, word for word.
 
+// Each test binary compiles its own copy and uses part of it.
+#![allow(dead_code)]
+
 /// What the bundled software device or a CI runner cannot give a test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Each including test binary names only the capabilities it needs.
 pub enum RigOnlyCapability {
     VulkanVideo,
     DmaBufModifiers,
@@ -22,7 +24,6 @@ pub enum RigOnlyCapability {
     AudioDevice,
 }
 
-#[allow(dead_code)]
 impl RigOnlyCapability {
     /// Every capability, in the order the closed list states them.
     pub const EVERY_RIG_ONLY_CAPABILITY: [RigOnlyCapability; 6] = [
@@ -49,12 +50,10 @@ impl RigOnlyCapability {
 
 /// What every skip line starts with; the lane's skip-line check matches it
 /// followed by a closed-list reason.
-#[allow(dead_code)]
 pub const HARDWARE_TEST_SKIP_LINE_PREFIX: &str = "hardware test skipped, needing ";
 
 /// Prints the skip line naming `capability` and returns `true` when this
 /// machine lacks it, so the caller returns; returns `false` otherwise.
-#[allow(dead_code)]
 pub fn skip_unless_this_machine_has(
     capability: RigOnlyCapability,
     this_machine_has_it: bool,
@@ -67,7 +66,6 @@ pub fn skip_unless_this_machine_has(
 
 /// Prints the skip line naming `capability`, for a caller that has already
 /// found it absent and returns next.
-#[allow(dead_code)]
 pub fn skip_because_this_machine_lacks(capability: RigOnlyCapability) {
     // `println!`, not `tracing`: a test binary that has started no runtime has
     // no subscriber, and the lane reads this line from the test's own stdout.
@@ -82,7 +80,6 @@ pub fn skip_because_this_machine_lacks(capability: RigOnlyCapability) {
 
 /// Whether this process can reach a display server: the window server on
 /// macOS, one named in the environment as winit finds it elsewhere.
-#[allow(dead_code)]
 pub fn this_process_can_reach_a_display_server() -> bool {
     cfg!(target_os = "macos")
         || ["DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET"]
