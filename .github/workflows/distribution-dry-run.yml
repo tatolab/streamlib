@@ -19,7 +19,6 @@ on:
       - '!.claude/**'
       - '!LICENSES/**'
       - '!examples/**'
-      - '!installer/**'
       - '!tests/**'
   workflow_dispatch:
 
