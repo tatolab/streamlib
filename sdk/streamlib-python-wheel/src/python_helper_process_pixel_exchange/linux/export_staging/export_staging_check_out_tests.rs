@@ -10,6 +10,7 @@ use streamlib::sdk::engine::host_rhi::{
 };
 
 use super::*;
+use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
 
 const STAGING_WIDTH: u32 = 64;
@@ -406,4 +407,87 @@ fn as_device_tensor_refuses_on_a_software_device_naming_it_before_any_staging_op
             assert_eq!(ops_asked, ["open_device_export_staging"]);
         }
     });
+}
+
+/// A tensor storage buffer's capsule reaches CUDA through the buffer's own
+/// import, and on a software device that import refuses by the device's name
+/// before CUDA is asked anything. On a hardware device the same call reaches
+/// CUDA, whatever CUDA then answers.
+#[test]
+fn a_tensor_storage_buffers_cuda_import_refuses_on_a_software_device_naming_it() {
+    const TENSOR_ELEMENT_COUNT: u64 = 64;
+    let Some(host_device) = host_device_or_skip() else {
+        return;
+    };
+    let tensor_byte_size = TENSOR_ELEMENT_COUNT * 4;
+    let tensor_memory = HostVulkanBuffer::new_opaque_fd_export(&host_device, tensor_byte_size)
+        .expect("an OPAQUE_FD tensor allocation");
+    let memory_type_index = tensor_memory
+        .vma_allocation_memory_type_index()
+        .expect("a VMA allocation states its memory type");
+    // SAFETY: the export mints a fresh fd this test owns.
+    let tensor_memory_fd = unsafe {
+        OwnedFd::from_raw_fd(
+            tensor_memory
+                .export_opaque_fd_memory()
+                .expect("the tensor memory exports"),
+        )
+    };
+    let share = SurfaceShareUnderTest::start("tensor-software");
+    let tensor_surface_id = "tensor-storage-buffer-under-test";
+    let publisher = streamlib_surface_client::connect_to_surface_share_socket(&share.socket_path)
+        .expect("a publisher connection");
+    let (response, _no_reply_fds) = streamlib_surface_client::send_request_with_fds(
+        &publisher,
+        &serde_json::json!({
+            "op": "register",
+            "surface_id": tensor_surface_id,
+            "runtime_id": "engine:tensor-storage-buffer-under-test",
+            "resource_type": "storage_buffer",
+            "handle_type": "opaque_fd",
+            "plane_sizes": [tensor_byte_size],
+            "plane_offsets": [0],
+            "plane_strides": [0],
+            "vk_memory_type_index": memory_type_index,
+            "exporting_device_uuid": streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+                host_device.physical_device_uuid(),
+            ),
+            "shape": [TENSOR_ELEMENT_COUNT],
+            "dtype": "float32",
+        }),
+        &[tensor_memory_fd.as_raw_fd()],
+        0,
+    )
+    .expect("the tensor registers");
+    assert!(
+        response.get("error").is_none(),
+        "the service refused the tensor: {response}"
+    );
+    let exchange_client = share.exchange_client_labelled_importing_on(
+        "tensor-software",
+        Ok(host_device.physical_device_uuid()),
+    );
+
+    let HelperCheckedOutSurface::StorageBuffer(storage_buffer) = exchange_client
+        .check_out_and_import(tensor_surface_id)
+        .expect("a tensor storage buffer checks out")
+    else {
+        panic!("a storage_buffer registration must check out as a storage buffer");
+    };
+    let cuda_import = storage_buffer.cuda_import();
+    if host_device.device_is_software() {
+        let refusal = cuda_import
+            .err()
+            .expect("a software device has no memory any GPU package can import");
+        assert!(
+            refusal.contains(&host_device.name()) && refusal.contains("software Vulkan device"),
+            "the refusal names the software device: {refusal}"
+        );
+    } else if let Err(cuda_answer) = cuda_import {
+        assert!(
+            !cuda_answer.contains("software Vulkan device"),
+            "{} is a hardware device and must not be refused as software: {cuda_answer}",
+            host_device.name()
+        );
+    }
 }

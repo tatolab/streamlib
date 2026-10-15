@@ -4,7 +4,7 @@
 use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
 use std::sync::Arc;
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
 use streamlib_consumer_rhi::ConsumerVulkanBuffer;
 
@@ -46,12 +46,13 @@ fn optional_decimal_string_field(
     response: &Bound<'_, PyAny>,
     field: &str,
 ) -> PyResult<Option<u64>> {
-    let Some(as_written) = response
-        .get_item(field)
-        .ok()
-        .filter(|value| !value.is_none())
-    else {
-        return Ok(None);
+    let as_written = match response.get_item(field) {
+        Ok(as_written) if as_written.is_none() => return Ok(None),
+        Ok(as_written) => as_written,
+        Err(lookup_failure) if lookup_failure.is_instance_of::<PyKeyError>(response.py()) => {
+            return Ok(None);
+        }
+        Err(lookup_failure) => return Err(lookup_failure),
     };
     let as_written: String = as_written.extract()?;
     as_written.parse().map(Some).map_err(|_| {
@@ -59,6 +60,16 @@ fn optional_decimal_string_field(
             "the parent's {field} was {as_written:?}, which is not a decimal u64"
         ))
     })
+}
+
+/// Whether a check-out's registration states the timeline fd `flag` names
+/// (`has_produce_done_fd`, `has_consume_done_fd`); such fds trail the
+/// memory's.
+fn registration_states_a_timeline_fd(registration: &serde_json::Value, flag: &str) -> bool {
+    registration
+        .get(flag)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
 }
 
 /// The exporting device's UUID, as 32 hex characters.
@@ -389,14 +400,10 @@ impl HelperProcessGpuExchangeClient {
         // pixel-buffer checkout carries none today. Peeled rather than
         // assumed absent, so a registration that gains them cannot corrupt
         // the plane list.
-        let has_timeline_fd = |flag: &str| {
-            response
-                .get(flag)
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-        };
-        let has_produce_done_fd = has_timeline_fd("has_produce_done_fd");
-        let has_consume_done_fd = has_timeline_fd("has_consume_done_fd");
+        let has_produce_done_fd =
+            registration_states_a_timeline_fd(response, "has_produce_done_fd");
+        let has_consume_done_fd =
+            registration_states_a_timeline_fd(response, "has_consume_done_fd");
         let trailing_timeline_fd_count =
             usize::from(has_produce_done_fd) + usize::from(has_consume_done_fd);
         if received_fds.len() < trailing_timeline_fd_count + 1 {

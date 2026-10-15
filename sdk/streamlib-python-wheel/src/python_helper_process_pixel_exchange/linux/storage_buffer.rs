@@ -48,10 +48,14 @@ pub(crate) struct HelperCheckedOutStorageBuffer {
 impl HelperCheckedOutStorageBuffer {
     /// CUDA's linear-memory import of this tensor, made on first ask. CUDA
     /// maps the tensor's exact byte size, never the allocation's rounded one.
+    /// Refused by the import device's name on a software device.
     pub(crate) fn cuda_import(&self) -> Result<Arc<CudaImportedSurface>, String> {
         if let Some(imported) = self.cuda_import.get() {
             return Ok(Arc::clone(imported));
         }
+        self.exchange_client
+            .refuse_a_device_tensor_on_a_software_device(&self.surface_id)
+            .map_err(|refusal| refusal.to_string())?;
         let mut opaque_memory_fd = self.opaque_memory_fd_until_cuda_imports_it.lock();
         if let Some(imported) = self.cuda_import.get() {
             return Ok(Arc::clone(imported));
