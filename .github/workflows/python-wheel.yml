@@ -358,13 +358,23 @@ jobs:
           tar -C "$RUNNER_TEMP/tatolab-runtime" -xzf "$RUNNER_TEMP/tatolab-runtime-unit/tatolab-runtime-unit.tar.gz"
           bundled_vulkan_driver_directory="$RUNNER_TEMP/tatolab-runtime/lib/tatolab/lend/tatolab/runtime/_vulkan_driver"
           test -f "$bundled_vulkan_driver_directory/lvp_icd.x86_64.json"
+          for driver_search_replacing_variable in VK_DRIVER_FILES VK_ICD_FILENAMES; do
+            if [ -n "${!driver_search_replacing_variable:-}" ]; then
+              echo "::error::$driver_search_replacing_variable is set, so the loader would ignore the unit's driver"
+              exit 1
+            fi
+          done
+          # Every directory the loader searches for driver manifests on Linux.
           shopt -s nullglob
-          driver_manifests_the_runner_carries=(
-            /etc/vulkan/icd.d/*.json
-            /usr/share/vulkan/icd.d/*.json
-            /usr/local/share/vulkan/icd.d/*.json
-            "$HOME"/.local/share/vulkan/icd.d/*.json
-          )
+          driver_manifests_the_runner_carries=()
+          IFS=: read -r -a xdg_config_directories <<< "${XDG_CONFIG_DIRS:-/etc/xdg}"
+          IFS=: read -r -a xdg_data_directories <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+          for driver_search_directory in \
+              "${XDG_CONFIG_HOME:-$HOME/.config}" "${xdg_config_directories[@]}" /etc \
+              "${XDG_DATA_HOME:-$HOME/.local/share}" "${xdg_data_directories[@]}" \
+              /usr/local/share /usr/share; do
+            driver_manifests_the_runner_carries+=("$driver_search_directory"/vulkan/icd.d/*.json)
+          done
           if (( ${#driver_manifests_the_runner_carries[@]} )); then
             printf '%s\n' "${driver_manifests_the_runner_carries[@]}"
             echo "::error::the runner carries a Vulkan driver of its own; the lane runs on the unit's alone"

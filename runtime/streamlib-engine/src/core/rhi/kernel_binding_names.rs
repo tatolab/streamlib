@@ -25,6 +25,8 @@ const SPIRV_MAGIC_NUMBER: u32 = 0x0723_0203;
 /// instructions whose first word packs word count and opcode (SPIR-V 1.6 §2.3).
 pub(super) const SPIRV_HEADER_WORD_COUNT: usize = 5;
 pub(super) const OP_SOURCE_CONTINUED: u32 = 2;
+/// `OpSourceContinued`'s opcode word and at least one word of its literal.
+const OP_SOURCE_CONTINUED_MINIMUM_WORD_COUNT: usize = 2;
 pub(super) const OP_SOURCE: u32 = 3;
 pub(super) const OP_STRING: u32 = 7;
 /// `OpSource`'s opcode word, source language, version and file id; its
@@ -80,6 +82,9 @@ fn spirv_without_its_debug_source_strings(spirv: &[u8]) -> Cow<'_, [u8]> {
         let instruction_bytes =
             &spirv[instruction_start_word_index * 4..instruction_end_word_index * 4];
         let replacement_bytes: Option<Vec<u8>> = match opcode {
+            OP_SOURCE_CONTINUED if word_count < OP_SOURCE_CONTINUED_MINIMUM_WORD_COUNT => {
+                return Cow::Borrowed(spirv);
+            }
             OP_SOURCE_CONTINUED => Some(Vec::new()),
             OP_SOURCE if word_count > OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT => {
                 let mut cut = instruction_header_word(
