@@ -178,7 +178,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   2026-10-02. [package-split-and-lend — SHIPPED #2686, #2689, #2693; amended by
   optional-accelerators: "`requires_gpu` halves stay rig-only" — only what a runner cannot
   give stays rig-only, the rest runs on the bundled software device (§Graphics)]
-  <!-- verify: grep -n -e "Stream suite (Python 3.10 and 3.12)" -e "Integration suite (all but rig-only)" .github/workflows/ci.yml -->
+  <!-- verify: grep -n -e "Stream suite (Python 3.10)" -e "Integration suite (all but rig-only)" .github/workflows/ci.yml -->
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
   stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
@@ -3944,9 +3944,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   --test-pattern` then `tatolab run` for twenty seconds, which must open the carried loader, raise
   nothing from the effect and show at least sixty frames. On release a failed macOS proof of
   the runtime unit withholds the PyPI upload, as a failed build of any distribution does. A
-  pull request builds no distribution: `ci.yml` builds the debug runtime unit on the same
-  runner and runs the scaffolded stream on the lend's driver, the wheel's Python suite and
-  the integration suite's GPU-free half on it.
+  pull request builds no distribution; on `main`, `ci.yml` also builds the debug runtime
+  unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
+  Python suite and the integration suite's GPU-free half on it.
   [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697]
   <!-- verify: grep -n 'macos-deployment-target = "15.0"' sdk/streamlib-python-wheel/pyproject.toml -->
   <!-- verify: grep -n "runs-on: macos-15" .github/workflows/reusable-macos-runtime-unit.yml -->

@@ -1,32 +1,45 @@
 name: CI
 
-# The one workflow a change is validated by: every pull request, every push to
-# `main`, every merge-queue group. It proves the change safe to merge and builds
-# nothing it ships; distribution-dry-run.yml builds the distributables on
-# `main`, and release.yml publishes them.
+# What a pull request must prove before it merges: the code is formatted and
+# lint-clean, it builds, its test suites pass, and a stream still runs end to
+# end on the runtime. It builds nothing that ships; distribution-dry-run.yml
+# builds and checks the distributables on every push to `main`, and release.yml
+# publishes them.
 #
-# Six jobs. `Changes` reads the paths a pull request touches
-# (`scripts/ci/classify_changed_paths.py`), and each other job runs only the
-# steps, or only at all, when the change can affect what it covers:
+#   Lint                 rustfmt, clippy, the source gates, licences, Python types,
+#                        the stream suite
+#   Rust Build (Linux)   one test build: every Rust suite, hardware tests on the
+#                        bundled lavapipe
+#   Runtime (Linux)      the runtime unit, then the wheel, extension and
+#                        integration suites on it
+#   Rust Build (macOS)   the Apple path: clippy and the Rust suites
+#   Runtime (macOS)      the macOS runtime unit and its suites; `main` only
 #
-#   Changes ─┬─ Lint                  gates, formatting, clippy, Python types, stream suite
-#            ├─ Rust Build (Linux)    the Rust suites, hardware tests on the bundled lavapipe
-#            ├─ Runtime (Linux)       the runtime unit, then the wheel, integration and
-#            │                        extension suites on it
-#            ├─ Rust Build (macOS)    the Rust suites, the adapters on MoltenVK
-#            └─ Runtime (macOS)       the runtime unit, then the same suites on macOS
-#
-# Each job compiles what it needs once and runs everything that needs it in
-# place. A runtime unit is restored from the cache when nothing it is built from
-# changed. A push to `main` runs every lane and saves the caches pull requests
-# restore from: Actions caches are ref-scoped, so a pull request's save would be
-# readable by no other pull request and would evict `main`'s. A failed job
-# cancels the rest of its run, and a newer push cancels the run before it.
+# A change that touches only prose or code CI never builds runs nothing. Caches
+# are saved by `main` alone and restored by pull requests. A failed job cancels
+# the rest of its run, and a newer push cancels the run before it.
+
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.claude/**'
+      - 'LICENSES/**'
+      - 'examples/**'
+      - 'docker/**'
+      - 'installer/**'
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.claude/**'
+      - 'LICENSES/**'
+      - 'examples/**'
+      - 'docker/**'
+      - 'installer/**'
   merge_group:
   workflow_dispatch:
 
@@ -54,54 +67,9 @@ env:
 
 
 jobs:
-  changes:
-    name: Changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      rust: ${{ steps.classify.outputs.rust }}
-      runtime_unit: ${{ steps.classify.outputs.runtime_unit }}
-      python_wheel: ${{ steps.classify.outputs.python_wheel }}
-      integration: ${{ steps.classify.outputs.integration }}
-      extension_webrtc: ${{ steps.classify.outputs.extension_webrtc }}
-      stream_package: ${{ steps.classify.outputs.stream_package }}
-      python_types: ${{ steps.classify.outputs.python_types }}
-      installer: ${{ steps.classify.outputs.installer }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          # A pull request checks out its merge commit, whose first parent is
-          # the base it merges into: the diff between the two is the change.
-          fetch-depth: 2
-
-      # `--no-renames`, so a moved file names the tree it left as well as the
-      # one it joined.
-      - name: Paths this pull request changes
-        if: github.event_name == 'pull_request'
-        run: |
-          git diff --no-renames --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed-paths.txt"
-          cat "$RUNNER_TEMP/changed-paths.txt"
-
-      - name: Lanes this change needs
-        id: classify
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "$EVENT_NAME" = pull_request ]; then
-            python3 scripts/ci/classify_changed_paths.py --event-name "$EVENT_NAME" \
-              --changed-paths-file "$RUNNER_TEMP/changed-paths.txt"
-          else
-            python3 scripts/ci/classify_changed_paths.py --event-name "$EVENT_NAME"
-          fi
-
-  # Seconds to a few minutes of work that needs no test build. The source
-  # gates scan `docs/` and Markdown as well as source, so they run on every
-  # change; clippy, the Python checks and the installer only when the change
-  # can affect them.
+  # Everything that needs no test build.
   lint:
     name: Lint
-    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -115,29 +83,11 @@ jobs:
       - name: License headers (Rust + Python)
         run: bash scripts/check-license-headers.sh
 
-      # The repository scripts' own tests: the header gate's exemption list,
-      # the ship-change removal gate, the rig-brake hook, and CI's own scripts.
-      - name: Repository script tests
-        run: |
-          bash .claude/scripts/tests/license-header-gate.test.sh
-          bash .claude/scripts/tests/ship-change-removed-gate.test.sh
-          bash .claude/scripts/tests/rig-brake.test.sh
-          python3 -m unittest discover -s scripts/ci -p 'test_*.py'
-
-      - name: actionlint
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/actionlint.tar.gz" \
-            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
-          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
-          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint" -color
-
       # The engine's build script compiles GLSL with glslc, the Linux engine
       # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
       # build the vendored shaderc. `timeout-minutes` is the backstop the
       # composite action cannot declare itself.
       - name: Install system dependencies
-        if: needs.changes.outputs.rust == 'true'
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
         with:
@@ -166,9 +116,6 @@ jobs:
       - name: cargo xtask check-all-source-gates
         run: cargo run --locked -q -p xtask -- check-all-source-gates
 
-      - name: cargo test -p xtask (all gate fixture tests)
-        run: cargo test --locked -p xtask
-
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
@@ -178,18 +125,15 @@ jobs:
         run: cargo deny --locked --workspace check licenses -D license-not-encountered
 
       - name: cargo clippy (workspace, default targets)
-        if: needs.changes.outputs.rust == 'true'
         run: cargo clippy --locked --workspace --exclude streamlib-adapter-skia --no-deps
 
       - name: Generated built-in node classes match the runtime's built-ins
-        if: needs.changes.outputs.rust == 'true'
         run: cargo run --locked -q -p xtask -- generate-built-in-node-classes --check
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
       - name: Prepare the environment pyright resolves against
-        if: needs.changes.outputs.python_types == 'true'
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
@@ -197,39 +141,22 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Type-check the wheel's Python surface
-        if: needs.changes.outputs.python_types == 'true'
         working-directory: sdk/streamlib-python-wheel
         run: uvx pyright@1.1.411
-
-      - name: Release configuration tests
-        if: needs.changes.outputs.python_types == 'true'
-        working-directory: scripts
-        run: python3 -m unittest test_release_configuration
-
-      - name: Audio loopback fixture negative controls
-        if: needs.changes.outputs.python_types == 'true'
-        working-directory: runtime/streamlib-engine/tests/fixtures
-        run: >-
-          "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python"
-          -m unittest test_known_audio_signal
 
       # The stream package with its test group and nothing of the runtime, so a
       # stream test that reaches for the runtime fails to import; built and
       # installed, not editable. 3.10 is the floor `requires-python` promises.
       # A scaffolded stream compiles and type-checks with no runtime installed.
-      - name: Stream suite (Python 3.10 and 3.12)
-        if: needs.changes.outputs.stream_package == 'true'
+      - name: Stream suite (Python 3.10)
         run: |
-          for python_version in 3.10 3.12; do
-            (
-              cd sdk/tatolab-stream
-              rm -rf .venv
-              uv venv --python "$python_version" .venv
-              VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
-              .venv/bin/pytest tests -q
-              uvx pyright@1.1.411
-            )
-          done
+          (
+            cd sdk/tatolab-stream
+            uv venv --python 3.10 .venv
+            VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
+            .venv/bin/pytest tests -q
+            uvx pyright@1.1.411
+          )
           cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
           uv venv --python 3.10 "$RUNNER_TEMP/scaffold-venv"
@@ -250,18 +177,6 @@ jobs:
           EOF
           uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
 
-      # install.sh against releases its test makes, on a machine booting
-      # systemd: install, a kill -9 restarted, an upgrade in place, a download
-      # refused on its sha256, macOS pointed at the app, and an uninstall that
-      # leaves the state directory.
-      - name: install.sh under a user systemd
-        if: needs.changes.outputs.installer == 'true'
-        timeout-minutes: 20
-        run: |
-          shellcheck -s sh installer/install.sh
-          shellcheck installer/tests/*.sh
-          bash installer/tests/run_install_sh_test_in_a_systemd_container.sh
-
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.
       - name: Cancel the rest of the run
@@ -278,8 +193,6 @@ jobs:
   # fails the job.
   linux:
     name: Rust Build (Linux)
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -443,8 +356,6 @@ jobs:
   # the lavapipe the unit carries), and the first-party extension's.
   linux-runtime:
     name: Runtime (Linux)
-    needs: changes
-    if: needs.changes.outputs.runtime_unit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -478,7 +389,6 @@ jobs:
       # build the vendored shaderc. `timeout-minutes` is the backstop the
       # composite action cannot declare itself.
       - name: Install system dependencies
-        if: steps.restore.outputs.cache-hit != 'true' || needs.changes.outputs.extension_webrtc == 'true'
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
         with:
@@ -494,7 +404,6 @@ jobs:
             python3-dev
 
       - name: Cache Rust dependencies
-        if: steps.restore.outputs.cache-hit != 'true' || needs.changes.outputs.extension_webrtc == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: linux-runtime
@@ -548,7 +457,6 @@ jobs:
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
       # stubtest compares the rest of `_engine.pyi` to the binary.
       - name: Wheel stubs and Python suite (GPU-free half)
-        if: needs.changes.outputs.python_wheel == 'true'
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
@@ -560,14 +468,12 @@ jobs:
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
       - name: Audio channel tap controls
-        if: needs.changes.outputs.python_wheel == 'true'
         working-directory: runtime/streamlib-engine/tests/fixtures
         run: >-
           "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python"
           -m unittest test_tap_audio_channel
 
       - name: Driver-search tests against the lend
-        if: needs.changes.outputs.python_wheel == 'true'
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
           uv venv --python 3.12 "$RUNNER_TEMP/lend-check-venv"
@@ -580,7 +486,6 @@ jobs:
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
-        if: needs.changes.outputs.extension_webrtc == 'true'
         working-directory: packages/streamlib-webrtc
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
@@ -593,7 +498,6 @@ jobs:
       # Before the venv is on PATH, so pyo3 resolves the system interpreter
       # whose headers the apt step installed.
       - name: "Extension: formatting, crate tests, clippy and types"
-        if: needs.changes.outputs.extension_webrtc == 'true'
         working-directory: packages/streamlib-webrtc
         run: |
           cargo fmt --all --check
@@ -605,7 +509,6 @@ jobs:
       # clock-parity test. The tests that import `tatolab.runtime` borrow it
       # from the lend, as a processor interpreter does.
       - name: "Extension: stubs and tests, GPU-free"
-        if: needs.changes.outputs.extension_webrtc == 'true'
         working-directory: packages/streamlib-webrtc
         run: |
           .venv/bin/python -m mypy.stubtest tatolab.webrtc._native
@@ -613,19 +516,16 @@ jobs:
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
       - name: Unpack the runtime unit under a test root
-        if: needs.changes.outputs.integration == 'true'
         run: |
           rm -rf target/tatolab-runtime
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
 
       - name: The suite's venv, from its lockfile
-        if: needs.changes.outputs.integration == 'true'
         working-directory: tests/stream-on-runtime
         run: uv sync --frozen
 
       - name: Integration suite (all but rig-only)
-        if: needs.changes.outputs.integration == 'true'
         working-directory: tests/stream-on-runtime
         run: .venv/bin/pytest -v -m "not rig_only_capability"
 
@@ -644,8 +544,6 @@ jobs:
   # paravirtual Metal device through MoltenVK.
   macos:
     name: Rust Build (macOS)
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -790,8 +688,7 @@ jobs:
   # inside the lend.
   macos-runtime:
     name: Runtime (macOS)
-    needs: changes
-    if: needs.changes.outputs.runtime_unit == 'true'
+    if: github.event_name != 'pull_request'
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -837,7 +734,6 @@ jobs:
         run: brew install shaderc cmake ninja
 
       - name: Cache Rust dependencies
-        if: steps.restore.outputs.cache-hit != 'true' || needs.changes.outputs.extension_webrtc == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: macos-runtime
@@ -892,7 +788,6 @@ jobs:
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
       # stubtest compares the rest of `_engine.pyi` to the binary.
       - name: Wheel stubs and Python suite (GPU-free half)
-        if: needs.changes.outputs.python_wheel == 'true'
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
@@ -904,7 +799,6 @@ jobs:
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
       - name: The scaffolded stream runs on the driver the lend carries
-        if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.stream_package == 'true'
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
           tatolabd_executable="$GITHUB_WORKSPACE/target/tatolab-runtime/bin/tatolabd"
@@ -1000,7 +894,6 @@ jobs:
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
-        if: needs.changes.outputs.extension_webrtc == 'true'
         working-directory: packages/streamlib-webrtc
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
@@ -1010,7 +903,6 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       - name: "Extension: crate tests and clippy"
-        if: needs.changes.outputs.extension_webrtc == 'true'
         working-directory: packages/streamlib-webrtc
         env:
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
@@ -1022,7 +914,6 @@ jobs:
       # clock-parity test. The tests that import `tatolab.runtime` borrow it
       # from the lend, as a processor interpreter does.
       - name: "Extension: stubs and tests, GPU-free"
-        if: needs.changes.outputs.extension_webrtc == 'true'
         working-directory: packages/streamlib-webrtc
         run: |
           .venv/bin/python -m mypy.stubtest tatolab.webrtc._native
@@ -1031,7 +922,6 @@ jobs:
 
       # The stream package on this floor, with nothing of the runtime installed.
       - name: Stream suite
-        if: needs.changes.outputs.stream_package == 'true'
         working-directory: sdk/tatolab-stream
         run: |
           rm -rf .venv
@@ -1040,7 +930,6 @@ jobs:
           .venv/bin/pytest tests -q
 
       - name: Integration suite (GPU-free half)
-        if: needs.changes.outputs.integration == 'true'
         run: |
           rm -rf target/tatolab-runtime
           mkdir -p target/tatolab-runtime

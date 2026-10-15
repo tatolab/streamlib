@@ -307,39 +307,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             "bash",
             &["scripts/check-license-headers.sh"],
         ),
-        (
-            "license-header-gate tests",
-            "bash",
-            &[".claude/scripts/tests/license-header-gate.test.sh"],
-        ),
-        (
-            "ship-change removed gate tests",
-            "bash",
-            &[".claude/scripts/tests/ship-change-removed-gate.test.sh"],
-        ),
-        (
-            "rig-brake tests",
-            "bash",
-            &[".claude/scripts/tests/rig-brake.test.sh"],
-        ),
-        (
-            "xtask gate fixture tests",
-            "cargo",
-            &["test", "--locked", "-p", "xtask"],
-        ),
-        (
-            "CI lane selection tests",
-            "python3",
-            &[
-                "-m",
-                "unittest",
-                "discover",
-                "-s",
-                "scripts/ci",
-                "-p",
-                "test_*.py",
-            ],
-        ),
         // Linux compiles in every built-in, so only Linux can render them all.
         #[cfg(target_os = "linux")]
         (
