@@ -8,7 +8,7 @@ name: CI
 #
 #   Lint                       formatting, clippy, the source gates, licences,
 #                              Python types
-#   Test (Linux)               every Rust test suite, the hardware tests on a
+#   Unit Test (Linux)          every Rust test suite, the hardware tests on a
 #                              software GPU (the lavapipe the runtime carries)
 #   Integration test (Linux)   real streams on a real `tatolabd`: builds the
 #                              runtime binaries those tests drive (a test fixture,
@@ -162,7 +162,7 @@ jobs:
   # `rig_only_capability_skip` naming one closed-list reason; any other skip
   # fails the job.
   test-linux:
-    name: Test (Linux)
+    name: Unit Test (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
