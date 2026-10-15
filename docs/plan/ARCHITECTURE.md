@@ -3523,8 +3523,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   cannot be dialled again. A bag the engine refuses is the one failure not retried: it names
   its port and ends the thread, because reconnecting would spend an endpoint's session
   forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150]
-- **DECIDED** — `ci.yml`'s `linux-runtime` and `macos-runtime` jobs carry the
-  extension lane for `packages/streamlib-webrtc`: on the runtime unit they built, build
+- **DECIDED** — `ci.yml`'s `integration-test-linux` and `integration-test-macos` jobs
+  carry the extension lane for `packages/streamlib-webrtc`: on the runtime unit they built, build
   the extension into a venv holding `tatolab-stream`, `cargo test` and clippy over its
   crate, `mypy.stubtest` over its `_native`, pyright over its Python, and pytest with
   `-m "not requires_gpu"`, the portability gate over its `.so` among them.
@@ -3952,7 +3952,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: grep -n "runs-on: macos-15" .github/workflows/reusable-macos-runtime-unit.yml -->
   <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
-  it. `Rust Build (macOS)` compiles the whole workspace with the wheel in it (clippy on
+  it. `Test (macOS)` compiles the whole workspace with the wheel in it (clippy on
   default targets, `check --all-targets`) and runs the wheel crate's unit tests; it then
   `maturin develop`s the wheel, gates `_engine.pyi` with `stubtest` against the macOS
   binary — one stub for both floors — and runs the Python suite's GPU-free half. The test

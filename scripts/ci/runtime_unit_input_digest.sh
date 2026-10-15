@@ -38,7 +38,6 @@ sha256_of_standard_input() {
     ':(exclude)sdk/tatolab-pypi-placeholder/**' \
     ':(exclude)sdk/tatolab-stream/**' \
     ':(exclude).github/ISSUE_TEMPLATE/**' \
-    ':(exclude).github/workflows/pr-title.yml' \
     ':(exclude)*.md' \
     ':(exclude)LICENSES/**'
   # `tatolab new` compiles the scaffold into the CLI, and the wheel ships the

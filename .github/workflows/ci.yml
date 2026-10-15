@@ -6,14 +6,16 @@ name: CI
 # builds and checks the distributables on every push to `main`, and release.yml
 # publishes them.
 #
-#   Lint                 rustfmt, clippy, the source gates, licences, Python types,
-#                        the stream suite
-#   Rust Build (Linux)   one test build: every Rust suite, hardware tests on the
-#                        bundled lavapipe
-#   Runtime (Linux)      the runtime unit, then the wheel, extension and
-#                        integration suites on it
-#   Rust Build (macOS)   the Apple path: clippy and the Rust suites
-#   Runtime (macOS)      the macOS runtime unit and its suites; `main` only
+#   Lint                       formatting, clippy, the source gates, licences,
+#                              Python types
+#   Test (Linux)               every Rust test suite, the hardware tests on a
+#                              software GPU (the lavapipe the runtime carries)
+#   Integration test (Linux)   real streams on a real `tatolabd`: builds the
+#                              runtime binaries those tests drive (a test fixture,
+#                              never shipped), then the stream package, wheel,
+#                              extension and end-to-end stream tests
+#   Test (macOS)               the Apple path: clippy and the Rust test suites
+#   Integration test (macOS)   the same end-to-end tests on macOS; `main` only
 #
 # A change that touches only prose or code CI never builds runs nothing. Caches
 # are saved by `main` alone and restored by pull requests. A failed job cancels
@@ -144,39 +146,6 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: uvx pyright@1.1.411
 
-      # The stream package with its test group and nothing of the runtime, so a
-      # stream test that reaches for the runtime fails to import; built and
-      # installed, not editable. 3.10 is the floor `requires-python` promises.
-      # A scaffolded stream compiles and type-checks with no runtime installed.
-      - name: Stream suite (Python 3.10)
-        run: |
-          (
-            cd sdk/tatolab-stream
-            uv venv --python 3.10 .venv
-            VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
-            .venv/bin/pytest tests -q
-            uvx pyright@1.1.411
-          )
-          cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
-          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
-          uv venv --python 3.10 "$RUNNER_TEMP/scaffold-venv"
-          VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'
-          cd "$RUNNER_TEMP/scaffold"
-          "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
-          import importlib.util
-          import sys
-
-          import stream
-          from tatolab.stream import compile_stream_to_graph
-
-          assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
-          graph = compile_stream_to_graph(stream.main)
-          runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
-          assert runtime_modules_loaded == [], runtime_modules_loaded
-          print([node["type"] for node in graph["nodes"]])
-          EOF
-          uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
-
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.
       - name: Cancel the rest of the run
@@ -191,8 +160,8 @@ jobs:
   # runs. A test that needs what this runner cannot give skips through
   # `rig_only_capability_skip` naming one closed-list reason; any other skip
   # fails the job.
-  linux:
-    name: Rust Build (Linux)
+  test-linux:
+    name: Test (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -354,8 +323,8 @@ jobs:
   # it: the wheel's own, the integration suite (one `tatolabd` per test, each
   # fixture stream loaded with `tatolab run` and driven over its local API, on
   # the lavapipe the unit carries), and the first-party extension's.
-  linux-runtime:
-    name: Runtime (Linux)
+  integration-test-linux:
+    name: Integration test (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -414,6 +383,39 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+
+      # The stream package with its test group and nothing of the runtime, so a
+      # stream test that reaches for the runtime fails to import; built and
+      # installed, not editable. 3.10 is the floor `requires-python` promises.
+      # A scaffolded stream compiles and type-checks with no runtime installed.
+      - name: Stream package tests (Python 3.10)
+        run: |
+          (
+            cd sdk/tatolab-stream
+            uv venv --python 3.10 .venv
+            VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
+            .venv/bin/pytest tests -q
+            uvx pyright@1.1.411
+          )
+          cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
+          uv venv --python 3.10 "$RUNNER_TEMP/scaffold-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'
+          cd "$RUNNER_TEMP/scaffold"
+          "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
+          import importlib.util
+          import sys
+
+          import stream
+          from tatolab.stream import compile_stream_to_graph
+
+          assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
+          graph = compile_stream_to_graph(stream.main)
+          runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
+          assert runtime_modules_loaded == [], runtime_modules_loaded
+          print([node["type"] for node in graph["nodes"]])
+          EOF
+          uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
 
       - name: Cache the Linux bundled Vulkan driver build
         if: steps.restore.outputs.cache-hit != 'true'
@@ -542,8 +544,8 @@ jobs:
   # `macos-15`, not `macos-latest`: the image decides the SDK the Apple
   # frameworks link against. GPU work runs last and narrow, on the runner's
   # paravirtual Metal device through MoltenVK.
-  macos:
-    name: Rust Build (macOS)
+  test-macos:
+    name: Test (macOS)
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -686,8 +688,8 @@ jobs:
   # stream suite on this floor. A stock Mac has no Vulkan driver and neither
   # does the runner image, so a stream that runs here ran on the MoltenVK
   # inside the lend.
-  macos-runtime:
-    name: Runtime (macOS)
+  integration-test-macos:
+    name: Integration test (macOS)
     if: github.event_name != 'pull_request'
     runs-on: macos-15
     timeout-minutes: 60

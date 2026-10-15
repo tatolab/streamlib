@@ -1,4 +1,4 @@
-name: Installer
+name: Installer test
 
 # install.sh against releases its test makes, on a machine booting systemd, so
 # the service it registers runs under a real user manager: install, a kill -9
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   install-sh-under-a-user-systemd:
-    name: install.sh under a user systemd
+    name: Test installer
     runs-on: ubuntu-latest
     # The image build is an apt install inside docker, outside the bounded-apt
     # action's reach; this bound is what stops a slow mirror holding the job.
