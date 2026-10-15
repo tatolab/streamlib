@@ -235,6 +235,15 @@ not `cargo`. A CoreAudio capture test checks access before it measures:
 3. Use a shared `try_vulkan_device()` helper (or equivalent) that
    gracefully skips when no GPU is available — keeps the test
    well-behaved when the feature is on but the runner has no GPU.
+   A test that needs what the bundled software device or a CI runner
+   cannot give — Vulkan Video, DMA-BUF modifiers, CUDA, a camera, a
+   display, an audio device — skips through
+   `skip_unless_this_machine_has` or `skip_because_this_machine_lacks`
+   in `runtime/streamlib-engine/tests/support/rig_only_capability_skip.rs`
+   (the engine's lib tests reach it as
+   `crate::core::test_support::rig_only_capability_skip`; an integration
+   test includes it with `#[path]`). Any other skip line fails the CI lane
+   below.
 4. Don't reach for `#[serial]` from the `serial_test` crate; the
    `--test-threads=1` invocation in tier 2 already serializes
    everything.
@@ -253,10 +262,18 @@ login session's screen is locked.
 
 ## CI
 
-Tier 1 runs on every PR via `.github/workflows/ci.yml`. A tier-2 CI
-workflow is **future work** — it requires a GPU runner that isn't wired
-yet.
+Tier 1 runs on every PR via `.github/workflows/ci.yml`. Tier 2 runs on
+every PR too, on the Linux runtime unit's bundled lavapipe rather than a GPU:
+`ci.yml`'s `linux-rust-tests` job stages that driver, names it through
+`VK_ADD_DRIVER_FILES`, and runs the engine's, `streamlib-media-builtins`' and
+`tatolabd`'s `hardware-tests` suites in the same cargo-nextest build as tier 1
+(`.config/nextest.toml`). A skip passes in a test harness, so the job reads
+every line that says it skipped out of the JUnit report and fails on one that
+is not the helper's line naming a closed-list reason. Exempt by name: the
+validation tests, which skip unless a run turns the layer on, and two engine
+log lines that skip no test.
 
-Until the GPU runner lands, run tier 2 locally before merging any
-PR that touches `vulkan/rhi/`, encoders/decoders, or display code.
-The PR template should call this out explicitly when it's relevant.
+What the software device cannot exercise stays on the rig: run tier 2 there
+before merging any PR that touches `vulkan/rhi/`, encoders/decoders, display
+or capture code, and expect no skip lines on NVIDIA beyond the validation
+tests and the DMA-BUF-absent arms, which run on lavapipe instead.

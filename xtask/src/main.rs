@@ -391,6 +391,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "tatolab-cli",
                 "-p",
                 "streamlib-python-wheel",
+                "--features",
+                "streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests",
                 "--lib",
                 "--bins",
                 "--tests",
@@ -398,9 +400,24 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "codec_roundtrip_rig",
             ],
         ),
-        // A shell, for the environment: a test build of the control plane refuses
-        // to run without its machine root, and the other crates' tests each make
-        // their own.
+        (
+            "engine and media built-ins doctests",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "--doc",
+                "-p",
+                "streamlib-engine",
+                "-p",
+                "streamlib-media-builtins",
+                "--features",
+                "streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests",
+            ],
+        ),
+        // A shell, for the environment: the control plane's and `tatolabd`'s
+        // tests run under one machine root, the contract's and the CLI's
+        // without, and both runs share one build.
         (
             "tests under a test machine root (nextest profile `ci-machine-directories-under-a-test-root`)",
             "sh",
@@ -410,16 +427,16 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                  -p tatolabd -p tatolab-cli \
                  --features streamlib-runtime-client-contract/machine-directories-under-a-test-root \
                  --features streamlib-api-server/machine-directories-under-a-test-root \
-                 --features tatolabd/machine-directories-under-a-test-root \
+                 --features tatolabd/machine-directories-under-a-test-root,tatolabd/hardware-tests \
                  --features tatolab-cli/machine-directories-under-a-test-root' \
                  && cargo nextest run --locked \
                  --profile ci-machine-directories-under-a-test-root $selection \
-                 -E 'not package(streamlib-api-server)' \
+                 -E 'package(streamlib-runtime-client-contract) | package(tatolab-cli)' \
                  && test_machine_root=\"$(mktemp -d /tmp/tl-XXXXXX)\" \
                  && trap 'rm -rf \"$test_machine_root\"' EXIT \
                  && TATOLAB_TEST_MACHINE_ROOT=\"$test_machine_root\" cargo nextest run --locked \
                  --profile ci-machine-directories-under-a-test-root $selection \
-                 -E 'package(streamlib-api-server)'",
+                 -E 'package(streamlib-api-server) | package(tatolabd)'",
             ],
         ),
         // The dependency closure's licences, against `deny.toml`'s allowlist.

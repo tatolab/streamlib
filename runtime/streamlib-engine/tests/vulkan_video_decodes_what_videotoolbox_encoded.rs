@@ -15,9 +15,12 @@
 use std::sync::OnceLock;
 
 use streamlib::sdk::context::{GpuContext, VideoCodecElementaryStream};
+use streamlib::sdk::engine::HostGpuDeviceExt as _;
 
 #[path = "support/codec_round_trip_scoring.rs"]
 mod codec_round_trip_scoring;
+#[path = "support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
 
 use codec_round_trip_scoring::decode_the_checked_in_videotoolbox_clip_inside_the_bands;
 
@@ -26,12 +29,26 @@ fn gpu_context() -> &'static GpuContext {
     GPU_CONTEXT.get_or_init(|| GpuContext::init_for_platform().expect("a Vulkan device"))
 }
 
+/// Whether the device decodes Vulkan Video, naming its absence when it does not.
+fn skip_unless_the_device_decodes_vulkan_video() -> bool {
+    rig_only_capability_skip::skip_unless_this_machine_has(
+        rig_only_capability_skip::RigOnlyCapability::VulkanVideo,
+        gpu_context()
+            .device()
+            .vulkan_device()
+            .supports_video_decode(),
+    )
+}
+
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — needs Vulkan Video decode queues; see docs/testing-hardware.md"
 )]
 fn vulkan_video_decodes_the_h264_clip_videotoolbox_encoded() {
+    if skip_unless_the_device_decodes_vulkan_video() {
+        return;
+    }
     decode_the_checked_in_videotoolbox_clip_inside_the_bands(
         gpu_context(),
         VideoCodecElementaryStream::H264,
@@ -44,6 +61,9 @@ fn vulkan_video_decodes_the_h264_clip_videotoolbox_encoded() {
     ignore = "hardware integration — needs Vulkan Video decode queues; see docs/testing-hardware.md"
 )]
 fn vulkan_video_decodes_the_h265_clip_videotoolbox_encoded() {
+    if skip_unless_the_device_decodes_vulkan_video() {
+        return;
+    }
     decode_the_checked_in_videotoolbox_clip_inside_the_bands(
         gpu_context(),
         VideoCodecElementaryStream::H265,

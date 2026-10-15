@@ -23,11 +23,14 @@
 use streamlib_engine::linux_alsa_audio_device_backend::AlsaAudioDeviceBackend;
 
 mod audio_arm_timestamp_contract;
+#[path = "support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
 use audio_arm_timestamp_contract::{
     assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one,
     assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off,
     assert_the_timestamp_contract_holds_on,
 };
+use rig_only_capability_skip::{RigOnlyCapability, skip_because_this_machine_lacks};
 
 /// The arm, or `None` when this machine has no `libasound` and no capture
 /// hardware at all.
@@ -57,6 +60,15 @@ fn alsa_arm() -> Option<AlsaAudioDeviceBackend> {
             None
         }
     }
+}
+
+/// [`alsa_arm`], printing the skip line naming an audio device when it is `None`.
+fn alsa_arm_or_skip() -> Option<AlsaAudioDeviceBackend> {
+    let alsa_arm = alsa_arm();
+    if alsa_arm.is_none() {
+        skip_because_this_machine_lacks(RigOnlyCapability::AudioDevice);
+    }
+    alsa_arm
 }
 
 /// What a caller gets when it names no device — restated here because the tier
@@ -115,7 +127,7 @@ fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend)
     ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn the_default_device_stamps_its_blocks_with_the_devices_own_timing() {
-    let Some(backend) = alsa_arm() else {
+    let Some(backend) = alsa_arm_or_skip() else {
         return;
     };
     assert_the_timestamp_contract_holds_on(&backend, None);
@@ -131,10 +143,11 @@ fn the_default_device_stamps_its_blocks_with_the_devices_own_timing() {
     ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_raw_hardware_device_stamps_its_blocks_with_the_drivers_own_timing() {
-    let Some(backend) = alsa_arm() else {
+    let Some(backend) = alsa_arm_or_skip() else {
         return;
     };
     let Some(raw_capture_device) = a_raw_capture_device_this_machine_will_open(&backend) else {
+        skip_because_this_machine_lacks(RigOnlyCapability::AudioDevice);
         return;
     };
     assert_the_timestamp_contract_holds_on(&backend, Some(raw_capture_device));
@@ -149,7 +162,7 @@ fn a_raw_hardware_device_stamps_its_blocks_with_the_drivers_own_timing() {
     ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
-    let Some(backend) = alsa_arm() else {
+    let Some(backend) = alsa_arm_or_skip() else {
         return;
     };
     assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off(&backend, None);
@@ -163,7 +176,7 @@ fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
     ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one() {
-    let Some(backend) = alsa_arm() else {
+    let Some(backend) = alsa_arm_or_skip() else {
         return;
     };
     assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one(&backend, None);

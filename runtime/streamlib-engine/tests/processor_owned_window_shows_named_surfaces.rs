@@ -15,6 +15,9 @@
 
 #![cfg(target_os = "linux")]
 
+#[path = "support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
+
 mod processor_owned_window_named_surface_contract;
 
 use streamlib_engine::core::context::GpuContext;
@@ -30,6 +33,9 @@ use processor_owned_window_named_surface_contract::{
 )]
 #[test]
 fn a_named_surface_reaches_the_window_and_an_unresolvable_id_leaves_the_last_frame_up() {
+    if rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server() {
+        return;
+    }
     let gpu_context = GpuContext::init_for_platform().expect("a GPU is required for this tier");
     let registered_window =
         ProcessorOwnedWindowAwaitingItsPresentTarget::register_on_the_process_wide_window_event_pump(

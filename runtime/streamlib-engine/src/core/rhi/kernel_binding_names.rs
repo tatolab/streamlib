@@ -12,11 +12,118 @@
 //! differs between them is which newtypes they name. The refusals every
 //! pipeline kind owes its callers live here too, compute included.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use rspirv_reflect::{DescriptorType as RDescriptorType, ReflectError, Reflection};
 
 use crate::core::{Error, Result};
+
+/// The SPIR-V magic number, as a module's first word (SPIR-V 1.6 §2.3).
+const SPIRV_MAGIC_NUMBER: u32 = 0x0723_0203;
+/// A SPIR-V module opens with five header words, then a stream of
+/// instructions whose first word packs word count and opcode (SPIR-V 1.6 §2.3).
+pub(super) const SPIRV_HEADER_WORD_COUNT: usize = 5;
+pub(super) const OP_SOURCE_CONTINUED: u32 = 2;
+/// `OpSourceContinued`'s opcode word and at least one word of its literal.
+const OP_SOURCE_CONTINUED_MINIMUM_WORD_COUNT: usize = 2;
+pub(super) const OP_SOURCE: u32 = 3;
+pub(super) const OP_STRING: u32 = 7;
+/// `OpSource`'s opcode word, source language, version and file id; its
+/// optional source text follows them.
+pub(super) const OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT: usize = 4;
+/// `OpString`'s opcode word, result id and an empty literal.
+const OP_STRING_WORD_COUNT_WITH_AN_EMPTY_LITERAL: usize = 3;
+
+/// Reflect a SPIR-V module with its debug source strings — the embedded
+/// shader source and the source file names — left out.
+///
+/// Ubuntu 24.04's `glslc` (shaderc 2023.8, SPIRV-Tools 2023.6) packs a literal
+/// string's bytes sign-extended, so a non-ASCII byte fills the rest of its word
+/// with `0xFF`. `-g` puts the shader's source in `OpSource` and its file name in
+/// `OpString`, and `rspirv` refuses a module with a literal that is not UTF-8.
+/// Reflection reads neither.
+pub(crate) fn reflect_spirv_without_its_debug_source_strings(
+    spirv: &[u8],
+) -> std::result::Result<Reflection, ReflectError> {
+    Reflection::new_from_spirv(&spirv_without_its_debug_source_strings(spirv))
+}
+
+/// `spirv` with every `OpSourceContinued` dropped, every `OpSource` cut before
+/// its source text and every `OpString` literal emptied, its result id kept; a
+/// module that is not well-formed SPIR-V is handed back unchanged, for
+/// reflection to refuse.
+fn spirv_without_its_debug_source_strings(spirv: &[u8]) -> Cow<'_, [u8]> {
+    if !spirv.len().is_multiple_of(4) || spirv.len() < SPIRV_HEADER_WORD_COUNT * 4 {
+        return Cow::Borrowed(spirv);
+    }
+    let word_at = |word_index: usize| {
+        let at = word_index * 4;
+        [spirv[at], spirv[at + 1], spirv[at + 2], spirv[at + 3]]
+    };
+    // rspirv reads little-endian modules only; any other is handed on for it to refuse.
+    if u32::from_le_bytes(word_at(0)) != SPIRV_MAGIC_NUMBER {
+        return Cow::Borrowed(spirv);
+    }
+    let module_word_count = spirv.len() / 4;
+    let instruction_header_word =
+        |word_count: usize, opcode: u32| u32::to_le_bytes(((word_count as u32) << 16) | opcode);
+
+    let mut module_without_debug_source_strings: Option<Vec<u8>> = None;
+    let mut instruction_start_word_index = SPIRV_HEADER_WORD_COUNT;
+    while instruction_start_word_index < module_word_count {
+        let instruction_header = u32::from_le_bytes(word_at(instruction_start_word_index));
+        let word_count = (instruction_header >> 16) as usize;
+        let opcode = instruction_header & 0xffff;
+        let instruction_end_word_index = instruction_start_word_index + word_count;
+        if word_count == 0 || instruction_end_word_index > module_word_count {
+            return Cow::Borrowed(spirv);
+        }
+        let instruction_bytes =
+            &spirv[instruction_start_word_index * 4..instruction_end_word_index * 4];
+        let replacement_bytes: Option<Vec<u8>> = match opcode {
+            OP_SOURCE_CONTINUED if word_count < OP_SOURCE_CONTINUED_MINIMUM_WORD_COUNT => {
+                return Cow::Borrowed(spirv);
+            }
+            OP_SOURCE_CONTINUED => Some(Vec::new()),
+            OP_SOURCE if word_count > OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT => {
+                let mut cut = instruction_header_word(
+                    OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT,
+                    OP_SOURCE,
+                )
+                .to_vec();
+                cut.extend_from_slice(
+                    &instruction_bytes[4..OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT * 4],
+                );
+                Some(cut)
+            }
+            OP_STRING if word_count >= OP_STRING_WORD_COUNT_WITH_AN_EMPTY_LITERAL => {
+                let mut emptied =
+                    instruction_header_word(OP_STRING_WORD_COUNT_WITH_AN_EMPTY_LITERAL, OP_STRING)
+                        .to_vec();
+                emptied.extend_from_slice(&instruction_bytes[4..8]);
+                emptied.extend_from_slice(&[0; 4]);
+                Some(emptied)
+            }
+            _ => None,
+        };
+        match (
+            replacement_bytes,
+            module_without_debug_source_strings.as_mut(),
+        ) {
+            (Some(replacement_bytes), Some(rewritten)) => rewritten.extend(replacement_bytes),
+            (Some(replacement_bytes), None) => {
+                let mut rewritten = spirv[..instruction_start_word_index * 4].to_vec();
+                rewritten.extend(replacement_bytes);
+                module_without_debug_source_strings = Some(rewritten);
+            }
+            (None, Some(rewritten)) => rewritten.extend_from_slice(instruction_bytes),
+            (None, None) => {}
+        }
+        instruction_start_word_index = instruction_end_word_index;
+    }
+    module_without_debug_source_strings.map_or(Cow::Borrowed(spirv), Cow::Owned)
+}
 
 /// Render a shader's declared binding names for an error message.
 pub fn quote_declared_shader_binding_names(names: &[&str]) -> String {
@@ -345,11 +452,12 @@ where
     for module in stage_modules {
         let stage = module.stage;
         let stage_flag = stage_flag_of(stage);
-        let reflection = Reflection::new_from_spirv(module.spirv).map_err(|e| {
-            Error::GpuError(format!(
-                "{kernel_kind_label}: failed to reflect SPIR-V for {stage:?} stage: {e:?}"
-            ))
-        })?;
+        let reflection =
+            reflect_spirv_without_its_debug_source_strings(module.spirv).map_err(|e| {
+                Error::GpuError(format!(
+                    "{kernel_kind_label}: failed to reflect SPIR-V for {stage:?} stage: {e:?}"
+                ))
+            })?;
         let sets = reflection.get_descriptor_sets().map_err(|e| {
             Error::GpuError(format!(
                 "{kernel_kind_label}: failed to extract descriptor sets for {stage:?} stage: {e:?}"
