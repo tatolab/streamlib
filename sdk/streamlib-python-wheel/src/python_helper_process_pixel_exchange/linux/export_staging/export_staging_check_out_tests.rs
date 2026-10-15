@@ -483,6 +483,10 @@ fn a_tensor_storage_buffers_cuda_import_refuses_on_a_software_device_naming_it()
             refusal.contains(&host_device.name()) && refusal.contains("software Vulkan device"),
             "the refusal names the software device: {refusal}"
         );
+        assert!(
+            refusal.starts_with("surface "),
+            "the refusal is the message itself, never a stringified Python error: {refusal}"
+        );
     } else if let Err(cuda_answer) = cuda_import {
         assert!(
             !cuda_answer.contains("software Vulkan device"),

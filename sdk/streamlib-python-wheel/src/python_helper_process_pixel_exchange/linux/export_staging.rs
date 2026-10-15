@@ -153,6 +153,19 @@ impl HelperExportStagingResidency {
     }
 }
 
+/// Why `surface_id` cannot be handed out as a device tensor on the software
+/// device `software_device_name`, and the door that reads it instead.
+pub(super) fn device_tensor_refused_on_a_software_device(
+    surface_id: &str,
+    software_device_name: &str,
+) -> String {
+    format!(
+        "surface {surface_id:?} cannot be handed out as a device tensor: this runtime runs on \
+         {software_device_name}, a software Vulkan device, and no GPU package can import its \
+         memory — read the pixels on the CPU with `cpu()` or `as_numpy()` instead"
+    )
+}
+
 /// Bound on the wait for a refill the parent said it signalled. The copy
 /// is VRAM→VRAM; reaching this bound means the parent's queue is wedged,
 /// not that the copy is slow.
@@ -172,7 +185,11 @@ impl HelperProcessGpuExchangeClient {
         python: Python<'_>,
         surface_id: &str,
     ) -> PyResult<Arc<HelperDeviceExport>> {
-        python.detach(|| self.refuse_a_device_tensor_on_a_software_device(surface_id))?;
+        if let Some(software_device_name) = python.detach(|| self.software_import_device_name())? {
+            return Err(crate::python_processor_context::gpu_operation_error(
+                device_tensor_refused_on_a_software_device(surface_id, &software_device_name),
+            ));
+        }
         // Memoised per pool slot: the parent's staging (and this CUDA
         // import of it) spans every frame the slot publishes, while each
         // refill names — and the parent validates — the specific frame id.
@@ -204,28 +221,17 @@ impl HelperProcessGpuExchangeClient {
         ))
     }
 
-    /// Refuse a device tensor when this child's import device — the device
-    /// the runtime named at spawn — is a software device: no GPU package
-    /// imports its memory. Both device-tensor doors ask before they touch
-    /// CUDA, and the device export asks before anything escalates, so no
-    /// staging opens for a tensor nothing could read.
-    pub(super) fn refuse_a_device_tensor_on_a_software_device(
-        &self,
-        surface_id: &str,
-    ) -> PyResult<()> {
+    /// The name of this child's import device — the device the runtime
+    /// named at spawn — when it is a software device, the one device a
+    /// device tensor is refused on: no GPU package imports its memory. Both
+    /// device-tensor doors ask before they touch CUDA, and the device export
+    /// asks before anything escalates, so no staging opens for a tensor
+    /// nothing could read.
+    pub(super) fn software_import_device_name(&self) -> PyResult<Option<String>> {
         let import_device = self.consumer_vulkan_device()?;
-        if import_device.device_is_software() {
-            return Err(crate::python_processor_context::gpu_operation_error(
-                format!(
-                    "surface {surface_id:?} cannot be handed out as a device tensor: this \
-                     runtime runs on {}, a software Vulkan device, and no GPU package can \
-                     import its memory — read the pixels on the CPU with `cpu()` or \
-                     `as_numpy()` instead",
-                    import_device.name()
-                ),
-            ));
-        }
-        Ok(())
+        Ok(import_device
+            .device_is_software()
+            .then(|| import_device.name().to_string()))
     }
 
     /// Open this surface's CPU-readback export, checking the parent's

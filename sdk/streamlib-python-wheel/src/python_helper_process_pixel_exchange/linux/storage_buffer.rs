@@ -18,6 +18,7 @@ use super::super::storage_buffer::tensor_layout_of_a_check_out;
 use super::super::{
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
 };
+use super::export_staging::device_tensor_refused_on_a_software_device;
 use super::parse_device_uuid;
 use crate::python_cuda_pixel_exchange::{CudaImportedSurface, import_opaque_fd_into_cuda};
 
@@ -53,9 +54,16 @@ impl HelperCheckedOutStorageBuffer {
         if let Some(imported) = self.cuda_import.get() {
             return Ok(Arc::clone(imported));
         }
-        self.exchange_client
-            .refuse_a_device_tensor_on_a_software_device(&self.surface_id)
-            .map_err(|refusal| refusal.to_string())?;
+        let software_device_name = self
+            .exchange_client
+            .software_import_device_name()
+            .map_err(|import_device_failure| import_device_failure.to_string())?;
+        if let Some(software_device_name) = software_device_name {
+            return Err(device_tensor_refused_on_a_software_device(
+                &self.surface_id,
+                &software_device_name,
+            ));
+        }
         let mut opaque_memory_fd = self.opaque_memory_fd_until_cuda_imports_it.lock();
         if let Some(imported) = self.cuda_import.get() {
             return Ok(Arc::clone(imported));
