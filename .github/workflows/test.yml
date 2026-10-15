@@ -174,8 +174,8 @@ jobs:
           # thing that drives the two `match_device` production call sites —
           # `SpeakerSink::setup()` settling its port, and the spawn seam refusing
           # a port setup left unsettled — but it stands up a real graph, and
-          # `App::new()` needs a GpuContext no CI runner has. Building it here is
-          # what stops it rotting between rig runs; the rig is where it passes.
+          # `App::new()` needs a GpuContext this job has no driver for. It runs
+          # in python-wheel.yml's bundled-software-device job.
           cargo test --locked -p streamlib-media-builtins \
             --test speaker_sink_matches_its_device --no-run
           # Compiled but not run, for the same reason: the camera→H264Encoder
@@ -905,7 +905,8 @@ jobs:
           # re-loads, the state directory and its own log. Built with the test
           # feature, so each run's lock, runtime and state directories sit under
           # its own short root. GPU-free; its started-stream and signal-ladder
-          # tests sit behind `hardware-tests` and run on the rig.
+          # tests sit behind `hardware-tests` and run in python-wheel.yml's
+          # bundled-software-device job.
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
           # The CLI: `new`'s rendered files, and every verb against a stub local
           # API served at the machine's fixed socket. Built as users run it, the
