@@ -48,6 +48,10 @@ yourself.
   revert. A gate never seen red is a blocker.
 - **Naming** (`.claude/rules/naming.md`): zero-context test; a bare `Writer` / `Handle`
   / `State` / `ctx` is a finding.
+- **Comments** (`.claude/rules/comments.md`): a comment outside the rule's three purposes —
+  developer experience, the code as it is now, what the code cannot show — is a finding to fix
+  before the PR opens, and so is one clearer code would replace. An issue or PR reference, a
+  date, a decision record or change narration in a comment is always a finding.
 - **Doc conventions and license headers.** New `.rs` files carry the BUSL header — never in
   a vendored third-party tree (`vendor/tatolab-vulkanalia{,-sys,-vma}`), where adding one
   is the licence violation. Those paths and nothing else — any other tree still carries it.
