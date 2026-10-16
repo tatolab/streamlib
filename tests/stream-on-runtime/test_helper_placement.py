@@ -22,7 +22,10 @@ from pathlib import Path
 import pytest
 
 from conftest import TatolabdUnderTest
-from helper_placement_processors import MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE
+from helper_placement_processors import (
+    MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE,
+    RAW_MESSAGE_PAYLOAD_BYTES,
+)
 from helper_placement_streams import (
     dies_abruptly_beside_a_survivor_pair,
     first_labelled_source_into_sink,
@@ -31,6 +34,7 @@ from helper_placement_streams import (
     one_probe_sleeping_through_its_own_setup,
     one_probe_sleeping_through_its_own_shutdown,
     only_labelled_source_into_sink,
+    raw_message_payload_source_into_sink,
     reaped_labelled_source_into_sink,
     stale_build_labelled_source,
     two_labelled_sources_each_into_its_own_sink,
@@ -158,6 +162,54 @@ def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(
     )
     assert sink_pid != upstream_pid, (
         f"both processors shared one process ({sink_pid}) — one processor, one helper"
+    )
+
+
+def test_a_payload_one_helper_writes_reaches_a_reader_in_another_helper_unchanged(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A message's payload is bytes end to end: what a Python node writes is
+    what a Python node in another helper reads, byte for byte, with nothing
+    encoding or decoding it on the way. The payload is not msgpack, so any
+    hidden decode would refuse it rather than pass it through."""
+    tatolabd = start_tatolabd_running_stream(raw_message_payload_source_into_sink)
+    dict_write_outcome = tatolabd.await_marker("DICT_WRITE_OUTCOME")
+    payload_read = tatolabd.await_marker("RAW_MESSAGE_PAYLOAD_READ")
+    source_pid, sink_pid = dict_write_outcome["source_pid"], payload_read["sink_pid"]
+    assert_runs_in_a_process_of_its_own_beneath(source_pid, tatolabd.pid)
+    assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert source_pid != sink_pid, (
+        f"the writer and the reader shared one process ({sink_pid}) — one processor, one helper"
+    )
+    assert payload_read["payload_type"] == "bytes", (
+        f"an untyped read hands back bytes; got {payload_read['payload_type']}"
+    )
+    assert bytes.fromhex(payload_read["payload_hex"]) == RAW_MESSAGE_PAYLOAD_BYTES, (
+        f"the reader saw {payload_read['payload_hex']}, not the "
+        f"{RAW_MESSAGE_PAYLOAD_BYTES.hex()} the writer wrote"
+    )
+
+
+def test_a_python_write_refuses_a_dict_naming_bytes(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`write` takes bytes and nothing else, so a dict is refused at the write,
+    in the writer's own helper, by a `TypeError` that says what it wanted and
+    what it got."""
+    tatolabd = start_tatolabd_running_stream(raw_message_payload_source_into_sink)
+    dict_write_outcome = tatolabd.await_marker("DICT_WRITE_OUTCOME")
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert dict_write_outcome["refusal_type"] == "TypeError", (
+        f"writing a dict must raise TypeError; it raised {dict_write_outcome['refusal_type']}"
+    )
+    refusal_text = dict_write_outcome["refusal_text"]
+    assert "bytes" in refusal_text and "dict" in refusal_text, (
+        f"the refusal must name bytes and the dict it got: {refusal_text!r}"
     )
 
 
