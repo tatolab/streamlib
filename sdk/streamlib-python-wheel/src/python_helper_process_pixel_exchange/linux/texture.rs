@@ -473,19 +473,27 @@ impl HelperProcessGpuExchangeClient {
 
         let vulkan_device = self.consumer_vulkan_device()?;
         let dup_raw_fds = duplicate_plane_fds_for_import(&plane_fds)?;
-        let imported = match (metadata.handle_is_opaque_fd, dup_raw_fds.as_slice()) {
-            (true, &[opaque_memory_fd]) => ConsumerVulkanTexture::from_opaque_fd(
-                &vulkan_device,
-                opaque_memory_fd,
-                metadata.width,
-                metadata.height,
-                metadata.format,
-                metadata.vk_image_creation_recipe.vk_image_usage_flags,
-                metadata.allocation_byte_size,
-            ),
+        // The export contract is present exactly on an OPAQUE_FD
+        // registration — the metadata parse refuses one without it.
+        let imported = match (
+            metadata.opaque_fd_export_contract.as_ref(),
+            dup_raw_fds.as_slice(),
+        ) {
+            (Some(opaque_fd_export_contract), &[opaque_memory_fd]) => {
+                ConsumerVulkanTexture::from_opaque_fd(
+                    &vulkan_device,
+                    opaque_memory_fd,
+                    metadata.width,
+                    metadata.height,
+                    metadata.format,
+                    metadata.vk_image_creation_recipe.vk_image_usage_flags,
+                    metadata.allocation_byte_size,
+                    opaque_fd_export_contract.vk_memory_type_index,
+                )
+            }
             // Unreachable past the arity refusal above; destructured rather
             // than indexed so a broken invariant refuses instead of panicking.
-            (true, _) => {
+            (Some(_), _) => {
                 close_single_plane_dup_vulkan_refused(&dup_raw_fds);
                 return Err(PyRuntimeError::new_err(format!(
                     "opaque_fd texture {surface_id:?} duplicated {} fds where its whole \
@@ -493,7 +501,7 @@ impl HelperProcessGpuExchangeClient {
                     dup_raw_fds.len()
                 )));
             }
-            (false, _) => ConsumerVulkanTexture::import_render_target_dma_buf(
+            (None, _) => ConsumerVulkanTexture::import_render_target_dma_buf(
                 &vulkan_device,
                 &dup_raw_fds,
                 &metadata.plane_offsets,

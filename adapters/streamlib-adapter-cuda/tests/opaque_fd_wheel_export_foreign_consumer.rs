@@ -533,7 +533,9 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     assert_eq!(metadata_u64_field("vk_image_mip_levels"), 1);
     assert_eq!(metadata_u64_field("vk_image_array_layers"), 1);
     assert_eq!(metadata_u64_field("vk_image_samples"), 1);
-    assert!(metadata_u64_field("vk_memory_type_index") < 32); // VK_MAX_MEMORY_TYPES
+    let vk_memory_type_index = u32::try_from(metadata_u64_field("vk_memory_type_index"))
+        .expect("vk_memory_type_index is a memory type index");
+    assert!(vk_memory_type_index < 32); // VK_MAX_MEMORY_TYPES
     let exporting_device_uuid_hex = metadata
         .get("exporting_device_uuid_hex")
         .and_then(|value| value.as_str())
@@ -582,6 +584,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         ConsumerTextureFormat::Rgba8Unorm,
         vk_image_usage,
         allocation_byte_size,
+        vk_memory_type_index,
     ) {
         Ok(texture) => {
             let _adopted_by_vulkan = exported_texture_fd.into_raw_fd();

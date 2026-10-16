@@ -107,6 +107,7 @@ const A_DMA_BUF_DEVICE_WITH_A_RENDER_TARGET_MODIFIER: TextureExportCapabilitiesO
         exports_dma_buf: true,
         has_a_render_target_modifier_for_the_format: true,
         has_the_opaque_fd_image_pool: true,
+        exports_the_request_as_an_opaque_fd_image: true,
     };
 
 #[cfg(target_os = "linux")]
@@ -115,6 +116,7 @@ const A_DMA_BUF_DEVICE_WITHOUT_A_RENDER_TARGET_MODIFIER: TextureExportCapabiliti
         exports_dma_buf: true,
         has_a_render_target_modifier_for_the_format: false,
         has_the_opaque_fd_image_pool: true,
+        exports_the_request_as_an_opaque_fd_image: true,
     };
 
 /// The software device builds no DMA-BUF pool and takes no EGL modifier
@@ -125,6 +127,7 @@ const THE_SOFTWARE_DEVICE: TextureExportCapabilitiesOfTheDevice =
         exports_dma_buf: false,
         has_a_render_target_modifier_for_the_format: false,
         has_the_opaque_fd_image_pool: true,
+        exports_the_request_as_an_opaque_fd_image: true,
     };
 
 /// Implying both copy bits must not move any request off the flavour it
@@ -218,6 +221,49 @@ fn a_device_without_the_opaque_fd_pool_falls_back_to_not_importable() {
                 device_without_the_pool,
             ),
             TextureCrossProcessImportability::NotImportable,
+        );
+    }
+}
+
+/// OPAQUE_FD is offered only where the device reports the request
+/// exportable that way; a device that does not leaves the request not
+/// importable, which the acquisition refuses by name where DMA-BUF is absent.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_request_the_device_cannot_export_as_opaque_fd_is_not_importable() {
+    let render_target_usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
+    let cuda_usage = TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING;
+    for (device_that_cannot_export_the_request, usage) in [
+        (
+            TextureExportCapabilitiesOfTheDevice {
+                exports_the_request_as_an_opaque_fd_image: false,
+                ..THE_SOFTWARE_DEVICE
+            },
+            render_target_usage,
+        ),
+        (
+            TextureExportCapabilitiesOfTheDevice {
+                exports_the_request_as_an_opaque_fd_image: false,
+                ..THE_SOFTWARE_DEVICE
+            },
+            cuda_usage,
+        ),
+        (
+            TextureExportCapabilitiesOfTheDevice {
+                exports_the_request_as_an_opaque_fd_image: false,
+                ..A_DMA_BUF_DEVICE_WITHOUT_A_RENDER_TARGET_MODIFIER
+            },
+            cuda_usage,
+        ),
+    ] {
+        assert_eq!(
+            derive_texture_cross_process_importability(
+                TextureFormat::Rgba8Unorm,
+                usage,
+                device_that_cannot_export_the_request,
+            ),
+            TextureCrossProcessImportability::NotImportable,
+            "{usage:?} on {device_that_cannot_export_the_request:?}",
         );
     }
 }

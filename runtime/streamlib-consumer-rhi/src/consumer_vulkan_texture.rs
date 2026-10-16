@@ -16,6 +16,7 @@ use std::sync::{Arc, OnceLock};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
+use crate::consumer_vulkan_device::refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index;
 use crate::{
     ConsumerRhiError, ConsumerVulkanDevice, Result, TextureFormat, TextureUsages, VulkanTextureLike,
 };
@@ -261,9 +262,15 @@ impl ConsumerVulkanTexture {
     /// `HostVulkanTexture::vma_allocation_size()` to avoid bind
     /// failures across the boundary.
     ///
+    /// `stated_memory_type_index` is the registration's
+    /// `vk_memory_type_index` — the type the exporter allocated from, which
+    /// OPAQUE_FD gives an importer no way to derive. One the rebuilt image
+    /// cannot bind is refused by name.
+    ///
     /// fd ownership: the consumer transfers ownership to Vulkan on
     /// success (the driver dups internally and releases on
     /// `vkFreeMemory`). On error the caller still owns `fd`.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fd: std::os::unix::io::RawFd,
@@ -272,6 +279,7 @@ impl ConsumerVulkanTexture {
         format: TextureFormat,
         vk_image_usage: u32,
         allocation_size: vk::DeviceSize,
+        stated_memory_type_index: u32,
     ) -> Result<Self> {
         if format.plane_count() != 1 {
             return Err(ConsumerRhiError::Gpu(format!(
@@ -325,17 +333,19 @@ impl ConsumerVulkanTexture {
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
         let alloc_size = allocation_size.max(mem_requirements.size);
 
-        let memory = vulkan_device
-            .import_opaque_fd_memory(
+        let memory = refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index(
+            "ConsumerVulkanTexture::from_opaque_fd",
+            mem_requirements.memory_type_bits,
+            stated_memory_type_index,
+        )
+        .and_then(|()| {
+            vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
                 fd,
                 alloc_size,
-                mem_requirements.memory_type_bits,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                stated_memory_type_index,
             )
-            .map_err(|e| {
-                unsafe { device.destroy_image(image, None) };
-                e
-            })?;
+        })
+        .inspect_err(|_| unsafe { device.destroy_image(image, None) })?;
 
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
             vulkan_device.free_imported_memory(memory);
