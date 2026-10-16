@@ -1,8 +1,13 @@
 # Working agreements
 
-Owner rulings on how sessions work, and practical lessons from the repo, the rig and CI, that no
-other file records. `CLAUDE.md`, `.claude/rules/` and `docs/plan/` outrank this file. If an entry
-contradicts one of them, or the tree shows it is stale, fix or delete the entry in the same PR.
+Owner rulings on how sessions work, and practical lessons from the repo, the rig and CI, that help
+agents across many issues and no other file records. `CLAUDE.md`, `.claude/rules/` and `docs/plan/`
+outrank this file. If an entry contradicts one of them, or the tree shows it is stale, fix or delete
+the entry in the same PR.
+
+Where a fact goes: a bug is a bug issue; a ruling or fact that only matters to one issue is a
+comment on that issue; a fact that helps agents across issues goes here or in the doc that owns its
+topic; `CLAUDE.md` holds only what every session must load.
 
 ## Deciding and asking
 
@@ -83,8 +88,6 @@ contradicts one of them, or the tree shows it is stale, fix or delete the entry 
 - **Read the comments.** Owner rulings land in issue comments after filing, so every tracker sweep
   reads `gh issue view <n> --comments`. A ticket too large for one session hands off through a
   pushed branch and a structured comment, never a handoff file.
-- **Parked improvement banks stay open.** Milestone #15's bank, #373 (CLAP on Linux) and #1204 are known
-  GPU and audio improvements. Close a parked ticket only when a plan entry supersedes it (owner, 2026-10-04).
 
 ## Testing, CI and verification
 
