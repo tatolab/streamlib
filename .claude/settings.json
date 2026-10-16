@@ -19,10 +19,7 @@
     "ask": [
       "Edit(LICENSE)",
       "Edit(LICENSES/**)",
-      "Edit(docs/license/**)",
-      "Write(LICENSE)",
-      "Write(LICENSES/**)",
-      "Write(docs/license/**)"
+      "Edit(docs/license/**)"
     ]
   },
   "hooks": {
