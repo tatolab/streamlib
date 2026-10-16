@@ -40,7 +40,7 @@ changed live.
   > internet through a relay the machine has joined, which offers every public port there;
   > Funnel carries TCP only. The levels are unchanged.
   > Amended 2026-10-16 by `moq-relays.md`: the levels map onto relays — internal at none,
-  > private at the machine's local relay only, public at every joined relay. The cross-stream
+  > private at the machine's local relay's loopback listener only, public at every joined relay. The cross-stream
   > link over iceoryx2 that private admitted is deleted; a stream reads another's private port
   > through the relay source node. No HTTP leaves loopback.
 
