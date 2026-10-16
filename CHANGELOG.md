@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.13](https://github.com/tatolab/streamlib/compare/v0.46.12...v0.46.13) (2026-10-16)
+
+
+### Features
+
+* **wheel:** export_opaque_fd exports an OPAQUE_FD pixel buffer, so a software-device pooled frame has a raw-handle export ([#2794](https://github.com/tatolab/streamlib/issues/2794)) ([b67a90b](https://github.com/tatolab/streamlib/commit/b67a90b3cd13ac1b6683632ac191c9d15e6f43b4))
+
 ## [0.46.12](https://github.com/tatolab/streamlib/compare/v0.46.11...v0.46.12) (2026-10-16)
 
 
