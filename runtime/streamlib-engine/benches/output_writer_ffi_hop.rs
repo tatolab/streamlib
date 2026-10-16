@@ -12,11 +12,7 @@
 //! - `vtable_dispatch` — `OutputWriter::write_bytes_with_timestamp` on the public handle,
 //!   which derefs the opaque handle to the same
 //!   `OutputWriterInner::write_bytes_with_timestamp`. The delta vs `baseline_direct_inner`
-//!   is the handle-indirection cost. (The `output_writer_write_raw/`
-//!   group prefix and the `vtable_dispatch` / `payload_sweep_vtable`
-//!   criterion ids name a method and an arm that no longer exist and are
-//!   kept as-is: criterion ids are historical comparison keys, and
-//!   renaming them orphans every recorded baseline.)
+//!   is the handle-indirection cost.
 //! - `payload_sweep_vtable` — vtable-dispatch arm at 64 B / 256 B /
 //!   1 KiB / 8 KiB / 64 KiB payloads. Tells the reader whether the
 //!   hop's per-call cost is dominated by the fixed overhead (call
@@ -188,38 +184,44 @@ fn bench_baseline_direct_inner(c: &mut Criterion) {
     // VideoFrame / control message — close to the steady-state
     // payload size on the drone-racing control loop.
     let payload = vec![0u8; 256];
-    c.bench_function("output_writer_write_raw/baseline_direct_inner_256B", |b| {
-        b.iter(|| {
-            fx.inner
-                .write_bytes_with_timestamp(
-                    black_box("out"),
-                    black_box(&payload),
-                    black_box(0),
-                    true,
-                )
-                .unwrap();
-            drain_in_line(&fx);
-        });
-    });
+    c.bench_function(
+        "output_writer_write_bytes_with_timestamp/baseline_direct_inner_256B",
+        |b| {
+            b.iter(|| {
+                fx.inner
+                    .write_bytes_with_timestamp(
+                        black_box("out"),
+                        black_box(&payload),
+                        black_box(0),
+                        true,
+                    )
+                    .unwrap();
+                drain_in_line(&fx);
+            });
+        },
+    );
 }
 
 fn bench_vtable_dispatch(c: &mut Criterion) {
     let fx = build_inner_with_connection("vtable");
     let writer = OutputWriter::from_inner_arc(fx.inner.clone());
     let payload = vec![0u8; 256];
-    c.bench_function("output_writer_write_raw/vtable_dispatch_256B", |b| {
-        b.iter(|| {
-            writer
-                .write_bytes_with_timestamp(
-                    black_box("out"),
-                    black_box(&payload),
-                    black_box(0),
-                    true,
-                )
-                .unwrap();
-            drain_in_line(&fx);
-        });
-    });
+    c.bench_function(
+        "output_writer_write_bytes_with_timestamp/vtable_dispatch_256B",
+        |b| {
+            b.iter(|| {
+                writer
+                    .write_bytes_with_timestamp(
+                        black_box("out"),
+                        black_box(&payload),
+                        black_box(0),
+                        true,
+                    )
+                    .unwrap();
+                drain_in_line(&fx);
+            });
+        },
+    );
 }
 
 /// Vary payload size to characterize how the handle-indirection cost scales
@@ -229,7 +231,8 @@ fn bench_vtable_dispatch(c: &mut Criterion) {
 fn bench_payload_size_sweep(c: &mut Criterion) {
     let fx = build_inner_with_connection("sweep");
     let writer = OutputWriter::from_inner_arc(fx.inner.clone());
-    let mut group = c.benchmark_group("output_writer_write_raw/payload_sweep_vtable");
+    let mut group =
+        c.benchmark_group("output_writer_write_bytes_with_timestamp/payload_sweep_vtable");
     for size in [64usize, 256, 1024, 8 * 1024, 64 * 1024] {
         let payload = vec![0u8; size];
         group.bench_with_input(
@@ -311,7 +314,7 @@ fn drain_fanout_in_line(fx: &FanoutFixture) {
 /// per-connection copy loop would show cost climbing linearly with N.
 fn bench_write_bytes_with_timestamp_fanout(c: &mut Criterion) {
     let payload = vec![0u8; 256];
-    let mut group = c.benchmark_group("output_writer_write_raw/fanout_1_to_n");
+    let mut group = c.benchmark_group("output_writer_write_bytes_with_timestamp/fanout_1_to_n");
     for subscriber_count in [1usize, 2, 4, 8] {
         let fx = build_inner_with_fanout("fanout", subscriber_count);
         let writer = OutputWriter::from_inner_arc(fx.inner.clone());
@@ -384,7 +387,8 @@ fn build_round_trip(tag: &str) -> RoundTripFixture {
 /// control message, 64 KiB a camera-class frame — the size where the read
 /// side's per-frame copy cost dominates.
 fn bench_channel_round_trip(c: &mut Criterion) {
-    let mut group = c.benchmark_group("output_writer_write_raw/channel_round_trip");
+    let mut group =
+        c.benchmark_group("output_writer_write_bytes_with_timestamp/channel_round_trip");
     for size in [256usize, 64 * 1024] {
         let fx = build_round_trip(&format!("round_trip/{size}"));
         let payload = vec![0u8; size];
