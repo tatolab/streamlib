@@ -4,6 +4,7 @@
 use streamlib::sdk::context::SurfaceStore;
 use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanDevice};
 use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
+use streamlib_consumer_rhi::ConsumerVulkanDevice;
 
 use super::*;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
@@ -106,17 +107,76 @@ fn an_opaque_fd_pixel_buffer_imports_at_its_stated_memory_type_index_and_reads_t
         .expect_err("an OPAQUE_FD pixel buffer has no DMA-BUF fd to export")
         .to_string();
     assert!(
-        dma_buf_refusal.contains("OPAQUE_FD") && dma_buf_refusal.contains(&surface_id),
-        "the refusal must name the flavour and the surface: {dma_buf_refusal:?}"
+        dma_buf_refusal.contains("OPAQUE_FD")
+            && dma_buf_refusal.contains(&surface_id)
+            && dma_buf_refusal.contains("`export_opaque_fd`"),
+        "the refusal must name the flavour, the surface and the door that answers: \
+         {dma_buf_refusal:?}"
     );
+
     let checked_out = HelperCheckedOutSurface::PixelBuffer(pixel_surface);
-    let opaque_fd_refusal = checked_out
+    let export = checked_out
         .export_opaque_fd()
-        .err()
-        .expect("export_opaque_fd hands out texture memory only")
-        .to_string();
+        .unwrap_or_else(|refusal| panic!("an OPAQUE_FD pixel buffer exports: {refusal}"));
+    assert_eq!(export.width, PIXEL_BUFFER_WIDTH);
+    assert_eq!(export.height, PIXEL_BUFFER_HEIGHT);
+    assert_eq!(export.format_wire_name, PixelFormat::Bgra32.wire_name());
     assert!(
-        opaque_fd_refusal.contains("OPAQUE_FD pixel buffer"),
-        "the refusal must say what this surface is: {opaque_fd_refusal:?}"
+        export.vk_image_creation_recipe.is_none(),
+        "a pixel buffer carries no image recipe"
+    );
+    assert!(export.dedicated_allocation);
+    assert!(
+        export.allocation_byte_size >= PIXEL_BUFFER_BYTE_SIZE,
+        "the whole allocation can pad past the frame's bytes but never under them"
+    );
+    assert_eq!(
+        export.export_contract.exporting_device_uuid,
+        host_device.physical_device_uuid()
+    );
+
+    // A foreign consumer with nothing but the export: its own device, the
+    // fd, the allocation size and the stated memory type index.
+    let foreign_device = Arc::new(
+        ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+            export.export_contract.exporting_device_uuid,
+        )
+        .expect("a foreign device on the exporting GPU"),
+    );
+    let foreign_import = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+        &foreign_device,
+        export.exported_memory_fd,
+        export.allocation_byte_size,
+        export.export_contract.vk_memory_type_index,
+    )
+    .expect("the exported fd imports at its stated memory type index");
+    assert_eq!(
+        foreign_import.imported_allocation_byte_size(),
+        export.allocation_byte_size,
+        "an OPAQUE_FD import states the exporter's allocation size; the export must name it"
+    );
+    // SAFETY: the foreign import maps at least PIXEL_BUFFER_BYTE_SIZE bytes.
+    let foreign_seen = unsafe {
+        std::slice::from_raw_parts(foreign_import.mapped_ptr(), PIXEL_BUFFER_BYTE_SIZE as usize)
+    };
+    assert!(
+        foreign_seen
+            .iter()
+            .all(|byte| *byte == ENGINE_WRITTEN_STAMP),
+        "the exported fd must name the engine's own allocation"
+    );
+}
+
+/// A DMA-BUF pixel buffer's `export_opaque_fd` refusal points at the door
+/// its flavour has. Needs no device: the refusal is decided by flavour.
+#[test]
+fn a_dma_buf_pixel_buffer_refuses_export_opaque_fd_pointing_at_export_dma_buf() {
+    Python::initialize();
+    let refusal = a_dma_buf_pixel_buffer_exports_no_opaque_fd_error("surface#1").to_string();
+    assert!(
+        refusal.contains("DMA-BUF pixel buffer")
+            && refusal.contains("surface#1")
+            && refusal.contains("`export_dma_buf`"),
+        "the refusal must name the flavour, the surface and the door that answers: {refusal:?}"
     );
 }

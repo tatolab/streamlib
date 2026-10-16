@@ -961,6 +961,85 @@ class OpaqueFdExportHandoffProbe:
         return observation
 
 
+@node(execution="manual")
+class OpaqueFdPixelBufferExportHandoffProbe:
+    """Hands a pooled pixel buffer's OPAQUE_FD export to a foreign process.
+
+    On a device without DMA-BUF export a pooled frame is an OPAQUE_FD
+    allocation, and `export_opaque_fd` hands its memory out with no image
+    recipe; the receiver — the Rust rig test driving this stream — imports
+    the fd at the stated memory type index on its own device and compares
+    the bytes this probe wrote. On a DMA-BUF device the export refuses, and
+    the refusal travels instead. The socket path arrives in
+    STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        import socket
+        import struct
+
+        socket_path = os.environ.get("STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET")
+        if socket_path is None:
+            return {"failure": "STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET is not set"}
+        observation = {}
+        with ctx.gpu_limited_access.acquire_pixel_buffer(
+            SURFACE_WIDTH, SURFACE_HEIGHT
+        ) as pixel_buffer:
+            pixel_buffer.lock(read_only=False)
+            pixels = pixel_buffer.as_numpy()
+            # Every pixel differs, so a foreign read at the wrong offset
+            # cannot match; the Rust receiver recomputes the same formula.
+            rows, columns, channels = numpy.indices(pixels.shape)
+            pixels[:] = (rows * 7 + columns * 3 + channels * 61 + 1) % 256
+            bytes_per_row = pixels.strides[0]
+            del pixels
+            pixel_buffer.unlock()
+
+            handed_fds: list[int] = []
+            try:
+                export = ctx.gpu_full_access.export_opaque_fd(pixel_buffer)
+            except RuntimeError as refusal:
+                metadata = {"export_refusal": str(refusal)}
+            else:
+                handed_fds.append(export.fd)
+                metadata = {
+                    "allocation_byte_size": export.allocation_byte_size,
+                    "width": export.width,
+                    "height": export.height,
+                    "format": export.format,
+                    "bytes_per_row": bytes_per_row,
+                    "vk_image_tiling": export.vk_image_tiling,
+                    "vk_image_usage_flags": export.vk_image_usage_flags,
+                    "vk_image_mip_levels": export.vk_image_mip_levels,
+                    "vk_image_array_layers": export.vk_image_array_layers,
+                    "vk_image_samples": export.vk_image_samples,
+                    "dedicated_allocation": export.dedicated_allocation,
+                    "vk_memory_type_index": export.vk_memory_type_index,
+                    "exporting_device_uuid_hex": export.exporting_device_uuid.hex(),
+                }
+            metadata_wire = json.dumps(metadata).encode()
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as handoff:
+                handoff.settimeout(60.0)
+                handoff.connect(socket_path)
+                socket.send_fds(
+                    handoff,
+                    [struct.pack("!I", len(metadata_wire)) + metadata_wire],
+                    handed_fds,
+                )
+                # Holding the pixel buffer until the verdict keeps its pool
+                # slot from being rehanded under the foreign read.
+                observation["foreign_verdict"] = handoff.recv(64).decode()
+            # The kernel dup'd the fd on the SCM_RIGHTS crossing; this side's
+            # copy is still the caller's to close.
+            observation["fd_closes_cleanly"] = all(
+                os.close(handed_fd) is None for handed_fd in handed_fds
+            )
+        return observation
+
+
 
 # ---------------------------------------------------------------------------
 # Every door, both floors: the host request, `copy=True`, the row pitch, and

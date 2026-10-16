@@ -26,6 +26,7 @@ struct ConsumerImportedPlane {
     memory: vk::DeviceMemory,
     mapped_ptr: *mut u8,
     size: vk::DeviceSize,
+    imported_allocation_size: vk::DeviceSize,
 }
 
 /// Consumer-side imported `VkBuffer`. See module docs.
@@ -40,6 +41,8 @@ pub struct ConsumerVulkanBuffer {
     extra_imported_planes: Vec<ConsumerImportedPlane>,
     /// Size of plane 0 in bytes.
     size: vk::DeviceSize,
+    /// The `allocationSize` plane 0's import stated to `vkAllocateMemory`.
+    imported_allocation_size: vk::DeviceSize,
     /// The IOSurface whose pages plane 0's memory is, kept alive past the
     /// memory importing it.
     #[cfg(target_os = "macos")]
@@ -153,6 +156,7 @@ impl ConsumerVulkanBuffer {
             mapped_ptr: plane.mapped_ptr,
             extra_imported_planes: Vec::new(),
             size: plane.size,
+            imported_allocation_size: plane.imported_allocation_size,
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
         })
@@ -228,6 +232,7 @@ impl ConsumerVulkanBuffer {
             mapped_ptr: plane0.mapped_ptr,
             extra_imported_planes: imported,
             size: plane0.size,
+            imported_allocation_size: plane0.imported_allocation_size,
             #[cfg(target_os = "macos")]
             backing_iosurface: None,
         })
@@ -324,6 +329,7 @@ impl ConsumerVulkanBuffer {
             mapped_ptr: plane.mapped_ptr,
             extra_imported_planes: Vec::new(),
             size: plane.size,
+            imported_allocation_size: plane.imported_allocation_size,
             backing_iosurface: Some(objc2_core_foundation::CFRetained::from(iosurface)),
         })
     }
@@ -422,6 +428,13 @@ impl ConsumerVulkanBuffer {
     /// Plane 0 size in bytes.
     pub fn size(&self) -> vk::DeviceSize {
         self.size
+    }
+
+    /// Byte size of plane 0's whole imported `VkDeviceMemory` — the
+    /// `allocationSize` its import stated, which an OPAQUE_FD import must
+    /// match to the exporter's and can exceed [`Self::size`].
+    pub fn imported_allocation_byte_size(&self) -> vk::DeviceSize {
+        self.imported_allocation_size
     }
 
     /// Underlying `VkBuffer` for plane 0.
@@ -572,6 +585,7 @@ fn create_bind_and_map_imported_plane(
         memory,
         mapped_ptr,
         size: effective_size,
+        imported_allocation_size: alloc_size,
     })
 }
 
