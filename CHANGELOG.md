@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.14](https://github.com/tatolab/streamlib/compare/v0.46.13...v0.46.14) (2026-10-16)
+
+
+### Bug Fixes
+
+* **engine:** a DisplayWindow on the software device refuses by name at setup instead of aborting tatolabd ([#2796](https://github.com/tatolab/streamlib/issues/2796)) ([9f54c37](https://github.com/tatolab/streamlib/commit/9f54c370541164c2365e2d116ae13a159bad1b21))
+
 ## [0.46.13](https://github.com/tatolab/streamlib/compare/v0.46.12...v0.46.13) (2026-10-16)
 
 
