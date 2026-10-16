@@ -115,7 +115,9 @@ before implementation. Sessions implement the plan; they never make architecture
   a defect, and gets no ticket. It converts or deletes only through §Consumers' rules, never in
   passing.
 
-Captured knowledge lives in `docs/learnings/`; design rationale in `docs/decisions/`. However, these may go stale and should be verified, not viewed as facts. It serves as a cache. Everything else is re-derived
+Owner rulings on how sessions work, and repo, rig and CI lessons no other file holds, live in
+`docs/working-agreements.md` — read it before your first ticket, PR or rig run. `docs/index.md`
+maps every docs home. Captured knowledge lives in `docs/learnings/`; design rationale in `docs/decisions/`. However, these may go stale and should be verified, not viewed as facts. It serves as a cache. Everything else is re-derived
 from code at need — do not create summary docs of what code already shows.
 
 ## Reading the Python surface
