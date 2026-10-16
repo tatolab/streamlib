@@ -36,7 +36,9 @@ Tailscale reach is incidental: a local relay is on the machine, so the tailnet r
 - **A payload is bytes.** `write(port, bytes)` and `read(port) -> bytes`; `read(port,
   into=T)` is `T.from_bytes`. msgpack is a helper the stream package ships, applied in the
   node's own code; a built-in writes bytes in the encoding its catalog fragment names. The
-  audio-window contract stays the one place the engine reads a payload.
+  audio-window stage and the loopback snapshot door — reading a `VideoFrame` record on a port whose
+  fragment names that cast — are the two places the engine reads a payload, each a declared
+  encoding, neither in the forwarding path.
 - **The encoders write the stack's media frame.** `H264Encoder`, `H265Encoder` and
   `OpusEncoder` emit the frame layout the moq-dev players read — a varint timestamp then the
   bare access unit or packet — and state codec, extent and audio parameters in their catalog
