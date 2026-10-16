@@ -20,6 +20,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       # generate_openapi links the api-server, which pulls in streamlib-engine;
       # its build.rs compiles GLSL with glslc and links Vulkan, its dependency

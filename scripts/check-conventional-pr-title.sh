@@ -15,6 +15,6 @@ if printf '%s' "$title" | grep -qE '^(feat|fix|perf|refactor|docs|chore|test|ci|
   exit 0
 fi
 echo "not a conventional-commit title: $title" >&2
-echo "feat -> minor, fix -> patch, ! or a 'BREAKING CHANGE:' footer -> breaking (pre-1.0: minor);" >&2
-echo "refactor, chore, docs, test, ci, perf, build and revert land no version bump." >&2
+echo "pre-1.0: feat, fix and perf -> patch; ! or a 'BREAKING CHANGE:' footer -> minor;" >&2
+echo "refactor, chore, docs, test, ci, build and revert land no version bump." >&2
 exit 1
