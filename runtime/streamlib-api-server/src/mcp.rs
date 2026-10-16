@@ -110,10 +110,10 @@ const MAX_LOGS_RECORD_COUNT: u32 = 4096;
 /// Per-bag ceiling on the bytes a `tap` result hex-encodes, when the caller
 /// names none.
 ///
-/// Generous rather than frugal, because a trimmed bag is not a smaller answer —
-/// it is no answer: a bag is a msgpack map, so a decoder needs all of it or
-/// none, and every consumer here refuses a truncated one rather than reading
-/// half a value.
+/// Generous rather than frugal, because a trimmed message is not a smaller
+/// answer — it is no answer: a message's payload is decoded whole or not at all
+/// (every built-in's is one msgpack map), and every consumer here refuses a
+/// truncated one rather than reading half a value.
 const DEFAULT_MAX_TAP_BAG_BYTES: usize = 1024 * 1024;
 
 /// Total bag bytes one `tap` result encodes, and therefore also the largest
@@ -2491,9 +2491,9 @@ pub(crate) mod tests {
         first_text_block_json(&tool_call_result(runtime, "tap", arguments).await)
     }
 
-    /// A bag is a msgpack map, so a decoder needs all of it or none — which
-    /// makes the default cap load-bearing for every data model that rides its
-    /// payload inline, audio first among them.
+    /// A message's payload is decoded whole or not at all (every built-in's is
+    /// one msgpack map) — which makes the default cap load-bearing for every
+    /// data model that rides its payload inline, audio first among them.
     ///
     /// Mental revert: set the default cap under 8 366 and this reddens.
     #[tokio::test]

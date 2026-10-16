@@ -1128,10 +1128,10 @@ impl InputMailboxesInner {
         &self,
         port: &str,
     ) -> Result<Option<(MessageReadFromInputPort, InboundLinkName)>> {
-        let Some(mut bag) = self.next_bag_for_the_reader(port)? else {
+        let Some(mut message_body_for_the_reader) = self.next_bag_for_the_reader(port)? else {
             return Ok(None);
         };
-        let Some(inbound_link_name) = bag.inbound_link_name.take() else {
+        let Some(inbound_link_name) = message_body_for_the_reader.inbound_link_name.take() else {
             return Err(Error::Link(format!(
                 "a bag on input port '{port}' arrived with no inbound link behind it, so \
                  there is no link to name and the bag is consumed. Read such a port with \
@@ -1139,7 +1139,7 @@ impl InputMailboxesInner {
             )));
         };
         Ok(Some((
-            bag.into_message_read_from_input_port(),
+            message_body_for_the_reader.into_message_read_from_input_port(),
             inbound_link_name,
         )))
     }
@@ -3666,8 +3666,8 @@ mod tests {
     /// numbers rather than slicing past the frame.
     ///
     /// Fail-without-fix: drop the bound and the read slices
-    /// `[76..76 + 4096]` out of an 84-byte frame — "range end index 4172 out of
-    /// range for slice of length 84".
+    /// `[80..80 + 4096]` out of an 88-byte frame — "range end index 4176 out of
+    /// range for slice of length 88".
     #[test]
     fn a_read_rejects_a_frame_stamping_more_payload_than_it_carries() {
         const STAMPED: u32 = 4096;
