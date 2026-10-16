@@ -41,8 +41,6 @@ RUNTIME_LEND_MODULE_FILE_NAME = "_runtime_lend.py"
 ARGUMENTS_FOR_EACH_RUNTIME_BACKED_FUNCTION: "dict[str, tuple[Any, ...]]" = {
     "monotonic_now_ns": (),
     "start_monotonic_timer": (1_000_000,),
-    "encode_bag_to_msgpack_bytes": ({"width": 4},),
-    "decode_msgpack_bytes_to_python_object": (b"\x80",),
     "gpu_limited_access_of_the_typed_read_in_progress": (),
 }
 

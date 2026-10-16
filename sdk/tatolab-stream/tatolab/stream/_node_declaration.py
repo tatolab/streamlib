@@ -237,7 +237,7 @@ def _audio_window_declaration(
     if delivery_profile == "newest":
         raise ValueError(
             f"input port {port_name!r} declares an audio_window, so it must declare "
-            f"delivery_profile='ordered', not 'newest' — 'newest' skips to the latest bag "
+            f"delivery_profile='ordered', not 'newest' — 'newest' skips to the latest message "
             f"by design, and an accumulator that needs contiguous samples would flush on "
             f"nearly every read"
         )
@@ -339,10 +339,10 @@ class NodeDeclarationDecorator:
         The port is named after the method unless `name` overrides it. The port
         carries no type — the method's return annotation is the declaration, read
         by humans and type checkers only. `delivery_profile` is required and names
-        a read policy: `"newest"` drains to the most recent bag, `"ordered"`
+        a read policy: `"newest"` drains to the most recent message, `"ordered"`
         receives them in publication order. Neither promises delivery — both drop
         under sustained pressure, and no link ever blocks a producer. The
-        decorated method is a declaration only: bags are read with
+        decorated method is a declaration only: messages are read with
         `ctx.inputs.read(port_name)`.
 
         `audio_window` is optional and opt-in: an audio input may declare an
@@ -394,8 +394,8 @@ class NodeDeclarationDecorator:
         """Mark a method as declaring an output port.
 
         Same shape as [`node.input`], minus the delivery profile — delivery is the
-        consuming port's policy. Bags are written with
-        `ctx.outputs.write(port_name, bag)`.
+        consuming port's policy. Messages are written with
+        `ctx.outputs.write(port_name, payload_bytes)`.
         """
 
         def attach_output_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:

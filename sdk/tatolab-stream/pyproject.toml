@@ -15,7 +15,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 # What this package's own modules import, never the runtime. numpy is imported
 # lazily, only where a caller hands it an array.
-dependencies = []
+dependencies = ["msgpack>=1.0"]
 license = "BUSL-1.1"
 # A symlink to the repository's LICENSE, so the one file travels without a copy.
 license-files = ["LICENSE"]

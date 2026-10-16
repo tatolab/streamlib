@@ -1,11 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab.stream.EncodedAudioPacket` — the encoded bag's cast, built from a bag in hand.
+"""`tatolab.stream.EncodedAudioPacket` — the encoded-packet message's cast, read from a payload in hand.
 
 What the cast refuses and how it reads its fields, decided before any wire is
-involved. That the payload survives a real link as `bytes` is tested against
-the runtime.
+involved.
 """
 
 from typing import Any
@@ -13,24 +12,15 @@ from typing import Any
 import pytest
 
 from tatolab.stream import EncodedAudioPacket
-from tatolab.stream.encoded_audio_packet import _REQUIRED_BAG_KEYS
+from tatolab.stream.msgpack import pack, unpack
 
-
-# A stand-in Opus packet: a TOC byte and a few bytes of frame. Short on
-# purpose — nothing here decodes it, and what is under test is that the bytes
-# arrive as bytes.
+# A stand-in Opus packet: a TOC byte and a few bytes of frame.
 OPUS_PACKET = b"\x78\x01\x02\x03"
 
-
-# The encoder's lookahead at 48 kHz — `Fs/400 + Fs/250` — which is what a
-# decoder trims at entry and what a container writes as PreSkip.
+# The encoder's lookahead at 48 kHz — `Fs/400 + Fs/250`.
 LOOKAHEAD_SAMPLES_AT_48_KHZ = 312
 
-
-# Every integer the convention carries. A `bool` in any of them would arrive
-# as 0 or 1 and read as a plausible value, which is what makes the whole set
-# worth naming rather than the ordering pair alone.
-INTEGER_BAG_KEYS = (
+INTEGER_MESSAGE_KEYS = (
     "group_index",
     "sequence_index",
     "sample_rate",
@@ -39,10 +29,12 @@ INTEGER_BAG_KEYS = (
     "pre_skip",
 )
 
+REQUIRED_MESSAGE_KEYS = ("codec", "bitstream", "is_sync_point", *INTEGER_MESSAGE_KEYS)
 
-def encoded_packet_bag(**overrides: Any) -> "dict[str, Any]":
+
+def encoded_packet_entries(**overrides: Any) -> "dict[str, Any]":
     """One 20 ms stereo Opus packet at the convention's own framing."""
-    bag: "dict[str, Any]" = {
+    entries: "dict[str, Any]" = {
         "codec": "opus",
         "bitstream": OPUS_PACKET,
         "is_sync_point": True,
@@ -53,56 +45,60 @@ def encoded_packet_bag(**overrides: Any) -> "dict[str, Any]":
         "sample_count": 960,
         "pre_skip": LOOKAHEAD_SAMPLES_AT_48_KHZ,
     }
-    bag.update(overrides)
-    return bag
+    entries.update(overrides)
+    return entries
+
+
+def encoded_packet_payload(**overrides: Any) -> bytes:
+    return pack(encoded_packet_entries(**overrides))
+
+
+def test_from_bytes_reads_the_opus_packet_as_bytes():
+    packet = EncodedAudioPacket.from_bytes(encoded_packet_payload())
+
+    assert packet.opus_packet_bytes == OPUS_PACKET
+    assert (packet.sample_rate, packet.channels, packet.pre_skip) == (48_000, 2, 312)
+
+
+def test_to_bytes_writes_the_bitstream_under_the_wire_key_and_round_trips():
+    packet = EncodedAudioPacket.from_bytes(encoded_packet_payload())
+
+    assert unpack(packet.to_bytes()) == encoded_packet_entries()
+    assert EncodedAudioPacket.from_bytes(packet.to_bytes()) == packet
 
 
 def test_a_bitstream_that_is_not_bytes_is_refused_by_name():
-    """The mistake this catches is the one that otherwise decodes silently: a
-    producer whose Opus packet went out as a list of numbers rather than a
-    buffer."""
     with pytest.raises(ValueError, match="'bitstream' must be bytes"):
-        EncodedAudioPacket.from_bag(encoded_packet_bag(bitstream=[0x78, 0x01]))
+        EncodedAudioPacket.from_bytes(encoded_packet_payload(bitstream=[0x78, 0x01]))
 
 
 def test_a_codec_naming_another_elementary_stream_is_refused_by_name():
     with pytest.raises(ValueError, match="codec 'vorbis' names no elementary stream"):
-        EncodedAudioPacket.from_bag(encoded_packet_bag(codec="vorbis"))
+        EncodedAudioPacket.from_bytes(encoded_packet_payload(codec="vorbis"))
 
 
 def test_a_sync_point_flag_that_is_not_a_bool_is_refused_by_name():
-    """Every Opus packet is a sync point, so this flag is a constant of the
-    convention — but a truthy `1` standing in for it is still a producer bug,
-    and the door stays shut on the codec whose packets are not all sync
-    points."""
     with pytest.raises(ValueError, match="'is_sync_point' must be bool"):
-        EncodedAudioPacket.from_bag(encoded_packet_bag(is_sync_point=1))
+        EncodedAudioPacket.from_bytes(encoded_packet_payload(is_sync_point=1))
 
 
-@pytest.mark.parametrize("key", INTEGER_BAG_KEYS)
+@pytest.mark.parametrize("key", INTEGER_MESSAGE_KEYS)
 def test_a_bool_is_refused_for_every_integer_field(key: str):
-    """`bool` is an `int` subclass, so a `channels` of `True` would otherwise
-    arrive as 1 and read as a plausible mono stream."""
     with pytest.raises(ValueError, match=f"{key!r} must be int"):
-        EncodedAudioPacket.from_bag(encoded_packet_bag(**{key: True}))
+        EncodedAudioPacket.from_bytes(encoded_packet_payload(**{key: True}))
 
 
-@pytest.mark.parametrize("key", _REQUIRED_BAG_KEYS)
+@pytest.mark.parametrize("key", REQUIRED_MESSAGE_KEYS)
 def test_a_missing_key_is_named(key: str):
-    """No key of this convention is absent-means-unspecified — unlike the
-    video cast's `color` — so all nine are named when they go missing."""
-    bag = encoded_packet_bag()
-    del bag[key]
+    entries = encoded_packet_entries()
+    del entries[key]
 
-    with pytest.raises(ValueError, match=f"missing key {key!r}"):
-        EncodedAudioPacket.from_bag(bag)
+    with pytest.raises(TypeError, match=key):
+        EncodedAudioPacket.from_bytes(pack(entries))
 
 
 def test_an_encoded_audio_packet_takes_no_surface_and_holds_no_claim():
-    """An Opus packet touches no surface machinery at all — the cast composes
-    nothing that would demand a surface id or take a claim, which is why a
-    packet is constructible from a bag this test wrote by hand."""
-    packet = EncodedAudioPacket.from_bag(encoded_packet_bag())
+    packet = EncodedAudioPacket.from_bytes(encoded_packet_payload())
 
     assert not hasattr(packet, "surface_id")
     assert not hasattr(packet, "writable")
@@ -110,21 +106,7 @@ def test_an_encoded_audio_packet_takes_no_surface_and_holds_no_claim():
 
 
 def test_the_packet_payload_stays_off_the_repr():
-    """A failed assertion on an encoded packet prints its ordering, not its
-    compressed audio."""
-    rendered = repr(EncodedAudioPacket.from_bag(encoded_packet_bag()))
+    rendered = repr(EncodedAudioPacket.from_bytes(encoded_packet_payload()))
 
     assert "sequence_index=0" in rendered
     assert "opus_packet_bytes" not in rendered
-
-
-def test_the_cast_offers_no_way_back_onto_the_wire():
-    """Producing an encoded bag is spelling the keys against the wire
-    contract and writing it with `ctx.outputs.write(port, bag,
-    timestamp_ns=...)`. A to-bag helper would be a second spelling of the
-    contract, and `dataclasses.asdict` would emit `opus_packet_bytes` rather
-    than the wire's `bitstream`."""
-    packet = EncodedAudioPacket.from_bag(encoded_packet_bag())
-
-    assert not hasattr(packet, "to_bag")
-    assert not hasattr(packet, "as_bag")

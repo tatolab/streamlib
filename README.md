@@ -218,6 +218,7 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
+    msgpack,
     node,
 )
 
@@ -248,10 +249,10 @@ class InvertingEffect:
         frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
         if frame is None:
             return
-        ctx.outputs.write(
-            "video_to_downstream",
-            self.inverting_pixel_effect.apply_to_frame(ctx.gpu_limited_access, frame),
+        inverted_frame_record = self.inverting_pixel_effect.apply_to_frame(
+            ctx.gpu_limited_access, frame
         )
+        ctx.outputs.write("video_to_downstream", msgpack.pack(inverted_frame_record))
 ```
 
 Logic runs on the CPU. `nodes/brightness_meter.py` reads each frame back through an explicit
