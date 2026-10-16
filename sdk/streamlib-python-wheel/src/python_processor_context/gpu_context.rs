@@ -23,7 +23,7 @@ use crate::python_processor_owned_window::PythonProcessorOwnedWindow;
 use super::fd_shaped_raw_handle_is_linux_only_error;
 use super::format_vocabulary::{parse_pixel_format_name, parse_texture_format_name};
 use super::gpu_surface_check_out_lease::{
-    PythonGpuSurfaceCheckOutLease, PythonIOSurfaceMachPortExport, PythonOpaqueFdTextureExport,
+    PythonGpuSurfaceCheckOutLease, PythonIOSurfaceMachPortExport, PythonOpaqueFdAllocationExport,
 };
 use super::gpu_surface_handle::PythonGpuSurfaceHandle;
 #[cfg(not(target_os = "macos"))]
@@ -999,13 +999,13 @@ impl PythonGpuContextFullAccess {
         Err(fd_shaped_raw_handle_is_linux_only_error("export_dma_buf"))
     }
 
-    /// Export the OPAQUE_FD texture handle for `surface`, for native code
-    /// that runs its own Vulkan or CUDA external-memory import against
-    /// the allocation.
+    /// Export the OPAQUE_FD memory handle for `surface` — a texture or a
+    /// pixel buffer — for native code that runs its own Vulkan or CUDA
+    /// external-memory import against the allocation.
     ///
-    /// Returns a [`PythonOpaqueFdTextureExport`]. **The caller owns the
+    /// Returns a [`PythonOpaqueFdAllocationExport`]. **The caller owns the
     /// fd** — a successful foreign import adopts it; close it after a
-    /// failed one. Consume it as an image: a linear mapping over
+    /// failed one. Consume a texture's as an image: a linear mapping over
     /// OPTIMAL-tiled memory yields block-linear bytes, never pixels.
     ///
     /// Answered without leaving this process: the fd arrived here over
@@ -1019,7 +1019,7 @@ impl PythonGpuContextFullAccess {
         &self,
         python: Python<'_>,
         surface: &PythonGpuSurfaceHandle,
-    ) -> PyResult<PythonOpaqueFdTextureExport> {
+    ) -> PyResult<PythonOpaqueFdAllocationExport> {
         let owned_memory = surface.owned_memory()?;
         Ok(python.detach(|| owned_memory.export_opaque_fd())?.into())
     }
@@ -1037,7 +1037,7 @@ impl PythonGpuContextFullAccess {
     fn export_opaque_fd(
         &self,
         surface: &PythonGpuSurfaceHandle,
-    ) -> PyResult<PythonOpaqueFdTextureExport> {
+    ) -> PyResult<PythonOpaqueFdAllocationExport> {
         Err(fd_shaped_raw_handle_is_linux_only_error("export_opaque_fd"))
     }
 

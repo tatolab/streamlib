@@ -437,7 +437,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   outside the engine's enforceable envelope. `export_opaque_fd` returns a typed
   export object carrying the allocation-stable shape — whole-allocation byte size,
   extent, format, the image-creation recipe (tiling, usage, mip/layer/sample
-  counts), dedicated-allocation status, the exporter's memory type index, and the
+  counts; `None` for a pixel buffer, which exports too), dedicated-allocation
+  status, the exporter's memory type index, and the
   exporting device UUID — and no per-frame state (no image layout, no timeline
   edges); `export_dma_buf` keeps `(fd, byte_size)` and refuses the OPAQUE_FD
   flavour by name, pointing at `export_opaque_fd`. An fd flavour's export is taken from a

@@ -134,6 +134,11 @@ def opaque_fd_export_handoff_probe_alone(stream_builder: StreamBuilder) -> None:
 
 
 @stream
+def opaque_fd_pixel_buffer_export_handoff_probe_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(device_exchange_probes.OpaqueFdPixelBufferExportHandoffProbe)
+
+
+@stream
 def device_tensor_scope_doubles_a_kernel_output_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.DeviceTensorScopeDoublesAKernelOutputProbe)
 

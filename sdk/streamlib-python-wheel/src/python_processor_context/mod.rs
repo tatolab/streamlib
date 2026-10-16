@@ -35,7 +35,7 @@ pub(crate) use gpu_surface_check_out_lease::ExportedVkImageCreationRecipe;
 #[cfg(target_os = "linux")]
 pub(crate) use gpu_surface_check_out_lease::OpaqueFdExportContract;
 pub(crate) use gpu_surface_check_out_lease::{
-    PythonGpuSurfaceCheckOutLease, PythonIOSurfaceMachPortExport, PythonOpaqueFdTextureExport,
+    PythonGpuSurfaceCheckOutLease, PythonIOSurfaceMachPortExport, PythonOpaqueFdAllocationExport,
 };
 pub(crate) use gpu_surface_device_tensor_scope::PythonGpuSurfaceDeviceTensorScope;
 pub(crate) use gpu_surface_handle::PythonGpuSurfaceHandle;

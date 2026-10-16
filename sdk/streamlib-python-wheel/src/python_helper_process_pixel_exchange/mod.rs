@@ -72,7 +72,7 @@ use linux::HelperPixelBufferMemoryFlavour;
 pub(crate) use linux::{
     CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutStorageBuffer,
     HelperCheckedOutTextureSurface, HelperCpuReadbackExport, HelperDeviceExport,
-    HelperForeignSurfaceUnregisterDebt, OpaqueFdTextureExportDescription,
+    HelperForeignSurfaceUnregisterDebt, OpaqueFdAllocationExportDescription,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{

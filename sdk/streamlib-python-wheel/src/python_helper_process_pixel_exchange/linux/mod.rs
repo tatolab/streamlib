@@ -26,9 +26,9 @@ pub(crate) use export_staging::{
 };
 pub(crate) use foreign_dma_buf::HelperForeignSurfaceUnregisterDebt;
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
-pub(crate) use texture::{
-    HelperAcquiredTexture, HelperCheckedOutTextureSurface, OpaqueFdTextureExportDescription,
-};
+pub(crate) use texture::{HelperAcquiredTexture, HelperCheckedOutTextureSurface};
+
+use crate::python_processor_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
 
 /// A u64 the wire carries as a decimal string, because JSON has no 64-bit
 /// integer. Host-side counterpart: `EscalateResponseOk::staging_byte_size`.
@@ -107,6 +107,48 @@ fn memory_type_index_stated_by_an_opaque_fd_registration(
         })
 }
 
+/// The export contract an OPAQUE_FD registration states — the exporter's
+/// memory type index and device UUID — or the refusal naming
+/// `registered_subject` and the field it lacks.
+fn opaque_fd_export_contract_stated_by_a_registration(
+    registered_subject: std::fmt::Arguments<'_>,
+    registration: &serde_json::Value,
+) -> PyResult<OpaqueFdExportContract> {
+    let vk_memory_type_index =
+        memory_type_index_stated_by_an_opaque_fd_registration(registered_subject, registration)?;
+    let exporting_device_uuid = registration
+        .get("exporting_device_uuid")
+        .and_then(|value| value.as_str())
+        .map(parse_device_uuid)
+        .transpose()?
+        .ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "{registered_subject} was registered without its exporting device UUID; \
+                 importing onto the wrong GPU of a multi-GPU rig reads the wrong memory \
+                 instead of failing here"
+            ))
+        })?;
+    Ok(OpaqueFdExportContract {
+        vk_memory_type_index,
+        exporting_device_uuid,
+    })
+}
+
+/// What `export_opaque_fd` hands across: the freshly dup'd memory fd —
+/// caller-owned from this moment — plus the allocation-stable shape a
+/// foreign Vulkan or CUDA external-memory import must reproduce.
+pub(crate) struct OpaqueFdAllocationExportDescription {
+    pub(crate) exported_memory_fd: OwnedFd,
+    pub(crate) allocation_byte_size: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format_wire_name: &'static str,
+    /// Present when the allocation backs a texture.
+    pub(crate) vk_image_creation_recipe: Option<ExportedVkImageCreationRecipe>,
+    pub(crate) dedicated_allocation: bool,
+    pub(crate) export_contract: OpaqueFdExportContract,
+}
+
 /// A `u64` array field of a checkout's registration metadata; absent or
 /// malformed entries collapse to an empty array the caller length-checks.
 fn plane_u64_array_check_out_metadata_field(response: &serde_json::Value, field: &str) -> Vec<u64> {
@@ -162,9 +204,18 @@ fn duplicate_first_plane_fd_for_export(
              hand to native code"
         ))
     })?;
-    first_plane_fd.try_clone().map_err(|duplicate_failure| {
+    duplicate_memory_fd(first_plane_fd, format_args!("this {exported_subject}'s"))
+}
+
+/// Dup one memory fd, refusing by `duplicated_owner` (`this surface's`)
+/// when the kernel will not.
+fn duplicate_memory_fd(
+    memory_fd: &OwnedFd,
+    duplicated_owner: std::fmt::Arguments<'_>,
+) -> PyResult<OwnedFd> {
+    memory_fd.try_clone().map_err(|duplicate_failure| {
         PyRuntimeError::new_err(format!(
-            "could not duplicate this {exported_subject}'s memory fd: {duplicate_failure}"
+            "could not duplicate {duplicated_owner} memory fd: {duplicate_failure}"
         ))
     })
 }
@@ -177,19 +228,13 @@ pub(crate) enum HelperPixelBufferMemoryFlavour {
     /// answers locally instead of asking for something it already holds.
     DmaBuf { exportable_plane_fds: Vec<OwnedFd> },
     /// One OPAQUE_FD allocation — what a pooled frame is on a device without
-    /// DMA-BUF export. Its fd went to the Vulkan import, which owns it.
-    OpaqueFd,
-}
-
-/// The refusal both doors that would hand an OPAQUE_FD pixel buffer's
-/// memory to native code give it.
-fn an_opaque_fd_pixel_buffer_exports_no_memory_fd_error(surface_id: &str) -> PyErr {
-    PyRuntimeError::new_err(format!(
-        "surface {surface_id:?} is an OPAQUE_FD pixel buffer — what a pooled frame is on a \
-         device without DMA-BUF export — so it has no DMA-BUF fd to hand out, and \
-         `export_opaque_fd` hands out texture memory only; reach its pixels through the CPU \
-         door"
-    ))
+    /// DMA-BUF export. The Vulkan import took a dup; the delivered fd is kept
+    /// so `export_opaque_fd` answers from it, with the contract the
+    /// registration stated.
+    OpaqueFd {
+        exportable_memory_fd: OwnedFd,
+        export_contract: OpaqueFdExportContract,
+    },
 }
 
 impl HelperCheckedOutPixelSurface {
@@ -198,15 +243,19 @@ impl HelperCheckedOutPixelSurface {
     /// The fd is a `dup` of the one this process was handed at check-out,
     /// so the caller owns it and closing it does not disturb this
     /// surface's own mapping. Refused by name for an OPAQUE_FD pixel
-    /// buffer, so this name never mislabels an fd.
+    /// buffer, pointing at `export_opaque_fd`, so this name never
+    /// mislabels an fd.
     pub(crate) fn export_dma_buf(&self) -> PyResult<(RawFd, u64)> {
         let HelperPixelBufferMemoryFlavour::DmaBuf {
             exportable_plane_fds,
         } = &self.memory_flavour
         else {
-            return Err(an_opaque_fd_pixel_buffer_exports_no_memory_fd_error(
-                &self.surface_id,
-            ));
+            return Err(PyRuntimeError::new_err(format!(
+                "surface {:?} is an OPAQUE_FD pixel buffer — what a pooled frame is on a \
+                 device without DMA-BUF export — so it has no DMA-BUF fd to hand out; \
+                 `export_opaque_fd` hands its memory fd out under its own name",
+                self.surface_id
+            )));
         };
         let exported = duplicate_first_plane_fd_for_export(exportable_plane_fds, "surface")?;
         Ok((
@@ -215,19 +264,49 @@ impl HelperCheckedOutPixelSurface {
         ))
     }
 
-    /// The refusal `export_opaque_fd` gives a pixel buffer, pointing at the
-    /// door its flavour does have.
-    fn export_opaque_fd_refusal(&self) -> PyErr {
-        match self.memory_flavour {
-            HelperPixelBufferMemoryFlavour::DmaBuf { .. } => PyRuntimeError::new_err(
-                "this surface is a DMA-BUF pixel buffer, not a texture; its memory fd exports \
-                 through `export_dma_buf`",
-            ),
-            HelperPixelBufferMemoryFlavour::OpaqueFd => {
-                an_opaque_fd_pixel_buffer_exports_no_memory_fd_error(&self.surface_id)
-            }
-        }
+    /// The OPAQUE_FD memory fd plus the allocation-stable shape a foreign
+    /// import must reproduce; a pixel buffer has no image recipe.
+    ///
+    /// The mirror of the refusal above: a DMA-BUF pixel buffer is refused
+    /// by name, pointing at `export_dma_buf`.
+    pub(crate) fn export_opaque_fd(&self) -> PyResult<OpaqueFdAllocationExportDescription> {
+        let HelperPixelBufferMemoryFlavour::OpaqueFd {
+            exportable_memory_fd,
+            export_contract,
+        } = &self.memory_flavour
+        else {
+            return Err(a_dma_buf_pixel_buffer_exports_no_opaque_fd_error(
+                &self.surface_id,
+            ));
+        };
+        Ok(OpaqueFdAllocationExportDescription {
+            exported_memory_fd: duplicate_memory_fd(
+                exportable_memory_fd,
+                format_args!("surface {:?}'s", self.surface_id),
+            )?,
+            // What this process's own import stated: the size an OPAQUE_FD
+            // import must match, which the pool slot's driver requirement
+            // can pad past the frame's bytes.
+            allocation_byte_size: self.consumer_buffer.imported_allocation_byte_size(),
+            width: self.width,
+            height: self.height,
+            format_wire_name: self.format.wire_name(),
+            vk_image_creation_recipe: None,
+            // DEDICATED_MEMORY by construction for the flavour
+            // (`HostVulkanBuffer::new_opaque_fd_export`).
+            dedicated_allocation: true,
+            export_contract: *export_contract,
+        })
     }
+}
+
+/// The refusal `export_opaque_fd` gives a DMA-BUF pixel buffer, pointing at
+/// the door its flavour does have.
+fn a_dma_buf_pixel_buffer_exports_no_opaque_fd_error(surface_id: &str) -> PyErr {
+    PyRuntimeError::new_err(format!(
+        "surface {surface_id:?} is a DMA-BUF pixel buffer: `export_dma_buf` hands its memory \
+         fd out under that name. Only an OPAQUE_FD allocation exports under this one"
+    ))
 }
 
 impl HelperCheckedOutSurface {
@@ -253,11 +332,11 @@ impl HelperCheckedOutSurface {
         }
     }
 
-    /// The OPAQUE_FD texture handle plus its allocation-stable shape,
-    /// or the refusal naming the right door.
-    pub(crate) fn export_opaque_fd(&self) -> PyResult<OpaqueFdTextureExportDescription> {
+    /// The OPAQUE_FD memory fd plus its allocation-stable shape, or the
+    /// refusal naming the right door.
+    pub(crate) fn export_opaque_fd(&self) -> PyResult<OpaqueFdAllocationExportDescription> {
         match self {
-            Self::PixelBuffer(pixel_surface) => Err(pixel_surface.export_opaque_fd_refusal()),
+            Self::PixelBuffer(pixel_surface) => pixel_surface.export_opaque_fd(),
             Self::Texture(texture_surface) => texture_surface.export_opaque_fd(),
             Self::AcquiredDeviceTexture(_) => {
                 Err(an_acquired_device_texture_carries_no_exportable_fd_error())
@@ -276,7 +355,7 @@ enum CheckedOutPixelBufferHandleType {
     },
     OpaqueFdAtStatedMemoryTypeIndex {
         opaque_memory_fd: OwnedFd,
-        stated_memory_type_index: u32,
+        export_contract: OpaqueFdExportContract,
     },
 }
 
@@ -477,11 +556,10 @@ impl HelperProcessGpuExchangeClient {
                 )?;
                 CheckedOutPixelBufferHandleType::OpaqueFdAtStatedMemoryTypeIndex {
                     opaque_memory_fd,
-                    stated_memory_type_index:
-                        memory_type_index_stated_by_an_opaque_fd_registration(
-                            format_args!("opaque_fd pixel buffer {surface_id:?}"),
-                            response,
-                        )?,
+                    export_contract: opaque_fd_export_contract_stated_by_a_registration(
+                        format_args!("opaque_fd pixel buffer {surface_id:?}"),
+                        response,
+                    )?,
                 }
             }
             other => {
@@ -555,12 +633,17 @@ impl HelperProcessGpuExchangeClient {
             }
             CheckedOutPixelBufferHandleType::OpaqueFdAtStatedMemoryTypeIndex {
                 opaque_memory_fd,
-                stated_memory_type_index,
+                export_contract,
             } => {
+                let stated_memory_type_index = export_contract.vk_memory_type_index;
+                let duplicated_for_import = duplicate_memory_fd(
+                    &opaque_memory_fd,
+                    format_args!("opaque_fd pixel buffer {surface_id:?}'s"),
+                )?;
                 let consumer_buffer =
                     ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
                         &vulkan_device,
-                        opaque_memory_fd,
+                        duplicated_for_import,
                         plane0_size,
                         stated_memory_type_index,
                     )
@@ -576,7 +659,13 @@ impl HelperProcessGpuExchangeClient {
                          the CPU doors read the mapping, so there is nothing to hand out"
                     )));
                 }
-                (consumer_buffer, HelperPixelBufferMemoryFlavour::OpaqueFd)
+                (
+                    consumer_buffer,
+                    HelperPixelBufferMemoryFlavour::OpaqueFd {
+                        exportable_memory_fd: opaque_memory_fd,
+                        export_contract,
+                    },
+                )
             }
         };
 

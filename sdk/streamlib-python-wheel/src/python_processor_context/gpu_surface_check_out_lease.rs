@@ -35,21 +35,21 @@ impl PythonGpuSurfaceCheckOutLease {
     }
 }
 
-/// A raw OPAQUE_FD texture handle: the allocation's memory fd plus the
-/// allocation-stable shape a foreign Vulkan or CUDA external-memory import
-/// must reproduce.
+/// A raw OPAQUE_FD memory handle — a texture's or a pixel buffer's: the
+/// allocation's memory fd plus the allocation-stable shape a foreign Vulkan
+/// or CUDA external-memory import must reproduce.
 ///
 /// Deliberately outside the `GpuSurface*` family prefix: the object names
 /// an allocation, never a frame-bearing surface — the surface-id lifetime
 /// guarantees end at export.
-#[pyclass(name = "OpaqueFdTextureExport", module = "tatolab.stream", frozen)]
-pub(crate) struct PythonOpaqueFdTextureExport {
+#[pyclass(name = "OpaqueFdAllocationExport", module = "tatolab.stream", frozen)]
+pub(crate) struct PythonOpaqueFdAllocationExport {
     exported_memory_fd: i32,
     allocation_byte_size: u64,
     width: u32,
     height: u32,
     format_wire_name: &'static str,
-    vk_image_creation_recipe: ExportedVkImageCreationRecipe,
+    vk_image_creation_recipe: Option<ExportedVkImageCreationRecipe>,
     dedicated_allocation: bool,
     export_contract: OpaqueFdExportContract,
 }
@@ -78,11 +78,11 @@ pub(crate) struct OpaqueFdExportContract {
 }
 
 #[cfg(target_os = "linux")]
-impl From<crate::python_helper_process_pixel_exchange::OpaqueFdTextureExportDescription>
-    for PythonOpaqueFdTextureExport
+impl From<crate::python_helper_process_pixel_exchange::OpaqueFdAllocationExportDescription>
+    for PythonOpaqueFdAllocationExport
 {
     fn from(
-        description: crate::python_helper_process_pixel_exchange::OpaqueFdTextureExportDescription,
+        description: crate::python_helper_process_pixel_exchange::OpaqueFdAllocationExportDescription,
     ) -> Self {
         use std::os::unix::io::IntoRawFd;
         Self {
@@ -99,7 +99,7 @@ impl From<crate::python_helper_process_pixel_exchange::OpaqueFdTextureExportDesc
 }
 
 #[pymethods]
-impl PythonOpaqueFdTextureExport {
+impl PythonOpaqueFdAllocationExport {
     /// The exported memory fd. The caller owns it: a successful foreign
     /// import adopts it — never close it after one; always close it after
     /// a failed one.
@@ -115,57 +115,68 @@ impl PythonOpaqueFdTextureExport {
         self.allocation_byte_size
     }
 
-    /// Texture width in pixels.
+    /// Surface width in pixels.
     #[getter]
     fn width(&self) -> u32 {
         self.width
     }
 
-    /// Texture height in pixels.
+    /// Surface height in pixels.
     #[getter]
     fn height(&self) -> u32 {
         self.height
     }
 
-    /// The engine's format name for the texture, e.g. `"rgba16_float"`.
+    /// The engine's format name for the surface, e.g. `"rgba16_float"` or
+    /// `"rgba32"`.
     #[getter]
     fn format(&self) -> &'static str {
         self.format_wire_name
     }
 
-    /// Raw `VkImageTiling` the exporter created the image with.
+    /// Raw `VkImageTiling` the exporter created the image with; `None`
+    /// when the allocation is a pixel buffer.
     #[getter]
-    fn vk_image_tiling(&self) -> i32 {
-        self.vk_image_creation_recipe.vk_image_tiling
+    fn vk_image_tiling(&self) -> Option<i32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_tiling)
     }
 
-    /// Raw `VkImageUsageFlags` bitfield the exporter created the image with.
+    /// Raw `VkImageUsageFlags` bitfield the exporter created the image
+    /// with; `None` when the allocation is a pixel buffer.
     #[getter]
-    fn vk_image_usage_flags(&self) -> u32 {
-        self.vk_image_creation_recipe.vk_image_usage_flags
+    fn vk_image_usage_flags(&self) -> Option<u32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_usage_flags)
     }
 
-    /// `VkImageCreateInfo::mipLevels` of the exporter's image.
+    /// `VkImageCreateInfo::mipLevels` of the exporter's image; `None` when
+    /// the allocation is a pixel buffer.
     #[getter]
-    fn vk_image_mip_levels(&self) -> u32 {
-        self.vk_image_creation_recipe.vk_image_mip_levels
+    fn vk_image_mip_levels(&self) -> Option<u32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_mip_levels)
     }
 
-    /// `VkImageCreateInfo::arrayLayers` of the exporter's image.
+    /// `VkImageCreateInfo::arrayLayers` of the exporter's image; `None`
+    /// when the allocation is a pixel buffer.
     #[getter]
-    fn vk_image_array_layers(&self) -> u32 {
-        self.vk_image_creation_recipe.vk_image_array_layers
+    fn vk_image_array_layers(&self) -> Option<u32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_array_layers)
     }
 
-    /// Raw `VkSampleCountFlagBits` of the exporter's image.
+    /// Raw `VkSampleCountFlagBits` of the exporter's image; `None` when the
+    /// allocation is a pixel buffer.
     #[getter]
-    fn vk_image_samples(&self) -> i32 {
-        self.vk_image_creation_recipe.vk_image_samples
+    fn vk_image_samples(&self) -> Option<i32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_samples)
     }
 
-    /// Whether the allocation is dedicated — always true for this flavour;
-    /// omitting the importer-side dedicated chain is undefined behaviour,
-    /// not leniency.
+    /// Whether the allocation is dedicated — always true for this flavour,
+    /// a texture's and a pixel buffer's alike; omitting the importer-side
+    /// dedicated chain is undefined behaviour, not leniency.
     #[getter]
     fn dedicated_allocation(&self) -> bool {
         self.dedicated_allocation
