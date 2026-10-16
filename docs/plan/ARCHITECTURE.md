@@ -23,7 +23,7 @@ the change that removes it ships and folds it out — never direction, and nothi
 on it. Off a stream, the direction is §Networking's `[moq-relays]` entries. "Bag" in an older
 entry reads as **message** (the glossary).
 
-## Product (the MVP sentence) — SHIPPED (unbuilt: the sharing step)
+## Product (the MVP sentence) — IN-FLIGHT (→ moq-relays)
 <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
@@ -303,7 +303,7 @@ entry reads as **message** (the glossary).
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — SHIPPED
+## Packages & extension model — IN-FLIGHT (→ moq-relays)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-08-package-split-and-lend.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-07-authoring-names.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-13-shared-pools-bounded-by-memory-budget.md -->
@@ -867,7 +867,7 @@ entry reads as **message** (the glossary).
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — SHIPPED (OPEN: resources across streams; unbuilt: the sharing step)
+## Processor model & scheduling — IN-FLIGHT (→ moq-relays; OPEN: resources across streams)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -2217,7 +2217,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib the_helpers_reasons_are_the_python_rig_only_closed_list -->
   <!-- verify: grep -n -e "--expected-device llvmpipe" -e "Integration suite (all but rig-only)" .github/workflows/ci.yml -->
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut, moq-relays)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
@@ -3545,7 +3545,7 @@ entry reads as **message** (the glossary).
   Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
   #2721]
 
-## Networking — transport, moq, webrtc — SHIPPED (unbuilt: the sharing step)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ moq-relays)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -3988,7 +3988,7 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_sighup_tears_the_graph_down_gracefully -->
 
-## Distribution & versioning — SHIPPED (unbuilt: the Rust crate's `tatolab-stream` name)
+## Distribution & versioning — IN-FLIGHT (→ moq-relays; unbuilt: the Rust crate's `tatolab-stream` name)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-16-optional-accelerators.md -->
@@ -4200,7 +4200,7 @@ entry reads as **message** (the glossary).
   list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
   Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721]
 
-## Control plane & observability — SHIPPED (unbuilt: the sharing step)
+## Control plane & observability — IN-FLIGHT (→ moq-relays)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
