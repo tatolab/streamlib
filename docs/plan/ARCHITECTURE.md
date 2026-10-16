@@ -889,7 +889,8 @@ entry reads as **message** (the glossary).
   runtime portion applies behind a call; a built-in writes bytes in the encoding its port's
   catalog fragment names — the camera's frame record stays a msgpack record `VideoFrame`
   reads, the encoders write the stack's media frame; the envelope gains the group flag
-  (§Networking); the audio-window contract stays the one place the engine reads a payload
+  (§Networking); the audio-window stage and the loopback snapshot door, each on a declared
+  encoding and neither in the forwarding path, are the two places the engine reads a payload
   (owner, 2026-10-16)]
   Rejected: an encoding applied inside `write` and `read` — it stood between an encoder's port
   and a stock MoQ player (owner, 2026-10-16).
