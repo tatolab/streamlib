@@ -1150,6 +1150,9 @@ pub struct GpuCapabilitiesSnapshot {
     pub supports_cross_device_dma_buf_probe: bool,
     /// Whether the GPU exposes `VK_KHR_ray_tracing_pipeline`.
     pub supports_ray_tracing_pipeline: bool,
+    /// Whether a window of this platform's window systems can get a surface;
+    /// never on the bundled software driver, which carries no window-system code.
+    pub supports_window_system_surface: bool,
 }
 
 /// A cached graphics kernel with the context's draw recorder locked: its staged
@@ -3205,6 +3208,7 @@ impl GpuContext {
             supports_semaphore_export: dev.supports_semaphore_export(),
             supports_cross_device_dma_buf_probe: dev.supports_cross_device_dma_buf_probe(),
             supports_ray_tracing_pipeline: dev.supports_ray_tracing_pipeline(),
+            supports_window_system_surface: dev.supports_window_system_surface(),
         }
     }
 

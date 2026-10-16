@@ -35,7 +35,7 @@ use super::vulkan_frame_allocation_device_memory_budget::{
 use super::vulkan_frame_allocation_device_memory_budget::{
     DeviceMemoryHeapBudgetReading, heap_budget_without_the_memory_budget_extension,
 };
-use super::vulkan_instance::HostVulkanInstance;
+use super::vulkan_instance::{HostVulkanInstance, WindowSystemSurfaceExtensionsEnabledOnInstance};
 use super::vulkan_kernel_capability_refusal::{
     VulkanSubgroupOperationSupport, ray_tracing_tier_absent_refusal,
 };
@@ -3064,6 +3064,21 @@ impl HostVulkanDevice {
     /// Whether the device is a CPU-type software rasterizer.
     pub fn device_is_software(&self) -> bool {
         self.device_is_software
+    }
+
+    /// Whether the instance can create a surface for a window of some window
+    /// system of this platform; never on the bundled software driver.
+    pub fn supports_window_system_surface(&self) -> bool {
+        self.vulkan_instance
+            .window_system_surface_extensions
+            .can_create_a_surface_for_some_window_system()
+    }
+
+    /// The window-system surface extensions the instance enabled.
+    pub(crate) fn window_system_surface_extensions(
+        &self,
+    ) -> &WindowSystemSurfaceExtensionsEnabledOnInstance {
+        &self.vulkan_instance.window_system_surface_extensions
     }
 
     /// Whether frames can cross as DMA-BUF; never on a software device.
