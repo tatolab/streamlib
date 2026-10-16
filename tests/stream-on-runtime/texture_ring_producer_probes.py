@@ -24,6 +24,7 @@ from tatolab.stream import (
     log,
     node,
 )
+from tatolab.stream.msgpack import pack, unpack
 
 FRAME_WIDTH = 64
 FRAME_HEIGHT = 32
@@ -111,13 +112,15 @@ class TextureRingPublishingVideoSource:
 
         ctx.outputs.write(
             "frames_to_downstream",
-            {
-                "surface_id": slot_for_this_frame.surface_id,
-                "width": FRAME_WIDTH,
-                "height": FRAME_HEIGHT,
-                "timestamp_ns": clock.monotonic_now_ns(),
-                "frame_index": frame_index,
-            },
+            pack(
+                {
+                    "surface_id": slot_for_this_frame.surface_id,
+                    "width": FRAME_WIDTH,
+                    "height": FRAME_HEIGHT,
+                    "timestamp_ns": clock.monotonic_now_ns(),
+                    "frame_index": frame_index,
+                }
+            ),
         )
         self._surface_ids_published_so_far.append(slot_for_this_frame.surface_id)
 
@@ -136,10 +139,11 @@ class PublishedFramePixelReadingSink:
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("frames_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("frames_from_upstream")
+        if payload is None:
             return
-        frame = VideoFrame.from_bag(bag)
+        frame = VideoFrame.from_bytes(payload)
+        frame_index = unpack(payload)["frame_index"]
 
         def read_the_frames_pixels() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -147,7 +151,7 @@ class PublishedFramePixelReadingSink:
                 top_left_pixel = surface.as_numpy()[0, 0].tolist()
                 surface.unlock()
             return {
-                "frame_index": bag["frame_index"],
+                "frame_index": frame_index,
                 "surface_id": frame.surface_id,
                 "extent": [frame.width, frame.height],
                 "top_left_pixel": top_left_pixel,
@@ -165,10 +169,11 @@ class PublishedFrameIdRecordingSink:
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("frames_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("frames_from_upstream")
+        if payload is None:
             return
-        _report("PublishedFrameIdRecordingSink", lambda: {"surface_id": bag["surface_id"]})
+        surface_id = unpack(payload)["surface_id"]
+        _report("PublishedFrameIdRecordingSink", lambda: {"surface_id": surface_id})
 
 
 def _top_left_pixel_of(ctx, surface_id: str) -> "list[int]":
@@ -195,16 +200,17 @@ class ClaimedFrameHoldingSink:
         if self._held_frame is None:
             self._held_frame = ctx.inputs.read("frames_from_upstream", into=VideoFrame)
             return
-        bag = ctx.inputs.read("frames_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("frames_from_upstream")
+        if payload is None:
             return
         self._later_frames_seen += 1
         held_frame = self._held_frame
+        later_surface_id = unpack(payload)["surface_id"]
 
         def reread_the_held_frame() -> dict:
             return {
                 "held_surface_id": held_frame.surface_id,
-                "later_surface_id": bag["surface_id"],
+                "later_surface_id": later_surface_id,
                 "later_frames_seen": self._later_frames_seen,
                 "held_top_left_pixel": _top_left_pixel_of(ctx, held_frame.surface_id),
             }
@@ -225,11 +231,11 @@ class UnclaimedFrameHoldingSink:
         self._later_frames_seen = 0
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("frames_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("frames_from_upstream")
+        if payload is None:
             return
         if self._first_surface_id is None:
-            self._first_surface_id = bag["surface_id"]
+            self._first_surface_id = unpack(payload)["surface_id"]
             return
         self._later_frames_seen += 1
         first_surface_id = self._first_surface_id

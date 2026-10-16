@@ -17,6 +17,7 @@ import traceback
 import uuid
 
 from tatolab.stream import clock, log, node
+from tatolab.stream.msgpack import pack, unpack
 
 MODEL_INPUT_TENSOR_SHAPE = [1, 3, 640, 640]
 ODD_TENSOR_SHAPE = [3, 7, 11]
@@ -186,11 +187,13 @@ class TensorStorageBufferPublishingSource:
 
         ctx.outputs.write(
             "tensors_to_downstream",
-            {
-                "surface_id": surface_id,
-                "frame_index": frame_index,
-                "timestamp_ns": clock.monotonic_now_ns(),
-            },
+            pack(
+                {
+                    "surface_id": surface_id,
+                    "frame_index": frame_index,
+                    "timestamp_ns": clock.monotonic_now_ns(),
+                }
+            ),
         )
         self._surface_ids_published_so_far.append(surface_id)
         if len(self._surface_ids_published_so_far) == self._config.frames_to_publish:
@@ -207,7 +210,7 @@ def _read_a_published_tensor(
     ctx, surface_id: str, shape, dtype, frame_index, resolved_frame_index
 ) -> dict:
     """Compare the tensor `surface_id` names against the values of the frame
-    whose bag arrived and of the frame the id was published for."""
+    whose message arrived and of the frame the id was published for."""
     import torch
 
     with ctx.gpu_limited_access.resolve_surface(surface_id) as tensor_surface:
@@ -258,29 +261,30 @@ class PublishedTensorReadingSink:
         self._previous_surface_id: "str | None" = None
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("tensors_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("tensors_from_upstream")
+        if payload is None:
             return
-        resolved_surface_id = bag["surface_id"]
-        resolved_frame_index = bag["frame_index"]
+        message = unpack(payload)
+        resolved_surface_id = message["surface_id"]
+        resolved_frame_index = message["frame_index"]
         if self._config.resolve_the_previous_frames_id:
             previous_surface_id = self._previous_surface_id
-            self._previous_surface_id = bag["surface_id"]
+            self._previous_surface_id = message["surface_id"]
             if previous_surface_id is None:
                 return
             resolved_surface_id = previous_surface_id
-            resolved_frame_index = bag["frame_index"] - 1
+            resolved_frame_index = message["frame_index"] - 1
 
         _report(
             "PublishedTensorReadingSink",
             lambda: {
-                "frame_index": bag["frame_index"],
-                "published_surface_id": bag["surface_id"],
+                "frame_index": message["frame_index"],
+                "published_surface_id": message["surface_id"],
                 **_read_a_published_tensor(
                     ctx,
                     resolved_surface_id,
                     *TENSORS_BY_NAME[self._config.tensor_name],
-                    bag["frame_index"],
+                    message["frame_index"],
                     resolved_frame_index,
                 ),
             },
@@ -311,19 +315,20 @@ class HeldTensorRereadingSink:
     def process(self, ctx) -> None:
         import torch
 
-        bag = ctx.inputs.read("tensors_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("tensors_from_upstream")
+        if payload is None:
             return
+        message = unpack(payload)
         if self._held_tensor_surface is None:
             # The claim holds the slot from the read to the resolve, then
             # drops, so the rereads rest on the resolved handle alone.
             claim_from_the_read = (
                 ctx.gpu_limited_access.claim_surface_against_producer_reuse(
-                    bag["surface_id"]
+                    message["surface_id"]
                 )
             )
             self._held_tensor_surface = ctx.gpu_limited_access.resolve_surface(
-                bag["surface_id"]
+                message["surface_id"]
             )
             del claim_from_the_read
             return
@@ -337,7 +342,7 @@ class HeldTensorRereadingSink:
             ).to(read.device)
             return {
                 "held_surface_id": held_tensor_surface.surface_id,
-                "later_surface_id": bag["surface_id"],
+                "later_surface_id": message["surface_id"],
                 "later_tensors_seen": self._later_tensors_seen,
                 "held_values_still_frame_0s": bool(torch.equal(read, expected)),
             }

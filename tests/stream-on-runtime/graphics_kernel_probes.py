@@ -29,6 +29,7 @@ from tatolab.stream import (
     log,
     node,
 )
+from tatolab.stream.msgpack import pack
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 64
@@ -493,12 +494,14 @@ class RenderedTextureFrameProducer:
             return
         ctx.outputs.write(
             "video_to_downstream",
-            {
-                "surface_id": self.color_target.surface_id,
-                "width": SURFACE_WIDTH,
-                "height": SURFACE_HEIGHT,
-                "timestamp_ns": ctx.time,
-            },
+            pack(
+                {
+                    "surface_id": self.color_target.surface_id,
+                    "width": SURFACE_WIDTH,
+                    "height": SURFACE_HEIGHT,
+                    "timestamp_ns": ctx.time,
+                }
+            ),
         )
 
 

@@ -10,10 +10,10 @@ end, so a run that stalls half way still says how far it got.
 Both probes read with `read_with_timestamp` and cast what it hands back,
 rather than with `into=`: the frame-header stamp is what the trim and the
 derived-stamp assertions are about, and no `into=` read yields it. Nothing is
-given up by that — `into=T` is `T(**bag)`, which is what `from_bag` calls once
-it has named any missing key, so the two are one validation path. `into=` over
-a live link is locked in `test_encoded_audio_packet_cast.py`; what these prove
-is that the path holds over bags libopus actually wrote.
+given up by that — `into=T` calls `T.from_bytes`, the call these make, so the
+two are one validation path. `into=` over a live link is locked in
+`test_encoded_audio_packet_cast.py`; what these prove is that the path holds
+over messages libopus actually wrote.
 
 `StereoToneSource` states its own format rather than discovering one, so the
 count the encoder follows is the test's fact and not the machine's. It carries
@@ -32,6 +32,7 @@ from tatolab.stream import (
     monotonic_now_ns,
     node,
 )
+from tatolab.stream.msgpack import pack
 
 ENCODED_PACKET_MARKER = "MARKER:ENCODED_PACKET "
 ENCODED_PACKETS_COMPLETE_MARKER = "MARKER:ENCODED_PACKETS_COMPLETE"
@@ -105,19 +106,21 @@ class StereoToneSource:
 
         ctx.outputs.write(
             "audio",
-            {
-                "samples": struct.pack(f"<{len(scalars)}f", *scalars),
-                "sample_rate": SOURCE_SAMPLE_RATE,
-                "channels": SOURCE_CHANNELS,
-                "sample_count": SOURCE_FRAMES_PER_BLOCK,
-                "dtype": "f32",
-                # Derived from the samples before it rather than read fresh, so
-                # the stamps describe one gapless stream even though the
-                # publishing runs ahead of real time.
-                "first_sample_timestamp_ns": (
-                    anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE
-                ),
-            },
+            pack(
+                {
+                    "samples": struct.pack(f"<{len(scalars)}f", *scalars),
+                    "sample_rate": SOURCE_SAMPLE_RATE,
+                    "channels": SOURCE_CHANNELS,
+                    "sample_count": SOURCE_FRAMES_PER_BLOCK,
+                    "dtype": "f32",
+                    # Derived from the samples before it rather than read fresh,
+                    # so the stamps describe one gapless stream even though the
+                    # publishing runs ahead of real time.
+                    "first_sample_timestamp_ns": (
+                        anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE
+                    ),
+                }
+            ),
         )
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
@@ -139,13 +142,13 @@ class EncodedAudioPacketProbe:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.packets_admitted >= ENCODED_PACKETS_REPORTED:
             return
-        # The frame-header stamp beside the bag, because what the decoder
+        # The frame-header stamp beside the payload, because what the decoder
         # anchors its run on is the packet's stamp and the cross-check needs
         # both halves off one read.
-        bag, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)
-        if bag is None:
+        payload, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)
+        if payload is None:
             return
-        packet = EncodedAudioPacket.from_bag(bag)
+        packet = EncodedAudioPacket.from_bytes(payload)
         self.packets_admitted += 1
         log.info(
             ENCODED_PACKET_MARKER
@@ -172,7 +175,7 @@ class EncodedAudioPacketProbe:
 class DecodedAudioBlockProbe:
     """Reports each decoded block's format, its length and its stamp.
 
-    The stamp comes off the frame header rather than the bag so it is the one
+    The stamp comes off the frame header rather than the payload so it is the one
     the transport carried, which is what a re-stamp at publication would move.
     """
 
@@ -185,10 +188,10 @@ class DecodedAudioBlockProbe:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.blocks_admitted >= DECODED_BLOCKS_REPORTED:
             return
-        bag, timestamp_ns = ctx.inputs.read_with_timestamp(DECODED_PORT)
-        if bag is None:
+        payload, timestamp_ns = ctx.inputs.read_with_timestamp(DECODED_PORT)
+        if payload is None:
             return
-        block = AudioBlock.from_bag(bag)
+        block = AudioBlock.from_bytes(payload)
         self.blocks_admitted += 1
         log.info(
             DECODED_BLOCK_MARKER
