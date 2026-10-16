@@ -4,6 +4,11 @@ Rationale for the `[processor-owned-windows]` entries in `docs/plan/ARCHITECTURE
 §Media I/O, decided by the owner 2026-08-23. Carries forward the owner intent recorded
 during discovery: processors are little programs with resource-request autonomy.
 
+> Superseded in whole 2026-10-16 by `moq-relays.md`: the runtime opens no windows. The
+> capability, the engine-run present loop, the event pump and `DisplayWindow` are deleted by
+> the sharing step's change; a stream is seen in a browser through the preview page. The
+> text below is the record of why the capability had the shape it had while it existed.
+
 ## Trigger
 
 Read this before exposing any window or present-class capability to a processor, before
