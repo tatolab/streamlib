@@ -6,7 +6,8 @@
 //! typed metadata as JSON, and this test — a separate process from both
 //! the `tatolabd` hosting the stream and the processor interpreter that
 //! answered the export — imports that fd on its own `VkDevice` and
-//! byte-compares the kernel's pixels.
+//! byte-compares the kernel's pixels, or — for a pooled pixel buffer on a
+//! device without DMA-BUF export — the bytes the probe wrote.
 //!
 //! What this locks: the exported fd names the kernel-written allocation
 //! (a wrong fd reads wrong pixels or refuses to import), and the wire
@@ -84,6 +85,13 @@ const TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE: &str = "TATOLAB_TEST_MACHINE_ROOT"
 
 /// The name the handoff stream is loaded under.
 const OPAQUE_FD_EXPORT_HANDOFF_STREAM_NAME: &str = "opaque_fd_export_handoff";
+
+/// The `@stream` that hosts the pooled pixel buffer's handoff probe alone,
+/// and the name it is loaded under.
+const OPAQUE_FD_PIXEL_BUFFER_EXPORT_HANDOFF_STREAM: &str =
+    "opaque_fd_pixel_buffer_export_handoff_probe_alone";
+const OPAQUE_FD_PIXEL_BUFFER_EXPORT_HANDOFF_STREAM_NAME: &str =
+    "opaque_fd_pixel_buffer_export_handoff";
 
 /// The refusal `tatolabd` ends with when the loader finds no Vulkan driver at all.
 const TATOLABD_NO_VULKAN_DRIVER_REFUSAL: &str = "No usable Vulkan driver";
@@ -292,28 +300,69 @@ fn receive_metadata_and_fds(stream: &UnixStream) -> (serde_json::Value, Vec<Owne
     (metadata, received_fds)
 }
 
-#[test]
-#[serial]
-fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_env_filter("streamlib=warn,streamlib_consumer_rhi=debug")
-        .try_init();
+/// A `tatolabd` hosting one handoff probe's stream, the connection the probe
+/// opened, and the metadata and fds it sent across.
+struct ProbeHandoffUnderTest {
+    handoff_stream: UnixStream,
+    metadata: serde_json::Value,
+    received_fds: Vec<OwnedFd>,
+    loading_tatolab_run: TatolabRunLoadingTheHandoffStream,
+    hosting_tatolabd: TatolabdHostingTheHandoffStream,
+    _run_state_directory: tempfile::TempDir,
+}
 
-    // The local staging allocation and the consumer import need the same
-    // driver support the sibling carve-outs skip without.
-    let host_device = match HostVulkanDevice::new() {
-        Ok(device) => device,
-        Err(unavailable) => {
-            println!("wheel export handoff: no Vulkan host device — skipping ({unavailable})");
-            return;
-        }
-    };
-    if host_device.opaque_fd_buffer_pool().is_none() {
-        println!("wheel export handoff: OPAQUE_FD HOST_VISIBLE buffer pool unavailable — skipping");
-        return;
+/// How a finished handoff's load and runtime ended, for the caller's
+/// assertions.
+struct FinishedProbeHandoff {
+    tatolab_run_exit: Option<std::process::ExitStatus>,
+    tatolab_run_output: String,
+    tatolabd_diagnostic_tails: String,
+}
+
+impl FinishedProbeHandoff {
+    fn assert_the_load_exited_cleanly(&self) {
+        let Self {
+            tatolab_run_exit,
+            tatolab_run_output,
+            tatolabd_diagnostic_tails,
+        } = self;
+        assert!(
+            tatolab_run_exit.is_some_and(|exit| exit.success()),
+            "tatolab run -d must load the handoff stream and exit 0; it ended \
+             {tatolab_run_exit:?}:\n{tatolab_run_output}\n{tatolabd_diagnostic_tails}"
+        );
     }
+}
 
+/// Send `verdict` to the probe, let the load answer, and stop the runtime.
+fn finish_the_handoff_with_verdict(
+    handoff_stream: UnixStream,
+    mut loading_tatolab_run: TatolabRunLoadingTheHandoffStream,
+    hosting_tatolabd: TatolabdHostingTheHandoffStream,
+    verdict: &[u8],
+) -> FinishedProbeHandoff {
+    use std::io::Write;
+    let _ = (&handoff_stream).write_all(verdict);
+    drop(handoff_stream);
+    let tatolab_run_exit = loading_tatolab_run.wait_for_its_exit(Duration::from_secs(120));
+    let tatolab_run_output = loading_tatolab_run.output();
+    drop(loading_tatolab_run);
+    let tatolabd_diagnostic_tails = hosting_tatolabd.diagnostic_tails();
+    drop(hosting_tatolabd);
+    FinishedProbeHandoff {
+        tatolab_run_exit,
+        tatolab_run_output,
+        tatolabd_diagnostic_tails,
+    }
+}
+
+/// Start the integration unit's `tatolabd`, load `probe_stream` from the
+/// suite's `device_exchange_streams` under `stream_name`, and accept the
+/// probe's handoff. `None` when `tatolabd` finds no Vulkan driver.
+fn start_the_probe_stream_and_accept_its_handoff(
+    probe_stream: &str,
+    stream_name: &str,
+) -> Option<ProbeHandoffUnderTest> {
     let suite_venv_interpreter = stream_on_runtime_suite_directory().join(".venv/bin/python");
     assert!(
         suite_venv_interpreter.exists(),
@@ -401,7 +450,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
                     "wheel export handoff: tatolabd found no Vulkan driver — skipping.\n{}",
                     hosting_tatolabd.diagnostic_tails()
                 );
-                return;
+                return None;
             }
             panic!(
                 "tatolabd exited {exit} before its local API answered.\n{}",
@@ -435,10 +484,8 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         .arg("--dir")
         .arg(stream_on_runtime_suite_directory())
         .arg("--name")
-        .arg(OPAQUE_FD_EXPORT_HANDOFF_STREAM_NAME)
-        .arg(format!(
-            "device_exchange_streams.py:{OPAQUE_FD_EXPORT_HANDOFF_STREAM}"
-        ))
+        .arg(stream_name)
+        .arg(format!("device_exchange_streams.py:{probe_stream}"))
         .env(TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE, &test_machine_root)
         .stdin(Stdio::null())
         .stdout(Stdio::from(
@@ -489,7 +536,53 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("bounded reads on the handoff socket");
 
-    let (metadata, mut received_fds) = receive_metadata_and_fds(&stream);
+    let (metadata, received_fds) = receive_metadata_and_fds(&stream);
+    Some(ProbeHandoffUnderTest {
+        handoff_stream: stream,
+        metadata,
+        received_fds,
+        loading_tatolab_run,
+        hosting_tatolabd,
+        _run_state_directory: run_state_directory,
+    })
+}
+
+#[test]
+#[serial]
+fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter("streamlib=warn,streamlib_consumer_rhi=debug")
+        .try_init();
+
+    // The local staging allocation and the consumer import need the same
+    // driver support the sibling carve-outs skip without.
+    let host_device = match HostVulkanDevice::new() {
+        Ok(device) => device,
+        Err(unavailable) => {
+            println!("wheel export handoff: no Vulkan host device — skipping ({unavailable})");
+            return;
+        }
+    };
+    if host_device.opaque_fd_buffer_pool().is_none() {
+        println!("wheel export handoff: OPAQUE_FD HOST_VISIBLE buffer pool unavailable — skipping");
+        return;
+    }
+
+    let Some(ProbeHandoffUnderTest {
+        handoff_stream: stream,
+        metadata,
+        mut received_fds,
+        loading_tatolab_run,
+        hosting_tatolabd,
+        _run_state_directory,
+    }) = start_the_probe_stream_and_accept_its_handoff(
+        OPAQUE_FD_EXPORT_HANDOFF_STREAM,
+        OPAQUE_FD_EXPORT_HANDOFF_STREAM_NAME,
+    )
+    else {
+        return;
+    };
     assert_eq!(
         received_fds.len(),
         1,
@@ -523,14 +616,19 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     );
     let allocation_byte_size = metadata_u64_field("allocation_byte_size");
     assert!(allocation_byte_size >= IMAGE_BYTES);
-    // The recipe constants `new_opaque_fd_export` hardcodes, read back off
-    // the wire the probe crossed.
+    // The recipe `new_opaque_fd_export` gives an Rgba8Unorm image asking for
+    // nothing past the CUDA usage set, read back off the wire the probe
+    // crossed.
     assert_eq!(metadata_u64_field("vk_image_tiling"), 0); // OPTIMAL
-    assert_eq!(metadata_u64_field("vk_image_usage_flags"), 0x0F);
+    let vk_image_usage = u32::try_from(metadata_u64_field("vk_image_usage_flags"))
+        .expect("vk_image_usage_flags is a VkImageUsageFlags bitfield");
+    assert_eq!(vk_image_usage, 0x0F); // TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE
     assert_eq!(metadata_u64_field("vk_image_mip_levels"), 1);
     assert_eq!(metadata_u64_field("vk_image_array_layers"), 1);
     assert_eq!(metadata_u64_field("vk_image_samples"), 1);
-    assert!(metadata_u64_field("vk_memory_type_index") < 32); // VK_MAX_MEMORY_TYPES
+    let vk_memory_type_index = u32::try_from(metadata_u64_field("vk_memory_type_index"))
+        .expect("vk_memory_type_index is a memory type index");
+    assert!(vk_memory_type_index < 32); // VK_MAX_MEMORY_TYPES
     let exporting_device_uuid_hex = metadata
         .get("exporting_device_uuid_hex")
         .and_then(|value| value.as_str())
@@ -553,25 +651,33 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         )
     };
 
-    let consumer_vulkan_device = match ConsumerVulkanDevice::new() {
+    let exporting_device_uuid =
+        streamlib_consumer_rhi::vulkan_device_uuid_from_hex(exporting_device_uuid_hex)
+            .expect("the exporting device UUID is 32 hex characters");
+    let consumer_vulkan_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        exporting_device_uuid,
+    ) {
         Ok(device) => Arc::new(device),
         Err(unavailable) => {
             println!(
-                "wheel export handoff: ConsumerVulkanDevice::new failed: {unavailable:?} — \
+                "wheel export handoff: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {unavailable:?} — \
                  skipping (likely a UUID mismatch on a multi-GPU rig)"
             );
             return;
         }
     };
-    // Both imports adopt their fd on success and leave it owned here on
-    // failure, so each is released only at its call.
+    // The texture import adopts its fd on success and leaves it owned here on
+    // failure, so it is released only at its call; the staging import always
+    // consumes its fd.
     let imported_texture = match ConsumerVulkanTexture::from_opaque_fd(
         &consumer_vulkan_device,
         exported_texture_fd.as_raw_fd(),
         SURFACE_WIDTH_PIXELS,
         SURFACE_HEIGHT_PIXELS,
         ConsumerTextureFormat::Rgba8Unorm,
+        vk_image_usage,
         allocation_byte_size,
+        vk_memory_type_index,
     ) {
         Ok(texture) => {
             let _adopted_by_vulkan = exported_texture_fd.into_raw_fd();
@@ -586,13 +692,10 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     };
     let imported_staging = match ConsumerVulkanBuffer::from_opaque_fd(
         &consumer_vulkan_device,
-        local_staging_fd.as_raw_fd(),
+        local_staging_fd,
         IMAGE_BYTES as vk::DeviceSize,
     ) {
-        Ok(buffer) => {
-            let _adopted_by_vulkan = local_staging_fd.into_raw_fd();
-            Arc::new(buffer)
-        }
+        Ok(buffer) => Arc::new(buffer),
         Err(import_failure) => {
             panic!(
                 "the local staging fd would not import: {import_failure}\n{}",
@@ -637,14 +740,8 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     } else {
         b"mismatch"
     };
-    use std::io::Write;
-    let _ = (&stream).write_all(verdict);
-    drop(stream);
-    let tatolab_run_exit = loading_tatolab_run.wait_for_its_exit(Duration::from_secs(120));
-    let tatolab_run_output = loading_tatolab_run.output();
-    drop(loading_tatolab_run);
-    let tatolabd_diagnostic_tails = hosting_tatolabd.diagnostic_tails();
-    drop(hosting_tatolabd);
+    let finished_handoff =
+        finish_the_handoff_with_verdict(stream, loading_tatolab_run, hosting_tatolabd, verdict);
 
     assert!(
         pixels_match,
@@ -652,9 +749,208 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
          fill constant {FILL_CONSTANT_RGBA:?}; first pixel was {:?}",
         &readback[..4]
     );
+    finished_handoff.assert_the_load_exited_cleanly();
+}
+
+/// The byte `OpaqueFdPixelBufferExportHandoffProbe` writes at one pixel
+/// channel — the probe's own formula.
+fn pixel_buffer_handoff_byte(row: u64, column: u64, channel: u64) -> u8 {
+    ((row * 7 + column * 3 + channel * 61 + 1) % 256) as u8
+}
+
+/// A pooled pixel buffer's raw-handle export consumed by a foreign process.
+/// On a device without DMA-BUF export (lavapipe) the pooled frame is an
+/// OPAQUE_FD allocation: `export_opaque_fd` hands its fd over with no image
+/// recipe, and this process imports it at the stated memory type index and
+/// reads the bytes the probe wrote. On a DMA-BUF device the export refuses,
+/// pointing at `export_dma_buf`.
+#[test]
+#[serial]
+fn a_wheel_exported_opaque_fd_pixel_buffer_read_by_a_foreign_process_shows_the_frames_bytes() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter("streamlib=warn,streamlib_consumer_rhi=debug")
+        .try_init();
+
+    let host_device = match HostVulkanDevice::new() {
+        Ok(device) => device,
+        Err(unavailable) => {
+            println!(
+                "pixel buffer export handoff: no Vulkan host device — skipping ({unavailable})"
+            );
+            return;
+        }
+    };
+    let pooled_frames_cross_as_dma_buf = host_device.supports_dma_buf_export();
+
+    let Some(ProbeHandoffUnderTest {
+        handoff_stream,
+        metadata,
+        mut received_fds,
+        loading_tatolab_run,
+        hosting_tatolabd,
+        _run_state_directory,
+    }) = start_the_probe_stream_and_accept_its_handoff(
+        OPAQUE_FD_PIXEL_BUFFER_EXPORT_HANDOFF_STREAM,
+        OPAQUE_FD_PIXEL_BUFFER_EXPORT_HANDOFF_STREAM_NAME,
+    )
+    else {
+        return;
+    };
+
+    let export_refusal = metadata
+        .get("export_refusal")
+        .and_then(|value| value.as_str());
+    if pooled_frames_cross_as_dma_buf {
+        println!(
+            "pixel buffer export handoff: {} pooled frames cross as DMA-BUF; the export \
+             answered {export_refusal:?}",
+            host_device.name()
+        );
+        let finished_handoff = finish_the_handoff_with_verdict(
+            handoff_stream,
+            loading_tatolab_run,
+            hosting_tatolabd,
+            b"refusal-seen",
+        );
+        assert!(
+            received_fds.is_empty(),
+            "a refused export hands no fd across"
+        );
+        let export_refusal = export_refusal.unwrap_or_else(|| {
+            panic!("a DMA-BUF pooled frame must refuse export_opaque_fd: {metadata}")
+        });
+        assert!(
+            export_refusal.contains("DMA-BUF pixel buffer")
+                && export_refusal.contains("`export_dma_buf`"),
+            "the refusal must name the flavour and point at the door it has: {export_refusal:?}"
+        );
+        finished_handoff.assert_the_load_exited_cleanly();
+        return;
+    }
     assert!(
-        tatolab_run_exit.is_some_and(|exit| exit.success()),
-        "tatolab run -d must load the handoff stream and exit 0; it ended {tatolab_run_exit:?}:\n\
-         {tatolab_run_output}\n{tatolabd_diagnostic_tails}"
+        export_refusal.is_none(),
+        "{} exports no DMA-BUF, so its pooled frame is OPAQUE_FD and must export: {metadata}",
+        host_device.name()
     );
+
+    assert_eq!(
+        received_fds.len(),
+        1,
+        "the export travels as exactly one memory fd"
+    );
+    let exported_pixel_buffer_fd = received_fds.remove(0);
+    let metadata_u64_field = |name: &str| -> u64 {
+        metadata
+            .get(name)
+            .and_then(|value| value.as_u64())
+            .unwrap_or_else(|| panic!("handoff metadata field {name:?} missing: {metadata}"))
+    };
+    let width = metadata_u64_field("width");
+    let height = metadata_u64_field("height");
+    assert_eq!(width, u64::from(SURFACE_WIDTH_PIXELS));
+    assert_eq!(height, u64::from(SURFACE_HEIGHT_PIXELS));
+    let bytes_per_row = metadata_u64_field("bytes_per_row");
+    assert!(bytes_per_row >= width * 4);
+    let allocation_byte_size = metadata_u64_field("allocation_byte_size");
+    assert!(
+        allocation_byte_size >= bytes_per_row * height,
+        "the whole allocation can pad past the frame's bytes but never under them"
+    );
+    for image_recipe_field in [
+        "vk_image_tiling",
+        "vk_image_usage_flags",
+        "vk_image_mip_levels",
+        "vk_image_array_layers",
+        "vk_image_samples",
+    ] {
+        assert!(
+            metadata
+                .get(image_recipe_field)
+                .is_some_and(serde_json::Value::is_null),
+            "a pixel buffer carries no image recipe, so {image_recipe_field} is None: {metadata}"
+        );
+    }
+    assert_eq!(
+        metadata
+            .get("dedicated_allocation")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    let vk_memory_type_index = u32::try_from(metadata_u64_field("vk_memory_type_index"))
+        .expect("vk_memory_type_index is a memory type index");
+    let exporting_device_uuid_hex = metadata
+        .get("exporting_device_uuid_hex")
+        .and_then(|value| value.as_str())
+        .expect("handoff metadata carries the exporting device UUID");
+    let exporting_device_uuid =
+        streamlib_consumer_rhi::vulkan_device_uuid_from_hex(exporting_device_uuid_hex)
+            .expect("the exporting device UUID is 32 hex characters");
+
+    let consumer_vulkan_device =
+        match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(exporting_device_uuid) {
+            Ok(device) => Arc::new(device),
+            Err(unavailable) => {
+                panic!(
+                    "a foreign device on the exporter's GPU must come up: {unavailable:?}\n{}",
+                    hosting_tatolabd.diagnostic_tails()
+                );
+            }
+        };
+    let imported_pixel_buffer = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+        &consumer_vulkan_device,
+        exported_pixel_buffer_fd,
+        allocation_byte_size as vk::DeviceSize,
+        vk_memory_type_index,
+    )
+    .unwrap_or_else(|import_failure| {
+        panic!(
+            "the exported fd must import at its stated memory type index: {import_failure}\n{}",
+            hosting_tatolabd.diagnostic_tails()
+        )
+    });
+    assert_eq!(
+        imported_pixel_buffer.imported_allocation_byte_size(),
+        allocation_byte_size,
+        "an OPAQUE_FD import states the exporter's allocation size; the export must name it"
+    );
+
+    // SAFETY: the import maps the whole allocation, HOST_COHERENT; the probe
+    // wrote and unlocked the frame before exporting it.
+    let foreign_bytes = unsafe {
+        std::slice::from_raw_parts(
+            imported_pixel_buffer.mapped_ptr(),
+            (bytes_per_row * height) as usize,
+        )
+    };
+    let first_mismatch = (0..height)
+        .flat_map(|row| (0..width).map(move |column| (row, column)))
+        .flat_map(|(row, column)| (0..4).map(move |channel| (row, column, channel)))
+        .find(|&(row, column, channel)| {
+            foreign_bytes[(row * bytes_per_row + column * 4 + channel) as usize]
+                != pixel_buffer_handoff_byte(row, column, channel)
+        });
+    drop(imported_pixel_buffer);
+    println!(
+        "pixel buffer export handoff: imported {allocation_byte_size} bytes at memory type \
+         index {vk_memory_type_index}; first mismatch {first_mismatch:?}"
+    );
+    let verdict: &[u8] = if first_mismatch.is_none() {
+        b"bytes-match"
+    } else {
+        b"mismatch"
+    };
+    let finished_handoff = finish_the_handoff_with_verdict(
+        handoff_stream,
+        loading_tatolab_run,
+        hosting_tatolabd,
+        verdict,
+    );
+
+    assert!(
+        first_mismatch.is_none(),
+        "the foreign import must read the bytes the probe wrote; first mismatch at (row, \
+         column, channel) {first_mismatch:?}"
+    );
+    finished_handoff.assert_the_load_exited_cleanly();
 }

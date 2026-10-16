@@ -17,7 +17,9 @@ mod host_marker;
 mod vulkan_command_buffer;
 mod vulkan_command_queue;
 mod vulkan_device;
+mod vulkan_device_selection;
 mod vulkan_frame_allocation_device_memory_budget;
+mod vulkan_instance;
 #[cfg(target_os = "macos")]
 mod vulkan_metal_working_set_budget;
 mod vulkan_queue_submission_completion;
@@ -29,7 +31,6 @@ mod vulkan_upload_resources;
 pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
-pub(crate) use vulkan_device::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_device::PixelBufferUploadFinalTextureLayout;
 pub use vulkan_device::{
@@ -181,6 +182,9 @@ pub use vulkan_query_pool::{HostVulkanQueryPool, QueryPoolDescriptor};
 
 #[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;
+
+#[cfg(all(test, target_os = "linux"))]
+mod dma_buf_export_test_device_fixture;
 
 #[cfg(all(test, target_os = "linux"))]
 mod video_profile_test_fixture;

@@ -32,6 +32,8 @@
 //! pattern rather than a camera on purpose: it needs no `/dev/video*` device,
 //! so what this asserts is the codec round trip and nothing else.
 
+#[path = "../../../streamlib-engine/tests/support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
 use std::sync::{Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -218,6 +220,13 @@ fn ensure_every_processor_type_is_registered() {
 pub fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surface(
     arm: CodecRoundTripArm,
 ) {
+    #[cfg(target_os = "linux")]
+    if rig_only_capability_skip::skip_unless_this_machine_has(
+        rig_only_capability_skip::RigOnlyCapability::VulkanVideo,
+        this_device_encodes_and_decodes_vulkan_video(),
+    ) {
+        return;
+    }
     ensure_every_processor_type_is_registered();
 
     let project_directory = tempfile::tempdir().expect("a project directory");
@@ -391,4 +400,13 @@ pub fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surfa
         }
         previous_frame_header_timestamp_ns = Some(*frame_header_timestamp_ns);
     }
+}
+
+/// Whether the Vulkan device a runtime here builds on encodes and decodes
+/// Vulkan Video; on macOS the codec built-ins take VideoToolbox instead.
+#[cfg(target_os = "linux")]
+fn this_device_encodes_and_decodes_vulkan_video() -> bool {
+    let device = streamlib::sdk::engine::host_rhi::HostVulkanDevice::new()
+        .expect("a Vulkan device comes up on this machine");
+    device.supports_video_encode() && device.supports_video_decode()
 }

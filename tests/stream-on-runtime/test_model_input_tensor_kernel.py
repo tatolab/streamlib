@@ -54,6 +54,7 @@ def expected_shape(fit_case_name: str, layout: str) -> "list[int]":
 
 
 @pytest.mark.parametrize("fit_case_name", list(FIT_CASES))
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_every_layout_and_dtype_of_a_fit_matches_the_torch_reference(
     start_tatolabd_running_stream, fit_case_name: str
 ):
@@ -80,6 +81,7 @@ def test_every_layout_and_dtype_of_a_fit_matches_the_torch_reference(
         )
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_the_comparison_fails_for_a_kernel_compiled_with_the_wrong_mean(
     start_tatolabd_running_stream,
 ):
@@ -107,6 +109,7 @@ def test_a_bgra_frame_and_a_tensor_surface_are_refused_by_name(start_tatolabd_ru
     assert "tensor" in observed["tensor_refusal"]
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_pad_bottom_right_tensor_follows_its_frame_across_an_extent_change(
     start_tatolabd_running_stream,
 ):

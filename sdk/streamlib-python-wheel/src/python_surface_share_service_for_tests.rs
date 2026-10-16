@@ -426,4 +426,63 @@ impl SurfaceShareUnderTest {
             .outstanding_check_out_count(surface_id)
             .expect("the lease table stays readable")
     }
+
+    /// A helper's exchange client on this service, registering foreign
+    /// surfaces as `helper:{label}` and importing on the first device the
+    /// loader enumerates — for a test whose surfaces no engine device
+    /// exported. Its escalate callables are `None`: the paths under test speak
+    /// only to the surface-share channel.
+    pub(crate) fn exchange_client_labelled(
+        &self,
+        label: &str,
+    ) -> Arc<crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient> {
+        self.exchange_client_labelled_importing_on(
+            label,
+            streamlib_consumer_rhi::vulkan_device_uuid_of_the_first_device_the_loader_enumerates(),
+        )
+    }
+
+    /// A helper's exchange client on this service importing on
+    /// `vulkan_device_uuid_the_runtime_named` — the device that exported the
+    /// surfaces the test checks out, as the runtime names it at spawn.
+    pub(crate) fn exchange_client_labelled_importing_on(
+        &self,
+        label: &str,
+        vulkan_device_uuid_the_runtime_named: streamlib_consumer_rhi::Result<[u8; 16]>,
+    ) -> Arc<crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient> {
+        use pyo3::prelude::*;
+
+        Python::initialize();
+        let no_parent = Python::attach(|python| python.None());
+        self.exchange_client_labelled_importing_on_answered_by(
+            label,
+            vulkan_device_uuid_the_runtime_named,
+            no_parent,
+        )
+    }
+
+    /// As [`Self::exchange_client_labelled_importing_on`], with
+    /// `escalate_request_to_parent` standing in for the parent's escalate
+    /// channel — for a path that asks the parent before it checks out.
+    pub(crate) fn exchange_client_labelled_importing_on_answered_by(
+        &self,
+        label: &str,
+        vulkan_device_uuid_the_runtime_named: streamlib_consumer_rhi::Result<[u8; 16]>,
+        escalate_request_to_parent: pyo3::Py<pyo3::PyAny>,
+    ) -> Arc<crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient> {
+        use pyo3::prelude::*;
+
+        Python::initialize();
+        Python::attach(|python| {
+            Arc::new(
+                crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient::new(
+                    escalate_request_to_parent,
+                    python.None(),
+                    self.channel_name_for_the_helper(),
+                    vulkan_device_uuid_the_runtime_named,
+                    format!("helper:{label}"),
+                ),
+            )
+        })
+    }
 }

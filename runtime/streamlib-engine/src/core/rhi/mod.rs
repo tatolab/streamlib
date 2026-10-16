@@ -19,6 +19,8 @@ mod kernel_binding_names;
 mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod plane_fd_under_test;
 mod ray_tracing_kernel;
 #[cfg(test)]
 pub(crate) mod spirv_module_rewriting_for_tests;
@@ -66,6 +68,7 @@ pub use graphics_kernel::{
 pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use index_buffer::IndexBuffer;
+pub(crate) use kernel_binding_names::reflect_spirv_without_its_debug_source_strings;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use kernel_binding_names::{
     KernelShaderStageMask, quote_declared_shader_binding_names, quote_shader_stage_names,

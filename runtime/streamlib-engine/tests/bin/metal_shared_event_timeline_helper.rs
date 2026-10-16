@@ -107,7 +107,8 @@ mod timeline_helper {
             fail(&format!("NO_TIMELINE_PORTS {answer}"));
         }
         let device = Arc::new(
-            ConsumerVulkanDevice::new()
+            streamlib_consumer_rhi::runtime_vulkan_device_uuid_named_at_spawn()
+                .and_then(ConsumerVulkanDevice::new_on_the_device_the_runtime_named)
                 .unwrap_or_else(|failure| fail(&format!("NO_DEVICE {failure}"))),
         );
         let import = |port: &OwnedMachSendRight| {

@@ -247,7 +247,7 @@ pub(crate) struct EscalateRequestCopyDeviceExportStagingBackToSurface {
     /// `refill_done` at end-of-submit. Refused when the surface's export is
     /// read-only — the write-back path belongs to surfaces whose only backing
     /// is their own pooled allocation. Answers with the signalled
-    /// `timeline_value`.
+    /// `timeline_value`, absent where the device exports no timeline.
     pub(crate) surface_id: String,
 }
 
@@ -385,15 +385,16 @@ pub(crate) struct EscalateRequestOpenCpuReadbackStaging {
 
     /// The surface whose pixels the subprocess wants to read with the CPU.
     /// Same contract as `open_device_export_staging` — the host allocates the
-    /// staging if the surface has none, registers it plus its `refill_done`
-    /// timeline with the surface-share service, and answers with the id they
+    /// staging if the surface has none, registers it plus, where the device
+    /// exports one, its `refill_done` timeline with the surface-share service,
+    /// and answers with the id they
     /// are registered under — differing in one respect: this staging is
     /// HOST_VISIBLE and HOST_COHERENT, so the consumer maps and reads it
     /// directly instead of importing it into a device API. A surface can carry
     /// both at once; they are separate allocations under separate ids.
     /// The `ok` response carries `handle_id`, `width`, `height`, `format`,
     /// `staging_byte_size`, `bytes_per_row`, `writable`, and
-    /// `exporting_device_uuid`. The staging fd and the timeline fd travel over
+    /// `exporting_device_uuid`. The staging fd and any timeline fd travel over
     /// the surface-share socket at check-out, never over this one.
     pub(crate) surface_id: String,
 }
@@ -406,14 +407,16 @@ pub(crate) struct EscalateRequestOpenDeviceExportStaging {
 
     /// The surface whose pixels the subprocess wants in an external device
     /// API's dialect (CUDA today). The host allocates that surface's OPAQUE_FD
-    /// device-export staging buffer if it has none, registers the staging plus
-    /// its `refill_done` timeline with the surface-share service, and answers
+    /// device-export staging buffer if it has none, registers the staging plus,
+    /// where the device exports one, its `refill_done` timeline with the
+    /// surface-share service, and answers
     /// with the id they are registered under. Pool allocations are DMA-BUF-
-    /// flavoured and external device APIs import OPAQUE_FD; one allocation
-    /// cannot export both on NVIDIA, which is why the staging exists at all.
+    /// flavoured wherever the device exports DMA-BUF, external device APIs
+    /// import OPAQUE_FD, and on NVIDIA one allocation cannot export both,
+    /// which is why the staging exists at all.
     /// The `ok` response carries `handle_id` (the surface-share id to check
     /// out), `width`, `height`, `format`, `staging_byte_size`, `bytes_per_row`,
-    /// `writable`, and `exporting_device_uuid`. The staging fd and the timeline
+    /// `writable`, and `exporting_device_uuid`. The staging fd and any timeline
     /// fd travel over the surface-share socket at check-out, never over this
     /// one.
     pub(crate) surface_id: String,
@@ -430,8 +433,9 @@ pub(crate) struct EscalateRequestRefillDeviceExportStaging {
     /// pixels into the staging buffer, and signals a new value on the
     /// staging's `refill_done` timeline at end-of-submit. The response's
     /// `timeline_value` is what the subprocess waits for on its imported
-    /// `ConsumerVulkanTimelineSemaphore` before reading the staging. No FDs
-    /// travel on the wire.
+    /// `ConsumerVulkanTimelineSemaphore` before reading the staging; it is
+    /// absent where the device exports no timeline, the copy having retired on
+    /// the host before the reply. No FDs travel on the wire.
     /// The source is resolved per refill and never cached: rotating producers
     /// re-register a different texture under the same surface id every frame,
     /// so a cached source blits the previous cycle's pixels.
@@ -1609,7 +1613,8 @@ pub(crate) struct EscalateRequestRunCpuReadbackCopy {
     /// end-of-submit; the subprocess waits on the timeline (through its
     /// imported `ConsumerVulkanTimelineSemaphore`) before reading or
     /// releasing. No FDs travel on the wire — only the timeline value the
-    /// host signaled.
+    /// host signaled, absent where the device exports no timeline and the
+    /// copy retired on the host before the reply.
     pub(crate) direction: EscalateRequestRunCpuReadbackCopyDirection,
 
     /// Correlates request with response. UUID string.

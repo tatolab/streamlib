@@ -299,7 +299,7 @@ mod tests {
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
     )]
     #[test]
-    fn a_queue_submission_snapshot_reads_completed_once_its_recorders_fence_was_waited() {
+    fn a_queue_submission_snapshot_completes_once_its_recorders_fence_was_waited() {
         let Some(device) = test_device() else {
             return;
         };
@@ -326,11 +326,23 @@ mod tests {
             "a recorder submit must advance its queue's completion timeline"
         );
         recorder.wait_for_completion().expect("recorder fence wait");
+        // A driver may signal the fence before the completion timeline value
+        // the same submit signals is readable on the host: lavapipe does so
+        // under CPU load. The timeline's own wait is what the snapshot promises.
+        assert!(
+            device
+                .wait_for_every_queue_submission_in_snapshot(
+                    &snapshot_after_submit,
+                    Duration::from_secs(5)
+                )
+                .expect("waiting on the snapshot"),
+            "the recorder's submission ran, so the submission the snapshot names completed"
+        );
         assert!(
             device
                 .every_queue_submission_in_snapshot_has_completed(&snapshot_after_submit)
                 .expect("reading the snapshot"),
-            "the recorder's fence signalled, so the submission the snapshot names completed"
+            "a snapshot whose wait returned reads completed"
         );
     }
 

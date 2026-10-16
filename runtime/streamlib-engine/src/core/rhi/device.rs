@@ -116,7 +116,7 @@ impl GpuDevice {
 
     /// Create an OPAQUE_FD-exportable texture a foreign process can import
     /// whole — see [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]
-    /// for the fixed usage set and the CUDA-mappable format subset.
+    /// for the usage it carries and the formats it takes.
     #[cfg(target_os = "linux")]
     pub fn create_texture_opaque_fd_export(&self, desc: &TextureDescriptor) -> Result<Texture> {
         let vulkan_texture = self.inner.create_texture_opaque_fd_export(desc)?;

@@ -2,10 +2,10 @@ name: Linux Runtime Tarball
 
 # The tarball install.sh installs: the runtime unit built in manylinux_2_28 by
 # `scripts/build_linux_runtime_release_tarball.sh`, which also runs the
-# portability gate over it at the 2.28 glibc floor. Called by python-wheel.yml
-# on every PR — a change needing a newer glibc symbol, or a system library
-# manylinux lacks, must fail on the PR that makes it, not on release day — and
-# by release-wheel.yml, where a failure here withholds the whole release.
+# portability gate over it at the 2.28 glibc floor. Called by
+# reusable-distributions.yml: as a dry run on every push to `main`, so a change
+# needing a newer glibc symbol or a system library manylinux lacks fails on the
+# commit that made it, and at release, where a failure withholds the release.
 on:
   workflow_call:
     inputs:
@@ -25,7 +25,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
@@ -33,7 +33,7 @@ jobs:
       # The bundled lavapipe takes minutes to build in manylinux; the staging
       # script reuses a build whose key matches, and these three files are the key.
       - name: Cache the Linux bundled Vulkan driver build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: target/linux_bundled_vulkan_driver_cache
           key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
@@ -46,7 +46,7 @@ jobs:
           bash scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh
           "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: linux-runtime-tarball
           path: ${{ runner.temp }}/linux-runtime-tarball/

@@ -276,6 +276,7 @@ fn binding_a_bottom_level_structure_at_a_trace_is_refused() {
 
 #[test]
 fn a_colour_write_mask_names_its_channels() {
+    Python::initialize();
     assert_eq!(color_write_channels_to_wire("rgba").unwrap(), 0b1111);
     assert_eq!(color_write_channels_to_wire("rg").unwrap(), 0b0011);
     assert_eq!(color_write_channels_to_wire("").unwrap(), 0);

@@ -16,6 +16,9 @@
 
 #![cfg(target_os = "linux")]
 
+#[path = "support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
+
 use std::time::{Duration, Instant};
 
 use streamlib_engine::core::color::{ColorTraits, PrimariesId, TransferId};
@@ -120,6 +123,9 @@ fn wait_until_the_pump_routes_to_exactly(expected_window_count: usize) {
 )]
 #[test]
 fn the_engine_run_loop_shows_what_its_owner_names_without_ever_pacing_the_owner() {
+    if rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server() {
+        return;
+    }
     let gpu_context = GpuContext::init_for_platform().expect("a GPU is required for this tier");
     let gpu_context_limited_access = gpu_context.limited_access();
 

@@ -124,15 +124,15 @@ class LiveAddedEffect:
             log.info(f"MARKER:{self.marker}")
 '''
 
-# The display window is a native built-in; over the control plane it is named
-# by the type `graph` reports for one, its class in `tatolab.stream`.
-DISPLAY_WINDOW_TYPE = "tatolab.stream:DisplayWindow"
+# A native built-in is named over the control plane by the type `graph`
+# reports for one, its class in `tatolab.stream`.
+LIVE_ADDED_NATIVE_BUILT_IN_TYPE = "tatolab.stream:TestPatternSource"
 
 
 def test_the_live_added_effect_written_as_a_source_string_still_declares():
     """`LiveAddedEffect` lives as a triple-quoted literal, so no import, no
-    linter and no AST sweep reaches it — running it here is the only way a bad
-    migration of it fails anywhere but on the rig."""
+    linter and no AST sweep reaches it — running it here is how a bad migration
+    of it fails without a device."""
     namespace: "dict[str, Any]" = {"__name__": LIVE_ADDED_EFFECT_MODULE}
     # `dont_inherit`: compiled as the file it is written to, not under this
     # module's `from __future__ import annotations`.
@@ -256,8 +256,9 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     processor interpreter that imports a module nothing had seen; the first
     connect wires a link into a source that was already publishing; the second
     consumer of that same source port proves the channel was sized for a late
-    subscriber; the window proves a native built-in can be added live and a
-    helper's output can be wired after its setup; the disconnect stops the flow
+    subscriber; the downstream effect proves a helper's output can be wired
+    after its setup; the live-added pattern proves a native built-in can be
+    added live; the disconnect stops the flow
     the tap was seeing; the remove takes the processor and its links away.
     """
     pattern_stream = start_the_pattern_stream(
@@ -351,16 +352,16 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
     tatolabd.await_marker("SECOND_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
 
-    # A native built-in added live, consuming the helper's output: the output
-    # side of a helper that already ran its setup, and a destination whose
-    # notify service is created after the source was already publishing.
-    window = local_api.call_tool(
+    # A node added live, consuming the helper's output: the output side of a
+    # helper that already ran its setup, and a destination whose notify
+    # service is created after the source was already publishing.
+    downstream = local_api.call_tool(
         "add_node",
         {
             "stream": stream_name,
-            "type": DISPLAY_WINDOW_TYPE,
-            "config": {"title": "live-added", "scaling": "fit"},
-            "name": "window",
+            "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
+            "config": {"marker": "DOWNSTREAM_EFFECT_SAW_A_FRAME"},
+            "name": "downstream-effect",
         },
     )
     local_api.call_tool(
@@ -369,8 +370,8 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
             "stream": stream_name,
             "from_node": "effect",
             "from_port": "video_to_downstream",
-            "to_node": window["name"],
-            "to_port": "video",
+            "to_node": downstream["name"],
+            "to_port": "video_from_upstream",
         },
     )
     effect_output_channel = tap_channel_of(graph_after_add, "effect", "video_to_downstream")
@@ -378,6 +379,23 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         "tap", {"stream": stream_name, "channel": effect_output_channel, "count": 3}
     )
     assert flowing["received"] > 0, f"no bags left the live-added effect: {flowing}"
+    tatolabd.await_marker("DOWNSTREAM_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
+
+    # A native built-in added live, by the type `graph` reports for one: its
+    # class in `tatolab.stream`, resolved apart from a project's processors.
+    live_added_pattern = local_api.call_tool(
+        "add_node",
+        {
+            "stream": stream_name,
+            "type": LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
+            "config": {"width": 320, "height": 180},
+            "name": "live-added-pattern",
+        },
+    )
+    assert (
+        await_node_state(local_api, stream_name, live_added_pattern["name"], "Running")
+        == "Running"
+    )
 
     local_api.call_tool("disconnect", {"stream": stream_name, "link_id": upstream_link_id})
     graph_after_disconnect = local_api.call_tool("graph", {"stream": stream_name})
@@ -402,7 +420,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     ), f"a removed node's links must go with it: {graph_after_remove['links']}"
     # The rest of the graph is untouched by the removal.
     assert node_named(graph_after_remove, "second-effect")["components"]["state"] == "Running"
-    assert node_named(graph_after_remove, "window")["components"]["state"] == "Running"
+    assert node_named(graph_after_remove, "downstream-effect")["components"]["state"] == "Running"
 
     pattern_stream.tatolab_run.interrupt()
     assert pattern_stream.tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (

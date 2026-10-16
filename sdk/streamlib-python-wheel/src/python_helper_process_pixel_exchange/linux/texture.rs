@@ -20,8 +20,9 @@ use crate::python_helper_process_pixel_exchange::{
 use crate::python_processor_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
 
 use super::{
-    close_single_plane_dup_vulkan_refused, duplicate_first_plane_fd_for_export,
-    duplicate_plane_fds_for_import, parse_device_uuid, plane_u64_array_check_out_metadata_field,
+    OpaqueFdAllocationExportDescription, close_single_plane_dup_vulkan_refused,
+    duplicate_first_plane_fd_for_export, duplicate_plane_fds_for_import,
+    opaque_fd_export_contract_stated_by_a_registration, plane_u64_array_check_out_metadata_field,
     response_field,
 };
 
@@ -147,35 +148,14 @@ impl TextureCheckOutRegistrationMetadata {
                  usage set)"
             )));
         }
-        let vk_memory_type_index = response
-            .get("vk_memory_type_index")
-            .and_then(|value| value.as_u64())
-            .and_then(|value| u32::try_from(value).ok());
-        if handle_is_opaque_fd && vk_memory_type_index.is_none() {
-            return Err(PyRuntimeError::new_err(format!(
-                "texture {surface_id:?} was registered without its exporter's memory type \
-                 index; a conforming OPAQUE_FD import binds a stated memory type, never a \
-                 guessed one"
-            )));
-        }
-        let exporting_device_uuid = response
-            .get("exporting_device_uuid")
-            .and_then(|value| value.as_str())
-            .map(parse_device_uuid)
+        let opaque_fd_export_contract = handle_is_opaque_fd
+            .then(|| {
+                opaque_fd_export_contract_stated_by_a_registration(
+                    format_args!("texture {surface_id:?}"),
+                    response,
+                )
+            })
             .transpose()?;
-        if handle_is_opaque_fd && exporting_device_uuid.is_none() {
-            return Err(PyRuntimeError::new_err(format!(
-                "texture {surface_id:?} was registered without its exporting device UUID; \
-                 importing onto the wrong GPU of a multi-GPU rig reads the wrong memory \
-                 instead of failing here"
-            )));
-        }
-        let opaque_fd_export_contract = vk_memory_type_index.zip(exporting_device_uuid).map(
-            |(vk_memory_type_index, exporting_device_uuid)| OpaqueFdExportContract {
-                vk_memory_type_index,
-                exporting_device_uuid,
-            },
-        );
         Ok(Self {
             width,
             height,
@@ -272,20 +252,6 @@ pub(crate) struct HelperCheckedOutTextureSurface {
     pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
-/// What `export_opaque_fd` hands across: the freshly dup'd memory fd —
-/// caller-owned from this moment — plus the allocation-stable shape a
-/// foreign Vulkan or CUDA external-memory import must reproduce.
-pub(crate) struct OpaqueFdTextureExportDescription {
-    pub(crate) exported_memory_fd: OwnedFd,
-    pub(crate) allocation_byte_size: u64,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) format_wire_name: &'static str,
-    pub(crate) vk_image_creation_recipe: ExportedVkImageCreationRecipe,
-    pub(crate) dedicated_allocation: bool,
-    pub(crate) export_contract: OpaqueFdExportContract,
-}
-
 impl HelperCheckedOutTextureSurface {
     /// A DMA-BUF fd for the texture's first plane and the allocation's
     /// byte size — the handle itself, not a linear view of it.
@@ -312,7 +278,7 @@ impl HelperCheckedOutTextureSurface {
     ///
     /// The mirror of the refusal above: a DMA-BUF-flavoured texture is
     /// refused by name, pointing at `export_dma_buf`.
-    pub(crate) fn export_opaque_fd(&self) -> PyResult<OpaqueFdTextureExportDescription> {
+    pub(crate) fn export_opaque_fd(&self) -> PyResult<OpaqueFdAllocationExportDescription> {
         if !self.handle_is_opaque_fd {
             return Err(PyRuntimeError::new_err(
                 "this texture's memory is DMA-BUF-flavoured: `export_dma_buf` hands its fd \
@@ -328,13 +294,13 @@ impl HelperCheckedOutTextureSurface {
         })?;
         let exported_memory_fd =
             duplicate_first_plane_fd_for_export(&self.exported_plane_fds, "texture")?;
-        Ok(OpaqueFdTextureExportDescription {
+        Ok(OpaqueFdAllocationExportDescription {
             exported_memory_fd,
             allocation_byte_size: self.allocation_byte_size,
             width: self.width,
             height: self.height,
             format_wire_name: self.format.wire_name(),
-            vk_image_creation_recipe: self.vk_image_creation_recipe,
+            vk_image_creation_recipe: Some(self.vk_image_creation_recipe),
             // DEDICATED_MEMORY by construction for the flavour
             // (`HostVulkanTexture::new_opaque_fd_export`); a Vulkan importer
             // chains `VkMemoryDedicatedAllocateInfo`, a CUDA importer sets
@@ -476,18 +442,27 @@ impl HelperProcessGpuExchangeClient {
 
         let vulkan_device = self.consumer_vulkan_device()?;
         let dup_raw_fds = duplicate_plane_fds_for_import(&plane_fds)?;
-        let imported = match (metadata.handle_is_opaque_fd, dup_raw_fds.as_slice()) {
-            (true, &[opaque_memory_fd]) => ConsumerVulkanTexture::from_opaque_fd(
-                &vulkan_device,
-                opaque_memory_fd,
-                metadata.width,
-                metadata.height,
-                metadata.format,
-                metadata.allocation_byte_size,
-            ),
+        // The export contract is present exactly on an OPAQUE_FD
+        // registration — the metadata parse refuses one without it.
+        let imported = match (
+            metadata.opaque_fd_export_contract.as_ref(),
+            dup_raw_fds.as_slice(),
+        ) {
+            (Some(opaque_fd_export_contract), &[opaque_memory_fd]) => {
+                ConsumerVulkanTexture::from_opaque_fd(
+                    &vulkan_device,
+                    opaque_memory_fd,
+                    metadata.width,
+                    metadata.height,
+                    metadata.format,
+                    metadata.vk_image_creation_recipe.vk_image_usage_flags,
+                    metadata.allocation_byte_size,
+                    opaque_fd_export_contract.vk_memory_type_index,
+                )
+            }
             // Unreachable past the arity refusal above; destructured rather
             // than indexed so a broken invariant refuses instead of panicking.
-            (true, _) => {
+            (Some(_), _) => {
                 close_single_plane_dup_vulkan_refused(&dup_raw_fds);
                 return Err(PyRuntimeError::new_err(format!(
                     "opaque_fd texture {surface_id:?} duplicated {} fds where its whole \
@@ -495,7 +470,7 @@ impl HelperProcessGpuExchangeClient {
                     dup_raw_fds.len()
                 )));
             }
-            (false, _) => ConsumerVulkanTexture::import_render_target_dma_buf(
+            (None, _) => ConsumerVulkanTexture::import_render_target_dma_buf(
                 &vulkan_device,
                 &dup_raw_fds,
                 &metadata.plane_offsets,

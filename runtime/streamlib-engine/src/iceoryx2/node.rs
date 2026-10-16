@@ -1901,23 +1901,47 @@ mod tests {
         );
     }
 
-    /// A test-domain prefix naming an exited pid, so the next test process's
-    /// sweep reclaims the shared memory a test leaves under it.
+    /// A test-domain prefix naming a child process held alive until this is
+    /// dropped, then killed, so the first sweep after it reclaims the shared
+    /// memory a test leaves under it.
     ///
-    /// Settles this process's own domain first, because doing so runs the
-    /// one-time sweep that deletes every `/dev/shm` segment whose prefix names a
-    /// process that is gone — which is exactly the shape this prefix creates.
-    /// Left to happen on its own, that sweep fires whenever some sibling test
-    /// first asks for the shared domain, and if that lands mid-test it deletes
-    /// the test's shared memory underneath it (`ServiceInCorruptedState`).
-    /// `OnceLock`, so forcing it here means it cannot fire again.
-    fn a_test_domain_prefix_the_next_test_process_reclaims() -> String {
-        use crate::iceoryx2::iceoryx2_domain_for_this_test_process::{
-            test_domain_prefix, tests::a_process_id_that_has_exited,
-        };
+    /// Alive, because every test process runs a one-time sweep at its first
+    /// iceoryx2 use that deletes each `/dev/shm` segment whose prefix names a
+    /// process that is gone. Nextest starts sibling test processes throughout a
+    /// test's run, so a prefix naming an exited pid has its shared memory
+    /// deleted underneath it mid-test (`HangsInCreation`,
+    /// `ServiceInCorruptedState`).
+    struct TestDomainPrefixNamingALiveChildProcess {
+        prefix: String,
+        child_process_the_prefix_names: std::process::Child,
+    }
 
-        let _ = crate::iceoryx2::iceoryx2_domain_for_this_test_process();
-        test_domain_prefix(current_process_uid(), a_process_id_that_has_exited())
+    impl TestDomainPrefixNamingALiveChildProcess {
+        fn new() -> Self {
+            use crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix;
+
+            let child_process_the_prefix_names = std::process::Command::new("sleep")
+                .arg("3600")
+                .spawn()
+                .expect("a child process for a test domain's prefix to name");
+            let prefix =
+                test_domain_prefix(current_process_uid(), child_process_the_prefix_names.id());
+            Self {
+                prefix,
+                child_process_the_prefix_names,
+            }
+        }
+
+        fn prefix(&self) -> &str {
+            &self.prefix
+        }
+    }
+
+    impl Drop for TestDomainPrefixNamingALiveChildProcess {
+        fn drop(&mut self) {
+            let _ = self.child_process_the_prefix_names.kill();
+            let _ = self.child_process_the_prefix_names.wait();
+        }
     }
 
     #[test]
@@ -1926,8 +1950,10 @@ mod tests {
         let second_domain_root_parent = domain_root_parent_within_the_socket_path_budget();
         let first_root = first_domain_root_parent.path().join("iox2");
         let second_root = second_domain_root_parent.path().join("iox2");
-        let first_prefix = a_test_domain_prefix_the_next_test_process_reclaims();
-        let second_prefix = a_test_domain_prefix_the_next_test_process_reclaims();
+        let first_domain_prefix = TestDomainPrefixNamingALiveChildProcess::new();
+        let second_domain_prefix = TestDomainPrefixNamingALiveChildProcess::new();
+        let first_prefix = first_domain_prefix.prefix();
+        let second_prefix = second_domain_prefix.prefix();
         let service_name = ServiceName::new(&unique_service_name("disjoint")).unwrap();
 
         let first_node =
@@ -1992,7 +2018,8 @@ mod tests {
         let second_domain_root_parent = domain_root_parent_within_the_socket_path_budget();
         let first_root = first_domain_root_parent.path().join("iox2");
         let second_root = second_domain_root_parent.path().join("iox2");
-        let shared_prefix = a_test_domain_prefix_the_next_test_process_reclaims();
+        let shared_domain_prefix = TestDomainPrefixNamingALiveChildProcess::new();
+        let shared_prefix = shared_domain_prefix.prefix();
         let channel_service_name = unique_service_name("shared_prefix");
         // One past the first domain's lone subscriber, so a refusal for room
         // can never stand in for the delivery this test asserts on.

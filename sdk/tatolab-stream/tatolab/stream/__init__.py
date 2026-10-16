@@ -60,7 +60,7 @@ from ._gpu_protocols import GpuSurfaceHandle as GpuSurfaceHandle
 from ._gpu_protocols import GraphicsKernel as GraphicsKernel
 from ._gpu_protocols import IOSurfaceMachPortExport as IOSurfaceMachPortExport
 from ._gpu_protocols import KernelDispatchBatch as KernelDispatchBatch
-from ._gpu_protocols import OpaqueFdTextureExport as OpaqueFdTextureExport
+from ._gpu_protocols import OpaqueFdAllocationExport as OpaqueFdAllocationExport
 from ._gpu_protocols import RayTracingKernel as RayTracingKernel
 from ._node_context_protocols import LinkInputDataReader as LinkInputDataReader
 from ._node_context_protocols import LinkOutputDataWriter as LinkOutputDataWriter
@@ -179,7 +179,7 @@ __all__ = [
     "NodeOwnedWindow",
     "NodeOwnedWindowEvents",
     "NodeReference",
-    "OpaqueFdTextureExport",
+    "OpaqueFdAllocationExport",
     "OpusDecoder",
     "OpusDecoderConfig",
     "OpusEncoder",

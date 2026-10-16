@@ -28,12 +28,13 @@ is one with a real producer behind the frame: an edit through `writable()` or
 `cpu()` is checked by resolving the surface again from scratch, because
 published means every *other* holder observes it.
 
-Every test here is `requires_gpu`, so CI runs none of them, but they do not all
-need the same hardware. The lifetime pair, the device-side tensor pair and the
-camera write-door pair are camera-gated; the rest drive the engine's native
-test pattern, and the host-side ones consume with plain numpy, so they need a
-GPU and nothing else. Each gate skips by name, so a missing camera or a
-CPU-only torch reads as what it is rather than as a failure of the capability.
+Every test here is `requires_gpu`, but they do not all need the same
+hardware. The lifetime pair and the camera write-door pair are camera-gated;
+the rest drive the engine's native test pattern. The device-side tensor pair,
+the GPU write door and the bare-view pair need CUDA — the bare view asserts
+the read advertises `kDLCUDA` — and the CPU write-door pair needs a device and
+nothing else. Each gate skips by name, so a missing camera or a CPU-only torch
+reads as what it is rather than as a failure of the capability.
 
 The write doors are proven against both sources deliberately. A producer that
 published an internal transient under the frame's id would leave the
@@ -138,6 +139,7 @@ def _require_a_moving_scene(observation: dict) -> None:
         )
 
 
+@pytest.mark.rig_only_capability(reason="a camera")
 def test_a_typed_cast_claims_its_frame_and_outlives_the_producers_ring(
     start_tatolabd_running_stream,
 ):
@@ -167,6 +169,7 @@ def test_a_typed_cast_claims_its_frame_and_outlives_the_producers_ring(
     )
 
 
+@pytest.mark.rig_only_capability(reason="a camera")
 def test_an_untyped_read_claims_nothing_and_is_refused_once_the_slot_cycles(
     start_tatolabd_running_stream,
 ):
@@ -221,6 +224,7 @@ def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
     )
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
     start_tatolabd_running_stream,
 ):
@@ -240,6 +244,7 @@ def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
     _assert_the_bare_view_is_this_frames_pixels(observation)
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_the_shipped_video_frame_reaches_its_pixels_the_same_way(
     start_tatolabd_running_stream,
 ):
@@ -283,6 +288,7 @@ def _require_a_device_consumer() -> None:
         )
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_user_authored_cast_type_reaches_torch_as_a_device_tensor(
     start_tatolabd_running_stream,
 ):
@@ -297,6 +303,7 @@ def test_a_user_authored_cast_type_reaches_torch_as_a_device_tensor(
     _assert_the_bare_device_tensor_is_this_frames_pixels(observation)
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_the_shipped_video_frame_reaches_torch_as_a_device_tensor(
     start_tatolabd_running_stream,
 ):
@@ -327,6 +334,7 @@ def _assert_the_edit_reached_the_surface(observation: dict) -> None:
     )
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_gpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
     start_tatolabd_running_stream,
 ):
@@ -347,6 +355,7 @@ def test_a_gpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
     _assert_the_edit_reached_the_surface(observation)
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_raise_inside_the_gpu_write_door_follows_its_floors_publication_rule(
     start_tatolabd_running_stream,
 ):
@@ -410,6 +419,7 @@ def test_a_raise_inside_the_cpu_write_door_propagates_and_closes_the_scope(
     assert observation["the_door_opens_again_after_a_raise"]
 
 
+@pytest.mark.rig_only_capability(reason="a camera")
 def test_a_gpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
     start_tatolabd_running_stream,
 ):
@@ -429,6 +439,7 @@ def test_a_gpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
     _assert_the_edit_reached_the_surface(observation)
 
 
+@pytest.mark.rig_only_capability(reason="a camera")
 def test_a_cpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
     start_tatolabd_running_stream,
 ):

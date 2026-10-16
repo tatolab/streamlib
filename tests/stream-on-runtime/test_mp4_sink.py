@@ -4,9 +4,9 @@
 """`Mp4Sink` from Python, built-in class to a file with two tracks in it.
 
 The load tests need no device: `tatolabd` loads the graph and its start is
-then refused at the GPU, which is why they run in CI. The recording test starts the engine,
-so it carries `requires_gpu` like every other graph test here and runs nowhere
-in CI: writing an MP4 needs no device, but a running processor does.
+then refused at the GPU. The recording test starts the engine, so it carries
+`requires_gpu` like every other graph test here: writing an MP4 needs no
+device, but a running processor does.
 
 No camera and no microphone. What this suite proves is the container and the
 track-per-link rule reached from Python, so both tracks are Opus over a tone

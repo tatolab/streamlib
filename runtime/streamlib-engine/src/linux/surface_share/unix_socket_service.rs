@@ -23,11 +23,12 @@ use streamlib_surface_client::{
 
 use crate::core::context::SurfaceCheckOutLeaseHolderId;
 use crate::core::context::surface_share_wire_verbs::{
+    SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID, SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX,
     answer_release_check_out, answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
     latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
     record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
     release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
-    tensor_layout_of_a_storage_buffer_registration,
+    stated_vk_memory_type_index, tensor_layout_of_a_storage_buffer_registration,
 };
 
 use super::state::{SurfaceRegistration, SurfaceShareState};
@@ -297,6 +298,28 @@ fn handle_client_connection(
     }
 }
 
+/// The raw-handle export contract an OPAQUE_FD producer states beside its
+/// fd, as a registration or check-in request carries it.
+struct RawHandleExportContractFields {
+    vk_memory_type_index: Option<u32>,
+    exporting_device_uuid: Option<String>,
+}
+
+/// Read the raw-handle export contract fields from `request`. No default
+/// exists: `0` is a valid memory type index, so absence stays absent through
+/// the table and the checkout echo.
+fn parse_raw_handle_export_contract_fields(
+    request: &serde_json::Value,
+) -> RawHandleExportContractFields {
+    RawHandleExportContractFields {
+        vk_memory_type_index: stated_vk_memory_type_index(request),
+        exporting_device_uuid: request
+            .get(SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID)
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    }
+}
+
 /// Extract `plane_sizes`, `plane_offsets`, and `plane_strides` from a JSON
 /// request body. Returns vecs whose length matches `expected_plane_count`,
 /// falling back to `[0]` for single-plane registrations that omit the arrays.
@@ -480,17 +503,10 @@ fn handle_register(
     // field absent-defaults to the OPAQUE_FD constructor's hardcoded
     // shape so legacy callers see no behavior change.
     let vk_image = parse_vk_image_create_info_fields(request);
-    // Raw-handle export contract fields, OPAQUE_FD producers only. No
-    // default exists: `0` is a valid memory type index, so absence stays
-    // absent through the table and the checkout echo.
-    let vk_memory_type_index = request
-        .get("vk_memory_type_index")
-        .and_then(|v| v.as_u64())
-        .and_then(|v| u32::try_from(v).ok());
-    let exporting_device_uuid = request
-        .get("exporting_device_uuid")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
+    let RawHandleExportContractFields {
+        vk_memory_type_index,
+        exporting_device_uuid,
+    } = parse_raw_handle_export_contract_fields(request);
     let tensor_layout = match tensor_layout_of_a_storage_buffer_registration(request) {
         Ok(tensor_layout) => tensor_layout,
         Err(refusal) => return (serde_json::json!({"error": refusal}), Vec::new()),
@@ -772,10 +788,10 @@ fn handle_lookup(
     // `SurfaceMetadata::vk_memory_type_index`), so no default may appear
     // on the wire.
     if let Some(vk_memory_type_index) = checkout.vk_memory_type_index {
-        response["vk_memory_type_index"] = vk_memory_type_index.into();
+        response[SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX] = vk_memory_type_index.into();
     }
     if let Some(exporting_device_uuid) = checkout.exporting_device_uuid {
-        response["exporting_device_uuid"] = exporting_device_uuid.into();
+        response[SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID] = exporting_device_uuid.into();
     }
     echo_the_tensor_layout_onto_a_lookup_reply(&mut response, checkout.tensor_layout.as_ref());
     (response, dup_fds)
@@ -881,6 +897,10 @@ fn handle_check_in(
     // the OPAQUE_FD constructor's hardcoded shape so legacy callers
     // see no behavior change.
     let vk_image = parse_vk_image_create_info_fields(request);
+    let RawHandleExportContractFields {
+        vk_memory_type_index,
+        exporting_device_uuid,
+    } = parse_raw_handle_export_contract_fields(request);
 
     let surface_id = uuid::Uuid::new_v4().to_string();
 
@@ -931,10 +951,8 @@ fn handle_check_in(
             vk_image_tiling: vk_image.vk_image_tiling,
             vk_image_usage: vk_image.vk_image_usage,
             vk_image_allocation_size: vk_image.vk_image_allocation_size,
-            // check_in surfaces are pixel buffers; the raw-handle export
-            // contract fields ride texture registrations only.
-            vk_memory_type_index: None,
-            exporting_device_uuid: None,
+            vk_memory_type_index,
+            exporting_device_uuid,
             tensor_layout: None,
         })
     {
@@ -2071,6 +2089,90 @@ mod tests {
         close_every_fd(&bare_lookup_fds);
         assert!(bare_lookup_resp.get("vk_memory_type_index").is_none());
         assert!(bare_lookup_resp.get("exporting_device_uuid").is_none());
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// A `check_in` keeps the raw-handle export contract the same way a
+    /// `register` does: an OPAQUE_FD pixel buffer checked in with both fields
+    /// sees them echoed on lookup and check-out — index `0` included — and a
+    /// check-in that states neither gets neither back.
+    #[test]
+    fn a_check_in_echoes_the_raw_handle_export_fields_it_states_and_no_others() {
+        let state = SurfaceShareState::new();
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+        let send_fd = make_memfd_with(b"check-in-raw-handle-export-fixture");
+
+        let check_in = |request: serde_json::Value| -> String {
+            let (check_in_resp, _) =
+                send_request_with_fds(&stream, &request, &[send_fd], 0).expect("check_in request");
+            check_in_resp
+                .get("surface_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("check_in must answer a surface id: {check_in_resp:?}"))
+                .to_string()
+        };
+        let stated_surface_id = check_in(serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "test-runtime",
+            "width": 64,
+            "height": 32,
+            "format": "rgba32",
+            "handle_type": "opaque_fd",
+            "plane_sizes": [8192u64],
+            "plane_offsets": [0u64],
+            "vk_memory_type_index": 0u32,
+            "exporting_device_uuid": "00112233445566778899aabbccddeeff",
+        }));
+        let bare_surface_id = check_in(serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "test-runtime",
+            "width": 64,
+            "height": 32,
+            "format": "rgba32",
+            "handle_type": "dma_buf",
+            "plane_sizes": [8192u64],
+            "plane_offsets": [0u64],
+        }));
+        unsafe { libc::close(send_fd) };
+
+        for op in ["lookup", "check_out"] {
+            let (stated_resp, stated_fds) = send_request_with_fds(
+                &stream,
+                &serde_json::json!({"op": op, "surface_id": stated_surface_id}),
+                &[],
+                MAX_DMA_BUF_PLANES,
+            )
+            .expect("request for the stated surface");
+            close_every_fd(&stated_fds);
+            assert_eq!(
+                stated_resp
+                    .get("vk_memory_type_index")
+                    .and_then(|v| v.as_u64()),
+                Some(0),
+                "{op} must echo the stated index, zero included: {stated_resp:?}"
+            );
+            assert_eq!(
+                stated_resp
+                    .get("exporting_device_uuid")
+                    .and_then(|v| v.as_str()),
+                Some("00112233445566778899aabbccddeeff"),
+                "{op}: {stated_resp:?}"
+            );
+
+            let (bare_resp, bare_fds) = send_request_with_fds(
+                &stream,
+                &serde_json::json!({"op": op, "surface_id": bare_surface_id}),
+                &[],
+                MAX_DMA_BUF_PLANES,
+            )
+            .expect("request for the bare surface");
+            close_every_fd(&bare_fds);
+            assert!(bare_resp.get("vk_memory_type_index").is_none(), "{op}");
+            assert!(bare_resp.get("exporting_device_uuid").is_none(), "{op}");
+        }
 
         drop(stream);
         service.stop();

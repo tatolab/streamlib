@@ -2,30 +2,18 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::io::Write as _;
-use std::sync::Arc;
 
 use objc2_io_surface::IOSurfaceLockOptions;
 use objc2_metal::MTLSharedEvent as _;
-use pyo3::prelude::*;
 use streamlib_consumer_rhi::ConsumerVulkanDevice;
 
-use super::super::super::{HelperCheckedOutSurface, HelperProcessGpuExchangeClient};
+use super::super::super::HelperCheckedOutSurface;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
 
-fn exchange_client_on(share: &SurfaceShareUnderTest) -> Arc<HelperProcessGpuExchangeClient> {
-    Python::initialize();
-    Python::attach(|python| {
-        Arc::new(HelperProcessGpuExchangeClient::new(
-            python.None(),
-            python.None(),
-            share.channel_name_for_the_helper(),
-            "helper:texture-check-out-under-test".to_string(),
-        ))
-    })
-}
-
 fn a_vulkan_device_is_available() -> bool {
-    match ConsumerVulkanDevice::new() {
+    match streamlib_consumer_rhi::vulkan_device_uuid_of_the_first_device_the_loader_enumerates()
+        .and_then(ConsumerVulkanDevice::new_on_the_device_the_runtime_named)
+    {
         Ok(_) => true,
         Err(unavailable) => {
             let _ = writeln!(
@@ -76,7 +64,7 @@ fn a_checked_out_texture_reads_its_iosurface_rows_and_releases_on_its_shared_eve
     // SAFETY: pairs the lock above.
     unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
 
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("texture-check-out-under-test");
     let checked_out = exchange_client
         .check_out_and_import("texture-slot")
         .expect("the checkout and import");

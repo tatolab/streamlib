@@ -103,8 +103,8 @@ vendor's kernels are written against `surf2Dwrite` /
 
 Engine resources:
 - [`HostVulkanTexture::new_opaque_fd_export`] (`VK_IMAGE_TILING_OPTIMAL`,
-  no DRM modifier, format restricted to the CUDA-mappable subset —
-  `Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`).
+  no DRM modifier; CUDA maps only the `Rgba8Unorm` / `Rgba16Float` /
+  `Rgba32Float` images it allocates).
 - Same timeline-semaphore primitive.
 - The vendor library imports via `cudaImportExternalMemory(OPAQUE_FD)` +
   `cudaExternalMemoryGetMappedMipmappedArray` and writes via surface

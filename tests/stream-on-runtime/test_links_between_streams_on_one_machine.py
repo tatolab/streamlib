@@ -12,8 +12,9 @@ streams attached on one `tatolabd`, the source loaded as `a` and the reader as
 counts at its stop, and a `tatolab tap` on a port only another stream reads.
 
 A started stream needs a GPU context, so the tests that run streams are
-`requires_gpu`; a refusal the load or the compile makes is read on a
-`tatolabd` that reaches no Vulkan driver.
+`requires_gpu`, and the one ending in a native window is rig-only, since a
+window refuses on the software device; a refusal the load or the compile makes
+is read on a `tatolabd` that reaches no Vulkan driver.
 """
 
 from __future__ import annotations
@@ -173,6 +174,7 @@ def refused_naming(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> str:
 
 
 @pytest.mark.requires_gpu
+@pytest.mark.rig_only_capability(reason="a display")
 def test_a_link_between_streams_carries_a_native_source_into_python_and_a_python_source_into_a_native_window(
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",

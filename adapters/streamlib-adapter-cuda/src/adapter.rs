@@ -183,7 +183,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         registration: HostImageSurfaceRegistration<D::Privilege>,
     ) -> Result<(), AdapterError> {
         let format = registration.texture.format();
-        if !is_cuda_mappable_format(format) {
+        if !format.is_cuda_mappable() {
             return Err(AdapterError::BackendRejected {
                 reason: format!(
                     "register_host_image_surface: surface_id={id}: format {format:?} is not \
@@ -1044,22 +1044,6 @@ struct ImageWriteAcquired<P: DevicePrivilege> {
     format: TextureFormat,
 }
 
-/// Format gate enforced at [`CudaSurfaceAdapter::register_host_image_surface`]
-/// time. The CUDA-mappable subset is fixed by
-/// `cudaExternalMemoryGetMappedMipmappedArray`'s accepted
-/// `cudaChannelFormatDesc`: 1/2/4-channel `R8/R16/R32` integer or
-/// 16/32-bit float, no sRGB, no `BGR*`, no three-channel formats.
-/// Mapped to `TextureFormat` variants the streamlib RHI exposes today:
-/// `Rgba8Unorm`, `Rgba16Float`, `Rgba32Float`. Other variants
-/// (`Rgba8UnormSrgb`, `Bgra8Unorm`, `Bgra8UnormSrgb`, `Nv12`) are
-/// rejected.
-fn is_cuda_mappable_format(format: TextureFormat) -> bool {
-    matches!(
-        format,
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float
-    )
-}
-
 impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
     type ReadView<'g> = CudaReadView<'g>;
     type WriteView<'g> = CudaWriteView<'g>;
@@ -1223,22 +1207,4 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Locks the CUDA-mappable format gate. Mentally revert
-    /// `is_cuda_mappable_format` to `|_| true` (or remove the
-    /// `matches!` arm) and the second assertion fires.
-    #[test]
-    fn cuda_mappable_format_accepts_supported_subset() {
-        assert!(is_cuda_mappable_format(TextureFormat::Rgba8Unorm));
-        assert!(is_cuda_mappable_format(TextureFormat::Rgba16Float));
-        assert!(is_cuda_mappable_format(TextureFormat::Rgba32Float));
-    }
-
-    #[test]
-    fn cuda_mappable_format_rejects_other_variants() {
-        assert!(!is_cuda_mappable_format(TextureFormat::Rgba8UnormSrgb));
-        assert!(!is_cuda_mappable_format(TextureFormat::Bgra8Unorm));
-        assert!(!is_cuda_mappable_format(TextureFormat::Bgra8UnormSrgb));
-        assert!(!is_cuda_mappable_format(TextureFormat::Nv12));
-    }
 }

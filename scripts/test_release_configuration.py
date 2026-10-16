@@ -5,7 +5,7 @@
 
 Several files have to agree, and each disagreement fails too late to be
 obvious: a manifest release-please does not bump publishes the previous
-version again, which PyPI refuses, and an extension `release-wheel.yml` does not
+version again, which PyPI refuses, and an extension `reusable-distributions.yml` does not
 name is never built or published at all.
 
 Stdlib on purpose: this runs on a runner with no test dependencies installed.
@@ -26,7 +26,7 @@ EXTENSION_DISTRIBUTION_NAME_PREFIX = "tatolab-"
 
 TATOLAB_STREAM_PYPROJECT_RELATIVE_PATH = "sdk/tatolab-stream/pyproject.toml"
 ENGINE_WHEEL_PYPROJECT_RELATIVE_PATH = "sdk/streamlib-python-wheel/pyproject.toml"
-RELEASE_TO_PYPI_WORKFLOW_RELATIVE_PATH = ".github/workflows/release-wheel.yml"
+RELEASE_TO_PYPI_WORKFLOW_RELATIVE_PATH = ".github/workflows/reusable-distributions.yml"
 
 
 def extension_package_directory_and_distribution_names():

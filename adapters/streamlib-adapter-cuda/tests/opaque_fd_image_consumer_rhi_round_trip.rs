@@ -57,6 +57,7 @@
 #[path = "common.rs"]
 mod common;
 
+use std::os::fd::FromRawFd as _;
 use std::sync::Arc;
 
 use serial_test::serial;
@@ -172,7 +173,9 @@ fn opaque_fd_image_carve_out_round_trip() {
     );
 
     // Phase 5: consumer imports both via consumer-rhi.
-    let consumer_device = match ConsumerVulkanDevice::new() {
+    let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        host_device.physical_device_uuid(),
+    ) {
         Ok(d) => Arc::new(d),
         Err(e) => {
             unsafe {
@@ -180,7 +183,7 @@ fn opaque_fd_image_carve_out_round_trip() {
                 libc::close(dest_fd);
             }
             println!(
-                "opaque_fd image carve-out: ConsumerVulkanDevice::new failed: {e:?} — skipping \
+                "opaque_fd image carve-out: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {e:?} — skipping \
                  (likely a UUID mismatch on a multi-GPU rig)"
             );
             return;
@@ -193,7 +196,11 @@ fn opaque_fd_image_carve_out_round_trip() {
         W,
         H,
         ConsumerTextureFormat::Rgba8Unorm,
+        host_image.vk_image_usage_flags().bits(),
         host_image_alloc_size,
+        host_image
+            .vma_allocation_memory_type_index()
+            .expect("an OPAQUE_FD export image has a VMA allocation"),
     ) {
         Ok(t) => Arc::new(t),
         Err(e) => {
@@ -205,14 +212,12 @@ fn opaque_fd_image_carve_out_round_trip() {
         }
     };
 
+    // SAFETY: the fd the export just returned; nothing else holds it.
+    let dest_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(dest_fd) };
     let consumer_dest_buf =
         match ConsumerVulkanBuffer::from_opaque_fd(&consumer_device, dest_fd, host_dest_size) {
             Ok(b) => Arc::new(b),
-            Err(e) => {
-                // Image fd ownership already transferred to its driver.
-                unsafe { libc::close(dest_fd) };
-                panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}");
-            }
+            Err(e) => panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}"),
         };
 
     // Phase 5b: assert imported metadata matches.
@@ -379,7 +384,9 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
     let host_image_alloc_size = host_image.vma_allocation_size();
     let host_dest_size = dest_buf.size() as vk::DeviceSize;
 
-    let consumer_device = match ConsumerVulkanDevice::new() {
+    let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        host_device.physical_device_uuid(),
+    ) {
         Ok(d) => Arc::new(d),
         Err(e) => {
             unsafe {
@@ -387,7 +394,7 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
                 libc::close(dest_fd);
             }
             println!(
-                "opaque_fd teardown probe: ConsumerVulkanDevice::new failed: {e:?} — skipping \
+                "opaque_fd teardown probe: ConsumerVulkanDevice::new_on_the_device_the_runtime_named failed: {e:?} — skipping \
                  (likely a UUID mismatch on a multi-GPU rig)"
             );
             return;
@@ -399,7 +406,11 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
         W,
         H,
         ConsumerTextureFormat::Rgba8Unorm,
+        host_image.vk_image_usage_flags().bits(),
         host_image_alloc_size,
+        host_image
+            .vma_allocation_memory_type_index()
+            .expect("an OPAQUE_FD export image has a VMA allocation"),
     ) {
         Ok(t) => Arc::new(t),
         Err(e) => {
@@ -410,13 +421,12 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
             panic!("ConsumerVulkanTexture::from_opaque_fd failed: {e}");
         }
     };
+    // SAFETY: the fd the export just returned; nothing else holds it.
+    let dest_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(dest_fd) };
     let consumer_dest_buf =
         match ConsumerVulkanBuffer::from_opaque_fd(&consumer_device, dest_fd, host_dest_size) {
             Ok(b) => Arc::new(b),
-            Err(e) => {
-                unsafe { libc::close(dest_fd) };
-                panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}");
-            }
+            Err(e) => panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}"),
         };
 
     // The teardown under probe: the exporting side destroys its source

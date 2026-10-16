@@ -48,7 +48,7 @@ three keys and only the stub's transport sentence changes.
     there);
   - `docs/architecture/third-party-gpu-backends.md`, whose only shipped instance is nvJPEG
     and `J`'s backend trait, and `texture-ring.md:30`, `:206`, `:282`, `:330`;
-  - `Cargo.toml:5`, `deny.toml:184-187`, and the comment at `release-please.yml:59`.
+  - `Cargo.toml:5`, `deny.toml:184-187`, and the comment in `release.yml`'s version-pin sync step.
 
 **The decoder, today**
 - **No raw vulkanalia.** Every import is the facade's re-export of an engine item:
@@ -78,8 +78,8 @@ three keys and only the stub's transport sentence changes.
   - Each frame allocates and repacks about 25 MB (`scan.rs:52`, `kernel.rs:467-477`).
   - The shader evaluates a full 64-term IDCT with two `cos()` per term
     (`jpeg_decode.comp:94-165`). Its own comment targets 640×360 at 30 Hz.
-- **No CI step runs its tests.** Linux clippy builds the lib only (`test.yml:121-122`), and
-  macOS checks `--all-targets` without running them (`:801`). The ADR's line saying they run
+- **No CI step runs its tests.** Linux clippy builds the lib only (`ci.yml`'s `lint` job), and
+  macOS checks `--all-targets` without running them (`ci.yml`'s `build-macos` job). The ADR's line saying they run
   is corrected in this PR.
 
 **The V4L2 arm, today**
@@ -103,7 +103,7 @@ three keys and only the stub's transport sentence changes.
   (`:681-683`). Its selector is a pure function with unit tests (`:1138-1170`).
 - **Tests and devices.**
   - No test reaches `negotiate_capture_format`, which takes a live `v4l::Device`.
-  - CI runs V4L2 tests by name only (`test.yml:325-348`, mirrored in `xtask/src/main.rs:437-441`).
+  - CI runs V4L2 tests by name only (`.config/nextest.toml`'s `ci` profile).
   - vivid offers no MJPG.
   - The Cam Link (USB 3) offers MJPG at every size from 640×480 to 3840×2160, at 60/50/30/25.
     One captured 1920×1080 frame is baseline 4:2:2 with its tables present.
@@ -203,7 +203,7 @@ At ship, the entry drops "(unbuilt)" and the workspace-member clause. It then re
    - 4:4:4 and greyscale stay refused: no camera case needs them, and 4:4:4 grows the buffer
      to 24.9 MB.
 7. **Proof, as the floor allows.**
-   - The CPU tests move into the engine and are named in `test.yml` and the xtask mirror:
+   - The CPU tests move into the engine and are named in `.config/nextest.toml`'s `ci` profile:
      parser, entropy, colour, Annex K and the selector.
    - A `hardware-tests` PSNR test carries `gpu_decode.rs`'s CPU reference, generalised to
      4:2:2, against JPEGs the test encodes itself. It is rig-only, per the GPU-tests rule.

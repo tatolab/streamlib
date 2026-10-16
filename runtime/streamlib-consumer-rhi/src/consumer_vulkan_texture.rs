@@ -16,6 +16,7 @@ use std::sync::{Arc, OnceLock};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
+use crate::consumer_vulkan_device::refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index;
 use crate::{
     ConsumerRhiError, ConsumerVulkanDevice, Result, TextureFormat, TextureUsages, VulkanTextureLike,
 };
@@ -102,6 +103,9 @@ impl ConsumerVulkanTexture {
     /// fd ownership: the consumer transfers ownership to Vulkan on
     /// success (the driver dups internally and releases on
     /// `vkFreeMemory`). On error the caller still owns `fds[0]`.
+    ///
+    /// Refused by name, before any Vulkan call, on a device without
+    /// `VK_EXT_external_memory_dma_buf` or `VK_EXT_image_drm_format_modifier`.
     pub fn import_render_target_dma_buf(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
@@ -113,6 +117,16 @@ impl ConsumerVulkanTexture {
         format: TextureFormat,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanTexture::import_render_target_dma_buf",
+            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION,
+            "no DMA-BUF can be imported",
+        )?;
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanTexture::import_render_target_dma_buf",
+            vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION,
+            "no image with an explicit DRM format modifier can be created",
+        )?;
         if fds.is_empty() {
             return Err(ConsumerRhiError::Gpu(
                 "ConsumerVulkanTexture::import_render_target_dma_buf: empty fd vec".into(),
@@ -230,79 +244,65 @@ impl ConsumerVulkanTexture {
         })
     }
 
-    /// Import a host-allocated OPAQUE_FD `VkImage` as a
-    /// DEVICE_LOCAL OPTIMAL tiled image on the consumer device —
-    /// the Vulkan → CUDA interop carve-out.
+    /// Import a host-allocated OPAQUE_FD `VkImage` as a DEVICE_LOCAL
+    /// OPTIMAL image on the consumer device — the cross-process image
+    /// flavor of a device without DMA-BUF, and the Vulkan → CUDA interop
+    /// flavor of one with.
     ///
     /// Pairs with the host's
-    /// [`streamlib::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`] —
-    /// the host allocates the image via the OPAQUE_FD image pool,
-    /// `vkGetMemoryFdKHR` with `OPAQUE_FD` produces a kernel fd, and
-    /// this constructor reproduces the consumer-side `VkImage` bound
-    /// to the imported memory. The same FD can subsequently be passed
-    /// to `cudaImportExternalMemory(OPAQUE_FD)` →
-    /// `cudaExternalMemoryGetMappedMipmappedArray` for the actual
-    /// CUDA texture / surface object — that step lives in the cuda
-    /// adapter, not in this crate.
-    ///
-    /// Constraints (mirror the host constructor exactly):
-    ///
-    /// - `format` must be CUDA-mappable: `Rgba8Unorm`, `Rgba16Float`,
-    ///   or `Rgba32Float`. The other [`TextureFormat`] variants are
-    ///   rejected by `cudaExternalMemoryGetMappedMipmappedArray`.
-    /// - Tiling is forced `VK_IMAGE_TILING_OPTIMAL`; no DRM modifier
-    ///   chain (OPAQUE_FD has no portable layout descriptor —
-    ///   vendor-private interpretation only). For DRM-modifier
-    ///   tiled DMA-BUF imports, use
-    ///   [`Self::import_render_target_dma_buf`].
-    /// - Usage flags match the host: `TRANSFER_SRC | TRANSFER_DST |
-    ///   SAMPLED | STORAGE`. No COLOR_ATTACHMENT — rendering into a
-    ///   CUDA-imported image is not a supported flow.
-    /// - Single FD (no plane vec, no plane layouts). OPAQUE_FD is
-    ///   opaque to the importing API; multi-plane semantics don't
-    ///   apply.
+    /// [`streamlib::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`].
+    /// The image is rebuilt with the registration's `vk_image_usage` — the
+    /// host's create-time usage, which the bind requirements depend on —
+    /// for any single-plane format, OPTIMAL tiling and no DRM modifier
+    /// chain. For DRM-modifier tiled DMA-BUF imports, use
+    /// [`Self::import_render_target_dma_buf`].
     ///
     /// `allocation_size` must be ≥ the consumer's
     /// `vkGetImageMemoryRequirements(image).size`; pass the host's
     /// `HostVulkanTexture::vma_allocation_size()` to avoid bind
     /// failures across the boundary.
     ///
+    /// `stated_memory_type_index` is the registration's
+    /// `vk_memory_type_index` — the type the exporter allocated from, which
+    /// OPAQUE_FD gives an importer no way to derive. One the rebuilt image
+    /// cannot bind is refused by name.
+    ///
     /// fd ownership: the consumer transfers ownership to Vulkan on
     /// success (the driver dups internally and releases on
     /// `vkFreeMemory`). On error the caller still owns `fd`.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fd: std::os::unix::io::RawFd,
         width: u32,
         height: u32,
         format: TextureFormat,
+        vk_image_usage: u32,
         allocation_size: vk::DeviceSize,
+        stated_memory_type_index: u32,
     ) -> Result<Self> {
-        // CUDA-mappable subset — mirrors the host-side constructor.
-        match format {
-            TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => {
-            }
-            other => {
-                return Err(ConsumerRhiError::Gpu(format!(
-                    "ConsumerVulkanTexture::from_opaque_fd: format {other:?} is not \
-                     CUDA-mappable. Supported: Rgba8Unorm, Rgba16Float, Rgba32Float."
-                )));
-            }
+        if format.plane_count() != 1 {
+            return Err(ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanTexture::from_opaque_fd: format {format:?} is multi-plane; an \
+                 OPAQUE_FD image crosses as one memory block no import can split into planes"
+            )));
         }
         if width == 0 || height == 0 {
             return Err(ConsumerRhiError::Gpu(
                 "ConsumerVulkanTexture::from_opaque_fd: width and height must be > 0".into(),
             ));
         }
+        let usage_flags = vk::ImageUsageFlags::from_bits(vk_image_usage)
+            .filter(|usage| !usage.is_empty())
+            .ok_or_else(|| {
+                ConsumerRhiError::Gpu(format!(
+                    "ConsumerVulkanTexture::from_opaque_fd: vk_image_usage {vk_image_usage:#x} \
+                     is not a usage this consumer can rebuild the image with"
+                ))
+            })?;
 
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
-        // Must match the host's `new_opaque_fd_export` usage flags so
-        // both sides build images with identical bind requirements.
-        let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::TRANSFER_DST
-            | vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::STORAGE;
 
         let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
@@ -333,17 +333,19 @@ impl ConsumerVulkanTexture {
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
         let alloc_size = allocation_size.max(mem_requirements.size);
 
-        let memory = vulkan_device
-            .import_opaque_fd_memory(
+        let memory = refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index(
+            "ConsumerVulkanTexture::from_opaque_fd",
+            mem_requirements.memory_type_bits,
+            stated_memory_type_index,
+        )
+        .and_then(|()| {
+            vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
                 fd,
                 alloc_size,
-                mem_requirements.memory_type_bits,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                stated_memory_type_index,
             )
-            .map_err(|e| {
-                unsafe { device.destroy_image(image, None) };
-                e
-            })?;
+        })
+        .inspect_err(|_| unsafe { device.destroy_image(image, None) })?;
 
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
             vulkan_device.free_imported_memory(memory);
@@ -375,7 +377,8 @@ impl ConsumerVulkanTexture {
     ///
     /// Use [`Self::import_render_target_dma_buf`] when the consumer
     /// will render INTO the imported image — LINEAR is sampler-only on
-    /// NVIDIA.
+    /// NVIDIA. Refused by name, before any Vulkan call, on a device without
+    /// `VK_EXT_external_memory_dma_buf`.
     pub fn from_dma_buf_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fd: std::os::unix::io::RawFd,
@@ -384,6 +387,11 @@ impl ConsumerVulkanTexture {
         format: TextureFormat,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
+        vulkan_device.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanTexture::from_dma_buf_fd",
+            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION,
+            "no DMA-BUF can be imported",
+        )?;
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
         let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
@@ -713,7 +721,7 @@ mod iosurface_import_tests {
     }
 
     fn try_create_device() -> Option<Arc<ConsumerVulkanDevice>> {
-        match ConsumerVulkanDevice::new() {
+        match crate::consumer_vulkan_device::consumer_vulkan_device_on_the_first_device_the_loader_enumerates() {
             Ok(device) => Some(Arc::new(device)),
             Err(unavailable) => {
                 println!("Skipping test — ConsumerVulkanDevice unavailable: {unavailable}");

@@ -673,8 +673,9 @@ shape but **don't**:
 4. **"My adapter wants per-acquire host work on a subprocess's
    behalf."** That is not an adapter's job. Per-acquire host work
    for a subprocess is an escalate op answered by `GpuContext`,
-   which owns the staging and signals the timeline the subprocess
-   waits on — see `run_cpu_readback_copy`. Adding an installable
+   which owns the staging, retires each copy before it replies, and
+   signals the timeline the subprocess waits on where the device exports
+   one — see `run_cpu_readback_copy`. Adding an installable
    bridge would reintroduce the application-glue step the engine
    deleted.
 
@@ -683,7 +684,8 @@ shape but **don't**:
    the DLPack contract). The plumbing exists: `RhiExternalHandle`
    has `DmaBuf` and `OpaqueFd` variants, the surface-share wire
    format carries `handle_type` as a discriminator,
-   `ConsumerVulkanDevice::import_opaque_fd_memory` exists. Pick
+   `ConsumerVulkanDevice::import_opaque_fd_memory_at_stated_memory_type_index`
+   exists. Pick
    the variant your framework requires; don't invent a third seam.
 
 6. **"My adapter is hot-path — IPC roundtrips will kill perf."**

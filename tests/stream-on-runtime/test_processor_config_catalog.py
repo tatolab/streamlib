@@ -7,7 +7,7 @@ The declaration suite proves the document is derived, and the engine's Rust
 tests prove it reaches the shape `/api/registry` serializes. This is the whole
 path on a real node with each processor in its own processor interpreter —
 which needs a running graph, and a running graph initializes a GPU context, so
-it runs on the rig like every other live proof in this suite.
+it carries `requires_gpu` like every other live proof in this suite.
 """
 
 from collections.abc import Callable

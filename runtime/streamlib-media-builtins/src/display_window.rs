@@ -116,8 +116,11 @@ impl Default for DisplayWindowConfig {
     description = "Shows video frames in a window with vsync.\n\n\
                   `video` takes any published `VideoFrame`. Add as many as the graph needs: each \
                   instance registers its own window with the engine's shared event pump and \
-                  renders on its own thread. An instance that cannot get a window drains its \
-                  input without showing anything, so upstream still sees a live consumer.",
+                  renders on its own thread. On a device whose driver carries no window-system \
+                  support — the runtime's bundled software driver — setup refuses by name and \
+                  the node never reaches Running; the stream is viewed by its URL or by a node \
+                  that reads its frames. An instance that cannot get a window otherwise drains \
+                  its input without showing anything, so upstream still sees a live consumer.",
     execution = manual,
     scheduling = high,
     config = crate::display_window::DisplayWindowConfig,
@@ -132,6 +135,13 @@ pub struct DisplayWindow {
 
 impl ManualProcessor for DisplayWindow::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let capabilities_of_the_device_this_runtime_built_on =
+            ctx.gpu_full_access().gpu_capabilities()?;
+        refuse_a_window_on_a_device_with_no_window_system_surface(
+            &self.config.title,
+            &capabilities_of_the_device_this_runtime_built_on.device_name,
+            capabilities_of_the_device_this_runtime_built_on.supports_window_system_surface,
+        )?;
         // The render thread needs an owned handle that escapes into the
         // thread closure, so the clone at setup is load-bearing.
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
@@ -342,6 +352,23 @@ impl DisplayWindowRenderLoop {
     }
 }
 
+/// Refuse a display on a device that can create no window surface.
+fn refuse_a_window_on_a_device_with_no_window_system_surface(
+    window_title: &str,
+    device_name: &str,
+    device_supports_window_system_surface: bool,
+) -> Result<()> {
+    if device_supports_window_system_surface {
+        return Ok(());
+    }
+    Err(Error::DisplaySurfaceUnavailable(format!(
+        "DisplayWindow \"{window_title}\": the Vulkan device this runtime built on, \
+         {device_name}, cannot open a window: its driver carries no window-system support. \
+         Install your GPU vendor's Vulkan driver to show a window, or view the stream without \
+         one: by its URL, or by a node that reads its frames."
+    )))
+}
+
 /// Whether an outcome spent one of the frames this display reports at stop.
 /// Only an id that never resolved leaves the count untouched — the window had
 /// nothing to show, so counting it would report frames that never existed.
@@ -381,6 +408,43 @@ mod tests {
     use streamlib::sdk::color::{PrimariesId, TransferId};
 
     use super::*;
+
+    #[test]
+    fn a_device_with_no_window_system_surface_refuses_naming_the_vendor_driver_and_the_way_to_view()
+    {
+        let refusal = refuse_a_window_on_a_device_with_no_window_system_surface(
+            "preview",
+            "llvmpipe (LLVM 20.1.2, 256 bits)",
+            false,
+        )
+        .expect_err("a device that can create no window surface must refuse the window")
+        .to_string();
+
+        for named in [
+            "DisplayWindow \"preview\"",
+            "llvmpipe (LLVM 20.1.2, 256 bits)",
+            "GPU vendor's Vulkan driver",
+            "by its URL",
+            "a node that reads its frames",
+        ] {
+            assert!(
+                refusal.contains(named),
+                "the refusal must name {named:?}: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_device_with_a_window_system_surface_opens_the_window() {
+        assert!(
+            refuse_a_window_on_a_device_with_no_window_system_surface(
+                "preview",
+                "NVIDIA GeForce RTX 3090",
+                true
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn config_defaults_are_720p_fit() {

@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-# What only the GPU tests import, installed on the rig with
+# The device-tensor frameworks — torch, and MLX on macOS — installed on the rig with
 # `uv sync --group rig`. PyPI's Linux torch wheels are CUDA builds.
 rig = [
     # 2.10 is the Metal capsule's floor on macOS: 2.9 maps kDLMetal, 2.10
@@ -48,11 +48,13 @@ tatolab-stream = { path = "../../sdk/tatolab-stream", editable = true }
 pythonpath = ["."]
 testpaths = ["."]
 markers = [
-    # A runtime's first stream start initializes a GPU context, and the engine's DMA-BUF
-    # pool pre-warm needs a driver that can actually allocate exportable
-    # device memory. A software rasterizer (lavapipe) cannot, so a GPU-less
-    # runner deselects these with `-m "not requires_gpu"`.
-    "requires_gpu: needs a Vulkan device that can allocate exportable DMA-BUF memory",
+    # A runtime's first stream start builds its GPU context on a Vulkan device.
+    # On Linux CI that is the runtime unit's own software device.
+    "requires_gpu: needs a Vulkan device",
+    # What a CI runner cannot give, from the closed list the stream suite's
+    # `test_platform_markers.py` pins. Deselected on the Linux lane with
+    # `-m "not rig_only_capability"`; a test carrying it also carries `requires_gpu`.
+    "rig_only_capability(reason): needs a capability only the rig has — Vulkan Video, DMA-BUF modifiers, CUDA, a camera, a display or an audio device",
     # The closed list of what macOS does not have, each with its reason. The
     # stream suite's `test_platform_markers.py` pins it. Skipped off Linux.
     "linux_only_capability(reason): a capability the closed list names as absent off Linux",

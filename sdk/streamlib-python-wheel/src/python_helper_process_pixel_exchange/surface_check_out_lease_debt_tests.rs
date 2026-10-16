@@ -4,27 +4,13 @@
 use super::*;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
 
-/// The client needs escalate callables it never uses here — the lease
-/// path speaks only to the surface-share socket.
-fn exchange_client_on(share: &SurfaceShareUnderTest) -> Arc<HelperProcessGpuExchangeClient> {
-    Python::initialize();
-    Python::attach(|python| {
-        Arc::new(HelperProcessGpuExchangeClient::new(
-            python.None(),
-            python.None(),
-            share.channel_name_for_the_helper(),
-            "helper:lease-debt-under-test".to_string(),
-        ))
-    })
-}
-
 /// The checkout claims the frame; dropping the debt — the last share of
 /// the surface going away — is what returns the slot to its producer.
 #[test]
 fn a_check_out_is_held_until_its_debt_drops() {
     let share = SurfaceShareUnderTest::start("debt");
     let surface_id = share.publish_one_surface();
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("lease-debt-under-test");
 
     let (response, _plane_fds_closed_by_scope) = exchange_client
         .check_out_surface(&surface_id)
@@ -58,7 +44,7 @@ fn a_check_out_is_held_until_its_debt_drops() {
 fn a_claim_pins_the_frame_without_importing_it() {
     let share = SurfaceShareUnderTest::start("claim");
     let surface_id = share.publish_one_surface();
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("lease-debt-under-test");
 
     let claim = exchange_client
         .claim_surface_against_producer_reuse(&surface_id)
@@ -90,7 +76,7 @@ fn a_claim_pins_the_frame_without_importing_it() {
 fn claiming_a_recycled_frame_is_refused_naming_the_recycling() {
     let share = SurfaceShareUnderTest::start("recycled");
     share.publish_pool_slot_frame("pool-slot-under-test", 1);
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("lease-debt-under-test");
 
     let claim_while_current = exchange_client
         .claim_surface_against_producer_reuse("pool-slot-under-test#1")
@@ -127,7 +113,7 @@ fn claiming_a_recycled_frame_is_refused_naming_the_recycling() {
 #[test]
 fn claiming_a_surface_the_service_does_not_know_is_refused_by_name() {
     let share = SurfaceShareUnderTest::start("unknown");
-    let exchange_client = exchange_client_on(&share);
+    let exchange_client = share.exchange_client_labelled("lease-debt-under-test");
 
     let Err(refusal) = exchange_client.claim_surface_against_producer_reuse("no-such-surface")
     else {

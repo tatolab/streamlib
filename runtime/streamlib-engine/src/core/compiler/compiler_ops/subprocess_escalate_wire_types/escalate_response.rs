@@ -145,7 +145,9 @@ pub(crate) struct EscalateResponseOk {
     /// imported `ConsumerVulkanTimelineSemaphore` for this value before reading
     /// or writing the staging buffer mapped at registration time. JSON has no
     /// 64-bit integer — wire form is decimal-string, parsed back to u64 on
-    /// the subprocess side.
+    /// the subprocess side. Absent on those copy responses where the device
+    /// exports no timeline semaphore: the copy was retired on the host before
+    /// the reply, and the subprocess waits on nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) timeline_value: Option<String>,
 

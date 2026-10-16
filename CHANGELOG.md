@@ -1,5 +1,83 @@
 # Changelog
 
+## [0.46.14](https://github.com/tatolab/streamlib/compare/v0.46.13...v0.46.14) (2026-10-16)
+
+
+### Bug Fixes
+
+* **engine:** a DisplayWindow on the software device refuses by name at setup instead of aborting tatolabd ([#2796](https://github.com/tatolab/streamlib/issues/2796)) ([9f54c37](https://github.com/tatolab/streamlib/commit/9f54c370541164c2365e2d116ae13a159bad1b21))
+
+## [0.46.13](https://github.com/tatolab/streamlib/compare/v0.46.12...v0.46.13) (2026-10-16)
+
+
+### Features
+
+* **wheel:** export_opaque_fd exports an OPAQUE_FD pixel buffer, so a software-device pooled frame has a raw-handle export ([#2794](https://github.com/tatolab/streamlib/issues/2794)) ([b67a90b](https://github.com/tatolab/streamlib/commit/b67a90b3cd13ac1b6683632ac191c9d15e6f43b4))
+
+## [0.46.12](https://github.com/tatolab/streamlib/compare/v0.46.11...v0.46.12) (2026-10-16)
+
+
+### Features
+
+* **engine:** a texture crosses as OPAQUE_FD only where the device reports it can, and the interpreter's import binds the stated memory type ([#2789](https://github.com/tatolab/streamlib/issues/2789)) ([1f284bf](https://github.com/tatolab/streamlib/commit/1f284bfa7f880d0bbd5e40a3a3f3bd7534be01c4))
+
+## [0.46.11](https://github.com/tatolab/streamlib/compare/v0.46.10...v0.46.11) (2026-10-16)
+
+
+### Bug Fixes
+
+* **engine:** iceoryx2 test domains name a live process, so a sibling test's sweep never deletes their shared memory mid-test ([#2790](https://github.com/tatolab/streamlib/issues/2790)) ([252110a](https://github.com/tatolab/streamlib/commit/252110aae441527017bfc5925b9fef9c8c8b45b1))
+* **engine:** the freed-entry destruction test waits on the completion timeline the pools read, not the recorder's fence ([#2791](https://github.com/tatolab/streamlib/issues/2791)) ([92a3f9b](https://github.com/tatolab/streamlib/commit/92a3f9b670bf1be72e48db46243ed46bf3fe0d6e))
+
+## [0.46.10](https://github.com/tatolab/streamlib/compare/v0.46.9...v0.46.10) (2026-10-15)
+
+
+### Features
+
+* **ci:** the engine's hardware tests run on the unit's bundled driver, and a kernel reflects SPIR-V whose debug strings an older glslc mis-encoded ([#2780](https://github.com/tatolab/streamlib/issues/2780)) ([d40e0ea](https://github.com/tatolab/streamlib/commit/d40e0eaae296c5182a76e1817aabe48282c66fe8))
+
+## [0.46.9](https://github.com/tatolab/streamlib/compare/v0.46.8...v0.46.9) (2026-10-15)
+
+
+### Features
+
+* **ci:** the Linux integration lane runs on the unit's bundled driver; rig_only_capability(reason=…) is held to a closed list ([#2778](https://github.com/tatolab/streamlib/issues/2778)) ([f2d5834](https://github.com/tatolab/streamlib/commit/f2d583453d5ccd768c074d351bca27bcfeee44b1))
+
+## [0.46.8](https://github.com/tatolab/streamlib/compare/v0.46.7...v0.46.8) (2026-10-15)
+
+
+### Features
+
+* **engine:** a texture a processor acquires on a device without DMA-BUF crosses as OPAQUE_FD ([#2776](https://github.com/tatolab/streamlib/issues/2776)) ([de59d71](https://github.com/tatolab/streamlib/commit/de59d715dc65f63d24c08b3da62d5d8b1a86bc9f))
+
+## [0.46.7](https://github.com/tatolab/streamlib/compare/v0.46.6...v0.46.7) (2026-10-15)
+
+
+### Features
+
+* **engine:** a device that exports no semaphore crosses no timeline, and a device tensor refuses on a software device ([#2772](https://github.com/tatolab/streamlib/issues/2772)) ([b28274b](https://github.com/tatolab/streamlib/commit/b28274b4d4cf68cfab87e8fdec27a188ccdd449b))
+
+## [0.46.6](https://github.com/tatolab/streamlib/compare/v0.46.5...v0.46.6) (2026-10-15)
+
+
+### Features
+
+* **engine:** a processor interpreter imports on the device the runtime names at spawn ([#2770](https://github.com/tatolab/streamlib/issues/2770)) ([8d0479f](https://github.com/tatolab/streamlib/commit/8d0479fb81c0a4e312cd8f91a096b7ad16df2945))
+
+## [0.46.5](https://github.com/tatolab/streamlib/compare/v0.46.4...v0.46.5) (2026-10-14)
+
+
+### Features
+
+* **engine:** DMA-BUF is a device capability — the software device's pooled frames cross to processor interpreters as OPAQUE_FD ([#2766](https://github.com/tatolab/streamlib/issues/2766)) ([de3b3b4](https://github.com/tatolab/streamlib/commit/de3b3b4c60df6bfcf4300072e0a7c0ec486dec5d))
+
+## [0.46.4](https://github.com/tatolab/streamlib/compare/v0.46.3...v0.46.4) (2026-10-14)
+
+
+### Features
+
+* **engine:** build the GpuContext on the first device that accepts, CPU-type last, naming every pass-over ([#2763](https://github.com/tatolab/streamlib/issues/2763)) ([771af10](https://github.com/tatolab/streamlib/commit/771af1064b16e9045eae881554bbf9291636816e))
+
 ## [0.46.3](https://github.com/tatolab/streamlib/compare/v0.46.2...v0.46.3) (2026-10-14)
 
 

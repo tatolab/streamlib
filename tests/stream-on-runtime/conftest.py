@@ -150,31 +150,43 @@ TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS = 120.0
 LOCAL_API_SOCKET_POLL_INTERVAL_SECONDS = 0.05
 
 
+def reason_a_reasoned_marker_carries(item: pytest.Item, reasoned_marker_name: str) -> "str | None":
+    """The `reason=` the item's `reasoned_marker_name` marker carries, `None` when it has no such
+    marker; a marker without one is a usage error."""
+    reasoned_marker = item.get_closest_marker(reasoned_marker_name)
+    if reasoned_marker is None:
+        return None
+    reason = reasoned_marker.kwargs.get("reason")
+    if not reason:
+        raise pytest.UsageError(f"{item.nodeid}: {reasoned_marker_name} needs reason=")
+    return reason
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Item]") -> None:
-    """Turns the platform markers and the audible marker into a skip or a strict xfail."""
+    """Turns the platform markers and the audible marker into a skip or a strict xfail, and
+    refuses a reasoned marker without its reason or a rig-only test that needs no device."""
     for item in items:
-        audible = item.get_closest_marker("audible_on_macos")
-        if audible is not None:
-            reason = audible.kwargs.get("reason")
-            if not reason:
-                raise pytest.UsageError(f"{item.nodeid}: audible_on_macos needs reason=")
+        audible_reason = reason_a_reasoned_marker_carries(item, "audible_on_macos")
+        if audible_reason is not None:
             if (
                 sys.platform == "darwin"
                 and os.environ.get(RUN_ATTENDED_AUDIBLE_TESTS_ENVIRONMENT_VARIABLE) != "1"
             ):
                 item.add_marker(
                     pytest.mark.skip(
-                        reason=f"audible on a Mac, so attended only ({reason}) — set "
+                        reason=f"audible on a Mac, so attended only ({audible_reason}) — set "
                         f"{RUN_ATTENDED_AUDIBLE_TESTS_ENVIRONMENT_VARIABLE}=1 with someone listening"
                     )
                 )
-        linux_only = item.get_closest_marker("linux_only_capability")
-        if linux_only is not None:
-            reason = linux_only.kwargs.get("reason")
-            if not reason:
-                raise pytest.UsageError(f"{item.nodeid}: linux_only_capability needs reason=")
-            if sys.platform != "linux":
-                item.add_marker(pytest.mark.skip(reason=f"Linux-only: {reason}"))
+        linux_only_reason = reason_a_reasoned_marker_carries(item, "linux_only_capability")
+        if linux_only_reason is not None and sys.platform != "linux":
+            item.add_marker(pytest.mark.skip(reason=f"Linux-only: {linux_only_reason}"))
+        rig_only_reason = reason_a_reasoned_marker_carries(item, "rig_only_capability")
+        # The rig's run selects `-m requires_gpu`, so a rig-only test without it runs nowhere.
+        if rig_only_reason is not None and item.get_closest_marker("requires_gpu") is None:
+            raise pytest.UsageError(
+                f"{item.nodeid}: rig_only_capability ({rig_only_reason}) needs requires_gpu too"
+            )
         awaiting = item.get_closest_marker("awaiting_macos_parity")
         if awaiting is not None:
             issue = awaiting.kwargs.get("issue")

@@ -14,7 +14,9 @@ The MVP minute is measured here too, with every processor in its own processor
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
 live inside the startup budget their interpreters cost, and the edit loop —
 `dev` loading the stream again on each save — reports a bad save and loads the
-next good one, on the same runtime.
+next good one, on the same runtime. The scaffold ends in a window, which
+refuses on the software device, so the two tests that watch it show live video
+are rig-only.
 """
 
 from __future__ import annotations
@@ -605,6 +607,7 @@ def the_first_streams_output(tatolabd: TatolabdUnderTest) -> str:
     return tatolabd.stderr_text.split(the_first_streams_stop, 1)[0] + the_first_streams_stop
 
 
+@pytest.mark.rig_only_capability(reason="a display")
 def test_the_scaffolded_app_reaches_a_running_graph(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
@@ -612,7 +615,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 ):
     """What `tatolab new` writes must actually run, frame after frame.
 
-    Run exactly as scaffolded — window included, which is why this is rig-only:
+    Run exactly as scaffolded, window included:
     `dev` has the runtime compile the scaffold's `@stream` and load the graph
     it builds, so the graph the local API renders carries the stream's name and
     the exposure it declared. A listed stream alone proves almost nothing here:
@@ -848,6 +851,7 @@ def node_ids_of(graph: "dict[str, Any]") -> "list[str]":
     return sorted(node["id"] for node in graph["nodes"])
 
 
+@pytest.mark.rig_only_capability(reason="a display")
 def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",

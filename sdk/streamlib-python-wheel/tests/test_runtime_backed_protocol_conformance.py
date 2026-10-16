@@ -109,7 +109,7 @@ def test_every_runtime_backed_name_the_ticket_lists_is_held_by_tatolab_stream():
         "KernelDispatchBatch",
         "AccelerationStructureHandle",
         "MonotonicTimer",
-        "OpaqueFdTextureExport",
+        "OpaqueFdAllocationExport",
         "IOSurfaceMachPortExport",
         "NodeOwnedWindow",
         "NodeOwnedWindowEvents",

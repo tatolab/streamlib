@@ -123,8 +123,8 @@ pub struct SurfaceMetadata {
     pub vk_image_tiling: i32,
     /// `VkImageUsageFlags` (raw `u32` bitfield). Defaults to
     /// `TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE = 0x0F` when
-    /// absent — the usage set [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]
-    /// emits and the consumer side hardcodes today.
+    /// absent — the usage [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]
+    /// gives a CUDA-mappable texture that asks for nothing beyond it.
     pub vk_image_usage: u32,
     /// Host-side `VkMemoryRequirements::size` (i.e. `vmaGetAllocationInfo().size`)
     /// of the imported VkImage's backing memory. Required for the
@@ -322,9 +322,9 @@ pub struct SurfaceRegistration<'a> {
     /// [`VK_IMAGE_ALLOCATION_SIZE_DEFAULT`](crate::core::context::surface_share_wire_verbs::VK_IMAGE_ALLOCATION_SIZE_DEFAULT) (= 0) when the consumer
     /// derives the size from `width * height * bytes_per_pixel`.
     pub vk_image_allocation_size: u64,
-    /// `vmaGetAllocationInfo().memoryType` of the exporting allocation.
-    /// Pass `None` for flavours that never carry one (DMA-BUF, pixel
-    /// buffers) — see [`SurfaceMetadata::vk_memory_type_index`].
+    /// `vmaGetAllocationInfo().memoryType` of the exporting allocation, which
+    /// every OPAQUE_FD registration states, pixel buffers included. Pass
+    /// `None` for DMA-BUF — see [`SurfaceMetadata::vk_memory_type_index`].
     pub vk_memory_type_index: Option<u32>,
     /// The exporting device's UUID as 32 hex characters, or `None` —
     /// see [`SurfaceMetadata::exporting_device_uuid`].

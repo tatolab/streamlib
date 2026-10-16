@@ -57,7 +57,11 @@ platform.
 
 A subprocess can't share a host's `VkDevice` across processes — it must
 construct its own consumer-only `VkDevice` to bind imported FDs. The
-carve-out exists to make that bind possible and nothing more:
+carve-out exists to make that bind possible and nothing more. That
+`VkDevice` is built on the physical device whose `deviceUUID` the runtime
+names in `STREAMLIB_RUNTIME_VULKAN_DEVICE_UUID` at spawn — an import binds
+only on the device that exported it — and a helper refuses by name when no
+device it enumerates carries that UUID, or the variable is absent:
 
 - DMA-BUF FD import + bind + map (`vkImportMemoryFdKHR`,
   `vkBindBufferMemory`, `vkBindImageMemory`).
@@ -81,7 +85,8 @@ carve-out exists to make that bind possible and nothing more:
   acquire (optional extension `VK_EXT_external_memory_acquire_unmodified`)
   so producer-side content survives the transfer per Vulkan spec. The
   acquire-side extension is the only meaningful gate, optionally probed
-  at `ConsumerVulkanDevice::new` / `HostVulkanDevice::new`; when missing
+  at `ConsumerVulkanDevice::new_on_the_device_the_runtime_named` /
+  `HostVulkanDevice::new`; when missing
   the helpers fall back to a bridging `UNDEFINED → target` transition
   (content discard permitted by spec, preserved in practice on every
   modern Linux Vulkan driver). The release/acquire helpers
@@ -170,15 +175,15 @@ consumer-rhi through one of the four wired adapters.
 | `VulkanComputeKernel` SPIR-V reflection + dispatch | Escalate IPC | `register_compute_kernel` + `run_compute_kernel` |
 | Graphics-pipeline draw | Escalate IPC | `register_graphics_kernel` + `run_graphics_draw` |
 | Ray-tracing AS build + trace | Escalate IPC | `register_acceleration_structure_blas` / `_tlas` + `register_ray_tracing_kernel` + `run_ray_tracing_kernel` |
-| `vkCmdCopyImageToBuffer` for cpu-readback | Escalate IPC (thin trigger only; staging buffers + `produce_done` / `consume_done` timelines pre-registered via surface-share) | Subprocess imports the staging buffer + both timelines through `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore` once at registration, then per-acquire is `run_cpu_readback_copy(surface_id) → done(produce_done_value)` plus a consumer-side wait; the subprocess signals `consume_done` in `end_read_access` |
+| `vkCmdCopyImageToBuffer` for cpu-readback | Escalate IPC (thin trigger only; staging buffers + `produce_done` / `consume_done` timelines pre-registered via surface-share, the timelines only where the device exports one) | Subprocess imports the staging buffer + both timelines through `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore` once at registration, then per-acquire is `run_cpu_readback_copy(surface_id) → done(produce_done_value)` plus a consumer-side wait; the subprocess signals `consume_done` in `end_read_access`. On a device that exports no timeline (the software device) the staging crosses alone, the copy is retired on the host before the reply, and the subprocess waits on nothing |
 | Layout transitions / timeline waits beyond carve-out | Host-only | Adapter runs at acquire/release boundary |
 | Validation layers + tracing | Host-only | Subprocess uses `tracing::*!` macros via escalate `log` op |
 | Single `VkDevice` per process (NVIDIA dual-device crash) | Host has `FullAccess` device; subprocess has consumer-only device | Crash triggers on *concurrent submission*; subprocess submits nothing — provably safe ([learning](../learnings/nvidia-dual-vulkan-device-crash.md)) |
 | DMA-BUF FD import + bind + map | **Carve-out** (host AND subprocess) | One shared crate (`streamlib-consumer-rhi`) |
 | Tiled-image import (`VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`) | **Carve-out** | Same crate |
 | HOST_VISIBLE staging-buffer import (cpu-readback) | **Carve-out** | Same crate (`ConsumerVulkanBuffer`) |
-| OPAQUE_FD VkBuffer import (cuda) | **Carve-out** | Same crate (`ConsumerVulkanDevice::import_opaque_fd_memory` + `ConsumerVulkanBuffer::from_opaque_fd`). The cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedBuffer`. OPAQUE_FD is not interchangeable with DMA-BUF: DLPack consumers (PyTorch / JAX / NumPy `from_dlpack`) require a flat `void*` device pointer, and only `cudaExternalMemoryGetMappedBuffer` produces one — and that requires the source memory to be a `VkBuffer` exported as OPAQUE_FD, not DMA-BUF |
-| OPAQUE_FD VkImage import (cuda, image path) | **Carve-out** | Same crate (`ConsumerVulkanDevice::import_opaque_fd_memory` + `ConsumerVulkanTexture::from_opaque_fd`). Image-flavored sibling of the VkBuffer entry; tiling fixed `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier (OPAQUE_FD + `DRM_FORMAT_MODIFIER_EXT` is invalid on NVIDIA), format restricted to the CUDA-mappable subset (`Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`). The cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedMipmappedArray` for the texture / surface-object backing — the tiled-image zero-copy path that's complementary to `cudaExternalMemoryGetMappedBuffer`'s flat-tensor / DLPack path |
+| OPAQUE_FD VkBuffer import (cuda) | **Carve-out** | Same crate (`ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index`, binding the memory type index the registration states). The cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedBuffer`. OPAQUE_FD is not interchangeable with DMA-BUF: DLPack consumers (PyTorch / JAX / NumPy `from_dlpack`) require a flat `void*` device pointer, and only `cudaExternalMemoryGetMappedBuffer` produces one — and that requires the source memory to be a `VkBuffer` exported as OPAQUE_FD, not DMA-BUF |
+| OPAQUE_FD VkImage import (cuda, image path) | **Carve-out** | Same crate (`ConsumerVulkanTexture::from_opaque_fd`, binding the memory type index the registration states). Image-flavored sibling of the VkBuffer entry; tiling fixed `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier (OPAQUE_FD + `DRM_FORMAT_MODIFIER_EXT` is invalid on NVIDIA), any single-plane format, rebuilt with the registration's `vk_image_usage`; CUDA maps only the CUDA-mappable subset (`Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`). The cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedMipmappedArray` for the texture / surface-object backing — the tiled-image zero-copy path that's complementary to `cudaExternalMemoryGetMappedBuffer`'s flat-tensor / DLPack path |
 
 ## Layered architecture
 

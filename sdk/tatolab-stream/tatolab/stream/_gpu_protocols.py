@@ -377,28 +377,33 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         over SCM_RIGHTS when the surface was checked out, and they are the same
         ones a host-side export would mint.
 
-        Refuses by name for an OPAQUE_FD-flavoured texture — that fd imports
-        through Vulkan or CUDA external memory, not as a DMA-BUF; export it
-        through `export_opaque_fd` instead — and for a pooled-texture handle
-        whose memory was never checked out into this process (resolve the
-        surface id first).
+        Refuses by name for:
+
+        - an OPAQUE_FD-flavoured texture. Its fd imports through Vulkan or
+          CUDA external memory, not as a DMA-BUF; use `export_opaque_fd`.
+        - an OPAQUE_FD pixel buffer, which is what a pooled frame is on a
+          device without DMA-BUF export; use `export_opaque_fd`.
+        - a pooled-texture handle whose memory was never checked out into
+          this process. Resolve the surface id first.
         """
         ...
 
-    def export_opaque_fd(self, surface: GpuSurfaceHandle) -> OpaqueFdTextureExport:
-        """Export the OPAQUE_FD texture handle for `surface`, for native code
-        that runs its own Vulkan or CUDA external-memory import against the
-        allocation.
+    def export_opaque_fd(self, surface: GpuSurfaceHandle) -> OpaqueFdAllocationExport:
+        """Export the OPAQUE_FD memory handle for `surface` — a texture or a
+        pixel buffer — for native code that runs its own Vulkan or CUDA
+        external-memory import against the allocation.
 
         Linux only. On macOS it refuses by name, pointing at
         `export_iosurface` — a surface there is an IOSurface, not an fd.
 
         The caller owns the returned object's fd: a successful foreign import
         adopts it — never close it after one; always close it after a failed
-        one. Consume the texture as an image (CUDA maps the mipmapped array;
+        one. Consume a texture as an image (CUDA maps the mipmapped array;
         Vulkan recreates the image from the carried recipe) — a linear buffer
         mapping over OPTIMAL-tiled memory yields block-linear bytes, never
-        pixels.
+        pixels. A pixel buffer — what a pooled frame is on a device without
+        DMA-BUF export — carries no recipe; its memory is linear and binds
+        to a buffer.
 
         A raw handle names the allocation, never the frame: the surface-id
         lifetime guarantees end at export, and per-frame reach stays with
@@ -406,10 +411,9 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         process: the fd arrived over SCM_RIGHTS when the surface was checked
         out.
 
-        Refuses by name for a DMA-BUF-flavoured texture (use
-        `export_dma_buf`), for a pixel buffer, and for a pooled-texture
-        handle whose memory was never checked out into this process (resolve
-        the surface id first).
+        Refuses by name for a DMA-BUF-flavoured texture or pixel buffer (use
+        `export_dma_buf`), and for a pooled-texture handle whose memory was
+        never checked out into this process (resolve the surface id first).
         """
         ...
 
@@ -678,10 +682,10 @@ class GpuSurfaceCheckOutLease(Protocol):
 
 
 @runtime_backed_protocol
-class OpaqueFdTextureExport(Protocol):
-    """A raw OPAQUE_FD texture handle: the allocation's memory fd plus the
-    allocation-stable shape a foreign Vulkan or CUDA external-memory import
-    must reproduce.
+class OpaqueFdAllocationExport(Protocol):
+    """A raw OPAQUE_FD memory handle — a texture's or a pixel buffer's: the
+    allocation's memory fd plus the allocation-stable shape a foreign Vulkan
+    or CUDA external-memory import must reproduce.
 
     Deliberately outside the `GpuSurface*` family prefix: the object names an
     allocation, never a frame-bearing surface — the surface-id lifetime
@@ -705,52 +709,63 @@ class OpaqueFdTextureExport(Protocol):
 
     @property
     def width(self) -> int:
-        """Texture width in pixels."""
+        """Surface width in pixels."""
         ...
 
     @property
     def height(self) -> int:
-        """Texture height in pixels."""
+        """Surface height in pixels."""
         ...
 
     @property
     def format(self) -> str:
-        """The engine's format name for the texture, e.g. `"rgba16_float"`."""
-        ...
-
-    @property
-    def vk_image_tiling(self) -> int:
-        """Raw `VkImageTiling` the exporter created the image with."""
-        ...
-
-    @property
-    def vk_image_usage_flags(self) -> int:
-        """Raw `VkImageUsageFlags` bitfield the exporter created the image
-        with.
+        """The engine's format name for the surface, e.g. `"rgba16_float"` or
+        `"rgba32"`.
         """
         ...
 
     @property
-    def vk_image_mip_levels(self) -> int:
-        """`VkImageCreateInfo.mipLevels` of the exporter's image."""
+    def vk_image_tiling(self) -> int | None:
+        """Raw `VkImageTiling` the exporter created the image with; `None`
+        when the allocation is a pixel buffer.
+        """
         ...
 
     @property
-    def vk_image_array_layers(self) -> int:
-        """`VkImageCreateInfo.arrayLayers` of the exporter's image."""
+    def vk_image_usage_flags(self) -> int | None:
+        """Raw `VkImageUsageFlags` bitfield the exporter created the image
+        with; `None` when the allocation is a pixel buffer.
+        """
         ...
 
     @property
-    def vk_image_samples(self) -> int:
-        """Raw `VkSampleCountFlagBits` of the exporter's image."""
+    def vk_image_mip_levels(self) -> int | None:
+        """`VkImageCreateInfo.mipLevels` of the exporter's image; `None` when
+        the allocation is a pixel buffer.
+        """
+        ...
+
+    @property
+    def vk_image_array_layers(self) -> int | None:
+        """`VkImageCreateInfo.arrayLayers` of the exporter's image; `None`
+        when the allocation is a pixel buffer.
+        """
+        ...
+
+    @property
+    def vk_image_samples(self) -> int | None:
+        """Raw `VkSampleCountFlagBits` of the exporter's image; `None` when the
+        allocation is a pixel buffer.
+        """
         ...
 
     @property
     def dedicated_allocation(self) -> bool:
         """Whether the allocation is dedicated — always true for this
-        flavour. A Vulkan importer chains `VkMemoryDedicatedAllocateInfo`, a
-        CUDA importer sets `cudaExternalMemoryDedicated`; omitting either is
-        undefined behaviour, not leniency.
+        flavour, a texture's and a pixel buffer's alike. A Vulkan importer
+        chains `VkMemoryDedicatedAllocateInfo`, a CUDA importer sets
+        `cudaExternalMemoryDedicated`; omitting either is undefined
+        behaviour, not leniency.
         """
         ...
 

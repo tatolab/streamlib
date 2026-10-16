@@ -15,23 +15,31 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-Reading rule since the 2026-10-04 pivot (`[moq-on-the-tailnet]`): the `tap` and `exchange` verbs
-go at the sharing step. An entry describing `tap` or `exchange` is a
-fact about the shipped tree until the change that removes them ships and folds it out — never
-direction, and nothing new is built on it. Off a machine, the direction is §Networking's
-`[moq-on-the-tailnet]` entries.
+Reading rule since the 2026-10-16 align (`[moq-relays]`, which amends the 2026-10-04
+`[moq-on-the-tailnet]` pivot): the `tap` and `exchange` verbs, every window, `remote_output`
+and the cross-stream link, the Tailscale read, and the msgpack encoding inside `write` and
+`read` go at the sharing step. An entry describing one is a fact about the shipped tree until
+the change that removes it ships and folds it out — never direction, and nothing new is built
+on it. Off a stream, the direction is §Networking's `[moq-relays]` entries. "Bag" in an older
+entry reads as **message** (the glossary).
 
-## Product (the MVP sentence) — IN-FLIGHT (→ optional-accelerators; unbuilt: the sharing step)
+## Product (the MVP sentence) — IN-FLIGHT (→ moq-relays)
 <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-16-optional-accelerators.md -->
 
-- **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
-  installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac, each
-  registering it as a per-user service — installs `tatolab-stream` from PyPI into an
+- **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
+  Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
+  each registering it as a per-user service — installs `tatolab-stream` from PyPI into an
   ordinary uv-managed venv, runs `tatolab new` then `tatolab dev`, sees their camera live in
-  a window within a minute, and makes the pipeline theirs by editing the scaffolded node —
-  zero ceremony: no manifest, no `main()`, no schema wrangling, a fast edit loop. The
+  a window within a minute — on Linux a window needs a hardware device, and on the software
+  device the Linux unit carries the stream runs and is viewed from outside the runtime
+  (§Graphics) — and makes the pipeline theirs by editing the scaffolded node —
+  zero ceremony: no manifest, no `main()`, no schema wrangling, a fast edit loop. Amended by
+  moq-relays (owner, 2026-10-16): "sees Tatolab's sample stream live in their browser within a
+  minute, on every floor and on the software device alike, then points it at their camera and
+  makes the pipeline theirs" — the window clauses go with the windows. The
   zero-ceremony clauses bind both floors alike. Apple Silicon is a supported floor, not a
   developer machine: CI gates it on every PR, its runtime unit is proven in the release
   closure, and a macOS-only regression blocks a release as a Linux one does. macOS
@@ -39,12 +47,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   app bundle to obtain them would. Every ticket traces to this sentence or does not exist.
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
   SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
-  runtime-hosting — SHIPPED #2721, #2722; amended by optional-accelerators: "with an NVIDIA
-  GPU" — a GPU is optional, the Linux unit carrying a software device (§Graphics)]
+  runtime-hosting — SHIPPED #2721, #2722; optional-accelerators — SHIPPED #2761, #2763,
+  #2796]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
-  <!-- verify: grep -n "The scaffolded stream runs on the driver the lend carries" .github/workflows/macos-wheel.yml -->
+  <!-- verify: grep -n "The scaffolded stream runs on the driver the lend carries" .github/workflows/reusable-macos-runtime-unit.yml .github/workflows/ci.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
 - **DECIDED** — Terms of the sentence: Tatolab is a pure-Python stream package,
   `tatolab-stream` from PyPI, beside a native runtime — `tatolabd`, the `tatolab` CLI and
@@ -74,6 +82,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
+  <!-- verify: cargo test -p streamlib --test app_sugar_test -->
 - **DECIDED** — The two floors are one product surface. A Python node written
   against `tatolab.stream` runs on both; where it cannot is a short closed
   list that refuses by name before a frame flows — at load, or in `setup()`,
@@ -88,18 +97,21 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   native module once in `_engine.pyi`, gated by `stubtest` against both binaries, so no
   class or method exists on one floor and not the other; the three suites — stream,
   runtime and integration (the entry below) — run on both floors, their GPU-free halves on
-  both CI lanes and their `requires_gpu` halves on each floor's rig; and a test skipped off
+  both CI lanes; on Linux their `requires_gpu` halves run on the lane on the unit's own
+  software device, and a test stays on the rig only when it carries
+  `rig_only_capability(reason=…)`, whose reason `test_platform_markers.py` holds to a closed
+  list — Vulkan Video, DMA-BUF modifiers, CUDA, a camera, a display, an audio device; on macOS
+  the `requires_gpu` half runs on that floor's rig until the parity ticket that first makes
+  it green; and a test skipped off
   Linux carries `linux_only_capability(reason=…)`, whose
   reason `test_platform_markers.py` holds to the closed list plus one named group — a
   test whose body is itself a Linux mechanism (`XDG_RUNTIME_DIR`, v4l2loopback and udev,
   the boot-session file, X11/Wayland, SIGHUP and SIGINT hand-back). A test red on macOS
   for any other reason is a parity bug, never a skip.
   [macos-capability-parity — SHIPPED #2400, #2403, #2405; package-split-and-lend — SHIPPED
-  #2671, #2686; amended by optional-accelerators: "their `requires_gpu` halves on each floor's
-  rig" — the Linux lane runs the engine on the bundled software device, and rig-only is only
-  what a runner cannot give (§Graphics)]
+  #2671, #2686; optional-accelerators — SHIPPED #2778, #2780]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
-  <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
+  <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/ci.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py::test_the_engine_conforms_to_tatolab_stream_and_its_stub -->
   <!-- verify: pytest tests/stream-on-runtime/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
@@ -116,7 +128,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   checkable; ruff runs over every render, pyright over the template tree, and the
   cross-floor check gates the output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
-  stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693]
+  stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; amended by
+  moq-relays: the scaffold is the sample stream and only that — `TestPatternSource` (the
+  branded animation, §Media I/O) → `InvertingEffect` → `H264Encoder` → `expose(…, PUBLIC)`,
+  the `BrightnessMeter` on a fan-out of the effect's output; `tatolab new` takes no `--camera`
+  and no `--test-pattern`, and no template holds a camera — camera projects live in the docs'
+  sample projects and, later, an examples folder the app installs; the in-repo camera
+  examples stay examples (owner, 2026-10-16)]
+  Rejected: a camera in the scaffold, as the default or as a flag — a user whose camera does
+  not open meets a failure as the first thing (owner, 2026-10-16).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_depends_on_tatolab_stream_and_numpy_only -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
@@ -172,12 +192,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the suite project's venv) and drives it over the local API — processor
   interpreters, the lend, describe, escalate ops, pixel and device exchange, the CLI end to
   end. The division is structural, not a lint: each CI job installs only what its suite may
-  touch, so a stream test reaching for the runtime fails to import. `requires_gpu` halves
-  stay rig-only. Testing a user's stream without a runtime is separate work. Owner,
-  2026-10-02. [package-split-and-lend — SHIPPED #2686, #2689, #2693; amended by
-  optional-accelerators: "`requires_gpu` halves stay rig-only" — only what a runner cannot
-  give stays rig-only, the rest runs on the bundled software device (§Graphics)]
-  <!-- verify: grep -n -e "stream-suite:" -e "integration-suite:" .github/workflows/python-wheel.yml -->
+  touch, so a stream test reaching for the runtime fails to import. On Linux the
+  `requires_gpu` halves run on the lane on the unit's own software device, a test staying on
+  the rig only under `rig_only_capability(reason=…)` (the entry above). Testing a user's
+  stream without a runtime is separate work. Owner, 2026-10-02. [package-split-and-lend —
+  SHIPPED #2686, #2689, #2693; optional-accelerators — SHIPPED #2778, #2780]
+  <!-- verify: grep -n -e "Stream suite (Python 3.10)" -e "Integration suite (all but rig-only)" .github/workflows/ci.yml -->
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
   stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
@@ -186,13 +206,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   present, serves the machine's local API, and schedules across streams. Every Python node
   keeps its own process, and agents keep changing live graphs. Owner, 2026-09-30.
   [one-runtime-per-machine; stream-graph — SHIPPED #2612, #2618, #2655; amended by
-  moq-on-the-tailnet: the runtime serves the machine's MoQ endpoint, built at the sharing
-  step]
+  moq-relays: the runtime sends every exposed port to relays through one publisher and runs
+  the local relay as a child, built at the sharing step]
 - **DECIDED** — What Tatolab is for: a simple SDK for defining live streams as pipes and
   sharing them with people and agents. Tailscale users are the first customers, and Tatolab
-  builds nothing Tailscale already does. Robotics and physical-machine systems are out of
-  scope, and Tatolab never replaces a team's own ROS or Zenoh stack. Owner, 2026-10-04.
-  [moq-on-the-tailnet]
+  builds nothing Tailscale already does — nor reads or configures it: a tailnet reaches a
+  machine's local relay as any network does. Robotics and physical-machine systems are out of
+  scope, and Tatolab never replaces a team's own ROS or Zenoh stack. Owner, 2026-10-04 and
+  2026-10-16. [moq-on-the-tailnet; moq-relays]
 - **DECIDED** — The runtime is required and always on, installed once per machine by an
   installer — the desktop app, a package manager, a `curl | sh` script or a distro package —
   which ships the runtime, the CLI and the native portion processor interpreters borrow as one
@@ -282,7 +303,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — SHIPPED
+## Packages & extension model — IN-FLIGHT (→ moq-relays)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-08-package-split-and-lend.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-07-authoring-names.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-13-shared-pools-bounded-by-memory-budget.md -->
@@ -436,7 +457,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   outside the engine's enforceable envelope. `export_opaque_fd` returns a typed
   export object carrying the allocation-stable shape — whole-allocation byte size,
   extent, format, the image-creation recipe (tiling, usage, mip/layer/sample
-  counts), dedicated-allocation status, the exporter's memory type index, and the
+  counts; `None` for a pixel buffer, which exports too), dedicated-allocation
+  status, the exporter's memory type index, and the
   exporting device UUID — and no per-frame state (no image layout, no timeline
   edges); `export_dma_buf` keeps `(fd, byte_size)` and refuses the OPAQUE_FD
   flavour by name, pointing at `export_opaque_fd`. An fd flavour's export is taken from a
@@ -680,10 +702,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   #2693, #2697]
   <!-- verify: cargo run -p xtask -- check-no-tatolab-namespace-package-init -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_bundled_vulkan_driver.py -->
-- **OPEN** — How an external control client plugs in. What it hands the runtime beyond a
-  relay address and a credential is the sharing step's to decide (§Networking). Known
-  (2026-10-04): no stream map, router or peer identity exists to push.
-  [one-runtime-per-machine; moq-on-the-tailnet]
+- **OPEN** — How an external control client plugs in. The sharing step settled what it hands
+  the runtime: a relay's address and credential per adapter, and nothing else (§Networking,
+  the adapters); how it plugs in stays open. Known (2026-10-04): no stream map, router or peer
+  identity exists to push. [one-runtime-per-machine; moq-relays]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tatolab (`Tatolab.app`); the installer ships all three as one
   unit, and users still call the program "the runtime" (owner, 2026-10-02); the bare name `tatolab` is the
@@ -845,7 +867,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — SHIPPED (OPEN: resources across streams; unbuilt: the sharing step)
+## Processor model & scheduling — IN-FLIGHT (→ moq-relays; OPEN: resources across streams)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -859,7 +881,19 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   payload on exactly the ports that asked it to. A link into a port with
   no contract is unchanged in every respect — still pure plumbing, `connect` still
   compares nothing, and the frame header still carries no schema ident.
-  [schema-free-ports — SHIPPED #1814; audio-port-window-contract — SHIPPED #2033]
+  [schema-free-ports — SHIPPED #1814; audio-port-window-contract — SHIPPED #2033; amended by
+  moq-relays: a message's payload is bytes — `write(port, payload: bytes, timestamp_ns=,
+  starts_group=)` and `read(port) -> bytes`, with `read(port, into=T)` calling
+  `T.from_bytes`; msgpack becomes a helper the stream package ships (`pack`, and a one-line
+  mixin giving a dataclass or TypedDict `from_bytes`), never an encoding the engine or the
+  runtime portion applies behind a call; a built-in writes bytes in the encoding its port's
+  catalog fragment names — the camera's frame record stays a msgpack record `VideoFrame`
+  reads, the encoders write the stack's media frame; the envelope gains the group flag
+  (§Networking); the audio-window stage and the loopback snapshot door, each on a declared
+  encoding and neither in the forwarding path, are the two places the engine reads a payload
+  (owner, 2026-10-16)]
+  Rejected: an encoding applied inside `write` and `read` — it stood between an encoder's port
+  and a stock MoQ player (owner, 2026-10-16).
   <!-- verify: cargo test -p streamlib-ipc-types frame_header_size_matches_constant -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_bag_carrying_extra_keys_is_read_rather_than_refused -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
@@ -872,7 +906,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   yielding the bag as a mapping and `read(port, into=T)` the opt-in strictness dial
   (a TypedDict casts for free, a dataclass or pydantic model constructs and validates,
   raising at read); in Rust the read target's `Deserialize` impl is the validation,
-  always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812]
+  always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812; amended by
+  moq-relays: an output port also carries its producer-written catalog fragment —
+  `encoding`, optional `cast` import path, `kind` — documentation `connect` never compares
+  (§Networking, the catalog); `into=T` casts bytes through `T.from_bytes`]
+  Rejected: a port declaring a shape or a convention name the engine compares — the 2026-09-10
+  ruling, whose reason (agents on a mesh reading dynamically coded nodes) no longer exists;
+  the fragment is a pointer, not a contract (owner, 2026-10-16).
   <!-- verify: sdk/streamlib-python-wheel/tests/test_read_into_target.py -->
 - **DECIDED** — A read can name the inbound link it drained. Beside `read_raw`, a reader
   offers a read that returns the bag, its stamp and the *inbound link* it arrived on,
@@ -1033,7 +1073,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   processor author ever names. The engine half of the
   proof is CI-run; the end-to-end wheel arm — an overrun helper, a ceiling refusal and a
   SIGKILL'd helper's last counts, all read off a running node's `graph` — is
-  `requires_gpu` and therefore rig-only.
+  `requires_gpu`, run on the Linux CI lane on the bundled software device.
   [loss-visibility — SHIPPED #2270]
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_renders_the_counts_its_helper_wrote_on_its_slot -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::helper_process_loss_count_board::tests::the_parent_reads_each_entry_only_for_the_wiring_it_assigned -->
@@ -1430,7 +1470,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   by its class's import path in `tatolab.stream`, the entry below) —
   derived mechanically, never authored, and the same string in the registry, in the
   control plane's type field, and for spawning the processor's helper process — which
-  is how every Python processor runs. A processor defined in the entry file run as
+  is how every Python processor runs. The same import-path grammar names a cast in a port's
+  catalog fragment (§Networking). A processor defined in the entry file run as
   `python <script>.py` identifies as `__main__:<Type>` and is a wiring error at `stream_builder.add`,
   with an error naming the fix (move the class to an importable module and import it
   from the entry file — one import line). The entry file itself may still run as
@@ -1586,8 +1627,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   between two streams on one machine copies no pixels. Streams needing conflicting Python
   packages each start from their own venv (the package split and the lend, §Packages). Owner,
   2026-10-01; the surface clause confirmed 2026-10-02. [one-runtime-per-machine;
-  runtime-hosting — SHIPPED #2704, #2715; amended by moq-on-the-tailnet: the machine's MoQ
-  endpoint is kept once for the machine, built at the sharing step]
+  runtime-hosting — SHIPPED #2704, #2715; amended by moq-relays: the cross-stream link over
+  iceoryx2 and `awaiting_remote` are deleted — streams read each other through the local relay
+  and the relay source node (§Networking) — and the publisher, the adapters and the local
+  relay child are kept once for the machine, built at the sharing step]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::one_streams_shutdown_ends_it_and_leaves_the_other_loaded -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::one_streams_graph_change_reaches_only_its_own_compiler_and_topic -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_streams_log_each_to_its_own_file_and_a_record_no_stream_emitted_to_neither -->
@@ -1622,8 +1665,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_records_a_stream_that_keeps_crashing_it_failed a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start_retries_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_hosts_a_stream_on_the_gpu a_clean_restart_between_two_crashes_resets_the_count -->
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ optional-accelerators)
+## Graphics (RHI / GPU) — SHIPPED
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-13-shared-pools-bounded-by-memory-budget.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-16-optional-accelerators.md -->
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the
@@ -1726,18 +1770,24 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   it cannot tell a consumer's write from uninitialised memory and one staging spans every
   frame its pool slot publishes. Cross-process texture import is part of the capability, and
   importability is an allocation flavour the engine derives per acquisition, never a Python
-  dial. Linux: single-plane render-attachment usage takes explicit-modifier DMA-BUF where the
-  render-target modifier probes available; a CUDA-mappable format whose usage sits inside the
-  OPAQUE_FD set takes OPAQUE_FD where that image pool exists. macOS: any single-plane format
-  on a device with `VK_EXT_metal_objects` takes an `OPTIMAL` image over a private IOSurface
-  the engine creates — never `kIOSurfaceIsGlobal`, which MoltenVK's own export path sets —
+  dial. Linux: OPAQUE_FD is taken only where that image pool exists and the device reports
+  the request's format and usage exportable as OPAQUE_FD. On a device that exports no
+  DMA-BUF, every such single-plane request — render targets included, whatever the format —
+  takes OPAQUE_FD, and one the device cannot export that way is refused at the acquisition,
+  naming the device, the format and the usage. On a device that exports DMA-BUF,
+  single-plane render-attachment usage takes explicit-modifier DMA-BUF where the
+  render-target modifier probes available, and a CUDA-mappable format whose usage sits
+  inside the OPAQUE_FD set takes OPAQUE_FD.
+  macOS: any single-plane format on a device with `VK_EXT_metal_objects` takes an `OPTIMAL`
+  image over a private IOSurface the engine creates — never `kIOSurfaceIsGlobal`, which MoltenVK's own export path sets —
   bound to a device-local memory type that is not host-visible, chosen by query; a
   host-visible type would eagerly allocate a private `MTLBuffer` per image. Everything else
   keeps a non-importable allocation. A planar format is refused an IOSurface-backed image by
   name: NV12 render targets are absent on macOS, since MoltenVK refuses a biplanar 4:2:0
   IOSurface as a multi-planar image and no driver patch is carried (owner, 2026-09-26). A
   flavour the device or format cannot take falls back at derivation rather than failing the
-  acquire, and the later cross-process import refuses by naming the flavour.
+  acquire — except on a Linux device without DMA-BUF, above — and the later cross-process
+  import refuses by naming the flavour.
   [python-kernel-api; python-kernel-surface — SHIPPED #1778, #1779; macos-capability-parity
   — SHIPPED #2402, #2404]
   <!-- verify: cargo test -p streamlib-engine the_seam_refuses_to_publish_a_staging_no_frame_was_read_into -->
@@ -2113,11 +2163,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   override, the engine adding no dial. A runtime that can build no device at all — with the
   bundle, a broken install — keeps serving and refuses each stream's start by name, as today.
   The adapter crates stay under `adapters/`; nothing here moves one. Owner, 2026-10-13.
-  [one-runtime-per-machine; optional-accelerators]
+  [one-runtime-per-machine; optional-accelerators — SHIPPED #2761, #2763]
   Rejected: a device-less engine mode — CPU pixel buffers and a CPU path in every built-in — a
   second path beside every GPU one (owner, 2026-09-26, reaffirmed 2026-10-13).
   Rejected: SwiftShader as the software device — a 2 GiB heap, no memory-budget extension, no
   exportable timeline semaphore, no tagged release (owner, 2026-10-13).
+  <!-- verify: cargo test -p streamlib-engine --lib the_first_device_the_engine_can_build_on_wins_and_a_cpu_type_device_is_last -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_device_passed_over_is_named_with_its_reason -->
+  <!-- verify: cargo test -p streamlib-engine --lib --features hardware-tests with_only_lavapipe_visible_the_engine_builds_on_a_software_device_that_exports_neither_dma_buf_nor_a_semaphore -->
+  <!-- verify: cargo test -p streamlib-consumer-rhi --lib the_linux_unit_carries_the_loader_lavapipe_and_its_manifest -->
 - **DECIDED** — What a stream gets on the software device. Every stream starts and every node
   runs; a capability the software device lacks is an absent tier refused by name at the node
   that asks, as on any device, never at the stream's start: Vulkan Video, so the codec
@@ -2126,22 +2180,45 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   DMA-BUF flavour is absent on the software device by rule, never by what `/dev/udmabuf`
   permits: its frames cross to processor interpreters as OPAQUE_FD, the pixel-buffer pool
   taking that flavour where DMA-BUF is absent, and the virtual camera's loopback door takes
-  the host-pointer import tier. Camera capture takes its MMAP path, display presents through
-  the device's own swapchain, and compute, graphics, ray tracing and pixel effects run at the
-  speed the CPU gives; the runtime names the device once and warns no further. A processor
+  the host-pointer import tier. A device that exports no semaphore — the software device does
+  not — crosses no timeline: a texture or staging registration carries none, a processor
+  interpreter waits on none, and every copy an escalate op makes on that device is retired on
+  the host before the reply, as on macOS. Camera capture takes its MMAP path; a window needs a
+  hardware device — the bundled driver carries no window-system code, so `DisplayWindow`
+  refuses by name on the software device, and a stream there is viewed from outside the
+  runtime, by its URL or by a node that reads its frames; compute, graphics, ray tracing and
+  pixel effects run at the speed the CPU gives; the runtime names the device once and warns no
+  further. A user who wants a window on a machine with no GPU points `VK_DRIVER_FILES` at
+  their distribution's own lavapipe, which carries the window-system code. A processor
   interpreter imports on the runtime's device: the runtime hands each interpreter the device
   it built on and the loader environment reaching the bundled driver at spawn, and an
   interpreter that resolves another device refuses by name. The memory budget on the software
   device is the extension's reading of the system-memory heap, as the budget entry above
-  states for any device. Owner, 2026-10-13. [optional-accelerators]
+  states for any device. Owner, 2026-10-13. [optional-accelerators — SHIPPED #2766, #2770,
+  #2772, #2776, #2789, #2794, #2796]
+  Rejected: a software device built with window-system support — it links libxcb, libX11-xcb,
+  libxshmfence and libwayland-client, so a minimal container or headless server, which lacks
+  them, cannot open the driver at all (owner, 2026-10-13).
+  Rejected: carrying both a headless and a window-system build, chosen at start — roughly
+  doubles the driver bytes (owner, 2026-10-13).
+  <!-- verify: cargo test -p streamlib-engine --lib --features hardware-tests a_software_device_builds_no_dma_buf_pool_and_chains_no_dma_buf_create_info -->
+  <!-- verify: cargo test -p streamlib-engine --lib on_a_device_without_dma_buf_every_single_plane_request_takes_opaque_fd -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_staging_copy_without_a_timeline_is_retired_before_the_reply -->
+  <!-- verify: cargo test -p streamlib-consumer-rhi --lib a_helper_on_a_machine_with_two_devices_imports_on_the_one_the_runtime_named -->
+  <!-- verify: cargo test -p streamlib-python-wheel as_device_tensor_refuses_on_a_software_device_naming_it_before_any_staging_opens -->
+  <!-- verify: cargo test -p streamlib-python-wheel a_staging_without_a_timeline_reads_after_the_reply -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib a_device_with_no_window_system_surface_refuses_naming_the_vendor_driver_and_the_way_to_view -->
 - **DECIDED** — The Linux CI lane runs the engine on the bundled software device. A test is
   rig-only only when it needs what a GitHub runner cannot give — a capability the software
   device lacks (Vulkan Video, DMA-BUF modifiers, CUDA) or a real camera, display or audio
   device — and its marker's reason says which; every other engine, runtime and integration
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
-  ruling. [optional-accelerators]
+  ruling. [optional-accelerators — SHIPPED #2778, #2780]
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_helpers_reasons_are_the_python_rig_only_closed_list -->
+  <!-- verify: grep -n -e "--expected-device llvmpipe" -e "Integration suite (all but rig-only)" .github/workflows/ci.yml -->
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut, moq-relays)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
@@ -2152,7 +2229,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   set, not a rule: a further first-party capability is a built-in only under the criterion
   in §Packages & extension model, and is otherwise an extension wheel.
   [importable-python-library — SHIPPED #1709; extension-model; package-split-and-lend —
-  SHIPPED #2684, #2693]
+  SHIPPED #2684, #2693; amended by moq-relays: the display built-in is deleted with the
+  windows (the entry below)]
   <!-- verify: pytest tests/stream-on-runtime/test_native_builtin_blocks.py -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
@@ -2343,7 +2421,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   320×180 on a Retina Mac. A processor that cannot get a window drains and discards, so
   upstream still sees a live consumer.
   [importable-python-library — SHIPPED #1707; shared-window-event-pump — SHIPPED #1734;
-  macos-platform-floor — SHIPPED #2357]
+  macos-platform-floor — SHIPPED #2357; amended by moq-relays: the whole entry is deleted (the
+  windows entry below)]
   <!-- verify: cargo test -p streamlib-engine --test window_event_pump_serves_many_windows -->
   <!-- verify: cargo test -p streamlib-engine --lib a_request_carries_its_title_and_size_to_the_window_attributes -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test processor_owned_window_on_the_first_thread -->
@@ -2392,13 +2471,40 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   shows, drains and closes its own window and carries the HDR sidecar through the same
   present loop, the helper's window exchange client being fd-free and shared.
   [processor-owned-windows — SHIPPED #1928, #1929, #1930; macos-capability-parity — SHIPPED
-  #2407]
+  #2407; amended by moq-relays: the whole entry is deleted (the windows entry below)]
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_over_the_escalate_wire -->
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_shows_named_surfaces -->
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_refused_without_a_display_server -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_all_three_ways_of_naming_a_published_surface_reach_the_window -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar -->
+- **DECIDED** — The runtime opens no windows. `DisplayWindow`, `NodeOwnedWindow` and its events
+  and Protocols, the window event pump, the present target, the swapchain and present
+  compositor code in the RHI, the Apple first-thread pump and its `CAMetalLayer` path, `winit`,
+  every window test and rig fixture, the restart-for-a-display unit, the `DISPLAY`,
+  `WAYLAND_DISPLAY` and `XAUTHORITY` handling in `tatolabd`, and the software-device window
+  refusal are deleted by the sharing step's change, which inventories every site and deletes
+  them together so no window path outlives the browser path. A person sees a stream in a
+  browser through the preview page (§Networking); the rigs and the codec proof read a private
+  port's snapshot over loopback HTTP; a stream's one output off its graph is a track at a
+  relay. Owner, 2026-10-16. [moq-relays]
+- **DECIDED** — `TestPatternSource` is the sample stream's source: a branded looping animation
+  — colour bars, the potato bouncing corner to corner, "Tatolab stream setup successfully" and
+  "sample stream" bottom-right — rendered by one GPU pass into the pooled `Rgba32` frame every
+  source lands in, the text from a glyph atlas baked into the binary, so it needs no device, no
+  permission, no font library and nothing added to `DT_NEEDED`, and runs on the software
+  device. It keeps its name and its ports; the branding is content. Owner, 2026-10-16.
+  [moq-relays]
+- **DECIDED** — `H264Encoder` has a CPU arm. Where the device offers no Vulkan Video and no
+  VideoToolbox — the software device — the block encodes with openh264, loading Cisco's own
+  prebuilt library, which the runtime fetches once from Cisco and verifies by hash and never
+  builds from source; a machine that cannot fetch it refuses the encoder by name saying so.
+  Same block, same output bytes, same config keys; the arm is chosen with the codec seam's
+  first-arm-that-opens walk and logged once. Owner, 2026-10-16. [moq-relays]
+  Rejected: building openh264 from source — the patent coverage Cisco carries applies to its
+  binary alone (owner, 2026-10-16).
+  Rejected: a royalty-free codec in its own block for the no-GPU case — the scaffold would pick
+  a codec per device (owner, 2026-10-16).
 - **DECIDED** — Camera → GPU transport: zero-copy import of the device's own memory when
   the driver takes it, transparent CPU upload otherwise, selected automatically — no
   configuration dial. Both arms land frames through one stage: the device's NV12 or YUYV
@@ -2564,7 +2670,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and audio adds none. No name is added to the permitted-host-library list — an audio
   library appearing there is the failure this design exists to prevent, not a fix for
   it. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_elf_the_lend_carries_links_only_what_the_host_may_supply -->
 - **DECIDED** — A backend device paces the audio path: capture and playback callbacks
   are the cadence source, and a block's timestamp derives from the backend's own
   timing (status minus reported delay) in the machine monotonic epoch — never from a
@@ -2872,7 +2978,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   reset seams the stamp and flush clauses bind. Hand-rolling a polyphase resampler was
   rejected: a maintenance burden and no capability.
   [audio-port-window-contract — SHIPPED #2033]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_elf_the_lend_carries_links_only_what_the_host_may_supply -->
 - **DECIDED** — A port whose target format is not knowable at declaration declares the
   sentinel `audio_window = match_device`, and the contract resolves at `setup()` — where
   the typestate is Full, the same phase in which a processor requests a window — from the
@@ -3008,7 +3114,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   survivable — a reader enters a stream only at a sync point and discards back to one
   after a `sequence_index` step other than exactly one, counting what it lost — and
   that OPEN stays its own decision, named here so a codec ship is never read as having
-  resolved it. [codec-blocks — SHIPPED #2083, #2085]
+  resolved it. [codec-blocks — SHIPPED #2083, #2085; amended by moq-relays: the encoded
+  frame's payload becomes the stack's media frame — a varint timestamp in microseconds then
+  the Annex-B access unit with parameter sets inline — and nothing around it; `codec`, the
+  coded extent and `color` move to the port's catalog fragment, the encoder writing it after
+  its first frame, `is_sync_point` to the envelope's `starts_group`, and the ordering pair to
+  the group and object numbering the relay carries; `H264Decoder` and `Mp4Sink` read that
+  payload (owner, 2026-10-16)]
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_video_frame -->
 - **DECIDED** — A decoder publishes the display window, never the coded picture. Both
   codecs pad up to a block size — H.264 to the 16-sample macroblock, H.265 to the
@@ -3128,7 +3240,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   decoder, a container or a socket, and producing an encoded bag from Python is
   spelling the keys as a bag literal and writing it with the timestamped write —
   the implicit one would stamp the moment of publication rather than the frame's own
-  instant. [python-codec-block-api — SHIPPED #2106, #2114]
+  instant. [python-codec-block-api — SHIPPED #2106, #2114; amended by moq-relays:
+  `EncodedVideoFrame` is deleted — an encoder's port carries the stack's media frame as bytes,
+  and a reader does with them what it does (owner, 2026-10-16)]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_video_frame_cast.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_video_frame_cast.py -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_video_frame_cast.py::test_an_encoded_video_frame_takes_no_surface_and_holds_no_claim -->
@@ -3164,7 +3278,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   with none of these keys — the encoded-video bag's three refusals spelled again. The Rust
   struct is `EncodedAudioPacket` — *packet*, because Opus uses *frame* for a subdivision
   of one, and a name that means two things at the seam it crosses is the wrong name.
-  [opus-mp4-recording-rung — SHIPPED #2125]
+  [opus-mp4-recording-rung — SHIPPED #2125; amended by moq-relays: the payload becomes the
+  stack's media frame — the varint timestamp then the bare Opus packet — with `channels`,
+  `sample_rate` and `pre_skip` in the port's catalog fragment and `is_sync_point` the envelope's
+  `starts_group`, always `True`; `OpusDecoder`, `Mp4Sink`, `WhipPublisher` and `WhepPlayer`
+  read and write that payload (owner, 2026-10-16)]
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::encoded_audio_packet_msgpack_wire_carries_the_documented_keys -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::the_bitstream_crosses_the_wire_as_a_binary_payload_not_an_array -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::a_bag_with_no_encoded_packet_keys_is_refused_naming_the_keys -->
@@ -3173,7 +3291,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   cast verbatim: the wire keys are the constructor keywords, `bool` is refused where an
   integer is required, unknown keys are read past, the payload is stored under the Rust
   struct's own field name and stays off the repr, and there is no to-bag helper and no
-  numpy property. [opus-mp4-recording-rung — SHIPPED #2126]
+  numpy property. [opus-mp4-recording-rung — SHIPPED #2126; amended by moq-relays:
+  `EncodedAudioPacket` is deleted with `EncodedVideoFrame` (owner, 2026-10-16)]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_audio_packet_cast.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_audio_packet_cast.py -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_audio_packet_cast.py::test_an_encoded_audio_packet_takes_no_surface_and_holds_no_claim -->
@@ -3222,12 +3341,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `_engine.abi3.so` names.
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2125]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_elf_the_lend_carries_links_only_what_the_host_may_supply -->
 - **DECIDED** — `Mp4Sink` muxes the encoded elementary streams the blocks produce
   (H.264/H.265 video, Opus audio) in pure Rust through `mp4-atom` — no ffmpeg subprocess,
   no raw-frame transcode path, no new `DT_NEEDED` entry.
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2127]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_elf_the_lend_carries_links_only_what_the_host_may_supply -->
 - **DECIDED** — `Mp4Sink` is `reactive`/`high` with one `ordered` input, `tracks`, and no
   output. Any number of links may enter it and **each inbound link is one track**, named
   by its source channel name, so two cameras are two video tracks and three microphones
@@ -3369,7 +3488,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib core::annex_b_access_unit -->
   <!-- verify: cargo test -p xtask mp4_inspect -->
   <!-- verify: cargo test -p xtask mp4_inspect::tests::a_real_sink_recording_reports_both_tracks_under_their_link_names -->
-- **DECIDED** — Rig-only, `requires_gpu` and said in the module docstring:
+- **DECIDED** — `requires_gpu` and said in the module docstring:
   `test_opus_blocks.py` — a Python known-signal source → `OpusEncoder` → probes →
   `OpusDecoder` → probes: every bag casts, `sequence_index` advances by one,
   `sample_count` is 960, decoded blocks are 48 kHz `f32` in the source's channels;
@@ -3427,7 +3546,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
   #2721]
 
-## Networking — transport, moq, webrtc — SHIPPED (unbuilt: the sharing step)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ moq-relays)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -3463,7 +3582,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   ordering pair from its own counters, a sync point from the access unit, the audio
   parameters from the session description — rather than from config. What crosses a
   network on a media track is a bitstream and the keys a decoder needs, never a serialised
-  link payload. [extension-model; moq-data-tracks — SHIPPED #2172, #2173]
+  link payload. [extension-model; moq-data-tracks — SHIPPED #2172, #2173; amended by
+  moq-relays: the two casts are deleted and the ports carry the stack's media frame as bytes,
+  the keys a decoder needs riding the ports' catalog fragments]
 - **DECIDED** — A received stream reaches the bag through the manual-source shape: the wheel's Rust receives on
   its own runtime and a processor-owned thread writes, so no engine seam is added for it. Two
   budgets the wheel lives inside, ticket-level but named here: a helper stops on the shutdown
@@ -3505,18 +3626,22 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   per attempt, since a closed peer connection
   cannot be dialled again. A bag the engine refuses is the one failure not retried: it names
   its port and ends the thread, because reconnecting would spend an endpoint's session
-  forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150]
-- **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job, and an
-  `extension-wheels-macos` beside it, over a matrix holding `packages/streamlib-webrtc`:
-  unpack the runtime unit, build the extension into a venv holding `tatolab-stream`,
-  `cargo test` and clippy over its crate, `mypy.stubtest` over its `_native`, pyright over
-  its Python, and pytest with `-m "not requires_gpu"`, the portability gate over its `.so`
-  among them. `release-please-config.json` bumps the extension with everything else, one
+  forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150; amended
+  by moq-relays: both read and write the stack's media frame as bytes — the publisher hands
+  the access unit or packet after its varint timestamp to RTP, the player writes that frame
+  and states codec, extent and Opus parameters in its ports' catalog fragments — since
+  `EncodedVideoFrame` and `EncodedAudioPacket` are deleted]
+- **DECIDED** — `ci.yml`'s `integration-test-linux` and `integration-test-macos` jobs
+  carry the extension lane for `packages/streamlib-webrtc`: on the runtime unit they built, build
+  the extension into a venv holding `tatolab-stream`, `cargo test` and clippy over its
+  crate, `mypy.stubtest` over its `_native`, pyright over its Python, and pytest with
+  `-m "not requires_gpu"`, the portability gate over its `.so` among them.
+  `release-please-config.json` bumps the extension with everything else, one
   version (§Distribution & versioning); the release builds `tatolab-webrtc` for manylinux
   and Apple Silicon and uploads it to PyPI beside `tatolab-stream`, attaching nothing.
   [networking-extension-wheels — SHIPPED #2152; package-split-and-lend — SHIPPED #2691,
   #2697]
-  <!-- verify: grep -n "build-tatolab-webrtc-distribution:" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "build-tatolab-webrtc-distribution:" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by the wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
   cases), SDP offer construction and answer parsing, and the player's bag literal checked
@@ -3541,9 +3666,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   never an address. In Python `stream_builder.remote_output(address)` takes the address string,
   right-anchored — `"main/camera/video"` another stream on this machine — each chunk cast, one
   casting to empty, `.` or `..` refused where it is written; an address naming another machine
-  links nothing until the sharing step and is refused by name.
+  links nothing and is refused by name.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
-  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715]
+  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715; amended by
+  moq-relays: `remote_output` is deleted — a stream reads another stream's port through the
+  relay source node; `tap` goes with the preview and snapshot forms]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
@@ -3556,29 +3683,29 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket the_retired_verbs_and_flags_are_usage_errors -->
-- **DECIDED** — A link's ends are both on this machine. A link end names a port of this
-  stream's graph, or — a source only — `{stream, node, port}` of another stream on this
-  machine; the graph holds one link collection, which every traversal walks. `LinkState`'s
-  `AwaitingRemote` waits on a source stream that is not loaded or a source port it may not
-  read yet, its reason naming which, and the link wires once the source can be read. A
-  snapshot whose link end names another machine is refused by name at load rather than read
-  as a local end. In Python `connect(source, destination)` takes a reference minted by this
-  stream's builder, or `remote_output`'s, as its source, and a value of any other kind is
-  refused naming the spelling that would work. The engine reads no bag key to carry a link.
-  Linking to another machine is the sharing step's (the moq-on-the-tailnet entries below).
-  [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715]
+- **DECIDED** — A link's ends are both on this machine, in one stream. As built, a link end
+  names a port of this stream's graph, or — a source only — `{stream, node, port}` of another
+  stream on this machine; the graph holds one link collection, which every traversal walks.
+  `LinkState`'s `AwaitingRemote` waits on a source stream that is not loaded or a source port
+  it may not read yet, its reason naming which, and the link wires once the source can be
+  read. A snapshot whose link end names another machine is refused by name at load rather
+  than read as a local end. In Python `connect(source, destination)` takes a reference minted
+  by this stream's builder, or `remote_output`'s, as its source, and a value of any other kind
+  is refused naming the spelling that would work. The engine reads no payload to carry a
+  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715;
+  amended by moq-relays: a link's ends are both in one stream — the cross-stream source end,
+  `AwaitingRemote` and `remote_output` are deleted, and a stream reads another stream's port,
+  on this machine or another, through the relay source node below]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_carrying_a_key_no_address_chunk_is_refused_naming_the_keys_of_a_link_end -->
   <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the_address_shape -->
   <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machine -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_an_input_as_its_source_naming_the_fix -->
-- **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
-  creates it, reading a port the source stream has exposed — private on the machine, public off
-  it — and the source is never asked. No runtime pushes its output into another's input, and no
-  runtime wires two others. A machine that wants
-  another's port finds it among that machine's exposed ports and pulls it — from its own stream,
-  from code on the machine, or by opening the port's URL. Owner, 2026-10-04: a source never
-  wires itself into a reader, the way a server never wires its URL into a client's browser.
-  [exposure-levels]
+- **DECIDED** — Reading across streams is always pulled, and the source is never asked. The
+  stream that wants another stream's port subscribes to it at a relay — through the relay
+  source node, the preview page, or any MoQ client — and nothing is sent for a track nobody
+  subscribes to. No runtime pushes its output into another's input, and no runtime wires two
+  others. Owner, 2026-10-04: a source never wires itself into a reader, the way a server never
+  wires its URL into a client's browser. [exposure-levels; moq-relays]
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_between_streams_carries_a_native_source_into_python_and_a_python_source_into_a_native_window -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_reader_run_before_its_source_awaits_naming_it_then_wires_once_the_source_runs -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_the_builders_address_refusals_are_the_compiles_refusal -->
@@ -3586,28 +3713,34 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test a_link_loaded_before_its_source_stream_awaits_naming_it_then_wires_when_it_starts -->
 - **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
   is one clock per machine, and a stamp is never compared against one from another clock. No
-  link can carry a stamp from another machine, so nothing reads or renders a clock identity,
-  and `Mp4Sink` compares first stamps across tracks with no another-machine refusal. How a stamp taken on another machine's clock is marked is the sharing step's OPEN below.
-  [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643]
+  link carries a stamp from another machine, so nothing reads or renders a clock identity, and
+  `Mp4Sink` compares first stamps across tracks with no another-machine refusal. A message
+  read from a relay reaches a graph through the relay source node, which restates each
+  message's stamp on this machine's clock with the timestamped write, as a decoder restates
+  an upstream stamp; the relay's object carries the writer's stamp and the node's doc says
+  both. [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643; moq-relays]
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
-  machines become comparable; until then the per-clock rule above stands. A relay — a
-  decoder, an encoder, any Python `write(…, timestamp_ns=)` — restates an upstream stamp on a
-  local output, so whatever closes this also says how a restated stamp keeps the machine it
-  was taken on. The question stands for stamps that cross machines over MoQ.
-  [runtime-mesh; cross-runtime-links; moq-on-the-tailnet]
-- **DECIDED** — The runtime decides what leaves the machine; who reads a public port off the
-  machine is the tailnet's access rules or a relay's. [one-runtime-per-machine;
-  moq-on-the-tailnet]
-- **DECIDED** — streamlib does not solve every networking problem. Reaching a machine behind
-  NAT, a peer machine's identity, and encryption between machines are left to Tailscale or a
-  relay the machine dials out to. streamlib owns what leaves a machine, streams as URLs, and
-  many streams on one runtime (owner, 2026-09-30). Nothing is built for a private network
-  without a tailnet. [one-runtime-per-machine; moq-on-the-tailnet]
+  machines become comparable; until then the per-clock rule above stands, and the relay
+  source node's restated stamp is a local stamp like any relay node's. [runtime-mesh;
+  cross-runtime-links; moq-relays]
+- **DECIDED** — The runtime decides what leaves the machine; who reads at a relay is that
+  relay's own access rules. [one-runtime-per-machine; moq-relays]
+- **DECIDED** — Tatolab solves no networking problem. Reach between machines, a peer's
+  identity, encryption on the wire, NAT and names are a relay's, or the network the user
+  already has — a tailnet, a LAN, the internet. The runtime reads, configures and requires
+  nothing of Tailscale: no status, no `tailscale serve`, no certificate, no name; reaching a
+  machine's local relay over a tailnet is a docs page, because the relay listens on the
+  machine and a tailnet reaches the machine. Nothing is built for discovery, certificate
+  minting, name claiming or peer authentication, on any network. Owner, 2026-10-16.
+  [one-runtime-per-machine; moq-relays]
+  Rejected: reading Tailscale's status for the machine's name and the tailnet's machines, and
+  having `tatolabd` configure `tailscale serve` — a rights prompt and a manual step on every
+  install, for reach the local relay already gives (owner, 2026-10-16).
 - **DECIDED** — The address is `<machine>/<stream>/<node>/<port>`: the runtime is addressed by
-  its machine (its tailnet name, else its hostname), and the same string is the address in
-  Python, the CLI, the URL path and the graph (owner, 2026-09-30). Collisions (owner,
+  its machine, and the same string is the address in Python, the CLI, the URL path and the
+  graph (owner, 2026-09-30). Collisions (owner,
   2026-10-02): a second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
   is unique per machine, defaults to its function's, and a second
   load of a name is refused naming where the first came from, with `--name` the way out, which
@@ -3631,86 +3764,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_names_the_port_a_fixture_address_parses_to -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_refuses_a_fixture_address_naming_no_port_where_it_is_written -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_the_builders_address_refusals_are_the_compiles_refusal -->
-- **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
-  runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
-  any node of the stream may link to it, and nothing outside the stream may read it.
-  **Private**: any other stream on the machine, and code on the machine, may read it.
-  **Public**: private, plus a URL reachable off the machine, which other machines and tools
-  pull. `stream_builder.expose(output)` makes an
-  output private and `stream_builder.expose(output, Exposure.PUBLIC)` public; a level is an enum
-  member, never a string. The stream's function sets where its exposures start; `expose` at
-  the CLI, the app or the local API changes them while the stream runs, the change applies at
-  once — a reader the new level no longer allows is cut off — and neither the runtime nor the
-  stream restarts. The engine checks the live exposures wherever a read crosses a stream's
-  edge — another stream's link, a reader or URL on the machine, a reader on another machine —
-  and a port is read from outside its stream only through exposure: no debugging tap or other
-  door bypasses it, and a stream's own logs are how its insides are seen. Nothing leaves the
-  machine until a port is public. The CLI and the app list every running stream with its
-  private and public ports; an internal port may be listed and is never readable. Owner,
-  2026-10-04. [exposure-levels; one-runtime-per-machine; stream-graph — SHIPPED #2708; amended by
-  moq-on-the-tailnet: off the machine a public port is read over MoQ on the tailnet, and at a
-  relay once the machine has joined one; machines are listed from Tailscale's status and asked
-  for their public ports]
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_to_an_internal_port_awaits_naming_the_port_and_its_level_and_wires_once_it_is_exposed -->
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_lowering_the_source_to_internal_cuts_the_link_at_once_and_a_link_to_a_still_private_port_keeps_flowing -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test a_link_to_an_internal_port_of_another_stream_is_refused_naming_the_port_and_its_level -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test lowering_the_source_to_internal_disconnects_the_link_at_once_and_other_links_keep_carrying -->
-- **DECIDED** — Every public port is reachable by URL, and every private port from any tool
-  on the machine. A user with no account can see and use their own streams locally (owner,
-  2026-09-30). [one-runtime-per-machine; amended by moq-on-the-tailnet: live data has one form,
-  MoQ, played by a browser through the viewer page or read by another runtime; HTTP serves the
-  listing, the read-only MCP, snapshots and small samples, and off the machine both need a
-  tailnet or a relay]
-- **OPEN** — The URL grammar and the forms. Direction (review, not decided): a machine exports
-  one namespace, `/<stream>/<node>/<port>/<form>`, every level listable, an unexposed port
-  simply absent from it; the form a child segment, never a query parameter. Live data has one
-  form, `moq`, and `ts`, `hls`, raw H.264, fMP4 and `whep` are not forms.
-  Direction for the rest, names undecided: `page` for the viewer, and a snapshot and a
-  bounded-sample form (`png`, `ndjson`). Undecided:
-  how a relay prefixes the namespace; whether a stream's description is written by its author,
-  generated from the nodes' descriptions and a live sample, or both (it stays documentation,
-  never a contract at the port); and the certificate a browser is shown on the engine's QUIC
-  listener. Known: Tailscale Funnel carries no UDP, so live data from a machine goes over the
-  tailnet directly or through a relay; the HTTP passes.
-  [one-runtime-per-machine; moq-on-the-tailnet]
-- **DECIDED** — End-to-end encryption through a relay is not a launch requirement; it is a
-  later change, and the design keeps it possible. A hosted relay's operator can see the
-  streams passing through it until that change lands, and that is said plainly; a
-  self-hosted relay is the user's own and exposes nothing. What
-  stays true so the door stays open: a relay never parses the payloads it forwards; the engine
-  never reads a bag's payload; a frame's sequence, stamp and keyframe flag stay readable so
-  delivery and drop counting work; and no key ever lives on a relay. When it lands it is the
-  WebRTC insertable-streams and MoQ secure-objects shape — encrypt each frame at the source
-  inside the transport encryption, decrypt in the player, relays untouched — with a pre-shared
-  key per team first (carried to a browser in a URL fragment, which never reaches a server),
-  per-stream keys through the control client later, and the team's devices signing the key
-  set the way Tailnet Lock does. Its cost, accepted for later: every server-side form
-  (snapshots) then comes from the machine, and stock ffmpeg and curl work only through a TLS
-  tunnel ending on the machine. Owner, 2026-09-30. [one-runtime-per-machine; amended by
-  moq-on-the-tailnet: the relay is a separate program the machine joins]
-- **DECIDED** — Off a machine, real-time data travels over MoQ on QUIC and over nothing else.
-  On one machine streams share data through shared memory, as today. Each machine's engine
-  serves a MoQ endpoint itself, on its tailnet address, and a reader on another machine
-  subscribes to it directly; no MoQ relay is needed between machines on one tailnet. A
-  link between streams on two machines is still pulled by its reader from a public port
-  (pull-only, above), and nothing is sent for a port nobody subscribes to. Zenoh is removed —
-  no session, no runtime mesh, no mesh name, no multicast discovery, no router. Owner,
-  2026-10-04. [moq-on-the-tailnet]
-- **DECIDED** — Tatolab builds nothing Tailscale already does. Reach between machines, machine
-  names, encryption on the wire, identity and discovery come from the tailnet. A machine with
-  no Tailscale runs every stream, shares between streams on itself, and can join a relay; it is
-  never read directly by another machine, and nothing is built for a plain LAN — no discovery,
-  no certificate minting, no name claiming, no peer authentication. Who may read a public port
-  on the tailnet is Tailscale's access rules: the engine checks the port's exposure and adds no
-  per-reader check, so the stream map and peer authentication are not built. Owner, 2026-10-04.
-  [moq-on-the-tailnet]
-- **DECIDED** — A machine's name is its tailnet name. The engine reads the local Tailscale's
-  status for two things: its own machine name, and the list of the tailnet's other machines.
-  Whether a listed machine runs Tatolab, and what it exposes, is learned by asking that
-  machine. `desk/<stream>/<node>/<port>` therefore names the tailnet machine `desk`, and a full
-  tailnet name is accepted in the machine position for a machine shared in from another
-  tailnet. With no Tailscale the machine's name is its hostname and matters only on that
-  machine. Owner, 2026-10-04. [moq-on-the-tailnet; runtime-hosting — SHIPPED #2715]
+- **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
+  that relay's credential assigns. As built, the engine reads the local Tailscale's status for
+  its own name and the tailnet's machines, falling back to the hostname. [runtime-hosting —
+  SHIPPED #2715; amended by moq-relays: the Tailscale read is deleted — the machine is its
+  hostname cast on every machine, and a relay adapter's root prefixes the broadcast there]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::no_tailscale_names_the_machine_by_its_hostname -->
@@ -3718,63 +3776,178 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_naming_another_machine_is_refused_by_name -->
-- **DECIDED** — The engine stands on the moq-dev line of MoQ, the `moq-net` and `moq-tokio`
-  crates, pinned to exact versions, and serves sessions itself with no relay program beside it.
-  Known (2026-10-04): the line's compatibility with Cloudflare's hosted relays is
-  claimed upstream and unverified here. Owner, 2026-10-04. [moq-on-the-tailnet]
-- **DECIDED** — The internet edge is a relay the machine has joined, and joining is a machine
-  setting. A machine joined to a relay offers every one of its public ports there, sending a
-  port only while someone subscribes; there is no fourth exposure level and no per-port
-  internet flag, and who reads at the relay is the relay's own access rules. The runtime joins
-  any relay from an address and a credential and holds nothing else about relays — no account,
-  team, directory, signed link or billing, which belong to a separate private service. No relay
-  is written or bundled here; a person who wants their own runs an existing open-source relay
-  program. The relay is never a role of the runtime. Owner, 2026-10-04. [moq-on-the-tailnet]
-- **DECIDED** — HTTP carries only what is not real time: the listing of exposed ports, a
-  read-only MCP, snapshots, small samples and the viewer page — never live media, in any
-  browser and for any tool. `tatolabd` asks Tailscale to serve its HTTP, on a port of its own,
-  the first time a port goes public; where Tailscale refuses for lack of rights it says the
-  one command to run once, and it never alters any other serve setting. Off the machine that
-  HTTP shows public ports only, as on any address but loopback (§Control plane, the local
-  API). Live forms over HTTP — MPEG-TS, HLS, raw H.264 and fMP4 — and a `whep` form are not
-  built. Owner, 2026-10-04. [moq-on-the-tailnet]
-- **DECIDED** — The viewer page is in the first version of sharing: every public port has a
-  page that plays it, served with the HTTP above and built on the MoQ stack's own browser
-  player, never one written here. One path serves every browser — QUIC and MoQ. No WebSocket
-  or other TCP fallback is built or enabled. Owner, 2026-10-04. [moq-on-the-tailnet]
-- **DECIDED** — Until the sharing step nothing links one machine to another and the tree holds
-  no MoQ; everything on one machine works, and the WebRTC extension stays as it is. The `tap` and `exchange` verbs, retired
-  by the exposure entry above, stay until the sharing step and are deleted in the change that
-  builds the snapshot and sample forms: from then the repo's live verification reads a port
-  the way a user does — the fixture stream exposes it private, and the check fetches exact,
-  full-resolution snapshots from the machine's local HTTP listing.
-  The one-runtime-per-machine sequence continues, after runtime hosting, with accelerators
-  optional, then one sharing step — the entries above — in place of that
-  sequence's steps 8 and 9, then resources, packs and the app. Owner, 2026-10-04.
-  [moq-on-the-tailnet; zenoh-and-moq-wheel-removal — SHIPPED #2633, #2643, #2645, #2649]
-- **OPEN** — The sharing step's details, decided at its own align and built against by nothing
-  until then: which versions of `moq-net` and `moq-tokio` are pinned; how groups are cut for
-  data that is not video, without the engine reading a bag;
-  what a public port whose bags name a surface serves off the machine, a browser needing
-  encoded video rather than raw pixels; how a relay is joined and how a machine's ports
-  are named there; the certificate the engine's QUIC listener shows a browser; how the HTTP
-  that `tailscale serve` fronts shows public ports only, the loopback listener showing private
-  ones too; what a browser that cannot play is told; the read-only
-  MCP's tools and who may call it; the verbs that list machines and their public ports; what a
-  control client hands the runtime beyond a relay address and a credential; and how a stamp
-  taken on another machine's clock is marked. Direction (session's, not decided): a bag stands alone, so each may open
-  its own group, video cutting at its keyframes; machine to machine needs no certificate from
-  Tailscale, a tailnet address being authenticated already; `tailscale serve` supplies the
-  HTTPS certificate for what it fronts, so the runtime requests and renews none. Known
-  (2026-10-04): `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet
-  address itself; changing serve settings needs root, Tailscale's operator user or, on macOS,
-  the admin group, and HTTPS must be switched on for the tailnet; Funnel carries TCP only, on
-  ports 443, 8443 and 10000; any local user reads Tailscale's status on Linux, the same user
-  on macOS; the stack's player keeps WebKit on a WebSocket fallback by default, which the entry
-  above rules out, so Safari and iOS play only where their own QUIC support holds. Known
-  (2026-09-30): Safari accepts no self-signed certificate hash, so a Safari browser reaching the
-  engine's QUIC listener needs a certificate it trusts, such as the tailnet's.
-  [moq-on-the-tailnet]
+- **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
+  runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
+  any node of the stream may link to it, and it is at no relay. **Private**: at the machine's
+  local relay's loopback listener only, so a stream, a script, the preview page or any MoQ
+  client on the machine reads it and nothing off the machine can. **Public**: at every relay
+  the machine has joined, the local relay's every-interface listener included. As
+  built, private also admits another stream's link over iceoryx2 and public also means a URL
+  reachable off the machine. `stream_builder.expose(output)` makes an
+  output private and `stream_builder.expose(output, Exposure.PUBLIC)` public; a level is an enum
+  member, never a string. The stream's function sets where its exposures start; `expose` at
+  the CLI, the app or the local API changes them while the stream runs, the change applies at
+  once — a reader the new level no longer allows is cut off, a relay subscriber included — and
+  neither the runtime nor the stream restarts. The engine checks the live exposures wherever a
+  read crosses a stream's edge, and a port is read from outside its stream only through
+  exposure: no debugging tap or other door bypasses it, and a stream's own logs are how its
+  insides are seen. Nothing leaves the machine until a port is public. The CLI and the app
+  list every running stream with its private and public ports; an internal port may be
+  listed and is never readable. Owner, 2026-10-04 and 2026-10-16. [exposure-levels;
+  one-runtime-per-machine; stream-graph — SHIPPED #2708; amended by moq-relays: private is
+  the local relay, public every joined relay, and the cross-stream iceoryx2 link is deleted]
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_to_an_internal_port_awaits_naming_the_port_and_its_level_and_wires_once_it_is_exposed -->
+  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_lowering_the_source_to_internal_cuts_the_link_at_once_and_a_link_to_a_still_private_port_keeps_flowing -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test a_link_to_an_internal_port_of_another_stream_is_refused_naming_the_port_and_its_level -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test lowering_the_source_to_internal_disconnects_the_link_at_once_and_other_links_keep_carrying -->
+- **DECIDED** — Every exposed port is a track at a relay, named by its address, and that is the
+  one way a port is read from outside its stream — by another stream through the relay source
+  node, by the preview page, by a script, by ffmpeg-side MoQ tooling, by another runtime,
+  all alike. A user with no account sees and uses their own streams through the local relay
+  (owner, 2026-09-30). [one-runtime-per-machine; moq-relays]
+- **DECIDED** — The runtime's HTTP is on loopback only and carries what is not real time:
+  the listing of the machine's streams and exposed ports, the preview page, and the snapshot
+  form. Its paths are the address: `/watch/<machine>/<stream>` opens the preview on a
+  broadcast with its tracks to pick from, `/watch/<machine>/<stream>/<node>/<port>` straight
+  onto one track, and `/snapshot/<machine>/<stream>/<node>/<port>` answers one exact,
+  full-resolution PNG of the latest frame a port whose encoding it knows carries — the door the
+  repo's live verification reads instead of `exchange`. The listing shows private and public
+  ports; an internal port is listed and not served. No HTTP serves live media, in any browser,
+  for any tool; no HTTP listens off loopback. The read-only MCP and the bounded-sample form
+  are not built. Owner, 2026-10-16. [moq-relays]
+  Rejected: live forms over HTTP — MPEG-TS, HLS, raw H.264, fMP4 — and a `whep` form (owner,
+  2026-10-04).
+- **DECIDED** — End-to-end encryption through a relay is not a launch requirement; it is a
+  later change, and the design keeps it possible. A hosted relay's operator can see the
+  streams passing through it until that change lands, and that is said plainly; a
+  self-hosted relay is the user's own and exposes nothing. What
+  stays true so the door stays open: a relay never parses the payloads it forwards; the engine
+  never reads a payload; a message's group, stamp and envelope stay readable so delivery and
+  drop counting work; and no key ever lives on a relay. When it lands it is the
+  WebRTC insertable-streams and MoQ secure-objects shape — encrypt each payload at the source
+  inside the transport encryption, decrypt in the reader, relays untouched — with a pre-shared
+  key per team first (carried to a browser in a URL fragment, which never reaches a server),
+  per-stream keys through the control client later, and the team's devices signing the key
+  set the way Tailnet Lock does. Its cost, accepted for later: the snapshot form then comes
+  from the machine alone, and stock ffmpeg and curl work only through a TLS tunnel ending on
+  the machine. Owner, 2026-09-30. [one-runtime-per-machine; moq-relays]
+- **DECIDED** — Off a stream, data travels over MoQ on QUIC and over nothing else, to relays.
+  Inside a stream, nodes share data through shared memory, as today. The runtime serves no MoQ
+  endpoint of its own: it is a MoQ client of every relay it has joined, and the local relay —
+  `moq-relay`, shipped in the runtime unit on both floors, started and supervised by `tatolabd`
+  as a child process with its own configuration, with a loopback listener and an
+  every-interface listener at fixed UDP ports (the adapters entry below) — is the relay every
+  machine has. It is a separate program the runtime joins like
+  any other; the runtime is never a relay. Owner, 2026-10-16. [moq-relays]
+  Rejected: embedding `moq-relay` as a library inside `tatolabd` to save the loopback hop — the
+  runtime would then be a relay (owner, 2026-10-16).
+  Rejected: the engine serving a MoQ endpoint itself on its tailnet address, read directly by
+  other machines — a second serving path beside the relays, and a Tailscale requirement
+  (owner, 2026-10-16, over the 2026-10-04 ruling).
+- **DECIDED** — One publisher per runtime, and it holds no logic. It watches exposure across
+  every loaded stream: a port turning private or public is announced at the relays its level
+  reaches, one turning back is withdrawn, which cuts its subscribers at once. Per exposed port
+  it holds one reader on the port's channel — the subscriber slot every channel reserves, which
+  `tap` held — and forwards each message's payload bytes, as written and uncopied until the
+  QUIC send, to every joined relay that has a subscriber. It decodes no payload, imports no
+  class, and knows no port's encoding. Which exposed ports it offers is a predicate that
+  today says "all"; a filter or a tag rule later lives there and nowhere else. Owner,
+  2026-10-16. [moq-relays]
+- **DECIDED** — A stream is one broadcast; each exposed port is one track in it. At a relay a
+  stream is the broadcast `<root>/<machine>/<stream>`, `<root>` the prefix the relay's
+  credential assigned, and each exposed port is the track `<node>/<port>` inside it, so four
+  cameras and a microphone in one stream are five tracks a player switches among. The relay's
+  own listing is the directory: everything under `<root>/<machine>/` is that machine's streams,
+  and the broadcast's catalog is what is in one. A stream that wants two unrelated bundles is
+  two streams. Owner, 2026-10-16. [moq-relays]
+  Rejected: one broadcast per exposed port — it loses multi-track switching and audio beside
+  video, the things a broadcast is for (owner, 2026-10-16).
+- **DECIDED** — A message's group boundary is the writer's, in the envelope. `write(port,
+  payload, starts_group=True)`: the default says this message stands alone, so every data
+  port is one group per message and its author never sees the flag; `starts_group=False`
+  continues the group the last message opened. The built-in encoders set it themselves —
+  `True` on a keyframe, `False` otherwise — and a node emitting encoded media sets it from its
+  own keyframe knowledge. The publisher maps it to the relay's group boundary and reads
+  nothing else; no reader sees it, and the envelope's stamp is the object's. Owner,
+  2026-10-16. [moq-relays]
+- **DECIDED** — The catalog is assembled from port descriptions, never from payloads. An output
+  port's declaration carries, beside its name and description, a producer-written fragment
+  saying what the node writes there: its `encoding` (`msgpack`, a codec string, or a name of
+  the author's own), an optional `cast` — the import path of the type a reader casts the bytes
+  into, `acme_types:Detection`, importable in the reader's own environment from PyPI, an
+  internal index, a path dependency or a copied module — and a `kind` that places it in the
+  catalog (`video`, `audio`, `binary`). A node may update its fragment while running — an
+  encoder states its codec string and coded extent after its first frame. The publisher merges
+  the fragments of a stream's exposed ports into the broadcast's catalog track as text — one
+  entry per track, named by its track address `<node>/<port>` and grouped under its `kind`, so
+  four camera ports are four `video` entries — in the layout the stack's players read, and
+  `graph` renders each port's fragment. It
+  is documentation a reader follows: `connect` compares nothing, the engine checks nothing
+  against it, and no port is required to carry one. Owner, 2026-10-16. [moq-relays]
+  Rejected: a port declaration the engine acts on — a media opt-in the publisher reads payloads
+  under — media logic in the adapter path (owner, 2026-10-16).
+- **DECIDED** — Relay adapters carry exactly what differs between relays. One trait in
+  `tatolabd`, one implementation per relay kind: the MoQ dialect the relay speaks (`moq-net`
+  negotiates moq-lite and the IETF drafts; Cloudflare's relays are on the drafts, `moq-relay`
+  on moq-lite), how a machine authenticates and refreshes its credential, and the root the
+  relay assigns the machine. The first adapters are the local relay, Cloudflare and moq.pro;
+  Red5 waits on its cost. Joining a relay is a machine setting: an address and a credential,
+  and the runtime holds nothing else about relays — no account, team, directory, signed link
+  or billing, which belong to a separate private service, and signing in to a provider and
+  provisioning a relay live in the app or that service, never the runtime. Adapters ship with
+  the runtime on every install, headless included. The local relay's read boundary is where
+  it listens, never a token: it has two listeners — one bound to loopback alone, serving every
+  exposed port, private and public, which is what the preview page and a relay source node on
+  the machine dial; and one bound to every interface, serving public tracks only, which is
+  what another machine dials. A private port is therefore readable only by a process on the
+  machine, enforced by the kernel's loopback binding; whether the two listeners are two
+  `moq-relay` children or one configured so is the building change's. Owner, 2026-10-14 and
+  2026-10-16. [moq-relays]
+  Rejected: private tracks on an all-interfaces listener behind a token minted over loopback —
+  a bearer token carried off the machine reads them from anywhere (review of the align PR,
+  2026-10-16).
+- **DECIDED** — Reading a track is a source node. The relay source node, a built-in, takes a
+  relay address and a track's address, subscribes, and writes each object's payload bytes to
+  its one output as received, restating the stamp on this machine's clock; the track's catalog
+  fragment is readable off the node. What follows it — a decoder, a numpy node, nothing — is
+  the builder's. It is how a stream on this machine reads another stream's private port, how
+  a stream on another machine reads a public one, and the only way a graph reads a relay.
+  Nothing in the runtime is built for runtime-to-runtime: the node is one MoQ client among
+  any. Owner, 2026-10-16. [moq-relays]
+  Rejected: the engine subscribing inside the link machinery so `remote_output("desk/…")`
+  wires through a relay — a MoQ reader in the engine, a second link kind, and a stamp-marking
+  question with no answer (owner, 2026-10-16).
+- **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio` and the
+  `moq-relay` program, each pinned to an exact version the change that builds the publisher
+  names (0.3, 0.19 and 0.17 lines as of 2026-10-16), and every payload a stock player reads
+  is in that line's media layout. Known (2026-10-16): Cloudflare's hosted relays speak IETF
+  drafts 14 and 16 only, which `moq-net` negotiates; the line's own compatibility claim is
+  otherwise unverified here. Owner, 2026-10-04 and 2026-10-16. [moq-relays]
+- **DECIDED** — The preview page is a lightweight built-in viewer, not a product: served by the
+  runtime's loopback HTTP, built on the stack's own browser player and reading the local relay
+  alone — a hosted relay has its own player at its own URL. One path serves every browser —
+  QUIC and MoQ — and no WebSocket or other TCP fallback is built or enabled. Known
+  (2026-10-16): the stack's player keeps WebKit on its WebSocket path by default, so Safari
+  and iOS do not play through the preview page until that changes upstream. Owner,
+  2026-10-04 and 2026-10-16. [moq-relays]
+  Rejected: a `?relay=` parameter pointing the preview page at another relay — every hosted
+  relay already has its own player (owner, 2026-10-16).
+- **DECIDED** — The sharing step is the one change after accelerators optional, in place of the
+  one-runtime-per-machine sequence's steps 8 and 9, then resources, packs and the app. It
+  builds the publisher, the adapters, the local relay, the catalog fragments, the group flag,
+  bytes payloads, the relay source node, the sample stream, the loopback forms and the CPU
+  encoder arm; it deletes the windows (§Media I/O), `remote_output` and the cross-stream link,
+  the Tailscale read, `tap` and `exchange`, in the same change, inventorying every site. Until
+  it ships the tree holds no MoQ and nothing links one machine to another. Owner, 2026-10-04
+  and 2026-10-16. [moq-relays; zenoh-and-moq-wheel-removal — SHIPPED #2633, #2643, #2645,
+  #2649]
+- **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
+  ports; end-to-end encryption (the entry above); a CMAF-emitting node for HLS players and
+  stock MoQ tooling, over `Mp4Sink`'s fragmented writer; Red5's adapter; and a zero-copy
+  local fast path behind the relay source node for two streams on one machine. Known
+  (2026-10-16): through the local relay a raw frame between two streams on one machine pays an
+  encode, two loopback hops and a decode, about ten milliseconds and a lossy codec; data
+  pays about a millisecond. [moq-relays]
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py -->
@@ -3816,9 +3989,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_sighup_tears_the_graph_down_gracefully -->
 
-## Distribution & versioning — IN-FLIGHT (→ optional-accelerators; unbuilt: the Rust crate's `tatolab-stream` name)
+## Distribution & versioning — IN-FLIGHT (→ moq-relays; unbuilt: the Rust crate's `tatolab-stream` name)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-16-optional-accelerators.md -->
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
@@ -3829,7 +4003,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
   SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; amended by tatolab-names: the crate
   is `tatolab-stream`]
-  <!-- verify: grep -n "publish-to-pypi:" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "publish-to-pypi:" .github/workflows/reusable-distributions.yml -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index -->
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
@@ -3845,14 +4019,20 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   SHIPPED #2671, #2691, #2697]
   <!-- verify: grep -n "packages/streamlib-webrtc/pyproject.toml" release-please-config.json -->
 - **DECIDED** — Wheel portability model: what the host may supply is stated per platform,
-  and nothing else is linked. On Linux, system libraries (Vulkan loader, window system,
-  libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape.
-  On macOS a stock machine has no Vulkan driver, so the lend carries one in
-  `tatolab/runtime/_vulkan_driver/`: the Vulkan loader (built from source at the wheel's
-  deployment target), MoltenVK and its unedited ICD manifest, and still links only
-  `/usr/lib/` and `/System/`. Engine and helper alike dlopen that loader by absolute path,
-  found beside the `_engine` image through `dladdr`, after the bare names and `VULKAN_SDK`
-  and before the Homebrew prefixes, which are developer-machine fallbacks.
+  and nothing else is linked. On Linux, system libraries (window system, libcuda) are
+  dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape. A stock machine
+  on either floor may have no Vulkan driver, so the lend carries one in
+  `tatolab/runtime/_vulkan_driver/`: on macOS the Vulkan loader (built from source at the
+  wheel's deployment target), MoltenVK and its unedited ICD manifest, linking only
+  `/usr/lib/` and `/System/`; on Linux the Vulkan loader and Mesa lavapipe built with LLVM
+  linked in and no window-system code, from one Mesa tag pinned by SHA-256, and its unedited
+  ICD manifest — each linking only what the host may supply, proven for every native binary
+  the lend carries, not only `_engine`. Engine and helper alike dlopen that loader by
+  absolute path, found beside the `_engine` image through `dladdr` — on Linux before the bare
+  soname, so every Linux machine runs the one loader the unit was tested with and the host's
+  drivers and layers stay reachable through its own search and variables; on macOS after the
+  bare names and `VULKAN_SDK` and before the Homebrew prefixes, which are developer-machine
+  fallbacks.
   `tatolabd`, and `tatolab/runtime/__init__.py` in a processor interpreter, name the bundled
   manifest to the loader additively — through
   `VK_ADD_DRIVER_FILES`, before `_engine` loads, idempotently for a re-importing helper, and
@@ -3876,10 +4056,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `.so`/`.dylib` that is neither format fails rather than skips.
   [importable-python-library — SHIPPED #1691, #1692; python-kernel-surface — SHIPPED #1775;
   macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2689, #2693;
-  amended by optional-accelerators: "On Linux … the Vulkan loader … dlopen'd at runtime" — the
-  Linux lend carries the loader and the software device in `_vulkan_driver/` as the macOS
-  lend carries MoltenVK, still dlopen'd and never linked (§Graphics)]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  optional-accelerators — SHIPPED #2761]
+  Rejected: the system loader before the lend's on Linux — a distribution loader older than
+  1.3.207, which Ubuntu 22.04 and Debian 11 ship, never reads `VK_ADD_DRIVER_FILES` and so
+  hides the bundled driver (owner, 2026-10-14).
+  Rejected: the system loader when it reports 1.3.207 or later, else the lend's — users run
+  loaders the unit was never tested with (owner, 2026-10-14).
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_elf_the_lend_carries_links_only_what_the_host_may_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_native_binary_the_lend_carries_parses -->
@@ -3900,33 +4083,36 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   No notarisation and no signing identity: nothing pip delivers is quarantined. Every
   post-link rewrite of a shipped binary — `lipo -thin` on MoltenVK — is re-signed ad hoc
   (`codesign -f -s -`) in the step that rewrites it, and signatures are verified in the
-  built zip and again after install. The same workflow runs on every PR on a runner with no
-  Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
+  built zip and again after install. The same workflow runs as a dry run on every push to
+  `main`, on a runner with no Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
   and of `tatolabd` and `tatolab`, runs the portability, notices and driver-search tests
   against the lend, and in a venv holding only `tatolab-stream` runs `tatolab new
   --test-pattern` then `tatolab run` for twenty seconds, which must open the carried loader, raise
   nothing from the effect and show at least sixty frames. On release a failed macOS proof of
-  the runtime unit withholds the PyPI upload, as a failed build of any distribution does.
+  the runtime unit withholds the PyPI upload, as a failed build of any distribution does. A
+  pull request builds no distribution; on `main`, `ci.yml` also builds the debug runtime
+  unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
+  Python suite and the integration suite's GPU-free half on it.
   [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697]
   <!-- verify: grep -n 'macos-deployment-target = "15.0"' sdk/streamlib-python-wheel/pyproject.toml -->
-  <!-- verify: grep -n "runs-on: macos-26" .github/workflows/macos-wheel.yml -->
-  <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "runs-on: macos-26" .github/workflows/reusable-macos-runtime-unit.yml -->
+  <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
-  it. `Rust Build (macOS)` compiles the whole workspace with the wheel in it (clippy on
-  default targets, `check --all-targets`) and runs the wheel crate's unit tests; it then
-  `maturin develop`s the wheel, gates `_engine.pyi` with `stubtest` against the macOS
-  binary — one stub for both floors — and runs the Python suite's GPU-free half. The test
+  it. On every PR `Build (macOS)` compiles the whole workspace with the wheel in it
+  (clippy on default targets, `check --all-targets`); on `main` it also runs the Rust
+  suites and the wheel crate's unit tests, and `Integration test (macOS)` gates
+  `_engine.pyi` with `stubtest` against the macOS binary — one stub for both floors — and
+  runs the Python suite's GPU-free half. The test
   target's pipe is `std::io::pipe()`, and `check-no-inheritable-descriptor` accepts that
   portable spelling for its two pipe entries, with every Linux flag it accepts or refuses
   unchanged; on Darwin that pipe is `pipe` then `fcntl`, not atomic, and the spawn-side
   answer to the race is `posix_spawn` (#2368). `lint-logging` evaluates `cfg` for macOS
   too, so `apple/` is linted. A test absent on macOS carries
   `linux_only_capability(reason=…)`, held to the closed list §Product states. The Python
-  suite's `requires_gpu` half does not run on the macOS lane — it runs on each floor's rig;
-  the runner's paravirtual Metal device serves the in-process adapter tests below.
-  [macos-capability-parity — SHIPPED #2400; amended by optional-accelerators: the Linux lane's
-  `requires_gpu` half runs on the bundled software device, rig-only narrowed to what a runner
-  cannot give (§Graphics)]
+  suite's `requires_gpu` half does not run on the macOS lane — it runs on the macOS rig, as
+  the Linux lane runs it on the bundled software device (§Product); the runner's paravirtual
+  Metal device serves the in-process adapter tests below.
+  [macos-capability-parity — SHIPPED #2400; optional-accelerators — SHIPPED #2778]
   <!-- verify: cargo run -p xtask -- check-no-inheritable-descriptor -->
   <!-- verify: cargo test -p xtask check_no_inheritable_descriptor::tests::the_portable_std_pipe_is_accepted_and_a_refused_pipe_names_it -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
@@ -3948,7 +4134,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [macos-capability-parity — SHIPPED #2415]
   <!-- verify: cargo test -p streamlib-adapter-vulkan -p streamlib-adapter-cpu-readback -->
   <!-- verify: grep -n "Absent on macOS" adapters/streamlib-adapter-opengl/src/lib.rs adapters/streamlib-adapter-cuda/src/lib.rs -->
-  <!-- verify: grep -n "p streamlib-adapter-skia" .github/workflows/test.yml -->
+  <!-- verify: grep -n "p streamlib-adapter-skia" .github/workflows/ci.yml -->
 - **DECIDED** — streamlib ships under a `tatolab.*` namespace, as a pure-Python stream package
   and a native runtime package, with support for Linux and Apple Silicon macOS and no
   streamlib-owned service (sentence 5, its "host" read as the runtime — the per-user service that
@@ -3975,11 +4161,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   (`WantedBy=graphical-session.target`) when a desktop session starts. Re-running upgrades in
   place and restarts the service, a failed restart keeping the previous release; `--uninstall`
   removes the service and the files, never the state directory. On macOS the script refuses,
-  pointing at the app. Owner, 2026-10-11. [runtime-hosting — SHIPPED #2722; amended by
-  optional-accelerators: the tarball carries the Vulkan loader and the software device in
-  `tatolab/runtime/_vulkan_driver/` (§Graphics)]
+  pointing at the app. The tarball carries the Vulkan loader and the software device in
+  `tatolab/runtime/_vulkan_driver/`, and `install.sh` refuses a tarball without the driver's
+  manifest. Owner, 2026-10-11. [runtime-hosting — SHIPPED #2722; optional-accelerators —
+  SHIPPED #2761]
   <!-- verify: bash installer/tests/run_install_sh_test_in_a_systemd_container.sh -->
-  <!-- verify: grep -n "GET_TATOLAB_COM_URL: https://get.tatolab.com" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "_vulkan_driver/lvp_icd.x86_64.json" installer/install.sh -->
+  <!-- verify: grep -n "The tarball starts a stream on machines with no Vulkan driver" .github/workflows/reusable-linux-runtime-tarball.yml -->
+  <!-- verify: grep -n "GET_TATOLAB_COM_URL: https://get.tatolab.com" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — `Tatolab.app`, a menu-bar app carrying the runtime, lives in the private
   repository `tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app
   private — and is a Tauri app registering its agent through `objc2-service-management`. On
@@ -4012,7 +4201,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
   Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721]
 
-## Control plane & observability — SHIPPED (unbuilt: the sharing step)
+## Control plane & observability — IN-FLIGHT (→ moq-relays)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
@@ -4251,8 +4440,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
   client's. Owner, 2026-10-01. [one-runtime-per-machine; local-api — SHIPPED
-  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; amended by moq-on-the-tailnet: the URL
-  listener's tailnet half, through `tailscale serve`]
+  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; amended by moq-relays: the URL
+  listener stays on loopback and serves `watch` and `snapshot` by address — no tailnet half]
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name a_local_api_socket_a_live_process_holds_is_refused_naming_it -->
   <!-- verify: cargo test -p streamlib-api-server serving_the_router_on_the_local_api_socket_opens_no_tcp_listener -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket -->

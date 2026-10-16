@@ -22,7 +22,8 @@
 //!   semaphores (lives on
 //!   [`crate::ConsumerVulkanTimelineSemaphore`]).
 //!
-//! Crucially, this struct is constructed via [`Self::new`], which spins
+//! Crucially, this struct is constructed via
+//! [`ConsumerVulkanDevice::new_on_the_device_the_runtime_named`], which spins
 //! up its *own* `VkInstance` + `VkDevice`. It does **not** share the
 //! host's logical device — that's load-bearing for the
 //! capability-boundary story (the cdylib never holds a reference to
@@ -55,21 +56,66 @@ fn default_color_subresource_range() -> vk::ImageSubresourceRange {
     }
 }
 
-/// Device extensions the platform's imports need; the device refuses to
-/// construct without any of them.
+/// Whether `device_extension` was enabled on `device`.
+fn device_extension_is_enabled(device: &Device, device_extension: vk::Extension) -> bool {
+    device.extensions().contains(&device_extension.name)
+}
+
+/// Device extensions every import on the platform needs; the device refuses
+/// to construct without any of them.
 #[cfg(target_os = "linux")]
-const REQUIRED_DEVICE_EXTENSIONS: &[&CStr] = &[
-    c"VK_KHR_external_memory",
-    c"VK_KHR_external_memory_fd",
-    c"VK_EXT_external_memory_dma_buf",
-    c"VK_EXT_image_drm_format_modifier",
-    c"VK_KHR_external_semaphore_fd",
-];
+const REQUIRED_DEVICE_EXTENSIONS: &[&CStr] =
+    &[c"VK_KHR_external_memory", c"VK_KHR_external_memory_fd"];
 
 /// Device extensions the platform's imports need. MoltenVK has no fd
 /// handles; an IOSurface's pages import as host memory.
 #[cfg(target_os = "macos")]
 const REQUIRED_DEVICE_EXTENSIONS: &[&CStr] = &[c"VK_EXT_external_memory_host"];
+
+/// Device extensions enabled where the driver advertises them, short of
+/// [`PROBED_DEVICE_EXTENSIONS_WITHHELD_FROM_A_SOFTWARE_DEVICE`]. Each arm that
+/// needs one refuses by name on a device without it rather than the whole
+/// device refusing.
+#[cfg(target_os = "linux")]
+const PROBED_DEVICE_EXTENSIONS: &[&CStr] = &[
+    c"VK_EXT_external_memory_dma_buf",
+    c"VK_EXT_image_drm_format_modifier",
+    c"VK_KHR_external_semaphore_fd",
+];
+
+/// Device extensions enabled where the driver advertises them.
+#[cfg(target_os = "macos")]
+const PROBED_DEVICE_EXTENSIONS: &[&CStr] = &[];
+
+/// Probed extensions a CPU-type device never enables, whatever it advertises:
+/// DMA-BUF is absent on the software device by rule, so whether `/dev/udmabuf`
+/// is reachable never decides what a helper there can import.
+const PROBED_DEVICE_EXTENSIONS_WITHHELD_FROM_A_SOFTWARE_DEVICE: &[&CStr] = &[
+    c"VK_EXT_external_memory_dma_buf",
+    c"VK_EXT_image_drm_format_modifier",
+];
+
+/// The import extensions to enable out of `advertised`: every `required` one,
+/// then each `probed` one the driver advertises and `withheld` does not name.
+/// `Err` carries the first required extension the driver lacks.
+fn import_device_extensions_to_enable<'extension_name>(
+    advertised: &[&CStr],
+    required: &[&'extension_name CStr],
+    probed: &[&'extension_name CStr],
+    withheld: &[&CStr],
+) -> std::result::Result<Vec<&'extension_name CStr>, &'extension_name CStr> {
+    let mut enabled = Vec::with_capacity(required.len() + probed.len());
+    for required_extension in required {
+        if !advertised.contains(required_extension) {
+            return Err(required_extension);
+        }
+        enabled.push(*required_extension);
+    }
+    enabled.extend(probed.iter().copied().filter(|probed_extension| {
+        advertised.contains(probed_extension) && !withheld.contains(probed_extension)
+    }));
+    Ok(enabled)
+}
 
 /// Consumer-only Vulkan device — see module docs.
 pub struct ConsumerVulkanDevice {
@@ -80,8 +126,9 @@ pub struct ConsumerVulkanDevice {
     device: vulkanalia::Device,
     queue: vk::Queue,
     queue_family_index: u32,
-    #[allow(dead_code)]
     device_name: String,
+    /// Whether the physical device is CPU-type — a software rasterizer.
+    device_is_software: bool,
     /// Whether `VK_EXT_external_memory_acquire_unmodified` was enabled
     /// at device creation. Lets the consumer's acquire barrier chain
     /// `VkExternalMemoryAcquireUnmodifiedEXT` so the producer's
@@ -116,90 +163,203 @@ pub struct ConsumerVulkanDevice {
     queue_mutex: Mutex<()>,
 }
 
+/// A physical device the Vulkan loader enumerates, as selection by
+/// `deviceUUID` sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VulkanDeviceTheLoaderEnumerates {
+    pub(crate) device_name: String,
+    pub(crate) device_uuid: [u8; 16],
+    pub(crate) device_type: vk::PhysicalDeviceType,
+}
+
+/// Every physical device the Vulkan loader enumerates for this process, in
+/// the loader's order.
+pub(crate) fn vulkan_devices_the_loader_enumerates() -> Result<Vec<VulkanDeviceTheLoaderEnumerates>>
+{
+    let (_entry, instance) = create_the_consumer_vulkan_instance()?;
+    Ok(physical_devices_the_loader_enumerates_on(&instance)?
+        .into_iter()
+        .map(|(_physical_device, enumerated_device)| enumerated_device)
+        .collect())
+}
+
+/// A `VkInstance` destroyed when dropped unless [`Self::keep`] hands it on, so
+/// every early return of a device's construction tears it down.
+struct VulkanInstanceDestroyedUnlessKept(vulkanalia::Instance);
+
+impl VulkanInstanceDestroyedUnlessKept {
+    fn keep(self) -> vulkanalia::Instance {
+        std::mem::ManuallyDrop::new(self).0.clone()
+    }
+}
+
+impl std::ops::Deref for VulkanInstanceDestroyedUnlessKept {
+    type Target = vulkanalia::Instance;
+
+    fn deref(&self) -> &vulkanalia::Instance {
+        &self.0
+    }
+}
+
+impl Drop for VulkanInstanceDestroyedUnlessKept {
+    fn drop(&mut self) {
+        unsafe { self.0.destroy_instance(None) };
+    }
+}
+
+/// The `deviceUUID` of the first device the loader enumerates, for a test with
+/// no runtime to name one; a processor interpreter imports only on the device
+/// the runtime named.
+#[doc(hidden)]
+pub fn vulkan_device_uuid_of_the_first_device_the_loader_enumerates() -> Result<[u8; 16]> {
+    vulkan_devices_the_loader_enumerates()?
+        .into_iter()
+        .next()
+        .map(|first_enumerated_device| first_enumerated_device.device_uuid)
+        .ok_or_else(|| ConsumerRhiError::Gpu("No Vulkan physical devices found".into()))
+}
+
+/// The loader's library, entry and the minimal instance a consumer device
+/// enumerates on: no surface extensions, since the consumer never renders to
+/// a window.
+fn create_the_consumer_vulkan_instance()
+-> Result<(vulkanalia::Entry, VulkanInstanceDestroyedUnlessKept)> {
+    let loader = crate::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
+        ConsumerRhiError::Gpu(format!(
+            "Failed to load the Vulkan loader library; tried:\n{not_found}"
+        ))
+    })?;
+    let entry = unsafe { vulkanalia::Entry::new(loader) }
+        .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan entry: {e}")))?;
+
+    let app_info = vk::ApplicationInfo::builder()
+        .application_name(b"StreamLibConsumer\0")
+        .application_version(vk::make_version(0, 1, 0))
+        .engine_name(b"StreamLib\0")
+        .engine_version(vk::make_version(0, 1, 0))
+        .api_version(crate::REQUESTED_VULKAN_INSTANCE_API_VERSION)
+        .build();
+
+    // MoltenVK is a non-conformant portability implementation: the loader
+    // enumerates it only for an instance that opts in.
+    #[cfg(target_os = "macos")]
+    let (instance_extensions, instance_create_flags) = (
+        [c"VK_KHR_portability_enumeration".as_ptr()],
+        vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
+    );
+    #[cfg(not(target_os = "macos"))]
+    let (instance_extensions, instance_create_flags): ([*const c_char; 0], _) =
+        ([], vk::InstanceCreateFlags::empty());
+    let instance_info = vk::InstanceCreateInfo::builder()
+        .application_info(&app_info)
+        .enabled_extension_names(&instance_extensions)
+        .flags(instance_create_flags)
+        .build();
+
+    let instance = unsafe { entry.create_instance(&instance_info, None) }
+        .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create Vulkan instance: {e}")))?;
+    Ok((entry, VulkanInstanceDestroyedUnlessKept(instance)))
+}
+
+/// Each physical device `instance` enumerates, in the loader's order, with
+/// how selection by `deviceUUID` sees it.
+fn physical_devices_the_loader_enumerates_on(
+    instance: &vulkanalia::Instance,
+) -> Result<Vec<(vk::PhysicalDevice, VulkanDeviceTheLoaderEnumerates)>> {
+    let physical_devices = unsafe { instance.enumerate_physical_devices() }
+        .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to enumerate physical devices: {e}")))?;
+    Ok(physical_devices
+        .into_iter()
+        .map(|physical_device| {
+            let mut id_properties = vk::PhysicalDeviceIDProperties::default();
+            let mut properties2 = vk::PhysicalDeviceProperties2::builder()
+                .push_next(&mut id_properties)
+                .build();
+            unsafe { instance.get_physical_device_properties2(physical_device, &mut properties2) };
+            let device_properties = properties2.properties;
+            (
+                physical_device,
+                VulkanDeviceTheLoaderEnumerates {
+                    device_name: device_properties
+                        .device_name
+                        .as_cstr()
+                        .to_string_lossy()
+                        .into_owned(),
+                    device_uuid: id_properties.device_uuid.into(),
+                    device_type: device_properties.device_type,
+                },
+            )
+        })
+        .collect())
+}
+
+/// The index in `enumerated_devices` of the one carrying
+/// `vulkan_device_uuid_the_runtime_named`, or the refusal naming that UUID and
+/// every device enumerated — never a fallback to another device, since an
+/// OPAQUE_FD import on any other reads the wrong memory.
+fn index_of_the_device_the_runtime_named(
+    enumerated_devices: &[VulkanDeviceTheLoaderEnumerates],
+    vulkan_device_uuid_the_runtime_named: [u8; 16],
+) -> Result<usize> {
+    if let Some(index) = enumerated_devices.iter().position(|enumerated_device| {
+        enumerated_device.device_uuid == vulkan_device_uuid_the_runtime_named
+    }) {
+        return Ok(index);
+    }
+    let devices_seen = if enumerated_devices.is_empty() {
+        "none".to_owned()
+    } else {
+        enumerated_devices
+            .iter()
+            .map(|enumerated_device| {
+                format!(
+                    "{} ({:?}, {})",
+                    enumerated_device.device_name,
+                    enumerated_device.device_type,
+                    crate::lowercase_hex_of_vulkan_device_uuid(enumerated_device.device_uuid)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Err(ConsumerRhiError::Gpu(format!(
+        "the runtime built on Vulkan device {}, and no device this process enumerates carries \
+         that UUID — it saw: {devices_seen}. A processor interpreter inherits the runtime's \
+         loader environment; a driver variable set for this process alone can hide the \
+         runtime's device",
+        crate::lowercase_hex_of_vulkan_device_uuid(vulkan_device_uuid_the_runtime_named)
+    )))
+}
+
 impl ConsumerVulkanDevice {
-    /// Construct a fresh consumer-only Vulkan device targeting the
-    /// system's preferred discrete GPU.
+    /// Construct a fresh consumer-only Vulkan device on the physical device
+    /// whose `deviceUUID` is `vulkan_device_uuid_the_runtime_named`, refusing
+    /// by name when no enumerated device carries it.
     ///
     /// Enables only the extensions / features the carve-out needs — the
-    /// platform's import extensions ([`REQUIRED_DEVICE_EXTENSIONS`]) plus
-    /// the Vulkan 1.3 sync-2 and timeline-semaphore features. Every
-    /// required device extension is *required* — failure surfaces as
-    /// [`ConsumerRhiError::Gpu`] rather than a silent capability
-    /// downgrade, so cdylib code never tries an import the driver cannot
-    /// serve.
-    pub fn new() -> Result<Self> {
-        let loader =
-            crate::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
-                ConsumerRhiError::Gpu(format!(
-                    "Failed to load the Vulkan loader library; tried:\n{not_found}"
-                ))
-            })?;
-        let entry = unsafe { vulkanalia::Entry::new(loader) }
-            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan entry: {e}")))?;
-
-        // Instance — minimal: just enough to enumerate physical devices.
-        // No surface extensions; the consumer doesn't render to a window.
-        let app_info = vk::ApplicationInfo::builder()
-            .application_name(b"StreamLibConsumer\0")
-            .application_version(vk::make_version(0, 1, 0))
-            .engine_name(b"StreamLib\0")
-            .engine_version(vk::make_version(0, 1, 0))
-            .api_version(crate::REQUESTED_VULKAN_INSTANCE_API_VERSION)
-            .build();
-
-        // MoltenVK is a non-conformant portability implementation: the loader
-        // enumerates it only for an instance that opts in.
-        #[cfg(target_os = "macos")]
-        let (instance_extensions, instance_create_flags) = (
-            [c"VK_KHR_portability_enumeration".as_ptr()],
-            vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
-        );
-        #[cfg(not(target_os = "macos"))]
-        let (instance_extensions, instance_create_flags): ([*const c_char; 0], _) =
-            ([], vk::InstanceCreateFlags::empty());
-        let instance_info = vk::InstanceCreateInfo::builder()
-            .application_info(&app_info)
-            .enabled_extension_names(&instance_extensions)
-            .flags(instance_create_flags)
-            .build();
-
-        let instance = unsafe { entry.create_instance(&instance_info, None) }
-            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create Vulkan instance: {e}")))?;
-
-        // Physical device — prefer DISCRETE_GPU, fall back to first available.
-        let physical_devices = unsafe { instance.enumerate_physical_devices() }.map_err(|e| {
-            ConsumerRhiError::Gpu(format!("Failed to enumerate physical devices: {e}"))
-        })?;
-        if physical_devices.is_empty() {
-            return Err(ConsumerRhiError::Gpu(
-                "No Vulkan physical devices found".into(),
-            ));
-        }
-        let physical_device = physical_devices
-            .iter()
-            .find(|&&pd| {
-                let props = unsafe { instance.get_physical_device_properties(pd) };
-                props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
-            })
-            .copied()
-            .unwrap_or(physical_devices[0]);
-
-        let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_name = device_props
-            .device_name
-            .as_cstr()
-            .to_string_lossy()
-            .into_owned();
-
-        // Extract VkPhysicalDeviceIDProperties::deviceUUID via
-        // vkGetPhysicalDeviceProperties2. Used by CUDA / OpenCL interop
-        // to pick the matching foreign-API device on multi-GPU rigs.
-        let mut id_props = vk::PhysicalDeviceIDProperties::default();
-        let mut props2 = vk::PhysicalDeviceProperties2::builder()
-            .push_next(&mut id_props)
-            .build();
-        unsafe { instance.get_physical_device_properties2(physical_device, &mut props2) };
-        let physical_device_uuid: [u8; 16] = id_props.device_uuid.into();
+    /// platform's import extensions plus the Vulkan 1.3 sync-2 and
+    /// timeline-semaphore features. A missing [`REQUIRED_DEVICE_EXTENSIONS`]
+    /// entry refuses the device with [`ConsumerRhiError::Gpu`]; a missing
+    /// [`PROBED_DEVICE_EXTENSIONS`] entry is left disabled, and the import
+    /// arm that needs it refuses by name.
+    pub fn new_on_the_device_the_runtime_named(
+        vulkan_device_uuid_the_runtime_named: [u8; 16],
+    ) -> Result<Self> {
+        let (entry, instance) = create_the_consumer_vulkan_instance()?;
+        let (physical_devices, mut enumerated_devices): (Vec<_>, Vec<_>) =
+            physical_devices_the_loader_enumerates_on(&instance)?
+                .into_iter()
+                .unzip();
+        let index = index_of_the_device_the_runtime_named(
+            &enumerated_devices,
+            vulkan_device_uuid_the_runtime_named,
+        )?;
+        let physical_device = physical_devices[index];
+        let VulkanDeviceTheLoaderEnumerates {
+            device_name,
+            device_uuid: physical_device_uuid,
+            device_type,
+        } = enumerated_devices.swap_remove(index);
 
         // Pick any GRAPHICS-capable queue family (graphics implies transfer +
         // compute on every conformant Vulkan implementation, which covers
@@ -215,9 +375,6 @@ impl ConsumerVulkanDevice {
                 ConsumerRhiError::Gpu("No graphics queue family on consumer device".into())
             })?;
 
-        // Required device extensions — refusing to construct the device on
-        // a driver that doesn't expose them is the right shape (see module
-        // docs).
         let available_device_extension_properties = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)
@@ -228,17 +385,26 @@ impl ConsumerVulkanDevice {
         let available_device_ext_names =
             vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
 
-        let mut device_extensions: Vec<*const c_char> =
-            Vec::with_capacity(REQUIRED_DEVICE_EXTENSIONS.len() + 2);
-        for ext in REQUIRED_DEVICE_EXTENSIONS {
-            if !available_device_ext_names.contains(ext) {
-                return Err(ConsumerRhiError::Gpu(format!(
-                    "ConsumerVulkanDevice: required extension {} not available on this driver",
-                    ext.to_string_lossy()
-                )));
-            }
-            device_extensions.push(ext.as_ptr());
-        }
+        let device_is_software = device_type == vk::PhysicalDeviceType::CPU;
+        let mut device_extensions: Vec<*const c_char> = import_device_extensions_to_enable(
+            &available_device_ext_names,
+            REQUIRED_DEVICE_EXTENSIONS,
+            PROBED_DEVICE_EXTENSIONS,
+            if device_is_software {
+                PROBED_DEVICE_EXTENSIONS_WITHHELD_FROM_A_SOFTWARE_DEVICE
+            } else {
+                &[]
+            },
+        )
+        .map_err(|missing_required_extension| {
+            ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanDevice: required extension {} not available on {device_name}",
+                missing_required_extension.to_string_lossy()
+            ))
+        })?
+        .into_iter()
+        .map(CStr::as_ptr)
+        .collect();
 
         // Optional extension for spec-correct cross-process layout
         // coordination (#633). `VK_EXT_external_memory_acquire_unmodified`
@@ -333,22 +499,28 @@ impl ConsumerVulkanDevice {
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
         tracing::info!(
-            "ConsumerVulkanDevice initialized: {} (queue family {}, {} memory types, acquire_unmodified={})",
+            "ConsumerVulkanDevice initialized on the device the runtime named: {} (uuid={}, software={}, queue family {}, {} memory types, acquire_unmodified={}, dma_buf_import={}, drm_format_modifier_import={}, semaphore_fd_import={})",
             device_name,
+            crate::lowercase_hex_of_vulkan_device_uuid(physical_device_uuid),
+            device_is_software,
             queue_family_index,
             memory_properties.memory_type_count,
             has_acquire_unmodified,
+            device_extension_is_enabled(&device, vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION),
+            device_extension_is_enabled(&device, vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION),
+            device_extension_is_enabled(&device, vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION),
         );
 
         Ok(Self {
             entry,
-            instance,
+            instance: instance.keep(),
             physical_device,
             memory_properties,
             device,
             queue,
             queue_family_index,
             device_name,
+            device_is_software,
             has_acquire_unmodified,
             physical_device_uuid,
             imported_host_pointer_alignment,
@@ -372,9 +544,59 @@ impl ConsumerVulkanDevice {
     }
 
     /// Device label from `VkPhysicalDeviceProperties::deviceName`.
-    #[allow(dead_code)]
     pub fn name(&self) -> &str {
         &self.device_name
+    }
+
+    /// Whether the physical device is a CPU-type software rasterizer.
+    pub fn device_is_software(&self) -> bool {
+        self.device_is_software
+    }
+
+    /// Whether `VK_EXT_external_memory_dma_buf` was enabled — what every
+    /// DMA-BUF memory import needs; never on a software device.
+    pub fn supports_dma_buf_memory_import(&self) -> bool {
+        device_extension_is_enabled(&self.device, vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION)
+    }
+
+    /// Whether `VK_EXT_image_drm_format_modifier` was enabled — what an
+    /// image over a DMA-BUF with an explicit DRM modifier needs.
+    pub fn supports_drm_format_modifier_image_import(&self) -> bool {
+        device_extension_is_enabled(&self.device, vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION)
+    }
+
+    /// Whether `VK_KHR_external_semaphore_fd` was enabled — what importing a
+    /// timeline semaphore's OPAQUE_FD needs.
+    pub fn supports_opaque_fd_timeline_semaphore_import(&self) -> bool {
+        device_extension_is_enabled(&self.device, vk::KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION)
+    }
+
+    /// Refuse `refusing_operation` by name, naming this device, unless
+    /// `device_extension` was enabled on it.
+    pub(crate) fn refuse_unless_device_extension_is_enabled(
+        &self,
+        refusing_operation: &str,
+        device_extension: vk::Extension,
+        what_cannot_happen_without_it: &str,
+    ) -> Result<()> {
+        if device_extension_is_enabled(&self.device, device_extension) {
+            return Ok(());
+        }
+        Err(ConsumerRhiError::Gpu(format!(
+            "{refusing_operation}: {} is not enabled on this device ({}), so \
+             {what_cannot_happen_without_it}",
+            device_extension.name, self.device_name
+        )))
+    }
+
+    /// The property flags of memory type `memory_type_index`, or `None` when
+    /// the device has no such type.
+    pub fn property_flags_of_memory_type_index(
+        &self,
+        memory_type_index: u32,
+    ) -> Option<vk::MemoryPropertyFlags> {
+        (memory_type_index < self.memory_properties.memory_type_count)
+            .then(|| self.memory_properties.memory_types[memory_type_index as usize].property_flags)
     }
 
     /// Loaded Vulkan entry points.
@@ -413,7 +635,7 @@ impl ConsumerVulkanDevice {
 
     /// Find the first memory type whose bit is set in `type_filter` and
     /// satisfies `required_properties`.
-    fn find_memory_type(
+    pub(crate) fn find_memory_type(
         &self,
         type_filter: u32,
         required_properties: vk::MemoryPropertyFlags,
@@ -458,7 +680,8 @@ impl ConsumerVulkanDevice {
     ///
     /// fd ownership transfers to the Vulkan driver on success — caller
     /// must NOT close `fd` afterwards. On error the caller still owns
-    /// `fd`.
+    /// `fd`. Refused by name on a device without
+    /// `VK_EXT_external_memory_dma_buf`.
     pub fn import_dma_buf_memory(
         &self,
         fd: i32,
@@ -466,6 +689,11 @@ impl ConsumerVulkanDevice {
         memory_type_bits: u32,
         preferred_flags: vk::MemoryPropertyFlags,
     ) -> Result<vk::DeviceMemory> {
+        self.refuse_unless_device_extension_is_enabled(
+            "ConsumerVulkanDevice::import_dma_buf_memory",
+            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION,
+            "no DMA-BUF can be imported",
+        )?;
         let memory_type_index = self.find_memory_type(memory_type_bits, preferred_flags)?;
 
         let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
@@ -496,45 +724,15 @@ impl ConsumerVulkanDevice {
         Ok(memory)
     }
 
-    /// Import an OPAQUE_FD file descriptor as `VkDeviceMemory`. Pairs with
-    /// the host's `export_opaque_fd_memory`: the host allocates, exports,
-    /// and registers in surface-share with `handle_type="opaque_fd"`; the
-    /// consumer looks up, imports, and binds.
-    ///
-    /// Use this for cross-process Vulkan memory sharing where the importer
-    /// is also Vulkan-aware (CUDA via UUID-matched device, OpenCL, peer
-    /// VkInstance) and tile-aware DRM-modifier negotiation isn't needed.
-    /// For DMA-BUF FDs (EGL, V4L2, multi-plane Vulkan importers) use
-    /// [`Self::import_dma_buf_memory`].
-    ///
-    /// fd ownership transfers to the Vulkan driver on success — caller
-    /// must NOT close `fd` afterwards. On error the caller still owns
-    /// `fd`. Pairs with [`Self::free_imported_memory`].
-    #[tracing::instrument(level = "trace", skip(self), fields(fd, allocation_size))]
-    pub fn import_opaque_fd_memory(
-        &self,
-        fd: i32,
-        allocation_size: vk::DeviceSize,
-        memory_type_bits: u32,
-        preferred_flags: vk::MemoryPropertyFlags,
-    ) -> Result<vk::DeviceMemory> {
-        let memory_type_index = self.find_memory_type(memory_type_bits, preferred_flags)?;
-        self.import_opaque_fd_memory_at_stated_memory_type_index(
-            fd,
-            allocation_size,
-            memory_type_index,
-        )
-    }
-
     /// Import an OPAQUE_FD file descriptor as `VkDeviceMemory` bound to
-    /// the memory type index the **exporter** allocated from.
+    /// the memory type index the **exporter** allocated from. Pairs with
+    /// the host's `export_opaque_fd_memory`; for DMA-BUF FDs use
+    /// [`Self::import_dma_buf_memory`].
     ///
     /// The conforming import for this handle type: OPAQUE_FD has no
     /// `vkGetMemoryFdPropertiesKHR` query, so an importer cannot derive a
     /// compatible index and must be told the exporter's — which is why
-    /// the surface-share registration publishes it. Prefer this over
-    /// [`Self::import_opaque_fd_memory`], whose first-match search agrees
-    /// with the exporter only where both happen to land on the same type.
+    /// the surface-share registration publishes it.
     ///
     /// fd ownership transfers to the Vulkan driver on success — caller
     /// must NOT close `fd` afterwards. On error the caller still owns
@@ -559,7 +757,7 @@ impl ConsumerVulkanDevice {
 
         let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
             ConsumerRhiError::Gpu(format!(
-                "ConsumerVulkanDevice: import_opaque_fd_memory failed: {e}"
+                "ConsumerVulkanDevice::import_opaque_fd_memory_at_stated_memory_type_index failed: {e}"
             ))
         })?;
 
@@ -643,9 +841,7 @@ impl ConsumerVulkanDevice {
     /// IOSurface and a timeline over a Metal shared event both need.
     #[cfg(target_os = "macos")]
     pub fn supports_metal_objects_interop(&self) -> bool {
-        self.device
-            .extensions()
-            .contains(&vk::EXT_METAL_OBJECTS_EXTENSION.name)
+        device_extension_is_enabled(&self.device, vk::EXT_METAL_OBJECTS_EXTENSION)
     }
 
     /// Memory for an image created over an IOSurface, on the type
@@ -682,7 +878,7 @@ impl ConsumerVulkanDevice {
     }
 
     /// Free imported memory. Pair with [`Self::import_dma_buf_memory`],
-    /// [`Self::import_opaque_fd_memory`] or
+    /// [`Self::import_opaque_fd_memory_at_stated_memory_type_index`] or
     /// [`Self::import_host_pointer_memory`]. Calling on memory not allocated
     /// through one of those methods is undefined behavior at the Vulkan
     /// level.
@@ -1004,10 +1200,305 @@ impl Drop for ConsumerVulkanDevice {
     }
 }
 
+/// A consumer device on the first device the loader enumerates — for a test
+/// with no runtime to name one.
+#[cfg(test)]
+pub(crate) fn consumer_vulkan_device_on_the_first_device_the_loader_enumerates()
+-> Result<ConsumerVulkanDevice> {
+    ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+        vulkan_device_uuid_of_the_first_device_the_loader_enumerates()?,
+    )
+}
+
 // Vulkan handles are thread-safe behind external synchronization which
 // the per-queue mutex provides for submits.
 unsafe impl Send for ConsumerVulkanDevice {}
 unsafe impl Sync for ConsumerVulkanDevice {}
+
+/// Refuse a stated memory type index an imported resource's own
+/// `VkMemoryRequirements::memoryTypeBits` cannot take — binding it anyway is
+/// undefined behaviour rather than a Vulkan error.
+///
+/// `checked_shl` rather than a bare shift: an index at or past
+/// VK_MAX_MEMORY_TYPES names no memory type on any device, and must be
+/// refused rather than overflow the bit test.
+pub(crate) fn refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index(
+    importing_resource: &str,
+    memory_type_bits: u32,
+    stated_memory_type_index: u32,
+) -> Result<()> {
+    let stated_memory_type_bit = 1u32.checked_shl(stated_memory_type_index).unwrap_or(0);
+    if memory_type_bits & stated_memory_type_bit != 0 {
+        return Ok(());
+    }
+    Err(ConsumerRhiError::Configuration(format!(
+        "{importing_resource}: the exporter states memory type index \
+         {stated_memory_type_index}, which the imported resource cannot bind \
+         (memoryTypeBits=0x{memory_type_bits:x}) — the exporter and importer disagree \
+         on its shape, and binding anyway is undefined behaviour"
+    )))
+}
+
+#[cfg(test)]
+mod stated_memory_type_index_bind_tests {
+    use super::*;
+
+    /// The bind check is a pure bit test over the imported resource's own
+    /// `memoryTypeBits`, so it locks with no device: OPAQUE_FD carries no
+    /// `vkGetMemoryFdPropertiesKHR`, and binding an index the resource
+    /// cannot take is undefined behaviour rather than a Vulkan error.
+    #[test]
+    fn an_index_the_resource_can_bind_is_accepted_and_one_it_cannot_is_refused() {
+        // types 0, 2 and 31 allowed.
+        let memory_type_bits = 0b1000_0000_0000_0000_0000_0000_0000_0101u32;
+
+        for allowed in [0u32, 2, 31] {
+            assert!(
+                refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index(
+                    "ConsumerVulkanBuffer",
+                    memory_type_bits,
+                    allowed
+                )
+                .is_ok(),
+                "index {allowed} is set in memoryTypeBits and must bind"
+            );
+        }
+        for refused in [1u32, 3, 30] {
+            assert!(
+                refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index(
+                    "ConsumerVulkanBuffer",
+                    memory_type_bits,
+                    refused
+                )
+                .is_err(),
+                "index {refused} is clear in memoryTypeBits and must be refused"
+            );
+        }
+    }
+
+    /// An index at or past VK_MAX_MEMORY_TYPES names no memory type. The
+    /// bit test must answer "refused" rather than shift out of range —
+    /// `1u32 << 32` panics in debug and wraps to bit 0 in release, which
+    /// would let `u32::MAX` bind whatever type 0 happens to be.
+    #[test]
+    fn an_index_past_vk_max_memory_types_is_refused_rather_than_overflowing() {
+        let every_type_allowed = u32::MAX;
+        assert!(
+            refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index(
+                "ConsumerVulkanBuffer",
+                every_type_allowed,
+                31
+            )
+            .is_ok(),
+            "31 is the last real memory type index"
+        );
+        for past_the_end in [32u32, 33, 64, u32::MAX] {
+            assert!(
+                refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index(
+                    "ConsumerVulkanBuffer",
+                    every_type_allowed,
+                    past_the_end
+                )
+                .is_err(),
+                "index {past_the_end} names no memory type even when every bit is set"
+            );
+        }
+    }
+
+    /// The refusal has to be actionable: it names the index the exporter
+    /// stated and the mask the importer derived, which is the whole
+    /// diagnosis of an exporter/importer disagreement.
+    #[test]
+    fn the_refusal_names_the_resource_the_stated_index_and_its_memory_type_bits() {
+        let refusal = refuse_unless_the_imported_resource_can_bind_the_stated_memory_type_index(
+            "ConsumerVulkanBuffer",
+            0b1010,
+            7,
+        )
+        .expect_err("index 7 is clear in 0b1010");
+        let refusal = refusal.to_string();
+        assert!(
+            refusal.contains("memory type index 7"),
+            "must name the stated index: {refusal}"
+        );
+        assert!(
+            refusal.contains("memoryTypeBits=0xa"),
+            "must name what the resource can bind: {refusal}"
+        );
+        assert!(
+            refusal.contains("ConsumerVulkanBuffer"),
+            "must name the importing resource: {refusal}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod import_device_extension_partition_tests {
+    use super::*;
+
+    const REQUIRED: &[&CStr] = &[c"VK_KHR_external_memory", c"VK_KHR_external_memory_fd"];
+    const PROBED: &[&CStr] = &[
+        c"VK_EXT_external_memory_dma_buf",
+        c"VK_EXT_image_drm_format_modifier",
+        c"VK_KHR_external_semaphore_fd",
+    ];
+
+    /// A driver advertising the fd extensions but no DMA-BUF still yields a
+    /// device; the DMA-BUF arms refuse later, by name.
+    #[test]
+    fn a_driver_without_dma_buf_enables_only_the_required_extensions() {
+        let advertised = [
+            c"VK_KHR_external_memory",
+            c"VK_KHR_external_memory_fd",
+            c"VK_KHR_swapchain",
+        ];
+        assert_eq!(
+            import_device_extensions_to_enable(&advertised, REQUIRED, PROBED, &[]),
+            Ok(REQUIRED.to_vec())
+        );
+    }
+
+    /// Lavapipe advertises DMA-BUF and modifiers where `/dev/udmabuf` is
+    /// reachable; a software device enables neither, so the rig and a
+    /// container import the same flavours.
+    #[test]
+    fn a_software_device_advertising_dma_buf_enables_neither_dma_buf_nor_modifiers() {
+        let advertised = [
+            c"VK_KHR_external_memory",
+            c"VK_KHR_external_memory_fd",
+            c"VK_EXT_external_memory_dma_buf",
+            c"VK_EXT_image_drm_format_modifier",
+            c"VK_KHR_external_semaphore_fd",
+        ];
+        assert_eq!(
+            import_device_extensions_to_enable(
+                &advertised,
+                REQUIRED,
+                PROBED,
+                PROBED_DEVICE_EXTENSIONS_WITHHELD_FROM_A_SOFTWARE_DEVICE
+            ),
+            Ok(vec![
+                c"VK_KHR_external_memory",
+                c"VK_KHR_external_memory_fd",
+                c"VK_KHR_external_semaphore_fd",
+            ])
+        );
+    }
+
+    #[test]
+    fn every_advertised_probed_extension_is_enabled_and_no_other() {
+        let advertised = [
+            c"VK_KHR_external_semaphore_fd",
+            c"VK_KHR_external_memory_fd",
+            c"VK_EXT_external_memory_dma_buf",
+            c"VK_KHR_external_memory",
+        ];
+        assert_eq!(
+            import_device_extensions_to_enable(&advertised, REQUIRED, PROBED, &[]),
+            Ok(vec![
+                c"VK_KHR_external_memory",
+                c"VK_KHR_external_memory_fd",
+                c"VK_EXT_external_memory_dma_buf",
+                c"VK_KHR_external_semaphore_fd",
+            ])
+        );
+    }
+
+    #[test]
+    fn a_missing_required_extension_is_named_as_the_refusal() {
+        let advertised = [c"VK_KHR_external_memory", c"VK_EXT_external_memory_dma_buf"];
+        assert_eq!(
+            import_device_extensions_to_enable(&advertised, REQUIRED, PROBED, &[]),
+            Err(c"VK_KHR_external_memory_fd")
+        );
+    }
+
+    /// The platform partition itself: the DMA-BUF, modifier and semaphore-fd
+    /// extensions are never what decides whether a Linux device exists.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn on_linux_only_the_external_memory_fd_extensions_are_required() {
+        assert_eq!(REQUIRED_DEVICE_EXTENSIONS, REQUIRED);
+        assert_eq!(PROBED_DEVICE_EXTENSIONS, PROBED);
+    }
+}
+
+#[cfg(test)]
+mod selection_by_the_device_uuid_the_runtime_named_tests {
+    use super::*;
+
+    fn enumerated_device(
+        device_name: &str,
+        uuid_byte: u8,
+        device_type: vk::PhysicalDeviceType,
+    ) -> VulkanDeviceTheLoaderEnumerates {
+        VulkanDeviceTheLoaderEnumerates {
+            device_name: device_name.to_owned(),
+            device_uuid: [uuid_byte; 16],
+            device_type,
+        }
+    }
+
+    fn a_discrete_gpu_then_a_software_device() -> Vec<VulkanDeviceTheLoaderEnumerates> {
+        vec![
+            enumerated_device(
+                "NVIDIA GeForce RTX 3090",
+                0x94,
+                vk::PhysicalDeviceType::DISCRETE_GPU,
+            ),
+            enumerated_device("llvmpipe", 0x6c, vk::PhysicalDeviceType::CPU),
+        ]
+    }
+
+    /// The device the runtime named wins wherever the loader put it — the
+    /// software device second, behind a discrete GPU.
+    #[test]
+    fn the_device_carrying_the_named_uuid_is_chosen_wherever_it_is_enumerated() {
+        let enumerated_devices = a_discrete_gpu_then_a_software_device();
+        assert_eq!(
+            index_of_the_device_the_runtime_named(&enumerated_devices, [0x6c; 16])
+                .expect("llvmpipe carries the UUID"),
+            1
+        );
+        assert_eq!(
+            index_of_the_device_the_runtime_named(&enumerated_devices, [0x94; 16])
+                .expect("the discrete GPU carries the UUID"),
+            0
+        );
+    }
+
+    #[test]
+    fn a_uuid_no_enumerated_device_carries_is_refused_naming_it_and_every_device_seen() {
+        let refusal = index_of_the_device_the_runtime_named(
+            &a_discrete_gpu_then_a_software_device(),
+            [0x01; 16],
+        )
+        .expect_err("no enumerated device carries the UUID")
+        .to_string();
+        for named in [
+            "01010101010101010101010101010101",
+            "NVIDIA GeForce RTX 3090",
+            "DISCRETE_GPU",
+            "94949494949494949494949494949494",
+            "llvmpipe",
+            "CPU",
+            "6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c",
+        ] {
+            assert!(refusal.contains(named), "{named:?} is named in: {refusal}");
+        }
+    }
+
+    #[test]
+    fn a_process_that_enumerates_no_device_refuses_saying_it_saw_none() {
+        let refusal = index_of_the_device_the_runtime_named(&[], [0x94; 16])
+            .expect_err("no device carries any UUID")
+            .to_string();
+        assert!(
+            refusal.contains("94949494949494949494949494949494") && refusal.contains("saw: none"),
+            "{refusal}"
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1017,7 +1508,7 @@ mod tests {
     /// Try to construct a ConsumerVulkanDevice; return None if Vulkan
     /// is unavailable in this environment (CI sandboxes, no GPU).
     fn try_create() -> Option<Arc<ConsumerVulkanDevice>> {
-        match ConsumerVulkanDevice::new() {
+        match consumer_vulkan_device_on_the_first_device_the_loader_enumerates() {
             Ok(d) => Some(Arc::new(d)),
             Err(e) => {
                 println!("Skipping test — ConsumerVulkanDevice unavailable: {e}");
@@ -1036,6 +1527,80 @@ mod tests {
         // Sanity: the trait bound is wired to ConsumerMarker, not Host.
         fn assert_consumer<D: VulkanRhiDevice<Privilege = ConsumerMarker>>(_: &D) {}
         assert_consumer(&*device);
+    }
+
+    /// Run on a machine whose loader enumerates more than one device — the
+    /// rig's NVIDIA GPU beside the system lavapipe — and every device is the
+    /// one built on when the runtime names it, proven by its UUID.
+    #[test]
+    fn a_helper_on_a_machine_with_two_devices_imports_on_the_one_the_runtime_named() {
+        let enumerated_devices = match vulkan_devices_the_loader_enumerates() {
+            Ok(enumerated_devices) if enumerated_devices.len() >= 2 => enumerated_devices,
+            Ok(enumerated_devices) => {
+                tracing::info!(
+                    "Skipping test — the loader enumerates {} device(s), not two",
+                    enumerated_devices.len()
+                );
+                return;
+            }
+            Err(unavailable) => {
+                tracing::info!("Skipping test — no Vulkan loader: {unavailable}");
+                return;
+            }
+        };
+        for named_device in &enumerated_devices {
+            let device =
+                ConsumerVulkanDevice::new_on_the_device_the_runtime_named(named_device.device_uuid)
+                    .unwrap_or_else(|refusal| {
+                        panic!("a device on {}: {refusal}", named_device.device_name)
+                    });
+            assert_eq!(device.physical_device_uuid(), named_device.device_uuid);
+            assert_eq!(device.name(), named_device.device_name);
+            assert_eq!(
+                device.device_is_software(),
+                named_device.device_type == vk::PhysicalDeviceType::CPU
+            );
+        }
+    }
+
+    #[test]
+    fn a_uuid_no_enumerated_device_carries_is_refused_before_any_device_is_built() {
+        let enumerated_devices = match vulkan_devices_the_loader_enumerates() {
+            Ok(enumerated_devices) => enumerated_devices,
+            Err(unavailable) => {
+                tracing::info!("Skipping test — no Vulkan loader: {unavailable}");
+                return;
+            }
+        };
+        let uuid_no_device_carries = (0..=u8::MAX)
+            .map(|byte| [byte; 16])
+            .find(|candidate| {
+                enumerated_devices
+                    .iter()
+                    .all(|enumerated_device| enumerated_device.device_uuid != *candidate)
+            })
+            .expect("a UUID no enumerated device carries");
+        let refusal =
+            match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(uuid_no_device_carries)
+            {
+                Ok(device) => panic!(
+                    "a UUID no device carries built a device on {}",
+                    device.name()
+                ),
+                Err(refusal) => refusal.to_string(),
+            };
+        assert!(
+            refusal.contains(&crate::lowercase_hex_of_vulkan_device_uuid(
+                uuid_no_device_carries
+            )),
+            "{refusal}"
+        );
+        for enumerated_device in &enumerated_devices {
+            assert!(
+                refusal.contains(&enumerated_device.device_name),
+                "{refusal}"
+            );
+        }
     }
 
     #[test]
@@ -1068,6 +1633,31 @@ mod tests {
             inherent, device.has_acquire_unmodified,
             "supports_qfot_acquire_unmodified must equal has_acquire_unmodified \
              (VK_QUEUE_FAMILY_EXTERNAL is core 1.1 and always available)"
+        );
+    }
+
+    /// The rule holds on the live device, not just in the partition: a
+    /// software device imports no DMA-BUF whatever its driver advertises,
+    /// while still coming up with the OPAQUE_FD import every pooled frame
+    /// there takes.
+    #[test]
+    fn a_software_device_comes_up_without_dma_buf_or_modifier_import() {
+        let device = match try_create() {
+            Some(d) => d,
+            None => return,
+        };
+        if !device.device_is_software() {
+            return;
+        }
+        assert!(!device.supports_dma_buf_memory_import());
+        assert!(!device.supports_drm_format_modifier_image_import());
+        let refusal = device
+            .import_dma_buf_memory(-1, 4096, u32::MAX, vk::MemoryPropertyFlags::HOST_VISIBLE)
+            .expect_err("a software device imports no DMA-BUF")
+            .to_string();
+        assert!(
+            refusal.contains("VK_EXT_external_memory_dma_buf") && refusal.contains(device.name()),
+            "the refusal names the extension and the device: {refusal}"
         );
     }
 

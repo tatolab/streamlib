@@ -124,8 +124,11 @@ class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
 
     `video` takes any published `VideoFrame`. Add as many as the graph needs: each
     instance registers its own window with the engine's shared event pump and renders on
-    its own thread. An instance that cannot get a window drains its input without
-    showing anything, so upstream still sees a live consumer.
+    its own thread. On a device whose driver carries no window-system support — the
+    runtime's bundled software driver — setup refuses by name and the node never reaches
+    Running; the stream is viewed by its URL or by a node that reads its frames. An
+    instance that cannot get a window otherwise drains its input without showing
+    anything, so upstream still sees a live consumer.
 
     Inputs:
         `video` (newest): Video frames to show in the window.
@@ -629,10 +632,12 @@ class VirtualCameraSink(BuiltInNode[VirtualCameraSinkConfig]):
     enable-virtual-camera`, the one-time command that grants it behind your desktop's
     password prompt. The `v4l2loopback` door refuses by name at `setup()` in that case,
     and the runtime keeps running. The `pipewire` door is taken whatever the control
-    node says, refusing by name only where no PipeWire session answers. One instance is
-    never on both doors: a session manager mirrors every V4L2 capture device into the
-    portal's camera set, so it would list the same camera twice. The engine never loads
-    a module or asks for elevation.
+    node says, refusing by name where no PipeWire session answers, or where the device
+    the runtime built on exports no DMA-BUF (the software device never does) — there
+    only the loopback door serves, and `auto` without its permission refuses too. One
+    instance is never on both doors: a session manager mirrors every V4L2 capture device
+    into the portal's camera set, so it would list the same camera twice. The engine
+    never loads a module or asks for elevation.
 
     A loopback device a reader still holds at teardown is left in place and reclaimed by
     name at the next setup; a PipeWire node is gone with its stream. Frames are stamped

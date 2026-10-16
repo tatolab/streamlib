@@ -69,7 +69,7 @@ running_inside_the_pinned_image() {
   [ "${STREAMLIB_RUNNING_IN_MANYLINUX_2_28_IMAGE:-}" = "$MANYLINUX_2_28_IMAGE" ]
 }
 
-# A bounded, mirror-escaping dnf, for the reason release-extension-wheel.yml
+# A bounded, mirror-escaping dnf, for the reason reusable-extension-wheel.yml
 # gives: a slow AlmaLinux mirror is only detected by a wall-clock bound, and
 # `dnf clean all` makes the next attempt re-resolve the mirrorlist.
 install_build_dependencies_with_bounded_retry() {

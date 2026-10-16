@@ -35,8 +35,8 @@
 //!   `ARCHITECTURE.md` still fails, and editing an exempted one forces
 //!   re-review.
 //!
-//! Markdown supersession spans (`~~…~~`) are skipped, because the docs policy
-//! requires a retraction to quote what it retracts.
+//! Markdown strikethrough spans (`~~…~~`) are skipped: the records the docs
+//! policy keeps as written still carry the claims an earlier retraction struck.
 //!
 //! Part of the pattern set is sourced from the projects the ADR itself cites,
 //! rather than invented here — an author looking for words for the banned shape

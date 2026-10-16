@@ -94,14 +94,14 @@ Mesa 25.2.8). `E` = `runtime/streamlib-engine/src`, `V` = `E/vulkan/rhi`, `C` =
   tarball is 19,620,571 bytes. The portability gate checks `NEEDED` only for `_engine`
   (`test_wheel_portability.py:480-497`) and the glibc floor for every ELF (`:561-590`);
   `test_bundled_vulkan_driver.py:99-141` asserts `_vulkan_driver` is absent off macOS.
-- **CI.** `python-wheel.yml:211-223`, `:243-282` and `test.yml:886-891` run `-m "not requires_gpu"`
+- **CI.** `ci.yml`'s wheel Python suite, integration suite and macOS jobs run `-m "not requires_gpu"`
   with no ICD installed; `requires_gpu` is bare at 72 sites in `tests/stream-on-runtime`
   (162 of 301 tests) and defined as "needs a Vulkan device that can allocate exportable DMA-BUF
   memory" (`sdk/streamlib-python-wheel/pyproject.toml:61-66`, `tests/stream-on-runtime/pyproject.toml:50-55`);
   `linux_only_capability(reason=…)` is held to a closed list by
   `sdk/tatolab-stream/tests/test_platform_markers.py:28-77`; `hardware-tests` gates about 276
   `cfg_attr(…, ignore = "<free text>")` sites, 204 of them one boilerplate string.
-  `macos-wheel.yml:145-252` already runs `tatolabd` on the lend's driver and asserts the loader
+  `reusable-macos-runtime-unit.yml` already runs `tatolabd` on the lend's driver and asserts the loader
   opened `_vulkan_driver/libvulkan.1.dylib` — the precedent for a lane on the bundled driver.
 
 ## MODIFIED: §Graphics `ARCHITECTURE.md:2117-2136` — what a stream gets on the software device
@@ -171,8 +171,8 @@ a tarball without the driver's manifest"; both pointers fold.
   `test_every_elf_the_lend_carries_links_only_what_the_host_may_supply` (closing the gap that
   checks `_engine` alone); `test_bundled_vulkan_driver.py` gets Linux arms (the three files
   present, `VK_ADD_DRIVER_FILES` naming the lend's manifest); the tarball script's
-  `tests_against_the_runtime_unit_lend` run covers both. `linux-runtime-tarball.yml` asserts
-  the unit's `tatolabd` starts a stream naming `llvmpipe`, as `macos-wheel.yml:232` asserts
+  `tests_against_the_runtime_unit_lend` run covers both. `reusable-linux-runtime-tarball.yml` asserts
+  the unit's `tatolabd` starts a stream naming `llvmpipe`, as `reusable-macos-runtime-unit.yml` asserts
   the MoltenVK loader.
 
 **Slice 2 — the device the engine builds on, and what it offers.**
@@ -236,22 +236,22 @@ a tarball without the driver's manifest"; both pointers fold.
   (`test_video_frame_claim.py:128` and its sibling) stand.
 
 **Slice 4 — CI on the unit's driver.**
-- The Linux lanes take the driver from the unit they just built (`python-wheel.yml`'s tarball
-  artifact), never from apt: the integration suite runs the whole of
+- The Linux lanes take the driver from the unit they just built (`ci.yml`'s `test-linux` job stages
+  the same driver build), never from apt: the integration suite runs the whole of
   `tests/stream-on-runtime` minus `rig_only_capability`, and a job runs
   `cargo test --features hardware-tests` for the engine, media-builtins and `tatolabd` with
   `VK_ADD_DRIVER_FILES` naming the staged manifest; the engine-lib allowlist
-  (`test.yml:370-670`) stops being the only way an engine test reaches CI.
+  (`.config/nextest.toml`'s `ci` profile) stops being the only way an engine test reaches CI.
 - `rig_only_capability(reason=…)` joins `linux_only_capability` in `test_platform_markers.py`
   with its closed list; the 72 `requires_gpu` sites are re-read test by test, those needing a
   real camera, display, audio device, Vulkan Video, modifiers or CUDA gaining the marker; the
   `requires_gpu` definitions stop naming DMA-BUF. Rust: one helper,
   `skip_unless_the_device_has(…)` over the snapshot, whose reason is the same closed list, and
-  the lane fails on a skip line it cannot name — the shape `test.yml:1081-1095` already uses
+  the lane fails on a skip line it cannot name — the shape `ci.yml`'s `build-macos` job already uses
   for the macOS adapter tests. The 204 boilerplate `ignore` reasons are left as they are; a
   test that needs a tier says so through the helper, the rest simply run.
 - The no-driver fixture keeps working (its variables replace the bundle by the existing rule);
-  the lavapipe comments in `python-wheel.yml:211-219` and the two `pyproject.toml` markers go.
+  the lavapipe comments in the wheel's tests and the two `pyproject.toml` markers go.
 
 ## Assumptions stated, not asked
 
@@ -320,6 +320,6 @@ also #2754) start in parallel; the blocked-by edges are on the issues.
 - REMOVED: test_the_lend_carries_the_driver_beside_the_engine_on_macos_and_none_elsewhere
 - REMOVED: CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
 - REMOVED: needs a Vulkan device that can allocate exportable DMA-BUF memory
-- REMOVED: a software rasterizer (lavapipe) cannot
+- REMOVED: lavapipe) cannot
 - REMOVED: path and imports through CUDA, not a CPU mapping
 - REMOVED: it carries exactly the staging's memory and its copy timeline

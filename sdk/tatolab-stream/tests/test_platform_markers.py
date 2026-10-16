@@ -1,17 +1,21 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The two platform markers are held to what the plan allows them to say.
+"""The platform markers are held to what the plan allows them to say.
 
 `linux_only_capability` names only the closed list in `docs/plan/ARCHITECTURE.md`
 §Product, so a test red on macOS cannot
-be quietly skipped. `awaiting_macos_parity` names only a ticket an active
+be quietly skipped. `rig_only_capability` names only what a CI runner cannot
+give, so a test red on the bundled software device cannot be quietly moved to
+the rig. `awaiting_macos_parity` names only a ticket an active
 change still lists under `## Tickets`, so the mark cannot outlive the work it
 waits on.
 """
 
 import re
 from pathlib import Path
+
+import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 ACTIVE_CHANGES_DIRECTORY = REPOSITORY_ROOT / "docs" / "plan" / "changes"
@@ -39,40 +43,86 @@ LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
     "only Linux hands SIGINT back when a run ends",
 }
 
-MARKER_USE = re.compile(r"pytest\.mark\.(linux_only_capability|awaiting_macos_parity)\(([^)]*)\)")
-LINUX_ONLY_CAPABILITY_ARGUMENTS = re.compile(r'^reason="([^"]+)"$')
+RIG_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
+    "Vulkan Video",
+    "DMA-BUF modifiers",
+    "CUDA",
+    "a camera",
+    "a display",
+    "an audio device",
+}
+
+CLOSED_LIST_REASONS_BY_REASONED_MARKER_NAME = {
+    "linux_only_capability": LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS,
+    "rig_only_capability": RIG_ONLY_CAPABILITY_CLOSED_LIST_REASONS,
+}
+WHAT_AN_UNLISTED_REASON_HIDES_BY_REASONED_MARKER_NAME = {
+    "linux_only_capability": "a test red on macOS for any other reason is a parity bug",
+    "rig_only_capability": (
+        "a test red on the bundled software device for any other reason is an engine or "
+        "wheel bug"
+    ),
+}
+
+REASONED_MARKER_NAME_ALTERNATION = "|".join(
+    map(re.escape, CLOSED_LIST_REASONS_BY_REASONED_MARKER_NAME)
+)
+# Any `.<marker>` attribute, so `from pytest import mark` and any alias of it are held too.
+MARKER_USE = re.compile(
+    rf"\.({REASONED_MARKER_NAME_ALTERNATION}|awaiting_macos_parity)\s*\(([^)]*)\)"
+)
+BARE_REASONED_MARKER_USE = re.compile(
+    rf"\.({REASONED_MARKER_NAME_ALTERNATION})\b(?!\s*\()"
+)
+REASONED_MARKER_ARGUMENTS = re.compile(r'^reason="([^"]+)"$')
 AWAITING_MACOS_PARITY_ARGUMENTS = re.compile(r"^issue=(\d+)$")
 TICKET_LIST_ENTRY = re.compile(r"^\d+\. #(\d+)\b", re.M)
 
 
+def _marked_test_files() -> "list[Path]":
+    this_file = Path(__file__).resolve()
+    return [
+        test_file
+        for marked_test_directory in MARKED_TEST_DIRECTORIES
+        for test_file in sorted(marked_test_directory.glob("test_*.py"))
+        if test_file.resolve() != this_file
+    ]
+
+
 def _marker_uses() -> "list[tuple[str, str, str]]":
     uses = []
-    for marked_test_directory in MARKED_TEST_DIRECTORIES:
-        for test_file in sorted(marked_test_directory.glob("test_*.py")):
-            if test_file.resolve() == Path(__file__).resolve():
-                continue
-            test_file_name = str(test_file.relative_to(REPOSITORY_ROOT))
-            for marker_name, arguments in MARKER_USE.findall(
-                test_file.read_text(encoding="utf-8")
-            ):
-                uses.append((test_file_name, marker_name, arguments.strip()))
+    for test_file in _marked_test_files():
+        test_file_name = str(test_file.relative_to(REPOSITORY_ROOT))
+        for marker_name, arguments in MARKER_USE.findall(test_file.read_text(encoding="utf-8")):
+            uses.append((test_file_name, marker_name, arguments.strip()))
     return uses
 
 
 def test_the_markers_are_in_use():
     marker_names = {marker_name for _, marker_name, _ in _marker_uses()}
-    assert "linux_only_capability" in marker_names
+    assert CLOSED_LIST_REASONS_BY_REASONED_MARKER_NAME.keys() <= marker_names
 
 
-def test_linux_only_capability_names_only_the_closed_list():
+def test_a_reasoned_marker_is_never_bare():
+    for test_file in _marked_test_files():
+        bare_marker_names = BARE_REASONED_MARKER_USE.findall(test_file.read_text(encoding="utf-8"))
+        assert not bare_marker_names, (
+            f"{test_file.relative_to(REPOSITORY_ROOT)}: {bare_marker_names[0]} needs reason= from "
+            "its closed list"
+        )
+
+
+@pytest.mark.parametrize("reasoned_marker_name", sorted(CLOSED_LIST_REASONS_BY_REASONED_MARKER_NAME))
+def test_a_reasoned_marker_names_only_its_closed_list(reasoned_marker_name: str):
+    closed_list_reasons = CLOSED_LIST_REASONS_BY_REASONED_MARKER_NAME[reasoned_marker_name]
     for test_file_name, marker_name, arguments in _marker_uses():
-        if marker_name != "linux_only_capability":
+        if marker_name != reasoned_marker_name:
             continue
-        reason = LINUX_ONLY_CAPABILITY_ARGUMENTS.match(arguments)
+        reason = REASONED_MARKER_ARGUMENTS.match(arguments)
         assert reason is not None, f"{test_file_name}: spell the reason as one literal: {arguments}"
-        assert reason.group(1) in LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS, (
-            f"{test_file_name}: {reason.group(1)!r} is not on the closed list — a test red on "
-            "macOS for any other reason is a parity bug"
+        assert reason.group(1) in closed_list_reasons, (
+            f"{test_file_name}: {reason.group(1)!r} is not on the {reasoned_marker_name} closed "
+            f"list — {WHAT_AN_UNLISTED_REASON_HIDES_BY_REASONED_MARKER_NAME[reasoned_marker_name]}"
         )
 
 

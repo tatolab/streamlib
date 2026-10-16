@@ -89,6 +89,7 @@ def assert_written_through_torch_with_no_copy(producer_report: dict, shape) -> N
         )
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_tensor_written_through_torch_is_read_by_another_process(
     start_tatolabd_running_stream,
 ):
@@ -115,6 +116,7 @@ def test_a_tensor_written_through_torch_is_read_by_another_process(
     assert producer["pid"] not in {read["pid"] for read in reads}
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_an_odd_shaped_tensor_round_trips(start_tatolabd_running_stream):
     """(3, 7, 11) float16 — 462 bytes, no page multiple: CUDA maps the tensor's
     exact byte size, never the allocation's rounded one, and on macOS the
@@ -133,6 +135,7 @@ def test_an_odd_shaped_tensor_round_trips(start_tatolabd_running_stream):
         assert read["values_equal"], read
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_reader_resolving_a_different_id_sees_different_values(
     start_tatolabd_running_stream,
 ):
@@ -156,6 +159,7 @@ def test_a_reader_resolving_a_different_id_sees_different_values(
         )
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_tensor_a_consumer_holds_is_never_rewritten(start_tatolabd_running_stream):
     """The consumer holds the first tensor open while the producer publishes
     several pool depths past it: its values stay frame 0's, and its slot is
@@ -185,6 +189,7 @@ def test_a_tensor_a_consumer_holds_is_never_rewritten(start_tatolabd_running_str
     not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
     reason="needs a window server: the allocation under test follows a swapchain",
 )
+@pytest.mark.rig_only_capability(reason="a display")
 def test_a_tensor_acquired_after_a_window_opens_round_trips(start_tatolabd_running_stream):
     """DEVICE_LOCAL OPAQUE_FD memory allocated after a swapchain exists still
     allocates and round-trips (docs/learnings/nvidia-opaque-fd-after-swapchain.md)."""
@@ -197,6 +202,7 @@ def test_a_tensor_acquired_after_a_window_opens_round_trips(start_tatolabd_runni
         assert read["values_equal"], read
 
 
+@pytest.mark.rig_only_capability(reason="CUDA")
 def test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one(
     start_tatolabd_running_stream,
 ):

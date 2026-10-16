@@ -1,0 +1,6 @@
+# The one toolchain every build, gate and CI job compiles with, so the fmt and
+# clippy gates move only in the change that moves this pin.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

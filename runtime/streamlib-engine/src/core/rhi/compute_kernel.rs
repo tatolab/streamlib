@@ -10,12 +10,13 @@
 
 use std::borrow::Cow;
 
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use crate::core::{Error, Result};
 
 use super::kernel_binding_names::{
-    quote_declared_shader_binding_names, refuse_a_descriptor_set_other_than_set_0,
+    quote_declared_shader_binding_names, reflect_spirv_without_its_debug_source_strings,
+    refuse_a_descriptor_set_other_than_set_0,
 };
 
 /// Kind of resource bound at a particular slot in a compute kernel's
@@ -219,7 +220,7 @@ pub struct ComputeKernelDescriptor<'a> {
 /// dispatch: bindings are resolved by name in one spelling for both
 /// languages, so an unnamed binding cannot be bound at all.
 pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>, u32)> {
-    let reflection = Reflection::new_from_spirv(spv)
+    let reflection = reflect_spirv_without_its_debug_source_strings(spv)
         .map_err(|e| Error::GpuError(format!("Failed to reflect SPIR-V: {e:?}")))?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {
@@ -289,6 +290,8 @@ mod tests {
     use super::*;
     use crate::core::rhi::spirv_module_rewriting_for_tests::{
         move_binding_to_another_descriptor_set_in_spirv_module,
+        pack_the_debug_source_strings_as_ubuntu_24_04_glslc_does_for_a_non_ascii_character,
+        split_a_multi_byte_character_across_op_source_and_op_source_continued,
         strip_every_debug_name_from_spirv_module,
     };
 
@@ -493,6 +496,40 @@ mod tests {
         assert!(
             message.contains("only descriptor set 0 is supported") && message.contains('1'),
             "the refusal must name the unsupported set: {message}"
+        );
+    }
+
+    /// The bindings a module reflects to, after asserting `rspirv` alone
+    /// refuses it, so the engine's own reflection is what reads it.
+    fn bindings_of_a_module_rspirv_refuses(spirv: &[u8]) -> (Vec<ComputeBindingSpec>, u32) {
+        assert!(
+            rspirv_reflect::Reflection::new_from_spirv(spirv).is_err(),
+            "rspirv refuses the rewritten module"
+        );
+        derive_bindings_from_spirv(spirv).expect("the module reflects without its debug strings")
+    }
+
+    /// Mental revert: reflect with `Reflection::new_from_spirv` directly and
+    /// each module is refused with `DecodeStringFailed`.
+    #[test]
+    fn a_module_ubuntu_24_04_glslc_packed_debug_strings_into_reflects_the_same_bindings() {
+        let built_module_bindings =
+            derive_bindings_from_spirv(blend_spv(2)).expect("the built module reflects");
+        let packed_by_ubuntu_24_04_glslc =
+            pack_the_debug_source_strings_as_ubuntu_24_04_glslc_does_for_a_non_ascii_character(
+                blend_spv(2),
+            );
+        assert_eq!(
+            bindings_of_a_module_rspirv_refuses(&packed_by_ubuntu_24_04_glslc),
+            built_module_bindings
+        );
+        assert_eq!(
+            bindings_of_a_module_rspirv_refuses(
+                &split_a_multi_byte_character_across_op_source_and_op_source_continued(blend_spv(
+                    2
+                ))
+            ),
+            built_module_bindings
         );
     }
 

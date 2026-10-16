@@ -15,9 +15,8 @@ over is that the draw runs, and that every way of getting the bindings wrong is
 refused with a message naming what the shaders actually declare — the stage
 claim before a kernel exists, the rest before any GPU work is submitted.
 
-The tests here are `requires_gpu` and execute on the rig only; CI green is not
-proof for them. That a draw asks for no vertex buffer, index buffer or depth
-target is read off the declared surface in the stream suite.
+That a draw asks for no vertex buffer, index buffer or depth target is read
+off the declared surface in the stream suite.
 
 Every probe runs in its own processor interpreter and reports one
 `MARKER:PROBE_RESULT` JSON line; each test starts the probe's stream on
@@ -29,7 +28,13 @@ from collections.abc import Callable
 import pytest
 
 import graphics_kernel_streams
-from graphics_kernel_probes import SOURCE_BINDING
+from graphics_kernel_probes import (
+    LEFT_HALF_RGBA,
+    RIGHT_HALF_RGBA,
+    SOURCE_BINDING,
+    SURFACE_HEIGHT,
+    SURFACE_WIDTH,
+)
 from runtime_process_under_test import RuntimeProcessUnderTest
 
 PROBE_STREAMS = {
@@ -41,6 +46,9 @@ PROBE_STREAMS = {
     ),
     "GraphicsPassShapeRefusalProbe": (
         graphics_kernel_streams.graphics_pass_shape_refusal_probe_alone
+    ),
+    "RenderedFrameCpuReader": (
+        graphics_kernel_streams.rendered_texture_frame_read_through_cpu_downstream
     ),
 }
 
@@ -80,6 +88,25 @@ def test_a_python_processor_draws_through_a_graphics_kernel(start_tatolabd_runni
     assert observed["binding_names"] == [SOURCE_BINDING], (
         "the kernel reports the shaders' own binding names, which is what a "
         "draw resolves against"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_a_rendered_texture_is_read_through_cpu_in_a_downstream_interpreter(
+    start_tatolabd_running_stream,
+):
+    """A render target a Python node drew into crosses to another processor
+    interpreter, whose `cpu()` reads exactly the pixels the pass painted — on
+    whatever flavour the device carries a render target across with."""
+    observed = run_probe(start_tatolabd_running_stream, "RenderedFrameCpuReader")
+
+    assert observed["shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
+    assert observed["every_left_pixel_is_the_left_colour"], (
+        f"left half reads {observed['top_left_pixel']} at (0, 0), expected {LEFT_HALF_RGBA}"
+    )
+    assert observed["every_right_pixel_is_the_right_colour"], (
+        f"right half reads {observed['bottom_right_pixel']} at the last pixel, "
+        f"expected {RIGHT_HALF_RGBA}"
     )
 
 

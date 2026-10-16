@@ -17,7 +17,11 @@ use crate::python_helper_process_pixel_exchange::{
     refuse_check_out_the_service_declined,
 };
 
-use super::{decimal_string_field, parse_device_uuid, response_field};
+use super::{
+    decimal_string_field, memory_type_index_stated_by_an_opaque_fd_registration,
+    optional_decimal_string_field, parse_device_uuid, registration_states_a_timeline_fd,
+    response_field,
+};
 
 /// What the parent answered when asked to open a surface's device export.
 ///
@@ -38,35 +42,10 @@ struct DeviceExportStagingDescription {
     writable: bool,
 }
 
-/// The memory type index an OPAQUE_FD staging registration states.
-///
-/// Mandatory, not defensive: a conforming OPAQUE_FD import binds the
-/// index the *exporter* allocated from, and the handle type has no
-/// fd-properties query to discover it with. A registration without one
-/// would leave the import guessing, and a guess binds the wrong memory
-/// type rather than failing — silently, until the pixels are wrong.
-fn memory_type_index_stated_by_a_staging_registration(
-    staging_kind: &str,
-    staging_share_id: &str,
-    registration: &serde_json::Value,
-) -> PyResult<u32> {
-    registration
-        .get("vk_memory_type_index")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|index| u32::try_from(index).ok())
-        .ok_or_else(|| {
-            crate::python_processor_context::gpu_operation_error(format!(
-                "the {staging_kind} staging {staging_share_id:?} was registered without a usable \
-                 vk_memory_type_index; an OPAQUE_FD import must bind the memory type index the \
-                 exporter allocated from, and guessing one binds the wrong memory instead of \
-                 failing"
-            ))
-        })
-}
-
 /// A published export staging, checked out and validated, with its copy
-/// timeline already imported — everything both export arms need before
-/// they diverge on how the memory itself is imported.
+/// timeline already imported where the device exports one — everything both
+/// export arms need before they diverge on how the memory itself is
+/// imported.
 struct CheckedOutExportStaging {
     /// The memory type index the exporter allocated from, off the
     /// registration. Validated here rather than per arm: it is mandatory
@@ -75,12 +54,14 @@ struct CheckedOutExportStaging {
     stated_memory_type_index: u32,
     /// Handed to the memory import, which adopts it; never closed here.
     staging_fd: OwnedFd,
-    copy_done: ConsumerVulkanTimelineSemaphore,
+    /// `None` on a device that exports no timeline semaphore: there every
+    /// copy is retired on the host before the parent replies.
+    copy_done: Option<ConsumerVulkanTimelineSemaphore>,
 }
 
 /// What a helper process holds of a surface's device export: CUDA's
 /// import of the parent's staging buffer, and the timeline every refill
-/// signals.
+/// signals where the device exports one.
 ///
 /// The staging itself belongs to the parent's `GpuContext` and is cached
 /// there per surface. This is the consumer half — one import per surface
@@ -88,7 +69,7 @@ struct CheckedOutExportStaging {
 /// `cudaImportExternalMemory` is not a per-frame cost.
 pub(crate) struct HelperDeviceExport {
     pub(crate) cuda_import: Arc<CudaImportedSurface>,
-    refill_done: ConsumerVulkanTimelineSemaphore,
+    refill_done: Option<ConsumerVulkanTimelineSemaphore>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: PixelFormat,
@@ -98,7 +79,7 @@ pub(crate) struct HelperDeviceExport {
 
 /// What a helper process holds of a surface's CPU-readback export: this
 /// child's mapped import of the parent's host-visible staging, and the
-/// timeline every copy signals.
+/// timeline every copy signals where the device exports one.
 ///
 /// The mapped sibling of [`HelperDeviceExport`] — same staging machinery,
 /// same surface-share transport, same per-pool-slot memoisation — holding
@@ -108,7 +89,7 @@ pub(crate) struct HelperDeviceExport {
 /// how they are reached.
 pub(crate) struct HelperCpuReadbackExport {
     pub(crate) consumer_buffer: ConsumerVulkanBuffer,
-    copy_done: ConsumerVulkanTimelineSemaphore,
+    copy_done: Option<ConsumerVulkanTimelineSemaphore>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: PixelFormat,
@@ -172,6 +153,19 @@ impl HelperExportStagingResidency {
     }
 }
 
+/// Why `surface_id` cannot be handed out as a device tensor on the software
+/// device `software_device_name`, and the door that reads it instead.
+pub(super) fn device_tensor_refused_on_a_software_device(
+    surface_id: &str,
+    software_device_name: &str,
+) -> String {
+    format!(
+        "surface {surface_id:?} cannot be handed out as a device tensor: this runtime runs on \
+         {software_device_name}, a software Vulkan device, and no GPU package can import its \
+         memory — read the pixels on the CPU with `cpu()` or `as_numpy()` instead"
+    )
+}
+
 /// Bound on the wait for a refill the parent said it signalled. The copy
 /// is VRAM→VRAM; reaching this bound means the parent's queue is wedged,
 /// not that the copy is slow.
@@ -184,12 +178,18 @@ impl HelperProcessGpuExchangeClient {
     /// Two channels again, same division as the host path: escalate asks
     /// the parent to allocate and publish the staging, and the
     /// surface-share check-out carries the memory — the staging's
-    /// OPAQUE_FD and the refill timeline's fd, in that order.
+    /// OPAQUE_FD and, where the device exports one, the refill timeline's
+    /// fd, in that order.
     pub(crate) fn open_device_export(
         &self,
         python: Python<'_>,
         surface_id: &str,
     ) -> PyResult<Arc<HelperDeviceExport>> {
+        if let Some(software_device_name) = python.detach(|| self.software_import_device_name())? {
+            return Err(crate::python_processor_context::gpu_operation_error(
+                device_tensor_refused_on_a_software_device(surface_id, &software_device_name),
+            ));
+        }
         // Memoised per pool slot: the parent's staging (and this CUDA
         // import of it) spans every frame the slot publishes, while each
         // refill names — and the parent validates — the specific frame id.
@@ -219,6 +219,19 @@ impl HelperProcessGpuExchangeClient {
                 .entry(source_pool_slot_key.to_string())
                 .or_insert(opened),
         ))
+    }
+
+    /// The name of this child's import device — the device the runtime
+    /// named at spawn — when it is a software device, the one device a
+    /// device tensor is refused on: no GPU package imports its memory. Both
+    /// device-tensor doors ask before they touch CUDA, and the device export
+    /// asks before anything escalates, so no staging opens for a tensor
+    /// nothing could read.
+    pub(super) fn software_import_device_name(&self) -> PyResult<Option<String>> {
+        let import_device = self.consumer_vulkan_device()?;
+        Ok(import_device
+            .device_is_software()
+            .then(|| import_device.name().to_string()))
     }
 
     /// Open this surface's CPU-readback export, checking the parent's
@@ -323,11 +336,7 @@ impl HelperProcessGpuExchangeClient {
     }
 
     /// Ask the parent to run one device-export copy and wait for the
-    /// timeline value it answers with.
-    ///
-    /// The wait is the whole point of the round trip: the parent's own
-    /// post-submit wait orders nothing for this process, so a read that
-    /// skipped this would race the copy it asked for.
+    /// timeline value it answers with, where it answers one.
     pub(crate) fn run_device_export_copy(
         &self,
         python: Python<'_>,
@@ -343,7 +352,7 @@ impl HelperProcessGpuExchangeClient {
             &op,
             escalate_op,
             surface_id,
-            &export.refill_done,
+            export.refill_done.as_ref(),
         )
     }
 
@@ -369,22 +378,51 @@ impl HelperProcessGpuExchangeClient {
             &op,
             "run_cpu_readback_copy",
             surface_id,
-            &export.copy_done,
+            export.copy_done.as_ref(),
         )
     }
 
     /// The round trip both staging-copy arms share: send the op, then wait
     /// on this child's imported timeline for the value the parent signalled.
+    ///
+    /// The parent retires every copy on the host before it replies. Where
+    /// the device exports a timeline the child still waits on its imported
+    /// copy for the answered value; where it exports none the reply carries
+    /// no value and that retirement is the whole ordering contract. A reply
+    /// and a check-out that disagree about whether a timeline crossed are
+    /// refused, never read past.
     fn send_the_staging_copy_and_wait_for_its_timeline_value(
         &self,
         python: Python<'_>,
         op: &Bound<'_, PyDict>,
         escalate_op: &str,
         surface_id: &str,
-        copy_done: &ConsumerVulkanTimelineSemaphore,
+        copy_done: Option<&ConsumerVulkanTimelineSemaphore>,
     ) -> PyResult<()> {
         let response = escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, op)?;
-        let signalled = decimal_string_field(&response, "timeline_value")?;
+        let answered = optional_decimal_string_field(&response, "timeline_value")?;
+        let (copy_done, signalled) = match (copy_done, answered) {
+            (None, None) => return Ok(()),
+            (Some(copy_done), Some(signalled)) => (copy_done, signalled),
+            (None, Some(signalled)) => {
+                return Err(crate::python_processor_context::gpu_operation_error(
+                    format!(
+                        "{escalate_op} of surface {surface_id:?} answered timeline value \
+                         {signalled}, but its staging was checked out with no timeline to wait \
+                         on"
+                    ),
+                ));
+            }
+            (Some(_), None) => {
+                return Err(crate::python_processor_context::gpu_operation_error(
+                    format!(
+                        "{escalate_op} of surface {surface_id:?} answered no timeline value, but \
+                         its staging was checked out with a timeline the copy should have \
+                         signalled"
+                    ),
+                ));
+            }
+        };
         python.detach(|| {
             copy_done
                 .wait(signalled, DEVICE_EXPORT_REFILL_WAIT_TIMEOUT_NS)
@@ -447,13 +485,9 @@ impl HelperProcessGpuExchangeClient {
 
         let vulkan_device = self.consumer_vulkan_device()?;
         let stated_memory_type_index = checked_out.stated_memory_type_index;
-        // The staging fd is handed over here and never closed on the error
-        // path: ownership passes to the driver inside the call, and the
-        // failure arms that keep it are indistinguishable from the ones
-        // that do not (see `ConsumerVulkanBuffer::from_opaque_fd`).
         let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
             &vulkan_device,
-            checked_out.staging_fd.into_raw_fd(),
+            checked_out.staging_fd,
             described.staging_byte_size,
             stated_memory_type_index,
         )
@@ -525,8 +559,8 @@ impl HelperProcessGpuExchangeClient {
 
     /// The checkout both export arms share: take the published staging,
     /// refuse what the service declined, insist on the OPAQUE_FD flavour,
-    /// and import the copy timeline — leaving each arm only the memory
-    /// import its own consumer needs.
+    /// and import the copy timeline where the registration carries one —
+    /// leaving each arm only the memory import its own consumer needs.
     fn check_out_the_published_export_staging(
         &self,
         described: &DeviceExportStagingDescription,
@@ -556,47 +590,73 @@ impl HelperProcessGpuExchangeClient {
                 ),
             ));
         }
-        let stated_memory_type_index = memory_type_index_stated_by_a_staging_registration(
-            staging_kind,
-            staging_share_id,
+        let stated_memory_type_index = memory_type_index_stated_by_an_opaque_fd_registration(
+            format_args!("the {staging_kind} staging {staging_share_id:?}"),
             &registration,
         )?;
-        // The staging's memory fd, then the copy timeline's — the order
-        // the registration published them in.
-        let [staging_fd, copy_done_fd] =
-            <[OwnedFd; 2]>::try_from(received_fds).map_err(|delivered: Vec<OwnedFd>| {
-                crate::python_processor_context::gpu_operation_error(format!(
-                    "check_out of the {staging_kind} staging {staging_share_id:?} returned {} \
-                     fds; it carries exactly the staging's memory and its copy timeline",
-                    delivered.len(),
-                ))
-            })?;
-
-        let vulkan_device = self.consumer_vulkan_device()?;
-        // Both imports adopt their fd on success and leave it with the
-        // caller on failure, so each is handed over only at its call.
-        let copy_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
-            &vulkan_device,
-            copy_done_fd.as_raw_fd(),
+        // A device that exports no timeline registers the staging alone. The
+        // staging's memory fd comes first, then the copy timeline's — the
+        // order the registration published them in.
+        let copy_timeline_crosses =
+            registration_states_a_timeline_fd(&registration, "has_produce_done_fd");
+        let received_fd_count = received_fds.len();
+        let mut received_fds = received_fds.into_iter();
+        let (staging_fd, copy_done_fd) = match (
+            received_fds.next(),
+            received_fds.next(),
+            received_fds.next(),
+            copy_timeline_crosses,
         ) {
-            Ok(imported_timeline) => {
-                let _adopted_by_vulkan = copy_done_fd.into_raw_fd();
-                imported_timeline
-            }
-            Err(import_failure) => {
+            (Some(staging_fd), None, None, false) => (staging_fd, None),
+            (Some(staging_fd), Some(copy_done_fd), None, true) => (staging_fd, Some(copy_done_fd)),
+            _ => {
                 return Err(crate::python_processor_context::gpu_operation_error(
                     format!(
-                        "this helper could not import the copy timeline of \
-                     {staging_share_id:?}: {import_failure}"
+                        "check_out of the {staging_kind} staging {staging_share_id:?} returned \
+                         {received_fd_count} fds; its registration states the staging's \
+                         memory{}",
+                        if copy_timeline_crosses {
+                            " and its copy timeline"
+                        } else {
+                            " alone"
+                        },
                     ),
                 ));
             }
         };
+        let copy_done = copy_done_fd
+            .map(|copy_done_fd| {
+                self.import_the_staging_copy_timeline(copy_done_fd, staging_share_id)
+            })
+            .transpose()?;
         Ok(CheckedOutExportStaging {
             stated_memory_type_index,
             staging_fd,
             copy_done,
         })
+    }
+
+    /// Import a checked-out staging's copy timeline into this child's
+    /// device. The import adopts the fd on success and leaves it with the
+    /// caller on failure, so it is handed over only here.
+    fn import_the_staging_copy_timeline(
+        &self,
+        copy_done_fd: OwnedFd,
+        staging_share_id: &str,
+    ) -> PyResult<ConsumerVulkanTimelineSemaphore> {
+        let vulkan_device = self.consumer_vulkan_device()?;
+        let imported_timeline = ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &vulkan_device,
+            copy_done_fd.as_raw_fd(),
+        )
+        .map_err(|import_failure| {
+            crate::python_processor_context::gpu_operation_error(format!(
+                "this helper could not import the copy timeline of {staging_share_id:?}: \
+                 {import_failure}"
+            ))
+        })?;
+        let _adopted_by_vulkan = copy_done_fd.into_raw_fd();
+        Ok(imported_timeline)
     }
 }
 
@@ -604,3 +664,8 @@ impl HelperProcessGpuExchangeClient {
 /// exporter's memory-type index a registration must state.
 #[cfg(test)]
 mod export_staging_wire_tests;
+
+/// A staging checked out with or without its copy timeline, read after the
+/// parent's reply, and the device door refused on a software device.
+#[cfg(test)]
+mod export_staging_check_out_tests;
