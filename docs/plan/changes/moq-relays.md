@@ -53,23 +53,18 @@ against.
   (`ipc-types/src/lib.rs:327`), added in `channel_max_subscribers`
   (`E/core/compiler/compiler_ops/open_iceoryx2_service_op.rs:629-637`); `tap_async`
   (`E/core/runtime/operations_runtime.rs:1038`) → `start_channel_tap` (`E/core/runtime/tap.rs:152`).
-- **Exposure is enforced at two edges.** `OutputPortExposureLevel`
-  (`E/core/graph/output_port_exposure.rs:23`); `loaded_stream_output_port_exposure.rs:45-250`; the
-  cross-stream edges are `connect_from_an_output_port_in_another_stream`
+- **Exposure is enforced at two edges.** `OutputPortExposureLevel` (`E/core/graph/output_port_exposure.rs:23`);
+  `loaded_stream_output_port_exposure.rs:45-250`; the edges are `connect_from_an_output_port_in_another_stream`
   (`operations_runtime.rs:632-653`) and `open_the_source_side_on_the_source_stream`
   (`reconcile_a_link_reading_another_stream_op.rs:355-366`); `expose_port` (`A/mcp.rs:1057` →
   `stream_actions_of_this_runtime.rs:799`) records `KeptStreamRecord.exposure_rulings`
-  (`machine_state_directory.rs:60`, `:135`). Python `Exposure {PRIVATE, PUBLIC}` and `expose`
-  (`S/_stream_graph_builder.py:44`, `:377-406`).
-- **The cross-stream link.** `remote_output` → `NodeOutputPortReferenceByAddress`
-  (`S/_stream_graph_builder.py:344`, `:229-251`, `:448-466`); `LinkPortRefOutput { machine?,
-  stream?, node, port }` (`E/core/json_schema.rs:160-207`); `OutputPortInAnotherStreamOnThisMachine`
-  (`E/core/graph/edges/output_port_in_another_stream_on_this_machine.rs:16`);
-  `LinkState::AwaitingRemote` (`link_state.rs:23`); `wire_a_link_reading_another_stream`
-  (`compiler.rs:504-520`); tests
-  `tests/stream-on-runtime/test_links_between_streams_on_one_machine.py` and
-  `E/../tests/links_between_streams_on_one_machine_test.rs` with
-  `tests/support/links_between_streams_harness.rs`.
+  (`machine_state_directory.rs:60`, `:135`). Python `Exposure {PRIVATE, PUBLIC}`, `expose` (`S/_stream_graph_builder.py:44`, `:377-406`).
+- **The cross-stream link.** `remote_output` → `NodeOutputPortReferenceByAddress` (`S/_stream_graph_builder.py:344`,
+  `:229-251`, `:448-466`); `LinkPortRefOutput { machine?, stream?, node, port }` (`E/core/json_schema.rs:160-207`);
+  `OutputPortInAnotherStreamOnThisMachine` (`E/core/graph/edges/output_port_in_another_stream_on_this_machine.rs:16`);
+  `LinkState::AwaitingRemote` (`link_state.rs:23`); `wire_a_link_reading_another_stream` (`compiler.rs:504-520`);
+  tests `tests/stream-on-runtime/test_links_between_streams_on_one_machine.py`,
+  `E/../tests/links_between_streams_on_one_machine_test.rs` + `tests/support/links_between_streams_harness.rs`.
 - **Tailscale.** `MachineName::of_this_machine()` (`E/core/runtime/machine_name.rs:113`) runs
   `tailscale status --json --peers=false` with a 2 s timeout (`:27-40`, `:357`); its one caller is
   `Runner::new_with_construction_options` (`E/core/runtime/runtime.rs:577`).
@@ -120,11 +115,10 @@ against.
   (`refusing_null_video_codec_backend.rs:19`); the encoder opens its session at
   `published_surface_to_encoded_frame_encoder.rs:418-420`. No `openh264` anywhere.
 - **The unit.** `xtask/src/build_runtime.rs:167-623` lays `bin/`, `lib/tatolab/lend/`; sibling
-  native binaries are fetched by pinned tag and SHA-256 in
-  `scripts/stage_{linux,macos}_bundled_vulkan_driver.sh`; the portability gate walks every binary
-  (`test_wheel_portability.py:397-590`). `tatolabd` supervises no long-lived child
-  (`D/machine_stream_hosting.rs:45-134`); the state directory holds `streams/`, `logs/` and a run
-  marker only (`tatolab_state_directory.rs:105-116`) — no machine-level setting. No QUIC or MoQ
+  native binaries are fetched by pinned tag and SHA-256 in `scripts/stage_{linux,macos}_bundled_vulkan_driver.sh`;
+  the portability gate walks every binary (`test_wheel_portability.py:397-590`). `tatolabd`
+  supervises no long-lived child (`D/machine_stream_hosting.rs:45-134`); the state directory holds
+  `streams/`, `logs/` and a run marker only (`tatolab_state_directory.rs:105-116`). No QUIC or MoQ
   crate in the workspace; `tokio 1.48` (`Cargo.toml:66`); `rustls` only in the WebRTC wheel.
 
 ## MODIFIED: the wire — §Processor model `ARCHITECTURE.md:874-893`
