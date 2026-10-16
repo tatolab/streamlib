@@ -61,6 +61,7 @@ pub fn framed_bag(bag_payload: &[u8], slice_capacity: usize) -> Vec<u8> {
         FIXTURE_BAG_PORT_NAME,
         FIXTURE_BAG_TIMESTAMP_NS,
         u32::try_from(bag_payload.len()).unwrap(),
+        true,
     )
     .unwrap()
     .write_to_slice(&mut framed_bag_bytes);

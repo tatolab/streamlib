@@ -405,7 +405,7 @@ impl OutputWriterInner {
         // Header on the stack before the loan: a port key that overflows the
         // wire capacity must never cost a loan slot.
         let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new(port, timestamp_ns, data.len() as u32)
+        FrameHeader::new(port, timestamp_ns, data.len() as u32, true)
             .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
             .write_to_slice(&mut header_bytes);
 

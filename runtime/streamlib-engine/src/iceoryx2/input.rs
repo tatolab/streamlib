@@ -1517,7 +1517,7 @@ mod tests {
         carried_body: &[u8],
     ) -> Vec<u8> {
         let mut frame = vec![0u8; FRAME_HEADER_SIZE + carried_body.len()];
-        FrameHeader::new(port, timestamp_ns, stamped_payload_bytes)
+        FrameHeader::new(port, timestamp_ns, stamped_payload_bytes, true)
             .expect("port fits PortKey")
             .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
         frame[FRAME_HEADER_SIZE..].copy_from_slice(carried_body);

@@ -4,7 +4,7 @@
 //! Shared iceoryx2 payload types for cross-process IPC communication.
 //!
 //! A [`FrameHeader`] carries routing and framing only — port key, timestamp,
-//! payload length. Nothing on this wire names a type, so no read path can
+//! payload length, and the group flag. Nothing on this wire names a type, so no read path can
 //! compare one: a consumer handed a payload it cannot read discovers that as
 //! a decode failure of the payload itself, at its own read.
 //!
@@ -345,8 +345,10 @@ pub const MAX_DESTINATIONS_PER_CHANNEL: usize = 32;
 pub const MAX_INBOUND_LINKS_PER_DESTINATION: usize = 256;
 
 /// Size of the frame header in the `[u8]` slice wire format.
-pub const FRAME_HEADER_SIZE: usize =
-    MAX_PORT_KEY_SIZE + FRAME_HEADER_TIMESTAMP_NS_SIZE + FRAME_HEADER_PAYLOAD_LEN_SIZE;
+pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE
+    + FRAME_HEADER_TIMESTAMP_NS_SIZE
+    + FRAME_HEADER_PAYLOAD_LEN_SIZE
+    + FRAME_HEADER_FLAGS_SIZE;
 
 /// Size of the frame header's `timestamp_ns` field, little-endian on the wire.
 pub const FRAME_HEADER_TIMESTAMP_NS_SIZE: usize = std::mem::size_of::<i64>();
@@ -354,14 +356,20 @@ pub const FRAME_HEADER_TIMESTAMP_NS_SIZE: usize = std::mem::size_of::<i64>();
 /// Size of the frame header's payload-length field, little-endian on the wire.
 pub const FRAME_HEADER_PAYLOAD_LEN_SIZE: usize = std::mem::size_of::<u32>();
 
+/// Size of the frame header's flags field, little-endian on the wire.
+pub const FRAME_HEADER_FLAGS_SIZE: usize = std::mem::size_of::<u32>();
+
+/// The [`FrameHeader::flags`] bit set when the message opens a group — a point a
+/// relay or a late joiner can start from. Bits 1..31 are reserved: a writer
+/// writes them zero and a reader ignores them.
+pub const FRAME_HEADER_FLAG_STARTS_GROUP: u32 = 1 << 0;
+
 /// Error constructing a [`PortKey`] from a name that overflows the fixed
 /// wire capacity.
 ///
-/// This is the engine-layer replacement for the pre-#1416 silent truncation:
-/// a port / channel name longer than [`MAX_PORT_KEY_SIZE`] `- 1` bytes used to
-/// be quietly clipped, routing frames to a different (truncated) port than the
-/// one the author named. Over-length is now a hard, named error the caller
-/// must handle rather than a data-corruption surface. Names crossing this
+/// A port / channel name longer than [`MAX_PORT_KEY_SIZE`] `- 1` bytes is refused
+/// rather than clipped: a clipped name would route frames to a different port
+/// than the one the author named. Names crossing this
 /// boundary have already passed the charset + length grammar in
 /// the engine's `iceoryx2::validate_channel_name`; this guard is the wire-level
 /// backstop that makes truncation unrepresentable.
@@ -452,7 +460,7 @@ impl Default for PortKey {
 /// Header for slice-based iceoryx2 frame transport.
 ///
 /// Wire format in a `[u8]` slice (little-endian for multi-byte fields):
-/// `[port_key: 64][timestamp_ns: 8][len: 4][data: len]`
+/// `[port_key: 64][timestamp_ns: 8][len: 4][flags: 4][data: len]`
 ///
 /// Routing and framing only — the header names no type, so a subscriber can
 /// route a frame and bound its payload without knowing what is in it.
@@ -460,19 +468,37 @@ pub struct FrameHeader {
     pub port_key: PortKey,
     pub timestamp_ns: i64,
     pub len: u32,
+    /// [`FRAME_HEADER_FLAG_STARTS_GROUP`]; every other bit is reserved zero.
+    pub flags: u32,
 }
 
 impl FrameHeader {
-    /// Create a new frame header for `port`.
+    /// Create a new frame header for `port`, every reserved flag bit zero.
     ///
     /// Fails with [`PortKeyError`] if `port` overflows the fixed wire capacity —
     /// see [`PortKey::new`].
-    pub fn new(port: &str, timestamp_ns: i64, data_len: u32) -> Result<Self, PortKeyError> {
+    pub fn new(
+        port: &str,
+        timestamp_ns: i64,
+        data_len: u32,
+        starts_group: bool,
+    ) -> Result<Self, PortKeyError> {
+        let flags = if starts_group {
+            FRAME_HEADER_FLAG_STARTS_GROUP
+        } else {
+            0
+        };
         Ok(Self {
             port_key: PortKey::new(port)?,
             timestamp_ns,
             len: data_len,
+            flags,
         })
+    }
+
+    /// Whether the message opens a group, read from [`FRAME_HEADER_FLAG_STARTS_GROUP`].
+    pub fn starts_group(&self) -> bool {
+        self.flags & FRAME_HEADER_FLAG_STARTS_GROUP != 0
     }
 
     /// Write the header to the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
@@ -481,12 +507,12 @@ impl FrameHeader {
         // port_key: [len: 1][name: 63] = 64 bytes
         buf[0] = self.port_key.len;
         buf[1..MAX_PORT_KEY_SIZE].copy_from_slice(&self.port_key.name);
-        // timestamp_ns: 8 bytes little-endian
         let timestamp_ns_offset = MAX_PORT_KEY_SIZE;
         let len_offset = timestamp_ns_offset + FRAME_HEADER_TIMESTAMP_NS_SIZE;
+        let flags_offset = len_offset + FRAME_HEADER_PAYLOAD_LEN_SIZE;
         buf[timestamp_ns_offset..len_offset].copy_from_slice(&self.timestamp_ns.to_le_bytes());
-        // len: 4 bytes little-endian
-        buf[len_offset..FRAME_HEADER_SIZE].copy_from_slice(&self.len.to_le_bytes());
+        buf[len_offset..flags_offset].copy_from_slice(&self.len.to_le_bytes());
+        buf[flags_offset..FRAME_HEADER_SIZE].copy_from_slice(&self.flags.to_le_bytes());
     }
 
     /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
@@ -503,14 +529,17 @@ impl FrameHeader {
 
         let timestamp_ns_offset = MAX_PORT_KEY_SIZE;
         let len_offset = timestamp_ns_offset + FRAME_HEADER_TIMESTAMP_NS_SIZE;
+        let flags_offset = len_offset + FRAME_HEADER_PAYLOAD_LEN_SIZE;
         let timestamp_ns =
             i64::from_le_bytes(buf[timestamp_ns_offset..len_offset].try_into().unwrap());
-        let len = u32::from_le_bytes(buf[len_offset..FRAME_HEADER_SIZE].try_into().unwrap());
+        let len = u32::from_le_bytes(buf[len_offset..flags_offset].try_into().unwrap());
+        let flags = u32::from_le_bytes(buf[flags_offset..FRAME_HEADER_SIZE].try_into().unwrap());
 
         Self {
             port_key,
             timestamp_ns,
             len,
+            flags,
         }
     }
 
@@ -588,7 +617,7 @@ impl std::fmt::Display for FramePayloadRefusal {
         match self {
             Self::ShorterThanTheFrameHeader { frame_byte_len } => write!(
                 f,
-                "{frame_byte_len} bytes cannot hold a {FRAME_HEADER_SIZE}-byte frame header"
+                "{frame_byte_len} bytes cannot hold an {FRAME_HEADER_SIZE}-byte frame header"
             ),
             Self::PayloadTruncated {
                 stamped_payload_byte_len,
@@ -624,7 +653,7 @@ impl std::fmt::Display for TappedFramePayloadRefusal {
         match self.frame_payload_refusal {
             FramePayloadRefusal::ShorterThanTheFrameHeader { frame_byte_len } => write!(
                 f,
-                "a tapped bag carries a {FRAME_HEADER_SIZE}-byte frame header; got \
+                "a tapped bag carries an {FRAME_HEADER_SIZE}-byte frame header; got \
                  {frame_byte_len} bytes, which cannot hold one"
             ),
             FramePayloadRefusal::PayloadTruncated {
@@ -738,13 +767,14 @@ mod tests {
 
     #[test]
     fn frame_header_round_trip_via_slice() {
-        let header = FrameHeader::new("dest_port", 42, 1024).unwrap();
+        let header = FrameHeader::new("dest_port", 42, 1024, true).unwrap();
         let mut buf = [0u8; FRAME_HEADER_SIZE];
         header.write_to_slice(&mut buf);
         let back = FrameHeader::read_from_slice(&buf);
         assert_eq!(back.port(), "dest_port");
         assert_eq!(back.timestamp_ns, 42);
         assert_eq!(back.len, 1024);
+        assert!(back.starts_group());
     }
 
     #[test]
@@ -753,27 +783,55 @@ mod tests {
         // plane stamps CLOCK_MONOTONIC, and a reader comparing two stamps can
         // legitimately carry a value below its own epoch.
         let longest_port = "z".repeat(PortKey::MAX_NAME_BYTES);
-        for (port, timestamp_ns, len) in [
-            ("", i64::MIN, 0u32),
-            ("p", -1, 1),
-            (longest_port.as_str(), i64::MAX, u32::MAX),
+        for (port, timestamp_ns, len, starts_group) in [
+            ("", i64::MIN, 0u32, false),
+            ("p", -1, 1, true),
+            (longest_port.as_str(), i64::MAX, u32::MAX, false),
         ] {
             let mut buf = [0u8; FRAME_HEADER_SIZE];
-            FrameHeader::new(port, timestamp_ns, len)
+            FrameHeader::new(port, timestamp_ns, len, starts_group)
                 .expect("port fits the wire capacity")
                 .write_to_slice(&mut buf);
             let back = FrameHeader::read_from_slice(&buf);
             assert_eq!(back.port(), port);
             assert_eq!(back.timestamp_ns, timestamp_ns);
             assert_eq!(back.len, len);
+            assert_eq!(back.starts_group(), starts_group);
         }
     }
 
     #[test]
     fn frame_header_size_matches_constant() {
-        // [PortKey: 64][i64: 8][u32: 4] = 76 bytes.
-        assert_eq!(FRAME_HEADER_SIZE, 64 + 8 + 4);
-        assert_eq!(FRAME_HEADER_SIZE, 76);
+        // [PortKey: 64][i64: 8][u32: 4][u32: 4] = 80 bytes.
+        assert_eq!(FRAME_HEADER_SIZE, 64 + 8 + 4 + 4);
+        assert_eq!(FRAME_HEADER_SIZE, 80);
+    }
+
+    #[test]
+    fn frame_header_starts_group_flag_is_bit_zero_and_every_other_bit_is_written_zero() {
+        assert_eq!(FRAME_HEADER_FLAG_STARTS_GROUP, 0x0000_0001);
+
+        for (starts_group, expected_flags) in [(true, 0x0000_0001u32), (false, 0)] {
+            let mut buf = [0xFFu8; FRAME_HEADER_SIZE];
+            FrameHeader::new("cam", 0, 0, starts_group)
+                .unwrap()
+                .write_to_slice(&mut buf);
+            assert_eq!(
+                u32::from_le_bytes(buf[76..80].try_into().unwrap()),
+                expected_flags,
+                "a writer sets only the starts-group bit and writes every reserved bit zero"
+            );
+        }
+
+        let mut buf = [0u8; FRAME_HEADER_SIZE];
+        FrameHeader::new("cam", 0, 0, false)
+            .unwrap()
+            .write_to_slice(&mut buf);
+        buf[76..80].copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+        assert!(
+            !FrameHeader::read_from_slice(&buf).starts_group(),
+            "a reader ignores the reserved bits"
+        );
     }
 
     #[test]
@@ -786,7 +844,7 @@ mod tests {
         // and there is no version field to negotiate a disagreement on: a
         // shift here is silent cross-process corruption, not a compile error.
         let mut buf = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new("cam", 0x0102_0304_0506_0708, 0x0A0B_0C0D)
+        FrameHeader::new("cam", 0x0102_0304_0506_0708, 0x0A0B_0C0D, true)
             .unwrap()
             .write_to_slice(&mut buf);
 
@@ -805,6 +863,11 @@ mod tests {
             u32::from_le_bytes(buf[72..76].try_into().unwrap()),
             0x0A0B_0C0D,
             "len is 4 bytes little-endian at 72..76"
+        );
+        assert_eq!(
+            u32::from_le_bytes(buf[76..80].try_into().unwrap()),
+            FRAME_HEADER_FLAG_STARTS_GROUP,
+            "flags is 4 bytes little-endian at 76..80"
         );
     }
 
@@ -935,8 +998,7 @@ mod tests {
 
     #[test]
     fn port_key_rejects_over_length_name_instead_of_truncating() {
-        // Mental-revert guard for the pre-#1416 silent truncation: a name one
-        // byte past the wire capacity must be a named error, NOT a clipped key
+        // A name one byte past the wire capacity must be a named error, NOT a clipped key
         // that routes frames to the wrong port. Revert `PortKey::new` to the
         // `.min(MAX_PORT_KEY_SIZE - 1)` truncation and this fails — the
         // construction would succeed and `as_str()` would return the clipped
@@ -953,7 +1015,7 @@ mod tests {
     /// stamped for `port` — the shape every read site is handed off the wire.
     fn frame_with_payload_filler(port: &str, payload_bytes: usize, filler: u8) -> Vec<u8> {
         let mut frame = vec![filler; FRAME_HEADER_SIZE + payload_bytes];
-        FrameHeader::new(port, 7, payload_bytes as u32)
+        FrameHeader::new(port, 7, payload_bytes as u32, true)
             .expect("port fits the wire capacity")
             .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
         frame
@@ -1021,11 +1083,11 @@ mod tests {
         );
         assert_eq!(
             refusal.to_string(),
-            "8 bytes cannot hold a 76-byte frame header"
+            "8 bytes cannot hold an 80-byte frame header"
         );
         assert_eq!(
             TappedFramePayloadRefusal::from(refusal).to_string(),
-            "a tapped bag carries a 76-byte frame header; got 8 bytes, which cannot hold one"
+            "a tapped bag carries an 80-byte frame header; got 8 bytes, which cannot hold one"
         );
     }
 
@@ -1083,7 +1145,7 @@ mod tests {
     fn read_port_from_slice_rejects_an_over_capacity_len_prefix() {
         // Same prefix, the peek path: on a header-sized frame the unclamped
         // slice runs off the buffer itself — "range end index 256 out of range
-        // for slice of length 76".
+        // for slice of length 80".
         let mut frame = frame_with_payload_filler("cam", 0, 0);
         assert_eq!(frame.len(), FRAME_HEADER_SIZE);
         frame[0] = 0xFF;
@@ -1411,12 +1473,11 @@ mod tests {
 
     #[test]
     fn frame_header_rejects_over_length_port() {
-        // The truncation defect surfaced through FrameHeader::new on the write
-        // path — over-length must propagate as the typed error, not silently
-        // build a header with a clipped port key.
+        // Over-length must propagate from `FrameHeader::new` as the typed error,
+        // never build a header with a clipped port key.
         let over = "c".repeat(PortKey::MAX_NAME_BYTES + 1);
         assert!(matches!(
-            FrameHeader::new(&over, 0, 0),
+            FrameHeader::new(&over, 0, 0, true),
             Err(PortKeyError::TooLong { .. })
         ));
     }

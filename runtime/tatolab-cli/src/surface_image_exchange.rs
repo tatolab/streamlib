@@ -1343,7 +1343,7 @@ mod tests {
         assert_eq!(
             surface_id_in_tapped_bag_as_printed(&[0u8; 8], FIXTURE_CHANNEL, "surface_id"),
             Err(
-                "a bag from `cam/frame` could not be decoded: a tapped bag carries a 76-byte \
+                "a bag from `cam/frame` could not be decoded: a tapped bag carries an 80-byte \
                  frame header; got 8 bytes, which cannot hold one"
                     .to_owned()
             )

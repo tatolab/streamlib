@@ -117,7 +117,7 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
 
     let total_len = FRAME_HEADER_SIZE + OVERSIZED_PAYLOAD_BYTES;
     let mut frame = vec![0u8; total_len];
-    FrameHeader::new("dest_port", 42, OVERSIZED_PAYLOAD_BYTES as u32)
+    FrameHeader::new("dest_port", 42, OVERSIZED_PAYLOAD_BYTES as u32, true)
         .expect("dest_port fits PortKey bounds")
         .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(&payload);

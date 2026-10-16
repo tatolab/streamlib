@@ -1066,7 +1066,7 @@ mod tests {
         use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader};
 
         let mut frame = vec![0u8; FRAME_HEADER_SIZE + body.len()];
-        FrameHeader::new(port, timestamp_ns, body.len() as u32)
+        FrameHeader::new(port, timestamp_ns, body.len() as u32, true)
             .expect("port fits PortKey")
             .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
         frame[FRAME_HEADER_SIZE..].copy_from_slice(body);
@@ -1219,7 +1219,7 @@ mod tests {
     /// is still delivered, the guarantee that lets every destination be
     /// notified whatever mode it runs in.
     ///
-    /// The #1764 repro: a 2 ms `process()` against a 1 kHz source.
+    /// A 2 ms `process()` against a 1 kHz source.
     /// Fail-without-fix: an event transport queuing a wakeup per send comes
     /// back undelivered about 280 frames in once the dispatch loop stops
     /// draining.
