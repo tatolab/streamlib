@@ -757,7 +757,7 @@ impl ConsumerVulkanDevice {
 
         let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
             ConsumerRhiError::Gpu(format!(
-                "ConsumerVulkanDevice: import_opaque_fd_memory failed: {e}"
+                "ConsumerVulkanDevice::import_opaque_fd_memory_at_stated_memory_type_index failed: {e}"
             ))
         })?;
 
