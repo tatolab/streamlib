@@ -28,10 +28,9 @@ env:
 jobs:
   build-and-prove-macos-wheel:
     name: aarch64-apple-darwin wheel
-    # Pinned, not `macos-latest` (macOS 26): the image decides the SDK the wheel
-    # links against, and the wheel's deployment target is the newest macOS this
-    # label can both build for and run.
-    runs-on: macos-15
+    # Pinned, not `macos-latest`: the image decides the SDK the wheel links
+    # against. The wheel's deployment target stays below it, at 15.0.
+    runs-on: macos-26
     timeout-minutes: 90
 
     steps:
@@ -45,6 +44,10 @@ jobs:
       # `glslc` stages the engine's SPIR-V for `include_bytes!`; cmake and ninja
       # build the `shaderc` crate's C++ and the bundled Vulkan loader.
       - name: Install glslc and the C++ build tools
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: brew install shaderc cmake ninja
 
       - name: Install Rust
@@ -53,7 +56,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rust-macos-wheel-release
+          shared-key: rust-macos-26-wheel-release
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Python

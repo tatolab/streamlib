@@ -87,9 +87,8 @@ exclude = ["**/__pycache__/**"]
 # so it is named here, where the glob is relative to `python-source`.
 include = [{ path = "tatolab/runtime/_vulkan_driver/*.so", format = "wheel" }]
 
-# Apple Silicon only, and the newest macOS the pinned `macos-15` builder can
-# both build against and run the wheel on. Every Apple Silicon Mac can run it,
-# and it clears MoltenVK's own floor (12) and AVFoundation's
+# Apple Silicon only, built on the pinned `macos-26` runner's SDK. Every Apple
+# Silicon Mac can run it, and it clears MoltenVK's own floor (12) and AVFoundation's
 # `AVCaptureDeviceTypeExternal` (14). Pinned so it cannot drift with rustc;
 # `scripts/stage_macos_bundled_vulkan_driver.sh` builds the bundled loader here.
 [tool.maturin.target.aarch64-apple-darwin]

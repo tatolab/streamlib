@@ -64,6 +64,11 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   RUST_BACKTRACE: 1
+  # Homebrew's update and cleanup passes cost minutes on a macOS runner and buy
+  # nothing: the image's formula index is days old at most.
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
   NEXTEST_VERSION: 0.9.148
   # The runtime unit's cache entries. Bump to drop every unit cached so far.
   RUNTIME_UNIT_CACHE_GENERATION: 1
@@ -547,12 +552,12 @@ jobs:
 
   # The Apple path on every change that can break it: macOS is a supported
   # floor, and an Apple-path change merges only with this lane green.
-  # `macos-15`, not `macos-latest`: the image decides the SDK the Apple
+  # `macos-26`, not `macos-latest`: the image decides the SDK the Apple
   # frameworks link against. GPU work runs last and narrow, on the runner's
   # paravirtual Metal device through MoltenVK.
   build-macos:
     name: Build (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: read
@@ -571,7 +576,9 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: macos
+          # The key names the image: cargo's fingerprints cannot see which
+          # SDK a cached artifact was linked against.
+          shared-key: macos-26
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Python
@@ -702,7 +709,7 @@ jobs:
   integration-test-macos:
     name: Integration test (macOS)
     if: github.event_name != 'pull_request'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: read
@@ -749,7 +756,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: macos-runtime
+          shared-key: macos-26-runtime
           workspaces: |
             . -> target
             packages/streamlib-webrtc -> target
