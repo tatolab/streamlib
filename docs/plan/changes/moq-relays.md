@@ -61,9 +61,8 @@ against.
   `LinkState::AwaitingRemote` (`link_state.rs:23`); `wire_a_link_reading_another_stream` (`compiler.rs:504-520`);
   tests `tests/stream-on-runtime/test_links_between_streams_on_one_machine.py`,
   `E/../tests/links_between_streams_on_one_machine_test.rs` + `tests/support/links_between_streams_harness.rs`.
-- **Tailscale.** `MachineName::of_this_machine()` (`E/core/runtime/machine_name.rs:113`) runs
-  `tailscale status --json --peers=false` with a 2 s timeout (`:27-40`, `:357`); its one caller is
-  `Runner::new_with_construction_options` (`E/core/runtime/runtime.rs:577`).
+- **Tailscale.** `MachineName::of_this_machine()` (`E/core/runtime/machine_name.rs:113`) runs `tailscale
+  status --json --peers=false`, 2 s timeout (`:27-40`, `:357`); one caller, `runtime.rs:577`.
 - **Windows.** `M/display_window.rs` (registered `M/lib.rs:107`; software-device refusal `:356`;
   generated class `S/_built_in_nodes.py:87`, `:122`); `E/core/{window_event_pump,processor_owned_window,display_info}.rs`
   (called from `runtime.rs:1014-1199`, `loaded_stream.rs:550`, `runtime_context.rs:652`);
@@ -102,8 +101,7 @@ against.
   `e2e_fixture_psnr_vivid.sh:343`, `e2e_fixture_recording.sh:472`,
   `packages/streamlib-webrtc/tests/live/whip_whep_roundtrip.sh`; `.claude/skills/verify-live/SKILL.md:25-59`.
 - **No URL listener exists.** The api-server binds a Unix socket alone (`A/local_api_socket.rs:71`;
-  `serving_the_router_on_the_local_api_socket_opens_no_tcp_listener` `:464`); no route serves a port
-  by address or lists exposed ports.
+  `serving_the_router_on_the_local_api_socket_opens_no_tcp_listener` `:464`); nothing serves a port by address.
 - **The codec seam.** `VideoCodecBackend` (`E/core/context/video_codec_backend.rs:175`); the walk
   `first_video_codec_backend_arm_that_opens` (`:233`) over `platform_video_codec_backend_arms` (`:250-272`:
   Linux `vulkan-video`, macOS `videotoolbox`) into `refusing_null_video_codec_backend.rs:19`; the
@@ -201,11 +199,21 @@ without knowing one. Tools, each a local-API tool and a CLI verb: `add_relay {ad
 {relay_id, settings}` taking a partial settings map (`tatolab relay set <id> key=value …`),
 `remove_relay {relay_id}` (`tatolab relay rm`), `list_relays` (`tatolab relays`: id, adapter,
 settings with each secret shown as set or unset, connection state). The machine-level record is
-`<state>/relays.json` (0600) — `[{relay_id, adapter, settings}]` with secrets held apart in
-`<state>/relay-credentials.json` (0600), written atomically, never logged, never read back over
-the API — re-joined at every start. The two local adapters are entries too (`local-loopback`,
-`local-every-interface`), present by default, so their ports and TLS are tuned the same way.
-Rejected: a hand-edited file alone; the app alone (owner, 2026-10-16).
+`<state>/relays.json` (0600) — `[{relay_id, adapter, settings}]` holding no secret — re-joined at
+every start. The two local adapters are entries too (`local-loopback`, `local-every-interface`),
+present by default, so their ports and TLS are tuned the same way.
+**Credentials follow the platform's practice (owner, 2026-10-16).** A secret lives in the OS
+secret store — the macOS Keychain, the Linux Secret Service where a keyring daemon answers —
+through the `keyring` crate, one item per `{relay_id, field}` under the `tatolab` service name;
+where no store answers (a headless Linux box) the fallback is `<state>/relay-credentials.json`
+(0600, atomic), and the runtime's log says so once at start. A secret is write-only over the
+API, redacted in `list_relays`, `graph` and every log line, held in memory as a `secrecy::SecretString`
+zeroed on drop, and never placed in the environment of any child — processor interpreters and the
+relay children inherit none. Where a provider issues short-lived tokens the adapter stores the
+refresh credential and mints access tokens itself; `configure_relay` rotates by replacing, the
+old value overwritten in the store. The CLI's `--credential-file` reads the file once and sends it;
+the app hands a token over the socket and keeps no copy.
+Rejected: a hand-edited file alone; the app alone; a plaintext file where an OS store exists (owner, 2026-10-16).
 
 ## ADDED: the relay source node — §Networking `:3908`
 
@@ -275,40 +283,35 @@ a `moq-net` client (catalog plus one group); `new_writes_the_camera_stream_proje
 ## ADDED: `H264Encoder`'s CPU arm — §Media I/O `:2497`
 
 `E/core/context/openh264_video_codec_backend.rs`, a third arm after the platform's in
-`platform_video_codec_backend_arms` on every floor, opening only when the arms before it refused:
-the `openh264` crate (0.9.x, `libloading` feature, no bundled source) over Cisco's
-`libopenh264-<ver>-linux64.8.so` / `…-mac-arm64.dylib`, fetched once by `tatolabd` on first use
-into `<state>/openh264/<ver>/` from `ciscobinary.openh264.org`, SHA-256 pinned in the binary, the
-Cisco notice added to the third-party notices; a fetch refused (offline) refuses the encoder by
-name saying so. Encode only. `bitrate_bps` → rate control, `keyframe_interval_seconds` → IDR
-period, `effort_level` refused by name.
+`platform_video_codec_backend_arms`, opening only when the arms before it refused: the `openh264`
+crate (0.9.x, `libloading` feature, no bundled source) over Cisco's `libopenh264-<ver>-linux64.8.so`
+/ `…-mac-arm64.dylib`, fetched once by `tatolabd` on first use into `<state>/openh264/<ver>/` from
+`ciscobinary.openh264.org`, SHA-256 pinned in the binary, the Cisco notice in the third-party
+notices; a refused fetch refuses the encoder by name. Encode only; `bitrate_bps` → rate control,
+`keyframe_interval_seconds` → IDR period, `effort_level` refused by name.
 
 ## Tree consequences, by slice
 
-1. **Bytes on the wire** — header flag, `write`/`read` both sides, `tatolab.stream.msgpack`,
-   `MsgpackCast`, codec pair deleted, `from_bytes` on the two casts, the fragment on the
-   declaration, in `graph` and its update op. Proof: layout tests; `test_read_into_target.py`
-   over bytes; raw bytes written by one node read by another.
-2. **The media frame** — the video blocks, the Opus pair, `Mp4Sink`, the codec rig, the WebRTC
-   wheel, two casts deleted, the decided loss mechanism. Proof: the PSNR rigs lock to their
-   baselines unchanged; a hang-catalog validator over the encoders' fragments.
-3. **Publisher, adapters, local relay** — `moq-relay` in the unit, two children, the publisher,
-   `tap` and the Tailscale read deleted, the join verbs. Proof: a `moq-net` client reads a public
-   track at both listeners and a private one at loopback only, byte-identical to iceoryx2;
-   lowering a level ends the subscription; the catalog names every exposed port.
-4. **`RelayTrackSource`** and the deletion of `remote_output`. Proof: stream B decodes stream A's
-   private port through the loopback relay; two runtimes (rig, or two containers) read a public port.
+1. **Bytes on the wire** — header flag, `write`/`read` both sides, `tatolab.stream.msgpack`, `MsgpackCast`,
+   codec pair deleted, `from_bytes`, the fragment on the declaration, in `graph` and its update op.
+   Proof: layout tests; `test_read_into_target.py` over bytes; raw bytes node to node.
+2. **The media frame** — the codec blocks, `Mp4Sink`, the rig, the WebRTC wheel, two casts deleted,
+   the loss mechanism verified. Proof: the PSNR rigs lock to their baselines; a hang-catalog validator.
+3. **Publisher, adapters, local relay, relay settings** — `moq-relay` in the unit, two children, the
+   publisher, the catalog, tools and verbs, the secret store; `tap` and the Tailscale read deleted.
+   Proof: a `moq-net` client reads a public track at both listeners and a private one at loopback
+   only, byte-identical to iceoryx2; lowering a level ends the subscription; a secret never
+   appears in `list_relays`, `graph`, a log or a child's environment.
+4. **`RelayTrackSource`**; `remote_output` deleted. Proof: stream B decodes stream A's private port
+   through the loopback relay; two runtimes (rig, or two containers) read a public port.
 5. **Loopback HTTP** — listener, listing, snapshot, the staged preview dist; `exchange` deleted;
-   fixtures and skills rewritten. Proof: rigs green on `/snapshot/`; the page plays the sample
-   stream in Chromium on the rig (Playwright, rig-only).
-6. **Windows deleted.** Proof: both floors build with no `winit`; no lane needs a display;
-   `tatolabd` starts under a user manager with no display.
-7. **The sample stream** — GPU `TestPatternSource`, the scaffold, `tatolab new`. Proof: the
-   scaffold on the lavapipe lane reaches a track at the loopback relay with ≥ 60 groups.
-8. **The CPU encoder arm.** Proof: on `VK_DRIVER_FILES=lvp` the scaffold plays; the PSNR rig on
-   the CPU arm meets the Y floor.
-9. **Hosted adapters** — Cloudflare (drafts 14/16), moq.pro; credentials from the environment;
-   live proof rig-only, cannot-run without them. Order: 1 and 6 first; 2, 3 after 1; 4, 5, 9 after 3; 7 after 2 and 6; 8 any time.
+   fixtures and skills rewritten. Proof: rigs green on `/snapshot/`; the page plays in Chromium on the rig.
+6. **Windows deleted.** Proof: both floors build without `winit`; no lane needs a display.
+7. **The sample stream** — GPU `TestPatternSource`, the scaffold, `tatolab new`. Proof: the scaffold
+   on the lavapipe lane reaches a track at the loopback relay with ≥ 60 groups.
+8. **The CPU encoder arm.** Proof: on `VK_DRIVER_FILES=lvp` the scaffold plays; the PSNR rig meets the Y floor.
+9. **Hosted adapters** — Cloudflare (drafts 14/16), moq.pro; credentials from the store; live proof
+   rig-only, cannot-run without them. Order: 1 and 6 first; 2, 3 after 1; 4, 5, 9 after 3; 7 after 2 and 6; 8 any time.
 
 ## Assumptions stated, not asked
 
@@ -316,12 +319,9 @@ period, `effort_level` refused by name.
 - The Rust msgpack write is named `write_msgpack`, so a built-in's encoding is visible at its call.
 - `msgpack` from PyPI is the stream package's one new dependency; the stream suite stays runtime-free.
 - The hang `legacy` container (varint µs + payload) is the media frame: every player on the line reads it.
-- Default ports 4443–4446 on loopback, 4445 on every interface, tuned in the local adapters' settings.
-- Two `moq-relay` children, not one, because `moq-relay` binds one QUIC address.
-- A hosted relay's root is the credential's; the hostname sits under it.
+- Two `moq-relay` children (it binds one QUIC address) on default ports 4443–4446; a hosted relay's root is the credential's.
 - `RelayTrackSource` stamps arrival; the writer's stamp rides the object.
-- The preview page is `@moq/watch`'s published dist; no node toolchain enters the build.
-- Snapshot serves `VideoFrame` records only; an encoded or data port answers 415.
+- The preview page is `@moq/watch`'s published dist, no node toolchain; snapshot serves `VideoFrame` records only.
 - Cisco's binary is fetched at first use, never at install, so the installer stays offline-safe.
 
 ## REMOVED
