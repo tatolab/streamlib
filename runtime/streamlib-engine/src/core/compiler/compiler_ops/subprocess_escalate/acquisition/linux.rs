@@ -16,7 +16,7 @@ use crate::core::context::{
     GpuContextFullAccess, GpuContextLimitedAccess, OneOffAcquisitionShape, PooledTextureHandle,
     TextureCrossProcessImportability, TexturePoolDescriptor,
 };
-use crate::core::rhi::{TextureFormat, TextureUsages};
+use crate::core::rhi::{TextureFormat, TextureUsages, texture_usages_to_wire};
 use crate::host_rhi::HostSurfaceStoreExt;
 use crate::vulkan::rhi::HostVulkanTexture;
 
@@ -58,10 +58,11 @@ pub(super) fn allocate_registered_texture_for_helper(
                 && !device_capabilities.exports_dma_buf
             {
                 return Err(crate::core::error::Error::NotSupported(format!(
-                    "acquire_texture: {} exports no DMA-BUF and cannot export a {parsed_format:?} \
-                     texture with usage {parsed_usage:?} as OPAQUE_FD, so it cannot cross to a \
-                     processor interpreter",
-                    device.name()
+                    "acquire_texture: {} exports no DMA-BUF and cannot export a {} texture with \
+                     usage {} as OPAQUE_FD, so it cannot cross to a processor interpreter",
+                    device.name(),
+                    parsed_format.wire_name(),
+                    texture_usages_to_wire(parsed_usage).join(" | "),
                 )));
             }
             importability

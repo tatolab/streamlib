@@ -1763,3 +1763,60 @@ fn a_helpers_render_target_texture_registers_the_flavour_its_device_can_carry() 
         .expect("the render target releases");
     live_service.stop();
 }
+
+/// On a device without DMA-BUF, a texture request no OPAQUE_FD image can
+/// carry — a multi-plane format — is refused at the acquisition, naming the
+/// device, the format and the usage, rather than failing later at an export
+/// the device does not have.
+#[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_texture_no_opaque_fd_image_can_carry_is_refused_at_the_acquisition_where_dma_buf_is_absent() {
+    use super::super::handle_escalate_op;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::TextureFormat;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        tracing::warn!("no GPU device — skipping");
+        return;
+    };
+    if gpu.gpu_capabilities().supports_dma_buf_export {
+        tracing::warn!("the device exports DMA-BUF — the refusal is the software device's");
+        return;
+    }
+    let device_name = gpu.gpu_capabilities().device_name;
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+
+    let refusal = handle_id_or_refusal_of(handle_escalate_op(
+        &sandbox,
+        &registry,
+        EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+            request_id: "req-multi-plane-texture".to_string(),
+            width: 64,
+            height: 32,
+            format: TextureFormat::Nv12.wire_name().to_string(),
+            processor_output_pool: None,
+            usage: vec!["texture_binding".to_string()],
+        }),
+    ))
+    .expect_err("a multi-plane texture cannot cross a device without DMA-BUF");
+    for named in [
+        device_name.as_str(),
+        TextureFormat::Nv12.wire_name(),
+        "texture_binding",
+        "OPAQUE_FD",
+    ] {
+        assert!(
+            refusal.contains(named),
+            "the refusal names {named:?}: {refusal}"
+        );
+    }
+    live_service.stop();
+}

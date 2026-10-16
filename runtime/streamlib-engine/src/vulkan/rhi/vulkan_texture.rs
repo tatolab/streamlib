@@ -687,11 +687,11 @@ impl HostVulkanTexture {
             desc.usage,
         ) {
             return Err(Error::NotSupported(format!(
-                "HostVulkanTexture::new_opaque_fd_export: {} cannot export an optimal {:?} \
-                 image with usage {:?} as OPAQUE_FD",
+                "HostVulkanTexture::new_opaque_fd_export: {} cannot export an optimal {} \
+                 image with usage {} as OPAQUE_FD",
                 vulkan_device.name(),
-                desc.format,
-                desc.usage
+                desc.format.wire_name(),
+                crate::core::rhi::texture_usages_to_wire(desc.usage).join(" | "),
             )));
         }
 
@@ -3048,7 +3048,9 @@ mod tests {
                     "the refusal names the device: {refusal}"
                 );
                 assert!(
-                    refusal.contains("Rgba8UnormSrgb") && refusal.contains("OPAQUE_FD"),
+                    refusal.contains(TextureFormat::Rgba8UnormSrgb.wire_name())
+                        && refusal.contains("storage_binding")
+                        && refusal.contains("OPAQUE_FD"),
                     "the refusal names the format and the flavour: {refusal}"
                 );
             }
