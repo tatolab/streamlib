@@ -204,9 +204,18 @@ fn duplicate_first_plane_fd_for_export(
              hand to native code"
         ))
     })?;
-    first_plane_fd.try_clone().map_err(|duplicate_failure| {
+    duplicate_memory_fd(first_plane_fd, format_args!("this {exported_subject}'s"))
+}
+
+/// Dup one memory fd, refusing by `duplicated_owner` (`this surface's`)
+/// when the kernel will not.
+fn duplicate_memory_fd(
+    memory_fd: &OwnedFd,
+    duplicated_owner: std::fmt::Arguments<'_>,
+) -> PyResult<OwnedFd> {
+    memory_fd.try_clone().map_err(|duplicate_failure| {
         PyRuntimeError::new_err(format!(
-            "could not duplicate this {exported_subject}'s memory fd: {duplicate_failure}"
+            "could not duplicate {duplicated_owner} memory fd: {duplicate_failure}"
         ))
     })
 }
@@ -271,9 +280,9 @@ impl HelperCheckedOutPixelSurface {
             ));
         };
         Ok(OpaqueFdAllocationExportDescription {
-            exported_memory_fd: duplicate_first_plane_fd_for_export(
-                std::slice::from_ref(exportable_memory_fd),
-                "surface",
+            exported_memory_fd: duplicate_memory_fd(
+                exportable_memory_fd,
+                format_args!("surface {:?}'s", self.surface_id),
             )?,
             // What this process's own import stated: the size an OPAQUE_FD
             // import must match, which the pool slot's driver requirement
@@ -627,13 +636,10 @@ impl HelperProcessGpuExchangeClient {
                 export_contract,
             } => {
                 let stated_memory_type_index = export_contract.vk_memory_type_index;
-                let duplicated_for_import =
-                    opaque_memory_fd.try_clone().map_err(|duplicate_failure| {
-                        PyRuntimeError::new_err(format!(
-                            "could not duplicate opaque_fd pixel buffer {surface_id:?}'s memory \
-                             fd for import: {duplicate_failure}"
-                        ))
-                    })?;
+                let duplicated_for_import = duplicate_memory_fd(
+                    &opaque_memory_fd,
+                    format_args!("opaque_fd pixel buffer {surface_id:?}'s"),
+                )?;
                 let consumer_buffer =
                     ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
                         &vulkan_device,

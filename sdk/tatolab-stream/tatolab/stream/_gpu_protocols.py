@@ -762,9 +762,10 @@ class OpaqueFdAllocationExport(Protocol):
     @property
     def dedicated_allocation(self) -> bool:
         """Whether the allocation is dedicated — always true for this
-        flavour, a texture's and a pixel buffer's alike. A Vulkan importer chains `VkMemoryDedicatedAllocateInfo`, a
-        CUDA importer sets `cudaExternalMemoryDedicated`; omitting either is
-        undefined behaviour, not leniency.
+        flavour, a texture's and a pixel buffer's alike. A Vulkan importer
+        chains `VkMemoryDedicatedAllocateInfo`, a CUDA importer sets
+        `cudaExternalMemoryDedicated`; omitting either is undefined
+        behaviour, not leniency.
         """
         ...
 

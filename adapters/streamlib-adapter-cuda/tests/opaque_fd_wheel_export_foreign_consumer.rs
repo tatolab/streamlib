@@ -311,15 +311,36 @@ struct ProbeHandoffUnderTest {
     _run_state_directory: tempfile::TempDir,
 }
 
-/// Send `verdict` to the probe, let the load answer, and stop the runtime —
-/// returning the load's exit, its output and the runtime's diagnostic tails
-/// for the caller's assertions.
+/// How a finished handoff's load and runtime ended, for the caller's
+/// assertions.
+struct FinishedProbeHandoff {
+    tatolab_run_exit: Option<std::process::ExitStatus>,
+    tatolab_run_output: String,
+    tatolabd_diagnostic_tails: String,
+}
+
+impl FinishedProbeHandoff {
+    fn assert_the_load_exited_cleanly(&self) {
+        let Self {
+            tatolab_run_exit,
+            tatolab_run_output,
+            tatolabd_diagnostic_tails,
+        } = self;
+        assert!(
+            tatolab_run_exit.is_some_and(|exit| exit.success()),
+            "tatolab run -d must load the handoff stream and exit 0; it ended \
+             {tatolab_run_exit:?}:\n{tatolab_run_output}\n{tatolabd_diagnostic_tails}"
+        );
+    }
+}
+
+/// Send `verdict` to the probe, let the load answer, and stop the runtime.
 fn finish_the_handoff_with_verdict(
     handoff_stream: UnixStream,
     mut loading_tatolab_run: TatolabRunLoadingTheHandoffStream,
     hosting_tatolabd: TatolabdHostingTheHandoffStream,
     verdict: &[u8],
-) -> (Option<std::process::ExitStatus>, String, String) {
+) -> FinishedProbeHandoff {
     use std::io::Write;
     let _ = (&handoff_stream).write_all(verdict);
     drop(handoff_stream);
@@ -328,11 +349,11 @@ fn finish_the_handoff_with_verdict(
     drop(loading_tatolab_run);
     let tatolabd_diagnostic_tails = hosting_tatolabd.diagnostic_tails();
     drop(hosting_tatolabd);
-    (
+    FinishedProbeHandoff {
         tatolab_run_exit,
         tatolab_run_output,
         tatolabd_diagnostic_tails,
-    )
+    }
 }
 
 /// Start the integration unit's `tatolabd`, load `probe_stream` from the
@@ -719,7 +740,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     } else {
         b"mismatch"
     };
-    let (tatolab_run_exit, tatolab_run_output, tatolabd_diagnostic_tails) =
+    let finished_handoff =
         finish_the_handoff_with_verdict(stream, loading_tatolab_run, hosting_tatolabd, verdict);
 
     assert!(
@@ -728,11 +749,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
          fill constant {FILL_CONSTANT_RGBA:?}; first pixel was {:?}",
         &readback[..4]
     );
-    assert!(
-        tatolab_run_exit.is_some_and(|exit| exit.success()),
-        "tatolab run -d must load the handoff stream and exit 0; it ended {tatolab_run_exit:?}:\n\
-         {tatolab_run_output}\n{tatolabd_diagnostic_tails}"
-    );
+    finished_handoff.assert_the_load_exited_cleanly();
 }
 
 /// The byte `OpaqueFdPixelBufferExportHandoffProbe` writes at one pixel
@@ -755,10 +772,16 @@ fn a_wheel_exported_opaque_fd_pixel_buffer_read_by_a_foreign_process_shows_the_f
         .with_env_filter("streamlib=warn,streamlib_consumer_rhi=debug")
         .try_init();
 
-    if let Err(unavailable) = HostVulkanDevice::new() {
-        println!("pixel buffer export handoff: no Vulkan host device — skipping ({unavailable})");
-        return;
-    }
+    let host_device = match HostVulkanDevice::new() {
+        Ok(device) => device,
+        Err(unavailable) => {
+            println!(
+                "pixel buffer export handoff: no Vulkan host device — skipping ({unavailable})"
+            );
+            return;
+        }
+    };
+    let pooled_frames_cross_as_dma_buf = host_device.supports_dma_buf_export();
 
     let Some(ProbeHandoffUnderTest {
         handoff_stream,
@@ -775,36 +798,41 @@ fn a_wheel_exported_opaque_fd_pixel_buffer_read_by_a_foreign_process_shows_the_f
         return;
     };
 
-    if let Some(export_refusal) = metadata
+    let export_refusal = metadata
         .get("export_refusal")
-        .and_then(|value| value.as_str())
-    {
-        let export_refusal = export_refusal.to_string();
-        println!("pixel buffer export handoff: a DMA-BUF pooled frame refused: {export_refusal}");
-        let (tatolab_run_exit, tatolab_run_output, tatolabd_diagnostic_tails) =
-            finish_the_handoff_with_verdict(
-                handoff_stream,
-                loading_tatolab_run,
-                hosting_tatolabd,
-                b"refusal-seen",
-            );
+        .and_then(|value| value.as_str());
+    if pooled_frames_cross_as_dma_buf {
+        println!(
+            "pixel buffer export handoff: {} pooled frames cross as DMA-BUF; the export \
+             answered {export_refusal:?}",
+            host_device.name()
+        );
+        let finished_handoff = finish_the_handoff_with_verdict(
+            handoff_stream,
+            loading_tatolab_run,
+            hosting_tatolabd,
+            b"refusal-seen",
+        );
         assert!(
             received_fds.is_empty(),
             "a refused export hands no fd across"
         );
+        let export_refusal = export_refusal.unwrap_or_else(|| {
+            panic!("a DMA-BUF pooled frame must refuse export_opaque_fd: {metadata}")
+        });
         assert!(
             export_refusal.contains("DMA-BUF pixel buffer")
                 && export_refusal.contains("`export_dma_buf`"),
-            "only a DMA-BUF pooled frame refuses, and its refusal points at the door it has: \
-             {export_refusal:?}"
+            "the refusal must name the flavour and point at the door it has: {export_refusal:?}"
         );
-        assert!(
-            tatolab_run_exit.is_some_and(|exit| exit.success()),
-            "tatolab run -d must load the handoff stream and exit 0; it ended \
-             {tatolab_run_exit:?}:\n{tatolab_run_output}\n{tatolabd_diagnostic_tails}"
-        );
+        finished_handoff.assert_the_load_exited_cleanly();
         return;
     }
+    assert!(
+        export_refusal.is_none(),
+        "{} exports no DMA-BUF, so its pooled frame is OPAQUE_FD and must export: {metadata}",
+        host_device.name()
+    );
 
     assert_eq!(
         received_fds.len(),
@@ -912,22 +940,17 @@ fn a_wheel_exported_opaque_fd_pixel_buffer_read_by_a_foreign_process_shows_the_f
     } else {
         b"mismatch"
     };
-    let (tatolab_run_exit, tatolab_run_output, tatolabd_diagnostic_tails) =
-        finish_the_handoff_with_verdict(
-            handoff_stream,
-            loading_tatolab_run,
-            hosting_tatolabd,
-            verdict,
-        );
+    let finished_handoff = finish_the_handoff_with_verdict(
+        handoff_stream,
+        loading_tatolab_run,
+        hosting_tatolabd,
+        verdict,
+    );
 
     assert!(
         first_mismatch.is_none(),
         "the foreign import must read the bytes the probe wrote; first mismatch at (row, \
          column, channel) {first_mismatch:?}"
     );
-    assert!(
-        tatolab_run_exit.is_some_and(|exit| exit.success()),
-        "tatolab run -d must load the handoff stream and exit 0; it ended {tatolab_run_exit:?}:\n\
-         {tatolab_run_output}\n{tatolabd_diagnostic_tails}"
-    );
+    finished_handoff.assert_the_load_exited_cleanly();
 }
