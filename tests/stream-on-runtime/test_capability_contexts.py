@@ -155,11 +155,9 @@ def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd_running_str
     """A context kept past its hook still answers, because a helper process has
     no engine view to lease.
 
-    This inverts what the in-process arrangement guaranteed: there, a stashed
-    context held an erased borrow of the engine's own view and had to be
-    revoked when the hook returned. A child owns its state outright — its
-    pause flag is a local announcement from the parent, its config a local
-    value — so there is nothing to expire, and nothing that could dangle.
+    A child owns its state outright — its pause flag is a local announcement
+    from the parent, its config a local value — so there is nothing to expire,
+    and nothing that could dangle.
     """
     observation = run_probe(start_tatolabd_running_stream, "ContextStasher")
     assert observation["stashed_is_paused"] is False
@@ -178,7 +176,7 @@ def test_outputs_captured_in_setup_still_write_from_a_worker_thread(
     """`ctx.outputs` is deliberately not hook-bound: a manual source hands it to
     its own thread and keeps producing between hooks."""
     observation = run_probe(start_tatolabd_running_stream, "worker_thread_source")
-    assert observation["bag"] == {"origin": "worker-thread"}
+    assert observation["message"] == {"origin": "worker-thread"}
 
 
 # ---------------------------------------------------------------------------

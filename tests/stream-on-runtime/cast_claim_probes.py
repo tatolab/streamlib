@@ -14,9 +14,9 @@ Three families live here, and they need different hardware.
 The lagged holders need a camera: only a real capture pool recycles a slot
 underneath a held frame. Each holds one delivered frame while the camera runs
 ahead of it, then reads that frame's pixels again — the frame read *as a
-`VideoFrame`* must come back unchanged, and the same probe reading the bag as
-a plain dict must be refused loudly, because the camera recycled the slot and
-the published frame id retired with it (#1872). A scene that never moves would
+`VideoFrame`* must come back unchanged, and the same probe reading the message
+as plain bytes must be refused loudly, because the camera recycled the slot and
+the published frame id retired with it. A scene that never moves would
 make the typed half vacuous, so scene motion is measured separately.
 
 The host-side bare-protocol probes need only a GPU. They reach a delivered
@@ -52,6 +52,7 @@ from tatolab.stream import (
     log,
     node,
 )
+from tatolab.stream.msgpack import MsgpackCast, unpack
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 
@@ -61,7 +62,7 @@ def _the_claim_the_read_took(read: object) -> object:
 
     Read here — rather than inferred from behaviour — so the report says
     whether a claim was taken at all, separately from whether it worked. An
-    untyped read hands back a plain bag, which took none by construction.
+    untyped read hands back plain bytes, which took none by construction.
     """
     reach_the_surface = getattr(read, "pixel_access_to_the_surface_declared_in", None)
     if reach_the_surface is None:
@@ -115,15 +116,15 @@ def _report(probe_body) -> None:
 class _LaggedHolderProbe:
     """Hold the first frame, let the camera run ahead, read it again.
 
-    Subclasses differ in one line — how the bag is read — which is the whole
+    Subclasses differ in one line — how the message is read — which is the whole
     variable under test.
     """
 
-    # `newest`, not `ordered`: an unclaimed bag's id is only good for
-    # pool-depth frames after publish, so a probe that lets bags queue reads
-    # ids the camera has already recycled — refused loudly now (#1872), but
-    # that refusal on *arrival* is not what these probes measure. Reading the
-    # newest bag keeps arrivals current; the held frame still gets lapped.
+    # `newest`, not `ordered`: an unclaimed message's id is only good for
+    # pool-depth frames after publish, so a probe that lets messages queue reads
+    # ids the camera has already recycled — refused loudly, but that refusal on
+    # *arrival* is not what these probes measure. Reading the newest message
+    # keeps arrivals current; the held frame still gets lapped.
     @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
@@ -202,7 +203,7 @@ class _LaggedHolderProbe:
 
         # The held frame, read again after the producer has lapped its pool.
         # An unclaimed frame's slot was recycled, so its published id retired
-        # and the resolve is *refused* (#1872) — that refusal is the result,
+        # and the resolve is *refused* — that refusal is the result,
         # not a probe failure. A claimed frame's slot never recycled, so its
         # id is still current and the pixels must be the delivered ones.
         held_surface_id = self.held_surface_id
@@ -255,7 +256,9 @@ class _LaggedHolderProbe:
 
     @staticmethod
     def _read_current_surface_id(read) -> str:
-        return read.surface_id if isinstance(read, VideoFrame) else read["surface_id"]
+        if isinstance(read, VideoFrame):
+            return read.surface_id
+        return unpack(read)["surface_id"]
 
 
 @node
@@ -270,21 +273,21 @@ class TypedCastHoldsItsFrameProbe(_LaggedHolderProbe):
 
 @node
 class UntypedReadHoldsNothingProbe(_LaggedHolderProbe):
-    """The control. Same probe, same lag, bag read as a plain dict — so nothing
-    is claimed and the camera is free to recycle the slot. The late re-read
-    must be refused as recycled; a lookup that *succeeds* here is #1872's
-    silent wrongness come back."""
+    """The control. Same probe, same lag, message read as plain bytes — so
+    nothing is claimed and the camera is free to recycle the slot. The late
+    re-read must be refused as recycled; a lookup that *succeeds* here hands
+    back another frame's pixels under the held frame's id."""
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
         return ctx.inputs.read("video_from_upstream")
 
 
 @dataclass(frozen=True, init=False)
-class UserAuthoredVideoFrameCast(ClaimedSurfacePixelAccess):
-    """A cast type the wheel never heard of, declared the way the change file
-    spells it: name the fields, inherit the constructor, get the protocol.
+class UserAuthoredVideoFrameCast(ClaimedSurfacePixelAccess, MsgpackCast):
+    """A cast type the wheel never heard of: name the fields, inherit the
+    constructor and `from_bytes`, get the protocol.
 
-    A source's bag carries keys this type does not declare; they are dropped,
+    A source's message carries keys this type does not declare; they are dropped,
     which is the open-map rule every cast type rides.
     """
 
@@ -300,13 +303,13 @@ class _BareProtocolProbe:
     No resolve, no lock, no context manager — the protocol methods on the thing
     the read handed back. That the same pixels are also reachable the long way
     round is what proves the bare view is *this frame* rather than merely a
-    valid tensor. Subclasses differ in how the bag is read and which consumer
+    valid tensor. Subclasses differ in how the message is read and which consumer
     takes the capsule.
     """
 
-    # `newest`: an unclaimed bag's id is only good for pool-depth frames after
-    # publish, and this probe reads exactly one frame at whatever moment it
-    # starts — a queue of stale bags would refuse on arrival for reasons that
+    # `newest`: an unclaimed message's id is only good for pool-depth frames
+    # after publish, and this probe reads exactly one frame at whatever moment
+    # it starts — a queue of stale messages would refuse on arrival for reasons that
     # have nothing to do with the protocol under test.
     @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...

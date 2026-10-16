@@ -257,11 +257,11 @@ class InvertingEffect:
         self.frames_seen = 0
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None or self.frames_seen >= 1:
+        payload = ctx.inputs.read("video_from_upstream")
+        if payload is None or self.frames_seen >= 1:
             return
         self.frames_seen += 1
-        frame = VideoFrame.from_bag(bag)
+        frame = VideoFrame.from_bytes(payload)
 
         def probe() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -306,8 +306,8 @@ class ReportingInvertingEffect:
 
     It claims its first frame for the rest of its life, so the verifier
     downstream resolves the same pixels whatever the producer does next, and
-    sends that frame's bag on every call: no link promises delivery, and a bag
-    written before the verifier's interpreter subscribed is lost.
+    sends that frame's message on every call: no link promises delivery, and a
+    message written before the verifier's interpreter subscribed is lost.
     `skip_edit` makes it the negative control: it reports the inverted digest
     and leaves the pixels alone.
     """
@@ -321,16 +321,16 @@ class ReportingInvertingEffect:
     def __init__(self, config: ReportingInvertingEffectConfig) -> None:
         self.skip_edit = config.get("skip_edit", False)
         self.claim_on_the_edited_frame = None
-        self.edited_frame_bag = None
+        self.edited_frame_payload = None
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if self.edited_frame_bag is not None:
-            ctx.outputs.write("video_to_downstream", self.edited_frame_bag)
+        payload = ctx.inputs.read("video_from_upstream")
+        if self.edited_frame_payload is not None:
+            ctx.outputs.write("video_to_downstream", self.edited_frame_payload)
             return
-        if bag is None:
+        if payload is None:
             return
-        frame = VideoFrame.from_bag(bag)
+        frame = VideoFrame.from_bytes(payload)
         self.claim_on_the_edited_frame = (
             ctx.gpu_limited_access.claim_surface_against_producer_reuse(frame.surface_id)
         )
@@ -351,8 +351,8 @@ class ReportingInvertingEffect:
             }
 
         _report(edit)
-        self.edited_frame_bag = bag
-        ctx.outputs.write("video_to_downstream", bag)
+        self.edited_frame_payload = payload
+        ctx.outputs.write("video_to_downstream", payload)
 
 
 @node
@@ -367,11 +367,11 @@ class FrameDigestVerifier:
         self.reported = False
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None or self.reported:
+        payload = ctx.inputs.read("video_from_upstream")
+        if payload is None or self.reported:
             return
         self.reported = True
-        frame = VideoFrame.from_bag(bag)
+        frame = VideoFrame.from_bytes(payload)
 
         def verify() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:

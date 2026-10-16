@@ -26,6 +26,10 @@ SAMPLE_RATE = 48_000
 SAMPLE_COUNT = 512
 BLOCK_DURATION_NS = SAMPLE_COUNT * 1_000_000_000 // SAMPLE_RATE
 
+# The frame header's flags word: bit 0 marks a message that starts a group,
+# which every audio block does; every other bit is reserved zero.
+FRAME_HEADER_FLAG_STARTS_GROUP = 1 << 0
+
 
 class TappedAudioChannel(unittest.TestCase):
     def setUp(self):
@@ -503,6 +507,7 @@ def _framed_bag(block, frame_timestamp_ns=None):
         bytes(port_key)
         + struct.pack("<q", stamp)
         + struct.pack("<I", len(payload))
+        + struct.pack("<I", FRAME_HEADER_FLAG_STARTS_GROUP)
         + payload
     )
     return {

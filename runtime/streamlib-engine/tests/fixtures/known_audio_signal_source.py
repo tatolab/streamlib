@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Publishes the known signal as `AudioBlock` bags, for a speaker to play.
+"""Publishes the known signal as `AudioBlock` messages, for a speaker to play.
 
 The signal itself is `known_audio_signal.generate_signal()` — the same samples
 `e2e_audio_loopback.sh` plays through `pw-play`, `afplay` or a Core Audio
@@ -35,6 +35,7 @@ import numpy
 
 import known_audio_signal
 from tatolab.stream import RuntimeContextLimitedAccess, monotonic_now_ns, node
+from tatolab.stream.msgpack import pack
 
 # PipeWire's fixture sink is created with `audio.position=[FL FR]` and its arm
 # asks for `F32_LE`; a Mac's built-in speakers are two channels, and the
@@ -125,16 +126,18 @@ class KnownAudioSignalSource:
         # ahead of the device.
         ctx.outputs.write(
             "audio",
-            {
-                "samples": _interleaved_stereo_f32_bytes(block),
-                "sample_rate": SAMPLE_RATE,
-                "channels": CHANNELS,
-                "sample_count": len(block),
-                "dtype": DTYPE,
-                "first_sample_timestamp_ns": (
-                    self._first_sample_timestamp_ns
-                    + self._samples_published * 1_000_000_000 // SAMPLE_RATE
-                ),
-            },
+            pack(
+                {
+                    "samples": _interleaved_stereo_f32_bytes(block),
+                    "sample_rate": SAMPLE_RATE,
+                    "channels": CHANNELS,
+                    "sample_count": len(block),
+                    "dtype": DTYPE,
+                    "first_sample_timestamp_ns": (
+                        self._first_sample_timestamp_ns
+                        + self._samples_published * 1_000_000_000 // SAMPLE_RATE
+                    ),
+                }
+            ),
         )
         self._samples_published += len(block)

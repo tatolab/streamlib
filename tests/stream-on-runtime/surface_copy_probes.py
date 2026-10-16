@@ -110,11 +110,11 @@ class FrameLandingProbe:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None or self.reported:
+        payload = ctx.inputs.read("video_from_upstream")
+        if payload is None or self.reported:
             return
         self.reported = True
-        frame = VideoFrame.from_bag(bag)
+        frame = VideoFrame.from_bytes(payload)
         gpu = ctx.gpu_limited_access
 
         def land_and_invert() -> dict:
@@ -157,11 +157,11 @@ class CopyRefusalProbe:
         self.reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None or self.reported:
+        payload = ctx.inputs.read("video_from_upstream")
+        if payload is None or self.reported:
             return
         self.reported = True
-        frame = VideoFrame.from_bag(bag)
+        frame = VideoFrame.from_bytes(payload)
         gpu = ctx.gpu_limited_access
 
         def refusals() -> dict:

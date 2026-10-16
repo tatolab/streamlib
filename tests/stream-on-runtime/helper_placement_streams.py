@@ -10,9 +10,11 @@ from helper_placement_processors import (
     ForksAWorkerThatOutlivesItProbe,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessVideoSink,
+    ReportsTheRawMessagePayloadItReadSink,
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
+    WritesRawMessagePayloadSource,
 )
 
 
@@ -60,6 +62,16 @@ def dies_abruptly_beside_a_survivor_pair(stream_builder: StreamBuilder) -> None:
 def stale_build_labelled_source(stream_builder: StreamBuilder) -> None:
     """A lone source labelled `stale`, for a helper made to see another build."""
     stream_builder.add(ReportsItsOwnProcessSource, config={"label": "stale"})
+
+
+@stream
+def raw_message_payload_source_into_sink(stream_builder: StreamBuilder) -> None:
+    """A Python source writing a non-msgpack payload into a Python sink reporting it."""
+    source = stream_builder.add(WritesRawMessagePayloadSource)
+    sink = stream_builder.add(ReportsTheRawMessagePayloadItReadSink)
+    stream_builder.connect(
+        source.output("raw_messages_to_downstream"), sink.input("raw_messages_from_upstream")
+    )
 
 
 @stream

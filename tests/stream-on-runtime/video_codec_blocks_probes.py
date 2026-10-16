@@ -12,7 +12,7 @@ with `into=EncodedVideoFrame`, which is the whole claim the cast makes.
 `EncodedFrameTimestampProbe` reads the same link for its frame-header stamps,
 which `read_with_timestamp` is the only read that yields and which takes no
 `into=`. `DecodedVideoFrameProbe` reads the far side of the decoder, where the
-published output is an ordinary video-frame bag.
+published output is an ordinary video-frame message.
 
 The two stamp reports are uncapped, unlike the cast report. Each probe is its
 own helper process attaching at its own pace, so a short window on either side
@@ -23,6 +23,7 @@ overlap.
 import json
 
 from tatolab.stream import EncodedVideoFrame, log, node
+from tatolab.stream.msgpack import unpack
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
@@ -63,7 +64,7 @@ class EncodedFrameProbe:
         if frame is None:
             return
         # The doctrine every reader of an encoded stream owes it: enter only
-        # at a sync point. The first bag off this link is not necessarily the
+        # at a sync point. The first message off this link is not necessarily the
         # producer's first — attaching mid-group hands over frames whose sync
         # point is already gone.
         if not self.entered_the_stream:
@@ -93,9 +94,9 @@ class EncodedFrameProbe:
 
 @node
 class EncodedFrameTimestampProbe:
-    """Reports the frame-header stamp riding each of the encoder's bags.
+    """Reports the frame-header stamp riding each of the encoder's messages.
 
-    No sync-point gate: this decodes nothing, so every bag that arrives is one
+    No sync-point gate: this decodes nothing, so every message that arrives is one
     whose stamp a decoded frame downstream may carry.
     """
 
@@ -103,10 +104,10 @@ class EncodedFrameTimestampProbe:
     def encoded_video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        bag, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)
-        if bag is None:
+        payload, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)
+        if payload is None:
             return
-        frame = EncodedVideoFrame.from_bag(bag)
+        frame = EncodedVideoFrame.from_bytes(payload)
         log.info(
             ENCODED_FRAME_STAMP_MARKER
             + json.dumps(
@@ -117,32 +118,33 @@ class EncodedFrameTimestampProbe:
 
 @node
 class DecodedVideoFrameProbe:
-    """Reports the decoder's first two bags whole, then every frame's stamp.
+    """Reports the decoder's first two messages whole, then every frame's stamp.
 
-    The first two carry the whole bag because that is what the extent, colour
+    The first two carry the whole message because that is what the extent, colour
     and surface assertions read; the stamps keep coming so the encoded side's
     report has something to overlap with.
     """
 
     def __init__(self) -> None:
-        self.bags_seen = []
+        self.messages_seen = []
         self.stamps_reported = 0
 
     @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("video_from_upstream")
+        if payload is None:
             return
-        if len(self.bags_seen) < 2:
-            self.bags_seen.append(dict(bag))
-            if len(self.bags_seen) == 2:
-                log.info(DECODED_FRAMES_MARKER + json.dumps(self.bags_seen))
+        message = unpack(payload)
+        if len(self.messages_seen) < 2:
+            self.messages_seen.append(message)
+            if len(self.messages_seen) == 2:
+                log.info(DECODED_FRAMES_MARKER + json.dumps(self.messages_seen))
         self.stamps_reported += 1
         log.info(
             DECODED_FRAME_STAMP_MARKER
-            + json.dumps({"timestamp_ns": bag["timestamp_ns"]})
+            + json.dumps({"timestamp_ns": message["timestamp_ns"]})
         )
         if self.stamps_reported == DECODED_STAMPS_REPORTED:
             log.info(DECODED_FRAME_STAMPS_COMPLETE_MARKER)

@@ -26,6 +26,7 @@ from tatolab.stream import (
     log,
     node,
 )
+from tatolab.stream.msgpack import pack, unpack
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 
@@ -139,7 +140,7 @@ class ExplicitlyStampedSource:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.outputs.write(
-            "bags_to_downstream", {"value": 1}, timestamp_ns=EXPLICIT_TIMESTAMP_NS
+            "bags_to_downstream", pack({"value": 1}), timestamp_ns=EXPLICIT_TIMESTAMP_NS
         )
 
 
@@ -149,7 +150,7 @@ class DefaultStampedSource:
     def bags_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.outputs.write("bags_to_downstream", {"value": 1})
+        ctx.outputs.write("bags_to_downstream", pack({"value": 1}))
 
 
 @node
@@ -163,10 +164,11 @@ class TimestampCollectingSink:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.reported:
             return
-        bag, timestamp_ns = ctx.inputs.read_with_timestamp("bags_from_upstream")
-        if bag is not None:
+        payload, timestamp_ns = ctx.inputs.read_with_timestamp("bags_from_upstream")
+        if payload is not None:
             self.reported = True
-            _report(lambda: {"bag": bag, "timestamp_ns": timestamp_ns})
+            message = unpack(payload)
+            _report(lambda: {"message": message, "timestamp_ns": timestamp_ns})
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +215,9 @@ class WorkerThreadSource:
 
         def produce_from_worker_thread() -> None:
             while not self._stop.is_set():
-                captured_outputs.write("bags_to_downstream", {"origin": "worker-thread"})
+                captured_outputs.write(
+                    "bags_to_downstream", pack({"origin": "worker-thread"})
+                )
                 self._stop.wait(0.01)
 
         self._worker = threading.Thread(target=produce_from_worker_thread, daemon=True)
@@ -236,10 +240,11 @@ class WorkerThreadBagSink:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.reported:
             return
-        bag = ctx.inputs.read("bags_from_upstream")
-        if bag is not None:
+        payload = ctx.inputs.read("bags_from_upstream")
+        if payload is not None:
             self.reported = True
-            _report(lambda: {"bag": bag})
+            message = unpack(payload)
+            _report(lambda: {"message": message})
 
 
 # ---------------------------------------------------------------------------

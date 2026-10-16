@@ -28,7 +28,7 @@ def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The whole built-in mechanism, end to end: built-in class → native
-    registration → native production in `tatolabd` → bag read by a Python
+    registration → native production in `tatolabd` → message read by a Python
     processor in its own processor interpreter — no camera, no window."""
     tatolabd = start_tatolabd_running_stream(a_test_pattern_into_a_video_frame_probe)
     frames_seen = tatolabd.await_marker("FRAMES_SEEN")
@@ -36,15 +36,15 @@ def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
     tatolabd.await_clean_exit()
 
     assert isinstance(frames_seen, list), f"no parseable frame report:\n{tatolabd.recent_stderr()}"
-    first_bag, second_bag = frames_seen
+    first_message, second_message = frames_seen
 
-    frame = VideoFrame.from_bag(first_bag)
+    frame = VideoFrame(**first_message)
     assert (frame.width, frame.height) == (320, 180)
     assert frame.surface_id, "surface_id names the pattern surface"
     assert frame.fps == 30
     assert frame.color_info is not None and frame.color_info.transfer == "srgb"
 
-    later_frame = VideoFrame.from_bag(second_bag)
+    later_frame = VideoFrame(**second_message)
     assert later_frame.surface_id == frame.surface_id, (
         "the pattern surface is acquired once and republished"
     )

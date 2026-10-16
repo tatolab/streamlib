@@ -22,7 +22,7 @@ class LoadedFrameRelay:
     def video_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_upstream")
-        if frame is not None:
-            ctx.outputs.write("video_to_downstream", frame)
+        frame_payload = ctx.inputs.read("video_from_upstream")
+        if frame_payload is not None:
+            ctx.outputs.write("video_to_downstream", frame_payload)
 

@@ -15,6 +15,12 @@ import os
 import time
 
 from tatolab.stream import log, node
+from tatolab.stream.msgpack import pack, unpack
+
+#: A payload no msgpack decoder reads: `0xc1` is the one type byte msgpack never
+#: uses, then every byte value once, so an encode or decode anywhere between
+#: the writer and the reader changes or refuses it.
+RAW_MESSAGE_PAYLOAD_BYTES = bytes([0xC1]) + bytes(range(256))
 
 #: Names the directory each import of this module records `<pid>` in, holding
 #: the importing process's parent pid.
@@ -39,7 +45,7 @@ class ReportsItsOwnProcessSourceConfig:
 
 @node(execution="continuous", interval_ms=10)
 class ReportsItsOwnProcessSource:
-    """Stamps every bag with the pid it was produced in."""
+    """Stamps every message with the pid it was produced in."""
 
     def __init__(self, config: ReportsItsOwnProcessSourceConfig) -> None:
         self.label = config.label
@@ -52,29 +58,30 @@ class ReportsItsOwnProcessSource:
         if not self.announced:
             report("SOURCE_PID", {"label": self.label, "pid": os.getpid()})
             self.announced = True
-        ctx.outputs.write("frames_to_downstream", {"produced_in_pid": os.getpid()})
+        ctx.outputs.write("frames_to_downstream", pack({"produced_in_pid": os.getpid()}))
 
 
 @node
 class ReportsUpstreamProcessSink:
-    """Announces the pid a bag was produced in, alongside its own."""
+    """Announces the pid a message was produced in, alongside its own."""
 
     def __init__(self) -> None:
-        self.bags_seen = 0
+        self.messages_seen = 0
 
     @node.input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("frames_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("frames_from_upstream")
+        if payload is None:
             return
-        # Announced on every tenth bag rather than once: a test that waits for
-        # this *after* another processor crashed needs evidence of live
+        # Announced on every tenth message rather than once: a test that waits
+        # for this *after* another processor crashed needs evidence of live
         # traffic, not a marker emitted before the crash.
-        self.bags_seen += 1
-        if self.bags_seen % 10 == 1:
-            report("SINK_PID", {"sink_pid": os.getpid(), "upstream_pid": bag["produced_in_pid"]})
+        self.messages_seen += 1
+        if self.messages_seen % 10 == 1:
+            upstream_pid = unpack(payload)["produced_in_pid"]
+            report("SINK_PID", {"sink_pid": os.getpid(), "upstream_pid": upstream_pid})
 
 
 @node
@@ -97,6 +104,62 @@ class ReportsItsOwnProcessVideoSink:
             return
         self.announced = True
         report("VIDEO_SINK_PID", {"pid": os.getpid()})
+
+
+@node(execution="continuous", interval_ms=10)
+class WritesRawMessagePayloadSource:
+    """Writes `RAW_MESSAGE_PAYLOAD_BYTES` every tick, after reporting once what
+    handing `write` a dict raised."""
+
+    def __init__(self) -> None:
+        self.reported_the_dict_write = False
+
+    @node.output()
+    def raw_messages_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        if not self.reported_the_dict_write:
+            self.reported_the_dict_write = True
+            try:
+                ctx.outputs.write("raw_messages_to_downstream", {"not": "bytes"})
+            except Exception as refusal:  # noqa: BLE001 — the refusal is the observation
+                refusal_type, refusal_text = type(refusal).__name__, str(refusal)
+            else:
+                refusal_type, refusal_text = None, None
+            report(
+                "DICT_WRITE_OUTCOME",
+                {
+                    "source_pid": os.getpid(),
+                    "refusal_type": refusal_type,
+                    "refusal_text": refusal_text,
+                },
+            )
+        ctx.outputs.write("raw_messages_to_downstream", RAW_MESSAGE_PAYLOAD_BYTES)
+
+
+@node
+class ReportsTheRawMessagePayloadItReadSink:
+    """Reports the first payload it reads, as hex, with its type and its own pid."""
+
+    def __init__(self) -> None:
+        self.reported = False
+
+    @node.input(delivery_profile="ordered")
+    def raw_messages_from_upstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        payload = ctx.inputs.read("raw_messages_from_upstream")
+        if payload is None or self.reported:
+            return
+        self.reported = True
+        report(
+            "RAW_MESSAGE_PAYLOAD_READ",
+            {
+                "sink_pid": os.getpid(),
+                "payload_type": type(payload).__name__,
+                "payload_hex": bytes(payload).hex(),
+            },
+        )
 
 
 @node(execution="continuous", interval_ms=10)

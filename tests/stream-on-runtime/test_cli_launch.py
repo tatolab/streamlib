@@ -828,11 +828,11 @@ def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
             '    announced = False\n\n    @node.input(delivery_profile="newest")',
         ),
         (
-            "        ctx.outputs.write(\n",
+            "        ctx.outputs.write(",
             "        if not self.announced:\n"
             "            self.announced = True\n"
             '            log.info("MARKER:EDITED_EFFECT")\n'
-            "        ctx.outputs.write(\n",
+            "        ctx.outputs.write(",
         ),
     ):
         # Named one at a time, and required to be unique: a scaffold that grew

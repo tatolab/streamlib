@@ -56,6 +56,7 @@ from tatolab.stream import (
     log,
     node,
 )
+from tatolab.stream.msgpack import pack
 
 BAGS_PER_TICK = 20
 TICKS_PER_OVERSIZED_BAG = 50
@@ -63,7 +64,7 @@ TICKS_PER_OVERSIZED_BAG = 50
 
 @node(execution="continuous", interval_ms=1)
 class FastBagSource:
-    """Writes far faster than `SlowOrderedSink` reads, and now and then a bag no
+    """Writes far faster than `SlowOrderedSink` reads, and now and then a message no
     helper link can carry."""
 
     def __init__(self) -> None:
@@ -77,17 +78,17 @@ class FastBagSource:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         self.ticks += 1
-        for bag_index in range(BAGS_PER_TICK):
-            ctx.outputs.write("bags", {{"tick": self.ticks, "bag_index": bag_index}})
-        if self.ticks % TICKS_PER_OVERSIZED_BAG == 0:
+        for message_index in range(BAGS_PER_TICK):
             ctx.outputs.write(
-                "oversized_bags", {{"padding": bytes({OVERSIZED_BAG_PADDING_BYTES})}}
+                "bags", pack({{"tick": self.ticks, "message_index": message_index}})
             )
+        if self.ticks % TICKS_PER_OVERSIZED_BAG == 0:
+            ctx.outputs.write("oversized_bags", bytes({OVERSIZED_BAG_PADDING_BYTES}))
 
 
 @node
 class SlowOrderedSink:
-    """Takes every bag in order, far slower than they arrive."""
+    """Takes every message in order, far slower than they arrive."""
 
     @node.input(delivery_profile="ordered")
     def bags(self) -> None: ...
