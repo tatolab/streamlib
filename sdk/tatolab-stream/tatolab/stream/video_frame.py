@@ -1,22 +1,14 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The optional typed cast for a video-frame bag.
+"""The cast for a video-frame message: a GPU surface reference plus per-frame metadata.
 
-A link carries a self-describing bag (a dict); its keys are the contract and
-reading them directly is always enough. Casting is the opt-in dial for
-consumers that want construction-time validation and attribute access instead
-of key lookups. Pixels never ride the bag — the frame references a GPU surface
-by `surface_id`, resolved out-of-band.
-
-Casting also buys the frame's own lifetime and its pixels: read as a
-`VideoFrame`, the frame babysits its buffer and speaks `__dlpack__` itself, so
-`torch.from_dlpack(frame)` works straight off the read; `frame.writable()` is
-the GPU write door and `frame.cpu()` the CPU one, whose name is the whole
-warning. All of it comes from `ClaimedSurfacePixelAccess`, the piece the wheel
-ships for any cast type to compose — this class is built from it like any
-other, which is why reading the bag as a dict stays first-class and
-unpenalized.
+The payload is the msgpack map the camera and test pattern write; the pixels
+never ride it — the frame names a GPU surface by `surface_id`. Read as a
+`VideoFrame`, the frame holds its surface against producer reuse and speaks
+`__dlpack__`, so `torch.from_dlpack(frame)` works straight off the read;
+`frame.writable()` is the GPU write door and `frame.cpu()` the CPU one. All of
+it comes from `ClaimedSurfacePixelAccess`, which any cast type may compose.
 """
 
 from __future__ import annotations
@@ -27,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
+from .msgpack import MsgpackCast
 
 __all__ = [
     "ColorInfo",
@@ -52,14 +45,7 @@ Range = Literal["full", "limited"]
 
 _NestedCast = typing.TypeVar("_NestedCast", "ContentLight", "MasteringDisplay")
 
-# The keys without which there is no frame to speak of. Everything else the
-# bag carries is optional, this cast's or somebody else's.
-_REQUIRED_BAG_KEYS = ("surface_id", "width", "height", "timestamp_ns")
-
-# How every refusal from this cast names what the bag failed to be. Spelled
-# once because `_color_info_or_none` serves the encoded-frame cast too, which
-# names itself differently.
-_VIDEO_FRAME_REFUSAL_SUBJECT = "bag is not a video frame"
+_VIDEO_FRAME_REFUSAL_SUBJECT = "message is not a video frame"
 
 
 def _is_plain_int(value: Any) -> bool:
@@ -84,11 +70,11 @@ def _require_mapping(
 
 
 def _cast_nested(
-    key: str, nested_type: "type[_NestedCast]", nested_bag: Mapping[str, Any]
+    key: str, nested_type: "type[_NestedCast]", nested_entries: Mapping[str, Any]
 ) -> "_NestedCast":
-    """Construct a nested cast, keeping the ValueError contract of `from_bag`."""
+    """Construct a nested cast, refusing a malformed map with `ValueError`."""
     try:
-        return nested_type(**nested_bag)
+        return nested_type(**nested_entries)
     except TypeError as construction_error:
         raise ValueError(
             f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: {key!r} is malformed "
@@ -100,7 +86,7 @@ def _nested_or_none(
     key: str, nested_type: "type[_NestedCast]", value: Any
 ) -> "_NestedCast | None":
     """Nested metadata as its own type, whether it arrived already cast or as
-    the bag's nested map."""
+    the message's nested map."""
     if value is None or isinstance(value, nested_type):
         return value
     return _cast_nested(
@@ -108,10 +94,8 @@ def _nested_or_none(
     )
 
 
-# Every name a cast can place on each H.273 axis. An unrecognised name is a
-# producer's mistake and never a value the engine emits — its own producers
-# narrow an unknown H.273 byte to absent before it reaches a bag — so it is
-# refused rather than reaching the typed field as a string nobody declared.
+# Every name a cast can place on each H.273 axis. The engine's own producers
+# narrow an unknown H.273 byte to absent, so an unrecognised name is refused.
 _H273_AXIS_NAMES: "dict[str, frozenset[str]]" = {
     "primaries": frozenset(typing.get_args(Primaries)),
     "transfer": frozenset(typing.get_args(Transfer)),
@@ -141,21 +125,18 @@ def _h273_axis_or_none(
 def _color_info_or_none(
     refusal_subject: str, key: str, value: Any
 ) -> "ColorInfo | None":
-    """`ColorInfo` reads field by field rather than by construction: every
-    field is optional and a bag may carry a key this version does not know,
-    where the H.273 tuple's absent-means-unspecified rule still applies.
+    """`ColorInfo` read field by field, ignoring keys it does not know.
 
-    `refusal_subject` and `key` are the caller's because the same four-tuple
-    rides a video-frame bag as `color_info` and an encoded-frame bag as
-    `color`.
+    The same four-tuple rides a video frame as `color_info` and an encoded
+    frame as `color`, so the caller names the key and the refusal subject.
     """
     if value is None or isinstance(value, ColorInfo):
         return value
-    color_info_bag = _require_mapping(refusal_subject, key, value)
+    color_info_entries = _require_mapping(refusal_subject, key, value)
 
     def axis(axis_name: str) -> "str | None":
         return _h273_axis_or_none(
-            refusal_subject, key, axis_name, color_info_bag.get(axis_name)
+            refusal_subject, key, axis_name, color_info_entries.get(axis_name)
         )
 
     return ColorInfo(
@@ -205,23 +186,20 @@ class MasteringDisplay:
 
 
 @dataclass(frozen=True, init=False)
-class VideoFrame(ClaimedSurfacePixelAccess):
-    """A video-frame bag, cast: GPU surface reference plus per-frame metadata.
+class VideoFrame(ClaimedSurfacePixelAccess, MsgpackCast):
+    """A video-frame message, cast: GPU surface reference plus per-frame metadata.
 
-    ``surface_id`` is the handoff contract; ``timestamp_ns`` (the machine's
-    monotonic clock in nanoseconds, comparable with any stamp taken on the same
-    machine) is the ordering primitive.
+    ``surface_id`` names the pixels; ``timestamp_ns`` (the machine's monotonic
+    clock in nanoseconds) orders frames.
 
-    Read through ``ctx.inputs.read(port, into=VideoFrame)``, the frame also
-    holds its surface still: the producer cannot recycle those pixels while
-    this object lives, and letting it go releases them. There is nothing to
-    call, and holding a frame for longer costs the producer memory and then its
-    own frames — never another node's cadence.
+    Read through ``ctx.inputs.read(port, into=VideoFrame)``, the frame holds
+    its surface still: the producer cannot recycle those pixels while this
+    object lives, and letting it go releases them. Holding a frame longer
+    costs the producer memory and then its own frames — never another node's
+    cadence. A frame built anywhere else — `VideoFrame.from_bytes` on a payload
+    in hand, or by hand — takes no claim and rides pool depth.
 
-    Such a frame is a DLPack producer in its own right — ``torch.from_dlpack``
-    consumes it directly, GPU-resident — and carries the two write doors,
-    ``writable()`` and ``cpu()``, because it composes
-    ``ClaimedSurfacePixelAccess`` like any user-authored cast type can.
+    ``to_bytes()`` writes the frame back as the message it was read from.
     """
 
     surface_id: str
@@ -247,15 +225,9 @@ class VideoFrame(ClaimedSurfacePixelAccess):
         texture_layout: "int | None" = None,
         **keys_this_cast_does_not_read: Any,
     ) -> None:
-        """Validate and cast the nested metadata, then hand the settled values
-        to the composable, which assigns them and claims the surface.
+        """Validate and cast the nested metadata, then claim the surface.
 
-        Written out rather than generated because the bag is an open map: a
-        producer may carry keys this cast does not read, and the day one adds
-        a key must not be the day every `read(port, into=VideoFrame)` starts
-        raising — which would take the frame's lifetime protection with it.
-        Construction is the validation, so that spelling and `from_bag` are
-        one path rather than two that can drift.
+        A message is an open map, so keys this cast does not read are ignored.
         """
         del keys_this_cast_does_not_read
         if (
@@ -283,36 +255,3 @@ class VideoFrame(ClaimedSurfacePixelAccess):
                 "mastering_display", MasteringDisplay, mastering_display
             ),
         )
-
-    @classmethod
-    def from_bag(cls, bag: Mapping[str, Any]) -> "VideoFrame":
-        """Construct from a bag dict, raising ValueError on missing or
-        mistyped keys — required and optional alike.
-
-        The same *validation* `read(port, into=VideoFrame)` performs, so the
-        two spellings cannot disagree about what a valid frame is; this one
-        only names the missing key, which keyword construction reports in
-        Python's words.
-
-        They do differ in one respect, and it is the frame's lifetime. The
-        claim on the surface follows the *read*, not the spelling: it is
-        offered for the duration of a `read(port, into=…)` construction and
-        withdrawn the moment that returns. So calling this on a bag you are
-        already holding takes no claim, and its pixels last only as long as
-        pool depth gives them — the same protection an untyped read gets.
-        Called from inside a type that a typed read is constructing, it takes
-        one like any other frame built under that offer; the offer is open to
-        every class the read reaches, with no registration and no privileged
-        type.
-
-        The unclaimed case is a choice, not a lapse — a hand-rolled bag may
-        name no live surface at all. To hold a frame past the producer's ring,
-        read it with `into=VideoFrame`, or compose `ClaimedSurfacePixelAccess`
-        in your own type, which takes the claim on the same terms.
-        """
-        missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
-        if missing:
-            raise ValueError(
-                f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: missing key {missing[0]!r}"
-            )
-        return cls(**bag)
