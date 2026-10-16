@@ -75,14 +75,6 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_bag_conversion::encode_bag_to_msgpack_bytes,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        python_bag_conversion::decode_msgpack_bytes_to_python_object,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
         python_processor_context::engine_build_id_compiled_into_this_extension,
         module
     )?)?;

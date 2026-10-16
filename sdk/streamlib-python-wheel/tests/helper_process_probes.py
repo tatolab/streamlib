@@ -12,7 +12,7 @@ suite inside the child.
 import time
 from typing import TypedDict
 
-from tatolab.stream import node
+from tatolab.stream import msgpack, node
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
@@ -23,7 +23,7 @@ class PassThroughProbeConfig(TypedDict, total=False):
 
 @node
 class PassThroughProbe:
-    """Copies every bag from its input to its output."""
+    """Copies every msgpack record from its input to its output, tagged."""
 
     def __init__(self, config: PassThroughProbeConfig) -> None:
         self.tag = config.get("tag", "untagged")
@@ -35,9 +35,10 @@ class PassThroughProbe:
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("frames_from_upstream")
-        if bag is not None:
-            ctx.outputs.write("frames_to_downstream", {**bag, "tag": self.tag})
+        payload = ctx.inputs.read("frames_from_upstream")
+        if payload is not None:
+            record = msgpack.unpack(payload)
+            ctx.outputs.write("frames_to_downstream", msgpack.pack({**record, "tag": self.tag}))
 
 
 class OuterProbe:
@@ -73,7 +74,7 @@ class RefusesSetupProbe:
 
 @node
 class SlowPassThroughProbe:
-    """Copies every bag to its output, slower than a burst arrives."""
+    """Copies every message's payload to its output, slower than a burst arrives."""
 
     @node.input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...
@@ -82,10 +83,10 @@ class SlowPassThroughProbe:
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("frames_from_upstream")
-        if bag is not None:
+        payload = ctx.inputs.read("frames_from_upstream")
+        if payload is not None:
             time.sleep(0.005)
-            ctx.outputs.write("frames_to_downstream", bag)
+            ctx.outputs.write("frames_to_downstream", payload)
 
 
 # The hooks the interrupt probes below actually reached, in order. A test reads

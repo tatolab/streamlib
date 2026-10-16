@@ -1,19 +1,19 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab.stream.EncodedAudioPacket` — the encoded bag's cast, over a live link.
+"""`tatolab.stream.EncodedAudioPacket` — the encoded record's cast, over a live link.
 
 An encoded packet carries its payload inline, so what has to survive the wire
-is the payload's msgpack *type*: `bin`, which reaches Python as `bytes`. That
+is the payload's msgpack *type*: `bin`, which unpacks as `bytes`. That
 is what these tests drive, over real wired iceoryx2 ports rather than a
-stand-in, because a bag has to survive the wire before `into=` has anything to
+stand-in, because a message has to survive the wire before `into=` has anything to
 cast.
 
 Both ends live on this thread because iceoryx2's ports are `!Send`, and the
 destination is wired first because a send with no subscriber attached is
 dropped. No engine and no GPU: the ports are wired directly, which is what
 keeps this half of the proof in CI. The half that needs the real library —
-bags libopus actually wrote — is `test_opus_blocks.py`.
+packets libopus actually wrote — is `test_opus_blocks.py`.
 """
 
 import os
@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from tatolab.runtime import _engine
-from tatolab.stream import EncodedAudioPacket, NodeLinkDataAccess
+from tatolab.stream import EncodedAudioPacket, NodeLinkDataAccess, msgpack
 from tatolab.stream.encoded_audio_packet import _CODECS_ON_THE_WIRE
 
 pytestmark = pytest.mark.usefixtures(
@@ -44,9 +44,9 @@ OPUS_PACKET = b"\x78\x01\x02\x03"
 LOOKAHEAD_SAMPLES_AT_48_KHZ = 312
 
 
-def encoded_packet_bag(**overrides: Any) -> "dict[str, Any]":
+def encoded_packet_record(**overrides: Any) -> "dict[str, Any]":
     """One 20 ms stereo Opus packet at the convention's own framing."""
-    bag: "dict[str, Any]" = {
+    record: "dict[str, Any]" = {
         "codec": "opus",
         "bitstream": OPUS_PACKET,
         "is_sync_point": True,
@@ -57,8 +57,8 @@ def encoded_packet_bag(**overrides: Any) -> "dict[str, Any]":
         "sample_count": 960,
         "pre_skip": LOOKAHEAD_SAMPLES_AT_48_KHZ,
     }
-    bag.update(overrides)
-    return bag
+    record.update(overrides)
+    return record
 
 
 class WiredLinkUnderTest:
@@ -70,8 +70,8 @@ class WiredLinkUnderTest:
         self.source = source
         self.destination = destination
 
-    def deliver(self, bag: "dict[str, Any]") -> None:
-        self.source.write_to_output_port(OUTPUT_PORT, bag)
+    def deliver(self, record: "dict[str, Any]") -> None:
+        self.source.write_to_output_port(OUTPUT_PORT, msgpack.pack(record))
 
 
 @pytest.fixture
@@ -117,20 +117,21 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
 
 def test_the_bitstream_crosses_the_wire_as_bytes(wired_link: WiredLinkUnderTest):
     """The contract underneath the cast: `bitstream` is a byte buffer on the
-    wire, so an untyped read hands back `bytes` rather than a list of numbers.
+    wire, so the unpacked record holds `bytes` rather than a list of numbers.
 
     A producer whose packet encoded as a msgpack array would still read back
     equal-looking data here — as a `list`, five bytes on the wire per byte of
     audio, and unreadable as a buffer by a muxer, a socket, or a consumer in
     another language.
     """
-    wired_link.deliver(encoded_packet_bag())
+    wired_link.deliver(encoded_packet_record())
 
-    bag = wired_link.destination.read_from_input_port(INPUT_PORT)
+    payload = wired_link.destination.read_from_input_port(INPUT_PORT)
 
-    assert bag is not None
-    assert type(bag["bitstream"]) is bytes
-    assert bag["bitstream"] == OPUS_PACKET
+    assert payload is not None
+    record = msgpack.unpack(payload)
+    assert type(record["bitstream"]) is bytes
+    assert record["bitstream"] == OPUS_PACKET
 
 
 def test_every_wire_key_survives_the_read_into_an_encoded_audio_packet(
@@ -139,7 +140,7 @@ def test_every_wire_key_survives_the_read_into_an_encoded_audio_packet(
     """All nine keys, off a live link, in one assertion each — this is the
     lock on the wire contract the Opus built-ins publish against."""
     wired_link.deliver(
-        encoded_packet_bag(group_index=7, sequence_index=7, channels=6)
+        encoded_packet_record(group_index=7, sequence_index=7, channels=6)
     )
 
     packet = wired_link.destination.read_from_input_port(
@@ -161,9 +162,9 @@ def test_every_wire_key_survives_the_read_into_an_encoded_audio_packet(
 def test_a_key_this_cast_does_not_read_does_not_break_the_read(
     wired_link: WiredLinkUnderTest,
 ):
-    """The bag map is open: the day a producer adds a key must not be the day
+    """The record is an open map: the day a producer adds a key must not be the day
     every `read(port, into=EncodedAudioPacket)` starts raising."""
-    wired_link.deliver(encoded_packet_bag(a_future_key="ignored"))
+    wired_link.deliver(encoded_packet_record(a_future_key="ignored"))
 
     packet = wired_link.destination.read_from_input_port(
         INPUT_PORT, into=EncodedAudioPacket
@@ -181,7 +182,7 @@ def test_the_codec_this_convention_legalises_reads_through_the_cast(
     """Parametrized over the type's own arguments rather than the string, so
     the day the convention legalises a second codec this test covers it
     without being edited."""
-    wired_link.deliver(encoded_packet_bag(codec=codec))
+    wired_link.deliver(encoded_packet_record(codec=codec))
 
     packet = wired_link.destination.read_from_input_port(
         INPUT_PORT, into=EncodedAudioPacket

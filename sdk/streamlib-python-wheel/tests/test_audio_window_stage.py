@@ -5,7 +5,7 @@
 
 The contract crosses the parent→child wiring envelope beside `read_mode`, and
 the child's own `InputMailboxesInner` — the same Rust the parent's mailboxes
-run — resamples, mixes down and frames before `process()` ever sees a bag.
+run — resamples, mixes down and frames before `process()` ever sees a message.
 These tests read the envelope the way a child does; they need `/dev/shm` and
 nothing else, so they run in CI.
 """

@@ -50,7 +50,7 @@ streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", ve
 # export path uses.
 streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", version = "0.46.14" }
 
-# The bag's value tree. A bag crosses into Python as ordinary Python data, and
+# The value tree a tapped message and config JSON cross into Python through;
 # `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
 # text on the way through.
 rmpv = { workspace = true }

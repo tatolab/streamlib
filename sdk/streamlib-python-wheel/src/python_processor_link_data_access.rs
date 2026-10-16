@@ -3,11 +3,11 @@
 
 //! The data plane a Python node reads and writes through.
 //!
-//! This is where the GIL-release contract is kept for the per-bag path: the
-//! conversion between Python objects and msgpack needs the GIL and holds it;
-//! the iceoryx2 call that can block does not, and runs detached. Holding the
-//! GIL across that call would stall the interpreter's other threads for its
-//! duration.
+//! A message's payload crosses as `bytes` in both directions; nothing here
+//! encodes or decodes it. This is where the GIL-release contract is kept for
+//! the per-message path: the iceoryx2 call that can block runs detached, since
+//! holding the GIL across it would stall the interpreter's other threads for
+//! its duration.
 //!
 //! A helper process wires this object itself from the port wiring the parent
 //! sends it, then reads and writes through the same methods the parent's
@@ -19,8 +19,9 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
-use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
@@ -33,7 +34,7 @@ use streamlib::sdk::iceoryx2::{
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 
 use crate::python_bag_conversion::{
-    cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
+    cast_payload_bytes_into_read_target, python_type_name_for_error_message,
 };
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
@@ -101,7 +102,8 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// The writer `port_name` publishes through; `None` for a declared output
-    /// port no link has reached yet, whose bags go nowhere rather than raising.
+    /// port no link has reached yet, whose messages go nowhere rather than
+    /// raising.
     fn output_writer_reaching(&self, port_name: &str) -> PyResult<Option<&Arc<OutputWriterInner>>> {
         match self.output_writer.get() {
             Some(output_writer) if output_writer.has_port(port_name) => Ok(Some(output_writer)),
@@ -146,8 +148,8 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
-    /// The next bag on `port_name`, offering `offered_gpu_limited_access` to
-    /// whatever `into` constructs.
+    /// The next message's payload on `port_name`, offering
+    /// `offered_gpu_limited_access` to `into.from_bytes` when `into` is named.
     ///
     /// The one read body; the context-carrying reader passes its capability
     /// and the bare data plane passes nothing.
@@ -166,10 +168,10 @@ impl PythonProcessorLinkDataAccess {
             .detach(|| input_mailboxes.read_raw(port_name))
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
-            Some((encoded, _timestamp_ns)) => decode_one_bag_into(
+            Some(message) => payload_bytes_cast_into_the_read_target_when_named(
                 python,
                 port_name,
-                &encoded,
+                &message.payload_bytes,
                 into,
                 offered_gpu_limited_access,
             )
@@ -178,8 +180,8 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
-    /// The next bag on `port_name` with the inbound link it arrived on, or
-    /// `None` when the mailbox is empty.
+    /// The next message's payload on `port_name` with the inbound link it
+    /// arrived on, or `None` when the mailbox is empty.
     ///
     /// The read a destination taking many links on one port uses: each inbound
     /// link is one producer, named by the source channel name it subscribed to.
@@ -197,14 +199,14 @@ impl PythonProcessorLinkDataAccess {
                 into,
                 offered_gpu_limited_access,
             )?
-            .map(|(bag, inbound_link_name, _timestamp_ns)| (bag, inbound_link_name)))
+            .map(|(payload, inbound_link_name, _timestamp_ns)| (payload, inbound_link_name)))
     }
 
     /// The same read, keeping the frame header's timestamp.
     ///
     /// A many-track sink needs both halves at once: the link says which
-    /// producer sent the bag, and the stamp is the producer's own — the source
-    /// frame's instant, not the moment the bag was read.
+    /// producer sent the message, and the stamp is the producer's own — the
+    /// source frame's instant, not the moment the message was read.
     pub(crate) fn read_from_input_port_naming_its_inbound_link_and_timestamp<'py>(
         &self,
         python: Python<'py>,
@@ -219,20 +221,20 @@ impl PythonProcessorLinkDataAccess {
         let read = python
             .detach(|| input_mailboxes.read_raw_from_inbound_link(port_name))
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
-        let Some((encoded, timestamp_ns, inbound_link_name)) = read else {
+        let Some((message, inbound_link_name)) = read else {
             return Ok(None);
         };
-        let bag = decode_one_bag_into(
+        let payload = payload_bytes_cast_into_the_read_target_when_named(
             python,
             port_name,
-            &encoded,
+            &message.payload_bytes,
             into,
             offered_gpu_limited_access,
         )?;
         Ok(Some((
-            bag,
+            payload,
             inbound_link_name.as_str().to_string(),
-            timestamp_ns,
+            message.timestamp_ns,
         )))
     }
 
@@ -250,24 +252,25 @@ impl PythonProcessorLinkDataAccess {
     }
 }
 
-/// Decode one bag's msgpack and, where `into` names a target, cast into it —
-/// the half every read shares once the bytes are in hand.
-fn decode_one_bag_into<'py>(
+/// One message's payload as `bytes`, or what `into.from_bytes` builds from it
+/// when `into` names a target — the half every read shares once the payload
+/// is in hand.
+fn payload_bytes_cast_into_the_read_target_when_named<'py>(
     python: Python<'py>,
     port_name: &str,
-    encoded: &[u8],
+    payload_bytes: &[u8],
     into: Option<&Bound<'py, PyAny>>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let bag = decode_msgpack_to_python_object(python, encoded)?;
+    let payload_bytes = PyBytes::new(python, payload_bytes);
     match into {
-        Some(read_target_type) => cast_decoded_bag_into_read_target(
+        Some(read_target) => cast_payload_bytes_into_read_target(
             port_name,
-            bag,
-            read_target_type,
+            &payload_bytes,
+            read_target,
             offered_gpu_limited_access,
         ),
-        None => Ok(bag),
+        None => Ok(payload_bytes.into_any()),
     }
 }
 
@@ -608,7 +611,7 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
-    /// Whether any input port has a bag waiting.
+    /// Whether any input port has a message waiting.
     ///
     /// One wake does not mean one frame — iceoryx2 coalesces — so a reactive
     /// loop asks this rather than assuming.
@@ -619,15 +622,16 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
-    /// The next bag on `port_name`, or `None` when the mailbox is empty.
+    /// The next message's payload on `port_name`, or `None` when the mailbox is
+    /// empty.
     ///
-    /// `into` is the opt-in strictness dial: without it the bag arrives as a
-    /// mapping, and with it the bag is cast or constructed into the type named
-    /// — so a mismatch surfaces here, at the consuming read, and nowhere else.
+    /// Without `into` the payload arrives as `bytes`; with it the read returns
+    /// `into.from_bytes(payload)`, so a mismatch surfaces here, at the
+    /// consuming read, and nowhere else.
     ///
     /// This is the plumbing a helper process wires by hand; it holds no
-    /// context, so a type it constructs is offered no GPU capability. The read
-    /// a processor writes is `ctx.inputs.read`, which does.
+    /// context, so a target's `from_bytes` is offered no GPU capability. The
+    /// read a processor writes is `ctx.inputs.read`, which does.
     #[pyo3(signature = (port_name, *, into = None))]
     fn read_from_input_port<'py>(
         &self,
@@ -638,8 +642,8 @@ impl PythonProcessorLinkDataAccess {
         self.read_from_input_port_offering_gpu_access(python, port_name, into, None)
     }
 
-    /// The next bag on `port_name` with its stamp, or `(None, None)` when the
-    /// mailbox is empty.
+    /// The next message's payload on `port_name` with its stamp, or
+    /// `(None, None)` when the mailbox is empty.
     pub(crate) fn read_from_input_port_with_timestamp<'py>(
         &self,
         python: Python<'py>,
@@ -653,15 +657,15 @@ impl PythonProcessorLinkDataAccess {
             .detach(|| input_mailboxes.read_raw(port_name))
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
-            Some((encoded, timestamp_ns)) => Ok((
-                Some(decode_msgpack_to_python_object(python, &encoded)?),
-                Some(timestamp_ns),
+            Some(message) => Ok((
+                Some(PyBytes::new(python, &message.payload_bytes).into_any()),
+                Some(message.timestamp_ns),
             )),
             None => Ok((None, None)),
         }
     }
 
-    /// Whether a bag is waiting on `port_name`, without consuming it.
+    /// Whether a message is waiting on `port_name`, without consuming it.
     pub(crate) fn input_port_has_data(
         &self,
         python: Python<'_>,
@@ -685,26 +689,38 @@ impl PythonProcessorLinkDataAccess {
         self.declared_output_ports.lock().extend(output_port_names);
     }
 
-    /// Publish one bag to every downstream link on `port_name`.
+    /// Publish one message carrying `payload` to every downstream link on
+    /// `port_name`.
     ///
-    /// An over-ceiling bag is refused and counted on the port, reaches `graph`
-    /// through this helper's loss-count board, and is warned about through the
-    /// helper's log — never raised here, the write path's never-die contract.
-    #[pyo3(signature = (port_name, bag, timestamp_ns = None))]
+    /// `payload` is `bytes` and nothing else, refused by name otherwise.
+    /// Omitting `timestamp_ns` stamps the monotonic now; `starts_group` lands
+    /// in the frame header's group flag. An over-ceiling message is refused
+    /// and counted on the port, reaches `graph` through this helper's
+    /// loss-count board, and is warned about through the helper's log — never
+    /// raised here, the write path's never-die contract.
+    #[pyo3(signature = (port_name, payload, timestamp_ns = None, starts_group = true))]
     pub(crate) fn write_to_output_port(
         &self,
         python: Python<'_>,
         port_name: &str,
-        bag: &Bound<'_, PyAny>,
+        payload: &Bound<'_, PyAny>,
         timestamp_ns: Option<i64>,
+        starts_group: bool,
     ) -> PyResult<()> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let payload_bytes = payload_bytes_the_write_was_handed(port_name, payload)?;
         let Some(output_writer) = self.output_writer_reaching(port_name)? else {
             return Ok(());
         };
-        let encoded = encode_bag_to_msgpack(bag)?;
         let timestamp_ns = timestamp_ns.unwrap_or_else(|| monotonic_clock_now_ns() as i64);
-        match python.detach(|| output_writer.write_raw(port_name, &encoded, timestamp_ns)) {
+        match python.detach(|| {
+            output_writer.write_bytes_with_timestamp(
+                port_name,
+                payload_bytes,
+                timestamp_ns,
+                starts_group,
+            )
+        }) {
             Ok(()) => Ok(()),
             Err(Error::PayloadExceedsChannelCeiling {
                 channel,
@@ -715,9 +731,10 @@ impl PythonProcessorLinkDataAccess {
                 ..
             }) => {
                 tracing::warn!(
-                    "output port {port_name:?} refused a {payload_bytes}-byte bag past the \
+                    "output port {port_name:?} refused a {payload_bytes}-byte message past the \
                      {largest_admitted_frame_bytes} bytes channel {channel:?} admits ({tier} \
-                     tier); the bag was dropped, and the port has refused {refused_bags} so far"
+                     tier); the message was dropped, and the port has refused {refused_bags} so \
+                     far"
                 );
                 Ok(())
             }
@@ -726,10 +743,28 @@ impl PythonProcessorLinkDataAccess {
     }
 }
 
+/// The bytes a write was handed, or the refusal of anything that is not
+/// `bytes`, naming what it got.
+fn payload_bytes_the_write_was_handed<'payload>(
+    port_name: &str,
+    payload: &'payload Bound<'_, PyAny>,
+) -> PyResult<&'payload [u8]> {
+    payload
+        .cast::<PyBytes>()
+        .map(|payload_bytes| payload_bytes.as_bytes())
+        .map_err(|_| {
+            PyTypeError::new_err(format!(
+                "write() on output port {port_name:?} takes the message's payload as bytes; got \
+                 a {}. Encode a record with `tatolab.stream.msgpack.pack(record)`.",
+                python_type_name_for_error_message(payload, "value")
+            ))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::PyDict;
+    use pyo3::types::{PyByteArray, PyDict, PyString};
 
     /// Unique per test: every test in this process shares one iceoryx2 domain,
     /// so a fixed name would let one test's channel meet the next one's.
@@ -747,59 +782,74 @@ mod tests {
         )
     }
 
+    /// A source and a destination plane joined by one link, `frames_to_downstream`
+    /// into `frames_from_upstream`.
+    ///
+    /// The destination subscribes first: iceoryx2 drops a send with no
+    /// subscriber attached, so wiring the publisher first would race.
+    fn one_wired_link(
+        python: Python<'_>,
+        label: &str,
+    ) -> (PythonProcessorLinkDataAccess, PythonProcessorLinkDataAccess) {
+        let (channel, notify) = unique_channel_names(label);
+        let source = helper_plane();
+        let destination = helper_plane();
+        destination
+            .wire_input_link(
+                python,
+                "frames_from_upstream",
+                &channel,
+                &channel,
+                &notify,
+                "read_next_in_order",
+                8,
+                8,
+                2,
+                1,
+                "link-1",
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        source
+            .wire_output_link(
+                python,
+                "frames_to_downstream",
+                &channel,
+                &notify,
+                1024,
+                1 << 20,
+                8,
+                2,
+                1,
+                "link-1",
+                None,
+            )
+            .unwrap();
+        (source, destination)
+    }
+
     /// The whole point of the wiring surface: a helper process opens its own
     /// publisher and its own subscriber on the services the parent named, and a
-    /// bag written on one shows up on the other. Both planes live in this test's
-    /// thread because iceoryx2's ports are `!Send`.
+    /// message written on one shows up on the other, its payload the same bytes.
+    /// Both planes live in this test's thread because iceoryx2's ports are
+    /// `!Send`.
     #[test]
-    fn a_bag_written_on_a_wired_output_arrives_on_a_wired_input() {
+    fn a_message_written_on_a_wired_output_arrives_on_a_wired_input_as_the_same_bytes() {
         Python::initialize();
         Python::attach(|python| {
-            let (channel, notify) = unique_channel_names("roundtrip");
-            let source = helper_plane();
-            let destination = helper_plane();
+            let (source, destination) = one_wired_link(python, "roundtrip");
+            let payload_that_is_not_msgpack: &[u8] = b"\xc1 raw bytes, never decoded";
 
-            // The destination subscribes first: iceoryx2 drops a send with no
-            // subscriber attached, so wiring the publisher first would race.
-            destination
-                .wire_input_link(
-                    python,
-                    "frames_from_upstream",
-                    &channel,
-                    &channel,
-                    &notify,
-                    "read_next_in_order",
-                    8,
-                    8,
-                    2,
-                    1,
-                    "link-1",
-                    // No window contract: this port reads the bags it is sent.
-                    None,
-                    None,
-                    None,
-                )
-                .unwrap();
             source
-                .wire_output_link(
+                .write_to_output_port(
                     python,
                     "frames_to_downstream",
-                    &channel,
-                    &notify,
-                    1024,
-                    1 << 20,
-                    8,
-                    2,
-                    1,
-                    "link-1",
+                    PyBytes::new(python, payload_that_is_not_msgpack).as_any(),
                     None,
+                    true,
                 )
-                .unwrap();
-
-            let bag = PyDict::new(python);
-            bag.set_item("frame_index", 7i64).unwrap();
-            source
-                .write_to_output_port(python, "frames_to_downstream", bag.as_any(), None)
                 .unwrap();
 
             let received = destination
@@ -808,22 +858,96 @@ mod tests {
                 .expect("the wired input received nothing");
             assert_eq!(
                 received
-                    .get_item("frame_index")
+                    .cast::<PyBytes>()
+                    .expect("a read without `into` hands back bytes")
+                    .as_bytes(),
+                payload_that_is_not_msgpack
+            );
+        });
+    }
+
+    /// `starts_group` lands in the frame header's group flag, which a Rust
+    /// reader on the far side of the link observes on the message it reads,
+    /// beside the stamp the write gave it.
+    #[test]
+    fn the_group_flag_and_the_stamp_a_write_names_reach_a_rust_reader() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, destination) = one_wired_link(python, "groupflag");
+            for (timestamp_ns, starts_group) in [(11i64, false), (12i64, true)] {
+                source
+                    .write_to_output_port(
+                        python,
+                        "frames_to_downstream",
+                        PyBytes::new(python, b"access unit").as_any(),
+                        Some(timestamp_ns),
+                        starts_group,
+                    )
+                    .unwrap();
+            }
+
+            let input_mailboxes = destination
+                .input_mailboxes
+                .get()
+                .expect("a wired input plane holds its mailboxes");
+            for (timestamp_ns, starts_group) in [(11i64, false), (12i64, true)] {
+                let message = input_mailboxes
+                    .read_raw("frames_from_upstream")
                     .unwrap()
-                    .extract::<i64>()
-                    .unwrap(),
-                7
+                    .expect("the wired input received nothing");
+                assert_eq!(message.payload_bytes, b"access unit");
+                assert_eq!(message.timestamp_ns, timestamp_ns);
+                assert_eq!(message.starts_group, starts_group);
+            }
+        });
+    }
+
+    /// A payload that is not `bytes` is refused at the write, naming `bytes`
+    /// and the type it got — and refused on a declared port no link has
+    /// reached, too, so an author learns before the first link arrives.
+    #[test]
+    fn a_write_refuses_a_payload_that_is_not_bytes_by_name() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, destination) = one_wired_link(python, "refusal");
+            source.declare_ports(vec![], vec!["unlinked_output".to_string()]);
+            let record = PyDict::new(python);
+            record.set_item("frame_index", 7i64).unwrap();
+            let not_bytes = [
+                ("dict", record.into_any()),
+                ("str", PyString::new(python, "frame").into_any()),
+                ("bytearray", PyByteArray::new(python, b"frame").into_any()),
+            ];
+            for port_name in ["frames_to_downstream", "unlinked_output"] {
+                for (type_name, payload) in &not_bytes {
+                    let refusal = source
+                        .write_to_output_port(python, port_name, payload, None, true)
+                        .expect_err("a payload that is not bytes must be refused");
+                    assert!(
+                        refusal.is_instance_of::<PyTypeError>(python),
+                        "got: {refusal}"
+                    );
+                    let refusal_text = refusal.to_string();
+                    assert!(
+                        refusal_text.contains("as bytes")
+                            && refusal_text.contains(&format!("got a {type_name}")),
+                        "the refusal names bytes and what it got: {refusal_text}"
+                    );
+                }
+            }
+            assert!(
+                destination
+                    .read_from_input_port(python, "frames_from_upstream", None)
+                    .unwrap()
+                    .is_none(),
+                "a refused write publishes nothing"
             );
         });
     }
 
     /// A helper's egress crosses the subprocess boundary by construction, so the
     /// tier it labels a ceiling refusal with is the one the parent classified
-    /// this channel under when it chose the ceiling the envelope carries. The
-    /// value was always the untrusted-session one; the label said `trusted`.
-    ///
-    /// Fail-without-fix: the refusal a helper's author reads names a
-    /// trusted-tier limit no helper link ever has.
+    /// this channel under when it chose the ceiling the envelope carries.
     #[test]
     fn a_ceiling_refusal_on_a_helpers_egress_names_the_untrusted_session_tier() {
         Python::initialize();
@@ -853,8 +977,8 @@ mod tests {
                 .expect("a wired output plane holds its writer");
             let over_the_ceiling = vec![0u8; ceiling_bytes + 1];
             let refusal = output_writer
-                .write_raw("frames_to_downstream", &over_the_ceiling, 1)
-                .expect_err("a bag past the channel ceiling must be refused");
+                .write_bytes_with_timestamp("frames_to_downstream", &over_the_ceiling, 1, true)
+                .expect_err("a message past the channel ceiling must be refused");
 
             match refusal {
                 Error::PayloadExceedsChannelCeiling { tier, .. } => assert_eq!(
@@ -871,9 +995,6 @@ mod tests {
     /// port's losses onto its link's slot and a refusal at the ceiling onto its
     /// output port's entry, with nothing but the reads and writes the processor
     /// already makes — no loop flush and no timer.
-    ///
-    /// Fail-without-fix: open the board and wire nothing onto it, and the slot
-    /// and the entry both still read zero after the losses.
     #[test]
     fn a_helper_that_opened_its_board_mirrors_its_losses_as_its_reads_and_writes_count_them() {
         Python::initialize();
@@ -940,21 +1061,29 @@ mod tests {
                 .unwrap();
 
             let write_frame = |frame_index: i64| {
-                let bag = PyDict::new(python);
-                bag.set_item("frame_index", frame_index).unwrap();
                 source
-                    .write_to_output_port(python, "frames_to_downstream", bag.as_any(), None)
+                    .write_to_output_port(
+                        python,
+                        "frames_to_downstream",
+                        PyBytes::new(python, &frame_index.to_le_bytes()).as_any(),
+                        None,
+                        true,
+                    )
                     .unwrap();
             };
             let read_frame_index = || {
-                destination
+                let payload = destination
                     .read_from_input_port(python, "frames_from_upstream", None)
                     .unwrap()
-                    .expect("the port holds a bag")
-                    .get_item("frame_index")
-                    .unwrap()
-                    .extract::<i64>()
-                    .unwrap()
+                    .expect("the port holds a message");
+                i64::from_le_bytes(
+                    payload
+                        .cast::<PyBytes>()
+                        .unwrap()
+                        .as_bytes()
+                        .try_into()
+                        .expect("an eight-byte frame index"),
+                )
             };
             let slot_counts = || {
                 parent_board.inbound_link_slot(4).map(|slot| {
@@ -976,19 +1105,17 @@ mod tests {
             assert_eq!(
                 slot_counts(),
                 Some((21, 4, 0)),
-                "the four bags the eight-deep ring overwrote land on the link's slot at the read"
+                "the four messages the eight-deep ring overwrote land on the link's slot at the \
+                 read"
             );
 
-            let bag_over_the_ceiling = PyDict::new(python);
-            bag_over_the_ceiling
-                .set_item("padding", pyo3::types::PyBytes::new(python, &[0u8; 4096]))
-                .unwrap();
             destination
                 .write_to_output_port(
                     python,
                     "frames_to_downstream",
-                    bag_over_the_ceiling.as_any(),
+                    PyBytes::new(python, &[0u8; 4096]).as_any(),
                     None,
+                    true,
                 )
                 .expect("a refusal at the ceiling is never raised");
             assert_eq!(
@@ -1053,15 +1180,15 @@ mod tests {
 
     /// The window contract crosses the parent→child envelope and the child's
     /// own stage honours it: a 48 kHz stereo source published on the wired
-    /// output reaches the wired input as exactly-512-sample 16 kHz mono
-    /// windows, in this process, through the same engine code the parent's
-    /// mailboxes run.
+    /// output as msgpack `AudioBlock`s reaches the wired input as
+    /// exactly-512-sample 16 kHz mono windows, in this process, through the
+    /// same engine code the parent's mailboxes run.
     ///
     /// The wheel crate's own test target is the only place this is provable
     /// without a device: everything above it is either a Python-level refusal
     /// or a rig-gated graph.
     #[test]
-    fn a_windowed_input_link_hands_the_child_windows_rather_than_the_bags_it_was_sent() {
+    fn a_windowed_input_link_hands_the_child_windows_rather_than_the_blocks_it_was_sent() {
         Python::initialize();
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("windowed");
@@ -1112,56 +1239,44 @@ mod tests {
             const SOURCE_FRAMES_PER_BLOCK: usize = 512;
             const SOURCE_RATE: i64 = 48_000;
             for block in 0..8i64 {
-                let payload: Vec<u8> = (0..SOURCE_FRAMES_PER_BLOCK * 2)
-                    .flat_map(|scalar| (scalar as f32 / 1024.0).to_le_bytes())
-                    .collect();
-                let bag = PyDict::new(python);
-                bag.set_item("samples", pyo3::types::PyBytes::new(python, &payload))
-                    .unwrap();
-                bag.set_item("sample_rate", SOURCE_RATE).unwrap();
-                bag.set_item("channels", 2i64).unwrap();
-                bag.set_item("sample_count", SOURCE_FRAMES_PER_BLOCK as i64)
-                    .unwrap();
-                bag.set_item("dtype", "f32").unwrap();
-                bag.set_item(
-                    "first_sample_timestamp_ns",
-                    block * SOURCE_FRAMES_PER_BLOCK as i64 * 1_000_000_000 / SOURCE_RATE,
-                )
-                .unwrap();
+                let source_block = streamlib_media_builtins::AudioBlock {
+                    interleaved_sample_bytes: (0..SOURCE_FRAMES_PER_BLOCK * 2)
+                        .flat_map(|scalar| (scalar as f32 / 1024.0).to_le_bytes())
+                        .collect(),
+                    sample_rate: SOURCE_RATE as u32,
+                    channels: 2,
+                    sample_count: SOURCE_FRAMES_PER_BLOCK as u32,
+                    dtype: streamlib_media_builtins::AudioSampleDtype::F32,
+                    first_sample_timestamp_ns: block
+                        * SOURCE_FRAMES_PER_BLOCK as i64
+                        * 1_000_000_000
+                        / SOURCE_RATE,
+                };
+                let payload = rmp_serde::to_vec_named(&source_block).unwrap();
                 source
-                    .write_to_output_port(python, "audio", bag.as_any(), None)
+                    .write_to_output_port(
+                        python,
+                        "audio",
+                        PyBytes::new(python, &payload).as_any(),
+                        None,
+                        true,
+                    )
                     .unwrap();
             }
 
-            let window = destination
+            let window_payload = destination
                 .read_from_input_port(python, "audio_from_upstream", None)
                 .unwrap()
                 .expect("the windowed input received nothing");
+            let window: streamlib_media_builtins::AudioBlock =
+                rmp_serde::from_slice(window_payload.cast::<PyBytes>().unwrap().as_bytes())
+                    .expect("the stage emits a msgpack AudioBlock");
             assert_eq!(
-                window
-                    .get_item("sample_count")
-                    .unwrap()
-                    .extract::<i64>()
-                    .unwrap(),
-                512,
+                window.sample_count, 512,
                 "the child's stage owes exactly what the contract declared"
             );
-            assert_eq!(
-                window
-                    .get_item("sample_rate")
-                    .unwrap()
-                    .extract::<i64>()
-                    .unwrap(),
-                16_000
-            );
-            assert_eq!(
-                window
-                    .get_item("channels")
-                    .unwrap()
-                    .extract::<i64>()
-                    .unwrap(),
-                1
-            );
+            assert_eq!(window.sample_rate, 16_000);
+            assert_eq!(window.channels, 1);
         });
     }
 
