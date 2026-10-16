@@ -921,6 +921,10 @@ jobs:
     # A cold cache builds shaderc — glslang and SPIRV-Tools from source — before
     # it reaches a single test, which is most of a 22-minute first run.
     timeout-minutes: 60
+    # Line tables keep backtraces readable and drop the bulk of the debug info,
+    # which is most of what the Rust cache uploads and restores.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
     steps:
       - uses: actions/checkout@v4
@@ -935,16 +939,24 @@ jobs:
       # carries the binary. `cmake` and `ninja` build the `shaderc` *crate*
       # (glslang + SPIRV-Tools from source); ninja is what makes that a minute
       # rather than several, so it is installed explicitly rather than assumed.
+      # Homebrew's update and cleanup passes cost minutes on a runner and buy
+      # nothing: the image's formula index is days old at most.
       - name: Install glslc and the shaderc crate's build tools
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: brew install shaderc cmake ninja
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # The key names the image: cargo's fingerprints cannot see which SDK a
+      # cached artifact was linked against.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rust-macos
+          shared-key: rust-macos-26
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The Python the wheel crate's unit tests link and the venv below is
@@ -1073,6 +1085,10 @@ jobs:
 
       # After the Python suite, so it runs without MoltenVK installed.
       - name: Install MoltenVK and find the Metal device under it
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
           system_profiler SPDisplaysDataType
           brew install molten-vk vulkan-loader vulkan-tools

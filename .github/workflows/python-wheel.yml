@@ -462,7 +462,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: extension-macos-${{ matrix.extension }}
+          shared-key: extension-macos-26-${{ matrix.extension }}
           workspaces: packages/${{ matrix.extension }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
