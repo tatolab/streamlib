@@ -20,10 +20,12 @@ import os
 import traceback
 from collections.abc import Sequence
 
+import numpy
 from tatolab.stream import (
     GpuContextFullAccess,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    VideoFrame,
     log,
     node,
 )
@@ -431,3 +433,109 @@ class GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
             "no_color_target": no_color_target,
             "two_attachment_formats": two_attachment_formats,
         }
+
+
+# Two halves of exactly representable colours, so the frame read downstream
+# either matches every pixel or names where it does not.
+LEFT_HALF_RGBA = [255, 0, 0, 255]
+RIGHT_HALF_RGBA = [0, 0, 255, 255]
+
+TWO_HALVES_FRAGMENT_GLSL = f"""\
+#version 450
+layout(location = 0) out vec4 painted_colour;
+void main() {{
+    painted_colour = gl_FragCoord.x < {SURFACE_WIDTH // 2}.0
+        ? vec4(1.0, 0.0, 0.0, 1.0)
+        : vec4(0.0, 0.0, 1.0, 1.0);
+}}
+"""
+
+
+@node(execution="continuous", interval_ms=10)
+class RenderedTextureFrameProducer:
+    """Renders two known halves into a render-target texture it acquired, once,
+    and sends that frame downstream on every tick — no link promises delivery,
+    and a bag written before the reader's interpreter subscribed is lost."""
+
+    @node.output()
+    def video_to_downstream(self) -> None: ...
+
+    def __init__(self) -> None:
+        self.color_target = None
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        try:
+            gpu = ctx.gpu_full_access
+            kernel = gpu.create_graphics_kernel(
+                color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
+                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
+                fragment_source=TWO_HALVES_FRAGMENT_GLSL,
+                label="python-two-halves",
+            )
+            self.color_target = gpu.acquire_texture(
+                SURFACE_WIDTH,
+                SURFACE_HEIGHT,
+                COLOR_ATTACHMENT_FORMAT,
+                COLOR_TARGET_TEXTURE_USAGE,
+            )
+            kernel.draw(
+                bindings={},
+                color_targets=[self.color_target],
+                extent=(SURFACE_WIDTH, SURFACE_HEIGHT),
+                vertex_count=3,
+            )
+        except BaseException:
+            _report(lambda: {"failure": "the producer: " + traceback.format_exc()})
+            raise
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        if self.color_target is None:
+            return
+        ctx.outputs.write(
+            "video_to_downstream",
+            {
+                "surface_id": self.color_target.surface_id,
+                "width": SURFACE_WIDTH,
+                "height": SURFACE_HEIGHT,
+                "timestamp_ns": ctx.time,
+            },
+        )
+
+
+@node(description="Reads a rendered frame's pixels through cpu() in its own interpreter")
+class RenderedFrameCpuReader:
+    """Reads the first frame it is handed through `cpu()`, in a processor
+    interpreter of its own, and reports what each half holds."""
+
+    @node.input(delivery_profile="ordered")
+    def video_from_upstream(self) -> None: ...
+
+    def __init__(self) -> None:
+        self.reported = False
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        if self.reported:
+            return
+        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        if frame is None:
+            return
+        self.reported = True
+
+        def observe() -> dict:
+            with frame.cpu() as host_pixels:
+                pixels = numpy.array(host_pixels, copy=True)
+            left_half = pixels[:, : SURFACE_WIDTH // 2]
+            right_half = pixels[:, SURFACE_WIDTH // 2 :]
+            return {
+                "shape": list(pixels.shape),
+                "every_left_pixel_is_the_left_colour": bool(
+                    (left_half == LEFT_HALF_RGBA).all()
+                ),
+                "every_right_pixel_is_the_right_colour": bool(
+                    (right_half == RIGHT_HALF_RGBA).all()
+                ),
+                "top_left_pixel": pixels[0, 0].tolist(),
+                "bottom_right_pixel": pixels[-1, -1].tolist(),
+            }
+
+        _report(observe)
