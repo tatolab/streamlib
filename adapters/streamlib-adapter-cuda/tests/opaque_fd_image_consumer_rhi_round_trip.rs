@@ -198,6 +198,9 @@ fn opaque_fd_image_carve_out_round_trip() {
         ConsumerTextureFormat::Rgba8Unorm,
         host_image.vk_image_usage_flags().bits(),
         host_image_alloc_size,
+        host_image
+            .vma_allocation_memory_type_index()
+            .expect("an OPAQUE_FD export image has a VMA allocation"),
     ) {
         Ok(t) => Arc::new(t),
         Err(e) => {
@@ -405,6 +408,9 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
         ConsumerTextureFormat::Rgba8Unorm,
         host_image.vk_image_usage_flags().bits(),
         host_image_alloc_size,
+        host_image
+            .vma_allocation_memory_type_index()
+            .expect("an OPAQUE_FD export image has a VMA allocation"),
     ) {
         Ok(t) => Arc::new(t),
         Err(e) => {

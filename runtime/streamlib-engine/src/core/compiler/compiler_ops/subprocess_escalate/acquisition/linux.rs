@@ -30,24 +30,46 @@ pub(super) fn allocate_registered_texture_for_helper(
     parsed_usage: TextureUsages,
 ) -> crate::core::error::Result<(String, RegisteredHandle)> {
     // The importability flavor is derived engine-side from the request —
-    // there is no Python dial for it, and a flavor the request cannot take
-    // falls back to NotImportable so a later import refuses by name instead of
-    // the acquire failing.
-    let desc = TexturePoolDescriptor::new(width, height, parsed_format)
-        .with_usage(parsed_usage)
-        .with_cross_process_importability(match full.host_vulkan_device_arc() {
-            Ok(device) => derive_texture_cross_process_importability(
+    // there is no Python dial for it. Where the device exports DMA-BUF, a
+    // flavor the request cannot take falls back to NotImportable so a later
+    // import refuses by name instead of the acquire failing; where it does
+    // not, nothing else can carry the texture across, so the acquire refuses.
+    let importability = match full.host_vulkan_device_arc() {
+        Ok(device) => {
+            let device_capabilities = TextureExportCapabilitiesOfTheDevice {
+                exports_dma_buf: device.supports_dma_buf_export(),
+                has_a_render_target_modifier_for_the_format: device
+                    .has_render_target_modifier_for_texture_format(parsed_format),
+                has_the_opaque_fd_image_pool: device.opaque_fd_image_pool().is_some(),
+                exports_the_request_as_an_opaque_fd_image:
+                    crate::vulkan::rhi::HostVulkanTexture::device_exports_an_opaque_fd_image_of_format_and_usage(
+                        &device,
+                        parsed_format,
+                        parsed_usage,
+                    ),
+            };
+            let importability = derive_texture_cross_process_importability(
                 parsed_format,
                 parsed_usage,
-                TextureExportCapabilitiesOfTheDevice {
-                    exports_dma_buf: device.supports_dma_buf_export(),
-                    has_a_render_target_modifier_for_the_format: device
-                        .has_render_target_modifier_for_texture_format(parsed_format),
-                    has_the_opaque_fd_image_pool: device.opaque_fd_image_pool().is_some(),
-                },
-            ),
-            Err(_) => TextureCrossProcessImportability::NotImportable,
-        });
+                device_capabilities,
+            );
+            if importability == TextureCrossProcessImportability::NotImportable
+                && !device_capabilities.exports_dma_buf
+            {
+                return Err(crate::core::error::Error::NotSupported(format!(
+                    "acquire_texture: {} exports no DMA-BUF and cannot export a {parsed_format:?} \
+                     texture with usage {parsed_usage:?} as OPAQUE_FD, so it cannot cross to a \
+                     processor interpreter",
+                    device.name()
+                )));
+            }
+            importability
+        }
+        Err(_) => TextureCrossProcessImportability::NotImportable,
+    };
+    let desc = TexturePoolDescriptor::new(width, height, parsed_format)
+        .with_usage(parsed_usage)
+        .with_cross_process_importability(importability);
     let texture = full.host_inner().acquire_texture(&desc)?;
     let (handle_id, produce_done, consume_done) = assign_texture_handle_id(full, &texture)?;
     texture.note_a_surface_share_id_naming_its_pool_slot(&handle_id);
@@ -270,6 +292,15 @@ pub(super) struct TextureExportCapabilitiesOfTheDevice {
     pub(super) has_a_render_target_modifier_for_the_format: bool,
     /// The device built its OPAQUE_FD image pool.
     pub(super) has_the_opaque_fd_image_pool: bool,
+    /// The device reports it can export an optimal image of the requested
+    /// format and usage as OPAQUE_FD.
+    pub(super) exports_the_request_as_an_opaque_fd_image: bool,
+}
+
+impl TextureExportCapabilitiesOfTheDevice {
+    fn allocates_the_request_as_an_opaque_fd_image(self) -> bool {
+        self.has_the_opaque_fd_image_pool && self.exports_the_request_as_an_opaque_fd_image
+    }
 }
 
 /// Which cross-process-importable allocation flavor an `acquire_texture`
@@ -277,8 +308,8 @@ pub(super) struct TextureExportCapabilitiesOfTheDevice {
 /// a Python dial.
 ///
 /// Where the device exports no DMA-BUF, OPAQUE_FD is the one flavor that
-/// crosses a process, and every single-plane request takes it whatever its
-/// format and usage. Where it does, render-attachment requests need the
+/// crosses a process, and every single-plane request the device reports
+/// exportable as OPAQUE_FD takes it whatever its format and usage. Where it does, render-attachment requests need the
 /// explicit-modifier DMA-BUF flavor, and OPAQUE_FD is kept to the
 /// CUDA-mappable formats within its fixed usage set. Only single-plane
 /// formats cross either way — a multi-plane registration ships one fd
@@ -293,7 +324,7 @@ pub(super) fn derive_texture_cross_process_importability(
 ) -> TextureCrossProcessImportability {
     let format_is_single_plane = format.plane_count() == 1;
     if !device.exports_dma_buf {
-        return if device.has_the_opaque_fd_image_pool && format_is_single_plane {
+        return if device.allocates_the_request_as_an_opaque_fd_image() && format_is_single_plane {
             TextureCrossProcessImportability::OpaqueFd
         } else {
             TextureCrossProcessImportability::NotImportable
@@ -307,7 +338,7 @@ pub(super) fn derive_texture_cross_process_importability(
         };
     }
     if format.is_cuda_mappable()
-        && device.has_the_opaque_fd_image_pool
+        && device.allocates_the_request_as_an_opaque_fd_image()
         && TextureUsages::EVERY_USAGE_A_CUDA_MAPPED_IMAGE_CARRIES.contains(usage)
     {
         return TextureCrossProcessImportability::OpaqueFd;

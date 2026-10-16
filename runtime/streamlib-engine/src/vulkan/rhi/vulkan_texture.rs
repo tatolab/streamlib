@@ -85,6 +85,21 @@ fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
     flags
 }
 
+/// The usage an OPAQUE_FD export image of `format` is created with: the
+/// request's plus the transfer bits, and for a CUDA-mappable format every
+/// usage a CUDA-mapped image carries.
+#[cfg(target_os = "linux")]
+fn vk_usage_of_an_opaque_fd_export_image(
+    format: TextureFormat,
+    usage: TextureUsages,
+) -> vk::ImageUsageFlags {
+    let mut usage = usage | TextureUsages::COPY_SRC | TextureUsages::COPY_DST;
+    if format.is_cuda_mappable() {
+        usage |= TextureUsages::EVERY_USAGE_A_CUDA_MAPPED_IMAGE_CARRIES;
+    }
+    texture_usages_to_vk(usage)
+}
+
 /// Per-construction Vulkan image metadata exposed through
 /// [`super::VulkanTextureLike`] to surface-adapter consumers (Skia in
 /// particular needs the full create-time descriptor to wrap the image
@@ -580,6 +595,50 @@ impl HostVulkanTexture {
         })
     }
 
+    /// Whether `vulkan_device` reports it can export the image
+    /// [`Self::new_opaque_fd_export`] creates for `format` and `usage` as an
+    /// OPAQUE_FD — asked of the device, never assumed from its driver.
+    #[cfg(target_os = "linux")]
+    pub fn device_exports_an_opaque_fd_image_of_format_and_usage(
+        vulkan_device: &HostVulkanDevice,
+        format: TextureFormat,
+        usage: TextureUsages,
+    ) -> bool {
+        if format.plane_count() != 1 {
+            return false;
+        }
+        let mut external_image_format_info = vk::PhysicalDeviceExternalImageFormatInfo::builder()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .build();
+        let image_format_info = vk::PhysicalDeviceImageFormatInfo2::builder()
+            .format(texture_format_to_vk(format))
+            .type_(vk::ImageType::_2D)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk_usage_of_an_opaque_fd_export_image(format, usage))
+            .push_next(&mut external_image_format_info)
+            .build();
+        let mut external_image_format_properties = vk::ExternalImageFormatProperties::default();
+        let mut image_format_properties = vk::ImageFormatProperties2::builder()
+            .push_next(&mut external_image_format_properties)
+            .build();
+        // VK_ERROR_FORMAT_NOT_SUPPORTED is the device's "no" for the
+        // combination as a whole.
+        let queried = unsafe {
+            vulkan_device
+                .instance()
+                .get_physical_device_image_format_properties2(
+                    vulkan_device.physical_device(),
+                    &image_format_info,
+                    &mut image_format_properties,
+                )
+        };
+        queried.is_ok()
+            && external_image_format_properties
+                .external_memory_properties
+                .external_memory_features
+                .contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+    }
+
     /// Allocate an OPAQUE_FD-exportable DEVICE_LOCAL OPTIMAL `VkImage` from
     /// [`HostVulkanDevice::opaque_fd_image_pool`] — the cross-process image
     /// flavor of a device without DMA-BUF, and the Vulkan → CUDA
@@ -599,8 +658,9 @@ impl HostVulkanTexture {
     /// - **Memory** is `DEDICATED_MEMORY`: the import takes the whole
     ///   `VkDeviceMemory` block.
     ///
-    /// Returns `Err` when the pool is unavailable or the format is
-    /// multi-plane. Callers must not fall back to a non-exportable
+    /// Returns `Err` when the pool is unavailable, the format is
+    /// multi-plane, or the device does not report the format and usage as
+    /// OPAQUE_FD-exportable. Callers must not fall back to a non-exportable
     /// allocation — the failure would surface only at `vkGetMemoryFdKHR`.
     #[cfg(target_os = "linux")]
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(width = desc.width, height = desc.height, format = ?desc.format))]
@@ -621,12 +681,22 @@ impl HostVulkanTexture {
             ));
         }
 
-        let vk_format = texture_format_to_vk(desc.format);
-        let mut usage = desc.usage | TextureUsages::COPY_SRC | TextureUsages::COPY_DST;
-        if desc.format.is_cuda_mappable() {
-            usage |= TextureUsages::EVERY_USAGE_A_CUDA_MAPPED_IMAGE_CARRIES;
+        if !Self::device_exports_an_opaque_fd_image_of_format_and_usage(
+            vulkan_device,
+            desc.format,
+            desc.usage,
+        ) {
+            return Err(Error::NotSupported(format!(
+                "HostVulkanTexture::new_opaque_fd_export: {} cannot export an optimal {:?} \
+                 image with usage {:?} as OPAQUE_FD",
+                vulkan_device.name(),
+                desc.format,
+                desc.usage
+            )));
         }
-        let usage_flags = texture_usages_to_vk(usage);
+
+        let vk_format = texture_format_to_vk(desc.format);
+        let usage_flags = vk_usage_of_an_opaque_fd_export_image(desc.format, desc.usage);
 
         // Declare OPAQUE_FD handle type on the image create info; the
         // matching ExportMemoryAllocateInfo lives on the pool's

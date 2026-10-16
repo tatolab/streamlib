@@ -3155,6 +3155,8 @@ mod opaque_fd_texture_registration_payload_tests {
             payload["vk_image_allocation_size"]
                 .as_u64()
                 .expect("the registration states its allocation size"),
+            stated_vk_memory_type_index(&payload)
+                .expect("the registration states its memory type index"),
         );
         let imported = match imported {
             Ok(imported) => imported,
