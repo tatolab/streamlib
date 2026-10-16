@@ -2982,6 +2982,84 @@ mod tests {
         }
     }
 
+    /// The device query agrees with the allocation: every request the device
+    /// reports exportable as OPAQUE_FD allocates, and one it does not — an
+    /// sRGB storage image, which many devices cannot create at all — is
+    /// refused naming the device before any image is created.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn opaque_fd_export_follows_what_the_device_reports_for_the_format_and_usage() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_image_pool().is_none() {
+            println!("Skipping - OPAQUE_FD image pool unavailable on this driver");
+            return;
+        }
+        let device_name = device.name();
+        let render_target_usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
+
+        assert!(
+            !HostVulkanTexture::device_exports_an_opaque_fd_image_of_format_and_usage(
+                &device,
+                TextureFormat::Nv12,
+                TextureUsages::TEXTURE_BINDING,
+            ),
+            "{device_name}: a multi-plane format never crosses as one OPAQUE_FD block"
+        );
+        for (format, usage) in [
+            (TextureFormat::Rgba8Unorm, TextureUsages::TEXTURE_BINDING),
+            (TextureFormat::Rgba8Unorm, render_target_usage),
+            (TextureFormat::Bgra8Unorm, render_target_usage),
+        ] {
+            assert!(
+                HostVulkanTexture::device_exports_an_opaque_fd_image_of_format_and_usage(
+                    &device, format, usage,
+                ),
+                "{device_name}: reports {format:?} with {usage:?} not exportable as OPAQUE_FD"
+            );
+        }
+
+        let srgb_storage_usage = TextureUsages::STORAGE_BINDING;
+        let device_reports_srgb_storage_exportable =
+            HostVulkanTexture::device_exports_an_opaque_fd_image_of_format_and_usage(
+                &device,
+                TextureFormat::Rgba8UnormSrgb,
+                srgb_storage_usage,
+            );
+        let allocated = HostVulkanTexture::new_opaque_fd_export(
+            &device,
+            &TextureDescriptor::new(64, 64, TextureFormat::Rgba8UnormSrgb)
+                .with_usage(srgb_storage_usage),
+        );
+        match (device_reports_srgb_storage_exportable, allocated) {
+            (true, Ok(_)) => {}
+            (false, Err(crate::core::Error::NotSupported(refusal))) => {
+                assert!(
+                    refusal.contains(&device_name),
+                    "the refusal names the device: {refusal}"
+                );
+                assert!(
+                    refusal.contains("Rgba8UnormSrgb") && refusal.contains("OPAQUE_FD"),
+                    "the refusal names the format and the flavour: {refusal}"
+                );
+            }
+            (reported, allocated) => panic!(
+                "{device_name}: reported sRGB storage exportable = {reported}, but the \
+                 allocation answered {:?}",
+                allocated.map(|_| "Ok")
+            ),
+        }
+    }
+
     /// A multi-plane format is refused by name; every single-plane format
     /// allocates. A CUDA-mappable format keeps exactly the usage CUDA's
     /// texture- and surface-object imports bind; a render target, of any

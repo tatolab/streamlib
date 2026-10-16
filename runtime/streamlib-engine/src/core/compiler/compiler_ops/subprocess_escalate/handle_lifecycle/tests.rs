@@ -1683,3 +1683,83 @@ fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exp
     }
     live_service.stop();
 }
+
+/// A render-target texture a helper acquires crosses on the flavour its
+/// device can carry: tiled DMA-BUF where the device exports DMA-BUF, and
+/// OPAQUE_FD — stating its colour-attachment usage and the memory type an
+/// import must bind — where it does not.
+#[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_helpers_render_target_texture_registers_the_flavour_its_device_can_carry() {
+    use super::super::handle_escalate_op;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::TextureFormat;
+
+    const VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT: u32 = 0x10;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        tracing::warn!("no GPU device — skipping");
+        return;
+    };
+    let device_exports_dma_buf = gpu.gpu_capabilities().supports_dma_buf_export;
+    let device_name = gpu.gpu_capabilities().device_name;
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+
+    let handle_id = match handle_escalate_op(
+        &sandbox,
+        &registry,
+        EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+            request_id: "req-render-target-texture".to_string(),
+            width: 64,
+            height: 32,
+            format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
+            processor_output_pool: None,
+            usage: vec![
+                "render_attachment".to_string(),
+                "texture_binding".to_string(),
+            ],
+        }),
+    ) {
+        Some(EscalateResponse::Ok(ok)) => ok.handle_id,
+        other => panic!("{device_name}: a render-target acquire_texture failed: {other:?}"),
+    };
+    let registered = live_service
+        .state
+        .get_surface_planes(&handle_id)
+        .expect("the render target is registered with the service");
+
+    if device_exports_dma_buf {
+        assert_eq!(registered.handle_type, "dma_buf", "{device_name}");
+        assert_ne!(
+            registered.drm_format_modifier, 0,
+            "{device_name}: a render target on a DMA-BUF device takes the tiled flavour"
+        );
+        assert_eq!(registered.vk_memory_type_index, None, "{device_name}");
+    } else {
+        assert_eq!(registered.handle_type, "opaque_fd", "{device_name}");
+        assert_ne!(
+            registered.vk_image_usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            0,
+            "{device_name}: the registration states the colour-attachment usage the import \
+             rebuilds the image with, got {:#x}",
+            registered.vk_image_usage
+        );
+        assert!(
+            registered.vk_memory_type_index.is_some(),
+            "{device_name}: an OPAQUE_FD registration states the memory type an import binds"
+        );
+    }
+
+    release_a_handle_over_the_escalate_op(&sandbox, &registry, &handle_id)
+        .expect("the render target releases");
+    live_service.stop();
+}
