@@ -3,16 +3,14 @@
 
 """What a `VideoFrame` does with the capability a typed read offers it.
 
-The seam itself — a bag crossing a real link, a real surface-share service,
-the lease the pool reads — is proven against the runtime, which is where a
-service can be started. What is left to prove here is the frame's own half:
-that it claims when something offers the means, holds the claim in a field
-nobody has to touch, releases it by going away, and stays an ordinary
-construction when nothing is on offer.
+The seam itself — a message crossing a real link, a real surface-share
+service, the lease the pool reads — is proven against the runtime. What is
+proven here is the frame's own half: it claims when something offers the
+means, holds the claim in a field nobody has to touch, releases it by going
+away, and stays an ordinary construction when nothing is on offer.
 
-The capability is stood in for. The stand-in is exactly what the read offers —
-an object with `claim_surface_against_producer_reuse` — which is the point:
-nothing about the frame is bound to the runtime's implementation of it.
+The capability is stood in for by an object with
+`claim_surface_against_producer_reuse`, which is all the read offers.
 """
 
 from __future__ import annotations
@@ -30,14 +28,17 @@ from tatolab.stream import (
     VideoFrame,
 )
 from tatolab.stream import claimed_surface_pixel_access as composable_module
+from tatolab.stream.msgpack import pack
 
 
-FRAME_BAG = {
+FRAME_ENTRIES: "dict[str, Any]" = {
     "surface_id": "surface-7",
     "width": 1280,
     "height": 720,
     "timestamp_ns": 123_456_789,
 }
+
+FRAME_PAYLOAD = pack(FRAME_ENTRIES)
 
 
 PER_SURFACE_ACCESS_FIELD = "_pixel_access_by_declared_surface_field"
@@ -98,38 +99,26 @@ def offered(monkeypatch: pytest.MonkeyPatch):
 def test_a_frame_built_under_an_offer_claims_the_surface_it_names(offered):
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
 
-    frame = VideoFrame(**FRAME_BAG)
+    frame = VideoFrame(**FRAME_ENTRIES)
 
     assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
     assert claim_taken_on(frame).surface_id == "surface-7"
 
 
-def test_from_bag_claims_when_a_typed_read_is_the_one_constructing(offered):
-    """The claim follows the read, not the spelling.
-
-    A type reached through `read(port, into=MyType)` may build a `VideoFrame`
-    from a nested bag inside its own constructor, and that frame is as much a
-    delivered frame as one the read built directly — the offer is open for the
-    whole construction, to every class it reaches. Documenting `from_bag` as
-    unconditionally claimless would be wrong here, and would tell an author
-    composing types that their nested frames are unprotected when they are not.
-    """
+def test_from_bytes_claims_when_a_typed_read_is_the_one_constructing(offered):
+    """The claim follows the read, not the spelling: a frame a read target
+    builds inside its own `from_bytes` is offered the claim too."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
 
-    class FrameHolderBuiltByTheRead:
-        def __init__(self, **bag: object) -> None:
-            self.frame = VideoFrame.from_bag(bag)
-
-    holder = FrameHolderBuiltByTheRead(**FRAME_BAG)
+    frame = VideoFrame.from_bytes(FRAME_PAYLOAD)
 
     assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
-    assert claim_taken_on(holder.frame).surface_id == "surface-7"
+    assert claim_taken_on(frame).surface_id == "surface-7"
 
 
-def test_from_bag_outside_any_read_claims_nothing():
-    """The other half, with no offer standing: the same call takes no claim,
-    which is what an author building a bag by hand gets."""
-    frame = VideoFrame.from_bag(FRAME_BAG)
+def test_from_bytes_outside_any_read_claims_nothing():
+    """With no offer standing, a payload in hand builds an unclaimed frame."""
+    frame = VideoFrame.from_bytes(FRAME_PAYLOAD)
 
     assert claim_taken_on(frame) is None
 
@@ -137,7 +126,7 @@ def test_from_bag_outside_any_read_claims_nothing():
 def test_the_claim_goes_away_with_the_frame_and_nothing_is_called(offered):
     offered(GpuLimitedAccessStandIn())
 
-    frame = VideoFrame(**FRAME_BAG)
+    frame = VideoFrame(**FRAME_ENTRIES)
     claim_still_alive = weakref.ref(claim_taken_on(frame))
     assert claim_still_alive() is not None
 
@@ -148,78 +137,77 @@ def test_the_claim_goes_away_with_the_frame_and_nothing_is_called(offered):
     )
 
 
-def test_a_frame_built_from_a_bag_you_are_holding_claims_nothing():
-    """`from_bag` on a dict claims nothing: there is no read in progress, and a
-    hand-rolled bag may name no live surface at all."""
-    frame = VideoFrame.from_bag(FRAME_BAG)
-    assert claim_taken_on(frame) is None
-
-
 def test_a_surface_that_cannot_be_claimed_still_reads(offered):
-    """A frame whose surface is already gone is still a delivered frame. It
-    falls back to what an untyped read gets — pool depth — rather than turning
-    into an exception at the read."""
+    """A frame whose surface is already gone is still a delivered frame; it
+    falls back to pool depth rather than raising at the read."""
     offered(GpuLimitedAccessThatRefuses())
 
-    frame = VideoFrame(**FRAME_BAG)
+    frame = VideoFrame.from_bytes(FRAME_PAYLOAD)
 
     assert claim_taken_on(frame) is None
     assert frame.surface_id == "surface-7"
 
 
 def test_the_claim_is_not_part_of_what_a_frame_is(offered):
-    """It rides alongside the fields: two frames off the same bag are equal,
-    and the claim shows up in neither equality nor repr."""
+    """Two frames off the same message are equal, and the claim shows up in
+    neither equality nor repr."""
     offered(GpuLimitedAccessStandIn())
 
-    frame = VideoFrame(**FRAME_BAG)
-    same_bag_again = VideoFrame(**FRAME_BAG)
+    frame = VideoFrame.from_bytes(FRAME_PAYLOAD)
+    same_message_again = VideoFrame.from_bytes(FRAME_PAYLOAD)
 
-    assert frame == same_bag_again
+    assert frame == same_message_again
     assert PER_SURFACE_ACCESS_FIELD not in repr(frame)
 
 
-def test_the_read_spelling_casts_nested_metadata_like_from_bag():
-    """`read(port, into=VideoFrame)` constructs `VideoFrame(**bag)`, so that
-    spelling has to produce the same frame `from_bag` does — otherwise the
-    strictness dial hands back raw dicts where it promised types."""
-    bag = {
-        **FRAME_BAG,
+def test_to_bytes_carries_no_claim(offered):
+    offered(GpuLimitedAccessStandIn())
+
+    frame = VideoFrame.from_bytes(FRAME_PAYLOAD)
+
+    assert PER_SURFACE_ACCESS_FIELD.encode() not in frame.to_bytes()
+    assert VideoFrame.from_bytes(frame.to_bytes()) == frame
+
+
+def test_from_bytes_casts_nested_metadata_like_keyword_construction():
+    entries = {
+        **FRAME_ENTRIES,
         "fps": 30,
         "color_info": {"primaries": "bt709", "transfer": "srgb"},
         "content_light": {"max_cll": 1000, "max_fall": 400},
     }
 
-    constructed = VideoFrame(**bag)
+    read_back = VideoFrame.from_bytes(pack(entries))
 
-    assert constructed == VideoFrame.from_bag(bag)
-    assert constructed.color_info == ColorInfo(primaries="bt709", transfer="srgb")
-    assert constructed.content_light == ContentLight(max_cll=1000, max_fall=400)
+    assert read_back == VideoFrame(**entries)
+    assert read_back.color_info == ColorInfo(primaries="bt709", transfer="srgb")
+    assert read_back.content_light == ContentLight(max_cll=1000, max_fall=400)
 
 
-def test_the_read_spelling_validates_like_from_bag():
+def test_keyword_construction_validates_like_from_bytes():
     with pytest.raises(ValueError, match="must be int"):
-        VideoFrame(**{**FRAME_BAG, "timestamp_ns": "not-an-int"})
+        VideoFrame(**{**FRAME_ENTRIES, "timestamp_ns": "not-an-int"})
     with pytest.raises(ValueError, match="fps"):
-        VideoFrame(**{**FRAME_BAG, "fps": "30"})
+        VideoFrame(**{**FRAME_ENTRIES, "fps": "30"})
     with pytest.raises(ValueError, match="content_light"):
-        VideoFrame(**{**FRAME_BAG, "content_light": {"max_cll": 1, "unexpected_key": 1}})
+        VideoFrame(**{**FRAME_ENTRIES, "content_light": {"max_cll": 1, "unexpected_key": 1}})
 
 
 def test_both_spellings_ignore_keys_the_cast_does_not_read():
-    """The bag is an open map — the engine's own convention, and what the Rust
-    cast does. A producer adding a key must not turn every typed read into a
-    TypeError, because that read is the one that claims the frame."""
-    bag_from_a_newer_producer = {**FRAME_BAG, "a_key_a_future_producer_adds": "ignored"}
+    """A message is an open map; a producer adding a key must not turn the
+    read that claims the frame into a TypeError."""
+    entries_from_a_newer_producer = {
+        **FRAME_ENTRIES,
+        "a_key_a_future_producer_adds": "ignored",
+    }
 
-    assert VideoFrame(**bag_from_a_newer_producer) == VideoFrame.from_bag(
-        bag_from_a_newer_producer
+    assert VideoFrame(**entries_from_a_newer_producer) == VideoFrame.from_bytes(
+        pack(entries_from_a_newer_producer)
     )
-    assert VideoFrame(**bag_from_a_newer_producer).surface_id == "surface-7"
 
 
 def test_already_cast_metadata_survives_construction():
-    """A frame built in Python — a test fixture, a node forwarding one —
-    passes real `ColorInfo`, and re-casting must not mangle it."""
-    frame = VideoFrame(**FRAME_BAG, color_info=ColorInfo(matrix="bt709"))
+    """A frame built in Python passes real `ColorInfo`, and re-casting must
+    not mangle it."""
+    frame = VideoFrame(**FRAME_ENTRIES, color_info=ColorInfo(matrix="bt709"))
     assert frame.color_info == ColorInfo(matrix="bt709")

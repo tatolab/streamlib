@@ -8,20 +8,19 @@ A stream is a `@stream` function that adds, links and exposes nodes on a
 declares its execution and ports with `@node` / `@node.input` / `@node.output` and
 receives a capability-typed context in every lifecycle hook. The contexts, link
 endpoints, GPU classes, windows and timer a node is handed while it runs are
-`typing.Protocol`s the runtime implements; the clock, the timer's start and the
-bag codec are functions that reach the runtime when called, and raise
-`RuntimeError` naming themselves where no runtime is lent. Everything else here
-is pure Python, so a stream imports, type-checks and compiles with no runtime
-installed. The built-in nodes are generated from the runtime's own
-declarations, each with a `TypedDict` for its config.
+`typing.Protocol`s the runtime implements; the clock and the timer's start are
+functions that reach the runtime when called, and raise `RuntimeError` naming
+themselves where no runtime is lent. A message's payload is bytes;
+`tatolab.stream.msgpack` packs and unpacks the msgpack records the built-ins
+carry, and `MsgpackCast` gives a class the `from_bytes` a typed read calls.
+Everything else here is pure Python, so a stream imports, type-checks and
+compiles with no runtime installed. The built-in nodes are generated from the
+runtime's own declarations, each with a `TypedDict` for its config.
 """
 
 from . import clock as clock
 from . import log as log
-from ._bag_codec import (
-    decode_msgpack_bytes_to_python_object as decode_msgpack_bytes_to_python_object,
-)
-from ._bag_codec import encode_bag_to_msgpack_bytes as encode_bag_to_msgpack_bytes
+from . import msgpack as msgpack
 from ._built_in_nodes import CameraSource as CameraSource
 from ._built_in_nodes import CameraSourceConfig as CameraSourceConfig
 from ._built_in_nodes import DisplayWindow as DisplayWindow
@@ -62,6 +61,9 @@ from ._gpu_protocols import IOSurfaceMachPortExport as IOSurfaceMachPortExport
 from ._gpu_protocols import KernelDispatchBatch as KernelDispatchBatch
 from ._gpu_protocols import OpaqueFdAllocationExport as OpaqueFdAllocationExport
 from ._gpu_protocols import RayTracingKernel as RayTracingKernel
+from ._node_context_protocols import (
+    CastFromMessagePayloadBytes as CastFromMessagePayloadBytes,
+)
 from ._node_context_protocols import LinkInputDataReader as LinkInputDataReader
 from ._node_context_protocols import LinkOutputDataWriter as LinkOutputDataWriter
 from ._node_context_protocols import NodeLinkDataAccess as NodeLinkDataAccess
@@ -117,6 +119,8 @@ from .model_input_tensor_kernel import (
 )
 from .model_input_tensor_kernel import ModelInputTensorKernel as ModelInputTensorKernel
 from .model_input_tensor_kernel import ModelInputTensorLayout as ModelInputTensorLayout
+from .msgpack import MsgpackCast as MsgpackCast
+from .msgpack import msgpack_typed_dict_cast as msgpack_typed_dict_cast
 from .node_output_texture_ring import NodeOutputTextureRing as NodeOutputTextureRing
 from .video_frame import ColorInfo as ColorInfo
 from .video_frame import ContentLight as ContentLight
@@ -129,6 +133,7 @@ __all__ = [
     "AudioWindowContract",
     "CameraSource",
     "CameraSourceConfig",
+    "CastFromMessagePayloadBytes",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
@@ -171,6 +176,7 @@ __all__ = [
     "MonotonicTimer",
     "Mp4Sink",
     "Mp4SinkConfig",
+    "MsgpackCast",
     "NodeInputPortReference",
     "NodeLinkDataAccess",
     "NodeOutputPortReference",
@@ -198,11 +204,11 @@ __all__ = [
     "VirtualCameraSinkConfig",
     "clock",
     "compile_stream_to_graph",
-    "decode_msgpack_bytes_to_python_object",
-    "encode_bag_to_msgpack_bytes",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log",
     "monotonic_now_ns",
+    "msgpack",
+    "msgpack_typed_dict_cast",
     "node",
     "start_monotonic_timer",
     "stream",

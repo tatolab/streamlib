@@ -7,7 +7,7 @@ The user writes `vec4 effect(vec4 source, ivec2 at)` and a list of named
 dials; this class supplies the rest of an ordinary compute kernel around it —
 the source sampler, the output image, the workgroup tile, the push-constant
 block — and per frame lands the frame with the engine copy, dispatches, and
-hands back the output bag. Wheel grammar over `create_compute_kernel`,
+hands back the output frame's record. Wheel grammar over `create_compute_kernel`,
 `NodeOutputTextureRing`, `copy_surface_to_surface` and `dispatch`; the
 engine sees nothing but a kernel and a copy.
 
@@ -285,11 +285,13 @@ class GlslPixelEffect:
         frame: VideoFrame,
         dials: "Mapping[str, float | Sequence[float]] | None" = None,
     ) -> "dict[str, Any]":
-        """Run the effect over `frame` and return the output frame's bag, in `process()`.
+        """Run the effect over `frame` and return the output frame's record, in `process()`.
 
         `frame` is one single-plane RGBA frame. Every declared dial is
-        supplied on every apply; none persists. The output is an `rgba8_unorm` frame at the source's extent, carrying its
-        timestamp and colour description. Raises naming the dial for an
+        supplied on every apply; none persists. The output is an `rgba8_unorm`
+        frame at the source's extent, carrying its timestamp and colour
+        description; `tatolab.stream.msgpack.pack` turns the record into the
+        payload a `VideoFrame` reader reads. Raises naming the dial for an
         undeclared, missing or ill-typed one, and naming the frame when the
         engine copy refuses to land it.
         """
@@ -319,7 +321,7 @@ class GlslPixelEffect:
             push_constants=push_constants,
         )
 
-        output_bag: "dict[str, Any]" = {
+        output_frame_record: "dict[str, Any]" = {
             "surface_id": output_texture.surface_id,
             "width": frame.width,
             "height": frame.height,
@@ -327,12 +329,12 @@ class GlslPixelEffect:
             "timestamp_ns": frame.timestamp_ns,
         }
         if frame.color_info is not None:
-            output_bag["color_info"] = {
+            output_frame_record["color_info"] = {
                 axis: value
                 for axis, value in asdict(frame.color_info).items()
                 if value is not None
             }
-        return output_bag
+        return output_frame_record
 
     def _pack_push_constants(self, supplied_dials: "dict[str, Any]") -> bytes:
         for name in supplied_dials:
