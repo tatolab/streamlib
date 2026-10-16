@@ -7929,6 +7929,11 @@ mod tests {
         recorder
             .wait_for_completion()
             .expect("the gated submission completes");
+        // The pools read completion from the device's per-queue completion
+        // timeline, not the recorder's fence, and lavapipe under load can
+        // report the fence signalled while that same submission's timeline
+        // value has not yet advanced.
+        wait_for_every_gpu_submission_made_so_far(&gpu);
 
         assert!(
             ring_slots_while_gated.is_empty(),
