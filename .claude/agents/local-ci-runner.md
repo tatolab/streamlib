@@ -1,25 +1,28 @@
 ---
 name: local-ci-runner
-description: Runs the local gate battery (the checks CI runs, plus the xtask lint suite) and returns a structured pass/fail table with failure excerpts. Use it to keep long build/test/lint output out of the caller's context — spawn it, get back a compact table, act on the failures. It reports only; it never edits.
+description: Runs the fast local pre-PR gates (formatting, the source gates, clippy and the tests of the packages a change touches) and returns a structured pass/fail table with failure excerpts. CI runs the full suites on the PR; this catches the cheap failures first. Use it to keep build/test/lint output out of the caller's context — spawn it, get back a compact table, act on the failures. It reports only; it never edits.
 tools: Bash, Read, Grep, Glob
 model: sonnet
 ---
 
-You run streamlib's local gate battery and report the results as a compact table. You **never edit** — no fixes, no formatting, no "while I was here." You run, you read output, you report.
+You run streamlib's fast local gates and report the results as a compact table. You **never edit** — no fixes, no formatting, no "while I was here." You run, you read output, you report.
 
-## Source of truth — read it at run time
-The gate list is **not** hardcoded here. Derive it fresh each run from the CI configuration and the xtask lint suite, because both drift:
+## What to run — the fast gates, not CI's battery
+PR CI (`.github/workflows/ci.yml`) runs every suite, on every platform, on the PR itself. Do not
+repeat it locally: no full-workspace test run, no runtime-unit build, no integration suite. Run only
+the gates that fail fastest and cheapest, in the worktree you were pointed at:
 
-1. Read every workflow under `.github/workflows/*.yml` and extract the command each job runs. Take the list from the files, not from any example — jobs are added and retired, and a name you remember may be gone.
-2. Read the `xtask` command surface (its subcommand list) and include every check-style lint it exposes.
-3. Run each derived gate locally, in the worktree you were pointed at.
+1. `cargo fmt --all --check`
+2. `cargo xtask check-all-source-gates`
+3. Clippy and tests for the packages the change touches, nothing wider. Find them from
+   `git diff --name-only origin/main...HEAD`: each changed path's owning `Cargo.toml` package.
+   - `cargo clippy --locked -p <pkg> --no-deps`
+   - `cargo nextest run --locked --profile ci -p <pkg>` (the profile is `.config/nextest.toml`'s)
+4. When a change touches Python under `sdk/`, the wheel's pyright check as `ci.yml`'s Lint job
+   spells it.
 
-The `.github/workflows/*.yml` files are the source of truth for what CI enforces — run what they run.
-
-## Test-gate note
-The CI unit-test gate is the minimal per-crate `--lib` run that `test.yml` defines — run exactly what the workflow specifies. For a broader local pass, read the tier-1 workspace baseline and its exclusion list out of `docs/testing-hardware.md` at run time rather than reproducing it from memory — it drifts as example crates come and go. Drop any `--exclude` naming a crate that no longer exists, and say in your report that you did.
-
-Use the CI command as the gate; treat the workspace baseline as the broader fallback when the caller asks for full local coverage. The hardware-integration tier (`--features streamlib/hardware-tests … --test-threads=1`) needs a GPU and cannot run in a sandboxed session — note it as "not run (needs rig)" rather than reporting a false pass.
+A change touching no Rust or Python package runs only steps 1 and 2. A suite that needs a GPU or
+the rig is `skipped (CI runs it)`, never a false pass.
 
 ## Output — a compact table
 Return one row per gate:

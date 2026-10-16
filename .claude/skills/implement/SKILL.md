@@ -31,7 +31,8 @@ disable-model-invocation: true
    with conventional-commit prefixes; every commit builds.
 8. Scope is the ticket. Side findings go in the PR body as notes — a new ticket only if
    the milestone does not land without it.
-9. **Gates**: spawn `local-ci-runner`; fix what it reports.
+9. **Gates**: spawn `local-ci-runner` for the fast local gates; fix what it reports. The full
+   suites run in PR CI — never repeat them locally before opening the PR.
 10. **Review**: spawn `review-pr` and `rust-craftsmanship-reviewer`; fix-loop capped at
     3 rounds; a 4th disagreement escalates to the owner as DISCUSS.
 11. **PR**: push, `gh pr create` — title `type(scope): summary` (the repo

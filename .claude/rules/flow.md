@@ -35,10 +35,10 @@ paths:
 - Labels are display output only — nothing reads a label as control flow. Every work item is
   classified fresh from its content and from current code, never from its labels.
 - PR titles are conventional-commit typed (`type(scope): summary`). The repo squash-merges, so the
-  title becomes the commit release-please parses — a mistitled PR silently skips the version bump
-  (CI gate: `.github/workflows/pr-title.yml`).
-- Only `feat` (minor) and `fix` (patch) bump the version; `!` or a `BREAKING CHANGE:` footer is a
-  breaking bump (pre-1.0 → minor). `refactor` / `chore` / `docs` / `test` / `ci` / `perf` don't
+  title becomes the commit release-please parses — a mistitled PR silently skips the version bump.
+  No CI job checks it: run `scripts/check-conventional-pr-title.sh "<title>"` before opening the PR.
+- Pre-1.0, `feat`, `fix` and `perf` bump the patch version; `!` or a `BREAKING CHANGE:` footer bumps
+  the minor (`release-please-config.json`). `refactor` / `chore` / `docs` / `test` / `ci` don't
   bump — title an ABI- or behavior-affecting change that must move the version as `feat` (or
   breaking), never `refactor`.
 - Never hand-edit the version. `[workspace.package].version`, `.release-please-manifest.json`, and
