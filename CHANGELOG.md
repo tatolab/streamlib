@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.46.11](https://github.com/tatolab/streamlib/compare/v0.46.10...v0.46.11) (2026-10-16)
+
+
+### Bug Fixes
+
+* **engine:** iceoryx2 test domains name a live process, so a sibling test's sweep never deletes their shared memory mid-test ([#2790](https://github.com/tatolab/streamlib/issues/2790)) ([252110a](https://github.com/tatolab/streamlib/commit/252110aae441527017bfc5925b9fef9c8c8b45b1))
+* **engine:** the freed-entry destruction test waits on the completion timeline the pools read, not the recorder's fence ([#2791](https://github.com/tatolab/streamlib/issues/2791)) ([92a3f9b](https://github.com/tatolab/streamlib/commit/92a3f9b670bf1be72e48db46243ed46bf3fe0d6e))
+
 ## [0.46.10](https://github.com/tatolab/streamlib/compare/v0.46.9...v0.46.10) (2026-10-15)
 
 
