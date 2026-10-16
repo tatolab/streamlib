@@ -419,7 +419,7 @@ jobs:
   # else.
   extension-wheels-macos:
     name: Extension wheel, macOS (${{ matrix.extension }})
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     # Compiles and runs PR-authored code, so it gets the read it needs and
     # nothing else rather than inheriting the workflow's defaults.
@@ -556,7 +556,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, macos-15]
+        runner: [ubuntu-latest, macos-26]
         python: ["3.12"]
         include:
           - runner: ubuntu-latest

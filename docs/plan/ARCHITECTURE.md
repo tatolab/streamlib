@@ -3890,11 +3890,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — The macOS runtime unit is built for `aarch64-apple-darwin` at the same abi3
   floor as the Linux one, at the same version. Apple Silicon only: no
   Intel wheel, no universal2, and Rosetta is not a supported path — not as a fallback, not
-  as a courtesy (owner, 2026-09-19). It is built on a pinned `macos-15` runner, because the
-  image decides the SDK. The deployment target is macOS 15.0, pinned once in
+  as a courtesy (owner, 2026-09-19). It is built on a pinned `macos-26` runner, the owner's own
+  macOS, because the image decides the SDK. The deployment target is macOS 15.0, pinned once in
   `[tool.maturin.target.aarch64-apple-darwin]` and exported as `MACOSX_DEPLOYMENT_TARGET`,
   because maturin tags the wheel with it but does not hand it to the link; the bundled
-  loader is built to it. 15.0 is the newest target that runner can both build for and run,
+  loader is built to it. 15.0 sits below the build SDK on purpose: it
   clears MoltenVK's floor (12) and AVFoundation's `AVCaptureDeviceTypeExternal` (14), and
   every Apple Silicon Mac can run it; a Mac on 14 or older gets no matching distribution.
   No notarisation and no signing identity: nothing pip delivers is quarantined. Every
@@ -3909,7 +3909,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the runtime unit withholds the PyPI upload, as a failed build of any distribution does.
   [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697]
   <!-- verify: grep -n 'macos-deployment-target = "15.0"' sdk/streamlib-python-wheel/pyproject.toml -->
-  <!-- verify: grep -n "runs-on: macos-15" .github/workflows/macos-wheel.yml -->
+  <!-- verify: grep -n "runs-on: macos-26" .github/workflows/macos-wheel.yml -->
   <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/release-wheel.yml -->
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
   it. `Rust Build (macOS)` compiles the whole workspace with the wheel in it (clippy on

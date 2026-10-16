@@ -906,9 +906,9 @@ jobs:
   # a release exactly as a Linux one does — which only means anything if
   # something compiles it on every PR.
   #
-  # `macos-15` pinned rather than `macos-latest`: that label now means macOS 26,
-  # and the runner image is what decides the SDK the Apple frameworks are linked
-  # against. arm64, and free for public repositories.
+  # `macos-26` pinned rather than `macos-latest`: the runner image is what
+  # decides the SDK the Apple frameworks are linked against, so it moves only
+  # on purpose. arm64, and free for public repositories.
   #
   # GPU work is last and narrow: the runner exposes a paravirtual Metal device,
   # and the in-process adapters' tests run on it through MoltenVK. Everything
@@ -917,7 +917,7 @@ jobs:
   # the Linux one.
   rust-build-macos:
     name: Rust Build (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     # A cold cache builds shaderc — glslang and SPIRV-Tools from source — before
     # it reaches a single test, which is most of a 22-minute first run.
     timeout-minutes: 60

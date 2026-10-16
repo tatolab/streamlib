@@ -50,7 +50,7 @@ jobs:
           # Pinned for the reason macos-wheel.yml pins it: the image decides
           # the SDK the wheel links against.
           - platform: aarch64-apple-darwin
-            runner: macos-15
+            runner: macos-26
 
     steps:
       - uses: actions/checkout@v4
