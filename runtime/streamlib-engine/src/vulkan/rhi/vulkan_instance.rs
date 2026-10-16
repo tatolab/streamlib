@@ -56,6 +56,107 @@ pub(crate) struct HostVulkanInstance {
     /// Must outlive `destroy_instance`, whose own findings reach the
     /// pNext-chained messenger through the same user-data pointer.
     pub(crate) validation_messenger: Option<VulkanValidationMessenger>,
+    pub(crate) window_system_surface_extensions: WindowSystemSurfaceExtensionsEnabledOnInstance,
+}
+
+/// A platform extension that creates a `VkSurfaceKHR` for one window system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowSystemSurfaceExtension {
+    KhrWayland,
+    KhrXcb,
+    KhrXlib,
+    ExtMetal,
+}
+
+impl WindowSystemSurfaceExtension {
+    /// The window systems a window on this platform can come from.
+    const OFFERED_ON_THIS_PLATFORM: &[Self] = if cfg!(target_os = "linux") {
+        &[Self::KhrWayland, Self::KhrXcb, Self::KhrXlib]
+    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+        &[Self::ExtMetal]
+    } else {
+        &[]
+    };
+
+    /// The extension's registry name.
+    pub(crate) fn extension_name(self) -> &'static CStr {
+        match self {
+            Self::KhrWayland => c"VK_KHR_wayland_surface",
+            Self::KhrXcb => c"VK_KHR_xcb_surface",
+            Self::KhrXlib => c"VK_KHR_xlib_surface",
+            Self::ExtMetal => c"VK_EXT_metal_surface",
+        }
+    }
+}
+
+const KHR_SURFACE_EXTENSION_NAME: &CStr = c"VK_KHR_surface";
+
+/// The window-system surface extensions an instance enabled: which windows a
+/// surface can be created for, so no surface call reaches a command the
+/// loader never loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WindowSystemSurfaceExtensionsEnabledOnInstance {
+    khr_surface_enabled: bool,
+    platform_surface_extensions_enabled: Vec<WindowSystemSurfaceExtension>,
+}
+
+impl WindowSystemSurfaceExtensionsEnabledOnInstance {
+    /// Enable `VK_KHR_surface` and every surface extension of this platform's
+    /// window systems the loader offers.
+    fn select_from_available(available_extension_names: &[&CStr]) -> Self {
+        Self {
+            khr_surface_enabled: available_extension_names.contains(&KHR_SURFACE_EXTENSION_NAME),
+            platform_surface_extensions_enabled:
+                WindowSystemSurfaceExtension::OFFERED_ON_THIS_PLATFORM
+                    .iter()
+                    .copied()
+                    .filter(|extension| {
+                        available_extension_names.contains(&extension.extension_name())
+                    })
+                    .collect(),
+        }
+    }
+
+    /// The names to enable on the instance.
+    fn instance_extension_names(&self) -> impl Iterator<Item = &'static CStr> + '_ {
+        self.khr_surface_enabled
+            .then_some(KHR_SURFACE_EXTENSION_NAME)
+            .into_iter()
+            .chain(
+                self.platform_surface_extensions_enabled
+                    .iter()
+                    .map(|extension| extension.extension_name()),
+            )
+    }
+
+    /// Whether a window from at least one of this platform's window systems
+    /// can get a surface; a headless surface does not count.
+    pub(crate) fn can_create_a_surface_for_some_window_system(&self) -> bool {
+        self.khr_surface_enabled && !self.platform_surface_extensions_enabled.is_empty()
+    }
+
+    /// Refuse, naming the missing extension, a surface through `extension`
+    /// this instance did not enable.
+    pub(crate) fn refuse_a_surface_this_instance_cannot_create(
+        &self,
+        extension: WindowSystemSurfaceExtension,
+    ) -> Result<()> {
+        let missing_extension_name = if !self.khr_surface_enabled {
+            KHR_SURFACE_EXTENSION_NAME
+        } else if !self
+            .platform_surface_extensions_enabled
+            .contains(&extension)
+        {
+            extension.extension_name()
+        } else {
+            return Ok(());
+        };
+        Err(Error::DisplaySurfaceUnavailable(format!(
+            "the Vulkan instance has no {}, so no surface can be created for this window: the \
+             driver carries no support for its window system",
+            missing_extension_name.to_string_lossy()
+        )))
+    }
 }
 
 impl HostVulkanInstance {
@@ -80,15 +181,6 @@ impl HostVulkanInstance {
         // 3. Build extension list
         let mut instance_extensions: Vec<*const c_char> = Vec::new();
 
-        // The platform-agnostic half of WSI. Probed, so a host without a display
-        // stack simply does not get it; the platform surface extensions below
-        // are what differ.
-        let surface_ext = c"VK_KHR_surface";
-        if available_ext_names.contains(&surface_ext) {
-            instance_extensions.push(surface_ext.as_ptr());
-            tracing::info!("VK_KHR_surface enabled");
-        }
-
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             // MoltenVK is a non-conformant portability implementation: the loader
@@ -99,41 +191,36 @@ impl HostVulkanInstance {
                 instance_extensions.push(portability_enum.as_ptr());
                 tracing::info!("VK_KHR_portability_enumeration enabled");
             }
-
-            // The Metal WSI surface, for a swapchain over a CAMetalLayer.
-            // VK_EXT_metal_objects is a *device* extension — its commands are
-            // device-level — and is requested with the device, not here.
-            let metal_surface_ext = c"VK_EXT_metal_surface";
-            if available_ext_names.contains(&metal_surface_ext) {
-                instance_extensions.push(metal_surface_ext.as_ptr());
-                tracing::info!("VK_EXT_metal_surface enabled");
-            } else {
-                tracing::warn!(
-                    "VK_EXT_metal_surface not available - no window surface can be created"
-                );
-            }
         }
 
-        // On Linux, enable the platform surface extensions for windowed display
+        let window_system_surface_extensions =
+            WindowSystemSurfaceExtensionsEnabledOnInstance::select_from_available(
+                &available_ext_names,
+            );
+        instance_extensions.extend(
+            window_system_surface_extensions
+                .instance_extension_names()
+                .map(CStr::as_ptr),
+        );
+        let window_system_surface_extension_names: Vec<_> = window_system_surface_extensions
+            .instance_extension_names()
+            .map(CStr::to_string_lossy)
+            .collect();
+        if window_system_surface_extensions.can_create_a_surface_for_some_window_system() {
+            tracing::info!(
+                extensions = ?window_system_surface_extension_names,
+                "window-system surface extensions enabled"
+            );
+        } else {
+            tracing::info!(
+                extensions = ?window_system_surface_extension_names,
+                "the Vulkan instance offers no window-system surface extension: no window can \
+                 be opened on it"
+            );
+        }
+
         #[cfg(target_os = "linux")]
         {
-            // Enable all available platform surface extensions
-            let wayland_ext = c"VK_KHR_wayland_surface";
-            if available_ext_names.contains(&wayland_ext) {
-                instance_extensions.push(wayland_ext.as_ptr());
-                tracing::info!("VK_KHR_wayland_surface available");
-            }
-            let xcb_ext = c"VK_KHR_xcb_surface";
-            if available_ext_names.contains(&xcb_ext) {
-                instance_extensions.push(xcb_ext.as_ptr());
-                tracing::info!("VK_KHR_xcb_surface available");
-            }
-            let xlib_ext = c"VK_KHR_xlib_surface";
-            if available_ext_names.contains(&xlib_ext) {
-                instance_extensions.push(xlib_ext.as_ptr());
-                tracing::info!("VK_KHR_xlib_surface available");
-            }
-
             // VK_EXT_headless_surface — enables creating a Vulkan surface without
             // a window. Used by unit tests to exercise the swapchain code path
             // without requiring a display server.
@@ -238,6 +325,7 @@ impl HostVulkanInstance {
             entry,
             instance,
             validation_messenger,
+            window_system_surface_extensions,
         })
     }
 }
@@ -280,6 +368,76 @@ mod tests {
                      unit's lend carries the driver: {guidance}"
                 );
             }
+        }
+    }
+
+    fn every_window_system_surface_extension_of_this_platform() -> Vec<&'static CStr> {
+        WindowSystemSurfaceExtension::OFFERED_ON_THIS_PLATFORM
+            .iter()
+            .map(|extension| extension.extension_name())
+            .collect()
+    }
+
+    /// The bundled lavapipe is built headless: it offers the platform-agnostic
+    /// surface and the headless one, and no window system's (#2775).
+    #[test]
+    fn a_driver_offering_only_the_headless_surface_can_create_no_window_surface() {
+        let enabled = WindowSystemSurfaceExtensionsEnabledOnInstance::select_from_available(&[
+            c"VK_KHR_surface",
+            c"VK_EXT_headless_surface",
+        ]);
+
+        assert!(
+            !enabled.can_create_a_surface_for_some_window_system(),
+            "{enabled:?}"
+        );
+        for extension in WindowSystemSurfaceExtension::OFFERED_ON_THIS_PLATFORM {
+            let refusal = enabled
+                .refuse_a_surface_this_instance_cannot_create(*extension)
+                .expect_err("a surface through an extension the instance lacks must be refused");
+            assert!(
+                refusal
+                    .to_string()
+                    .contains(&*extension.extension_name().to_string_lossy()),
+                "the refusal must name the missing extension: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_driver_offering_this_platforms_window_systems_can_create_a_surface_for_each() {
+        let mut available = every_window_system_surface_extension_of_this_platform();
+        available.push(c"VK_KHR_surface");
+        let enabled =
+            WindowSystemSurfaceExtensionsEnabledOnInstance::select_from_available(&available);
+
+        assert_eq!(
+            enabled.can_create_a_surface_for_some_window_system(),
+            !WindowSystemSurfaceExtension::OFFERED_ON_THIS_PLATFORM.is_empty()
+        );
+        for extension in WindowSystemSurfaceExtension::OFFERED_ON_THIS_PLATFORM {
+            enabled
+                .refuse_a_surface_this_instance_cannot_create(*extension)
+                .expect("an enabled window-system extension must not be refused");
+        }
+        let mut enabled_names: Vec<&CStr> = enabled.instance_extension_names().collect();
+        enabled_names.sort();
+        available.sort();
+        assert_eq!(enabled_names, available);
+    }
+
+    #[test]
+    fn a_window_system_extension_without_the_platform_agnostic_surface_is_refused_naming_it() {
+        let enabled = WindowSystemSurfaceExtensionsEnabledOnInstance::select_from_available(
+            &every_window_system_surface_extension_of_this_platform(),
+        );
+
+        assert!(!enabled.can_create_a_surface_for_some_window_system());
+        for extension in WindowSystemSurfaceExtension::OFFERED_ON_THIS_PLATFORM {
+            let refusal = enabled
+                .refuse_a_surface_this_instance_cannot_create(*extension)
+                .expect_err("no surface can be created without VK_KHR_surface");
+            assert!(refusal.to_string().contains("VK_KHR_surface"), "{refusal}");
         }
     }
 

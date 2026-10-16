@@ -13,8 +13,8 @@ the same over `tatolab mcp` with a JSON-RPC client speaking over the verb's
 stdin and stdout.
 
 A started stream needs a GPU context, so most tests here are `requires_gpu`;
-their streams are native built-ins only — a test pattern into a window — so no
-camera is needed. What needs no started stream runs without one: every verb
+their streams are a test pattern into a Python node that reads its frames, so
+no camera and no display is needed. What needs no started stream runs without one: every verb
 with no runtime, and a stopped kept stream through restarts, the owner's
 exposure ruling and `rm`.
 """
@@ -69,11 +69,12 @@ MCP_REQUEST_META = {
 ALPHA_STREAM = "alpha_pattern"
 BRAVO_STREAM = "bravo_pattern"
 
-#: Every project stream here: a test pattern into a small window, its `video`
-#: exposed public by the stream function — the author's suggestion, which an
-#: owner's ruling overrides.
+#: Every project stream here: a test pattern into a node that reads its frames,
+#: its `video` exposed public by the stream function — the author's suggestion,
+#: which an owner's ruling overrides.
 PROJECT_STREAM_SOURCE_TEMPLATE = '''\
-from tatolab.stream import DisplayWindow, Exposure, StreamBuilder, TestPatternSource, stream
+from frame_reader import PatternFrameReader
+from tatolab.stream import Exposure, StreamBuilder, TestPatternSource, stream
 
 
 @stream
@@ -81,13 +82,24 @@ def {stream_function_name}(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
         TestPatternSource, name="pattern", config={{"width": 320, "height": 180}}
     )
-    window = stream_builder.add(
-        DisplayWindow,
-        name="window",
-        config={{"width": 160, "height": 90, "title": "{stream_function_name}"}},
-    )
-    stream_builder.connect(pattern.output("video"), window.input("video"))
+    reader = stream_builder.add(PatternFrameReader, name="reader")
+    stream_builder.connect(pattern.output("video"), reader.input("video_from_upstream"))
     stream_builder.expose(pattern.output("video"), Exposure.PUBLIC)
+'''
+#: The project's reader, in its own module: a processor's only legal home.
+PROJECT_FRAME_READER_SOURCE = '''\
+from tatolab.stream import RuntimeContextLimitedAccess, node
+
+
+@node
+class PatternFrameReader:
+    """Reads each frame it receives and keeps none."""
+
+    @node.input(delivery_profile="newest")
+    def video_from_upstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.inputs.read("video_from_upstream")
 '''
 PROJECT_STREAM_NODE_COUNT = 2
 #: Bags a tap on a running stream's pattern collects to show frames flow.
@@ -132,7 +144,8 @@ def make_project_running_a_pattern_stream(
         {
             "stream.py": PROJECT_STREAM_SOURCE_TEMPLATE.format(
                 stream_function_name=stream_function_name
-            )
+            ),
+            "frame_reader.py": PROJECT_FRAME_READER_SOURCE
         },
         directory_name=stream_function_name.replace("_", "-"),
     ).resolve()
@@ -193,15 +206,15 @@ def assert_frames_flow_out_of_the_pattern(
     assert tapped["received"] > 0, f"no bag reached the tap on {channel} of `{stream_name}`: {tapped}"
 
 
-def assert_the_pattern_is_wired_to_the_window_inside_the_stream(
+def assert_the_pattern_is_wired_to_the_reader_inside_the_stream(
     local_api: LocalApiClient, stream_name: str
 ) -> None:
-    """The stream's one link, the pattern into the window, reaches `wired`: proof it runs,
+    """The stream's one link, the pattern into the reader, reaches `wired`: proof it runs,
     read from inside the stream, never by reading a port across its edge."""
     stream_links = local_api.graph(stream_name)["links"]
     assert len(stream_links) == 1, stream_links
     link_state = local_api.await_link_state(stream_links[0]["id"], "wired", stream=stream_name)
-    assert link_state == "wired", f"the pattern-to-window link of `{stream_name}` is {link_state}"
+    assert link_state == "wired", f"the pattern-to-reader link of `{stream_name}` is {link_state}"
 
 
 def stream_names_in_the_machine_graph(local_api: LocalApiClient) -> "list[str]":
@@ -891,7 +904,7 @@ def test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_bef
         stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
     assert graph_running_after_the_crash["exposed"] == exposure_at("internal")
-    assert_the_pattern_is_wired_to_the_window_inside_the_stream(local_api, ALPHA_STREAM)
+    assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, ALPHA_STREAM)
     assert listed_streams_by_name(local_api) == {
         ALPHA_STREAM: listing_of(ALPHA_STREAM, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
     }

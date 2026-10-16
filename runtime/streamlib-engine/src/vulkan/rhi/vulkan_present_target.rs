@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "linux")]
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::ExtHdrMetadataExtensionDeviceCommands as _;
@@ -21,6 +21,7 @@ use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 use super::vulkan_command_recorder::{RhiCommandRecorder, SwapchainImageBarrierScopes};
+use super::vulkan_instance::WindowSystemSurfaceExtension;
 use super::vulkan_pipeline_flags::VulkanStage;
 use super::vulkan_swapchain_colorspace::{
     SwapchainColorPick, build_hdr_metadata, pick_swapchain_format,
@@ -261,7 +262,7 @@ impl VulkanPresentTarget {
         color_traits: Option<&ColorTraits>,
     ) -> Result<Self> {
         let instance = device.instance();
-        let surface = create_surface_for_present_target(instance, surface_source)?;
+        let surface = create_surface_for_present_target(device, surface_source)?;
 
         let physical_device = device.physical_device();
         let queue_family_index = device.queue_family_index();
@@ -996,18 +997,32 @@ impl std::fmt::Debug for PresentTarget {
 }
 
 fn create_surface_for_present_target(
-    instance: &vulkanalia::Instance,
+    device: &HostVulkanDevice,
     surface_source: PresentSurfaceSource<'_>,
 ) -> Result<vk::SurfaceKHR> {
+    let instance = device.instance();
+    let window_system_surface_extensions = device.window_system_surface_extensions();
     let surface = match surface_source {
         #[cfg(target_os = "linux")]
         PresentSurfaceSource::NativeWindow {
             window_handle,
             display_handle,
-        } => unsafe { vulkanalia::window::create_surface(instance, display_handle, window_handle) },
+        } => {
+            window_system_surface_extensions.refuse_a_surface_this_instance_cannot_create(
+                window_system_surface_extension_for_native_window(display_handle, window_handle)?,
+            )?;
+            // SAFETY: the window outlives the present target that owns the
+            // surface, and the extension `create_surface` calls through was
+            // enabled on the instance, so its command was loaded.
+            unsafe { vulkanalia::window::create_surface(instance, display_handle, window_handle) }
+        }
         #[cfg(target_os = "macos")]
         PresentSurfaceSource::MetalLayerAddedAsSublayerOfWindowContentView(metal_layer) => {
             use vulkanalia::vk::ExtMetalSurfaceExtensionInstanceCommands as _;
+
+            window_system_surface_extensions.refuse_a_surface_this_instance_cannot_create(
+                WindowSystemSurfaceExtension::ExtMetal,
+            )?;
 
             let metal_surface_create_info = vk::MetalSurfaceCreateInfoEXT::builder()
                 .layer(metal_layer.metal_layer_pointer())
@@ -1021,6 +1036,48 @@ fn create_surface_for_present_target(
     surface.map_err(|e| {
         Error::DisplaySurfaceUnavailable(format!("VulkanPresentTarget: create_surface failed: {e}"))
     })
+}
+
+/// The extension `vulkanalia::window::create_surface` calls through for this
+/// window, refusing a handle it has no arm for rather than reaching its panic.
+#[cfg(target_os = "linux")]
+fn window_system_surface_extension_for_native_window(
+    display_handle: &dyn HasDisplayHandle,
+    window_handle: &dyn HasWindowHandle,
+) -> Result<WindowSystemSurfaceExtension> {
+    let display = display_handle.display_handle().map_err(|e| {
+        Error::DisplaySurfaceUnavailable(format!("the window's display handle is unavailable: {e}"))
+    })?;
+    let window = window_handle.window_handle().map_err(|e| {
+        Error::DisplaySurfaceUnavailable(format!("the window's handle is unavailable: {e}"))
+    })?;
+    window_system_surface_extension_for_raw_window_handles(display.as_raw(), window.as_raw())
+        .ok_or_else(|| {
+            Error::DisplaySurfaceUnavailable(
+                "the window is not a Wayland, XCB or Xlib window, the only window systems a \
+                 surface is created for on Linux"
+                    .into(),
+            )
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn window_system_surface_extension_for_raw_window_handles(
+    display: RawDisplayHandle,
+    window: RawWindowHandle,
+) -> Option<WindowSystemSurfaceExtension> {
+    match (display, window) {
+        (RawDisplayHandle::Wayland(_), RawWindowHandle::Wayland(_)) => {
+            Some(WindowSystemSurfaceExtension::KhrWayland)
+        }
+        (RawDisplayHandle::Xcb(_), RawWindowHandle::Xcb(_)) => {
+            Some(WindowSystemSurfaceExtension::KhrXcb)
+        }
+        (RawDisplayHandle::Xlib(_), RawWindowHandle::Xlib(_)) => {
+            Some(WindowSystemSurfaceExtension::KhrXlib)
+        }
+        _ => None,
+    }
 }
 
 /// The present mode a swapchain takes for a vsync preference, and whether a
@@ -1656,6 +1713,128 @@ mod tests {
 
         drop(frame);
         let _ = recorder.submit_and_wait();
+    }
+
+    /// A window whose handles name an X server no test ever connects to: a
+    /// surface call reaching the driver with it would fault, so a test using
+    /// it proves the refusal came first.
+    #[cfg(target_os = "linux")]
+    struct XlibWindowNoDisplayServerBacks;
+
+    #[cfg(target_os = "linux")]
+    impl HasWindowHandle for XlibWindowNoDisplayServerBacks {
+        fn window_handle(
+            &self,
+        ) -> std::result::Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
+        {
+            let window = RawWindowHandle::Xlib(raw_window_handle::XlibWindowHandle::new(1));
+            // SAFETY: the handle is never dereferenced — the surface is refused
+            // before any call takes it.
+            Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(window) })
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl HasDisplayHandle for XlibWindowNoDisplayServerBacks {
+        fn display_handle(
+            &self,
+        ) -> std::result::Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError>
+        {
+            let display = RawDisplayHandle::Xlib(raw_window_handle::XlibDisplayHandle::new(
+                Some(std::ptr::NonNull::dangling()),
+                0,
+            ));
+            // SAFETY: as for the window handle.
+            Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(display) })
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn each_linux_window_system_maps_to_the_extension_its_surface_is_created_through() {
+        use raw_window_handle::{
+            WaylandDisplayHandle, WaylandWindowHandle, XcbDisplayHandle, XcbWindowHandle,
+            XlibDisplayHandle, XlibWindowHandle,
+        };
+        use std::num::NonZeroU32;
+        use std::ptr::NonNull;
+
+        let wayland_display =
+            RawDisplayHandle::Wayland(WaylandDisplayHandle::new(NonNull::dangling()));
+        let wayland_window =
+            RawWindowHandle::Wayland(WaylandWindowHandle::new(NonNull::dangling()));
+        let xcb_display = RawDisplayHandle::Xcb(XcbDisplayHandle::new(None, 0));
+        let xcb_window = RawWindowHandle::Xcb(XcbWindowHandle::new(NonZeroU32::MIN));
+        let xlib_display = RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0));
+        let xlib_window = RawWindowHandle::Xlib(XlibWindowHandle::new(1));
+
+        assert_eq!(
+            window_system_surface_extension_for_raw_window_handles(wayland_display, wayland_window),
+            Some(WindowSystemSurfaceExtension::KhrWayland)
+        );
+        assert_eq!(
+            window_system_surface_extension_for_raw_window_handles(xcb_display, xcb_window),
+            Some(WindowSystemSurfaceExtension::KhrXcb)
+        );
+        assert_eq!(
+            window_system_surface_extension_for_raw_window_handles(xlib_display, xlib_window),
+            Some(WindowSystemSurfaceExtension::KhrXlib)
+        );
+        assert_eq!(
+            window_system_surface_extension_for_raw_window_handles(xlib_display, wayland_window),
+            None,
+            "a display and window of two window systems has no surface extension"
+        );
+    }
+
+    /// The bundled lavapipe is built headless (#2775): a window reaching it
+    /// must be refused naming the extension, never reach the loader's
+    /// unloaded `vkCreateXlibSurfaceKHR`. Runs where the instance lacks the
+    /// extension — the software-device lane — and passes over a device whose
+    /// instance has it, where the fake handles would reach the driver.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests"
+    )]
+    #[test]
+    fn a_window_on_an_instance_without_its_surface_extension_is_refused_naming_it() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        if device
+            .window_system_surface_extensions()
+            .refuse_a_surface_this_instance_cannot_create(WindowSystemSurfaceExtension::KhrXlib)
+            .is_ok()
+        {
+            return;
+        }
+
+        let window = XlibWindowNoDisplayServerBacks;
+        let refusal = match VulkanPresentTarget::new(
+            &device,
+            PresentSurfaceSource::NativeWindow {
+                window_handle: &window,
+                display_handle: &window,
+            },
+            1280,
+            720,
+            true,
+            None,
+        ) {
+            Ok(_) => panic!("a present target was built for a window the instance cannot surface"),
+            Err(refusal) => refusal,
+        };
+
+        assert!(
+            matches!(refusal, Error::DisplaySurfaceUnavailable(_)),
+            "{refusal:?}"
+        );
+        let refusal_text = refusal.to_string();
+        assert!(
+            refusal_text.contains("VK_KHR_xlib_surface") || refusal_text.contains("VK_KHR_surface"),
+            "the refusal must name the missing extension: {refusal_text}"
+        );
     }
 
     /// Smoke construction: requires a Vulkan device + winit window. We

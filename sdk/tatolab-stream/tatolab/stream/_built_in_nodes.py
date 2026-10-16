@@ -124,8 +124,11 @@ class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
 
     `video` takes any published `VideoFrame`. Add as many as the graph needs: each
     instance registers its own window with the engine's shared event pump and renders on
-    its own thread. An instance that cannot get a window drains its input without
-    showing anything, so upstream still sees a live consumer.
+    its own thread. On a device whose driver carries no window-system support — the
+    runtime's bundled software driver — setup refuses by name and the node never reaches
+    Running; the stream is viewed by its URL or by a node that reads its frames. An
+    instance that cannot get a window otherwise drains its input without showing
+    anything, so upstream still sees a live consumer.
 
     Inputs:
         `video` (newest): Video frames to show in the window.
