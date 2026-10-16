@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.12](https://github.com/tatolab/streamlib/compare/v0.46.11...v0.46.12) (2026-10-16)
+
+
+### Features
+
+* **engine:** a texture crosses as OPAQUE_FD only where the device reports it can, and the interpreter's import binds the stated memory type ([#2789](https://github.com/tatolab/streamlib/issues/2789)) ([1f284bf](https://github.com/tatolab/streamlib/commit/1f284bfa7f880d0bbd5e40a3a3f3bd7534be01c4))
+
 ## [0.46.11](https://github.com/tatolab/streamlib/compare/v0.46.10...v0.46.11) (2026-10-16)
 
 
