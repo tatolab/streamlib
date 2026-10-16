@@ -124,6 +124,11 @@ class LiveAddedEffect:
             log.info(f"MARKER:{self.marker}")
 '''
 
+# A native built-in is named over the control plane by the type `graph`
+# reports for one, its class in `tatolab.stream`.
+LIVE_ADDED_NATIVE_BUILT_IN_TYPE = "tatolab.stream:TestPatternSource"
+
+
 def test_the_live_added_effect_written_as_a_source_string_still_declares():
     """`LiveAddedEffect` lives as a triple-quoted literal, so no import, no
     linter and no AST sweep reaches it — running it here is how a bad migration
@@ -252,7 +257,8 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     connect wires a link into a source that was already publishing; the second
     consumer of that same source port proves the channel was sized for a late
     subscriber; the downstream effect proves a helper's output can be wired
-    after its setup; the disconnect stops the flow
+    after its setup; the live-added pattern proves a native built-in can be
+    added live; the disconnect stops the flow
     the tap was seeing; the remove takes the processor and its links away.
     """
     pattern_stream = start_the_pattern_stream(
@@ -374,6 +380,22 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
     assert flowing["received"] > 0, f"no bags left the live-added effect: {flowing}"
     tatolabd.await_marker("DOWNSTREAM_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
+
+    # A native built-in added live, by the type `graph` reports for one: its
+    # class in `tatolab.stream`, resolved apart from a project's processors.
+    live_added_pattern = local_api.call_tool(
+        "add_node",
+        {
+            "stream": stream_name,
+            "type": LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
+            "config": {"width": 320, "height": 180},
+            "name": "live-added-pattern",
+        },
+    )
+    assert (
+        await_node_state(local_api, stream_name, live_added_pattern["name"], "Running")
+        == "Running"
+    )
 
     local_api.call_tool("disconnect", {"stream": stream_name, "link_id": upstream_link_id})
     graph_after_disconnect = local_api.call_tool("graph", {"stream": stream_name})
