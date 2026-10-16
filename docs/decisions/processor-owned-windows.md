@@ -5,9 +5,10 @@ Rationale for the `[processor-owned-windows]` entries in `docs/plan/ARCHITECTURE
 during discovery: processors are little programs with resource-request autonomy.
 
 > Superseded in whole 2026-10-16 by `moq-relays.md`: the runtime opens no windows. The
-> capability, the engine-run present loop, the event pump and `DisplayWindow` are deleted by
-> the sharing step's change; a stream is seen in a browser through the preview page. The
-> text below is the record of why the capability had the shape it had while it existed.
+> capability, the engine-run present loop, the event pump and `DisplayWindow` stand in the
+> tree today and will be deleted by the sharing step's change, not before; a stream is then
+> seen in a browser through the preview page. Every clause below is retired with it; the text
+> is kept whole as the record of why the capability had the shape it had while it existed.
 
 ## Trigger
 

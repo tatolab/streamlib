@@ -47,8 +47,8 @@ Tailscale reach is incidental: a local relay is on the machine, so the tailnet r
   `encoding`, `cast` import path, `kind` — a reader follows; `connect` compares nothing.
 - **A stream is one broadcast; each exposed port one track.** The relay's listing is the
   directory. A machine is its hostname, cast; its root at a relay is the credential's.
-- **Exposure maps onto relays.** Internal at none, private at the local relay only (under a
-  token minted over loopback), public at every joined relay.
+- **Exposure maps onto relays.** Internal at none, private at the local relay's loopback
+  listener only, public at every joined relay and the local relay's every-interface listener.
 - **The local relay is `moq-relay`, a child of `tatolabd`,** shipped in the runtime unit on
   both floors. The runtime is a MoQ client of every relay and serves no endpoint.
 - **Relay adapters carry only what differs:** dialect, credential, root. Local, Cloudflare,
@@ -130,9 +130,13 @@ Tailscale reach is incidental: a local relay is on the machine, so the tailnet r
   is open for later.
 - **Safari and iOS do not play through the preview page** while the stack's player keeps
   WebKit on its WebSocket path; unchanged from 2026-10-04.
-- **Private tracks rely on the local relay's token grant** — anonymous read for public tracks,
-  a loopback-minted token for private ones — so a private port is readable on the machine
-  and nowhere else even though the relay listens on every interface.
+- **The private boundary is a loopback binding, not a token.** The local relay has two
+  listeners — loopback with every exposed port, every interface with public only — because a
+  bearer token minted on the machine can be carried off it; the kernel's binding cannot. The
+  review of the align PR caught the token design on 2026-10-16.
+- **The catalog has one entry per track**, named by `<node>/<port>` and grouped under its
+  `kind`, so several cameras in one stream are several `video` entries rather than one
+  replacing another.
 - **The sharing step is large:** publisher, adapters, local relay, catalog, group flag, bytes
   payloads, the source node, the sample stream, the CPU encoder arm, the loopback forms, and
   the deletions — windows, `remote_output`, the Tailscale read, `tap`, `exchange`.

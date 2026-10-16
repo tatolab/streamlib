@@ -3778,8 +3778,9 @@ entry reads as **message** (the glossary).
 - **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
   any node of the stream may link to it, and it is at no relay. **Private**: at the machine's
-  local relay only, so a stream, a script, the preview page or any MoQ client on the machine
-  reads it. **Public**: at every relay the machine has joined, the local one included. As
+  local relay's loopback listener only, so a stream, a script, the preview page or any MoQ
+  client on the machine reads it and nothing off the machine can. **Public**: at every relay
+  the machine has joined, the local relay's every-interface listener included. As
   built, private also admits another stream's link over iceoryx2 and public also means a URL
   reachable off the machine. `stream_builder.expose(output)` makes an
   output private and `stream_builder.expose(output, Exposure.PUBLIC)` public; a level is an enum
@@ -3833,8 +3834,9 @@ entry reads as **message** (the glossary).
   Inside a stream, nodes share data through shared memory, as today. The runtime serves no MoQ
   endpoint of its own: it is a MoQ client of every relay it has joined, and the local relay —
   `moq-relay`, shipped in the runtime unit on both floors, started and supervised by `tatolabd`
-  as a child process with its own configuration, listening on every interface at one fixed
-  UDP port — is the relay every machine has. It is a separate program the runtime joins like
+  as a child process with its own configuration, with a loopback listener and an
+  every-interface listener at fixed UDP ports (the adapters entry below) — is the relay every
+  machine has. It is a separate program the runtime joins like
   any other; the runtime is never a relay. Owner, 2026-10-16. [moq-relays]
   Rejected: embedding `moq-relay` as a library inside `tatolabd` to save the loopback hop — the
   runtime would then be a relay (owner, 2026-10-16).
@@ -3875,8 +3877,10 @@ entry reads as **message** (the glossary).
   internal index, a path dependency or a copied module — and a `kind` that places it in the
   catalog (`video`, `audio`, `binary`). A node may update its fragment while running — an
   encoder states its codec string and coded extent after its first frame. The publisher merges
-  the fragments of a stream's exposed ports into the broadcast's catalog track as text, keyed by
-  `kind`, in the layout the stack's players read, and `graph` renders each port's fragment. It
+  the fragments of a stream's exposed ports into the broadcast's catalog track as text — one
+  entry per track, named by its track address `<node>/<port>` and grouped under its `kind`, so
+  four camera ports are four `video` entries — in the layout the stack's players read, and
+  `graph` renders each port's fragment. It
   is documentation a reader follows: `connect` compares nothing, the engine checks nothing
   against it, and no port is required to carry one. Owner, 2026-10-16. [moq-relays]
   Rejected: a port declaration the engine acts on — a media opt-in the publisher reads payloads
@@ -3890,10 +3894,17 @@ entry reads as **message** (the glossary).
   and the runtime holds nothing else about relays — no account, team, directory, signed link
   or billing, which belong to a separate private service, and signing in to a provider and
   provisioning a relay live in the app or that service, never the runtime. Adapters ship with
-  the runtime on every install, headless included. At the local relay public tracks are read
-  anonymously and private tracks under a token the runtime mints and hands only over loopback
-  — to the preview page and the relay source node — so a private port is readable on the
-  machine and nowhere else. Owner, 2026-10-14 and 2026-10-16. [moq-relays]
+  the runtime on every install, headless included. The local relay's read boundary is where
+  it listens, never a token: it has two listeners — one bound to loopback alone, serving every
+  exposed port, private and public, which is what the preview page and a relay source node on
+  the machine dial; and one bound to every interface, serving public tracks only, which is
+  what another machine dials. A private port is therefore readable only by a process on the
+  machine, enforced by the kernel's loopback binding; whether the two listeners are two
+  `moq-relay` children or one configured so is the building change's. Owner, 2026-10-14 and
+  2026-10-16. [moq-relays]
+  Rejected: private tracks on an all-interfaces listener behind a token minted over loopback —
+  a bearer token carried off the machine reads them from anywhere (review of the align PR,
+  2026-10-16).
 - **DECIDED** — Reading a track is a source node. The relay source node, a built-in, takes a
   relay address and a track's address, subscribes, and writes each object's payload bytes to
   its one output as received, restating the stamp on this machine's clock; the track's catalog
