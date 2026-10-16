@@ -105,6 +105,9 @@ jobs:
       - name: Portability and driver-search tests against the lend
         run: |
           python3 -m venv /tmp/lend-check
+          # `--no-index` keeps `tatolab-stream` to this run's build, so its one
+          # dependency comes from PyPI first.
+          /tmp/lend-check/bin/pip install 'msgpack>=1.0'
           /tmp/lend-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
           /tmp/lend-check/bin/pip install pytest
           cd sdk/streamlib-python-wheel
@@ -117,6 +120,7 @@ jobs:
           python3 -m venv /tmp/wheel-check
           # The engine wheel declares no dependency; the notices tests' conftest
           # imports `tatolab.stream`.
+          /tmp/wheel-check/bin/pip install 'msgpack>=1.0'
           /tmp/wheel-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist \
             tatolab-stream target/tatolab-runtime/wheel/*.whl
           # The scaffolded effect's own declared dependency, and the tests'.
@@ -184,6 +188,7 @@ jobs:
 
           "$tatolab_executable" new /tmp/scaffold-check --test-pattern
           python3 -m venv /tmp/scaffold-check/.venv
+          /tmp/scaffold-check/.venv/bin/pip install 'msgpack>=1.0'
           /tmp/scaffold-check/.venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
           /tmp/scaffold-check/.venv/bin/pip install 'numpy>=2.1'
           if /tmp/scaffold-check/.venv/bin/python -c '

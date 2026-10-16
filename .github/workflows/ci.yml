@@ -844,6 +844,9 @@ jobs:
 
           "$tatolab_executable" new /tmp/scaffold-check --test-pattern
           python3 -m venv /tmp/scaffold-check/.venv
+          # `--no-index` keeps `tatolab-stream` to this run's build, so its one
+          # dependency comes from PyPI first.
+          /tmp/scaffold-check/.venv/bin/pip install 'msgpack>=1.0'
           /tmp/scaffold-check/.venv/bin/pip install --no-index --find-links "$RUNNER_TEMP/tatolab-stream-dist" tatolab-stream
           /tmp/scaffold-check/.venv/bin/pip install 'numpy>=2.1'
           if /tmp/scaffold-check/.venv/bin/python -c '
