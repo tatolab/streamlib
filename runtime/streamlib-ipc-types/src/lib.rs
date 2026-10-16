@@ -359,10 +359,31 @@ pub const FRAME_HEADER_PAYLOAD_LEN_SIZE: usize = std::mem::size_of::<u32>();
 /// Size of the frame header's flags field, little-endian on the wire.
 pub const FRAME_HEADER_FLAGS_SIZE: usize = std::mem::size_of::<u32>();
 
+/// Byte offset of the frame header's `timestamp_ns` field, right after the port key.
+pub const FRAME_HEADER_TIMESTAMP_NS_OFFSET: usize = MAX_PORT_KEY_SIZE;
+
+/// Byte offset of the frame header's payload-length field.
+pub const FRAME_HEADER_PAYLOAD_LEN_OFFSET: usize =
+    FRAME_HEADER_TIMESTAMP_NS_OFFSET + FRAME_HEADER_TIMESTAMP_NS_SIZE;
+
+/// Byte offset of the frame header's flags field.
+pub const FRAME_HEADER_FLAGS_OFFSET: usize =
+    FRAME_HEADER_PAYLOAD_LEN_OFFSET + FRAME_HEADER_PAYLOAD_LEN_SIZE;
+
 /// The [`FrameHeader::flags`] bit set when the message opens a group — a point a
 /// relay or a late joiner can start from. Bits 1..31 are reserved: a writer
 /// writes them zero and a reader ignores them.
 pub const FRAME_HEADER_FLAG_STARTS_GROUP: u32 = 1 << 0;
+
+/// Whether a message opens a group or continues the one before it, carried in
+/// [`FRAME_HEADER_FLAG_STARTS_GROUP`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageGroupBoundary {
+    /// The message opens a group — a point a relay or a late joiner can start from.
+    StartsGroup,
+    /// The message continues the group the message before it opened.
+    ContinuesGroup,
+}
 
 /// Error constructing a [`PortKey`] from a name that overflows the fixed
 /// wire capacity.
@@ -481,12 +502,11 @@ impl FrameHeader {
         port: &str,
         timestamp_ns: i64,
         data_len: u32,
-        starts_group: bool,
+        group_boundary: MessageGroupBoundary,
     ) -> Result<Self, PortKeyError> {
-        let flags = if starts_group {
-            FRAME_HEADER_FLAG_STARTS_GROUP
-        } else {
-            0
+        let flags = match group_boundary {
+            MessageGroupBoundary::StartsGroup => FRAME_HEADER_FLAG_STARTS_GROUP,
+            MessageGroupBoundary::ContinuesGroup => 0,
         };
         Ok(Self {
             port_key: PortKey::new(port)?,
@@ -497,8 +517,12 @@ impl FrameHeader {
     }
 
     /// Whether the message opens a group, read from [`FRAME_HEADER_FLAG_STARTS_GROUP`].
-    pub fn starts_group(&self) -> bool {
-        self.flags & FRAME_HEADER_FLAG_STARTS_GROUP != 0
+    pub fn group_boundary(&self) -> MessageGroupBoundary {
+        if self.flags & FRAME_HEADER_FLAG_STARTS_GROUP != 0 {
+            MessageGroupBoundary::StartsGroup
+        } else {
+            MessageGroupBoundary::ContinuesGroup
+        }
     }
 
     /// Write the header to the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
@@ -507,12 +531,12 @@ impl FrameHeader {
         // port_key: [len: 1][name: 63] = 64 bytes
         buf[0] = self.port_key.len;
         buf[1..MAX_PORT_KEY_SIZE].copy_from_slice(&self.port_key.name);
-        let timestamp_ns_offset = MAX_PORT_KEY_SIZE;
-        let len_offset = timestamp_ns_offset + FRAME_HEADER_TIMESTAMP_NS_SIZE;
-        let flags_offset = len_offset + FRAME_HEADER_PAYLOAD_LEN_SIZE;
-        buf[timestamp_ns_offset..len_offset].copy_from_slice(&self.timestamp_ns.to_le_bytes());
-        buf[len_offset..flags_offset].copy_from_slice(&self.len.to_le_bytes());
-        buf[flags_offset..FRAME_HEADER_SIZE].copy_from_slice(&self.flags.to_le_bytes());
+        buf[FRAME_HEADER_TIMESTAMP_NS_OFFSET..FRAME_HEADER_PAYLOAD_LEN_OFFSET]
+            .copy_from_slice(&self.timestamp_ns.to_le_bytes());
+        buf[FRAME_HEADER_PAYLOAD_LEN_OFFSET..FRAME_HEADER_FLAGS_OFFSET]
+            .copy_from_slice(&self.len.to_le_bytes());
+        buf[FRAME_HEADER_FLAGS_OFFSET..FRAME_HEADER_SIZE]
+            .copy_from_slice(&self.flags.to_le_bytes());
     }
 
     /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
@@ -527,20 +551,31 @@ impl FrameHeader {
         };
         port_key.name.copy_from_slice(&buf[1..MAX_PORT_KEY_SIZE]);
 
-        let timestamp_ns_offset = MAX_PORT_KEY_SIZE;
-        let len_offset = timestamp_ns_offset + FRAME_HEADER_TIMESTAMP_NS_SIZE;
-        let flags_offset = len_offset + FRAME_HEADER_PAYLOAD_LEN_SIZE;
-        let timestamp_ns =
-            i64::from_le_bytes(buf[timestamp_ns_offset..len_offset].try_into().unwrap());
-        let len = u32::from_le_bytes(buf[len_offset..flags_offset].try_into().unwrap());
-        let flags = u32::from_le_bytes(buf[flags_offset..FRAME_HEADER_SIZE].try_into().unwrap());
-
         Self {
             port_key,
-            timestamp_ns,
-            len,
-            flags,
+            timestamp_ns: i64::from_le_bytes(Self::fixed_width_field_bytes(
+                buf,
+                FRAME_HEADER_TIMESTAMP_NS_OFFSET,
+            )),
+            len: u32::from_le_bytes(Self::fixed_width_field_bytes(
+                buf,
+                FRAME_HEADER_PAYLOAD_LEN_OFFSET,
+            )),
+            flags: u32::from_le_bytes(Self::fixed_width_field_bytes(
+                buf,
+                FRAME_HEADER_FLAGS_OFFSET,
+            )),
         }
+    }
+
+    /// The `FIELD_WIDTH` bytes of `buf` starting at `offset`.
+    fn fixed_width_field_bytes<const FIELD_WIDTH: usize>(
+        buf: &[u8],
+        offset: usize,
+    ) -> [u8; FIELD_WIDTH] {
+        let mut field_bytes = [0u8; FIELD_WIDTH];
+        field_bytes.copy_from_slice(&buf[offset..offset + FIELD_WIDTH]);
+        field_bytes
     }
 
     /// Read the port key string from a raw slice without parsing the full header.
@@ -767,14 +802,15 @@ mod tests {
 
     #[test]
     fn frame_header_round_trip_via_slice() {
-        let header = FrameHeader::new("dest_port", 42, 1024, true).unwrap();
+        let header =
+            FrameHeader::new("dest_port", 42, 1024, MessageGroupBoundary::StartsGroup).unwrap();
         let mut buf = [0u8; FRAME_HEADER_SIZE];
         header.write_to_slice(&mut buf);
         let back = FrameHeader::read_from_slice(&buf);
         assert_eq!(back.port(), "dest_port");
         assert_eq!(back.timestamp_ns, 42);
         assert_eq!(back.len, 1024);
-        assert!(back.starts_group());
+        assert_eq!(back.group_boundary(), MessageGroupBoundary::StartsGroup);
     }
 
     #[test]
@@ -783,20 +819,25 @@ mod tests {
         // plane stamps CLOCK_MONOTONIC, and a reader comparing two stamps can
         // legitimately carry a value below its own epoch.
         let longest_port = "z".repeat(PortKey::MAX_NAME_BYTES);
-        for (port, timestamp_ns, len, starts_group) in [
-            ("", i64::MIN, 0u32, false),
-            ("p", -1, 1, true),
-            (longest_port.as_str(), i64::MAX, u32::MAX, false),
+        for (port, timestamp_ns, len, group_boundary) in [
+            ("", i64::MIN, 0u32, MessageGroupBoundary::ContinuesGroup),
+            ("p", -1, 1, MessageGroupBoundary::StartsGroup),
+            (
+                longest_port.as_str(),
+                i64::MAX,
+                u32::MAX,
+                MessageGroupBoundary::ContinuesGroup,
+            ),
         ] {
             let mut buf = [0u8; FRAME_HEADER_SIZE];
-            FrameHeader::new(port, timestamp_ns, len, starts_group)
+            FrameHeader::new(port, timestamp_ns, len, group_boundary)
                 .expect("port fits the wire capacity")
                 .write_to_slice(&mut buf);
             let back = FrameHeader::read_from_slice(&buf);
             assert_eq!(back.port(), port);
             assert_eq!(back.timestamp_ns, timestamp_ns);
             assert_eq!(back.len, len);
-            assert_eq!(back.starts_group(), starts_group);
+            assert_eq!(back.group_boundary(), group_boundary);
         }
     }
 
@@ -811,25 +852,34 @@ mod tests {
     fn frame_header_starts_group_flag_is_bit_zero_and_every_other_bit_is_written_zero() {
         assert_eq!(FRAME_HEADER_FLAG_STARTS_GROUP, 0x0000_0001);
 
-        for (starts_group, expected_flags) in [(true, 0x0000_0001u32), (false, 0)] {
+        for (group_boundary, expected_flags) in [
+            (MessageGroupBoundary::StartsGroup, 0x0000_0001u32),
+            (MessageGroupBoundary::ContinuesGroup, 0),
+        ] {
             let mut buf = [0xFFu8; FRAME_HEADER_SIZE];
-            FrameHeader::new("cam", 0, 0, starts_group)
+            FrameHeader::new("cam", 0, 0, group_boundary)
                 .unwrap()
                 .write_to_slice(&mut buf);
             assert_eq!(
-                u32::from_le_bytes(buf[76..80].try_into().unwrap()),
+                u32::from_le_bytes(
+                    buf[FRAME_HEADER_FLAGS_OFFSET..FRAME_HEADER_SIZE]
+                        .try_into()
+                        .unwrap()
+                ),
                 expected_flags,
                 "a writer sets only the starts-group bit and writes every reserved bit zero"
             );
         }
 
         let mut buf = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new("cam", 0, 0, false)
+        FrameHeader::new("cam", 0, 0, MessageGroupBoundary::ContinuesGroup)
             .unwrap()
             .write_to_slice(&mut buf);
-        buf[76..80].copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
-        assert!(
-            !FrameHeader::read_from_slice(&buf).starts_group(),
+        buf[FRAME_HEADER_FLAGS_OFFSET..FRAME_HEADER_SIZE]
+            .copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+        assert_eq!(
+            FrameHeader::read_from_slice(&buf).group_boundary(),
+            MessageGroupBoundary::ContinuesGroup,
             "a reader ignores the reserved bits"
         );
     }
@@ -844,30 +894,59 @@ mod tests {
         // and there is no version field to negotiate a disagreement on: a
         // shift here is silent cross-process corruption, not a compile error.
         let mut buf = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new("cam", 0x0102_0304_0506_0708, 0x0A0B_0C0D, true)
-            .unwrap()
-            .write_to_slice(&mut buf);
+        FrameHeader::new(
+            "cam",
+            0x0102_0304_0506_0708,
+            0x0A0B_0C0D,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .unwrap()
+        .write_to_slice(&mut buf);
 
         assert_eq!(buf[0], 3, "port_key len prefix at offset 0");
         assert_eq!(&buf[1..4], b"cam", "port_key name bytes start at offset 1");
         assert!(
-            buf[4..64].iter().all(|&b| b == 0),
-            "the port_key name field is zero-padded through offset 63"
+            buf[4..FRAME_HEADER_TIMESTAMP_NS_OFFSET]
+                .iter()
+                .all(|&b| b == 0),
+            "the port_key name field is zero-padded up to the timestamp"
         );
         assert_eq!(
-            i64::from_le_bytes(buf[64..72].try_into().unwrap()),
+            (
+                FRAME_HEADER_TIMESTAMP_NS_OFFSET,
+                FRAME_HEADER_PAYLOAD_LEN_OFFSET,
+                FRAME_HEADER_FLAGS_OFFSET,
+                FRAME_HEADER_SIZE,
+            ),
+            (64, 72, 76, 80),
+            "timestamp_ns at 64, len at 72, flags at 76, payload at 80"
+        );
+        assert_eq!(
+            i64::from_le_bytes(
+                buf[FRAME_HEADER_TIMESTAMP_NS_OFFSET..FRAME_HEADER_PAYLOAD_LEN_OFFSET]
+                    .try_into()
+                    .unwrap()
+            ),
             0x0102_0304_0506_0708,
-            "timestamp_ns is 8 bytes little-endian at 64..72"
+            "timestamp_ns is 8 bytes little-endian"
         );
         assert_eq!(
-            u32::from_le_bytes(buf[72..76].try_into().unwrap()),
+            u32::from_le_bytes(
+                buf[FRAME_HEADER_PAYLOAD_LEN_OFFSET..FRAME_HEADER_FLAGS_OFFSET]
+                    .try_into()
+                    .unwrap()
+            ),
             0x0A0B_0C0D,
-            "len is 4 bytes little-endian at 72..76"
+            "len is 4 bytes little-endian"
         );
         assert_eq!(
-            u32::from_le_bytes(buf[76..80].try_into().unwrap()),
+            u32::from_le_bytes(
+                buf[FRAME_HEADER_FLAGS_OFFSET..FRAME_HEADER_SIZE]
+                    .try_into()
+                    .unwrap()
+            ),
             FRAME_HEADER_FLAG_STARTS_GROUP,
-            "flags is 4 bytes little-endian at 76..80"
+            "flags is 4 bytes little-endian"
         );
     }
 
@@ -1015,9 +1094,14 @@ mod tests {
     /// stamped for `port` — the shape every read site is handed off the wire.
     fn frame_with_payload_filler(port: &str, payload_bytes: usize, filler: u8) -> Vec<u8> {
         let mut frame = vec![filler; FRAME_HEADER_SIZE + payload_bytes];
-        FrameHeader::new(port, 7, payload_bytes as u32, true)
-            .expect("port fits the wire capacity")
-            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        FrameHeader::new(
+            port,
+            7,
+            payload_bytes as u32,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .expect("port fits the wire capacity")
+        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
         frame
     }
 
@@ -1477,7 +1561,7 @@ mod tests {
         // never build a header with a clipped port key.
         let over = "c".repeat(PortKey::MAX_NAME_BYTES + 1);
         assert!(matches!(
-            FrameHeader::new(&over, 0, 0, true),
+            FrameHeader::new(&over, 0, 0, MessageGroupBoundary::StartsGroup),
             Err(PortKeyError::TooLong { .. })
         ));
     }

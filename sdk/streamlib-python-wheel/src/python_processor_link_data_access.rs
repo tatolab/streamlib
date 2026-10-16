@@ -29,7 +29,7 @@ use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
+    MessageGroupBoundary, OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
 };
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 
@@ -713,12 +713,17 @@ impl PythonProcessorLinkDataAccess {
             return Ok(());
         };
         let timestamp_ns = timestamp_ns.unwrap_or_else(|| monotonic_clock_now_ns() as i64);
+        let group_boundary = if starts_group {
+            MessageGroupBoundary::StartsGroup
+        } else {
+            MessageGroupBoundary::ContinuesGroup
+        };
         match python.detach(|| {
             output_writer.write_bytes_with_timestamp(
                 port_name,
                 payload_bytes,
                 timestamp_ns,
-                starts_group,
+                group_boundary,
             )
         }) {
             Ok(()) => Ok(()),
@@ -890,14 +895,17 @@ mod tests {
                 .input_mailboxes
                 .get()
                 .expect("a wired input plane holds its mailboxes");
-            for (timestamp_ns, starts_group) in [(11i64, false), (12i64, true)] {
+            for (timestamp_ns, group_boundary) in [
+                (11i64, MessageGroupBoundary::ContinuesGroup),
+                (12i64, MessageGroupBoundary::StartsGroup),
+            ] {
                 let message = input_mailboxes
                     .read_raw("frames_from_upstream")
                     .unwrap()
                     .expect("the wired input received nothing");
                 assert_eq!(message.payload_bytes, b"access unit");
                 assert_eq!(message.timestamp_ns, timestamp_ns);
-                assert_eq!(message.starts_group, starts_group);
+                assert_eq!(message.group_boundary, group_boundary);
             }
         });
     }
@@ -977,7 +985,12 @@ mod tests {
                 .expect("a wired output plane holds its writer");
             let over_the_ceiling = vec![0u8; ceiling_bytes + 1];
             let refusal = output_writer
-                .write_bytes_with_timestamp("frames_to_downstream", &over_the_ceiling, 1, true)
+                .write_bytes_with_timestamp(
+                    "frames_to_downstream",
+                    &over_the_ceiling,
+                    1,
+                    MessageGroupBoundary::StartsGroup,
+                )
                 .expect_err("a message past the channel ceiling must be refused");
 
             match refusal {

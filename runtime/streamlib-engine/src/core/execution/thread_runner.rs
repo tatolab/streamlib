@@ -1063,12 +1063,17 @@ mod tests {
     /// `body` behind a frame header stamped for `port` — the shape
     /// `InputMailboxesInner::route` injects.
     fn one_wire_frame_stamped_for(port: &str, timestamp_ns: i64, body: &[u8]) -> Vec<u8> {
-        use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader};
+        use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader, MessageGroupBoundary};
 
         let mut frame = vec![0u8; FRAME_HEADER_SIZE + body.len()];
-        FrameHeader::new(port, timestamp_ns, body.len() as u32, true)
-            .expect("port fits PortKey")
-            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        FrameHeader::new(
+            port,
+            timestamp_ns,
+            body.len() as u32,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .expect("port fits PortKey")
+        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
         frame[FRAME_HEADER_SIZE..].copy_from_slice(body);
         frame
     }

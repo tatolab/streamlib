@@ -43,7 +43,7 @@ use super::loss_counters::{
 };
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
-use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader};
+use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader, MessageGroupBoundary};
 use crate::core::error::{Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
 
@@ -51,41 +51,25 @@ use crate::core::graph::cast_exposed_name_to_url_safe;
 /// mixdown and framing work runs with that mutex released.
 type SharedAudioWindowStage = Arc<parking_lot::Mutex<AudioWindowAccumulator>>;
 
-/// One bag body ready to hand a reader, and the instant it is stamped with.
-///
-/// The two stamps are not the same thing and the type is what keeps them
-/// straight: on a port with no contract it is the frame header's, which marks
-/// when the bag was published; on a windowed port it is the one the stage
-/// derived from the device's own stamp, which marks an instant inside the
-/// source block the window came from.
+/// One message ready to hand a reader, and the inbound link it came in on.
 pub(super) struct BagBodyForTheReader {
-    pub(super) body: Vec<u8>,
-    pub(super) first_sample_or_publish_timestamp_ns: i64,
-    /// The frame header's group flag; a window always starts a group.
-    pub(super) starts_group: bool,
+    pub(super) message: MessageReadFromInputPort,
     /// The link this body came in on. `None` where nothing delivered it — a
     /// manually injected frame — and filled in for a window by the port that
     /// staged it, since a window is cut from bags rather than being one.
     pub(super) inbound_link_name: Option<InboundLinkName>,
 }
 
-impl BagBodyForTheReader {
-    fn into_message_read_from_input_port(self) -> MessageReadFromInputPort {
-        MessageReadFromInputPort {
-            payload_bytes: self.body,
-            timestamp_ns: self.first_sample_or_publish_timestamp_ns,
-            starts_group: self.starts_group,
-        }
-    }
-}
-
 /// One message read off an input port: its payload as the producer wrote it, its
 /// stamp, and whether it starts a group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageReadFromInputPort {
+    /// The payload exactly as the producer wrote it.
     pub payload_bytes: Vec<u8>,
+    /// The publish stamp, or a window's first-sample instant.
     pub timestamp_ns: i64,
-    pub starts_group: bool,
+    /// Whether the message opens a group; a window always opens one.
+    pub group_boundary: MessageGroupBoundary,
 }
 
 /// Decode one msgpack payload into the type a reader named.
@@ -1056,9 +1040,11 @@ impl InputMailboxesInner {
         );
         frame_bytes_from_wire.truncate(stamped_payload_bytes);
         Ok(Some(BagBodyForTheReader {
-            body: frame_bytes_from_wire,
-            first_sample_or_publish_timestamp_ns: header.timestamp_ns,
-            starts_group: header.starts_group(),
+            message: MessageReadFromInputPort {
+                payload_bytes: frame_bytes_from_wire,
+                timestamp_ns: header.timestamp_ns,
+                group_boundary: header.group_boundary(),
+            },
             inbound_link_name,
         }))
     }
@@ -1093,7 +1079,7 @@ impl InputMailboxesInner {
             let Some(bag) = self.pop_one_bag_off_the_mailbox(port, Some(stage))? else {
                 return Ok(None);
             };
-            let flush = stage.lock().accept(&bag.body)?;
+            let flush = stage.lock().accept(&bag.message.payload_bytes)?;
             if let Some(flush) = flush {
                 Self::count_a_flush_on_the_link_feeding(port, feeding_link.as_ref(), flush);
             }
@@ -1105,7 +1091,7 @@ impl InputMailboxesInner {
     pub fn read_raw(&self, port: &str) -> Result<Option<MessageReadFromInputPort>> {
         Ok(self
             .next_bag_for_the_reader(port)?
-            .map(BagBodyForTheReader::into_message_read_from_input_port))
+            .map(|bag_for_the_reader| bag_for_the_reader.message))
     }
 
     /// The next frame for `port` with the inbound link it arrived on.
@@ -1139,7 +1125,7 @@ impl InputMailboxesInner {
             )));
         };
         Ok(Some((
-            message_body_for_the_reader.into_message_read_from_input_port(),
+            message_body_for_the_reader.message,
             inbound_link_name,
         )))
     }
@@ -1525,9 +1511,14 @@ mod tests {
         carried_body: &[u8],
     ) -> Vec<u8> {
         let mut frame = vec![0u8; FRAME_HEADER_SIZE + carried_body.len()];
-        FrameHeader::new(port, timestamp_ns, stamped_payload_bytes, true)
-            .expect("port fits PortKey")
-            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        FrameHeader::new(
+            port,
+            timestamp_ns,
+            stamped_payload_bytes,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .expect("port fits PortKey")
+        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
         frame[FRAME_HEADER_SIZE..].copy_from_slice(carried_body);
         frame
     }
@@ -1758,12 +1749,8 @@ mod tests {
         );
 
         let mut payloads: Vec<Vec<u8>> = Vec::new();
-        while let Some(MessageReadFromInputPort {
-            payload_bytes: data,
-            ..
-        }) = mailboxes.read_raw("in").unwrap()
-        {
-            payloads.push(data);
+        while let Some(message) = mailboxes.read_raw("in").unwrap() {
+            payloads.push(message.payload_bytes);
         }
         payloads.sort();
         assert_eq!(
@@ -2043,7 +2030,7 @@ mod tests {
 
         let output_writer = output_writer_publishing_onto(&channel, "out");
         output_writer
-            .write_bytes_with_timestamp("out", b"old", 0, true)
+            .write_bytes_with_timestamp("out", b"old", 0, MessageGroupBoundary::StartsGroup)
             .unwrap();
         mailboxes.receive_pending();
 
@@ -2051,7 +2038,12 @@ mod tests {
         install_a_fresh_publisher(&output_writer, &channel, "out");
         for bag in 0..RING_DEPTH + 2 {
             output_writer
-                .write_bytes_with_timestamp("out", b"new", bag as i64, true)
+                .write_bytes_with_timestamp(
+                    "out",
+                    b"new",
+                    bag as i64,
+                    MessageGroupBoundary::StartsGroup,
+                )
                 .unwrap();
         }
         mailboxes.receive_pending();
@@ -2082,10 +2074,20 @@ mod tests {
         let output_writer = output_writer_publishing_onto(&channel, "out");
 
         output_writer
-            .write_bytes_with_timestamp("out", b"continues-a-group", 111, false)
+            .write_bytes_with_timestamp(
+                "out",
+                b"continues-a-group",
+                111,
+                MessageGroupBoundary::ContinuesGroup,
+            )
             .unwrap();
         output_writer
-            .write_bytes_with_timestamp("out", b"starts-a-group", 222, true)
+            .write_bytes_with_timestamp(
+                "out",
+                b"starts-a-group",
+                222,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap();
 
         assert_eq!(
@@ -2093,7 +2095,7 @@ mod tests {
             Some(MessageReadFromInputPort {
                 payload_bytes: b"continues-a-group".to_vec(),
                 timestamp_ns: 111,
-                starts_group: false,
+                group_boundary: MessageGroupBoundary::ContinuesGroup,
             })
         );
         assert_eq!(
@@ -2102,7 +2104,7 @@ mod tests {
                 MessageReadFromInputPort {
                     payload_bytes: b"starts-a-group".to_vec(),
                     timestamp_ns: 222,
-                    starts_group: true,
+                    group_boundary: MessageGroupBoundary::StartsGroup,
                 },
                 InboundLinkName::from("psource/out"),
             ))
@@ -2201,18 +2203,12 @@ mod tests {
         publish_one_frame(&publisher_a, "video_out", b"from-the-camera-again");
 
         let mut named: Vec<(String, String)> = Vec::new();
-        while let Some((
-            MessageReadFromInputPort {
-                payload_bytes: body,
-                ..
-            },
-            inbound_link_name,
-        )) = mailboxes
+        while let Some((message, inbound_link_name)) = mailboxes
             .read_raw_from_inbound_link("in")
             .expect("a delivered bag names its link")
         {
             named.push((
-                String::from_utf8(body).unwrap(),
+                String::from_utf8(message.payload_bytes).unwrap(),
                 inbound_link_name.as_str().to_string(),
             ));
         }
@@ -2396,25 +2392,17 @@ mod tests {
         );
 
         assert!(mailboxes.has_data("videoIn"));
-        let MessageReadFromInputPort {
-            payload_bytes: payload,
-            ..
-        } = mailboxes
+        let payload = mailboxes
             .read_raw("videoIn")
             .expect("a cast-alike spelling names the port")
-            .expect("three bags were published");
+            .expect("three bags were published")
+            .payload_bytes;
         assert_eq!(payload, b"first");
-        let (
-            MessageReadFromInputPort {
-                payload_bytes: payload,
-                ..
-            },
-            inbound_link_name,
-        ) = mailboxes
+        let (message, inbound_link_name) = mailboxes
             .read_raw_from_inbound_link("VideoIn")
             .expect("a cast-alike spelling names the port")
             .expect("two bags remain");
-        assert_eq!(payload, b"second");
+        assert_eq!(message.payload_bytes, b"second");
         assert_eq!(inbound_link_name.as_str(), "pcamera/videoout");
         let (bag, _inbound_link_name) = mailboxes
             .read_msgpack_from_inbound_link::<String>("VIDEOIN")
@@ -2657,13 +2645,11 @@ mod tests {
             mailboxes.route(wire_frame_stamping("in", 0, 5, b"world")),
             "the frame must route to port 'in'"
         );
-        let MessageReadFromInputPort {
-            payload_bytes: body,
-            ..
-        } = mailboxes
+        let body = mailboxes
             .read_raw("in")
             .expect("the plain read is untouched")
-            .expect("a read that names no link reads an injected bag whole");
+            .expect("a read that names no link reads an injected bag whole")
+            .payload_bytes;
         assert_eq!(body, b"world");
     }
 
@@ -3018,12 +3004,9 @@ mod tests {
         /// its contract settled to.
         fn windows_read_out_of(mailboxes: &InputMailboxesInner) -> Vec<Vec<f32>> {
             let mut windows = Vec::new();
-            while let Some(MessageReadFromInputPort {
-                payload_bytes: body,
-                ..
-            }) = mailboxes.read_raw("in").expect("the port reads")
-            {
-                let (scalars, sample_rate, channels) = scalars_of_one_window(&body);
+            while let Some(message) = mailboxes.read_raw("in").expect("the port reads") {
+                let (scalars, sample_rate, channels) =
+                    scalars_of_one_window(&message.payload_bytes);
                 assert_eq!(sample_rate, 48_000, "the window is at the device's rate");
                 assert_eq!(channels, 2, "the window is in the device's channel count");
                 assert_eq!(
@@ -3268,13 +3251,11 @@ mod tests {
         );
         assert!(mailboxes.any_port_has_data());
 
-        let MessageReadFromInputPort {
-            payload_bytes: window,
-            ..
-        } = mailboxes
+        let window = mailboxes
             .read_raw("in")
             .expect("a window reads")
-            .expect("the gate said a window was ready");
+            .expect("the gate said a window was ready")
+            .payload_bytes;
         assert!(!window.is_empty());
     }
 
@@ -3341,10 +3322,11 @@ mod tests {
             mailboxes.has_data("in"),
             "an arrived bag is data on an unwindowed port"
         );
-        let MessageReadFromInputPort {
-            payload_bytes: read_back,
-            ..
-        } = mailboxes.read_raw("in").expect("reads").expect("a bag");
+        let read_back = mailboxes
+            .read_raw("in")
+            .expect("reads")
+            .expect("a bag")
+            .payload_bytes;
         assert_eq!(read_back, published);
     }
 
@@ -3577,9 +3559,8 @@ mod tests {
     /// listener — releasing the notify service so a reconnect recreates it fresh.
     ///
     /// Fail-without-fix: make `remove_channel_link` a no-op and the final
-    /// disconnect leaves the
-    /// port and listener live, so `has_port` / `has_listener` stay true and the
-    /// release assertions fail.
+    /// disconnect leaves the port and listener live, so `has_port` /
+    /// `has_listener` stay true and the release assertions fail.
     #[test]
     fn remove_channel_link_reclaims_per_link_then_drops_port_and_listener() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();

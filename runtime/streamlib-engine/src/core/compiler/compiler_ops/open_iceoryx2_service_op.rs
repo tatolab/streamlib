@@ -1343,6 +1343,7 @@ mod tests {
         add_mock_input_only, add_mock_output_only,
     };
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+    use crate::iceoryx2::MessageGroupBoundary;
 
     /// A host whose transport lives out of process — the shape the processor
     /// interpreter spawn host has — with its far side already past its setup
@@ -2521,7 +2522,12 @@ mod tests {
         fn write_bags(&self, bag_count: usize) {
             for bag in 0..bag_count {
                 self.source_output
-                    .write_bytes_with_timestamp("out1", b"a bag", bag as i64, true)
+                    .write_bytes_with_timestamp(
+                        "out1",
+                        b"a bag",
+                        bag as i64,
+                        MessageGroupBoundary::StartsGroup,
+                    )
                     .expect("the source publishes onto the wired channel");
             }
         }
@@ -2696,7 +2702,12 @@ mod tests {
         );
 
         link.source_output
-            .write_bytes_with_timestamp("out1", &[0u8; CEILING_BYTES], 0, true)
+            .write_bytes_with_timestamp(
+                "out1",
+                &[0u8; CEILING_BYTES],
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
             .expect_err("a bag past the ceiling is refused");
         link.write_bags(1);
         link.dest_input.receive_pending();
@@ -2890,7 +2901,7 @@ mod tests {
                 "out1",
                 b"a bag the port carried before the ordered consumer",
                 0,
-                true,
+                MessageGroupBoundary::StartsGroup,
             )
             .expect("the port runs with one consumer");
         newest_consumer_input.receive_pending();
@@ -2906,7 +2917,7 @@ mod tests {
                     "out1",
                     b"a bag both consumers are fed",
                     bag as i64,
-                    true,
+                    MessageGroupBoundary::StartsGroup,
                 )
                 .expect("the port publishes to both consumers");
         }
@@ -4090,7 +4101,12 @@ mod tests {
 
         let write_one_block = || {
             link.source_output
-                .write_bytes_with_timestamp("out1", &a_mono_16k_audio_block(160, 0), 0, true)
+                .write_bytes_with_timestamp(
+                    "out1",
+                    &a_mono_16k_audio_block(160, 0),
+                    0,
+                    MessageGroupBoundary::StartsGroup,
+                )
                 .expect("the source publishes onto the windowed channel");
         };
         write_one_block();
@@ -4124,7 +4140,12 @@ mod tests {
         );
 
         link.source_output
-            .write_bytes_with_timestamp("out1", &a_mono_16k_audio_block(300, 0), 0, true)
+            .write_bytes_with_timestamp(
+                "out1",
+                &a_mono_16k_audio_block(300, 0),
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
             .expect("the source publishes");
         assert!(
             link.dest_input
@@ -4138,7 +4159,7 @@ mod tests {
                 "out1",
                 &a_mono_16k_audio_block(300, 1_000_000_000),
                 0,
-                true,
+                MessageGroupBoundary::StartsGroup,
             )
             .expect("the source publishes");
         let (_, warnings) = CapturedTracingWarnings::captured_while(|| {
@@ -4787,7 +4808,7 @@ mod tests {
                         "out1",
                         b"a bag read from another stream",
                         bag,
-                        true,
+                        MessageGroupBoundary::StartsGroup,
                     )
                     .expect("the source publishes onto the channel the other graph wired");
             }

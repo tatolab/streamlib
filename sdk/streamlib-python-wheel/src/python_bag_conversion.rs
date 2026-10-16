@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use rmpv::Value;
 
 use streamlib::sdk::iceoryx2::{FrameHeader, TappedFramePayloadRefusal};
@@ -91,7 +91,7 @@ pub(crate) fn cast_payload_bytes_into_read_target<'py>(
 /// The name a refusal gives an `into=` target: a class by its own name, any
 /// other object by its type's.
 fn name_of_the_read_target_for_error_message(read_target: &Bound<'_, PyAny>) -> String {
-    match read_target.cast::<pyo3::types::PyType>() {
+    match read_target.cast::<PyType>() {
         Ok(read_target_class) => read_target_class.name().map_or_else(
             |_| "class".to_string(),
             |class_name| format!("class {class_name}"),
@@ -117,7 +117,7 @@ thread_local! {
     /// a time. A processor's callbacks run on its own dedicated thread, so the
     /// window is exactly one `from_bytes` call deep. The green-thread execution
     /// flavor the plan keeps OPEN (ARCHITECTURE.md §Processor model) would
-    /// break that — a switch inside `__init__` is not nested reentrancy, and a
+    /// break that — a switch inside `from_bytes` is not nested reentrancy, and a
     /// resumed read would see the wrong offer — so that flavor owes this a
     /// rework onto `contextvars`, which follows the switch.
     static GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ:
@@ -422,7 +422,7 @@ fn msgpack_value_to_python_object<'py>(
 
 #[cfg(test)]
 mod tests {
-    use streamlib::sdk::iceoryx2::FRAME_HEADER_SIZE;
+    use streamlib::sdk::iceoryx2::{FRAME_HEADER_SIZE, MessageGroupBoundary};
 
     use super::*;
 
@@ -452,9 +452,14 @@ mod tests {
     /// something larger than the frame.
     fn frame_like_the_transport(payload: &[u8], slice_capacity_at_least: usize) -> Vec<u8> {
         let mut framed = vec![0u8; slice_capacity_at_least.max(FRAME_HEADER_SIZE + payload.len())];
-        FrameHeader::new("processor/port", 1_234, payload.len() as u32, true)
-            .expect("port key fits")
-            .write_to_slice(&mut framed);
+        FrameHeader::new(
+            "processor/port",
+            1_234,
+            payload.len() as u32,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .expect("port key fits")
+        .write_to_slice(&mut framed);
         framed[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + payload.len()].copy_from_slice(payload);
         framed
     }

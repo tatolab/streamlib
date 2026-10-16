@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use streamlib_ipc_types::{FRAME_HEADER_SIZE, FrameHeader};
+use streamlib_ipc_types::{FRAME_HEADER_SIZE, FrameHeader, MessageGroupBoundary};
 use streamlib_runtime_client_contract::local_api_wire_contract::{TapToolResult, TapToolResultBag};
 
 use super::stub_local_api_server::StubSurfaceImageAnswer;
@@ -61,7 +61,7 @@ pub fn framed_bag(bag_payload: &[u8], slice_capacity: usize) -> Vec<u8> {
         FIXTURE_BAG_PORT_NAME,
         FIXTURE_BAG_TIMESTAMP_NS,
         u32::try_from(bag_payload.len()).unwrap(),
-        true,
+        MessageGroupBoundary::StartsGroup,
     )
     .unwrap()
     .write_to_slice(&mut framed_bag_bytes);

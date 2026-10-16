@@ -116,10 +116,10 @@ struct EmittedWindow {
 fn drain_every_ready_window(stage: &mut AudioWindowAccumulator) -> Vec<EmittedWindow> {
     let mut windows = Vec::new();
     while let Some(window) = stage.next_ready_window().expect("a window emits") {
-        let block =
-            read_an_audio_block_off_the_wire(&window.body).expect("an emitted window reads back");
+        let block = read_an_audio_block_off_the_wire(&window.message.payload_bytes)
+            .expect("an emitted window reads back");
         assert_eq!(
-            block.first_sample_timestamp_ns, window.first_sample_or_publish_timestamp_ns,
+            block.first_sample_timestamp_ns, window.message.timestamp_ns,
             "the stamp beside the bag is the one inside it"
         );
         windows.push(EmittedWindow {
@@ -774,7 +774,8 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
         .next_ready_window()
         .expect("a window emits")
         .expect("a full window");
-    let block = read_an_audio_block_off_the_wire(&window.body).expect("reads back");
+    let block =
+        read_an_audio_block_off_the_wire(&window.message.payload_bytes).expect("reads back");
     assert_eq!(block.dtype, AudioBlockSampleDtype::I16);
     assert_eq!(block.interleaved_sample_bytes.len(), 256 * 2);
     for scalar in block.interleaved_sample_bytes.chunks_exact(2) {
@@ -843,7 +844,8 @@ fn assert_the_readiness_floor_holds_for(
                      {source_channels} channels that the read could not produce"
                 )
             });
-        let emitted = read_an_audio_block_off_the_wire(&window.body).expect("reads back");
+        let emitted =
+            read_an_audio_block_off_the_wire(&window.message.payload_bytes).expect("reads back");
         assert_eq!(
             emitted.channels, channels_each_window_carries,
             "the window the floor promised carries the count the contract resolves to"
@@ -945,7 +947,8 @@ fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
         .next_ready_window()
         .expect("a window emits")
         .expect("the run after the gap fills its own window");
-    let block = read_an_audio_block_off_the_wire(&window.body).expect("reads back");
+    let block =
+        read_an_audio_block_off_the_wire(&window.message.payload_bytes).expect("reads back");
     assert_eq!(
         block.first_sample_timestamp_ns, NANOSECONDS_PER_SECOND,
         "the window after the gap is anchored on its own run's first block"

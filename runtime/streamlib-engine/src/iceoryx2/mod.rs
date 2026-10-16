@@ -72,6 +72,7 @@ pub use loss_counters::{
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };
+pub use payload::MessageGroupBoundary;
 
 pub(crate) use node::ChannelSizing;
 pub use node::{

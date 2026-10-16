@@ -28,8 +28,8 @@
 //!   of shared memory).
 //! - `fanout_1_to_n` — one channel publisher feeding N ∈ {1,2,4,8}
 //!   subscribers. `write_bytes_with_timestamp` issues a SINGLE zero-copy loan + send
-//!   that reaches every subscriber (the transport inversion);
-//!   only the per-destination `notify()` is O(N). Throughput is
+//!   that reaches every subscriber; only the per-destination `notify()` is
+//!   O(N). Throughput is
 //!   reported as frames-delivered (N per call), so the curve stays
 //!   near-flat per delivered frame — the signature the retired
 //!   per-connection copy loop (one frame build + send PER subscriber,
@@ -49,8 +49,8 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_engine::iceoryx2::{
     ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelEgressConfig,
-    ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner, OutputWriter,
-    OutputWriterInner, ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner, MessageGroupBoundary,
+    OutputWriter, OutputWriterInner, ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
 };
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
@@ -193,7 +193,7 @@ fn bench_baseline_direct_inner(c: &mut Criterion) {
                         black_box("out"),
                         black_box(&payload),
                         black_box(0),
-                        true,
+                        MessageGroupBoundary::StartsGroup,
                     )
                     .unwrap();
                 drain_in_line(&fx);
@@ -215,7 +215,7 @@ fn bench_vtable_dispatch(c: &mut Criterion) {
                         black_box("out"),
                         black_box(&payload),
                         black_box(0),
-                        true,
+                        MessageGroupBoundary::StartsGroup,
                     )
                     .unwrap();
                 drain_in_line(&fx);
@@ -245,7 +245,7 @@ fn bench_payload_size_sweep(c: &mut Criterion) {
                             black_box("out"),
                             black_box(p),
                             black_box(0),
-                            true,
+                            MessageGroupBoundary::StartsGroup,
                         )
                         .unwrap();
                     drain_in_line(&fx);
@@ -329,7 +329,7 @@ fn bench_write_bytes_with_timestamp_fanout(c: &mut Criterion) {
                             black_box("out"),
                             black_box(&payload),
                             black_box(0),
-                            true,
+                            MessageGroupBoundary::StartsGroup,
                         )
                         .unwrap();
                     drain_fanout_in_line(&fx);
@@ -403,7 +403,7 @@ fn bench_channel_round_trip(c: &mut Criterion) {
                             black_box("out"),
                             black_box(p),
                             black_box(0),
-                            true,
+                            MessageGroupBoundary::StartsGroup,
                         )
                         .unwrap();
                     let message = fx

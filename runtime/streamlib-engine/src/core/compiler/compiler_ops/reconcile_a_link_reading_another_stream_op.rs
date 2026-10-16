@@ -652,7 +652,7 @@ mod tests {
         MockInputOnlyProcessor, MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
         ensure_test_mocks_registered,
     };
-    use crate::iceoryx2::{InputMailboxesInner, OutputWriterInner};
+    use crate::iceoryx2::{InputMailboxesInner, MessageGroupBoundary, OutputWriterInner};
 
     /// How long a test waits for a spawned cut to land on the reading stream.
     const A_CUT_LANDS_WITHIN: Duration = Duration::from_secs(10);
@@ -960,7 +960,12 @@ mod tests {
         );
         streams
             .camera_output
-            .write_bytes_with_timestamp("out1", b"a bag read from the stream a", 0, true)
+            .write_bytes_with_timestamp(
+                "out1",
+                b"a bag read from the stream a",
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
             .expect("the camera publishes");
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -994,7 +999,7 @@ mod tests {
                     "out1",
                     b"a bag written once the stream a resumes",
                     0,
-                    true,
+                    MessageGroupBoundary::StartsGroup,
                 )
                 .expect("the camera publishes");
             streams.display_input.receive_pending();
@@ -1106,7 +1111,12 @@ mod tests {
         );
         streams
             .camera_output
-            .write_bytes_with_timestamp("out1", b"a bag once the port opened", 0, true)
+            .write_bytes_with_timestamp(
+                "out1",
+                b"a bag once the port opened",
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -1205,7 +1215,12 @@ mod tests {
             1
         );
         reloaded_camera_output
-            .write_bytes_with_timestamp("out1", b"a bag from the reloaded stream", 0, true)
+            .write_bytes_with_timestamp(
+                "out1",
+                b"a bag from the reloaded stream",
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -1356,7 +1371,12 @@ mod tests {
         let in_stream = the_link_as_graph_renders_it(&streams.b, &in_stream);
         assert_eq!(in_stream["state"], "wired", "{in_stream}");
         pattern_output
-            .write_bytes_with_timestamp("out1", b"a bag of the reading stream's own", 0, true)
+            .write_bytes_with_timestamp(
+                "out1",
+                b"a bag of the reading stream's own",
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -1929,7 +1949,12 @@ mod tests {
         );
         assert_eq!(re_added_camera_output.channel_notifier_count("out1"), 1);
         re_added_camera_output
-            .write_bytes_with_timestamp("out1", b"a bag from the re-added camera", 0, true)
+            .write_bytes_with_timestamp(
+                "out1",
+                b"a bag from the re-added camera",
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);

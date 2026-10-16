@@ -33,7 +33,10 @@ use serde::Serialize;
 
 use super::helper_process_loss_count_board::OutputPortRefusedBagCountBoardMirror;
 use super::loss_counters::{OutputPortRefusedBagCounter, RefusedBagCountsByOutputPort};
-use super::{ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader};
+use super::{
+    ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader,
+    MessageGroupBoundary,
+};
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::media_clock::MediaClock;
@@ -99,10 +102,10 @@ fn as_maybe_uninit_bytes(bytes: &[u8]) -> &[MaybeUninit<u8>] {
 /// destination.
 ///
 /// One source output port maps to one channel, so a single zero-copy loan
-/// reaches every subscriber. The per-destination
-/// notifiers stay separate because each destination keeps its own listener-fd
-/// (the notify service is destination-keyed for fd-multiplexed wakeups); the
-/// data itself is published ONCE.
+/// reaches every subscriber. The per-destination notifiers stay separate
+/// because each destination keeps its own listener-fd (the notify service is
+/// destination-keyed for fd-multiplexed wakeups); the data itself is published
+/// ONCE.
 struct ChannelEgress {
     publisher: ChannelDataServicePublisher,
     /// The sequence number the next send that may deliver carries in its user
@@ -351,7 +354,7 @@ impl OutputWriterInner {
     }
 
     /// Publish one message — `payload_bytes` as given, stamped `timestamp_ns` and
-    /// `starts_group` in its header — on `port`.
+    /// `group_boundary` in its header — on `port`.
     ///
     /// One zero-copy loan reaches every channel subscriber; the frame is built
     /// and sent once, then every destination notifier is signalled.
@@ -364,7 +367,7 @@ impl OutputWriterInner {
         port: &str,
         payload_bytes: &[u8],
         timestamp_ns: i64,
-        starts_group: bool,
+        group_boundary: MessageGroupBoundary,
     ) -> Result<()> {
         let mut channels = self.channels.lock();
         let Some(egress) = channels.get_mut(port) else {
@@ -410,9 +413,14 @@ impl OutputWriterInner {
         // Header on the stack before the loan: a port key that overflows the
         // wire capacity must never cost a loan slot.
         let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new(port, timestamp_ns, payload_bytes.len() as u32, starts_group)
-            .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
-            .write_to_slice(&mut header_bytes);
+        FrameHeader::new(
+            port,
+            timestamp_ns,
+            payload_bytes.len() as u32,
+            group_boundary,
+        )
+        .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
+        .write_to_slice(&mut header_bytes);
 
         let mut sample = egress
             .publisher
@@ -565,17 +573,22 @@ impl OutputWriter {
     ) -> Result<()> {
         let payload_bytes = rmp_serde::to_vec_named(value)
             .map_err(|e| Error::Link(format!("Failed to serialize frame: {}", e)))?;
-        self.write_bytes_with_timestamp(port, &payload_bytes, timestamp_ns, true)
+        self.write_bytes_with_timestamp(
+            port,
+            &payload_bytes,
+            timestamp_ns,
+            MessageGroupBoundary::StartsGroup,
+        )
     }
 
     /// Publish `payload_bytes` as given on `port`, stamped `timestamp_ns` and
-    /// `starts_group` in the message's header.
+    /// `group_boundary` in the message's header.
     pub fn write_bytes_with_timestamp(
         &self,
         port: &str,
         payload_bytes: &[u8],
         timestamp_ns: i64,
-        starts_group: bool,
+        group_boundary: MessageGroupBoundary,
     ) -> Result<()> {
         let Some(inner) = self.host_inner() else {
             return Err(Error::Link(format!(
@@ -588,7 +601,7 @@ impl OutputWriter {
             &cast_exposed_name_to_url_safe(port)?,
             payload_bytes,
             timestamp_ns,
-            starts_group,
+            group_boundary,
         )
     }
 
@@ -727,10 +740,10 @@ mod tests {
 
         let writer = OutputWriter::from_inner_arc(inner);
         writer
-            .write_bytes_with_timestamp("out", b"payload", 1234, true)
+            .write_bytes_with_timestamp("out", b"payload", 1234, MessageGroupBoundary::StartsGroup)
             .unwrap();
         writer
-            .write_bytes_with_timestamp("out", b"more", 5678, true)
+            .write_bytes_with_timestamp("out", b"more", 5678, MessageGroupBoundary::StartsGroup)
             .unwrap();
 
         // Notifier::notify is non-blocking; give iceoryx2 a moment to deliver
@@ -867,7 +880,12 @@ mod tests {
 
         let writer = OutputWriter::from_inner_arc(inner);
         writer
-            .write_bytes_with_timestamp("out", b"fanout-payload", 4242, true)
+            .write_bytes_with_timestamp(
+                "out",
+                b"fanout-payload",
+                4242,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap();
 
         for (i, subscriber) in subscribers.iter().enumerate() {
@@ -898,9 +916,9 @@ mod tests {
     /// releasing the publisher so a reconnect recreates a fresh-sized service.
     ///
     /// Fail-without-fix: make `remove_channel_link` a no-op and the first
-    /// removal leaves both
-    /// notifiers, so `has_channel_publisher` stays true after the final
-    /// disconnect and the "channel fully removed" assertion fails.
+    /// removal leaves both notifiers, so `has_channel_publisher` stays true
+    /// after the final disconnect and the "channel fully removed" assertion
+    /// fails.
     #[test]
     fn remove_channel_link_reclaims_per_link_then_drops_channel() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
@@ -972,12 +990,12 @@ mod tests {
         inner.declare_output_ports(["video".to_string()]);
 
         inner
-            .write_bytes_with_timestamp("video", b"data", 0, true)
+            .write_bytes_with_timestamp("video", b"data", 0, MessageGroupBoundary::StartsGroup)
             .expect("a declared port with no link drops the bag");
         assert!(!inner.has_port("video"), "dropping opens no channel");
 
         let refused = inner
-            .write_bytes_with_timestamp("undeclared", b"data", 0, true)
+            .write_bytes_with_timestamp("undeclared", b"data", 0, MessageGroupBoundary::StartsGroup)
             .unwrap_err();
         assert!(
             format!("{refused}").contains("Unknown output port"),
@@ -1006,7 +1024,7 @@ mod tests {
 
         assert!(writer.has_port("videoOut"));
         writer
-            .write_bytes_with_timestamp("videoOut", b"bag", 0, true)
+            .write_bytes_with_timestamp("videoOut", b"bag", 0, MessageGroupBoundary::StartsGroup)
             .expect("a cast-alike spelling names the port");
         let sample = subscriber
             .receive()
@@ -1015,7 +1033,7 @@ mod tests {
         assert_eq!(&sample.payload()[FRAME_HEADER_SIZE..], b"bag");
 
         let refusal = writer
-            .write_bytes_with_timestamp("%%", b"bag", 0, true)
+            .write_bytes_with_timestamp("%%", b"bag", 0, MessageGroupBoundary::StartsGroup)
             .unwrap_err();
         assert!(
             matches!(refusal, Error::ExposedNameCastsToNothing(_)),
@@ -1031,7 +1049,7 @@ mod tests {
         let writer = OutputWriter::empty();
         assert!(!writer.is_configured());
         let err = writer
-            .write_bytes_with_timestamp("any_port", b"data", 0, true)
+            .write_bytes_with_timestamp("any_port", b"data", 0, MessageGroupBoundary::StartsGroup)
             .unwrap_err();
         let msg = format!("{}", err);
         assert!(
@@ -1095,7 +1113,7 @@ mod tests {
         // Within ceiling but far above the primed 4 KiB slot — grows + delivers.
         let within = vec![0x5Au8; 100 * 1024];
         inner
-            .write_bytes_with_timestamp("out", &within, 111, true)
+            .write_bytes_with_timestamp("out", &within, 111, MessageGroupBoundary::StartsGroup)
             .expect("in-bounds payload must grow the segment and send");
         assert_eq!(
             refused_bag_count_of(&inner, "out"),
@@ -1113,7 +1131,7 @@ mod tests {
         // Above ceiling — refused with the named error + counted, never a panic.
         let over = vec![0u8; ceiling + 1];
         let err = inner
-            .write_bytes_with_timestamp("out", &over, 222, true)
+            .write_bytes_with_timestamp("out", &over, 222, MessageGroupBoundary::StartsGroup)
             .expect_err("a payload above the channel ceiling must be refused");
         match err {
             Error::PayloadExceedsChannelCeiling {
@@ -1148,7 +1166,12 @@ mod tests {
 
         // Stream continues: a subsequent in-bounds write still delivers.
         inner
-            .write_bytes_with_timestamp("out", b"still-alive", 333, true)
+            .write_bytes_with_timestamp(
+                "out",
+                b"still-alive",
+                333,
+                MessageGroupBoundary::StartsGroup,
+            )
             .expect("stream must continue after a refusal");
         let got = subscriber
             .receive()
@@ -1210,10 +1233,20 @@ mod tests {
 
         install_the_channel(1);
         inner
-            .write_bytes_with_timestamp("out", &over_the_ceiling, 0, true)
+            .write_bytes_with_timestamp(
+                "out",
+                &over_the_ceiling,
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap_err();
         inner
-            .write_bytes_with_timestamp("out", &over_the_ceiling, 1, true)
+            .write_bytes_with_timestamp(
+                "out",
+                &over_the_ceiling,
+                1,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap_err();
         assert_eq!(refused_bags_on_the_board(), Some((1, 2)));
 
@@ -1225,7 +1258,12 @@ mod tests {
             "a port's reopened channel counts from zero, as its native count does"
         );
         inner
-            .write_bytes_with_timestamp("out", &over_the_ceiling, 2, true)
+            .write_bytes_with_timestamp(
+                "out",
+                &over_the_ceiling,
+                2,
+                MessageGroupBoundary::StartsGroup,
+            )
             .unwrap_err();
         assert_eq!(refused_bags_on_the_board(), Some((2, 1)));
 
@@ -1255,13 +1293,18 @@ mod tests {
         let inner = output_writer_with_one_channel(&pubsub, ceiling);
 
         inner
-            .write_bytes_with_timestamp("out", b"first", 1, true)
+            .write_bytes_with_timestamp("out", b"first", 1, MessageGroupBoundary::StartsGroup)
             .unwrap();
         inner
-            .write_bytes_with_timestamp("out", &vec![0u8; ceiling], 2, true)
+            .write_bytes_with_timestamp(
+                "out",
+                &vec![0u8; ceiling],
+                2,
+                MessageGroupBoundary::StartsGroup,
+            )
             .expect_err("a frame past the ceiling is refused");
         inner
-            .write_bytes_with_timestamp("out", b"second", 3, true)
+            .write_bytes_with_timestamp("out", b"second", 3, MessageGroupBoundary::StartsGroup)
             .unwrap();
 
         let mut sequence_numbers = Vec::new();
@@ -1327,7 +1370,7 @@ mod tests {
         );
         let refused_bag_counts = inner.refused_bag_counts_by_output_port();
         inner
-            .write_bytes_with_timestamp("out", &[0u8; 128], 0, true)
+            .write_bytes_with_timestamp("out", &[0u8; 128], 0, MessageGroupBoundary::StartsGroup)
             .unwrap_err();
         assert_eq!(refused_bag_count_of(&inner, "out"), 1);
 
@@ -1401,7 +1444,7 @@ mod tests {
         // recognisable filler, then goes back to the pool for reuse.
         let filler = vec![0xAAu8; 8 * 1024];
         inner
-            .write_bytes_with_timestamp("out", &filler, 1, true)
+            .write_bytes_with_timestamp("out", &filler, 1, MessageGroupBoundary::StartsGroup)
             .unwrap();
         drop(
             subscriber
@@ -1412,7 +1455,7 @@ mod tests {
 
         let payload = b"fresh-small-payload";
         inner
-            .write_bytes_with_timestamp("out", payload, 4242, true)
+            .write_bytes_with_timestamp("out", payload, 4242, MessageGroupBoundary::StartsGroup)
             .unwrap();
         let got = subscriber
             .receive()

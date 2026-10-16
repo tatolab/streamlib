@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::iceoryx2::{
     ChannelDataServiceSubscriber, DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile,
-    FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node,
+    FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node, MessageGroupBoundary,
 };
 
 /// Derived from the prime rather than written as a literal, so raising
@@ -117,9 +117,14 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
 
     let total_len = FRAME_HEADER_SIZE + OVERSIZED_PAYLOAD_BYTES;
     let mut frame = vec![0u8; total_len];
-    FrameHeader::new("dest_port", 42, OVERSIZED_PAYLOAD_BYTES as u32, true)
-        .expect("dest_port fits PortKey bounds")
-        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+    FrameHeader::new(
+        "dest_port",
+        42,
+        OVERSIZED_PAYLOAD_BYTES as u32,
+        MessageGroupBoundary::StartsGroup,
+    )
+    .expect("dest_port fits PortKey bounds")
+    .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(&payload);
 
     let sample = publisher
