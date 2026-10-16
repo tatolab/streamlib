@@ -4,6 +4,12 @@ Rationale for the `[moq-on-the-tailnet]` entries in `docs/plan/ARCHITECTURE.md` 
 2026-10-04 vocabulary in `docs/plan/GLOSSARY.md`, from the owner's pivot of 2026-10-04. The
 owner confirmed five sentences verbatim after a grilling of eleven questions.
 
+> Amended 2026-10-16 by `moq-relays.md`, the sharing step's align: the step is MoQ relays
+> through relay adapters, not MoQ on the tailnet. What stands from here: sentences 1 and 5,
+> the Zenoh removal, pull-only reading, the moq-dev line, the relay as a separate program,
+> `tap` and `exchange` leaving at the sharing step, and no TCP fallback. The struck clauses
+> below say what changed.
+
 Annotated in place: `one-runtime-per-machine.md` (its sentences 2 to 4 and its sequence),
 `runtime-mesh.md`, `runtime-hosting.md` and `exposure-levels.md`.
 
@@ -23,41 +29,57 @@ Read this before any of the following:
    agents; robotics and physical-machine systems are out of scope, and we never replace a
    team's own ROS or Zenoh stack.
 2. Tailscale users are the first customers, and Tatolab builds nothing Tailscale already does —
-   reach, machine names, encryption, identity and discovery come from the tailnet, and without
-   one a machine shares only with itself and through a relay.
-3. On one machine streams share data through shared memory; real-time data that leaves a
+   ~~reach, machine names, encryption, identity and discovery come from the tailnet, and without
+   one a machine shares only with itself and through a relay.~~ — Superseded 2026-10-16 by
+   `moq-relays.md`: the runtime reads, configures and requires nothing of Tailscale; every
+   machine shares through its local relay, which any network reaches.
+3. ~~On one machine streams share data through shared memory; real-time data that leaves a
    machine travels over MoQ on QUIC, served by each machine's engine on its tailnet address and
-   offered through a relay the machine has joined when an internet address is wanted.
-4. HTTP carries only what is not real time — listing exposed ports, a read-only MCP, snapshots,
-   small samples and the viewer page — never live media, in any browser.
+   offered through a relay the machine has joined when an internet address is wanted.~~ —
+   Superseded 2026-10-16 by `moq-relays.md`: inside a stream, shared memory; off a stream, MoQ
+   to relays only — the runtime serves no endpoint and runs the local relay as a child.
+4. ~~HTTP carries only what is not real time — listing exposed ports, a read-only MCP, snapshots,
+   small samples and the viewer page — never live media, in any browser.~~ — Superseded
+   2026-10-16 by `moq-relays.md`: HTTP is loopback only — the listing, the preview page and the
+   snapshot form; no read-only MCP, no sample form, no tailnet HTTP.
 5. Zenoh and the MoQ extension wheel are removed now; the exposure levels and pull-only links
    decided on 2026-10-04 (PR #2624) stand unchanged.
 
 ## Decided
 
-- **No tailnet, no direct reach.** A machine with no Tailscale runs every stream and shares
+- ~~**No tailnet, no direct reach.** A machine with no Tailscale runs every stream and shares
   between streams on itself, and can still join a relay. It cannot be read directly by another
-  machine. Nothing is built for a plain LAN.
+  machine. Nothing is built for a plain LAN.~~ — Superseded 2026-10-16 by `moq-relays.md`:
+  every machine is read at its local relay by whatever network reaches it; Tailscale is a
+  docs page.
 - **The internet is a machine setting.** Joining a machine to a relay offers every public port
   of that machine there, sent only while someone subscribes. There is no fourth exposure level
   and no per-port internet flag. Who reads at the relay is the relay's access rules, as who
   reads on the tailnet is Tailscale's.
 - **The open client joins any relay from an address and a credential,** and knows nothing else
-  about relays. No relay is written here; a person may run an existing open-source one.
+  about relays. ~~No relay is written here; a person may run an existing open-source one.~~ —
+  Amended 2026-10-16 by `moq-relays.md`: still none written, but `moq-relay` ships in the
+  runtime unit and runs as a child of `tatolabd`, one relay adapter per relay kind.
   Accounts, a team directory, signed links, hosted relays and billing belong to a separate
   private service.
 - **The engine stands on the moq-dev line** (`moq-net`, `moq-tokio`) at exact pinned versions
-  and serves MoQ itself. The vendored draft-16 `moq-transport` is deleted, not repaired.
-- **A machine's name is its tailnet name.** The engine reads the local Tailscale's status for
+  ~~and serves MoQ itself~~ — Superseded 2026-10-16 by `moq-relays.md`: it is a client of
+  relays and serves no endpoint. The vendored draft-16 `moq-transport` is deleted, not repaired.
+- ~~**A machine's name is its tailnet name.** The engine reads the local Tailscale's status for
   its own name and to list the tailnet's machines. With no Tailscale the name is the hostname
-  and matters only locally. The name-claiming rules built for the mesh are deleted.
-- **Who may read a public port on the tailnet is Tailscale's access rules.** The engine adds no
+  and matters only locally.~~ — Superseded 2026-10-16 by `moq-relays.md`: the hostname, cast,
+  everywhere; a relay's credential assigns the root. The name-claiming rules built for the
+  mesh are deleted.
+- ~~**Who may read a public port on the tailnet is Tailscale's access rules.**~~ — Superseded
+  2026-10-16 by `moq-relays.md`: who reads at a relay is that relay's rules. The engine adds no
   per-reader check, so the stream map and peer authentication are deleted.
-- **`tatolabd` sets up `tailscale serve`** for its HTTP listener on a port of its own the first
+- ~~**`tatolabd` sets up `tailscale serve`** for its HTTP listener on a port of its own the first
   time a port goes public, and says the one command to run when Tailscale refuses for lack of
-  rights. It never alters any other serve setting.
-- **The viewer page ships with the first version of sharing,** built on the stack's own
+  rights. It never alters any other serve setting.~~ — Superseded 2026-10-16 by
+  `moq-relays.md`: no HTTP off loopback and nothing of Tailscale is configured.
+- **The ~~viewer~~ preview page ships with the first version of sharing,** built on the stack's own
   player. One path for every browser: QUIC and MoQ. No TCP fallback is built or enabled.
+  (Renamed 2026-10-16 by `moq-relays.md`; it reads the local relay alone.)
 - **The repo's live verification reads a port the way a user does.** The fixture stream
   exposes the port private, and the check fetches exact, full-resolution snapshots from the
   machine's local HTTP listing. `tap` and `exchange` therefore stay until the sharing step
@@ -69,17 +91,22 @@ Read this before any of the following:
 
 ## Open
 
-Each is the sharing step's align to decide; none is built against until then.
+> Every item below was decided 2026-10-16 by `moq-relays.md`: groups from the writer's
+> envelope flag; a surface-naming payload goes out as written and names nothing remotely; the
+> loopback forms `watch` and `snapshot`, no browser certificate of ours; a relay is joined by
+> an adapter, a stream is one broadcast and each exposed port one track; no read-only MCP; the
+> control client hands an address and a credential per adapter and nothing else; the relay's
+> listing is the listing, no CLI verb; pins named in the plan.
 
-- How groups are cut for data that is not video, without the engine reading a bag.
-- What a public port whose bags name a surface serves off the machine.
-- The URL grammar, the forms that survive sentence 4, and the certificate a browser is shown.
-- How a relay is joined, and how a machine's ports are named there.
-- The read-only MCP: its tools and who may call it.
-- What a control client hands the runtime beyond a relay address and a credential.
-- The verbs that list machines and their public ports.
-- Which versions of `moq-net` and `moq-tokio` are pinned; the change that builds the endpoint
-  names them.
+- ~~How groups are cut for data that is not video, without the engine reading a bag.~~
+- ~~What a public port whose bags name a surface serves off the machine.~~
+- ~~The URL grammar, the forms that survive sentence 4, and the certificate a browser is shown.~~
+- ~~How a relay is joined, and how a machine's ports are named there.~~
+- ~~The read-only MCP: its tools and who may call it.~~
+- ~~What a control client hands the runtime beyond a relay address and a credential.~~
+- ~~The verbs that list machines and their public ports.~~
+- ~~Which versions of `moq-net` and `moq-tokio` are pinned; the change that builds the endpoint
+  names them.~~
 
 ## Why
 

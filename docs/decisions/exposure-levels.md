@@ -39,6 +39,10 @@ changed live.
   > Amended 2026-10-04 by `moq-on-the-tailnet.md`: that holds for the HTTP. Live data reaches the
   > internet through a relay the machine has joined, which offers every public port there;
   > Funnel carries TCP only. The levels are unchanged.
+  > Amended 2026-10-16 by `moq-relays.md`: the levels map onto relays — internal at none,
+  > private at the machine's local relay's loopback listener only, public at every joined relay. The cross-stream
+  > link over iceoryx2 that private admitted is deleted; a stream reads another's private port
+  > through the relay source node. No HTTP leaves loopback.
 
 - **Pull, never push.** A source wiring itself into a reader on another machine is a server
   wiring its URL into a client's browser. The reader's side decides what it consumes: it finds an
@@ -73,6 +77,7 @@ changed live.
 
 - `expose` on the CLI, the app and the local API edits the live map. Whether those live edits
   persist across a restart is the runtime-hosting change's to settle.
-- The URL listener serves private and public ports on loopback, and only public ones on a
-  ~~LAN or~~ tailnet address (no LAN address is served: amended 2026-10-04 by
-  `moq-on-the-tailnet.md`).
+- The URL listener serves private and public ports on loopback~~, and only public ones on a
+  LAN or tailnet address~~ (no LAN address is served: amended 2026-10-04 by
+  `moq-on-the-tailnet.md`; no tailnet address either: amended 2026-10-16 by `moq-relays.md`
+  — the listener is loopback only, `watch` and `snapshot` by address).

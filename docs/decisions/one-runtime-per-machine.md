@@ -241,7 +241,8 @@ Checked against the tree on 2026-09-30:
 - **A MoQ server of streamlib's own, or a WebTransport framing of our own instead of MoQ.**
   (Amended 2026-10-04 by `moq-on-the-tailnet.md`: the engine serves MoQ itself through the
   moq-dev line's embeddable server, and no relay is bundled; a framing of our own stays
-  rejected.)
+  rejected. Amended again 2026-10-16 by `moq-relays.md`: the engine serves nothing — it is a
+  client of relays, and `moq-relay` ships in the runtime unit as a child of `tatolabd`.)
   The listener, the certificates and the browser player cost the same either way; our own
   framing would re-invent groups, priorities and late-join and lose every relay and every
   third-party player, and the server half of a MoQ session already exists in the vendored
@@ -314,9 +315,12 @@ step needs decided first, so that `/plan` and every session read one sequence. E
    H.264 and MPEG-TS, then HLS, then `moq` through the bundled relay, the relay role.~~
 
    > Steps 8 and 9 superseded 2026-10-04 by `moq-on-the-tailnet.md`. The removal of Zenoh and
-   > the MoQ extension wheel comes first, ahead of the rest of steps 1 to 4. After step 5, one **sharing** step takes the place of both: MoQ on the
+   > the MoQ extension wheel comes first, ahead of the rest of steps 1 to 4. After step 5, one **sharing** step takes the place of both: ~~MoQ on the
    > tailnet, the relay a machine joins, and the HTTP listing, read-only MCP, snapshots, samples
-   > and viewer page. Steps 6, 7 and 10 follow it.
+   > and viewer page~~ — decided 2026-10-16 by `moq-relays.md`: MoQ relays through relay
+   > adapters, the local relay as a child, the publisher, bytes payloads, the relay source node,
+   > the sample stream, the loopback `watch` and `snapshot` forms, and the deletion of the
+   > windows, `remote_output`, the Tailscale read, `tap` and `exchange`. Steps 6, 7 and 10 follow it.
 10. **The app** — `Tatolab.app` with `tatolabd` as its SMAppService agent, the dmg, the
     permission prompts named Tatolab, and the remaining Rust names; last, because it packages
     everything above.

@@ -58,12 +58,29 @@ runs in native code the same wheel carries and which it calls directly;
 Python node.
 
 **Edge I/O processor**: a source or sink processor that ingests or egresses an
-external-world stream at a runtime boundary — WebRTC, raw UDP. Not how machines share
-streams, which is the engine's own. _Avoid_: "transport processor", "network transport".
+external-world stream — WebRTC, raw UDP, and the **relay source node**. Sending an exposed
+port to relays is the runtime's **publisher**; reading one back into a graph is a node.
+_Avoid_: "transport processor", "network transport".
 
-**Tailnet** _(user)_: the Tailscale network a machine belongs to, where its name, its reach to
-other machines, encryption, identity and discovery come from. Tailscale's own word, used as it
-is. _Avoid_: "mesh" (retired), "VPN", "network" unqualified.
+**Publisher** _(engine)_: the runtime's one component that forwards every exposed port's
+messages to the relays its level reaches, holding no logic — bytes as written, groups from
+the envelope, the catalog from the ports' fragments. _Avoid_: "publish" as the user's verb
+(that is **expose**), "broadcaster".
+
+**Relay adapter** _(engine)_: one implementation of the relay trait, carrying what differs
+between relays — dialect, credential, root. Local, Cloudflare, moq.pro, Red5. _Avoid_:
+"connector", "sink".
+
+**Relay source node** _(user)_: the built-in that subscribes to one track at a relay and
+writes its payloads out as received; the one way a graph reads a relay, on this machine or
+another. _Avoid_: "remote link", "remote_output" (retired 2026-10-16), "subscriber node".
+
+**Broadcast** / **Track**: MoQ's words, used as they are — a stream is one broadcast at a
+relay, each exposed port one track in it. _Avoid_: "channel" (iceoryx2's word), "topic".
+
+**Tailnet** _(user)_: the Tailscale network a machine may belong to. A docs word only: the
+runtime reads, configures and requires nothing of Tailscale, and a tailnet reaches a machine's
+local relay as any network does. _Avoid_: "mesh" (retired), "VPN", "network" unqualified.
 
 **Runtime** _(crosses)_: the one program per machine that runs streams — the engine, the
 accelerator when one is present, the transports, the local API; installed once, never
@@ -90,11 +107,18 @@ it runs. _Avoid_: "visibility" (discovery's word), "export", "publish", "endpoin
 
 **Exposed port** _(crosses)_: a private or public output port. _Avoid_: "shared port", "open port".
 
-**Form** _(user)_: the shape an exposed port is served in — the URL's child chunk. Live data
-has one form, `moq`. _Avoid_: "format" (a pixel format), "transport".
+**Form** _(user)_: the shape the runtime's loopback HTTP serves an exposed port in — the
+URL's leading chunk, `watch` or `snapshot`, before the address. Live data is a track at a
+relay, never a form. _Avoid_: "format" (a pixel format), "transport".
 
-**Relay** _(crosses)_: a separate program a machine joins so its public ports have an internet
-address. Never the runtime. _Avoid_: "gateway", "tower", "router".
+**Preview page** _(user)_: the lightweight built-in viewer the runtime serves on loopback at
+`/watch/<address>`, the stack's own player over the local relay; not a product. _Avoid_:
+"viewer page" (retired 2026-10-16), "dashboard", "console".
+
+**Relay** _(crosses)_: a separate program a machine joins so its exposed ports can be read —
+the **local relay** `tatolabd` runs as a child for every machine, and the hosted ones a
+machine joins for an internet address. Never the runtime. _Avoid_: "gateway", "tower",
+"router", "endpoint".
 
 **Codec block**: one of the seven codec built-ins that shipped — encoder, decoder, or
 muxer inside the runtime (`H264Encoder`, `Mp4Sink`, ...), configured like any built-in; its
@@ -121,13 +145,24 @@ legitimate in-that-process senses so "in-process" stops doing double duty. _Amen
 one-runtime-per-machine: the pivot's word is **runtime process**; this one names the shipped
 tree until the rename re-spells it._
 
-**Bag**: the self-describing msgpack named map a link carries — the schema-free view of
-a payload; consumers cast it to a type at read time. _Avoid_: "message", "envelope".
+**Message** _(crosses)_: one thing a link carries — an **envelope** the engine owns (stamp,
+length, the group flag) and a **payload**, bytes the engine never reads; at a relay, one
+object. _Avoid_: "bag" (retired 2026-10-16 — it named the msgpack map that was the whole
+payload; older entries saying "bag" mean message), "frame" for anything but a video frame.
 
-**Cast object**: the typed object `read(port, into=T)` constructs from a bag — the
-consumer's view of a payload. A cast type that claims its surface is also the
-tensor-protocol producer for that frame. _Avoid_: "typed bag", "frame object" (a cast
-type need not be a frame).
+**Payload**: a message's bytes, in whatever encoding the writer chose and its port's catalog
+fragment names — msgpack through the stream package's helper, a codec's media frame, the
+author's own. _Avoid_: "bag", "body".
+
+**Cast object**: the typed object `read(port, into=T)` constructs from a payload through
+`T.from_bytes` — the consumer's view of a message. A cast type that claims its surface is
+also the tensor-protocol producer for that frame. _Avoid_: "typed bag", "frame object" (a
+cast type need not be a frame).
+
+**Catalog fragment** _(crosses)_: what an output port's declaration says about what it
+writes — `encoding`, an optional `cast` import path, a `kind` — merged by the publisher into
+a broadcast's catalog as text and rendered by `graph`; documentation a reader follows, never
+a contract `connect` compares. _Avoid_: "schema", "port type", "shape declaration".
 
 **Local API** _(engine)_: the runtime's per-machine control surface over a local socket — for
 observing, inspecting and changing the live graphs of its streams — which the CLI, MCP hosts
@@ -245,14 +280,9 @@ opposed to an engine-ordered view. A raw handle names the allocation, never the
 frame — the surface-id lifetime guarantees end at export. _Avoid_: "export"
 unqualified where the allocation-vs-frame distinction matters.
 
-**Present target**: the engine-owned presentation surface minted from a raw window
-handle; the only way frames reach a window.
-
-**Node-owned window** _(user)_: a window a node requested from the engine and owns the
-policy of — title, extent, which frame it shows, what close means. For an owner outside
-the runtime process, the engine runs the window's native present loop, fed by surface ids
-the owner names. _Avoid_: "processor-owned window" (retired 2026-10-02), "debug window" as the
-concept (a use, not the capability).
+**Present target** and **Node-owned window**: retired 2026-10-16 with every window — the
+runtime opens none, and a stream is seen through the **preview page**. Entries that still
+use them are facts about the shipped tree until the sharing step's change deletes them.
 
 **Kernel**: a GPU program the engine compiles and runs on its device — compute,
 graphics, or ray-tracing. _Avoid_: "shader" for the whole object (that is its source
@@ -345,11 +375,18 @@ retired words are facts about the shipped tree, read through the plan's reading 
 rename change re-spells them.
 
 Retired by the 2026-10-04 moq-on-the-tailnet pivot (see `docs/decisions/moq-on-the-tailnet.md`):
-**Runtime mesh**, **Mesh name** and **Mesh peer** — no mesh exists; machines on one **tailnet**
-read each other's public ports directly; **Stream map** — not built, exposure being the whole of
-what the runtime enforces; **Relay** as a role of the runtime — a relay is a separate program.
-Entries that still use these words are facts about the shipped tree until the removal change
-ships.
+**Runtime mesh**, **Mesh name** and **Mesh peer** — no mesh exists; **Stream map** — not
+built, exposure being the whole of what the runtime enforces; **Relay** as a role of the
+runtime — a relay is a separate program. Entries that still use these words are facts about
+the shipped tree until the removal change ships.
+
+Retired by the 2026-10-16 sharing-step align (see `docs/decisions/moq-relays.md`): **MoQ on
+the tailnet** — the step is **MoQ relays**; **Viewer page** — say **preview page**;
+**Bag** — say **message**; **remote_output** and **remote link** — a graph reads a relay
+through the **relay source node**; **Tailnet HTTP** and `tailscale serve` — the runtime's HTTP
+is loopback only; **Window**, **DisplayWindow**, **present loop**, **event pump** — the
+runtime opens no windows; **EncodedVideoFrame** and **EncodedAudioPacket** — an encoder's
+port carries the stack's media frame as bytes.
 
 Retired by the 2026-10-02 package split (see `docs/decisions/package-split-and-lend.md`):
 **The wheel** — say **stream package** for `tatolab-stream` and **runtime portion** for

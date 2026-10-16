@@ -20,9 +20,12 @@ packaged on Apple.
 - Composition is plain Python over a flat graph.
 - The runtime keeps the GPU context, signals, ~~Zenoh session,~~ local API ~~and relay~~ once per
   machine (the Zenoh session and the bundled relay superseded 2026-10-04 by
-  `moq-on-the-tailnet.md`);
-  every other per-process table becomes per stream. Streams on one machine link without exposing;
-  surfaces are shared across all of the runtime's processor interpreters.
+  `moq-on-the-tailnet.md`; amended 2026-10-16 by `moq-relays.md`: the publisher, the relay
+  adapters and the local relay child are kept once per machine too);
+  every other per-process table becomes per stream. ~~Streams on one machine link without exposing;~~
+  — Superseded 2026-10-16 by `moq-relays.md`: a stream reads another's exposed port through
+  the relay source node, the cross-stream link being deleted.
+  Surfaces are shared across all of the runtime's processor interpreters.
 - On Apple, `tatolabd` is an SMAppService agent inside the signed Tatolab app.
 - Who starts it (2026-10-02): no verb ever does. With no runtime running, a verb fails because it
   cannot reach the socket, as `docker` does with its daemon down. `Tatolab.app` registers the
