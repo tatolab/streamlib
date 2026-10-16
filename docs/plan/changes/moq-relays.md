@@ -22,11 +22,10 @@ against.
 `runtime/streamlib-engine/src`, `M` = `runtime/streamlib-media-builtins/src`, `W` =
 `sdk/streamlib-python-wheel/src`, `S` = `sdk/tatolab-stream/tatolab/stream`, `A` =
 `runtime/streamlib-api-server/src`, `C` = `runtime/tatolab-cli/src`, `D` = `runtime/tatolabd/src`.
-- **The wire.** `FrameHeader { port_key, timestamp_ns, len }` is 76 bytes with documented offsets
-  (`runtime/streamlib-ipc-types/src/lib.rs:455-459`, `:348`), pinned by
-  `frame_header_size_matches_constant` and
-  `frame_header_fields_sit_at_their_documented_wire_offsets` (`:773`, `:780`). The per-link sequence
-  rides the iceoryx2 user header (`:654`), engine-internal.
+- **The wire.** `FrameHeader { port_key, timestamp_ns, len }`, 76 bytes with documented offsets
+  (`runtime/streamlib-ipc-types/src/lib.rs:455-459`, `:348`), pinned by `frame_header_size_matches_constant`
+  and `frame_header_fields_sit_at_their_documented_wire_offsets` (`:773`, `:780`); the per-link
+  sequence rides the iceoryx2 user header (`:654`), engine-internal.
 - **msgpack is applied behind the call.** `write(port_name, bag, timestamp_ns=None)`
   (`W/python_processor_context/link_data_access.rs:134`) → `encode_bag_to_msgpack`
   (`W/python_processor_link_data_access.rs:705`) → `write_raw`; every read decodes in
@@ -41,14 +40,11 @@ against.
 - **The encoded frame has no timestamp key**: `codec, bitstream, is_sync_point, group_index,
   sequence_index, width, height, color?` (`M/encoded_video_frame.rs:37-92`); the packet adds
   `sample_rate, channels, sample_count, pre_skip` (`M/encoded_audio_packet.rs:112`). Readers and
-  writers: `published_surface_to_encoded_frame_encoder.rs:288`,
-  `encoded_frame_to_published_surface_decoder.rs:204`,
+  writers: `published_surface_to_encoded_frame_encoder.rs:288`, `encoded_frame_to_published_surface_decoder.rs:204`,
   `audio_window_to_encoded_packet_encoder.rs:279`, `encoded_packet_to_audio_block_decoder.rs`,
-  `mp4_sink.rs:74-77` → `mp4_fragmented_file_writer.rs:69` (`BagCodecPeek`),
-  `E/../examples/codec_roundtrip_rig.rs:89`, and the WebRTC wheel
-  (`packages/streamlib-webrtc/python/tatolab/webrtc/processors.py:298-303`, `:553-577`;
-  `src/lib.rs:331-399`). `OpusDecoder` detects a gap by `sequence_index`
-  (`encoded_packet_to_audio_block_decoder.rs`); the video decoders enter at `sequence_index=0`.
+  `mp4_sink.rs:74-77` → `mp4_fragmented_file_writer.rs:69`, `E/../examples/codec_roundtrip_rig.rs:89`,
+  the WebRTC wheel (`packages/streamlib-webrtc/python/tatolab/webrtc/processors.py:298-303`, `:553-577`;
+  `src/lib.rs:331-399`). `OpusDecoder` detects a gap by `sequence_index`; the video decoders enter at 0.
 - **The tap slot is the publisher's seat.** `RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL = 1`
   (`ipc-types/src/lib.rs:327`), added in `channel_max_subscribers`
   (`E/core/compiler/compiler_ops/open_iceoryx2_service_op.rs:629-637`); `tap_async`
@@ -92,12 +88,11 @@ against.
   `installer/tatolabd-restart-for-a-display-at-login.service` (`install.sh:29`,
   `build_linux_runtime_release_tarball.sh:96`), marker `tatolabd-started-with-no-display-server`
   (`streamlib_runtime_directory.rs:150-154`).
-- **TestPatternSource is CPU bars**: `M/test_pattern_source.rs` fills one `Rgba32` pixel buffer with
+- **TestPatternSource is CPU bars**: `M/test_pattern_source.rs` fills one `Rgba32` buffer with
   `fill_smpte_bars_rgba` (`:63`) and republishes the same surface id every 33 ms; config `width`,
   `height`. `tatolab new --test-pattern` (`C/main.rs:110-113`, `:272-275`) string-replaces the one
-  template `sdk/tatolab-stream/scaffold_template/stream.py` (`CameraSource` + `DisplayWindow`,
-  `:14-27`) through `ScaffoldedStreamSource::{Camera, TestPattern}`
-  (`C/scaffold_new_stream_project.rs:41-119`).
+  template `scaffold_template/stream.py` (`CameraSource` + `DisplayWindow`, `:14-27`) through
+  `ScaffoldedStreamSource::{Camera, TestPattern}` (`C/scaffold_new_stream_project.rs:41-119`).
 - **`tap` and `exchange`.** `C/main.rs:195`, `:236`, `C/surface_image_exchange.rs`, `TAP_TOOL_NAME`
   (`C/runtime_observation_verbs.rs:16`); `A/handlers.rs:55` `/api/surfaces/{surface_id}/image`
   (`local_api_wire_contract.rs:24`), `:111` `/ws/tap/{channel}`; `A/mcp.rs:602-712`;
@@ -109,11 +104,10 @@ against.
 - **No URL listener exists.** The api-server binds a Unix socket alone (`A/local_api_socket.rs:71`;
   `serving_the_router_on_the_local_api_socket_opens_no_tcp_listener` `:464`); no route serves a port
   by address or lists exposed ports.
-- **The codec seam.** `VideoCodecBackend` (`E/core/context/video_codec_backend.rs:175`), the walk
-  `first_video_codec_backend_arm_that_opens` (`:233`) over `platform_video_codec_backend_arms`
-  (`:250-272`: Linux `vulkan-video`, macOS `videotoolbox`, else none) into the refusing backend
-  (`refusing_null_video_codec_backend.rs:19`); the encoder opens its session at
-  `published_surface_to_encoded_frame_encoder.rs:418-420`. No `openh264` anywhere.
+- **The codec seam.** `VideoCodecBackend` (`E/core/context/video_codec_backend.rs:175`); the walk
+  `first_video_codec_backend_arm_that_opens` (`:233`) over `platform_video_codec_backend_arms` (`:250-272`:
+  Linux `vulkan-video`, macOS `videotoolbox`) into `refusing_null_video_codec_backend.rs:19`; the
+  encoder opens its session at `published_surface_to_encoded_frame_encoder.rs:418-420`. No `openh264` anywhere.
 - **The unit.** `xtask/src/build_runtime.rs:167-623` lays `bin/`, `lib/tatolab/lend/`; sibling
   native binaries are fetched by pinned tag and SHA-256 in `scripts/stage_{linux,macos}_bundled_vulkan_driver.sh`;
   the portability gate walks every binary (`test_wheel_portability.py:397-590`). `tatolabd`
@@ -161,14 +155,16 @@ publisher and player, the codec rig and the fixtures read and write that frame.
 `EncodedVideoFrame`, `EncodedAudioPacket`, their casts, tests and `_built_in_nodes.py` key lists
 are deleted; `encoded_stream_ordering.rs` goes with the ordering pair.
 
-[NEEDS DECISION] How a decoder detects a lost message on an `ordered` link once no payload carries
-`sequence_index`. (a) **Recommended:** the reader exposes the count the engine already keeps —
-`read_from_inbound_link_with_timestamp` returns `lost_since_last_read` for that link (the mailbox
-eviction and ring-gap counts of loss-visibility, read and zeroed per read); a decoder with a nonzero
-count discards until the next `starts_group`. No payload key, no new counter. (b) A producer
-sequence inside the payload — non-standard, and a stock player stops on it. (c) Codec-level
-detection (`frame_num`, Opus TOC) — unreliable with hardware decoders. Spelling and the Rust twin
-are the ticket's.
+**Decided (owner, 2026-10-16) — loss on an `ordered` encoded link, to be verified.** No payload
+carries a sequence; the reader exposes the count the engine already keeps:
+`read_from_inbound_link_with_timestamp` returns `lost_since_last_read` for that link — the
+mailbox-eviction and ring-gap counts of loss-visibility, read and zeroed per read — and a decoder
+with a nonzero count discards until the next `starts_group`; the Rust reader gets the same.
+**Verify, not assume:** slice 2's proof drops messages on a running ordered link (the shipped
+`a_stalled_windowed_consumer…` shape) and asserts the count reaches the decoder on its next read
+and that the picture is clean after the next group — a counter that misses a loss class reopens
+this. Rejected: a producer sequence in the payload (stock players stop on it); codec-level
+detection (unreliable with hardware decoders).
 
 ## ADDED: the publisher, the adapters, the local relay — §Networking `:3833-3908`
 
@@ -194,37 +190,44 @@ are the ticket's.
 - `moq-net 0.3.x`, `moq-tokio 0.19.x`, `moq-relay 0.17.x`, `hang 0.21.x` (catalog types) pinned
   exact in the workspace; `rustls` enters the engine workspace through `moq-tokio`.
 
-[NEEDS DECISION] How a machine joins a hosted relay. (a) **Recommended:** CLI verbs `tatolab relay
-join <url> --credential-file <path>` / `relay leave <url>` / `relays`, each a local-API tool
-(`join_relay`, `leave_relay`, `list_relays`), recorded in a machine-level `relays.json` in the state
-directory (mode 0600) beside `streams/`, re-joined at every start; the app and a future control
-client call the same tools. (b) A settings file the user edits, no verb. (c) The app only, no CLI.
-(a) keeps "every stream verb is a local-API call" true for a machine setting too.
+**Decided (owner, 2026-10-16) — relays are configured like built-ins, each independently.**
+Every `RelayAdapter` declares a typed settings struct deriving `JsonSchema` through the same
+`ProcessorConfigJsonSchema` seam the built-ins' configs use, with every secret field (API key,
+OAuth token, credential file) marked `writeOnly` in the schema; the runtime serves a relay-adapter
+catalog — `GET /api/relay-adapters` and the MCP resource `streamlib://relay-adapter-catalog` —
+listing each adapter's `kind`, doc and settings schema, so the app renders a form per adapter
+without knowing one. Tools, each a local-API tool and a CLI verb: `add_relay {adapter, settings}`
+→ `{relay_id}` (`tatolab relay add <adapter> --settings-file <path>`), `configure_relay
+{relay_id, settings}` taking a partial settings map (`tatolab relay set <id> key=value …`),
+`remove_relay {relay_id}` (`tatolab relay rm`), `list_relays` (`tatolab relays`: id, adapter,
+settings with each secret shown as set or unset, connection state). The machine-level record is
+`<state>/relays.json` (0600) — `[{relay_id, adapter, settings}]` with secrets held apart in
+`<state>/relay-credentials.json` (0600), written atomically, never logged, never read back over
+the API — re-joined at every start. The two local adapters are entries too (`local-loopback`,
+`local-every-interface`), present by default, so their ports and TLS are tuned the same way.
+Rejected: a hand-edited file alone; the app alone (owner, 2026-10-16).
 
 ## ADDED: the relay source node — §Networking `:3908`
 
 `RelayTrackSource`, a native built-in (`M/relay_track_source.rs`), `execution = manual`, config
-`relay_url` (default the local loopback relay) and `track_address`
-(`<machine>/<stream>/<node>/<port>`), one output `track`. A processor-owned thread runs a `moq-net`
-subscription and writes each object's payload with `write_bytes_with_timestamp`, stamp
-`MediaClock::now()`, `starts_group` true on the first object of each group; the track's catalog
-fragment is copied onto the output port through the fragment update, so a reader's
-`inbound_link_catalog_fragment` sees the far end's. A relay refusing or vanishing is retried with
-backoff, never ending the stream; `stop()` closes the session inside the 5 s budget.
+`relay_url` (default the local loopback relay) and `track_address` (`<machine>/<stream>/<node>/<port>`),
+one output `track`. A processor-owned thread runs a `moq-net` subscription and writes each object's
+payload with `write_bytes_with_timestamp`, stamp `MediaClock::now()`, `starts_group` on a group's
+first object; the track's catalog fragment is copied onto the output through the fragment update,
+so `inbound_link_catalog_fragment` downstream sees the far end's. A relay refusing or vanishing is
+retried with backoff, never ending the stream; `stop()` closes the session inside the 5 s budget.
 
 ## REMOVED: `remote_output` and the cross-stream link — §Networking `:3685`, `:3778`
 
-The builder's `remote_output`, `NodeOutputPortReferenceByAddress`, `_link_source_end`'s machine
-and stream keys; `LinkPortRefOutput.{machine,stream}`, `OutputPortInAnotherStreamOnThisMachine`,
+The builder's `remote_output`, `NodeOutputPortReferenceByAddress`, `_link_source_end`'s machine and
+stream keys; `LinkPortRefOutput.{machine,stream}`, `OutputPortInAnotherStreamOnThisMachine`,
 `LinkState::AwaitingRemote`, `reconcile_a_link_reading_another_stream_op.rs`,
-`wire_a_link_reading_another_stream`, `connect_from_an_output_port_in_another_stream`, the
-`<end>_stream` arguments of `connect`; a link end naming a stream or machine is refused at load
-naming `RelayTrackSource`. The exposure edge collapses to the publisher's level set:
-`register_a_reader_of_an_exposed_output_port` and its refusals go, `set_output_port_exposure_level`
-notifies the publisher. Tests: the two cross-stream suites and their harnesses are deleted;
-`test_a_link_to_an_internal_port_awaits…` and `…lowering_the_source_to_internal_cuts…`
-are rewritten against the publisher (a private port appears at the loopback relay, a public
-one at both, lowering withdraws the track and the subscriber ends).
+`wire_a_link_reading_another_stream`, `connect_from_an_output_port_in_another_stream`, `connect`'s
+`<end>_stream`; a link end naming a stream or machine is refused at load naming `RelayTrackSource`.
+The exposure edge collapses to the publisher's level set — `register_a_reader_of_an_exposed_output_port`
+and its refusals go, `set_output_port_exposure_level` notifies the publisher. The two cross-stream
+suites and harnesses are deleted; the internal-port and lowering tests are rewritten against the
+publisher (private appears at loopback, public at both; lowering withdraws the track and ends the subscriber).
 
 ## ADDED: loopback HTTP — §Networking `:3807`, §Control plane `:4442`
 
@@ -305,9 +308,7 @@ period, `effort_level` refused by name.
 8. **The CPU encoder arm.** Proof: on `VK_DRIVER_FILES=lvp` the scaffold plays; the PSNR rig on
    the CPU arm meets the Y floor.
 9. **Hosted adapters** — Cloudflare (drafts 14/16), moq.pro; credentials from the environment;
-   live proof rig-only, cannot-run without them.
-
-1 and 6 start at once; 2, 3 after 1; 4, 5, 9 after 3; 7 after 2 and 6; 8 any time.
+   live proof rig-only, cannot-run without them. Order: 1 and 6 first; 2, 3 after 1; 4, 5, 9 after 3; 7 after 2 and 6; 8 any time.
 
 ## Assumptions stated, not asked
 
@@ -315,7 +316,7 @@ period, `effort_level` refused by name.
 - The Rust msgpack write is named `write_msgpack`, so a built-in's encoding is visible at its call.
 - `msgpack` from PyPI is the stream package's one new dependency; the stream suite stays runtime-free.
 - The hang `legacy` container (varint µs + payload) is the media frame: every player on the line reads it.
-- Fixed ports 4443–4446 on loopback, 4445 on every interface; one in use refuses the start by name.
+- Default ports 4443–4446 on loopback, 4445 on every interface, tuned in the local adapters' settings.
 - Two `moq-relay` children, not one, because `moq-relay` binds one QUIC address.
 - A hosted relay's root is the credential's; the hostname sits under it.
 - `RelayTrackSource` stamps arrival; the writer's stamp rides the object.
