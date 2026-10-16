@@ -28,7 +28,8 @@ disable-model-invocation: true
    (`{"issue": <N>, "branch": "<type>/<N>-<slug>"}`) — the mid-flight marker `/plan` reads.
    Branch `<type>/<N>-<slug>` off fresh `main`.
 7. **Build test-first at the seams the ticket names.** Commit at logical checkpoints
-   with conventional-commit prefixes; every commit builds.
+   with conventional-commit prefixes; every commit builds. Prune the comments that break
+   `.claude/rules/comments.md` in every file you touch.
 8. Scope is the ticket. Side findings go in the PR body as notes — a new ticket only if
    the milestone does not land without it.
 9. **Gates**: spawn `local-ci-runner` for the fast local gates; fix what it reports. The full
@@ -39,5 +40,6 @@ disable-model-invocation: true
     squash-merges; the title is the commit release-please parses); body `## Summary`,
     `## Closes` (one `Closes #N` per line), `## Exit criteria`, `## Test plan`,
     `## Notes for owner` (the batched findings).
-12. `rm -f .claude/state/active-ticket.json`. Report: PR URL, tests run, notes awaiting
+12. If step 7 pruned comments, say so on the ticket: unnecessary comments were removed in
+    favour of code discoverability. `rm -f .claude/state/active-ticket.json`. Report: PR URL, tests run, notes awaiting
     the owner. Merge is always the owner's call.
