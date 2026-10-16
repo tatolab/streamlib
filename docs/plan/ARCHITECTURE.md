@@ -2356,9 +2356,9 @@ entry reads as **message** (the glossary).
 - **DECIDED** — A camera frame carries one capture instant on both of its stamps. The
   seam's hand-off carries `capture_timestamp_ns`, resolved under one rule every arm shares
   (`VideoCaptureInstantResolver`), and `CameraSource` assigns it to the frame's own
-  `timestamp_ns` **and** passes the same value to `write_with_timestamp` — never the implicit
-  write, whose `MediaClock::now()` stamps publication, and never the call swap alone, which
-  sets only the envelope. The encoder reads the payload's stamp, `Mp4Sink` the
+  `timestamp_ns` **and** passes the same value to `write_msgpack_with_timestamp` — never
+  the implicit write, whose `MediaClock::now()` stamps publication, and never the call swap
+  alone, which sets only the envelope. The encoder reads the payload's stamp, `Mp4Sink` the
   envelope's; both name the instant of capture on both floors. A device stamp is trusted only
   when it is on the machine's monotonic clock and non-zero — V4L2's dequeued-buffer stamp with
   its timestamp flags, AVFoundation's sample presentation stamp converted from the session's

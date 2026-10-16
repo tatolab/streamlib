@@ -11,7 +11,7 @@
 //! - [`OutputWriter`] is the public handle that processor structs hold
 //!   via the macro-emitted `outputs: OutputWriter` field. It wraps an
 //!   `Arc<OutputWriterInner>` behind an opaque handle; its methods
-//!   (`write`, `write_raw`, `has_port`, `clone`, `drop`) borrow the
+//!   (`write_msgpack`, `write_bytes_with_timestamp`, `has_port`, `clone`, `drop`) borrow the
 //!   inner and invoke it directly.
 //!
 //! Host-side code that mutates the inner (e.g. compiler ops installing
@@ -98,8 +98,8 @@ fn as_maybe_uninit_bytes(bytes: &[u8]) -> &[MaybeUninit<u8>] {
 /// [`streamlib_ipc_types::MAX_PUBLISHERS_PER_CHANNEL`]) and one notifier per
 /// destination.
 ///
-/// The transport inversion (#1419): one source output port maps to one channel,
-/// so a single zero-copy loan reaches every subscriber. The per-destination
+/// One source output port maps to one channel, so a single zero-copy loan
+/// reaches every subscriber. The per-destination
 /// notifiers stay separate because each destination keeps its own listener-fd
 /// (the notify service is destination-keyed for fd-multiplexed wakeups); the
 /// data itself is published ONCE.
@@ -218,9 +218,9 @@ impl OutputWriterInner {
     /// Install the single channel publisher for an output port.
     ///
     /// The [`ChannelEgressConfig`] primes the growth / ceiling observability the
-    /// per-frame [`Self::write_raw`] enforces. Called once per output port (the
-    /// first link out of it); a second call replaces the publisher, which the
-    /// wiring op avoids via [`Self::has_channel_publisher`].
+    /// per-frame [`Self::write_bytes_with_timestamp`] enforces. Called once per
+    /// output port (the first link out of it); a second call replaces the
+    /// publisher, which the wiring op avoids via [`Self::has_channel_publisher`].
     pub fn set_channel_publisher(
         &self,
         output_port: &str,
@@ -350,30 +350,35 @@ impl OutputWriterInner {
         }
     }
 
-    /// Write raw bytes to the specified output port without serialization.
+    /// Publish one message — `payload_bytes` as given, stamped `timestamp_ns` and
+    /// `starts_group` in its header — on `port`.
     ///
-    /// The data is assumed to be pre-serialized (e.g., msgpack from a
-    /// subprocess bridge). One zero-copy loan reaches every channel subscriber;
-    /// the frame is built and sent ONCE, then every destination notifier is
-    /// signalled.
+    /// One zero-copy loan reaches every channel subscriber; the frame is built
+    /// and sent once, then every destination notifier is signalled.
     ///
     /// Every send that may deliver carries the port's next sequence number; a
     /// refusal, a header failure, a failed loan and a send that failed before
     /// reaching anyone consume none.
-    pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
+    pub fn write_bytes_with_timestamp(
+        &self,
+        port: &str,
+        payload_bytes: &[u8],
+        timestamp_ns: i64,
+        starts_group: bool,
+    ) -> Result<()> {
         let mut channels = self.channels.lock();
         let Some(egress) = channels.get_mut(port) else {
             // A declared port no link has reached — a processor added to a
             // running graph ahead of its connect, or one whose last link was
-            // taken away — carries nothing, so the bag is dropped as it would
-            // be for a consumer that cannot keep up.
+            // taken away — carries nothing, so the message is dropped as it
+            // would be for a consumer that cannot keep up.
             if self.declared_output_ports.lock().contains(port) {
                 return Ok(());
             }
             return Err(Error::Link(format!("Unknown output port: {}", port)));
         };
 
-        let total_len = FRAME_HEADER_SIZE + data.len();
+        let total_len = FRAME_HEADER_SIZE + payload_bytes.len();
 
         let admission = streamlib_ipc_types::decide_channel_egress_admission(
             total_len,
@@ -405,7 +410,7 @@ impl OutputWriterInner {
         // Header on the stack before the loan: a port key that overflows the
         // wire capacity must never cost a loan slot.
         let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
-        FrameHeader::new(port, timestamp_ns, data.len() as u32, true)
+        FrameHeader::new(port, timestamp_ns, payload_bytes.len() as u32, starts_group)
             .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
             .write_to_slice(&mut header_bytes);
 
@@ -417,9 +422,9 @@ impl OutputWriterInner {
         let (loaned_header_bytes, loaned_payload_bytes) =
             sample.payload_mut().split_at_mut(FRAME_HEADER_SIZE);
         loaned_header_bytes.copy_from_slice(as_maybe_uninit_bytes(&header_bytes));
-        loaned_payload_bytes.copy_from_slice(as_maybe_uninit_bytes(data));
+        loaned_payload_bytes.copy_from_slice(as_maybe_uninit_bytes(payload_bytes));
         // SAFETY: the two `copy_from_slice` calls above initialized
-        // `FRAME_HEADER_SIZE + data.len()` bytes — exactly the `total_len` the
+        // `FRAME_HEADER_SIZE + payload_bytes.len()` bytes — exactly the `total_len` the
         // loan was taken for — or panicked on a length mismatch.
         let sample = unsafe { sample.assume_init() };
         let send_outcome = sample.send();
@@ -511,8 +516,8 @@ impl OutputWriter {
     /// engine patches in a real inner via
     /// `GeneratedProcessor::set_iceoryx2_resources` before any
     /// downstream connection wiring runs. Safe to hold before wiring —
-    /// `has_port` / `is_configured` answer without a wired inner — but
-    /// `write` / `write_raw` return [`Error::Link`] until it fires.
+    /// `has_port` / `is_configured` answer without a wired inner — but every
+    /// write returns [`Error::Link`] until it fires.
     pub fn empty() -> Self {
         Self {
             handle: std::ptr::null(),
@@ -543,28 +548,35 @@ impl OutputWriter {
         }
     }
 
-    /// Write a frame to the specified output port. Serializes `T` to
-    /// msgpack, then publishes the bytes. Thread-safe.
-    pub fn write<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
+    /// Publish `value` as a msgpack named map on `port`, stamped now, as a message
+    /// that starts a group.
+    pub fn write_msgpack<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
         let timestamp_ns = MediaClock::now().as_nanos() as i64;
-        self.write_with_timestamp(port, value, timestamp_ns)
+        self.write_msgpack_with_timestamp(port, value, timestamp_ns)
     }
 
-    /// Write a frame to the specified output port with an
-    /// explicit timestamp.
-    pub fn write_with_timestamp<T: Serialize>(
+    /// Publish `value` as a msgpack named map on `port`, stamped `timestamp_ns`, as
+    /// a message that starts a group.
+    pub fn write_msgpack_with_timestamp<T: Serialize>(
         &self,
         port: &str,
         value: &T,
         timestamp_ns: i64,
     ) -> Result<()> {
-        let data = rmp_serde::to_vec_named(value)
+        let payload_bytes = rmp_serde::to_vec_named(value)
             .map_err(|e| Error::Link(format!("Failed to serialize frame: {}", e)))?;
-        self.write_raw(port, &data, timestamp_ns)
+        self.write_bytes_with_timestamp(port, &payload_bytes, timestamp_ns, true)
     }
 
-    /// Write raw msgpack-encoded bytes to the specified output port.
-    pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
+    /// Publish `payload_bytes` as given on `port`, stamped `timestamp_ns` and
+    /// `starts_group` in the message's header.
+    pub fn write_bytes_with_timestamp(
+        &self,
+        port: &str,
+        payload_bytes: &[u8],
+        timestamp_ns: i64,
+        starts_group: bool,
+    ) -> Result<()> {
         let Some(inner) = self.host_inner() else {
             return Err(Error::Link(format!(
                 "OutputWriter not wired (port='{}'): host has not yet \
@@ -572,7 +584,12 @@ impl OutputWriter {
                 port
             )));
         };
-        inner.write_raw(&cast_exposed_name_to_url_safe(port)?, data, timestamp_ns)
+        inner.write_bytes_with_timestamp(
+            &cast_exposed_name_to_url_safe(port)?,
+            payload_bytes,
+            timestamp_ns,
+            starts_group,
+        )
     }
 
     /// Check if a port is configured.
@@ -670,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn write_raw_calls_notifier() {
+    fn write_bytes_with_timestamp_calls_notifier() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let notify_name = unique_suffix("notify");
 
@@ -709,8 +726,12 @@ mod tests {
         assert_eq!(count, 0);
 
         let writer = OutputWriter::from_inner_arc(inner);
-        writer.write_raw("out", b"payload", 1234).unwrap();
-        writer.write_raw("out", b"more", 5678).unwrap();
+        writer
+            .write_bytes_with_timestamp("out", b"payload", 1234, true)
+            .unwrap();
+        writer
+            .write_bytes_with_timestamp("out", b"more", 5678, true)
+            .unwrap();
 
         // Notifier::notify is non-blocking; give iceoryx2 a moment to deliver
         // before draining. timed_wait returns as soon as the first event
@@ -725,7 +746,7 @@ mod tests {
         listener.try_wait(|_| count += 1).unwrap();
         assert!(
             count >= 1,
-            "expected at least one notify after write_raw, got {}",
+            "expected at least one notify after write_bytes_with_timestamp, got {}",
             count
         );
     }
@@ -739,7 +760,7 @@ mod tests {
     /// actually triggered. A failed delivery does not surface as `Err`: it
     /// returns a count that excludes the listener it could not reach. On an
     /// event transport that queues a wakeup per send, the undrained listener
-    /// stops counting after a bounded number of sends (#1764 measured ~280).
+    /// stops counting after a bounded number of sends (about 280).
     #[test]
     fn an_undrained_listener_is_delivered_every_send_and_drains_the_whole_count() {
         const SENDS: usize = 8192;
@@ -784,18 +805,18 @@ mod tests {
         );
     }
 
-    /// 1→N fan-out DELIVERY lock (#1419): a single `write_raw` publishes ONE
+    /// 1→N fan-out delivery: a single `write_bytes_with_timestamp` publishes ONE
     /// frame that reaches EVERY subscriber on the channel through one zero-copy
     /// loan + one send. Three subscribers each receive exactly one copy of the
     /// payload.
     ///
-    /// Revert lock: change `write_raw` to a per-connection copy loop (loan +
+    /// Revert lock: change `write_bytes_with_timestamp` to a per-connection copy loop (loan +
     /// send once per destination notifier) and each subscriber on the shared
     /// service receives N frames instead of one — the exactly-one assertion
     /// fails. The capacity-only tests (subscriber-count sizing) stay green under
     /// that revert; this is what pins the delivery guarantee.
     #[test]
-    fn write_raw_fans_out_single_loan_to_all_subscribers() {
+    fn write_bytes_with_timestamp_fans_out_single_loan_to_all_subscribers() {
         const N: usize = 3;
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
 
@@ -818,7 +839,7 @@ mod tests {
         );
 
         // N destination notifiers on the one channel — the compiler op's wiring
-        // shape for N destinations. `write_raw` signals each, but the frame is
+        // shape for N destinations. `write_bytes_with_timestamp` signals each, but the frame is
         // published exactly ONCE.
         let mut listeners = Vec::with_capacity(N);
         for i in 0..N {
@@ -845,7 +866,9 @@ mod tests {
         }
 
         let writer = OutputWriter::from_inner_arc(inner);
-        writer.write_raw("out", b"fanout-payload", 4242).unwrap();
+        writer
+            .write_bytes_with_timestamp("out", b"fanout-payload", 4242, true)
+            .unwrap();
 
         for (i, subscriber) in subscribers.iter().enumerate() {
             let mut received: Vec<Vec<u8>> = Vec::new();
@@ -867,15 +890,15 @@ mod tests {
         }
     }
 
-    /// Per-link source reclaim (#1549): a source port feeding two destination
+    /// Per-link source reclaim: a source port feeding two destination
     /// links that both wait on a listener holds two tagged notifiers on ONE
     /// channel egress. Disconnecting one link drops only its notifier (the
     /// channel — and its publisher — survive so the other destination keeps
     /// receiving); disconnecting the last link removes the whole channel egress,
     /// releasing the publisher so a reconnect recreates a fresh-sized service.
     ///
-    /// Fail-without-fix: revert `remove_channel_link` to a no-op (the pre-#1549
-    /// `close_iceoryx2_service` behaviour) and the first removal leaves both
+    /// Fail-without-fix: make `remove_channel_link` a no-op and the first
+    /// removal leaves both
     /// notifiers, so `has_channel_publisher` stays true after the final
     /// disconnect and the "channel fully removed" assertion fails.
     #[test]
@@ -949,11 +972,13 @@ mod tests {
         inner.declare_output_ports(["video".to_string()]);
 
         inner
-            .write_raw("video", b"data", 0)
+            .write_bytes_with_timestamp("video", b"data", 0, true)
             .expect("a declared port with no link drops the bag");
         assert!(!inner.has_port("video"), "dropping opens no channel");
 
-        let refused = inner.write_raw("undeclared", b"data", 0).unwrap_err();
+        let refused = inner
+            .write_bytes_with_timestamp("undeclared", b"data", 0, true)
+            .unwrap_err();
         assert!(
             format!("{refused}").contains("Unknown output port"),
             "an undeclared port is refused by name; got {refused}"
@@ -981,7 +1006,7 @@ mod tests {
 
         assert!(writer.has_port("videoOut"));
         writer
-            .write_raw("videoOut", b"bag", 0)
+            .write_bytes_with_timestamp("videoOut", b"bag", 0, true)
             .expect("a cast-alike spelling names the port");
         let sample = subscriber
             .receive()
@@ -989,7 +1014,9 @@ mod tests {
             .expect("the write reached the channel");
         assert_eq!(&sample.payload()[FRAME_HEADER_SIZE..], b"bag");
 
-        let refusal = writer.write_raw("%%", b"bag", 0).unwrap_err();
+        let refusal = writer
+            .write_bytes_with_timestamp("%%", b"bag", 0, true)
+            .unwrap_err();
         assert!(
             matches!(refusal, Error::ExposedNameCastsToNothing(_)),
             "a name that casts to nothing names no port; got {refusal}"
@@ -997,13 +1024,15 @@ mod tests {
     }
 
     /// Empty (unwired) writers should fail cleanly rather than crash.
-    /// Mentally revert the `is_configured()` guard in `write_raw` and
+    /// Mentally revert the `is_configured()` guard in `write_bytes_with_timestamp` and
     /// the test segfaults dereferencing the null handle.
     #[test]
     fn empty_writer_fails_cleanly() {
         let writer = OutputWriter::empty();
         assert!(!writer.is_configured());
-        let err = writer.write_raw("any_port", b"data", 0).unwrap_err();
+        let err = writer
+            .write_bytes_with_timestamp("any_port", b"data", 0, true)
+            .unwrap_err();
         let msg = format!("{}", err);
         assert!(
             msg.contains("not wired"),
@@ -1033,18 +1062,18 @@ mod tests {
         assert_eq!(Arc::strong_count(&inner_for_test), 1);
     }
 
-    /// Per-channel ceiling + PowerOfTwo growth (#1421): a payload UNDER the
+    /// Per-channel ceiling + PowerOfTwo growth: a payload UNDER the
     /// channel ceiling but far over the primed slot grows the segment and
     /// delivers intact; a payload OVER the ceiling is refused with the named
     /// [`Error::PayloadExceedsChannelCeiling`], counted, and the stream
     /// continues (a subsequent in-bounds write still delivers).
     ///
-    /// Fail-without-fix: remove the ceiling branch in `write_raw` and the
+    /// Fail-without-fix: remove the ceiling branch in `write_bytes_with_timestamp` and the
     /// over-ceiling write returns `Ok` (no error, count stays 0) — the graceful
     /// refusal this issue adds is gone. Remove the growth/PowerOfTwo path and the
     /// 100 KiB loan fails instead of delivering.
     #[test]
-    fn write_raw_refuses_over_ceiling_and_grows_within_it() {
+    fn write_bytes_with_timestamp_refuses_over_ceiling_and_grows_within_it() {
         let pubsub = open_channel_data_service("ceiling/pubsub", 2);
         // Prime tiny (4 KiB) under PowerOfTwo so a 100 KiB write must grow.
         let publisher = pubsub.create_publisher(4096).unwrap();
@@ -1066,7 +1095,7 @@ mod tests {
         // Within ceiling but far above the primed 4 KiB slot — grows + delivers.
         let within = vec![0x5Au8; 100 * 1024];
         inner
-            .write_raw("out", &within, 111)
+            .write_bytes_with_timestamp("out", &within, 111, true)
             .expect("in-bounds payload must grow the segment and send");
         assert_eq!(
             refused_bag_count_of(&inner, "out"),
@@ -1084,7 +1113,7 @@ mod tests {
         // Above ceiling — refused with the named error + counted, never a panic.
         let over = vec![0u8; ceiling + 1];
         let err = inner
-            .write_raw("out", &over, 222)
+            .write_bytes_with_timestamp("out", &over, 222, true)
             .expect_err("a payload above the channel ceiling must be refused");
         match err {
             Error::PayloadExceedsChannelCeiling {
@@ -1119,7 +1148,7 @@ mod tests {
 
         // Stream continues: a subsequent in-bounds write still delivers.
         inner
-            .write_raw("out", b"still-alive", 333)
+            .write_bytes_with_timestamp("out", b"still-alive", 333, true)
             .expect("stream must continue after a refusal");
         let got = subscriber
             .receive()
@@ -1135,7 +1164,7 @@ mod tests {
     /// whose channel was released and opened again mirrors from zero through
     /// its new claim alone.
     ///
-    /// Fail-without-fix: mirror nothing at `write_raw`, and the entry still
+    /// Fail-without-fix: mirror nothing at `write_bytes_with_timestamp`, and the entry still
     /// reads zero after two refusals.
     #[test]
     fn a_refusal_on_a_mirrored_output_port_reaches_its_board_entry_as_it_is_counted() {
@@ -1180,8 +1209,12 @@ mod tests {
         let over_the_ceiling = vec![0u8; 2048];
 
         install_the_channel(1);
-        inner.write_raw("out", &over_the_ceiling, 0).unwrap_err();
-        inner.write_raw("out", &over_the_ceiling, 1).unwrap_err();
+        inner
+            .write_bytes_with_timestamp("out", &over_the_ceiling, 0, true)
+            .unwrap_err();
+        inner
+            .write_bytes_with_timestamp("out", &over_the_ceiling, 1, true)
+            .unwrap_err();
         assert_eq!(refused_bags_on_the_board(), Some((1, 2)));
 
         assert!(inner.remove_channel_link("out", "L-out"));
@@ -1191,7 +1224,9 @@ mod tests {
             Some((2, 0)),
             "a port's reopened channel counts from zero, as its native count does"
         );
-        inner.write_raw("out", &over_the_ceiling, 2).unwrap_err();
+        inner
+            .write_bytes_with_timestamp("out", &over_the_ceiling, 2, true)
+            .unwrap_err();
         assert_eq!(refused_bags_on_the_board(), Some((2, 1)));
 
         assert!(
@@ -1219,11 +1254,15 @@ mod tests {
         let ceiling = 1024usize;
         let inner = output_writer_with_one_channel(&pubsub, ceiling);
 
-        inner.write_raw("out", b"first", 1).unwrap();
         inner
-            .write_raw("out", &vec![0u8; ceiling], 2)
+            .write_bytes_with_timestamp("out", b"first", 1, true)
+            .unwrap();
+        inner
+            .write_bytes_with_timestamp("out", &vec![0u8; ceiling], 2, true)
             .expect_err("a frame past the ceiling is refused");
-        inner.write_raw("out", b"second", 3).unwrap();
+        inner
+            .write_bytes_with_timestamp("out", b"second", 3, true)
+            .unwrap();
 
         let mut sequence_numbers = Vec::new();
         while let Some(sample) = subscriber.receive().unwrap() {
@@ -1287,7 +1326,9 @@ mod tests {
             crate::iceoryx2::a_notifier_nothing_listens_on(&unique_suffix("refusals-leave/notify")),
         );
         let refused_bag_counts = inner.refused_bag_counts_by_output_port();
-        inner.write_raw("out", &[0u8; 128], 0).unwrap_err();
+        inner
+            .write_bytes_with_timestamp("out", &[0u8; 128], 0, true)
+            .unwrap_err();
         assert_eq!(refused_bag_count_of(&inner, "out"), 1);
 
         assert!(inner.remove_channel_link("out", "L-only"));
@@ -1359,7 +1400,9 @@ mod tests {
         // A large all-0xAA frame primes the publisher's chunk pool with
         // recognisable filler, then goes back to the pool for reuse.
         let filler = vec![0xAAu8; 8 * 1024];
-        inner.write_raw("out", &filler, 1).unwrap();
+        inner
+            .write_bytes_with_timestamp("out", &filler, 1, true)
+            .unwrap();
         drop(
             subscriber
                 .receive()
@@ -1368,7 +1411,9 @@ mod tests {
         );
 
         let payload = b"fresh-small-payload";
-        inner.write_raw("out", payload, 4242).unwrap();
+        inner
+            .write_bytes_with_timestamp("out", payload, 4242, true)
+            .unwrap();
         let got = subscriber
             .receive()
             .expect("receive")

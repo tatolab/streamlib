@@ -31,7 +31,8 @@ pub(crate) struct BagSourceOfALinkBetweenStreams;
 
 impl crate::core::ContinuousProcessor for BagSourceOfALinkBetweenStreams::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.outputs.write_raw("video", b"a bag", 0)
+        self.outputs
+            .write_bytes_with_timestamp("video", b"a bag", 0, true)
     }
 }
 

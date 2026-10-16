@@ -77,22 +77,20 @@ impl ReactiveProcessor for H264Decoder::Processor {
         // pooled pixel buffers are released as soon as their frame is written
         // rather than held for the batch.
         let mut staged = Vec::new();
-        while let Some((bag_bytes, frame_header_timestamp_ns)) =
-            self.inputs.read_raw("encoded_video")?
-        {
+        while let Some(message) = self.inputs.read_raw("encoded_video")? {
             let decode_outcome = self.decode_body.decode_one_arriving_bag(
-                &bag_bytes,
-                frame_header_timestamp_ns,
+                &message.payload_bytes,
+                message.timestamp_ns,
                 &mut staged,
             );
             for decoded_frame in staged.drain(..) {
                 // The pooled pixel buffer rides inside `decoded_frame` and is
                 // released when it drops at the end of this iteration — after
                 // the write, so the pool cannot rotate the slot out mid-flight.
-                self.outputs.write_with_timestamp(
+                self.outputs.write_msgpack_with_timestamp(
                     "video",
                     &decoded_frame.frame,
-                    frame_header_timestamp_ns,
+                    message.timestamp_ns,
                 )?;
             }
             decode_outcome?;

@@ -72,7 +72,7 @@ impl ContinuousProcessor for SixteenKilohertzMonoSource::Processor {
         let samples: Vec<u8> = (0..SOURCE_SAMPLES_PER_BLOCK)
             .flat_map(|sample| (sample as f32 / SOURCE_SAMPLES_PER_BLOCK as f32).to_le_bytes())
             .collect();
-        self.outputs.write_with_timestamp(
+        self.outputs.write_msgpack_with_timestamp(
             "audio",
             &json!({
                 "samples": serde_bytes::ByteBuf::from(samples),

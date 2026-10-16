@@ -347,12 +347,14 @@ fn publish_one_captured_block(
 
     let block = audio_block_captured_as(captured, stream_format);
     // The device stamped this block, and the engine must not re-stamp it:
-    // `write`'s implicit `MediaClock::now()` would name the instant of
+    // `write_msgpack`'s implicit `MediaClock::now()` would name the instant of
     // publication rather than the instant of capture, and A/V sync is the
     // subtraction of two capture instants.
-    if let Err(e) =
-        outputs.write_with_timestamp(AUDIO_OUTPUT_PORT, &block, block.first_sample_timestamp_ns)
-    {
+    if let Err(e) = outputs.write_msgpack_with_timestamp(
+        AUDIO_OUTPUT_PORT,
+        &block,
+        block.first_sample_timestamp_ns,
+    ) {
         // A linked port that still refused the write: a payload over the
         // channel ceiling, an exhausted publisher segment behind a slow
         // consumer, a serialize failure. The error says which; this must not

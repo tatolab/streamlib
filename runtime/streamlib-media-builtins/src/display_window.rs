@@ -329,7 +329,7 @@ impl DisplayWindowRenderLoop {
         let Some(processor_owned_window) = self.processor_owned_window.as_mut() else {
             return;
         };
-        let frame_bag: VideoFrame = match self.inputs.read("video") {
+        let frame_bag: VideoFrame = match self.inputs.read_msgpack("video") {
             Ok(frame) => frame,
             Err(e) => {
                 tracing::warn!(error = %e, "DisplayWindow: failed to read frame");

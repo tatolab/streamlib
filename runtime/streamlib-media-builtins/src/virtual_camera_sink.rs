@@ -915,7 +915,7 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
         if !self.inputs.has_data("video") {
             return Ok(());
         }
-        let frame: VideoFrame = self.inputs.read("video")?;
+        let frame: VideoFrame = self.inputs.read_msgpack("video")?;
         if self.latched_refusal.is_some() {
             self.frames_dropped_under_refusal += 1;
             return Ok(());

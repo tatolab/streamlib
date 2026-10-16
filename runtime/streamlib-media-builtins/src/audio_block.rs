@@ -94,7 +94,7 @@ mod tests {
     }
 
     /// The actual wire is msgpack via `rmp_serde::to_vec_named` (what
-    /// `OutputWriter::write` does), and `samples` has to land on it as `bin`.
+    /// `OutputWriter::write_msgpack` does), and `samples` has to land on it as `bin`.
     ///
     /// Asserted as the msgpack type rather than through a serde round trip,
     /// which passes either way: a `Vec<f32>` field would encode as a msgpack

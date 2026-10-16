@@ -389,7 +389,7 @@ fn drain_blocks_into_playback(
             std::thread::park_timeout(DRAIN_IDLE_PARK_INTERVAL);
             continue;
         }
-        let block: AudioBlock = match inputs.read(AUDIO_INPUT_PORT) {
+        let block: AudioBlock = match inputs.read_msgpack(AUDIO_INPUT_PORT) {
             Ok(block) => {
                 read_failures.note_success();
                 block

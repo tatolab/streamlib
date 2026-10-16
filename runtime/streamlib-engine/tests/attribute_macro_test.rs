@@ -34,9 +34,6 @@ impl streamlib_engine::ManualProcessor for TestProcessor::Processor {
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // With iceoryx2 IPC, data is read via self.inputs.read("port_name")
-        // and written via self.outputs.write("port_name", &data)
-        // For this test, we just verify the structure exists
         Ok(())
     }
 }
@@ -251,7 +248,7 @@ pub struct CfgGatedFieldAlwaysCompiledState {
     pub always_compiled_marker: u32,
 }
 
-// #1588: a `#[cfg]` authored on a processor struct field must be re-emitted at
+// A `#[cfg]` authored on a processor struct field must be re-emitted at
 // BOTH generated sites — the `Processor` field definition and its `from_config`
 // struct-literal initializer. This is a compile-level proof: `any()` is false on
 // every target, so `never_compiled_state`'s deliberately-undeclared type only

@@ -71,8 +71,10 @@ impl streamlib_engine::ContinuousProcessor for BagSource::Processor {
                 .entry(self.config.output_writer_registered_as.clone())
                 .or_insert_with(|| Arc::downgrade(&output_writer));
         }
-        self.outputs.write_raw("video", b"a video bag", 0)?;
-        self.outputs.write_raw("preview", b"a preview bag", 0)
+        self.outputs
+            .write_bytes_with_timestamp("video", b"a video bag", 0, true)?;
+        self.outputs
+            .write_bytes_with_timestamp("preview", b"a preview bag", 0, true)
     }
 }
 

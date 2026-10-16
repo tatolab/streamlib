@@ -960,7 +960,7 @@ mod tests {
         );
         streams
             .camera_output
-            .write_raw("out1", b"a bag read from the stream a", 0)
+            .write_bytes_with_timestamp("out1", b"a bag read from the stream a", 0, true)
             .expect("the camera publishes");
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -990,7 +990,12 @@ mod tests {
             assert_eq!(rendered["state"], "wired", "{rendered}");
             streams
                 .camera_output
-                .write_raw("out1", b"a bag written once the stream a resumes", 0)
+                .write_bytes_with_timestamp(
+                    "out1",
+                    b"a bag written once the stream a resumes",
+                    0,
+                    true,
+                )
                 .expect("the camera publishes");
             streams.display_input.receive_pending();
             assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -1101,7 +1106,7 @@ mod tests {
         );
         streams
             .camera_output
-            .write_raw("out1", b"a bag once the port opened", 0)
+            .write_bytes_with_timestamp("out1", b"a bag once the port opened", 0, true)
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -1200,7 +1205,7 @@ mod tests {
             1
         );
         reloaded_camera_output
-            .write_raw("out1", b"a bag from the reloaded stream", 0)
+            .write_bytes_with_timestamp("out1", b"a bag from the reloaded stream", 0, true)
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -1351,7 +1356,7 @@ mod tests {
         let in_stream = the_link_as_graph_renders_it(&streams.b, &in_stream);
         assert_eq!(in_stream["state"], "wired", "{in_stream}");
         pattern_output
-            .write_raw("out1", b"a bag of the reading stream's own", 0)
+            .write_bytes_with_timestamp("out1", b"a bag of the reading stream's own", 0, true)
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
@@ -1924,7 +1929,7 @@ mod tests {
         );
         assert_eq!(re_added_camera_output.channel_notifier_count("out1"), 1);
         re_added_camera_output
-            .write_raw("out1", b"a bag from the re-added camera", 0)
+            .write_bytes_with_timestamp("out1", b"a bag from the re-added camera", 0, true)
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);

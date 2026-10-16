@@ -68,22 +68,21 @@ impl ReactiveProcessor for OpusDecoder::Processor {
         if !self.inputs.has_data("encoded_audio") {
             return Ok(());
         }
-        while let Some((bag_bytes, frame_header_timestamp_ns)) =
-            self.inputs.read_raw("encoded_audio")?
-        {
-            // A bag this reader cannot read is refused by name at the read,
+        while let Some(message) = self.inputs.read_raw("encoded_audio")? {
+            // A message this reader cannot read is refused by name at the read,
             // never reshaped into a plausible-looking wrong answer.
-            let packet = read_encoded_audio_packet_bag(&bag_bytes).map_err(|refusal| {
-                Error::Runtime(format!("{OPUS_DECODER_PROCESSOR_NAME}: {refusal}"))
-            })?;
+            let packet =
+                read_encoded_audio_packet_bag(&message.payload_bytes).map_err(|refusal| {
+                    Error::Runtime(format!("{OPUS_DECODER_PROCESSOR_NAME}: {refusal}"))
+                })?;
 
             if let Some(block) = self
                 .decode_body
-                .decode_one_arriving_packet(&packet, frame_header_timestamp_ns)?
+                .decode_one_arriving_packet(&packet, message.timestamp_ns)?
             {
                 let block_timestamp_ns = block.first_sample_timestamp_ns;
                 self.outputs
-                    .write_with_timestamp("audio", &block, block_timestamp_ns)?;
+                    .write_msgpack_with_timestamp("audio", &block, block_timestamp_ns)?;
             }
         }
         Ok(())

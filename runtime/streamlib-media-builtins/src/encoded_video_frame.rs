@@ -229,7 +229,7 @@ mod tests {
     }
 
     /// The actual wire is msgpack via `rmp_serde::to_vec_named` (what
-    /// `OutputWriter::write` does) — lock the named-map encoding and the
+    /// `OutputWriter::write_msgpack` does) — lock the named-map encoding and the
     /// documented keys at that boundary. `bitstream` is asserted as the
     /// msgpack *binary* type: a `Vec<u8>` without `serde_bytes` would encode
     /// as an array of numbers, a shape another language reads as a list.

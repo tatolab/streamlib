@@ -66,7 +66,7 @@ impl ReactiveProcessor for H265Encoder::Processor {
         if !self.inputs.has_data("video") {
             return Ok(());
         }
-        let frame: VideoFrame = self.inputs.read("video")?;
+        let frame: VideoFrame = self.inputs.read_msgpack("video")?;
 
         // Every bag the encode staged is written even when the call errored,
         // so a failure part way through a frame's packets never discards the
@@ -76,7 +76,7 @@ impl ReactiveProcessor for H265Encoder::Processor {
             self.encode_body
                 .encode_one_published_surface(&self.config, &frame, &mut staged);
         for encoded_frame in staged {
-            self.outputs.write_with_timestamp(
+            self.outputs.write_msgpack_with_timestamp(
                 "encoded_video",
                 &encoded_frame.frame,
                 encoded_frame.timestamp_ns,

@@ -12,7 +12,7 @@
 //! - [`InputMailboxes`] is the public handle that processor structs
 //!   hold via the macro-emitted `inputs: InputMailboxes` field. It
 //!   wraps an `Arc<InputMailboxesInner>` behind an opaque handle;
-//!   `process()` reaches input data through `read` / `read_raw` /
+//!   `process()` reaches input data through `read_raw` / `read_msgpack` /
 //!   `has_data`, which borrow the inner and invoke it directly.
 //!
 //! Host-side wiring code that mutates the inner (`add_port`,
@@ -61,14 +61,35 @@ type SharedAudioWindowStage = Arc<parking_lot::Mutex<AudioWindowAccumulator>>;
 pub(super) struct BagBodyForTheReader {
     pub(super) body: Vec<u8>,
     pub(super) first_sample_or_publish_timestamp_ns: i64,
+    /// The frame header's group flag; a window always starts a group.
+    pub(super) starts_group: bool,
     /// The link this body came in on. `None` where nothing delivered it — a
     /// manually injected frame — and filled in for a window by the port that
     /// staged it, since a window is cut from bags rather than being one.
     pub(super) inbound_link_name: Option<InboundLinkName>,
 }
 
-/// Decode one bag body into the type a reader named.
-fn deserialize_bag_body<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
+impl BagBodyForTheReader {
+    fn into_message_read_from_input_port(self) -> MessageReadFromInputPort {
+        MessageReadFromInputPort {
+            payload_bytes: self.body,
+            timestamp_ns: self.first_sample_or_publish_timestamp_ns,
+            starts_group: self.starts_group,
+        }
+    }
+}
+
+/// One message read off an input port: its payload as the producer wrote it, its
+/// stamp, and whether it starts a group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageReadFromInputPort {
+    pub payload_bytes: Vec<u8>,
+    pub timestamp_ns: i64,
+    pub starts_group: bool,
+}
+
+/// Decode one msgpack payload into the type a reader named.
+fn deserialize_msgpack_payload<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
     rmp_serde::from_slice(body)
         .map_err(|failure| Error::Link(format!("Failed to deserialize frame: {failure}")))
 }
@@ -98,8 +119,8 @@ enum WindowedPortStageInstallation {
 
 /// One channel subscriber bound to the local input port it feeds.
 ///
-/// The transport inversion (#1419): a channel is keyed on its source output
-/// port, so a destination consuming N inbound channels holds N subscribers.
+/// A channel is keyed on its source output port, so a destination consuming N
+/// inbound channels holds N subscribers.
 /// Routing is by this binding — the receive path pushes every frame a subscriber
 /// delivers into `local_port`'s mailbox — NOT by the frame's stamped port key
 /// (a channel's single publisher stamps its own source port, which two
@@ -948,17 +969,11 @@ impl InputMailboxesInner {
                     );
                     continue;
                 };
-                // The read side's per-frame cost after #1822 is this `to_vec`
-                // plus the header-strip memmove in `pop_one_bag_off_the_mailbox`. The copy
-                // is irreducible without parking the iceoryx2 `Sample` here
-                // instead of bytes — pinning shm slots while frames sit queued and
-                // coupling the mailbox's drop-oldest depth to the subscriber
-                // ring's. The memmove could fold into this copy by parsing the
-                // header here and queuing payload + timestamp, but that moves the
-                // stamped-length refusal off the read path (today a typed,
-                // port-named error to the reading processor, not a receive-time
-                // drop) and reshapes the mailbox's raw-wire-frame element contract
-                // (`route`, `drain`, [`PortMailbox`]).
+                // Copied rather than parking the iceoryx2 `Sample`: a parked sample
+                // pins its shm slot while the frame sits queued and couples the
+                // mailbox's drop-oldest depth to the subscriber ring's. The header
+                // stays on the queued frame so the stamped-length refusal is a
+                // port-named error at the read, not a receive-time drop.
                 port_config.mailbox.push_frame_from_inbound_link(
                     slice.to_vec(),
                     &bound.dropped_bag_counter,
@@ -1043,6 +1058,7 @@ impl InputMailboxesInner {
         Ok(Some(BagBodyForTheReader {
             body: frame_bytes_from_wire,
             first_sample_or_publish_timestamp_ns: header.timestamp_ns,
+            starts_group: header.starts_group(),
             inbound_link_name,
         }))
     }
@@ -1084,13 +1100,12 @@ impl InputMailboxesInner {
         }
     }
 
-    /// Read the next frame for `port` without deserializing it. Returns
-    /// `Ok(Some((data, timestamp_ns)))` if data is available, `Ok(None)` if the
+    /// The next message on `port`, its payload untouched, or `None` when the
     /// mailbox is empty.
-    pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+    pub fn read_raw(&self, port: &str) -> Result<Option<MessageReadFromInputPort>> {
         Ok(self
             .next_bag_for_the_reader(port)?
-            .map(|bag| (bag.body, bag.first_sample_or_publish_timestamp_ns)))
+            .map(BagBodyForTheReader::into_message_read_from_input_port))
     }
 
     /// The next frame for `port` with the inbound link it arrived on.
@@ -1112,41 +1127,40 @@ impl InputMailboxesInner {
     pub fn read_raw_from_inbound_link(
         &self,
         port: &str,
-    ) -> Result<Option<(Vec<u8>, i64, InboundLinkName)>> {
-        let Some(BagBodyForTheReader {
-            body: data,
-            first_sample_or_publish_timestamp_ns: timestamp_ns,
-            inbound_link_name,
-        }) = self.next_bag_for_the_reader(port)?
-        else {
+    ) -> Result<Option<(MessageReadFromInputPort, InboundLinkName)>> {
+        let Some(mut bag) = self.next_bag_for_the_reader(port)? else {
             return Ok(None);
         };
-        let Some(inbound_link_name) = inbound_link_name else {
+        let Some(inbound_link_name) = bag.inbound_link_name.take() else {
             return Err(Error::Link(format!(
                 "a bag on input port '{port}' arrived with no inbound link behind it, so \
                  there is no link to name and the bag is consumed. Read such a port with \
                  `read_raw`, which names no link"
             )));
         };
-        Ok(Some((data, timestamp_ns, inbound_link_name)))
+        Ok(Some((
+            bag.into_message_read_from_input_port(),
+            inbound_link_name,
+        )))
     }
 
-    /// The next frame for `port` deserialized into `T`, with the inbound link
-    /// it arrived on, or `None` when the mailbox is empty.
+    /// The next msgpack message on `port` deserialized into `T`, with the inbound
+    /// link it arrived on, or `None` when the mailbox is empty.
     ///
     /// `None` rather than an error on an empty mailbox, unlike
-    /// [`InputMailboxes::read`]: a destination fanning in N links reads until
-    /// its port runs dry, and an empty port is that loop ending.
-    pub fn read_from_inbound_link<T: DeserializeOwned>(
+    /// [`InputMailboxes::read_msgpack`]: a destination fanning in N links reads
+    /// until its port runs dry, and an empty port is that loop ending.
+    pub fn read_msgpack_from_inbound_link<T: DeserializeOwned>(
         &self,
         port: &str,
     ) -> Result<Option<(T, InboundLinkName)>> {
-        let Some((body, _timestamp_ns, inbound_link_name)) =
-            self.read_raw_from_inbound_link(port)?
-        else {
+        let Some((message, inbound_link_name)) = self.read_raw_from_inbound_link(port)? else {
             return Ok(None);
         };
-        Ok(Some((deserialize_bag_body(&body)?, inbound_link_name)))
+        Ok(Some((
+            deserialize_msgpack_payload(&message.payload_bytes)?,
+            inbound_link_name,
+        )))
     }
 
     /// Check if a port has any payloads available. This first
@@ -1337,60 +1351,54 @@ impl InputMailboxes {
         }
     }
 
-    /// Read and deserialize a frame from the given port.
-    ///
-    /// Uses the port's read mode to determine consumption strategy:
-    /// - `SkipToLatest`: Drains buffer, returns only the newest frame (video)
-    /// - `ReadNextInOrder`: Returns oldest frame in FIFO order (audio)
-    ///
-    /// Source-compatible with the pre-#894 `InputMailboxes::read`.
-    pub fn read<T: DeserializeOwned>(&self, port: &str) -> Result<T> {
-        let raw = self
+    /// The next message on `port` deserialized from msgpack into `T`, following
+    /// the port's read mode; an empty mailbox is an error.
+    pub fn read_msgpack<T: DeserializeOwned>(&self, port: &str) -> Result<T> {
+        let message = self
             .read_raw(port)?
             .ok_or_else(|| Error::Link(format!("No data available on port: {}", port)))?;
-        deserialize_bag_body(&raw.0)
+        deserialize_msgpack_payload(&message.payload_bytes)
     }
 
-    /// Read raw bytes and timestamp from the given port without
-    /// deserialization. Returns `Ok(Some((data, timestamp_ns)))` on
-    /// success, `Ok(None)` when the mailbox is empty.
-    pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+    /// The next message on `port`, its payload untouched, or `None` when the
+    /// mailbox is empty.
+    pub fn read_raw(&self, port: &str) -> Result<Option<MessageReadFromInputPort>> {
         let Some(inner) = self.host_inner() else {
             return Ok(None);
         };
         inner.read_raw(&cast_exposed_name_to_url_safe(port)?)
     }
 
-    /// The next bag on `port` with the inbound link it arrived on.
+    /// The next message on `port` with the inbound link it arrived on.
     ///
     /// What a destination taking many links on one port reads with: each
     /// inbound link is one producer, named by the source channel name it
     /// subscribed to, so a sink can tell N streams apart without the producers
-    /// having to identify themselves in their bags.
+    /// having to identify themselves in their messages.
     ///
-    /// Bags from one link keep that link's order; no interleaving is promised
-    /// between two links. A bag no link delivered is refused by name, and the
-    /// refusal consumes it.
+    /// Messages from one link keep that link's order; no interleaving is
+    /// promised between two links. A message no link delivered is refused by
+    /// name, and the refusal consumes it.
     pub fn read_raw_from_inbound_link(
         &self,
         port: &str,
-    ) -> Result<Option<(Vec<u8>, i64, InboundLinkName)>> {
+    ) -> Result<Option<(MessageReadFromInputPort, InboundLinkName)>> {
         let Some(inner) = self.host_inner() else {
             return Ok(None);
         };
         inner.read_raw_from_inbound_link(&cast_exposed_name_to_url_safe(port)?)
     }
 
-    /// The next bag on `port` deserialized into `T`, with the inbound link it
-    /// arrived on, or `None` when the mailbox is empty.
-    pub fn read_from_inbound_link<T: DeserializeOwned>(
+    /// The next msgpack message on `port` deserialized into `T`, with the inbound
+    /// link it arrived on, or `None` when the mailbox is empty.
+    pub fn read_msgpack_from_inbound_link<T: DeserializeOwned>(
         &self,
         port: &str,
     ) -> Result<Option<(T, InboundLinkName)>> {
         let Some(inner) = self.host_inner() else {
             return Ok(None);
         };
-        inner.read_from_inbound_link(&cast_exposed_name_to_url_safe(port)?)
+        inner.read_msgpack_from_inbound_link(&cast_exposed_name_to_url_safe(port)?)
     }
 
     /// Every inbound link feeding `port`, in wiring order.
@@ -1525,7 +1533,7 @@ mod tests {
     }
 
     /// A test channel's publisher, numbering its sends from zero the way
-    /// [`crate::iceoryx2::OutputWriterInner::write_raw`] does, so a frame
+    /// [`crate::iceoryx2::OutputWriterInner::write_bytes_with_timestamp`] does, so a frame
     /// published raw — one whose stamped length a test wants wrong — still
     /// reaches the receive seam in sequence.
     struct TestChannelPublisherNumberingItsSends {
@@ -1717,7 +1725,7 @@ mod tests {
         );
     }
 
-    /// N→1 fan-in DELIVERY lock (#1419): a destination consuming TWO inbound
+    /// N→1 fan-in delivery: a destination consuming TWO inbound
     /// channels binds two subscribers to ONE local input port; `receive_pending`
     /// routes every frame from both channels into that shared mailbox.
     ///
@@ -1750,7 +1758,11 @@ mod tests {
         );
 
         let mut payloads: Vec<Vec<u8>> = Vec::new();
-        while let Some((data, _ts)) = mailboxes.read_raw("in").unwrap() {
+        while let Some(MessageReadFromInputPort {
+            payload_bytes: data,
+            ..
+        }) = mailboxes.read_raw("in").unwrap()
+        {
             payloads.push(data);
         }
         payloads.sort();
@@ -2030,13 +2042,17 @@ mod tests {
         );
 
         let output_writer = output_writer_publishing_onto(&channel, "out");
-        output_writer.write_raw("out", b"old", 0).unwrap();
+        output_writer
+            .write_bytes_with_timestamp("out", b"old", 0, true)
+            .unwrap();
         mailboxes.receive_pending();
 
         assert!(output_writer.remove_channel_link("out", "L-to-the-destination"));
         install_a_fresh_publisher(&output_writer, &channel, "out");
         for bag in 0..RING_DEPTH + 2 {
-            output_writer.write_raw("out", b"new", bag as i64).unwrap();
+            output_writer
+                .write_bytes_with_timestamp("out", b"new", bag as i64, true)
+                .unwrap();
         }
         mailboxes.receive_pending();
 
@@ -2046,6 +2062,52 @@ mod tests {
             "the replacement's first received bag is a baseline"
         );
         assert_eq!(mailboxes.drain("in").len(), 1 + RING_DEPTH);
+    }
+
+    /// A message written as bytes reaches `read_raw` as its producer wrote it:
+    /// the payload untouched, its stamp, and its group flag cleared then set.
+    #[test]
+    fn a_message_written_as_bytes_reaches_read_raw_with_its_stamp_and_group_flag() {
+        let channel = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&unique_suffix("bytes-to-read-raw"), 2, 16)
+            .unwrap();
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 16, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-bytes",
+            &InboundLinkName::from("psource/out"),
+            channel.create_subscriber(16).unwrap(),
+        );
+        let output_writer = output_writer_publishing_onto(&channel, "out");
+
+        output_writer
+            .write_bytes_with_timestamp("out", b"continues-a-group", 111, false)
+            .unwrap();
+        output_writer
+            .write_bytes_with_timestamp("out", b"starts-a-group", 222, true)
+            .unwrap();
+
+        assert_eq!(
+            mailboxes.read_raw("in").unwrap(),
+            Some(MessageReadFromInputPort {
+                payload_bytes: b"continues-a-group".to_vec(),
+                timestamp_ns: 111,
+                starts_group: false,
+            })
+        );
+        assert_eq!(
+            mailboxes.read_raw_from_inbound_link("in").unwrap(),
+            Some((
+                MessageReadFromInputPort {
+                    payload_bytes: b"starts-a-group".to_vec(),
+                    timestamp_ns: 222,
+                    starts_group: true,
+                },
+                InboundLinkName::from("psource/out"),
+            ))
+        );
+        assert_eq!(mailboxes.read_raw("in").unwrap(), None);
     }
 
     /// A frame too short to carry a frame header consumed a sequence number and
@@ -2139,7 +2201,13 @@ mod tests {
         publish_one_frame(&publisher_a, "video_out", b"from-the-camera-again");
 
         let mut named: Vec<(String, String)> = Vec::new();
-        while let Some((body, _stamp, inbound_link_name)) = mailboxes
+        while let Some((
+            MessageReadFromInputPort {
+                payload_bytes: body,
+                ..
+            },
+            inbound_link_name,
+        )) = mailboxes
             .read_raw_from_inbound_link("in")
             .expect("a delivered bag names its link")
         {
@@ -2213,7 +2281,7 @@ mod tests {
         }
 
         let mut delivered = 0;
-        while let Some((_body, _stamp, inbound_link_name)) = mailboxes
+        while let Some((_, inbound_link_name)) = mailboxes
             .read_raw_from_inbound_link("in")
             .expect("a delivered bag names its link")
         {
@@ -2246,7 +2314,7 @@ mod tests {
     }
 
     /// The typed read, and the one place it diverges from
-    /// [`InputMailboxes::read`]: a drained port is `Ok(None)` here where `read`
+    /// [`InputMailboxes::read_msgpack`]: a drained port is `Ok(None)` here where `read_msgpack`
     /// is an error. A destination fanning in N links reads until its port runs
     /// dry, and an empty port is that loop ending rather than a failure.
     #[test]
@@ -2276,7 +2344,7 @@ mod tests {
         );
 
         let (bag, inbound_link_name) = mailboxes
-            .read_from_inbound_link::<OneTrackBag>("in")
+            .read_msgpack_from_inbound_link::<OneTrackBag>("in")
             .expect("a well-formed bag deserializes")
             .expect("one bag was published");
         assert_eq!(
@@ -2289,7 +2357,7 @@ mod tests {
 
         assert!(
             mailboxes
-                .read_from_inbound_link::<OneTrackBag>("in")
+                .read_msgpack_from_inbound_link::<OneTrackBag>("in")
                 .expect("a drained port is not a failure")
                 .is_none(),
             "a drained port must end a sink's read loop rather than raise",
@@ -2328,19 +2396,28 @@ mod tests {
         );
 
         assert!(mailboxes.has_data("videoIn"));
-        let (payload, _timestamp_ns) = mailboxes
+        let MessageReadFromInputPort {
+            payload_bytes: payload,
+            ..
+        } = mailboxes
             .read_raw("videoIn")
             .expect("a cast-alike spelling names the port")
             .expect("three bags were published");
         assert_eq!(payload, b"first");
-        let (payload, _timestamp_ns, inbound_link_name) = mailboxes
+        let (
+            MessageReadFromInputPort {
+                payload_bytes: payload,
+                ..
+            },
+            inbound_link_name,
+        ) = mailboxes
             .read_raw_from_inbound_link("VideoIn")
             .expect("a cast-alike spelling names the port")
             .expect("two bags remain");
         assert_eq!(payload, b"second");
         assert_eq!(inbound_link_name.as_str(), "pcamera/videoout");
         let (bag, _inbound_link_name) = mailboxes
-            .read_from_inbound_link::<String>("VIDEOIN")
+            .read_msgpack_from_inbound_link::<String>("VIDEOIN")
             .expect("a cast-alike spelling names the port")
             .expect("one bag remains");
         assert_eq!(bag, "third");
@@ -2437,7 +2514,7 @@ mod tests {
             );
         }
 
-        let (_window, _stamp, inbound_link_name) = mailboxes
+        let (_window, inbound_link_name) = mailboxes
             .read_raw_from_inbound_link("in")
             .expect("640 samples completes a 512 window")
             .expect("a full window reads out");
@@ -2580,7 +2657,10 @@ mod tests {
             mailboxes.route(wire_frame_stamping("in", 0, 5, b"world")),
             "the frame must route to port 'in'"
         );
-        let (body, _stamp) = mailboxes
+        let MessageReadFromInputPort {
+            payload_bytes: body,
+            ..
+        } = mailboxes
             .read_raw("in")
             .expect("the plain read is untouched")
             .expect("a read that names no link reads an injected bag whole");
@@ -2938,7 +3018,11 @@ mod tests {
         /// its contract settled to.
         fn windows_read_out_of(mailboxes: &InputMailboxesInner) -> Vec<Vec<f32>> {
             let mut windows = Vec::new();
-            while let Some((body, _)) = mailboxes.read_raw("in").expect("the port reads") {
+            while let Some(MessageReadFromInputPort {
+                payload_bytes: body,
+                ..
+            }) = mailboxes.read_raw("in").expect("the port reads")
+            {
                 let (scalars, sample_rate, channels) = scalars_of_one_window(&body);
                 assert_eq!(sample_rate, 48_000, "the window is at the device's rate");
                 assert_eq!(channels, 2, "the window is in the device's channel count");
@@ -3184,7 +3268,10 @@ mod tests {
         );
         assert!(mailboxes.any_port_has_data());
 
-        let (window, _) = mailboxes
+        let MessageReadFromInputPort {
+            payload_bytes: window,
+            ..
+        } = mailboxes
             .read_raw("in")
             .expect("a window reads")
             .expect("the gate said a window was ready");
@@ -3254,7 +3341,10 @@ mod tests {
             mailboxes.has_data("in"),
             "an arrived bag is data on an unwindowed port"
         );
-        let (read_back, _) = mailboxes.read_raw("in").expect("reads").expect("a bag");
+        let MessageReadFromInputPort {
+            payload_bytes: read_back,
+            ..
+        } = mailboxes.read_raw("in").expect("reads").expect("a bag");
         assert_eq!(read_back, published);
     }
 
@@ -3479,15 +3569,15 @@ mod tests {
         );
     }
 
-    /// Per-link destination reclaim (#1549): a destination fanning two inbound
+    /// Per-link destination reclaim: a destination fanning two inbound
     /// links into ONE local port holds two tagged subscribers plus one shared
     /// listener. Disconnecting one link drops only its subscriber (the port
     /// mailbox and listener survive so the other link keeps delivering);
     /// disconnecting the last link removes the port mailbox AND drops the shared
     /// listener — releasing the notify service so a reconnect recreates it fresh.
     ///
-    /// Fail-without-fix: revert `remove_channel_link` to a no-op (the pre-#1549
-    /// `close_iceoryx2_service` behaviour) and the final disconnect leaves the
+    /// Fail-without-fix: make `remove_channel_link` a no-op and the final
+    /// disconnect leaves the
     /// port and listener live, so `has_port` / `has_listener` stay true and the
     /// release assertions fail.
     #[test]
@@ -3623,7 +3713,11 @@ mod tests {
             "well-formed frame must route to port 'in'"
         );
 
-        let (data, timestamp_ns) = inner
+        let MessageReadFromInputPort {
+            payload_bytes: data,
+            timestamp_ns,
+            ..
+        } = inner
             .read_raw("in")
             .expect("read")
             .expect("the well-formed frame delivers");
@@ -3650,7 +3744,11 @@ mod tests {
         let frame = wire_frame_stamping("in", 77, STAMPED as u32, &body);
         assert!(inner.route(frame), "frame must route to port 'in'");
 
-        let (data, timestamp_ns) = inner
+        let MessageReadFromInputPort {
+            payload_bytes: data,
+            timestamp_ns,
+            ..
+        } = inner
             .read_raw("in")
             .expect("read")
             .expect("the over-carrying frame delivers its stamped payload");

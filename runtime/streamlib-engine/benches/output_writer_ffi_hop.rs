@@ -1,17 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Microbench for the `OutputWriter::write_raw` per-call cost.
+//! Microbench for the `OutputWriter::write_bytes_with_timestamp` per-call cost.
 //!
 //! Two arms compare a direct call on the inner against a call through
 //! the public `OutputWriter` handle. A third bench varies payload size
 //! so the report shows how the cost scales with the data length:
 //!
-//! - `baseline_direct_inner` — `Arc<OutputWriterInner>::write_raw`
+//! - `baseline_direct_inner` — `Arc<OutputWriterInner>::write_bytes_with_timestamp`
 //!   called directly. Includes the full iceoryx2 publish + notify step.
-//! - `vtable_dispatch` — `OutputWriter::write_raw` on the public handle,
+//! - `vtable_dispatch` — `OutputWriter::write_bytes_with_timestamp` on the public handle,
 //!   which derefs the opaque handle to the same
-//!   `OutputWriterInner::write_raw`. The delta vs `baseline_direct_inner`
+//!   `OutputWriterInner::write_bytes_with_timestamp`. The delta vs `baseline_direct_inner`
 //!   is the handle-indirection cost. (The `vtable_dispatch` /
 //!   `payload_sweep_vtable` criterion ids date from the deleted
 //!   vtable-dispatch arm and are kept as-is: criterion ids are
@@ -22,17 +22,17 @@
 //!   hop's per-call cost is dominated by the fixed overhead (call
 //!   indirection + msgpack envelope) or scales with payload size
 //!   (the single payload copy into the loan).
-//! - `channel_round_trip` — `write_raw` through `OutputWriterInner`
+//! - `channel_round_trip` — `write_bytes_with_timestamp` through `OutputWriterInner`
 //!   then `read_raw` through `InputMailboxesInner` at 256 B and
 //!   64 KiB payloads: the engine's full data-plane hop, write and
-//!   read timed together (#1822). The destination is a self-driven
+//!   read timed together. The destination is a self-driven
 //!   sink — no notifier — so the arm is not directly comparable to
 //!   the notify-carrying arms above; throughput counts payload bytes
 //!   per hop, though each hop moves them twice (into the loan, out
 //!   of shared memory).
 //! - `fanout_1_to_n` — one channel publisher feeding N ∈ {1,2,4,8}
-//!   subscribers. `write_raw` issues a SINGLE zero-copy loan + send
-//!   that reaches every subscriber (the transport inversion, #1419);
+//!   subscribers. `write_bytes_with_timestamp` issues a SINGLE zero-copy loan + send
+//!   that reaches every subscriber (the transport inversion);
 //!   only the per-destination `notify()` is O(N). Throughput is
 //!   reported as frames-delivered (N per call), so the curve stays
 //!   near-flat per delivered frame — the signature the retired
@@ -188,28 +188,44 @@ fn bench_baseline_direct_inner(c: &mut Criterion) {
     // VideoFrame / control message — close to the steady-state
     // payload size on the drone-racing control loop.
     let payload = vec![0u8; 256];
-    c.bench_function("output_writer_write_raw/baseline_direct_inner_256B", |b| {
-        b.iter(|| {
-            fx.inner
-                .write_raw(black_box("out"), black_box(&payload), black_box(0))
-                .unwrap();
-            drain_in_line(&fx);
-        });
-    });
+    c.bench_function(
+        "output_writer_write_bytes_with_timestamp/baseline_direct_inner_256B",
+        |b| {
+            b.iter(|| {
+                fx.inner
+                    .write_bytes_with_timestamp(
+                        black_box("out"),
+                        black_box(&payload),
+                        black_box(0),
+                        true,
+                    )
+                    .unwrap();
+                drain_in_line(&fx);
+            });
+        },
+    );
 }
 
 fn bench_vtable_dispatch(c: &mut Criterion) {
     let fx = build_inner_with_connection("vtable");
     let writer = OutputWriter::from_inner_arc(fx.inner.clone());
     let payload = vec![0u8; 256];
-    c.bench_function("output_writer_write_raw/vtable_dispatch_256B", |b| {
-        b.iter(|| {
-            writer
-                .write_raw(black_box("out"), black_box(&payload), black_box(0))
-                .unwrap();
-            drain_in_line(&fx);
-        });
-    });
+    c.bench_function(
+        "output_writer_write_bytes_with_timestamp/vtable_dispatch_256B",
+        |b| {
+            b.iter(|| {
+                writer
+                    .write_bytes_with_timestamp(
+                        black_box("out"),
+                        black_box(&payload),
+                        black_box(0),
+                        true,
+                    )
+                    .unwrap();
+                drain_in_line(&fx);
+            });
+        },
+    );
 }
 
 /// Vary payload size to characterize how the handle-indirection cost scales
@@ -219,7 +235,8 @@ fn bench_vtable_dispatch(c: &mut Criterion) {
 fn bench_payload_size_sweep(c: &mut Criterion) {
     let fx = build_inner_with_connection("sweep");
     let writer = OutputWriter::from_inner_arc(fx.inner.clone());
-    let mut group = c.benchmark_group("output_writer_write_raw/payload_sweep_vtable");
+    let mut group =
+        c.benchmark_group("output_writer_write_bytes_with_timestamp/payload_sweep_vtable");
     for size in [64usize, 256, 1024, 8 * 1024, 64 * 1024] {
         let payload = vec![0u8; size];
         group.bench_with_input(
@@ -228,7 +245,12 @@ fn bench_payload_size_sweep(c: &mut Criterion) {
             |b, p| {
                 b.iter(|| {
                     writer
-                        .write_raw(black_box("out"), black_box(p), black_box(0))
+                        .write_bytes_with_timestamp(
+                            black_box("out"),
+                            black_box(p),
+                            black_box(0),
+                            true,
+                        )
                         .unwrap();
                     drain_in_line(&fx);
                 });
@@ -291,12 +313,12 @@ fn drain_fanout_in_line(fx: &FanoutFixture) {
 }
 
 /// One publisher fanning out to N ∈ {1,2,4,8} subscribers. Throughput is
-/// reported as frames delivered (N per `write_raw` call), so a flat
+/// reported as frames delivered (N per `write_bytes_with_timestamp` call), so a flat
 /// per-delivered-frame cost is the single-loan signature; the retired
 /// per-connection copy loop would show cost climbing linearly with N.
-fn bench_write_raw_fanout(c: &mut Criterion) {
+fn bench_write_bytes_with_timestamp_fanout(c: &mut Criterion) {
     let payload = vec![0u8; 256];
-    let mut group = c.benchmark_group("output_writer_write_raw/fanout_1_to_n");
+    let mut group = c.benchmark_group("output_writer_write_bytes_with_timestamp/fanout_1_to_n");
     for subscriber_count in [1usize, 2, 4, 8] {
         let fx = build_inner_with_fanout("fanout", subscriber_count);
         let writer = OutputWriter::from_inner_arc(fx.inner.clone());
@@ -307,7 +329,12 @@ fn bench_write_raw_fanout(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     writer
-                        .write_raw(black_box("out"), black_box(&payload), black_box(0))
+                        .write_bytes_with_timestamp(
+                            black_box("out"),
+                            black_box(&payload),
+                            black_box(0),
+                            true,
+                        )
                         .unwrap();
                     drain_fanout_in_line(&fx);
                 });
@@ -359,12 +386,13 @@ fn build_round_trip(tag: &str) -> RoundTripFixture {
     }
 }
 
-/// The full data-plane hop: publish through `OutputWriterInner::write_raw`,
+/// The full data-plane hop: publish through `OutputWriterInner::write_bytes_with_timestamp`,
 /// receive + read through `InputMailboxesInner::read_raw`. 256 B mirrors a
 /// control message, 64 KiB a camera-class frame — the size where the read
 /// side's per-frame copy cost dominates.
 fn bench_channel_round_trip(c: &mut Criterion) {
-    let mut group = c.benchmark_group("output_writer_write_raw/channel_round_trip");
+    let mut group =
+        c.benchmark_group("output_writer_write_bytes_with_timestamp/channel_round_trip");
     for size in [256usize, 64 * 1024] {
         let fx = build_round_trip(&format!("round_trip/{size}"));
         let payload = vec![0u8; size];
@@ -375,14 +403,19 @@ fn bench_channel_round_trip(c: &mut Criterion) {
             |b, p| {
                 b.iter(|| {
                     fx.output_writer_inner
-                        .write_raw(black_box("out"), black_box(p), black_box(0))
+                        .write_bytes_with_timestamp(
+                            black_box("out"),
+                            black_box(p),
+                            black_box(0),
+                            true,
+                        )
                         .unwrap();
-                    let (data, _timestamp_ns) = fx
+                    let message = fx
                         .input_mailboxes_inner
                         .read_raw(black_box("in"))
                         .unwrap()
                         .expect("every write is read back in-line");
-                    black_box(data);
+                    black_box(message.payload_bytes);
                 });
             },
         );
@@ -395,7 +428,7 @@ criterion_group!(
     bench_baseline_direct_inner,
     bench_vtable_dispatch,
     bench_payload_size_sweep,
-    bench_write_raw_fanout,
+    bench_write_bytes_with_timestamp_fanout,
     bench_channel_round_trip,
 );
 criterion_main!(benches);

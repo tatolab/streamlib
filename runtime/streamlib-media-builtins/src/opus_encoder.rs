@@ -70,7 +70,7 @@ impl ReactiveProcessor for OpusEncoder::Processor {
         // A windowed port reports data only when a full window can be
         // emitted, and the drain loop dispatches once per ready window, so
         // one read per dispatch is the whole of what is waiting.
-        let window: AudioBlock = self.inputs.read("audio")?;
+        let window: AudioBlock = self.inputs.read_msgpack("audio")?;
         let window_timestamp_ns = window.first_sample_timestamp_ns;
 
         let Some(packet) = self.encode_body.encode_one_window(&self.config, &window)? else {
@@ -80,7 +80,7 @@ impl ReactiveProcessor for OpusEncoder::Processor {
         // the instant its first sample was captured, not the moment it was
         // published.
         self.outputs
-            .write_with_timestamp("encoded_audio", &packet, window_timestamp_ns)
+            .write_msgpack_with_timestamp("encoded_audio", &packet, window_timestamp_ns)
     }
 }
 

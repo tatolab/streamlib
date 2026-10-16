@@ -2521,7 +2521,7 @@ mod tests {
         fn write_bags(&self, bag_count: usize) {
             for bag in 0..bag_count {
                 self.source_output
-                    .write_raw("out1", b"a bag", bag as i64)
+                    .write_bytes_with_timestamp("out1", b"a bag", bag as i64, true)
                     .expect("the source publishes onto the wired channel");
             }
         }
@@ -2533,7 +2533,7 @@ mod tests {
     ///
     /// Driven through the real seam end to end — the destination-side wiring
     /// the compiler op runs, a real channel service, the source's own
-    /// `write_raw`, the destination's own `receive_pending` — so what is
+    /// `write_bytes_with_timestamp`, the destination's own `receive_pending` — so what is
     /// asserted is the rendering a `GET /api/graph` reader gets, not a counter
     /// poked by hand. Fail-without-fix: drop the publish step from
     /// `wire_rust_dest` and the node renders no `metrics` at all, so a run that
@@ -2696,7 +2696,7 @@ mod tests {
         );
 
         link.source_output
-            .write_raw("out1", &[0u8; CEILING_BYTES], 0)
+            .write_bytes_with_timestamp("out1", &[0u8; CEILING_BYTES], 0, true)
             .expect_err("a bag past the ceiling is refused");
         link.write_bags(1);
         link.dest_input.receive_pending();
@@ -2886,10 +2886,11 @@ mod tests {
         let newest_link = add_link_from_out1_to_in1(&mut graph, &source_id, &newest_consumer_id);
         open_iceoryx2_service(&mut graph, &newest_link, &node).expect("the newest consumer wires");
         source_output
-            .write_raw(
+            .write_bytes_with_timestamp(
                 "out1",
                 b"a bag the port carried before the ordered consumer",
                 0,
+                true,
             )
             .expect("the port runs with one consumer");
         newest_consumer_input.receive_pending();
@@ -2901,7 +2902,12 @@ mod tests {
 
         for bag in 1..=BAGS_PUBLISHED_WHILE_NEITHER_CONSUMER_READS {
             source_output
-                .write_raw("out1", b"a bag both consumers are fed", bag as i64)
+                .write_bytes_with_timestamp(
+                    "out1",
+                    b"a bag both consumers are fed",
+                    bag as i64,
+                    true,
+                )
                 .expect("the port publishes to both consumers");
         }
         newest_consumer_input.receive_pending();
@@ -4084,7 +4090,7 @@ mod tests {
 
         let write_one_block = || {
             link.source_output
-                .write_raw("out1", &a_mono_16k_audio_block(160, 0), 0)
+                .write_bytes_with_timestamp("out1", &a_mono_16k_audio_block(160, 0), 0, true)
                 .expect("the source publishes onto the windowed channel");
         };
         write_one_block();
@@ -4118,7 +4124,7 @@ mod tests {
         );
 
         link.source_output
-            .write_raw("out1", &a_mono_16k_audio_block(300, 0), 0)
+            .write_bytes_with_timestamp("out1", &a_mono_16k_audio_block(300, 0), 0, true)
             .expect("the source publishes");
         assert!(
             link.dest_input
@@ -4128,7 +4134,12 @@ mod tests {
             "300 of 512 samples is not a window"
         );
         link.source_output
-            .write_raw("out1", &a_mono_16k_audio_block(300, 1_000_000_000), 0)
+            .write_bytes_with_timestamp(
+                "out1",
+                &a_mono_16k_audio_block(300, 1_000_000_000),
+                0,
+                true,
+            )
             .expect("the source publishes");
         let (_, warnings) = CapturedTracingWarnings::captured_while(|| {
             link.dest_input
@@ -4207,8 +4218,8 @@ mod tests {
     }
 
     /// The channel service name a link's source output port publishes to is
-    /// source-centric (`{source}/{port}`), NOT destination-centric. This is the
-    /// transport inversion (#1419): channel identity keys on the source only.
+    /// source-centric (`{source}/{port}`), NOT destination-centric: channel
+    /// identity keys on the source only.
     /// Mentally revert to `streamlib/{dest}` and this fails — the derived name is
     /// a pure function of the source processor id + output port.
     #[test]
@@ -4772,7 +4783,12 @@ mod tests {
             for bag in 0..3 {
                 two_graphs
                     .source_output
-                    .write_raw("out1", b"a bag read from another stream", bag)
+                    .write_bytes_with_timestamp(
+                        "out1",
+                        b"a bag read from another stream",
+                        bag,
+                        true,
+                    )
                     .expect("the source publishes onto the channel the other graph wired");
             }
             two_graphs.dest_input.receive_pending();
