@@ -1736,7 +1736,7 @@ wheels = [
 
 [[package]]
 name = "tatolab-stream"
-version = "0.43.1"
+version = "0.46.12"
 source = { editable = "../../sdk/tatolab-stream" }
 
 [package.metadata]

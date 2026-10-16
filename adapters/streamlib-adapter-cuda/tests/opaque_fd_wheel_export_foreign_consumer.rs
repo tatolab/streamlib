@@ -780,6 +780,7 @@ fn a_wheel_exported_opaque_fd_pixel_buffer_read_by_a_foreign_process_shows_the_f
         .and_then(|value| value.as_str())
     {
         let export_refusal = export_refusal.to_string();
+        println!("pixel buffer export handoff: a DMA-BUF pooled frame refused: {export_refusal}");
         let (tatolab_run_exit, tatolab_run_output, tatolabd_diagnostic_tails) =
             finish_the_handoff_with_verdict(
                 handoff_stream,
@@ -902,6 +903,10 @@ fn a_wheel_exported_opaque_fd_pixel_buffer_read_by_a_foreign_process_shows_the_f
                 != pixel_buffer_handoff_byte(row, column, channel)
         });
     drop(imported_pixel_buffer);
+    println!(
+        "pixel buffer export handoff: imported {allocation_byte_size} bytes at memory type \
+         index {vk_memory_type_index}; first mismatch {first_mismatch:?}"
+    );
     let verdict: &[u8] = if first_mismatch.is_none() {
         b"bytes-match"
     } else {
