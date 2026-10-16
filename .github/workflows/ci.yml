@@ -465,8 +465,8 @@ jobs:
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
 
-      # The wheel's own suite on the unit's own wheel: the casts and the bag
-      # codec, a processor interpreter's bootstrap and helper process, and the
+      # The wheel's own suite on the unit's own wheel: the casts, a processor
+      # interpreter's bootstrap and helper process, and the
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
       # stubtest compares the rest of `_engine.pyi` to the binary.
       - name: Wheel stubs and Python suite (GPU-free half)
@@ -803,8 +803,8 @@ jobs:
           sudo chmod 0755 "$machine_runtime_lock_directory"
           sudo chmod 0666 "$machine_runtime_lock_directory/runtime.lock"
 
-      # The wheel's own suite on the unit's own wheel: the casts and the bag
-      # codec, a processor interpreter's bootstrap and helper process, and the
+      # The wheel's own suite on the unit's own wheel: the casts, a processor
+      # interpreter's bootstrap and helper process, and the
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
       # stubtest compares the rest of `_engine.pyi` to the binary.
       - name: Wheel stubs and Python suite (GPU-free half)
