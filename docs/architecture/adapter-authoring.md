@@ -684,7 +684,8 @@ shape but **don't**:
    the DLPack contract). The plumbing exists: `RhiExternalHandle`
    has `DmaBuf` and `OpaqueFd` variants, the surface-share wire
    format carries `handle_type` as a discriminator,
-   `ConsumerVulkanDevice::import_opaque_fd_memory` exists. Pick
+   `ConsumerVulkanDevice::import_opaque_fd_memory_at_stated_memory_type_index`
+   exists. Pick
    the variant your framework requires; don't invent a third seam.
 
 6. **"My adapter is hot-path — IPC roundtrips will kill perf."**

@@ -18,6 +18,7 @@ use crate::core::context::{
 };
 use crate::core::rhi::{TextureFormat, TextureUsages};
 use crate::host_rhi::HostSurfaceStoreExt;
+use crate::vulkan::rhi::HostVulkanTexture;
 
 /// Allocate one texture and register it for a helper — with the
 /// surface-share service and the parent's texture cache — answering the id it
@@ -42,7 +43,7 @@ pub(super) fn allocate_registered_texture_for_helper(
                     .has_render_target_modifier_for_texture_format(parsed_format),
                 has_the_opaque_fd_image_pool: device.opaque_fd_image_pool().is_some(),
                 exports_the_request_as_an_opaque_fd_image:
-                    crate::vulkan::rhi::HostVulkanTexture::device_exports_an_opaque_fd_image_of_format_and_usage(
+                    HostVulkanTexture::device_exports_an_opaque_fd_image_of_format_and_usage(
                         &device,
                         parsed_format,
                         parsed_usage,
@@ -307,16 +308,16 @@ impl TextureExportCapabilitiesOfTheDevice {
 /// request can take, derived from the request and the device alone — never
 /// a Python dial.
 ///
-/// Where the device exports no DMA-BUF, OPAQUE_FD is the one flavor that
-/// crosses a process, and every single-plane request the device reports
-/// exportable as OPAQUE_FD takes it whatever its format and usage. Where it does, render-attachment requests need the
-/// explicit-modifier DMA-BUF flavor, and OPAQUE_FD is kept to the
-/// CUDA-mappable formats within its fixed usage set. Only single-plane
-/// formats cross either way — a multi-plane registration ships one fd
-/// against N plane offsets, which every consumer import rejects. Everything
-/// else keeps the non-importable allocation: a flavor the device or format
-/// cannot take falls back rather than failing the acquire, and a later
-/// cross-process import refuses by naming the flavor.
+/// OPAQUE_FD is offered only for a request the device reports exportable
+/// that way. Where the device exports no DMA-BUF, it is the one flavor that
+/// crosses a process, and every such single-plane request takes it. Where
+/// it does, render-attachment requests need the explicit-modifier DMA-BUF
+/// flavor, and OPAQUE_FD is kept to the CUDA-mappable formats within its
+/// fixed usage set. Only single-plane formats cross either way — a
+/// multi-plane registration ships one fd against N plane offsets, which
+/// every consumer import rejects. Everything else keeps the non-importable
+/// allocation, which the acquisition refuses where DMA-BUF is absent and a
+/// later cross-process import refuses by naming the flavor elsewhere.
 pub(super) fn derive_texture_cross_process_importability(
     format: TextureFormat,
     usage: TextureUsages,

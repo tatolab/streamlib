@@ -724,45 +724,15 @@ impl ConsumerVulkanDevice {
         Ok(memory)
     }
 
-    /// Import an OPAQUE_FD file descriptor as `VkDeviceMemory`. Pairs with
-    /// the host's `export_opaque_fd_memory`: the host allocates, exports,
-    /// and registers in surface-share with `handle_type="opaque_fd"`; the
-    /// consumer looks up, imports, and binds.
-    ///
-    /// Use this for cross-process Vulkan memory sharing where the importer
-    /// is also Vulkan-aware (CUDA via UUID-matched device, OpenCL, peer
-    /// VkInstance) and tile-aware DRM-modifier negotiation isn't needed.
-    /// For DMA-BUF FDs (EGL, V4L2, multi-plane Vulkan importers) use
-    /// [`Self::import_dma_buf_memory`].
-    ///
-    /// fd ownership transfers to the Vulkan driver on success — caller
-    /// must NOT close `fd` afterwards. On error the caller still owns
-    /// `fd`. Pairs with [`Self::free_imported_memory`].
-    #[tracing::instrument(level = "trace", skip(self), fields(fd, allocation_size))]
-    pub fn import_opaque_fd_memory(
-        &self,
-        fd: i32,
-        allocation_size: vk::DeviceSize,
-        memory_type_bits: u32,
-        preferred_flags: vk::MemoryPropertyFlags,
-    ) -> Result<vk::DeviceMemory> {
-        let memory_type_index = self.find_memory_type(memory_type_bits, preferred_flags)?;
-        self.import_opaque_fd_memory_at_stated_memory_type_index(
-            fd,
-            allocation_size,
-            memory_type_index,
-        )
-    }
-
     /// Import an OPAQUE_FD file descriptor as `VkDeviceMemory` bound to
-    /// the memory type index the **exporter** allocated from.
+    /// the memory type index the **exporter** allocated from. Pairs with
+    /// the host's `export_opaque_fd_memory`; for DMA-BUF FDs use
+    /// [`Self::import_dma_buf_memory`].
     ///
     /// The conforming import for this handle type: OPAQUE_FD has no
     /// `vkGetMemoryFdPropertiesKHR` query, so an importer cannot derive a
     /// compatible index and must be told the exporter's — which is why
-    /// the surface-share registration publishes it. Prefer this over
-    /// [`Self::import_opaque_fd_memory`], whose first-match search agrees
-    /// with the exporter only where both happen to land on the same type.
+    /// the surface-share registration publishes it.
     ///
     /// fd ownership transfers to the Vulkan driver on success — caller
     /// must NOT close `fd` afterwards. On error the caller still owns
@@ -908,7 +878,7 @@ impl ConsumerVulkanDevice {
     }
 
     /// Free imported memory. Pair with [`Self::import_dma_buf_memory`],
-    /// [`Self::import_opaque_fd_memory`] or
+    /// [`Self::import_opaque_fd_memory_at_stated_memory_type_index`] or
     /// [`Self::import_host_pointer_memory`]. Calling on memory not allocated
     /// through one of those methods is undefined behavior at the Vulkan
     /// level.

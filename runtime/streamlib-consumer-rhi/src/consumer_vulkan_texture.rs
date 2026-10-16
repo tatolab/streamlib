@@ -345,10 +345,7 @@ impl ConsumerVulkanTexture {
                 stated_memory_type_index,
             )
         })
-        .map_err(|e| {
-            unsafe { device.destroy_image(image, None) };
-            e
-        })?;
+        .inspect_err(|_| unsafe { device.destroy_image(image, None) })?;
 
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
             vulkan_device.free_imported_memory(memory);
