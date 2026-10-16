@@ -137,13 +137,11 @@ impl ManualProcessor for DisplayWindow::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let capabilities_of_the_device_this_runtime_built_on =
             ctx.gpu_full_access().gpu_capabilities()?;
-        if let Some(refusal) = refusal_of_a_window_on_a_device_with_no_window_system_surface(
+        refuse_a_window_on_a_device_with_no_window_system_surface(
             &self.config.title,
             &capabilities_of_the_device_this_runtime_built_on.device_name,
             capabilities_of_the_device_this_runtime_built_on.supports_window_system_surface,
-        ) {
-            return Err(Error::DisplaySurfaceUnavailable(refusal));
-        }
+        )?;
         // The render thread needs an owned handle that escapes into the
         // thread closure, so the clone at setup is load-bearing.
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
@@ -354,23 +352,21 @@ impl DisplayWindowRenderLoop {
     }
 }
 
-/// The refusal of a display on a device that can create no window surface,
-/// `None` where it can.
-fn refusal_of_a_window_on_a_device_with_no_window_system_surface(
+/// Refuse a display on a device that can create no window surface.
+fn refuse_a_window_on_a_device_with_no_window_system_surface(
     window_title: &str,
     device_name: &str,
-    supports_window_system_surface: bool,
-) -> Option<String> {
-    (!supports_window_system_surface).then(|| {
-        format!(
-            "DisplayWindow \"{window_title}\": the Vulkan device this runtime built on, \
-             {device_name}, cannot open a window: its driver carries no window-system support, \
-             as the runtime's bundled software driver does not. Install your GPU vendor's \
-             Vulkan driver — the proprietary NVIDIA driver, or `mesa-vulkan-drivers` for \
-             AMD/Intel — to show a window, or view the stream without one: by its URL, or by a \
-             node that reads its frames."
-        )
-    })
+    device_supports_window_system_surface: bool,
+) -> Result<()> {
+    if device_supports_window_system_surface {
+        return Ok(());
+    }
+    Err(Error::DisplaySurfaceUnavailable(format!(
+        "DisplayWindow \"{window_title}\": the Vulkan device this runtime built on, \
+         {device_name}, cannot open a window: its driver carries no window-system support. \
+         Install your GPU vendor's Vulkan driver to show a window, or view the stream without \
+         one: by its URL, or by a node that reads its frames."
+    )))
 }
 
 /// Whether an outcome spent one of the frames this display reports at stop.
@@ -416,12 +412,13 @@ mod tests {
     #[test]
     fn a_device_with_no_window_system_surface_refuses_naming_the_vendor_driver_and_the_way_to_view()
     {
-        let refusal = refusal_of_a_window_on_a_device_with_no_window_system_surface(
+        let refusal = refuse_a_window_on_a_device_with_no_window_system_surface(
             "preview",
             "llvmpipe (LLVM 20.1.2, 256 bits)",
             false,
         )
-        .expect("a device that can create no window surface must refuse the window");
+        .expect_err("a device that can create no window surface must refuse the window")
+        .to_string();
 
         for named in [
             "DisplayWindow \"preview\"",
@@ -439,13 +436,13 @@ mod tests {
 
     #[test]
     fn a_device_with_a_window_system_surface_opens_the_window() {
-        assert_eq!(
-            refusal_of_a_window_on_a_device_with_no_window_system_surface(
+        assert!(
+            refuse_a_window_on_a_device_with_no_window_system_surface(
                 "preview",
                 "NVIDIA GeForce RTX 3090",
                 true
-            ),
-            None
+            )
+            .is_ok()
         );
     }
 

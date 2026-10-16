@@ -62,22 +62,18 @@ pub(crate) struct HostVulkanInstance {
 /// A platform extension that creates a `VkSurfaceKHR` for one window system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowSystemSurfaceExtension {
-    KhrWaylandSurface,
-    KhrXcbSurface,
-    KhrXlibSurface,
-    ExtMetalSurface,
+    KhrWayland,
+    KhrXcb,
+    KhrXlib,
+    ExtMetal,
 }
 
 impl WindowSystemSurfaceExtension {
     /// The window systems a window on this platform can come from.
     const OFFERED_ON_THIS_PLATFORM: &[Self] = if cfg!(target_os = "linux") {
-        &[
-            Self::KhrWaylandSurface,
-            Self::KhrXcbSurface,
-            Self::KhrXlibSurface,
-        ]
+        &[Self::KhrWayland, Self::KhrXcb, Self::KhrXlib]
     } else if cfg!(any(target_os = "macos", target_os = "ios")) {
-        &[Self::ExtMetalSurface]
+        &[Self::ExtMetal]
     } else {
         &[]
     };
@@ -85,10 +81,10 @@ impl WindowSystemSurfaceExtension {
     /// The extension's registry name.
     pub(crate) fn extension_name(self) -> &'static CStr {
         match self {
-            Self::KhrWaylandSurface => c"VK_KHR_wayland_surface",
-            Self::KhrXcbSurface => c"VK_KHR_xcb_surface",
-            Self::KhrXlibSurface => c"VK_KHR_xlib_surface",
-            Self::ExtMetalSurface => c"VK_EXT_metal_surface",
+            Self::KhrWayland => c"VK_KHR_wayland_surface",
+            Self::KhrXcb => c"VK_KHR_xcb_surface",
+            Self::KhrXlib => c"VK_KHR_xlib_surface",
+            Self::ExtMetal => c"VK_EXT_metal_surface",
         }
     }
 }
@@ -100,14 +96,14 @@ const KHR_SURFACE_EXTENSION_NAME: &CStr = c"VK_KHR_surface";
 /// loader never loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowSystemSurfaceExtensionsEnabledOnInstance {
-    pub(crate) khr_surface_enabled: bool,
-    pub(crate) platform_surface_extensions_enabled: Vec<WindowSystemSurfaceExtension>,
+    khr_surface_enabled: bool,
+    platform_surface_extensions_enabled: Vec<WindowSystemSurfaceExtension>,
 }
 
 impl WindowSystemSurfaceExtensionsEnabledOnInstance {
     /// Enable `VK_KHR_surface` and every surface extension of this platform's
     /// window systems the loader offers.
-    pub(crate) fn select_from_available(available_extension_names: &[&CStr]) -> Self {
+    fn select_from_available(available_extension_names: &[&CStr]) -> Self {
         Self {
             khr_surface_enabled: available_extension_names.contains(&KHR_SURFACE_EXTENSION_NAME),
             platform_surface_extensions_enabled:
@@ -122,7 +118,7 @@ impl WindowSystemSurfaceExtensionsEnabledOnInstance {
     }
 
     /// The names to enable on the instance.
-    pub(crate) fn instance_extension_names(&self) -> impl Iterator<Item = &'static CStr> + '_ {
+    fn instance_extension_names(&self) -> impl Iterator<Item = &'static CStr> + '_ {
         self.khr_surface_enabled
             .then_some(KHR_SURFACE_EXTENSION_NAME)
             .into_iter()
@@ -206,16 +202,20 @@ impl HostVulkanInstance {
                 .instance_extension_names()
                 .map(CStr::as_ptr),
         );
+        let window_system_surface_extension_names: Vec<_> = window_system_surface_extensions
+            .instance_extension_names()
+            .map(CStr::to_string_lossy)
+            .collect();
         if window_system_surface_extensions.can_create_a_surface_for_some_window_system() {
             tracing::info!(
-                platform_surface_extensions = ?window_system_surface_extensions
-                    .platform_surface_extensions_enabled,
-                "VK_KHR_surface and the window-system surface extensions enabled"
+                extensions = ?window_system_surface_extension_names,
+                "window-system surface extensions enabled"
             );
         } else {
-            tracing::warn!(
-                "the Vulkan instance offers no window-system surface extension - no window \
-                 surface can be created"
+            tracing::info!(
+                extensions = ?window_system_surface_extension_names,
+                "the Vulkan instance offers no window-system surface extension: no window can \
+                 be opened on it"
             );
         }
 

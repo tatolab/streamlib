@@ -1021,7 +1021,7 @@ fn create_surface_for_present_target(
             use vulkanalia::vk::ExtMetalSurfaceExtensionInstanceCommands as _;
 
             window_system_surface_extensions.refuse_a_surface_this_instance_cannot_create(
-                WindowSystemSurfaceExtension::ExtMetalSurface,
+                WindowSystemSurfaceExtension::ExtMetal,
             )?;
 
             let metal_surface_create_info = vk::MetalSurfaceCreateInfoEXT::builder()
@@ -1068,13 +1068,13 @@ fn window_system_surface_extension_for_raw_window_handles(
 ) -> Option<WindowSystemSurfaceExtension> {
     match (display, window) {
         (RawDisplayHandle::Wayland(_), RawWindowHandle::Wayland(_)) => {
-            Some(WindowSystemSurfaceExtension::KhrWaylandSurface)
+            Some(WindowSystemSurfaceExtension::KhrWayland)
         }
         (RawDisplayHandle::Xcb(_), RawWindowHandle::Xcb(_)) => {
-            Some(WindowSystemSurfaceExtension::KhrXcbSurface)
+            Some(WindowSystemSurfaceExtension::KhrXcb)
         }
         (RawDisplayHandle::Xlib(_), RawWindowHandle::Xlib(_)) => {
-            Some(WindowSystemSurfaceExtension::KhrXlibSurface)
+            Some(WindowSystemSurfaceExtension::KhrXlib)
         }
         _ => None,
     }
@@ -1740,8 +1740,10 @@ mod tests {
             &self,
         ) -> std::result::Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError>
         {
-            let display =
-                RawDisplayHandle::Xlib(raw_window_handle::XlibDisplayHandle::new(None, 0));
+            let display = RawDisplayHandle::Xlib(raw_window_handle::XlibDisplayHandle::new(
+                Some(std::ptr::NonNull::dangling()),
+                0,
+            ));
             // SAFETY: as for the window handle.
             Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(display) })
         }
@@ -1768,15 +1770,15 @@ mod tests {
 
         assert_eq!(
             window_system_surface_extension_for_raw_window_handles(wayland_display, wayland_window),
-            Some(WindowSystemSurfaceExtension::KhrWaylandSurface)
+            Some(WindowSystemSurfaceExtension::KhrWayland)
         );
         assert_eq!(
             window_system_surface_extension_for_raw_window_handles(xcb_display, xcb_window),
-            Some(WindowSystemSurfaceExtension::KhrXcbSurface)
+            Some(WindowSystemSurfaceExtension::KhrXcb)
         );
         assert_eq!(
             window_system_surface_extension_for_raw_window_handles(xlib_display, xlib_window),
-            Some(WindowSystemSurfaceExtension::KhrXlibSurface)
+            Some(WindowSystemSurfaceExtension::KhrXlib)
         );
         assert_eq!(
             window_system_surface_extension_for_raw_window_handles(xlib_display, wayland_window),
@@ -1802,9 +1804,7 @@ mod tests {
         };
         if device
             .window_system_surface_extensions()
-            .refuse_a_surface_this_instance_cannot_create(
-                WindowSystemSurfaceExtension::KhrXlibSurface,
-            )
+            .refuse_a_surface_this_instance_cannot_create(WindowSystemSurfaceExtension::KhrXlib)
             .is_ok()
         {
             return;

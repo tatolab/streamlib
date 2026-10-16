@@ -5,12 +5,11 @@
 
 The bundled lavapipe is built headless, so the instance it gives the engine has
 no window-system surface extension. A window there refuses at the node's setup,
-by name, and `tatolabd` and the stream's other nodes keep running. The arm
-needs a window server reachable — with none the window never reaches a surface
-call — so it is rig-only; the GPU lane has no display.
+by name, and `tatolabd` and the stream's other nodes keep running. The refusal
+reads no display, so the test runs on the lane, which has none, and on the rig,
+whose reachable display is where a window once aborted `tatolabd`.
 """
 
-import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -52,12 +51,7 @@ def the_bundled_software_driver_manifest(runtime_unit: RuntimeUnitUnderTest) -> 
 
 
 @pytest.mark.requires_gpu
-@pytest.mark.rig_only_capability(reason="a display")
 @pytest.mark.linux_only_capability(reason="DISPLAY and WAYLAND_DISPLAY are how Linux names a window server")
-@pytest.mark.skipif(
-    not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
-    reason="display tier — the refusal is proven where a window server is reachable",
-)
 def test_a_window_on_the_bundled_software_device_refuses_at_setup_and_the_stream_keeps_running(
     runtime_unit: RuntimeUnitUnderTest,
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
