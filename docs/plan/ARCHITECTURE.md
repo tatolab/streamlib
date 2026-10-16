@@ -1727,11 +1727,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   it cannot tell a consumer's write from uninitialised memory and one staging spans every
   frame its pool slot publishes. Cross-process texture import is part of the capability, and
   importability is an allocation flavour the engine derives per acquisition, never a Python
-  dial. Linux: on a device that exports no DMA-BUF, every single-plane request — render
-  targets included, whatever the format — takes OPAQUE_FD where that image pool exists. On a
-  device that exports DMA-BUF, single-plane render-attachment usage takes explicit-modifier
-  DMA-BUF where the render-target modifier probes available, and a CUDA-mappable format
-  whose usage sits inside the OPAQUE_FD set takes OPAQUE_FD where that image pool exists.
+  dial. Linux: OPAQUE_FD is taken only where that image pool exists and the device reports
+  the request's format and usage exportable as OPAQUE_FD. On a device that exports no
+  DMA-BUF, every such single-plane request — render targets included, whatever the format —
+  takes OPAQUE_FD, and one the device cannot export that way is refused at the acquisition,
+  naming the device, the format and the usage. On a device that exports DMA-BUF,
+  single-plane render-attachment usage takes explicit-modifier DMA-BUF where the
+  render-target modifier probes available, and a CUDA-mappable format whose usage sits
+  inside the OPAQUE_FD set takes OPAQUE_FD.
   macOS: any single-plane format on a device with `VK_EXT_metal_objects` takes an `OPTIMAL`
   image over a private IOSurface the engine creates — never `kIOSurfaceIsGlobal`, which MoltenVK's own export path sets —
   bound to a device-local memory type that is not host-visible, chosen by query; a
@@ -1740,7 +1743,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   name: NV12 render targets are absent on macOS, since MoltenVK refuses a biplanar 4:2:0
   IOSurface as a multi-planar image and no driver patch is carried (owner, 2026-09-26). A
   flavour the device or format cannot take falls back at derivation rather than failing the
-  acquire, and the later cross-process import refuses by naming the flavour.
+  acquire — except on a Linux device without DMA-BUF, above — and the later cross-process
+  import refuses by naming the flavour.
   [python-kernel-api; python-kernel-surface — SHIPPED #1778, #1779; macos-capability-parity
   — SHIPPED #2402, #2404]
   <!-- verify: cargo test -p streamlib-engine the_seam_refuses_to_publish_a_staging_no_frame_was_read_into -->
