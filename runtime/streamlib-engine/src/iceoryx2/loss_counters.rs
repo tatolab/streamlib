@@ -59,18 +59,36 @@ impl CumulativeCount {
     }
 }
 
+/// A count whose total `graph` renders.
+trait CountWithACumulativeTotal: Default {
+    fn total(&self) -> u64;
+}
+
+impl CountWithACumulativeTotal for CumulativeCount {
+    fn total(&self) -> u64 {
+        CumulativeCount::total(self)
+    }
+}
+
 /// Named cumulative counts, each shared live with whoever records into it.
 ///
 /// A name gets its count when it is first asked for, so a wired name that has
 /// lost nothing reports zero rather than going missing, and forgetting a name
 /// takes its count with it: a handle still held keeps counting into nothing.
-#[derive(Default)]
-struct CumulativeCountsByName {
-    per_name: Mutex<HashMap<String, Arc<CumulativeCount>>>,
+struct CumulativeCountsByName<Count = CumulativeCount> {
+    per_name: Mutex<HashMap<String, Arc<Count>>>,
 }
 
-impl CumulativeCountsByName {
-    fn count_for(&self, name: &str) -> Arc<CumulativeCount> {
+impl<Count> Default for CumulativeCountsByName<Count> {
+    fn default() -> Self {
+        Self {
+            per_name: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
+    fn count_for(&self, name: &str) -> Arc<Count> {
         Arc::clone(self.per_name.lock().entry(name.to_string()).or_default())
     }
 
@@ -95,30 +113,108 @@ impl CumulativeCountsByName {
     }
 }
 
+/// One inbound link's dropped bags: the total `graph` renders, split by where
+/// each was lost, and how many of them the reader has been told of.
+///
+/// The split is what places a loss on the right message. A bag lost before it
+/// reached the mailbox is ahead of every bag queued after the loss was counted,
+/// so a queued bag carries that part as it stood when it was queued. A bag the
+/// mailbox evicted was the oldest queued, so it is ahead of every bag of the
+/// link still queued, and a bag reads that part as it stands when it is taken.
+/// Each part lands on the right bag only while every push and pop of the link's
+/// mailbox is serialized, as `InputMailboxesInner` serializes them under its
+/// port map lock.
+#[derive(Default)]
+struct InboundLinkDroppedBagCount {
+    dropped_bags: CumulativeCount,
+    dropped_before_reaching_the_mailbox: AtomicU64,
+    evicted_from_the_mailbox: AtomicU64,
+    dropped_ahead_of_the_latest_bag_taken_off_the_mailbox: AtomicU64,
+    dropped_and_handed_to_the_reader: AtomicU64,
+}
+
+impl CountWithACumulativeTotal for InboundLinkDroppedBagCount {
+    fn total(&self) -> u64 {
+        self.dropped_bags.total()
+    }
+}
+
 /// One inbound link's cumulative count of bags lost before anything read them.
 ///
 /// A bag the subscriber ring overwrote, one the port's mailbox evicted, and one
 /// dropped at receive all land here. Handed to every mailbox entry that arrived
 /// on that link, so an eviction is attributed to the link whose bag was lost
 /// rather than to the link that happened to push. Cloning shares the count.
+///
+/// The total is never zeroed. A reader is told of each loss once, on the first
+/// message it reads from the link after the lost bag, through
+/// [`Self::take_dropped_bags_the_reader_has_not_been_told_of`].
 #[derive(Clone, Default)]
-pub struct InboundLinkDroppedBagCounter(Arc<CumulativeCount>);
+pub struct InboundLinkDroppedBagCounter(Arc<InboundLinkDroppedBagCount>);
 
 impl InboundLinkDroppedBagCounter {
-    /// Record one bag of this link's, lost before anything read it.
+    /// Record one bag of this link's, lost before it reached the mailbox.
     pub fn record_one_dropped_bag(&self) {
         self.record_dropped_bags(1);
     }
 
-    /// Record `dropped_bag_count` of this link's bags, lost before anything read
-    /// them.
+    /// Record `dropped_bag_count` of this link's bags, lost before they reached
+    /// the mailbox.
     pub fn record_dropped_bags(&self, dropped_bag_count: u64) {
-        self.0.add(dropped_bag_count);
+        self.0
+            .dropped_before_reaching_the_mailbox
+            .fetch_add(dropped_bag_count, Ordering::Relaxed);
+        self.0.dropped_bags.add(dropped_bag_count);
+    }
+
+    /// Record one bag of this link's that the mailbox evicted to make room.
+    pub(super) fn record_one_bag_evicted_from_the_mailbox(&self) {
+        self.0
+            .evicted_from_the_mailbox
+            .fetch_add(1, Ordering::Relaxed);
+        self.0.dropped_bags.add(1);
     }
 
     /// How many of this link's bags have been lost since it was wired.
     pub fn dropped_bag_count(&self) -> u64 {
-        self.0.total()
+        self.0.dropped_bags.total()
+    }
+
+    /// The bags lost before reaching the mailbox, as the count stands now — what
+    /// a bag queued now has ahead of it from that cause.
+    pub(super) fn dropped_before_reaching_the_mailbox(&self) -> u64 {
+        self.0
+            .dropped_before_reaching_the_mailbox
+            .load(Ordering::Relaxed)
+    }
+
+    /// Note a bag taken off the mailbox that had
+    /// `dropped_before_reaching_the_mailbox_when_queued` ahead of it when it was
+    /// queued; every eviction counted so far is ahead of it too.
+    pub(super) fn note_a_bag_taken_off_the_mailbox(
+        &self,
+        dropped_before_reaching_the_mailbox_when_queued: u64,
+    ) {
+        let dropped_ahead_of_it = dropped_before_reaching_the_mailbox_when_queued
+            + self.0.evicted_from_the_mailbox.load(Ordering::Relaxed);
+        self.0
+            .dropped_ahead_of_the_latest_bag_taken_off_the_mailbox
+            .fetch_max(dropped_ahead_of_it, Ordering::Relaxed);
+    }
+
+    /// The bags lost ahead of the latest bag taken off the mailbox that no
+    /// earlier call returned — the `lost_since_last_read` of the message that
+    /// bag is handed to the reader as.
+    pub(super) fn take_dropped_bags_the_reader_has_not_been_told_of(&self) -> u64 {
+        let dropped_ahead = self
+            .0
+            .dropped_ahead_of_the_latest_bag_taken_off_the_mailbox
+            .load(Ordering::Relaxed);
+        let already_told = self
+            .0
+            .dropped_and_handed_to_the_reader
+            .fetch_max(dropped_ahead, Ordering::Relaxed);
+        dropped_ahead.saturating_sub(already_told)
     }
 
     /// Write this count's every new total through `mirror`, or hand it back
@@ -127,7 +223,7 @@ impl InboundLinkDroppedBagCounter {
         &self,
         mirror: LossCountMirror,
     ) -> Result<(), LossCountMirror> {
-        self.0.mirror_every_new_total_into(mirror)
+        self.0.dropped_bags.mirror_every_new_total_into(mirror)
     }
 }
 
@@ -140,7 +236,7 @@ impl InboundLinkDroppedBagCounter {
 /// outliving its link would name something `graph` no longer has.
 #[derive(Default)]
 pub struct DroppedBagCountsByInboundLink {
-    per_inbound_link: CumulativeCountsByName,
+    per_inbound_link: CumulativeCountsByName<InboundLinkDroppedBagCount>,
 }
 
 impl DroppedBagCountsByInboundLink {

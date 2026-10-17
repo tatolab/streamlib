@@ -20,6 +20,7 @@ from tatolab.stream import (
     AudioBlock,
     LinkInputDataReader,
     LinkOutputDataWriter,
+    Message,
     VideoFrame,
     msgpack_typed_dict_cast,
 )
@@ -56,6 +57,15 @@ class InMemoryPortStandingInForTheRuntimes:
     def read_from_inbound_link(self, port_name: str, *, into: Any = None) -> Any:
         return self.read(port_name, into=into), INBOUND_LINK_NAME
 
+    def read_message(self, port_name: str, *, into: Any = None) -> Any:
+        return Message(
+            payload=self.read(port_name, into=into),
+            timestamp_ns=FRAME_ENTRIES["timestamp_ns"],
+            starts_group=True,
+            lost_since_last_read=0,
+            inbound_link=INBOUND_LINK_NAME,
+        )
+
     def write(
         self,
         port_name: str,
@@ -85,6 +95,16 @@ def read_every_spelling(inputs: LinkInputDataReader) -> None:
 
     payload_and_link = inputs.read_from_inbound_link("video")
     assert_type(payload_and_link, "tuple[bytes, str] | None")
+
+    message = inputs.read_message("video")
+    assert_type(message, "Message[bytes] | None")
+    assert message is not None
+    assert_type(message.starts_group, bool)
+    assert_type(message.lost_since_last_read, int)
+
+    frame_message = inputs.read_message("video", into=VideoFrame)
+    assert_type(frame_message, "Message[VideoFrame] | None")
+    assert frame_message is not None and frame_message.payload.width == 1280
 
 
 def write_every_spelling(outputs: LinkOutputDataWriter, frame: VideoFrame) -> None:

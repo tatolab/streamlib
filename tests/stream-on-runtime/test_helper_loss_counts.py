@@ -80,7 +80,9 @@ class FastBagSource:
         self.ticks += 1
         for message_index in range(BAGS_PER_TICK):
             ctx.outputs.write(
-                "bags", pack({{"tick": self.ticks, "message_index": message_index}})
+                "bags",
+                pack({{"tick": self.ticks, "message_index": message_index}}),
+                starts_group=message_index == 0,
             )
         if self.ticks % TICKS_PER_OVERSIZED_BAG == 0:
             ctx.outputs.write("oversized_bags", bytes({OVERSIZED_BAG_PADDING_BYTES}))
@@ -88,7 +90,14 @@ class FastBagSource:
 
 @node
 class SlowOrderedSink:
-    """Takes every message in order, far slower than they arrive."""
+    """Takes every message in order, far slower than they arrive, and says once
+    what its reads were told: a loss on its link, and a message continuing a
+    group."""
+
+    def __init__(self) -> None:
+        self.lost_told_so_far = 0
+        self.a_message_continuing_a_group_arrived = False
+        self.reported_what_its_reads_were_told = False
 
     @node.input(delivery_profile="ordered")
     def bags(self) -> None: ...
@@ -97,8 +106,30 @@ class SlowOrderedSink:
         log.info("MARKER:SLOW_SINK_PID " + json.dumps({{"pid": os.getpid()}}))
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if ctx.inputs.read("bags") is not None:
-            time.sleep(0.05)
+        message = ctx.inputs.read_message("bags")
+        if message is None:
+            return
+        self.lost_told_so_far += message.lost_since_last_read
+        if not message.starts_group:
+            self.a_message_continuing_a_group_arrived = True
+        if (
+            message.lost_since_last_read > 0
+            and self.a_message_continuing_a_group_arrived
+            and not self.reported_what_its_reads_were_told
+        ):
+            self.reported_what_its_reads_were_told = True
+            log.info(
+                "MARKER:SLOW_SINK_TOLD_OF_A_LOSS "
+                + json.dumps(
+                    {{
+                        "lost_since_last_read": message.lost_since_last_read,
+                        "lost_told_so_far": self.lost_told_so_far,
+                        "inbound_link": message.inbound_link,
+                        "sink_pid": os.getpid(),
+                    }}
+                )
+            )
+        time.sleep(0.05)
 
 
 @node
@@ -244,6 +275,36 @@ def test_an_overrun_helper_placed_ordered_destination_renders_its_dropped_bags_p
     assert list(metrics["dropped_bags_by_link"]) == [link_id]
     assert metrics["frames_dropped"] == metrics["dropped_bags_by_link"][link_id]
     assert metrics["refused_bags_by_output_port"] == {}
+
+
+def test_a_helper_placed_ordered_reader_is_told_its_links_losses_and_the_group_flag(
+    make_tatolab_project, start_tatolabd
+):
+    """A Python `ordered` consumer in its own helper process is told, on the read
+    after a loss, how many messages its link lost, and reads the group flag its
+    producer wrote — `starts_group=False` included — across the two processes.
+
+    Fail-without-fix: leave `read_message` telling no loss, or drop the flag on
+    the helper's read path, and the sink never reports what its reads were told.
+    """
+    loss_counting_stream = launch_the_loss_counting_node(make_tatolab_project, start_tatolabd)
+    tatolabd = loss_counting_stream.tatolabd
+    link_id = the_link_into(loss_counting_stream.graph(), "slow-sink")
+    slow_sink_pid = tatolabd.await_marker("SLOW_SINK_PID")["pid"]
+
+    told = tatolabd.await_marker("SLOW_SINK_TOLD_OF_A_LOSS", timeout=COUNT_TIMEOUT_SECONDS)
+
+    assert told["sink_pid"] == slow_sink_pid
+    assert told["sink_pid"] != os.getpid()
+    assert told["lost_since_last_read"] > 0
+    assert told["inbound_link"].endswith("/bags"), told
+    dropped_on_the_link = loss_counting_stream.metrics_of("slow-sink")["dropped_bags_by_link"][
+        link_id
+    ]
+    assert dropped_on_the_link >= told["lost_told_so_far"], (
+        "a read is told only of losses the link counted, and the count `graph` renders is "
+        f"never zeroed: told {told['lost_told_so_far']}, graph renders {dropped_on_the_link}"
+    )
 
 
 def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_output_port(

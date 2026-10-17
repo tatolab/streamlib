@@ -41,6 +41,9 @@ pub type PortMailboxEvictionNotice = Arc<dyn Fn() + Send + Sync>;
 struct PortMailboxQueuedFrame {
     payload: Vec<u8>,
     dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
+    /// The link's bags lost before reaching the mailbox, as the count stood
+    /// when this frame was queued.
+    dropped_before_reaching_the_mailbox_when_queued: u64,
     /// The link this frame arrived on, so a read can name it. `None` on the
     /// manual-injection path, which has no link behind it.
     inbound_link_name: Option<InboundLinkName>,
@@ -53,7 +56,22 @@ impl PortMailboxQueuedFrame {
     /// Count this frame as lost against the link it came in on.
     fn record_eviction(self) {
         if let Some(counter) = self.dropped_bag_counter {
-            counter.record_one_dropped_bag();
+            counter.record_one_bag_evicted_from_the_mailbox();
+        }
+    }
+
+    /// Hand this frame to a reader, noting on its link's count what was lost
+    /// ahead of it.
+    fn taken_by_a_reader(self) -> PortMailboxDeliveredBag {
+        if let Some(counter) = &self.dropped_bag_counter {
+            counter.note_a_bag_taken_off_the_mailbox(
+                self.dropped_before_reaching_the_mailbox_when_queued,
+            );
+        }
+        PortMailboxDeliveredBag {
+            payload: self.payload,
+            inbound_link_name: self.inbound_link_name,
+            dropped_bag_counter: self.dropped_bag_counter,
         }
     }
 }
@@ -64,22 +82,18 @@ pub struct PortMailboxDeliveredBag {
     pub payload: Vec<u8>,
     /// The link it arrived on; `None` for a manually injected frame.
     pub inbound_link_name: Option<InboundLinkName>,
-}
-
-impl From<PortMailboxQueuedFrame> for PortMailboxDeliveredBag {
-    fn from(frame: PortMailboxQueuedFrame) -> Self {
-        Self {
-            payload: frame.payload,
-            inbound_link_name: frame.inbound_link_name,
-        }
-    }
+    /// The dropped-bag count of the link it arrived on, which has noted this
+    /// bag as taken; `None` for a manually injected frame.
+    pub dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
 }
 
 /// Per-port mailbox with configurable history depth.
 ///
 /// Stores raw wire-format `[u8]` slices (header + data) as `Vec<u8>`.
 /// Uses a crossbeam ArrayQueue internally for lock-free, thread-safe access.
-/// Multiple threads can push and pop concurrently (MPMC).
+/// Multiple threads can push and pop concurrently (MPMC); the queue stays
+/// sound, but a link's losses land on the right bag only while its owner
+/// serializes every push and pop.
 pub struct PortMailbox {
     queue: ArrayQueue<PortMailboxQueuedFrame>,
     capacity: usize,
@@ -161,6 +175,8 @@ impl PortMailbox {
         let measure = self.measure_of(&payload);
         self.push_frame(PortMailboxQueuedFrame {
             payload,
+            dropped_before_reaching_the_mailbox_when_queued: dropped_bag_counter
+                .dropped_before_reaching_the_mailbox(),
             dropped_bag_counter: Some(dropped_bag_counter.clone()),
             inbound_link_name: Some(inbound_link_name.clone()),
             measure,
@@ -174,6 +190,7 @@ impl PortMailbox {
         self.push_frame(PortMailboxQueuedFrame {
             payload,
             dropped_bag_counter: None,
+            dropped_before_reaching_the_mailbox_when_queued: 0,
             inbound_link_name: None,
             measure,
         });
@@ -231,7 +248,8 @@ impl PortMailbox {
     ///
     /// Thread-safe: can be called from any thread.
     pub fn pop(&self) -> Option<PortMailboxDeliveredBag> {
-        self.pop_frame().map(PortMailboxDeliveredBag::from)
+        self.pop_frame()
+            .map(PortMailboxQueuedFrame::taken_by_a_reader)
     }
 
     /// Drain buffer and return only the newest entry.
@@ -243,7 +261,7 @@ impl PortMailbox {
     pub fn pop_latest(&self) -> Option<PortMailboxDeliveredBag> {
         let mut latest = None;
         while let Some(frame) = self.pop_frame() {
-            latest = Some(PortMailboxDeliveredBag::from(frame));
+            latest = Some(frame.taken_by_a_reader());
         }
         latest
     }
