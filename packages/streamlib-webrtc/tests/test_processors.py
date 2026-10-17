@@ -571,7 +571,7 @@ class PublisherWiredToEncoders:
                 TRACKS_INPUT_PORT,
                 channel_service_name,
                 destination_notify_service_name,
-                notify_max_notifiers=max(1, len(encoder_output_ports)),
+                notify_max_notifiers=len(encoder_output_ports),
             )
             self.inbound_link_by_encoder_output_port[encoder_output_port] = (
                 channel_service_name
@@ -597,7 +597,7 @@ class PublisherWiredToEncoders:
         )
 
 
-def encoder_output_ports(count: int) -> "list[str]":
+def numbered_encoder_output_ports(count: int) -> "list[str]":
     return [f"encoder{index}_output" for index in range(count)]
 
 
@@ -608,7 +608,7 @@ AN_ENDPOINT = {"url": "https://example.invalid/whip"}
 def test_a_publisher_sets_up_against_the_links_a_session_can_carry(
     request, inbound_links
 ):
-    PublisherWiredToEncoders(request, encoder_output_ports(inbound_links), AN_ENDPOINT)
+    PublisherWiredToEncoders(request, numbered_encoder_output_ports(inbound_links), AN_ENDPOINT)
 
 
 def test_a_publisher_with_nothing_wired_refuses_rather_than_publishing_silence(
@@ -617,12 +617,12 @@ def test_a_publisher_with_nothing_wired_refuses_rather_than_publishing_silence(
     """A graph that forgot the connect would otherwise open a session and send
     nothing, which looks from the relay's side like a working publisher."""
     with pytest.raises(ValueError, match="nothing is connected"):
-        PublisherWiredToEncoders(request, encoder_output_ports(0), AN_ENDPOINT)
+        PublisherWiredToEncoders(request, numbered_encoder_output_ports(0), AN_ENDPOINT)
 
 
 def test_more_links_than_a_session_can_carry_are_refused_naming_the_count(request):
     with pytest.raises(ValueError, match="3 links feed"):
-        PublisherWiredToEncoders(request, encoder_output_ports(3), AN_ENDPOINT)
+        PublisherWiredToEncoders(request, numbered_encoder_output_ports(3), AN_ENDPOINT)
 
 
 @pytest.mark.parametrize("config", [{"url": ""}, {"url": 7}])
@@ -630,14 +630,14 @@ def test_a_publisher_whose_endpoint_is_not_an_address_is_refused_by_name(
     request, config
 ):
     with pytest.raises(ValueError, match="`url` is required"):
-        PublisherWiredToEncoders(request, encoder_output_ports(1), config)
+        PublisherWiredToEncoders(request, numbered_encoder_output_ports(1), config)
 
 
 def test_a_publisher_added_with_no_endpoint_at_all_is_refused_by_its_config_class(request):
     """`url` has no default, so the config class refuses the empty mapping and
     names the missing key before any of this wheel's own validation runs."""
     with pytest.raises(TypeError, match="missing 1 required positional argument"):
-        PublisherWiredToEncoders(request, encoder_output_ports(1), {})
+        PublisherWiredToEncoders(request, numbered_encoder_output_ports(1), {})
 
 
 @pytest.mark.parametrize("processor_class", [WhipPublisher, WhepPlayer])

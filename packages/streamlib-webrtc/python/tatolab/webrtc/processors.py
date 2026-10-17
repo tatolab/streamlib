@@ -131,7 +131,7 @@ _TRACK_KIND_BY_CODEC: "dict[str, VideoOrAudio]" = {"h264": "video", "opus": "aud
 
 
 def encoded_bag_unpacked_from(payload: bytes, inbound_link: str) -> "dict[str, Any]":
-    """The msgpack map one encoded bag's payload carries, refused by its link when not a map."""
+    """The msgpack map one encoded bag's payload carries, refused by its link when it is not one."""
     try:
         bag = msgpack.unpack(payload)
     except ValueError as undecodable:
