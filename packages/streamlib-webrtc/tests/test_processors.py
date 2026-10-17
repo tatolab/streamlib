@@ -22,28 +22,43 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from tatolab.webrtc import WhepPlayer, WhepPlayerConfig, WhipPublisher
 from tatolab.webrtc.processors import (
+    ENCODED_AUDIO_OUTPUT_PORT,
+    ENCODED_VIDEO_OUTPUT_PORT,
     FIRST_RECONNECT_DELAY_SECONDS,
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
     LONGEST_RECONNECT_DELAY_SECONDS,
     LinkOutputWriteFailure,
     VideoOrAudio,
+    TRACKS_INPUT_PORT,
     _native,
+    encoded_audio_packet_bag,
+    encoded_video_frame_bag,
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
+)
+from helper_process_link_wiring import wire_one_link
+from played_media_stand_ins import (
+    ANNEX_B_ACCESS_UNIT,
+    OPUS_PACKET,
+    AccessUnitTheSessionPlayed,
+    OpusPacketTheSessionPlayed,
 )
 from tatolab.runtime import _engine
 from tatolab.runtime._processor_hosting import construct_processor_instance
 from tatolab.stream import (
+    EncodedAudioPacket,
+    EncodedVideoFrame,
     H264Decoder,
     H264Encoder,
     OpusDecoder,
@@ -51,6 +66,7 @@ from tatolab.stream import (
     StreamBuilder,
     compile_stream_to_graph,
     log,
+    msgpack,
     stream,
 )
 
@@ -140,6 +156,18 @@ ENGINE_VARIABLES_THE_RUNTIME_DOES_NOT_INHERIT = (
     "STREAMLIB_ICEORYX2_DOMAIN_ROOT",
 )
 
+#: The variable a test build of the runtime and its CLI read their machine root from.
+TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_MACHINE_ROOT"
+
+#: Not `tempfile.gettempdir()`: the local API socket under a machine root has to
+#: fit `sun_path`, and macOS's per-user temporary directory is too long for it.
+SHORT_TEMPORARY_DIRECTORY = "/tmp"
+
+#: The modes the machine's installer gives the macOS machine runtime lock's
+#: directory and file, which a test build expects under its root.
+MACHINE_RUNTIME_LOCK_DIRECTORY_MODE = 0o755
+MACHINE_RUNTIME_LOCK_FILE_MODE = 0o666
+
 #: Covers starting each Python node's interpreter to describe it, on a cold runner.
 LOAD_DEADLINE_SECONDS = 120.0
 SERVING_DEADLINE_SECONDS = 30.0
@@ -157,10 +185,13 @@ def _runtime_unit_executable(executable: Path) -> Path:
     return executable
 
 
-def _a_runtime_answers_at_the_local_api_socket() -> bool:
+def _a_runtime_answers_at_the_local_api_socket(
+    cli_environment: "dict[str, str]",
+) -> bool:
     try:
         streams_probe = subprocess.run(
             [str(_runtime_unit_executable(TATOLAB_EXECUTABLE)), "streams"],
+            env=cli_environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -174,8 +205,11 @@ def _a_runtime_answers_at_the_local_api_socket() -> bool:
 class TatolabdWithNoVulkanDriver:
     """A `tatolabd` from the runtime unit whose every stream start is refused at the GPU."""
 
-    def __init__(self, process: "subprocess.Popen[str]") -> None:
+    def __init__(
+        self, process: "subprocess.Popen[str]", cli_environment: "dict[str, str]"
+    ) -> None:
         self.process = process
+        self.cli_environment = cli_environment
         self.standard_error_lines: "list[str]" = []
         self._standard_error_drain = threading.Thread(
             target=self._drain_standard_error, daemon=True
@@ -205,18 +239,46 @@ class TatolabdWithNoVulkanDriver:
 
 
 @pytest.fixture(scope="module")
+def short_machine_root() -> "Iterator[Path]":
+    """A fresh machine root a test build keeps its runtime, state and lock under.
+
+    On macOS the lock directory and file a test build expects are made as the
+    machine's installer makes them.
+    """
+    with tempfile.TemporaryDirectory(
+        prefix="tl-", dir=SHORT_TEMPORARY_DIRECTORY
+    ) as machine_root_path:
+        machine_root = Path(machine_root_path)
+        if sys.platform == "darwin":
+            machine_runtime_lock_directory = machine_root / "lock"
+            machine_runtime_lock_directory.mkdir()
+            machine_runtime_lock_directory.chmod(MACHINE_RUNTIME_LOCK_DIRECTORY_MODE)
+            machine_runtime_lock_file = machine_runtime_lock_directory / "runtime.lock"
+            machine_runtime_lock_file.touch()
+            machine_runtime_lock_file.chmod(MACHINE_RUNTIME_LOCK_FILE_MODE)
+        yield machine_root
+
+
+@pytest.fixture(scope="module")
 def tatolabd_with_no_vulkan_driver(
-    tmp_path_factory: pytest.TempPathFactory,
+    tmp_path_factory: pytest.TempPathFactory, short_machine_root: Path
 ) -> "Iterator[TatolabdWithNoVulkanDriver]":
     """The machine's runtime for this module, started here and stopped after it.
 
-    It takes the machine's runtime lock and serves this user's local API socket,
-    so it is refused while another runtime holds the machine. Its state
-    directory is its own — `XDG_STATE_HOME`, and `HOME` on macOS — so it loads
-    none of this user's kept streams.
+    A test build of the runtime unit keeps its lock, local API socket and state
+    under a machine root of this module's own, so it runs beside the user's
+    runtime. A release build ignores that root: it takes the machine's runtime
+    lock and serves this user's local API socket, so it is refused while
+    another runtime holds the machine. Either way its state directory is its
+    own — `XDG_STATE_HOME`, and `HOME` on macOS — so it loads none of this
+    user's kept streams.
     """
     tatolabd_executable = _runtime_unit_executable(TATOLABD_EXECUTABLE)
-    if _a_runtime_answers_at_the_local_api_socket():
+    cli_environment = {
+        **os.environ,
+        TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE: str(short_machine_root),
+    }
+    if _a_runtime_answers_at_the_local_api_socket(cli_environment):
         pytest.fail(
             "a runtime already answers at this user's local API socket; stop it and run "
             "these again — they start the machine's runtime themselves"
@@ -234,6 +296,7 @@ def tatolabd_with_no_vulkan_driver(
         {variable: no_such_driver_file for variable in VULKAN_LOADER_DRIVER_FILE_VARIABLES}
     )
     environment["RUST_LOG"] = "info,rmcp=warn"
+    environment[TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE] = str(short_machine_root)
     environment["XDG_STATE_HOME"] = str(state_home)
     if sys.platform == "darwin":
         environment["HOME"] = str(state_home)
@@ -247,11 +310,12 @@ def tatolabd_with_no_vulkan_driver(
             stderr=subprocess.PIPE,
             text=True,
             errors="replace",
-        )
+        ),
+        cli_environment,
     )
     try:
         serving_deadline = time.monotonic() + SERVING_DEADLINE_SECONDS
-        while not _a_runtime_answers_at_the_local_api_socket():
+        while not _a_runtime_answers_at_the_local_api_socket(cli_environment):
             if tatolabd.process.poll() is not None:
                 tatolabd.stop()
                 pytest.fail(
@@ -328,6 +392,7 @@ def node_names_loaded_by_tatolabd(
             stream_name,
         ],
         cwd=working_directory,
+        env=tatolabd.cli_environment,
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
@@ -478,35 +543,62 @@ def test_the_channel_counts_rtp_carries_are_published(channels):
     refuse_audio_rtp_cannot_carry(channels, "encoder/encoded_audio")
 
 
-class _PublisherUnderTest:
-    """A `WhipPublisher` whose `setup()` can be driven without a graph.
+class PublisherWiredToEncoders:
+    """A set-up `WhipPublisher` whose `tracks` input one link per encoder port feeds.
 
     A helper-process context opened directly on wired links is the same seam
-    `setup()` sees in a real child, and it needs no runtime and no device.
+    `setup()` and `process()` see in a real child, and it needs no runtime and
+    no device.
     """
 
-    @staticmethod
-    def set_up_with(
+    def __init__(
+        self,
         request: pytest.FixtureRequest,
-        inbound_links: int,
+        encoder_output_ports: "list[str]",
         config: "dict[str, Any]",
     ) -> None:
-        unique = f"whipsetup{os.getpid()}_{request.node.name}"
-        link_data_access = _engine.open_node_link_data_access_for_helper_process()
-        for index in range(inbound_links):
-            link_data_access.wire_input_link(
-                "tracks", f"{unique}/encoder{index}", f"{unique}/encoder{index}",
-                f"{unique}_dest/notify",
-                "read_next_in_order", 8, 8, 2, 4, f"L-{unique}-{index}",
-            )  # fmt: skip
-        context = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, link_data_access, "runtime-under-test", "processor-under-test"
+        unique = f"whipwired{os.getpid()}_{request.node.name}"
+        destination_notify_service_name = f"{unique}_dest/notify"
+        tracks_input = _engine.open_node_link_data_access_for_helper_process()
+        self.encoder_outputs = _engine.open_node_link_data_access_for_helper_process()
+        self.inbound_link_by_encoder_output_port: "dict[str, str]" = {}
+        for encoder_output_port in encoder_output_ports:
+            channel_service_name = f"{unique}/{encoder_output_port}"
+            wire_one_link(
+                self.encoder_outputs,
+                encoder_output_port,
+                tracks_input,
+                TRACKS_INPUT_PORT,
+                channel_service_name,
+                destination_notify_service_name,
+                notify_max_notifiers=max(1, len(encoder_output_ports)),
+            )
+            self.inbound_link_by_encoder_output_port[encoder_output_port] = (
+                channel_service_name
+            )
+        self.context = _engine.open_runtime_context_full_access_for_helper_process(
+            {}, tracks_input, "runtime-under-test", "processor-under-test"
         )
         # Constructed the way the helper constructs it: the mapping becomes
         # the class's config object, not something read off the context.
-        construct_processor_instance(WhipPublisher, config, link_data_access).setup(
-            context
+        self.publisher = construct_processor_instance(WhipPublisher, config, tracks_input)
+        self.publisher.setup(self.context)
+
+    def publish(
+        self, encoder_output_port: str, payload: bytes, timestamp_ns: int = 0
+    ) -> None:
+        self.encoder_outputs.write_to_output_port(
+            encoder_output_port, payload, timestamp_ns
         )
+        self.publisher.process(
+            _engine.limited_access_view_of_runtime_context_for_helper_process(
+                self.context
+            )
+        )
+
+
+def encoder_output_ports(count: int) -> "list[str]":
+    return [f"encoder{index}_output" for index in range(count)]
 
 
 AN_ENDPOINT = {"url": "https://example.invalid/whip"}
@@ -516,7 +608,7 @@ AN_ENDPOINT = {"url": "https://example.invalid/whip"}
 def test_a_publisher_sets_up_against_the_links_a_session_can_carry(
     request, inbound_links
 ):
-    _PublisherUnderTest.set_up_with(request, inbound_links, AN_ENDPOINT)
+    PublisherWiredToEncoders(request, encoder_output_ports(inbound_links), AN_ENDPOINT)
 
 
 def test_a_publisher_with_nothing_wired_refuses_rather_than_publishing_silence(
@@ -525,12 +617,12 @@ def test_a_publisher_with_nothing_wired_refuses_rather_than_publishing_silence(
     """A graph that forgot the connect would otherwise open a session and send
     nothing, which looks from the relay's side like a working publisher."""
     with pytest.raises(ValueError, match="nothing is connected"):
-        _PublisherUnderTest.set_up_with(request, 0, AN_ENDPOINT)
+        PublisherWiredToEncoders(request, encoder_output_ports(0), AN_ENDPOINT)
 
 
 def test_more_links_than_a_session_can_carry_are_refused_naming_the_count(request):
     with pytest.raises(ValueError, match="3 links feed"):
-        _PublisherUnderTest.set_up_with(request, 3, AN_ENDPOINT)
+        PublisherWiredToEncoders(request, encoder_output_ports(3), AN_ENDPOINT)
 
 
 @pytest.mark.parametrize("config", [{"url": ""}, {"url": 7}])
@@ -538,14 +630,14 @@ def test_a_publisher_whose_endpoint_is_not_an_address_is_refused_by_name(
     request, config
 ):
     with pytest.raises(ValueError, match="`url` is required"):
-        _PublisherUnderTest.set_up_with(request, 1, config)
+        PublisherWiredToEncoders(request, encoder_output_ports(1), config)
 
 
 def test_a_publisher_added_with_no_endpoint_at_all_is_refused_by_its_config_class(request):
     """`url` has no default, so the config class refuses the empty mapping and
     names the missing key before any of this wheel's own validation runs."""
     with pytest.raises(TypeError, match="missing 1 required positional argument"):
-        _PublisherUnderTest.set_up_with(request, 1, {})
+        PublisherWiredToEncoders(request, encoder_output_ports(1), {})
 
 
 @pytest.mark.parametrize("processor_class", [WhipPublisher, WhepPlayer])
@@ -584,6 +676,112 @@ def test_a_processor_added_without_an_endpoint_is_refused_at_construction(
         construct_processor_instance(processor_class, {}, None)
 
 
+class RecordingWhipSession:
+    """A `_native.WhipSession` stand-in keeping what the publisher offered and sent."""
+
+    constructed: "list[RecordingWhipSession]" = []
+
+    def __init__(self, endpoint_url: str, bearer_token: "str | None" = None) -> None:
+        del endpoint_url, bearer_token
+        self.is_connected = False
+        self.offered: "tuple[bool, bool, int | None] | None" = None
+        self.video_access_units: "list[tuple[bytes, int]]" = []
+        self.audio_packets: "list[tuple[bytes, int]]" = []
+        RecordingWhipSession.constructed.append(self)
+
+    def connect(
+        self, *, video: bool, audio: bool, audio_channels: "int | None" = None
+    ) -> None:
+        self.offered = (video, audio, audio_channels)
+        self.is_connected = True
+
+    def write_video_access_unit(
+        self, annex_b_access_unit: bytes, timestamp_ns: int
+    ) -> None:
+        self.video_access_units.append((annex_b_access_unit, timestamp_ns))
+
+    def write_audio_packet(self, opus_packet: bytes, sample_count: int) -> None:
+        self.audio_packets.append((opus_packet, sample_count))
+
+    def close(self) -> None:
+        self.is_connected = False
+
+
+def route_every_log_level_to(
+    monkeypatch: pytest.MonkeyPatch, log_record_sink: "Callable[[str], None]"
+) -> None:
+    """`log` reaches a sink only in the interpreter the runtime starts for a node."""
+    for log_level in ("debug", "info", "warn", "error"):
+        monkeypatch.setattr(log, log_level, log_record_sink)
+
+
+def discard_log_record(message: str) -> None:
+    del message
+
+
+@pytest.fixture
+def recording_whip_session(monkeypatch) -> "type[RecordingWhipSession]":
+    RecordingWhipSession.constructed = []
+    monkeypatch.setattr(_native, "WhipSession", RecordingWhipSession)
+    route_every_log_level_to(monkeypatch, discard_log_record)
+    return RecordingWhipSession
+
+
+def test_a_packed_access_unit_reaches_the_session_with_its_stamp(
+    request, recording_whip_session
+):
+    wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
+
+    wired.publish(
+        "encoded_video",
+        msgpack.pack(encoded_video_frame_bag(AccessUnitTheSessionPlayed())),
+        timestamp_ns=1_234,
+    )
+
+    (session,) = recording_whip_session.constructed
+    assert session.offered == (True, False, None)
+    assert session.video_access_units == [(ANNEX_B_ACCESS_UNIT, 1_234)]
+
+
+def test_a_packed_opus_packet_reaches_the_session_with_its_sample_count(
+    request, recording_whip_session
+):
+    wired = PublisherWiredToEncoders(request, ["encoded_audio"], AN_ENDPOINT)
+
+    wired.publish(
+        "encoded_audio",
+        msgpack.pack(encoded_audio_packet_bag(OpusPacketTheSessionPlayed(channels=2))),
+    )
+
+    (session,) = recording_whip_session.constructed
+    assert session.offered == (False, True, 2)
+    assert session.audio_packets == [(OPUS_PACKET, 960)]
+
+
+@pytest.mark.parametrize(
+    ("payload", "refusal"),
+    [
+        (b"\x93\x01\x02\x03", "carries a msgpack list"),
+        (ANNEX_B_ACCESS_UNIT, "is not msgpack"),
+        (b"", "is not msgpack"),
+    ],
+    ids=["a_msgpack_array", "a_raw_access_unit", "nothing"],
+)
+def test_a_payload_that_is_not_a_msgpack_map_is_refused_naming_its_link(
+    request, recording_whip_session, payload, refusal
+):
+    """Any port can be wired into `tracks`, and the refusal is the only place
+    that wiring mistake is caught."""
+    wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
+
+    with pytest.raises(ValueError, match=refusal) as refused:
+        wired.publish("encoded_video", payload)
+
+    inbound_link = wired.inbound_link_by_encoder_output_port["encoded_video"]
+    assert f"`{inbound_link}`" in str(refused.value)
+    assert recording_whip_session.constructed[0].offered is None
+
+
 def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
     """The ordering, not just the refusal.
 
@@ -592,44 +790,17 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
     prevent. The endpoint here is unresolvable, so a connect attempted first
     would raise about signalling instead of about channels.
     """
-    unique = f"whipmulti{os.getpid()}_{request.node.name}"
-    channel = f"{unique}/encoder"
-    notify = f"{unique}_dest/notify"
-
-    destination = _engine.open_node_link_data_access_for_helper_process()
-    destination.wire_input_link(
-        "tracks", channel, channel, notify,
-        "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
-    )  # fmt: skip
-    source = _engine.open_node_link_data_access_for_helper_process()
-    source.wire_output_link(
-        "encoded_audio", channel, notify, 1024, 1 << 20, 8, 2, 1, f"L-{unique}",
-    )  # fmt: skip
-
-    context = _engine.open_runtime_context_full_access_for_helper_process(
-        {}, destination, "runtime-under-test", "processor-under-test"
-    )
-    publisher = construct_processor_instance(
-        WhipPublisher, {"url": "https://unresolvable.invalid/whip"}, destination
-    )
-    publisher.setup(context)
-    source.write_to_output_port(
-        "encoded_audio",
-        {
-            "codec": "opus",
-            "bitstream": b"\x78\x01\x02",
-            "is_sync_point": True,
-            "group_index": 0,
-            "sequence_index": 0,
-            "sample_rate": 48_000,
-            "channels": 6,
-            "sample_count": 960,
-            "pre_skip": 0,
-        },
+    wired = PublisherWiredToEncoders(
+        request, ["encoded_audio"], {"url": "https://unresolvable.invalid/whip"}
     )
 
     with pytest.raises(ValueError, match="mono and stereo only"):
-        publisher.process(_engine.limited_access_view_of_runtime_context_for_helper_process(context))
+        wired.publish(
+            "encoded_audio",
+            msgpack.pack(
+                encoded_audio_packet_bag(OpusPacketTheSessionPlayed(channels=6))
+            ),
+        )
 
 
 class RecordingWhepSession:
@@ -679,8 +850,7 @@ def scripted_whep_session(monkeypatch):
     RecordingWhepSession.connect_outcomes = []
     monkeypatch.setattr(_native, "WhepSession", RecordingWhepSession)
     kept_log_records: "list[str]" = []
-    for log_level in ("debug", "info", "warn", "error"):
-        monkeypatch.setattr(log, log_level, kept_log_records.append)
+    route_every_log_level_to(monkeypatch, kept_log_records.append)
     return RecordingWhepSession
 
 
@@ -696,10 +866,9 @@ def test_a_refused_connect_is_retried_rather_than_ending_the_stream(
 ):
     """The 409 a WHEP endpoint answers before its ingest is live is not the end.
 
-    This is the failure the live proof found: the player gave up permanently on
-    the first refusal, stayed alive, and produced nothing for the rest of the
-    run with nothing downstream able to tell that from an endpoint carrying no
-    media.
+    A player that gave up on the first refusal would stay alive and produce
+    nothing, and nothing downstream could tell that from an endpoint carrying
+    no media.
     """
     scripted_whep_session.connect_outcomes = [
         RuntimeError("409 Conflict: Live broadcast not started yet"),
@@ -804,3 +973,109 @@ def test_a_refused_bag_names_its_port_and_stops_rather_than_reconnecting(
     assert any("encoded_video" in message for message in errors), (
         "the port that refused the bag has to reach the log"
     )
+
+
+class WhepSessionReplayingMedia:
+    """A `_native.WhepSession` stand-in that hands back its media, then stops the player."""
+
+    def __init__(
+        self,
+        player: WhepPlayer,
+        media: "list[AccessUnitTheSessionPlayed | OpusPacketTheSessionPlayed]",
+    ) -> None:
+        self.player = player
+        self.media_still_to_hand_back = list(media)
+
+    def next_media(
+        self, timeout_ms: int
+    ) -> "AccessUnitTheSessionPlayed | OpusPacketTheSessionPlayed | None":
+        del timeout_ms
+        if self.media_still_to_hand_back:
+            return self.media_still_to_hand_back.pop(0)
+        self.player._stop.set()
+        return None
+
+
+class PlayerWiredToBothDecoders:
+    """A `WhepPlayer`'s two output ports, each wired to a decoder's input read here."""
+
+    def __init__(self, request: pytest.FixtureRequest) -> None:
+        unique = f"whepwired{os.getpid()}_{request.node.name}"
+        destination_notify_service_name = f"{unique}_dest/notify"
+        decoder_inputs = _engine.open_node_link_data_access_for_helper_process()
+        player_outputs = _engine.open_node_link_data_access_for_helper_process()
+        output_ports = (ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT)
+        for output_port in output_ports:
+            wire_one_link(
+                player_outputs,
+                output_port,
+                decoder_inputs,
+                output_port,
+                f"{unique}/{output_port}",
+                destination_notify_service_name,
+                notify_max_notifiers=len(output_ports),
+            )
+        self.decoders = _engine.open_runtime_context_full_access_for_helper_process(
+            {}, decoder_inputs, "runtime-under-test", "decoders-under-test"
+        )
+        self.player_context = _engine.open_runtime_context_full_access_for_helper_process(
+            {}, player_outputs, "runtime-under-test", "player-under-test"
+        )
+
+    def play(
+        self, media: "list[AccessUnitTheSessionPlayed | OpusPacketTheSessionPlayed]"
+    ) -> None:
+        player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
+        player._drain_until_stopped(
+            cast(Any, WhepSessionReplayingMedia(player, media)),
+            self.player_context.outputs,
+        )
+
+
+@pytest.fixture
+def player_wired_to_both_decoders(request, monkeypatch) -> PlayerWiredToBothDecoders:
+    monkeypatch.setattr(_native, "PlayedOpusPacket", OpusPacketTheSessionPlayed)
+    route_every_log_level_to(monkeypatch, discard_log_record)
+    return PlayerWiredToBothDecoders(request)
+
+
+def test_only_a_sync_point_opens_a_group_on_the_video_port(
+    player_wired_to_both_decoders: PlayerWiredToBothDecoders,
+):
+    """A decoder enters a stream only where a group starts, so a delta frame
+    that claimed one would be entered with no reference picture."""
+    player_wired_to_both_decoders.play(
+        [
+            AccessUnitTheSessionPlayed(is_sync_point=True, timestamp_ns=1_000),
+            AccessUnitTheSessionPlayed(is_sync_point=False, timestamp_ns=2_000),
+        ]
+    )
+    decoder = player_wired_to_both_decoders.decoders.inputs
+
+    keyframe = decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT, into=EncodedVideoFrame)
+    delta = decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT, into=EncodedVideoFrame)
+
+    assert keyframe is not None and delta is not None
+    assert (keyframe.starts_group, keyframe.timestamp_ns) == (True, 1_000)
+    assert (delta.starts_group, delta.timestamp_ns) == (False, 2_000)
+    assert delta.payload.annex_b_access_unit_bytes == ANNEX_B_ACCESS_UNIT
+
+
+def test_every_opus_packet_opens_a_group_on_the_audio_port(
+    player_wired_to_both_decoders: PlayerWiredToBothDecoders,
+):
+    player_wired_to_both_decoders.play(
+        [
+            OpusPacketTheSessionPlayed(timestamp_ns=1_000),
+            OpusPacketTheSessionPlayed(timestamp_ns=1_020),
+        ]
+    )
+    decoder = player_wired_to_both_decoders.decoders.inputs
+
+    first = decoder.read_message(ENCODED_AUDIO_OUTPUT_PORT, into=EncodedAudioPacket)
+    second = decoder.read_message(ENCODED_AUDIO_OUTPUT_PORT, into=EncodedAudioPacket)
+
+    assert first is not None and second is not None
+    assert (first.starts_group, first.timestamp_ns) == (True, 1_000)
+    assert (second.starts_group, second.timestamp_ns) == (True, 1_020)
+    assert decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT) is None
