@@ -489,8 +489,8 @@ No package extends the runtime — there is no plugin ABI, no manifest and no lo
 an ordinary `pyproject.toml`.
 
 **It costs you** a small set of built-ins. Camera, window, test pattern, microphone, speaker, the
-H.264 / H.265 / Opus codec pairs, an MP4 sink and the virtual camera ship inside the runtime because
-their per-frame paths have deadlines a separate process cannot meet, need primitives only the
+H.264 / H.265 / Opus codec pairs and the virtual camera ship inside the runtime because their
+per-frame paths have deadlines a separate process cannot meet, need primitives only the
 runtime has, or present a device to other applications; everything else is a package or a node you
 write.
 

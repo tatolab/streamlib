@@ -465,7 +465,7 @@ mod tests {
             !split
                 .parameter_sets
                 .is_complete_for(VideoCodecElementaryStream::H264),
-            "a sample entry cannot be built from an access unit with no sets"
+            "no format description can be built from an access unit with no sets"
         );
     }
 
