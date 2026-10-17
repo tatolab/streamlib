@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.47.0](https://github.com/tatolab/streamlib/compare/v0.46.14...v0.47.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** a message's payload is bytes — write(port, bytes, starts_group=), read(port) -> bytes, the header's group flag, msgpack as a tatolab.stream helper ([#2821](https://github.com/tatolab/streamlib/issues/2821))
+
+### Features
+
+* **engine:** a message's payload is bytes — write(port, bytes, starts_group=), read(port) -&gt; bytes, the header's group flag, msgpack as a tatolab.stream helper ([#2821](https://github.com/tatolab/streamlib/issues/2821)) ([2492efc](https://github.com/tatolab/streamlib/commit/2492efc03fe9969e1627e829c8b179427c0e0801))
+
 ## [0.46.14](https://github.com/tatolab/streamlib/compare/v0.46.13...v0.46.14) (2026-10-16)
 
 
