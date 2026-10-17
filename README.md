@@ -218,6 +218,7 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
+    msgpack,
     node,
 )
 
@@ -248,10 +249,10 @@ class InvertingEffect:
         frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
         if frame is None:
             return
-        ctx.outputs.write(
-            "video_to_downstream",
-            self.inverting_pixel_effect.apply_to_frame(ctx.gpu_limited_access, frame),
+        inverted_frame_record = self.inverting_pixel_effect.apply_to_frame(
+            ctx.gpu_limited_access, frame
         )
+        ctx.outputs.write("video_to_downstream", msgpack.pack(inverted_frame_record))
 ```
 
 Logic runs on the CPU. `nodes/brightness_meter.py` reads each frame back through an explicit
@@ -549,11 +550,13 @@ A profile names a read policy and nothing more. Neither promises delivery: both 
 sustained pressure, no link ever blocks a producer, and a dropped bag is counted on its link in
 `graph`. One output can feed a `newest` and an `ordered` reader at once.
 
-What crosses a link is a self-describing named map. No schema registry, no negotiation, no
-versions, no code-generation step, and the runtime never compares one node's types against
-another's. Strictness is a dial you turn at your own read: `ctx.inputs.read(port)` hands you a
-mapping, and `read(port, into=T)` constructs and validates — a `TypedDict` casts for free, a
-dataclass or pydantic model raises on a payload that doesn't fit.
+What crosses a link is a message whose payload is bytes, which the runtime never encodes or
+decodes. No schema registry, no negotiation, no versions, no code-generation step, and the
+runtime never compares one node's types against another's. The built-ins carry msgpack maps, and
+`tatolab.stream.msgpack` packs and unpacks them. Strictness is a dial you turn at your own read:
+`ctx.inputs.read(port)` hands you the bytes, and `read(port, into=T)` hands them to
+`T.from_bytes` — `into=msgpack_typed_dict_cast(T)` types a `TypedDict` for free, while a
+dataclass or pydantic model taking `MsgpackCast` raises on a payload that doesn't fit.
 
 **It costs you** compile-time safety. A mismatch surfaces as a decode failure at the consumer while
 running, not when you wire the graph.

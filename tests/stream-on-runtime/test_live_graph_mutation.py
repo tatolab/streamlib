@@ -72,6 +72,7 @@ from tatolab.stream import (
     log,
     node,
 )
+from tatolab.stream.msgpack import pack, unpack
 
 
 @dataclasses.dataclass
@@ -97,10 +98,10 @@ class LiveAddedEffect:
         self.output_ring = NodeOutputTextureRing("rgba8_unorm", ["texture_binding"])
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("video_from_upstream")
+        if payload is None:
             return
-        frame = VideoFrame.from_bag(bag)
+        frame = VideoFrame.from_bytes(payload)
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as upstream:
             upstream.lock(read_only=True)
             try:
@@ -115,10 +116,10 @@ class LiveAddedEffect:
             texture.as_numpy()[...] = pixels
         finally:
             texture.unlock()
-        republished = dict(bag)
+        republished = unpack(payload)
         republished["surface_id"] = texture.surface_id
         republished.pop("texture_layout", None)
-        ctx.outputs.write("video_to_downstream", republished)
+        ctx.outputs.write("video_to_downstream", pack(republished))
         self.frames += 1
         if self.frames == 1:
             log.info(f"MARKER:{self.marker}")

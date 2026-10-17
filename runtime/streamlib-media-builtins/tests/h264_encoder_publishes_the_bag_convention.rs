@@ -83,14 +83,12 @@ pub struct EncodedFrameBagCollector;
 
 impl ReactiveProcessor for EncodedFrameBagCollector::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some((bag_bytes, frame_header_timestamp_ns)) =
-            self.inputs.read_raw("encoded_video")?
-        {
+        while let Some(message) = self.inputs.read_raw("encoded_video")? {
             let mut observations = encoded_channel_observations().lock().unwrap();
-            match read_encoded_video_frame_bag(&bag_bytes) {
+            match read_encoded_video_frame_bag(&message.payload_bytes) {
                 Ok(encoded_frame) => observations.collected.push(CollectedEncodedFrameBag {
                     encoded_frame,
-                    frame_header_timestamp_ns,
+                    frame_header_timestamp_ns: message.timestamp_ns,
                 }),
                 Err(refusal) => observations.refusals.push(refusal.to_string()),
             }

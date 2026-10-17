@@ -428,7 +428,7 @@ mod tests {
     }
 
     /// The actual wire is msgpack via `rmp_serde::to_vec_named` (what
-    /// `OutputWriter::write` does) — lock the named-map encoding and the
+    /// `OutputWriter::write_msgpack` does) — lock the named-map encoding and the
     /// documented keys at that boundary, not just JSON.
     #[test]
     fn video_frame_msgpack_wire_is_a_named_map_with_the_documented_keys() {

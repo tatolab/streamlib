@@ -1,12 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bags across the Python boundary.
-//!
-//! A bag is a self-describing msgpack value, so the conversion is total in both
-//! directions and needs no schema: encoding walks ordinary Python data, decoding
-//! rebuilds ordinary Python data. Pixels never travel this way — a frame crosses
-//! as a handle, and the payload here is the named map describing it.
+//! Python data across the boundary: a tapped channel's msgpack message decoded
+//! for inspection, config and graph JSON both ways, and the cast a typed read
+//! hands a message's payload bytes to. A message's payload otherwise crosses
+//! as the bytes it is; nothing here encodes one.
 
 use std::cell::RefCell;
 
@@ -20,34 +18,7 @@ use streamlib::sdk::iceoryx2::{FrameHeader, TappedFramePayloadRefusal};
 
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 
-/// Encode a bag to the msgpack bytes the wire carries.
-///
-/// A bag is a named map — a dict with string keys — because that is what the
-/// wire format is, not a convention this layer invented: a Rust processor
-/// downstream deserializes the payload into a struct, which needs named fields.
-/// A list, a bare scalar, or a dict with non-string keys encodes to msgpack
-/// fine and then cannot be read on the other side, so it is refused here rather
-/// than published as bytes only Python can decode.
-pub(crate) fn encode_bag_to_msgpack(bag: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
-    let named_map = bag.cast::<PyDict>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "a bag is a dict with string keys — the wire carries a named map, and a \
-             {} cannot be read as one by a processor in another language. Wrap it: \
-             `{{\"value\": …}}`.",
-            python_type_name_for_error_message(bag, "value")
-        ))
-    })?;
-
-    let mut encoded = Vec::new();
-    rmpv::encode::write_value(
-        &mut encoded,
-        &named_map_to_msgpack_value(named_map, ContainersEnclosingAValue::OUTERMOST)?,
-    )
-    .map_err(|encode_failure| PyValueError::new_err(encode_failure.to_string()))?;
-    Ok(encoded)
-}
-
-/// Decode msgpack bytes from the wire into ordinary Python data.
+/// Decode msgpack bytes into ordinary Python data.
 pub(crate) fn decode_msgpack_to_python_object<'py>(
     python: Python<'py>,
     encoded: &[u8],
@@ -65,32 +36,8 @@ pub(crate) fn decode_msgpack_to_python_object<'py>(
     msgpack_value_to_python_object(python, &value, ContainersEnclosingAValue::OUTERMOST)
 }
 
-/// Encode a bag to the msgpack bytes the wire carries, for a caller carrying
-/// them itself.
-///
-/// Nothing is added over [`encode_bag_to_msgpack`]: the same named-map rule,
-/// the same refusals, and no link is read or written.
-#[pyfunction]
-pub(crate) fn encode_bag_to_msgpack_bytes<'py>(
-    bag: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyBytes>> {
-    Ok(PyBytes::new(bag.py(), &encode_bag_to_msgpack(bag)?))
-}
-
-/// Decode msgpack bytes into ordinary Python data.
-///
-/// Unlike [`decode_tapped_channel_bag_frame_to_python_object`] these are payload
-/// bytes with no [`FrameHeader`] in front of them — what an extension's
-/// transport delivered.
-#[pyfunction]
-pub(crate) fn decode_msgpack_bytes_to_python_object<'py>(
-    python: Python<'py>,
-    msgpack_bytes: &[u8],
-) -> PyResult<Bound<'py, PyAny>> {
-    decode_msgpack_to_python_object(python, msgpack_bytes)
-}
-
-/// Decode one raw tapped-channel bag into ordinary Python data.
+/// Decode one raw tapped-channel message, msgpack-encoded, into ordinary Python
+/// data.
 ///
 /// A tap forwards the channel's wire bytes verbatim, header included, so the
 /// transport's own accessor is what bounds the msgpack value inside them.
@@ -107,50 +54,50 @@ pub(crate) fn decode_tapped_channel_bag_frame_to_python_object<'py>(
     decode_msgpack_to_python_object(python, payload)
 }
 
-/// Cast or construct a decoded bag into the type an author named with
-/// `read(port, into=T)`.
+/// Hand one message's payload bytes to the `from_bytes` of the target an author
+/// named with `read(port, into=T)`, and return what it built.
 ///
-/// A TypedDict is a dict at runtime, so the decoded bag already is one and
-/// travels back untouched — that is the free cast. Every other target is
-/// constructed from the bag's entries as keyword arguments, and whatever the
-/// constructor raises is what the author sees: a pydantic `ValidationError`
-/// says more about the mismatch than any wrapper here could.
+/// Whatever `from_bytes` raises is what the author sees: a pydantic
+/// `ValidationError` or a dataclass's missing-argument `TypeError` says more
+/// about the mismatch than any wrapper here could.
 ///
-/// `offered_gpu_limited_access` is what the constructing type may reach for
-/// through [`gpu_limited_access_of_the_typed_read_in_progress`] — offered for
-/// the construction and withdrawn the moment it returns. Nothing here knows
-/// which types want it or what they do with it.
-pub(crate) fn cast_decoded_bag_into_read_target<'py>(
+/// `offered_gpu_limited_access` is what the cast may reach for through
+/// [`gpu_limited_access_of_the_typed_read_in_progress`] — offered for the
+/// `from_bytes` call and withdrawn the moment it returns. Nothing here knows
+/// which targets want it or what they do with it.
+pub(crate) fn cast_payload_bytes_into_read_target<'py>(
     port_name: &str,
-    decoded_bag: Bound<'py, PyAny>,
-    read_target_type: &Bound<'py, PyAny>,
+    payload_bytes: &Bound<'py, PyBytes>,
+    read_target: &Bound<'py, PyAny>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let named_map = decoded_bag.cast::<PyDict>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "the bag on input port {port_name:?} decoded as a {}, and `into=` builds its target \
-             from a named map's entries. Read it without `into=` to see what arrived.",
-            python_type_name_for_error_message(&decoded_bag, "value")
-        ))
-    })?;
-    if read_target_is_a_typed_dict(read_target_type)? {
-        // Nothing is constructed, so there is no constructor to offer
-        // anything to: the bag arrives as itself.
-        return Ok(decoded_bag);
-    }
+    let python = read_target.py();
+    let Some(from_bytes) = read_target
+        .getattr_opt(intern!(python, "from_bytes"))?
+        .filter(|from_bytes| from_bytes.is_callable())
+    else {
+        return Err(PyTypeError::new_err(format!(
+            "`into=` on input port {port_name:?} was handed a {}, which has no `from_bytes` to \
+             build the read from the message's payload bytes — name a class with a `from_bytes` \
+             classmethod (`tatolab.stream.MsgpackCast` gives one) or \
+             `tatolab.stream.msgpack_typed_dict_cast(SomeTypedDict)`.",
+            name_of_the_read_target_for_error_message(read_target)
+        )));
+    };
     let _offer = TypedReadGpuAccessOffer::open(offered_gpu_limited_access);
-    read_target_type
-        .call((), Some(named_map))
-        .map_err(|construction_failure| {
-            if read_target_type.is_callable() {
-                return construction_failure;
-            }
-            PyTypeError::new_err(format!(
-                "`into=` on input port {port_name:?} was handed a {}, which cannot be called to \
-                 build anything — name a TypedDict, a dataclass, or a model class.",
-                python_type_name_for_error_message(read_target_type, "value")
-            ))
-        })
+    from_bytes.call1((payload_bytes,))
+}
+
+/// The name a refusal gives an `into=` target: a class by its own name, any
+/// other object by its type's.
+fn name_of_the_read_target_for_error_message(read_target: &Bound<'_, PyAny>) -> String {
+    match read_target.cast::<PyType>() {
+        Ok(read_target_class) => read_target_class.name().map_or_else(
+            |_| "class".to_string(),
+            |class_name| format!("class {class_name}"),
+        ),
+        Err(_) => python_type_name_for_error_message(read_target, "value"),
+    }
 }
 
 // =============================================================================
@@ -161,27 +108,26 @@ thread_local! {
     /// The GPU capability the typed read running on this thread is offering,
     /// and only while it is constructing.
     ///
-    /// Thread-local rather than passed: `read(port, into=T)` builds `T` by
-    /// calling it with the bag's entries, which is the whole contract — an
-    /// argument the engine added would be one every target had to accept, and
-    /// most targets are ordinary dataclasses that want nothing to do with a
-    /// GPU.
+    /// Thread-local rather than passed: `read(port, into=T)` builds its result
+    /// with `T.from_bytes(payload)`, which is the whole contract — an argument
+    /// the engine added would be one every target had to accept, and most
+    /// targets are ordinary records that want nothing to do with a GPU.
     ///
     /// What this is keyed on is what it guarantees: one OS thread, one read at
     /// a time. A processor's callbacks run on its own dedicated thread, so the
-    /// window is exactly one constructor call deep. The green-thread execution
+    /// window is exactly one `from_bytes` call deep. The green-thread execution
     /// flavor the plan keeps OPEN (ARCHITECTURE.md §Processor model) would
-    /// break that — a switch inside `__init__` is not nested reentrancy, and a
+    /// break that — a switch inside `from_bytes` is not nested reentrancy, and a
     /// resumed read would see the wrong offer — so that flavor owes this a
     /// rework onto `contextvars`, which follows the switch.
     static GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ:
         RefCell<Option<Py<PythonGpuContextLimitedAccess>>> = const { RefCell::new(None) };
 }
 
-/// Opens the offer for one construction and withdraws it on drop, whether the
-/// constructor returned or raised.
+/// Opens the offer for one `from_bytes` call and withdraws it on drop, whether
+/// it returned or raised.
 struct TypedReadGpuAccessOffer {
-    /// Restored rather than cleared: a target whose constructor reads its own
+    /// Restored rather than cleared: a target whose `from_bytes` reads its own
     /// input ports would otherwise leave the outer read's offer withdrawn.
     offer_this_read_displaced: Option<Py<PythonGpuContextLimitedAccess>>,
 }
@@ -207,11 +153,11 @@ impl Drop for TypedReadGpuAccessOffer {
     }
 }
 
-/// The GPU capability of the `read(port, into=T)` currently constructing an
-/// object, or `None` when nothing is being read into a type.
+/// The GPU capability of the `read(port, into=T)` currently running
+/// `T.from_bytes`, or `None` when nothing is being read into a type.
 ///
 /// The same capability as `ctx.gpu_limited_access`, offered so a type can do
-/// per-frame work at construction that needs the engine — claiming the frame's
+/// per-frame work as it is built that needs the engine — claiming the frame's
 /// surface against producer reuse is what the shipped `VideoFrame` does with
 /// it. Any class reachable through `into=` may call this; there is no
 /// registration, no marker and no privileged type.
@@ -225,23 +171,6 @@ pub(crate) fn gpu_limited_access_of_the_typed_read_in_progress(
             .as_ref()
             .map(|capability| capability.clone_ref(python))
     })
-}
-
-/// Whether `read_target_type` is a TypedDict class.
-///
-/// Structural rather than `typing.is_typeddict`, which knows only the stdlib's
-/// TypedDict and answers `False` for one built from `typing_extensions` — the
-/// spelling a package supporting several interpreter versions uses. Every
-/// TypedDict class, from either module, is a `dict` subclass carrying
-/// `__required_keys__`.
-fn read_target_is_a_typed_dict(read_target_type: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let Ok(target_class) = read_target_type.cast::<PyType>() else {
-        return Ok(false);
-    };
-    // Interned: this is the per-frame free-cast path, and a plain `&str` here
-    // allocates a Python string per read.
-    Ok(target_class.is_subclass_of::<PyDict>()?
-        && target_class.hasattr(intern!(target_class.py(), "__required_keys__"))?)
 }
 
 /// The type name to name in a refusal, or `unknown_type_placeholder` when even
@@ -258,7 +187,7 @@ pub(crate) fn python_type_name_for_error_message(
 
 /// Convert JSON into ordinary Python data.
 ///
-/// Routed through the same msgpack value tree the data plane uses rather than
+/// Routed through the msgpack value tree the tap decode uses rather than
 /// growing a second converter: one conversion is one set of edge cases.
 pub(crate) fn json_value_to_python_object<'py>(
     python: Python<'py>,
@@ -286,8 +215,7 @@ pub(crate) fn python_object_to_json_value(
 /// The most containers one value may nest, the outermost counted, as it
 /// crosses the Python boundary in either direction. The walk recurses once per
 /// container, so the bound keeps it inside the thread's stack and turns a
-/// container that holds itself into a refusal; encode and decode share it so
-/// that a bag Python reads is always one it can publish again.
+/// container that holds itself into a refusal.
 const MAXIMUM_NESTED_CONTAINER_DEPTH: usize = 128;
 
 /// rmpv's depth budget that admits every value nesting at most
@@ -334,8 +262,8 @@ fn refusal_of_python_data_nested_past_the_maximum() -> PyErr {
 fn refusal_of_decoded_data_nested_past_the_maximum() -> PyErr {
     PyValueError::new_err(format!(
         "containers nest more than {MAXIMUM_NESTED_CONTAINER_DEPTH} deep in this value, the most \
-         one value may, so Python could not publish it again. Have its producer nest the data at \
-         most {MAXIMUM_NESTED_CONTAINER_DEPTH} containers deep"
+         one value may cross into Python. Have its producer nest the data at most \
+         {MAXIMUM_NESTED_CONTAINER_DEPTH} containers deep"
     ))
 }
 
@@ -372,10 +300,7 @@ fn python_object_to_msgpack_value(
         return Ok(Value::Binary(bytes.as_bytes().to_vec()));
     }
     if let Ok(mapping) = value.cast::<PyDict>() {
-        return match msgpack_extension_from_python_mapping(mapping)? {
-            Some(extension) => Ok(extension),
-            None => named_map_to_msgpack_value(mapping, containers_enclosing_it),
-        };
+        return named_map_to_msgpack_value(mapping, containers_enclosing_it);
     }
     if let Ok(sequence) = value.cast::<PyList>() {
         return sequence_to_msgpack_array(sequence.iter(), containers_enclosing_it);
@@ -384,45 +309,19 @@ fn python_object_to_msgpack_value(
         return sequence_to_msgpack_array(sequence.iter(), containers_enclosing_it);
     }
     Err(PyTypeError::new_err(format!(
-        "cannot put a {} in a bag: a bag is built from dict, list, tuple, str, bytes, int, \
-         float, bool and None. A GPU frame is not copied into Python — it travels as a handle.",
+        "cannot convert a {}: a value is built from dict, list, tuple, str, bytes, int, float, \
+         bool and None",
         value.get_type().name()?
     )))
 }
 
-/// The keys a decoded msgpack extension value is carried under.
-///
-/// An extension type is somebody else's payload, so decoding renders it as data
-/// a processor can look at and encoding puts it back exactly as it was — a
-/// passthrough processor must not rewrite what it only forwards. This holds for
-/// a nested value; a bag is a named map, so a *top-level* extension is not a bag
-/// and never re-encodes as one.
+/// The keys a decoded msgpack extension value is carried under, so a tapped
+/// message holding somebody else's extension type reads as data a reader can
+/// look at.
 const EXTENSION_TYPE_KEY: &str = "__msgpack_ext_type__";
 const EXTENSION_DATA_KEY: &str = "__msgpack_ext_data__";
 
-/// Recognize the shape [`msgpack_value_to_python_object`] decodes an extension
-/// value into, so it re-encodes as one.
-fn msgpack_extension_from_python_mapping(mapping: &Bound<'_, PyDict>) -> PyResult<Option<Value>> {
-    if mapping.len() != 2 {
-        return Ok(None);
-    }
-    let (Some(type_tag), Some(data)) = (
-        mapping.get_item(EXTENSION_TYPE_KEY)?,
-        mapping.get_item(EXTENSION_DATA_KEY)?,
-    ) else {
-        return Ok(None);
-    };
-    let (Ok(type_tag), Ok(data)) = (type_tag.extract::<i8>(), data.cast::<PyBytes>()) else {
-        return Ok(None);
-    };
-    Ok(Some(Value::Ext(type_tag, data.as_bytes().to_vec())))
-}
-
-/// Encode a dict, requiring string keys at every level.
-///
-/// msgpack maps allow any key type, but a named map is what every other
-/// language on the wire deserializes into a struct — an int-keyed map would
-/// encode and then fail to read there.
+/// Convert a dict, requiring string keys at every level.
 fn named_map_to_msgpack_value(
     mapping: &Bound<'_, PyDict>,
     containers_enclosing_the_mapping: ContainersEnclosingAValue,
@@ -433,7 +332,7 @@ fn named_map_to_msgpack_value(
     for (key, entry) in mapping.iter() {
         let key = key.cast::<PyString>().map_err(|_| {
             PyTypeError::new_err(format!(
-                "bag keys must be strings — the wire carries a named map; got a {} key",
+                "keys must be strings; got a {} key",
                 python_type_name_for_error_message(&key, "non-string")
             ))
         })?;
@@ -523,67 +422,27 @@ fn msgpack_value_to_python_object<'py>(
 
 #[cfg(test)]
 mod tests {
-    use streamlib::sdk::iceoryx2::FRAME_HEADER_SIZE;
+    use streamlib::sdk::iceoryx2::{FRAME_HEADER_SIZE, MessageGroupBoundary};
 
     use super::*;
 
-    /// The bytes a Rust producer's own `AudioBlock` puts on the wire, decoded
-    /// the way a Python processor's read decodes them.
-    ///
-    /// The joint between the two halves each side locks alone: the cast's wire
-    /// test asserts what `rmp_serde::to_vec_named` emits, and the Python cast's
-    /// tests assert what it builds from a named map — this is the one place
-    /// the real struct's bytes meet the real decode, so a rename on either
-    /// side surfaces here rather than at a microphone.
-    #[test]
-    fn a_rust_audio_block_decodes_into_the_named_map_the_python_cast_reads() {
-        Python::initialize();
-        let payload: Vec<u8> = [-1.0f32, -0.5, 0.0, 0.5]
-            .iter()
-            .flat_map(|scalar| scalar.to_le_bytes())
-            .collect();
-        let block = streamlib_media_builtins::AudioBlock {
-            interleaved_sample_bytes: payload.clone(),
-            sample_rate: 48_000,
-            channels: 2,
-            sample_count: 2,
-            dtype: streamlib_media_builtins::AudioSampleDtype::F32,
-            first_sample_timestamp_ns: 123_456_789,
-        };
-        let wire_bytes = rmp_serde::to_vec_named(&block).expect("msgpack serialize");
-
-        Python::attach(|python| {
-            let bag = decode_msgpack_to_python_object(python, &wire_bytes)
-                .expect("a Rust producer's bag decodes")
-                .cast_into::<PyDict>()
-                .expect("a bag is a named map");
-            let entry = |key: &str| {
-                bag.get_item(key)
-                    .expect("lookup")
-                    .unwrap_or_else(|| panic!("the bag carries {key:?}"))
-            };
-            assert_eq!(
-                entry("samples")
-                    .cast::<PyBytes>()
-                    .expect("the payload arrives as bytes, which is what numpy views")
-                    .as_bytes(),
-                payload.as_slice()
-            );
-            assert_eq!(entry("sample_rate").extract::<u32>().expect("u32"), 48_000);
-            assert_eq!(entry("channels").extract::<u32>().expect("u32"), 2);
-            assert_eq!(entry("sample_count").extract::<u32>().expect("u32"), 2);
-            assert_eq!(entry("dtype").extract::<String>().expect("str"), "f32");
-            assert_eq!(
-                entry("first_sample_timestamp_ns")
-                    .extract::<i64>()
-                    .expect("i64"),
-                123_456_789
-            );
-        });
+    fn msgpack_bytes_of(value: &Value) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        rmpv::encode::write_value(&mut encoded, value).unwrap();
+        encoded
     }
 
-    /// No slack behind the payload — the frame ends where the bag does.
-    const SLICE_HOLDS_ONLY_THE_BAG: usize = 0;
+    fn msgpack_map_of(entries: Vec<(&str, Value)>) -> Value {
+        Value::Map(
+            entries
+                .into_iter()
+                .map(|(key, entry)| (Value::from(key), entry))
+                .collect(),
+        )
+    }
+
+    /// No slack behind the payload — the frame ends where the message does.
+    const SLICE_HOLDS_ONLY_THE_MESSAGE: usize = 0;
 
     /// How many bytes the truncation fixture cuts off the end of a whole frame.
     const BYTES_THE_PREVIEW_CUT: usize = 8;
@@ -593,9 +452,14 @@ mod tests {
     /// something larger than the frame.
     fn frame_like_the_transport(payload: &[u8], slice_capacity_at_least: usize) -> Vec<u8> {
         let mut framed = vec![0u8; slice_capacity_at_least.max(FRAME_HEADER_SIZE + payload.len())];
-        FrameHeader::new("processor/port", 1_234, payload.len() as u32)
-            .expect("port key fits")
-            .write_to_slice(&mut framed);
+        FrameHeader::new(
+            "processor/port",
+            1_234,
+            payload.len() as u32,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .expect("port key fits")
+        .write_to_slice(&mut framed);
         framed[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + payload.len()].copy_from_slice(payload);
         framed
     }
@@ -605,13 +469,13 @@ mod tests {
     /// what the oversized buffer proves here is that a frame held in one does
     /// not derail the decode.
     #[test]
-    fn a_tapped_bag_decodes_to_what_the_channel_published() {
+    fn a_tapped_message_decodes_to_what_the_channel_published() {
         Python::initialize();
         Python::attach(|python| {
-            let published = PyDict::new(python);
-            published.set_item("surface_id", "camera/frame#7").unwrap();
-            published.set_item("width", 1920i64).unwrap();
-            let payload = encode_bag_to_msgpack(published.as_any()).unwrap();
+            let payload = msgpack_bytes_of(&msgpack_map_of(vec![
+                ("surface_id", Value::from("camera/frame#7")),
+                ("width", Value::from(1920)),
+            ]));
 
             let framed = frame_like_the_transport(&payload, 4096);
             let decoded =
@@ -622,26 +486,30 @@ mod tests {
                 Some(payload.len()),
                 "the buffer's trailing bytes were handed to the decoder"
             );
+            let published = PyDict::new(python);
+            published.set_item("surface_id", "camera/frame#7").unwrap();
+            published.set_item("width", 1920i64).unwrap();
             assert!(
                 decoded.eq(&published).unwrap(),
-                "the decode changed the bag"
+                "the decode changed the message"
             );
         });
     }
 
-    /// The tap tool hex-previews only the first bytes of a large bag. Decoding
-    /// that prefix must refuse by name: msgpack would otherwise happily read the
-    /// leading map entries and hand back a bag missing its later fields.
+    /// The tap tool hex-previews only the first bytes of a large message.
+    /// Decoding that prefix must refuse by name: msgpack would otherwise happily
+    /// read the leading map entries and hand back a map missing its later
+    /// fields.
     #[test]
     fn a_truncated_sample_is_refused_rather_than_half_decoded() {
         Python::initialize();
         Python::attach(|python| {
-            let published = PyDict::new(python);
-            published.set_item("surface_id", "camera/frame#7").unwrap();
-            published.set_item("filler", "x".repeat(512)).unwrap();
-            let payload = encode_bag_to_msgpack(published.as_any()).unwrap();
+            let payload = msgpack_bytes_of(&msgpack_map_of(vec![
+                ("surface_id", Value::from("camera/frame#7")),
+                ("filler", Value::from("x".repeat(512))),
+            ]));
 
-            let framed = frame_like_the_transport(&payload, SLICE_HOLDS_ONLY_THE_BAG);
+            let framed = frame_like_the_transport(&payload, SLICE_HOLDS_ONLY_THE_MESSAGE);
             let truncated = &framed[..framed.len() - BYTES_THE_PREVIEW_CUT];
 
             let refusal = decode_tapped_channel_bag_frame_to_python_object(python, truncated)
@@ -653,156 +521,74 @@ mod tests {
         });
     }
 
-    /// Fewer bytes than a header is not a zero-length bag — it is a caller
+    /// Fewer bytes than a header is not a zero-length message — it is a caller
     /// handing over something that was never a frame.
     #[test]
     fn bytes_too_short_to_hold_a_header_are_refused() {
         Python::initialize();
         Python::attach(|python| {
             let refusal = decode_tapped_channel_bag_frame_to_python_object(python, &[0u8; 8])
-                .expect_err("8 bytes cannot be a framed bag");
+                .expect_err("8 bytes cannot be a framed message");
             assert!(refusal.to_string().contains("frame header"));
         });
     }
 
-    /// Every value shape a bag can carry survives Python → msgpack → Python
-    /// with its type and value intact.
+    /// Every msgpack value shape decodes into the Python type a reader of a
+    /// tapped message expects: `bin` as `bytes`, a boolean as `bool` rather
+    /// than an `int`, an array as a list, and an extension value as its type
+    /// and data.
     #[test]
-    fn ordinary_python_data_round_trips_through_the_wire() {
+    fn every_msgpack_value_shape_decodes_into_ordinary_python_data() {
         Python::initialize();
         Python::attach(|python| {
-            let source = pyo3::types::PyDict::new(python);
-            source.set_item("nothing", python.None()).unwrap();
-            source.set_item("flag", true).unwrap();
-            source.set_item("count", -42i64).unwrap();
-            source.set_item("huge", u64::MAX).unwrap();
-            source.set_item("ratio", 1.5f64).unwrap();
-            source.set_item("label", "カメラ 🎥").unwrap();
-            source
+            let encoded = msgpack_bytes_of(&msgpack_map_of(vec![
+                ("nothing", Value::Nil),
+                ("flag", Value::from(true)),
+                ("count", Value::from(-42)),
+                ("huge", Value::from(u64::MAX)),
+                ("ratio", Value::from(1.5f64)),
+                ("label", Value::from("カメラ 🎥")),
+                ("payload", Value::Binary(vec![0, 255, 7])),
+                (
+                    "items",
+                    Value::Array(vec![Value::from(1), Value::from(2), Value::from(3)]),
+                ),
+                (
+                    "nested",
+                    msgpack_map_of(vec![("inner", Value::from("value"))]),
+                ),
+                ("extension", Value::Ext(42, vec![1, 2, 3])),
+            ]));
+
+            let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
+
+            let expected = PyDict::new(python);
+            expected.set_item("nothing", python.None()).unwrap();
+            expected.set_item("flag", true).unwrap();
+            expected.set_item("count", -42i64).unwrap();
+            expected.set_item("huge", u64::MAX).unwrap();
+            expected.set_item("ratio", 1.5f64).unwrap();
+            expected.set_item("label", "カメラ 🎥").unwrap();
+            expected
                 .set_item("payload", PyBytes::new(python, &[0u8, 255, 7]))
                 .unwrap();
-            source.set_item("items", vec![1i64, 2, 3]).unwrap();
-            let nested = pyo3::types::PyDict::new(python);
-            nested.set_item("inner", "value").unwrap();
-            source.set_item("nested", &nested).unwrap();
-
-            let encoded = encode_bag_to_msgpack(source.as_any()).unwrap();
-            let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
-
-            assert!(decoded.eq(&source).unwrap(), "round trip changed the bag");
-        });
-    }
-
-    /// `bool` is a subclass of `int` in Python, so a naive integer-first check
-    /// silently turns `True` into `1`.
-    #[test]
-    fn booleans_do_not_decay_into_integers() {
-        Python::initialize();
-        Python::attach(|python| {
-            let source = PyDict::new(python);
-            source.set_item("flag", true).unwrap();
-            let encoded = encode_bag_to_msgpack(source.as_any()).unwrap();
-            let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
-            assert!(decoded.get_item("flag").unwrap().is_instance_of::<PyBool>());
-        });
-    }
-
-    /// A tuple is a reasonable thing for an author to write, and msgpack has no
-    /// tuple — it arrives back as a list rather than being refused.
-    #[test]
-    fn a_tuple_is_accepted_and_arrives_as_a_list() {
-        Python::initialize();
-        Python::attach(|python| {
-            let source = PyDict::new(python);
-            source
-                .set_item("items", PyTuple::new(python, [1i64, 2, 3]).unwrap())
-                .unwrap();
-            let encoded = encode_bag_to_msgpack(source.as_any()).unwrap();
-            let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
-            let items = decoded.get_item("items").unwrap();
-            assert!(items.is_instance_of::<PyList>());
-            assert_eq!(items.len().unwrap(), 3);
-        });
-    }
-
-    /// The refusal names what a bag may hold — an author who reaches for a
-    /// numpy array or a socket should learn the rule from the error.
-    #[test]
-    fn an_unencodable_object_is_refused_with_the_rule() {
-        Python::initialize();
-        Python::attach(|python| {
-            let unencodable = python
-                .import("builtins")
-                .unwrap()
-                .getattr("object")
-                .unwrap()
-                .call0()
-                .unwrap();
-            let source = PyDict::new(python);
-            source.set_item("payload", unencodable).unwrap();
-            let failure = encode_bag_to_msgpack(source.as_any()).unwrap_err();
-            assert!(
-                failure.to_string().contains("a bag is built from"),
-                "the refusal must state what is allowed, got: {failure}"
-            );
-        });
-    }
-
-    /// A bag that is not a named map encodes to valid msgpack and is then
-    /// unreadable by a processor in another language, so it is refused at the
-    /// boundary rather than published.
-    #[test]
-    fn a_bag_that_is_not_a_named_map_is_refused() {
-        Python::initialize();
-        Python::attach(|python| {
-            let list_bag = PyList::new(python, [1i64, 2, 3]).unwrap();
-            let failure = encode_bag_to_msgpack(list_bag.as_any()).unwrap_err();
-            assert!(
-                failure
-                    .to_string()
-                    .contains("a bag is a dict with string keys"),
-                "got: {failure}"
-            );
-
-            let int_keyed = PyDict::new(python);
-            int_keyed.set_item(1i64, "value").unwrap();
-            let failure = encode_bag_to_msgpack(int_keyed.as_any()).unwrap_err();
-            assert!(
-                failure.to_string().contains("bag keys must be strings"),
-                "got: {failure}"
-            );
-
-            // Nested too — a named map all the way down, not just at the top.
-            let nested_int_keyed = PyDict::new(python);
-            nested_int_keyed.set_item("inner", &int_keyed).unwrap();
-            assert!(encode_bag_to_msgpack(nested_int_keyed.as_any()).is_err());
-        });
-    }
-
-    /// What an extension holding a bag over its own transport gets back — the
-    /// nesting intact and `bytes` still `bytes`, not a list of integers.
-    #[test]
-    fn the_exported_pair_round_trips_a_nested_bag_carrying_binary() {
-        Python::initialize();
-        Python::attach(|python| {
+            expected.set_item("items", vec![1i64, 2, 3]).unwrap();
             let nested = PyDict::new(python);
-            nested
-                .set_item("payload", PyBytes::new(python, &[0u8, 200, 7]))
+            nested.set_item("inner", "value").unwrap();
+            expected.set_item("nested", &nested).unwrap();
+            let extension = PyDict::new(python);
+            extension.set_item(EXTENSION_TYPE_KEY, 42i64).unwrap();
+            extension
+                .set_item(EXTENSION_DATA_KEY, PyBytes::new(python, &[1u8, 2, 3]))
                 .unwrap();
-            nested.set_item("items", vec![1i64, 2, 3]).unwrap();
-            let bag = PyDict::new(python);
-            bag.set_item("label", "telemetry").unwrap();
-            bag.set_item("nested", &nested).unwrap();
-
-            let encoded = encode_bag_to_msgpack_bytes(bag.as_any()).unwrap();
-            let decoded =
-                decode_msgpack_bytes_to_python_object(python, encoded.as_bytes()).unwrap();
-
-            assert!(decoded.eq(&bag).unwrap(), "round trip changed the bag");
+            expected.set_item("extension", &extension).unwrap();
+            assert!(
+                decoded.eq(&expected).unwrap(),
+                "decoded {decoded}, expected {expected}"
+            );
+            assert!(decoded.get_item("flag").unwrap().is_instance_of::<PyBool>());
             assert!(
                 decoded
-                    .get_item("nested")
-                    .unwrap()
                     .get_item("payload")
                     .unwrap()
                     .is_instance_of::<PyBytes>()
@@ -810,70 +596,87 @@ mod tests {
         });
     }
 
-    /// The msgpack framing the fixture's bag puts around a `bin` payload: the
-    /// map header, one key, and the length prefix. A `bin` payload rides at 1×,
-    /// so anything beyond this means it was encoded as something else.
-    const FRAMING_BYTES_AROUND_A_LONE_PAYLOAD: usize = 16;
-
-    /// The byte count is the assertion: the same 1024 bytes as a msgpack array
-    /// would be over 2000, because every value above 127 costs a marker too.
+    /// `bool` is a subclass of `int` in Python, so a naive integer-first check
+    /// silently turns `True` into `1`.
     #[test]
-    fn the_exported_encode_carries_binary_as_bin_at_one_times_its_length() {
+    fn booleans_do_not_decay_into_integers_on_the_way_to_json() {
         Python::initialize();
         Python::attach(|python| {
-            let payload = vec![0xFFu8; 1024];
-            let bag = PyDict::new(python);
-            bag.set_item("payload", PyBytes::new(python, &payload))
-                .unwrap();
-
-            let encoded = encode_bag_to_msgpack_bytes(bag.as_any()).unwrap();
-            let encoded = encoded.as_bytes();
-
-            assert!(
-                encoded.len() <= payload.len() + FRAMING_BYTES_AROUND_A_LONE_PAYLOAD,
-                "a {}-byte payload encoded to {} bytes — that is not a bin at 1×",
-                payload.len(),
-                encoded.len()
-            );
-            assert!(
-                encoded.windows(payload.len()).any(|run| run == payload),
-                "the payload is not carried verbatim"
+            let source = PyDict::new(python);
+            source.set_item("flag", true).unwrap();
+            assert_eq!(
+                python_object_to_json_value(source.as_any()).unwrap(),
+                serde_json::json!({"flag": true})
             );
         });
     }
 
-    /// The export forwards the codec's refusals rather than softening them —
-    /// an extension author learns the same rule at the same boundary.
+    /// A tuple is a reasonable thing for an author to write, and JSON has no
+    /// tuple — it converts as an array rather than being refused.
     #[test]
-    fn the_exported_encode_forwards_the_named_map_refusals() {
+    fn a_tuple_is_accepted_and_converts_as_an_array() {
         Python::initialize();
         Python::attach(|python| {
-            let list_bag = PyList::new(python, [1i64, 2, 3]).unwrap();
-            let failure = encode_bag_to_msgpack_bytes(list_bag.as_any()).unwrap_err();
-            assert!(
-                failure
-                    .to_string()
-                    .contains("a bag is a dict with string keys"),
-                "got: {failure}"
+            let source = PyDict::new(python);
+            source
+                .set_item("items", PyTuple::new(python, [1i64, 2, 3]).unwrap())
+                .unwrap();
+            assert_eq!(
+                python_object_to_json_value(source.as_any()).unwrap(),
+                serde_json::json!({"items": [1, 2, 3]})
             );
+        });
+    }
 
+    /// The refusal names what a value may hold — an author who reaches for a
+    /// numpy array or a socket should learn the rule from the error.
+    #[test]
+    fn an_unconvertible_object_is_refused_with_the_rule() {
+        Python::initialize();
+        Python::attach(|python| {
+            let unconvertible = python
+                .import("builtins")
+                .unwrap()
+                .getattr("object")
+                .unwrap()
+                .call0()
+                .unwrap();
+            let source = PyDict::new(python);
+            source.set_item("payload", unconvertible).unwrap();
+            let failure = python_object_to_json_value(source.as_any()).unwrap_err();
+            assert!(
+                failure.to_string().contains("a value is built from"),
+                "the refusal must state what is allowed, got: {failure}"
+            );
+        });
+    }
+
+    /// A key JSON cannot spell is refused at every level, not just the top.
+    #[test]
+    fn a_key_that_is_not_a_string_is_refused_at_any_depth() {
+        Python::initialize();
+        Python::attach(|python| {
             let int_keyed = PyDict::new(python);
             int_keyed.set_item(1i64, "value").unwrap();
-            let failure = encode_bag_to_msgpack_bytes(int_keyed.as_any()).unwrap_err();
+            let failure = python_object_to_json_value(int_keyed.as_any()).unwrap_err();
             assert!(
-                failure.to_string().contains("bag keys must be strings"),
+                failure.to_string().contains("keys must be strings"),
                 "got: {failure}"
             );
+
+            let nested_int_keyed = PyDict::new(python);
+            nested_int_keyed.set_item("inner", &int_keyed).unwrap();
+            assert!(python_object_to_json_value(nested_int_keyed.as_any()).is_err());
         });
     }
 
-    /// Build a target class the way an author's module would, so the runtime
-    /// carries whatever CPython actually assigns rather than attributes a test
-    /// set by hand.
+    /// Build a target the way an author's module would, so the runtime carries
+    /// whatever CPython actually assigns rather than attributes a test set by
+    /// hand.
     fn read_target_from_source<'py>(
         python: Python<'py>,
         source: &str,
-        class_name: &str,
+        target_name: &str,
     ) -> Bound<'py, PyAny> {
         let namespace = PyDict::new(python);
         python
@@ -883,188 +686,132 @@ mod tests {
                 None,
             )
             .unwrap();
-        namespace.get_item(class_name).unwrap().unwrap()
+        namespace.get_item(target_name).unwrap().unwrap()
     }
 
-    fn bag_with_one_name<'py>(python: Python<'py>, name: &str) -> Bound<'py, PyAny> {
-        let bag = PyDict::new(python);
-        bag.set_item("name", name).unwrap();
-        bag.into_any()
-    }
+    const DETECTION_CLASS_READ_FROM_ITS_LABEL_BYTES: &str = "\
+class Detection:
+    def __init__(self, label):
+        self.label = label
 
-    /// The free cast: a TypedDict is a dict at runtime, so the bag arrives as
-    /// itself — the same object, not a copy, and nothing validated. A bag
-    /// missing a declared key still reads, which is what "free" means.
+    @classmethod
+    def from_bytes(cls, payload):
+        return cls(payload.decode('utf-8'))
+";
+
+    /// A class with a `from_bytes` classmethod is handed the payload exactly as
+    /// it crossed the wire, and what it returns is the read.
     #[test]
-    fn a_typed_dict_target_hands_back_the_bag_without_constructing() {
+    fn a_class_with_from_bytes_is_handed_the_payload_bytes() {
         Python::initialize();
         Python::attach(|python| {
             let target = read_target_from_source(
                 python,
-                "from typing import TypedDict\nclass Detection(TypedDict):\n    name: str\n    \
-                 score: float\n",
+                DETECTION_CLASS_READ_FROM_ITS_LABEL_BYTES,
                 "Detection",
             );
-            let bag = bag_with_one_name(python, "cat");
-            let read = cast_decoded_bag_into_read_target("detections", bag.clone(), &target, None)
-                .expect("a TypedDict target validates nothing, so a partial bag must read");
-            assert!(read.is(&bag), "the free cast must not copy the bag");
-        });
-    }
-
-    /// The free cast has to survive a TypedDict `typing.is_typeddict` does not
-    /// recognize — a `typing_extensions.TypedDict` is one on every interpreter
-    /// this wheel supports, and the predicate answers `False` for it.
-    ///
-    /// Spelled here as the structure every TypedDict class shares rather than
-    /// by importing typing_extensions: the interpreter these tests link is the
-    /// system one, which carries no third-party packages.
-    #[test]
-    fn a_typed_dict_the_stdlib_predicate_misses_still_casts_for_free() {
-        Python::initialize();
-        Python::attach(|python| {
-            let target = read_target_from_source(
-                python,
-                "class Detection(dict):\n    __required_keys__ = frozenset({'name'})\n    \
-                 __optional_keys__ = frozenset()\n",
-                "Detection",
-            );
-            assert!(
-                !python
-                    .import("typing")
-                    .unwrap()
-                    .call_method1("is_typeddict", (&target,))
-                    .unwrap()
-                    .is_truthy()
-                    .unwrap(),
-                "this target must be one the stdlib predicate rejects, or it proves nothing"
-            );
-
-            let bag = bag_with_one_name(python, "cat");
-            let read = cast_decoded_bag_into_read_target("detections", bag.clone(), &target, None)
-                .unwrap();
-
-            assert!(read.is(&bag), "the free cast must not copy the bag");
-        });
-    }
-
-    /// A dataclass is the constructing half of the dial: a good bag builds an
-    /// instance, and construction is the validation.
-    #[test]
-    fn a_dataclass_target_is_constructed_from_the_bag() {
-        Python::initialize();
-        Python::attach(|python| {
-            let target = read_target_from_source(
-                python,
-                "from dataclasses import dataclass\n@dataclass\nclass Detection:\n    name: str\n",
-                "Detection",
-            );
-            let read = cast_decoded_bag_into_read_target(
+            let read = cast_payload_bytes_into_read_target(
                 "detections",
-                bag_with_one_name(python, "cat"),
+                &PyBytes::new(python, b"cat"),
                 &target,
                 None,
             )
             .unwrap();
             assert!(read.is_instance(&target).unwrap());
             assert_eq!(
-                read.getattr("name").unwrap().extract::<String>().unwrap(),
+                read.getattr("label").unwrap().extract::<String>().unwrap(),
                 "cat"
             );
         });
     }
 
-    /// The dial's whole point: a bag that does not fit the declared target
-    /// raises at the consuming read rather than travelling on as a mapping.
+    /// `into=` takes any object with a `from_bytes`, not only a class — the
+    /// shape `msgpack_typed_dict_cast` returns.
     #[test]
-    fn a_bag_the_target_cannot_be_built_from_raises_at_the_read() {
+    fn an_object_with_from_bytes_casts_like_a_class() {
         Python::initialize();
         Python::attach(|python| {
             let target = read_target_from_source(
                 python,
-                "from dataclasses import dataclass\n@dataclass\nclass Detection:\n    name: str\n",
-                "Detection",
+                "class LengthOfThePayload:\n    def from_bytes(self, payload):\n        return \
+                 len(payload)\nlength_of_the_payload = LengthOfThePayload()\n",
+                "length_of_the_payload",
             );
-            let bag = PyDict::new(python);
-            bag.set_item("label", "cat").unwrap();
-            let refusal =
-                cast_decoded_bag_into_read_target("detections", bag.into_any(), &target, None)
-                    .unwrap_err();
-            assert!(
-                refusal.to_string().contains("label"),
-                "the constructor's own refusal must reach the author: {refusal}"
-            );
-        });
-    }
-
-    /// `into=` builds its target from a named map's entries, so a bag that is
-    /// not one has to say so — the alternative is CPython's bare "argument
-    /// after ** must be a mapping", which names neither the port nor the bag.
-    #[test]
-    fn a_bag_that_is_not_a_named_map_is_refused_by_port_name() {
-        Python::initialize();
-        Python::attach(|python| {
-            let target = read_target_from_source(
-                python,
-                "from dataclasses import dataclass\n@dataclass\nclass Detection:\n    name: str\n",
-                "Detection",
-            );
-            let not_a_bag = PyList::new(python, [1i64, 2, 3]).unwrap().into_any();
-            let refusal = cast_decoded_bag_into_read_target("detections", not_a_bag, &target, None)
-                .unwrap_err();
-            assert!(
-                refusal.to_string().contains("detections")
-                    && refusal.to_string().contains("named map"),
-                "got: {refusal}"
-            );
-        });
-    }
-
-    /// A target that is not a class at all cannot build anything, and CPython's
-    /// own "not callable" names neither the port nor `into=`.
-    #[test]
-    fn a_target_that_cannot_be_called_is_refused_by_port_name() {
-        Python::initialize();
-        Python::attach(|python| {
-            let not_a_class = "Detection".into_pyobject(python).unwrap().into_any();
-            let refusal = cast_decoded_bag_into_read_target(
+            let read = cast_payload_bytes_into_read_target(
                 "detections",
-                bag_with_one_name(python, "cat"),
-                &not_a_class,
+                &PyBytes::new(python, b"four"),
+                &target,
+                None,
+            )
+            .unwrap();
+            assert_eq!(read.extract::<usize>().unwrap(), 4);
+        });
+    }
+
+    /// The dial's whole point: a payload the target cannot be built from raises
+    /// at the consuming read, and what `from_bytes` raised is what the author
+    /// sees.
+    #[test]
+    fn what_from_bytes_raises_reaches_the_author_unchanged() {
+        Python::initialize();
+        Python::attach(|python| {
+            let target = read_target_from_source(
+                python,
+                "class Detection:\n    @classmethod\n    def from_bytes(cls, payload):\n        \
+                 raise ValueError(f'no detection in {payload!r}')\n",
+                "Detection",
+            );
+            let refusal = cast_payload_bytes_into_read_target(
+                "detections",
+                &PyBytes::new(python, b"\x00\x01"),
+                &target,
                 None,
             )
             .unwrap_err();
             assert!(
-                refusal.to_string().contains("detections") && refusal.to_string().contains("into="),
+                refusal.is_instance_of::<PyValueError>(python),
+                "got: {refusal}"
+            );
+            assert!(
+                refusal.to_string().contains("no detection in"),
                 "got: {refusal}"
             );
         });
     }
 
-    /// An extension value survives a processor that only forwards the bag.
-    ///
-    /// Nothing in the engine emits one today, but a decode that turned it into
-    /// an ordinary map would make a passthrough processor silently rewrite
-    /// somebody else's payload.
+    /// A target with no `from_bytes` — a plain dataclass, a bare TypedDict, a
+    /// string — cannot build anything from bytes, and CPython's own
+    /// `AttributeError` names neither the port nor `into=`.
     #[test]
-    fn a_msgpack_extension_value_round_trips_unchanged() {
+    fn a_target_without_from_bytes_is_refused_by_port_name() {
         Python::initialize();
         Python::attach(|python| {
-            let original = Value::Map(vec![(
-                Value::from("payload"),
-                Value::Ext(42, vec![1, 2, 3]),
-            )]);
-            let mut encoded = Vec::new();
-            rmpv::encode::write_value(&mut encoded, &original).unwrap();
-
-            let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
-            let re_encoded = encode_bag_to_msgpack(&decoded).unwrap();
-
-            assert_eq!(
-                rmpv::decode::read_value(&mut &re_encoded[..]).unwrap(),
-                original,
-                "an Ext value did not survive decode-then-encode"
+            let plain_dataclass = read_target_from_source(
+                python,
+                "from dataclasses import dataclass\n@dataclass\nclass Detection:\n    label: str\n",
+                "Detection",
             );
+            let not_a_class = "Detection".into_pyobject(python).unwrap().into_any();
+            for target in [plain_dataclass, not_a_class] {
+                let refusal = cast_payload_bytes_into_read_target(
+                    "detections",
+                    &PyBytes::new(python, b"cat"),
+                    &target,
+                    None,
+                )
+                .unwrap_err();
+                assert!(
+                    refusal.is_instance_of::<PyTypeError>(python),
+                    "got: {refusal}"
+                );
+                let refusal_text = refusal.to_string();
+                assert!(
+                    refusal_text.contains("\"detections\"")
+                        && refusal_text.contains("into=")
+                        && refusal_text.contains("from_bytes"),
+                    "got: {refusal_text}"
+                );
+            }
         });
     }
 
@@ -1108,17 +855,18 @@ mod tests {
 
             let list_holding_itself = PyList::empty(python);
             list_holding_itself.append(&list_holding_itself).unwrap();
-            let bag_holding_the_list = PyDict::new(python);
-            bag_holding_the_list
+            let config_holding_the_list = PyDict::new(python);
+            config_holding_the_list
                 .set_item("items", &list_holding_itself)
                 .unwrap();
-            let refusal = encode_bag_to_msgpack(bag_holding_the_list.as_any()).unwrap_err();
+            let refusal =
+                python_object_to_json_value(config_holding_the_list.as_any()).unwrap_err();
             assert_refused_as_nesting_past_the_maximum(&refusal, python);
         });
     }
 
-    /// The bound counts every container, the outermost included, on both
-    /// paths: exactly the maximum converts and one more is refused.
+    /// The bound counts every container, the outermost included: exactly the
+    /// maximum converts and one more is refused.
     #[test]
     fn containers_nested_exactly_the_maximum_deep_convert_and_one_more_is_refused() {
         Python::initialize();
@@ -1129,24 +877,6 @@ mod tests {
             let nested_one_more =
                 lists_nested_containers_deep(python, MAXIMUM_NESTED_CONTAINER_DEPTH + 1);
             let refusal = python_object_to_json_value(&nested_one_more).unwrap_err();
-            assert_refused_as_nesting_past_the_maximum(&refusal, python);
-
-            let bag_reaching_the_maximum = PyDict::new(python);
-            bag_reaching_the_maximum
-                .set_item(
-                    "nested",
-                    lists_nested_containers_deep(python, MAXIMUM_NESTED_CONTAINER_DEPTH - 1),
-                )
-                .unwrap();
-            encode_bag_to_msgpack(bag_reaching_the_maximum.as_any()).unwrap();
-            let bag_one_past_the_maximum = PyDict::new(python);
-            bag_one_past_the_maximum
-                .set_item(
-                    "nested",
-                    lists_nested_containers_deep(python, MAXIMUM_NESTED_CONTAINER_DEPTH),
-                )
-                .unwrap();
-            let refusal = encode_bag_to_msgpack(bag_one_past_the_maximum.as_any()).unwrap_err();
             assert_refused_as_nesting_past_the_maximum(&refusal, python);
         });
     }
@@ -1207,9 +937,9 @@ mod tests {
         encoded
     }
 
-    /// A bag — `{"nested": …}` — whose containers, itself the outermost, nest
+    /// A map — `{"nested": …}` — whose containers, itself the outermost, nest
     /// `containers` deep.
-    fn msgpack_bag_nesting_containers_deep(containers: usize) -> Vec<u8> {
+    fn msgpack_map_nesting_containers_deep(containers: usize) -> Vec<u8> {
         const MSGPACK_ONE_ENTRY_MAP_MARKER: u8 = 0x81;
         const MSGPACK_SIX_BYTE_STRING_MARKER: u8 = 0xa6;
         let mut encoded = vec![MSGPACK_ONE_ENTRY_MAP_MARKER, MSGPACK_SIX_BYTE_STRING_MARKER];
@@ -1227,19 +957,18 @@ mod tests {
         assert!(
             refusal_text.contains(&format!(
                 "containers nest more than {MAXIMUM_NESTED_CONTAINER_DEPTH} deep"
-            )) && refusal_text.contains("could not publish it again")
-                && refusal_text.contains(&format!(
-                    "Have its producer nest the data at most {MAXIMUM_NESTED_CONTAINER_DEPTH} \
-                     containers deep"
-                )),
+            )) && refusal_text.contains(&format!(
+                "Have its producer nest the data at most {MAXIMUM_NESTED_CONTAINER_DEPTH} \
+                 containers deep"
+            )),
             "got: {refusal_text}"
         );
     }
 
-    /// Decode counts containers the way encode does, the outermost included:
-    /// exactly the maximum decodes — holding the leaf rmpv spends most depth
-    /// on — and one more is refused by name, as is a value deep enough to
-    /// exhaust rmpv's own budget.
+    /// Decode counts containers the way the JSON conversion does, the outermost
+    /// included: exactly the maximum decodes — holding the leaf rmpv spends
+    /// most depth on — and one more is refused by name, as is a value deep
+    /// enough to exhaust rmpv's own budget.
     #[test]
     fn containers_nested_exactly_the_maximum_deep_decode_and_one_more_is_refused() {
         Python::initialize();
@@ -1269,24 +998,22 @@ mod tests {
         });
     }
 
-    /// A passthrough processor forwards what it read, so the deepest bag that
-    /// decodes must encode again, byte for byte.
+    /// A map counts as the outermost container: one nested to the maximum
+    /// decodes and one more is refused.
     #[test]
-    fn a_bag_nested_to_the_maximum_decodes_and_re_encodes_unchanged() {
+    fn a_map_nested_to_the_maximum_decodes_and_one_more_is_refused() {
         Python::initialize();
         Python::attach(|python| {
-            let bag_reaching_the_maximum =
-                msgpack_bag_nesting_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH);
-            let decoded = decode_msgpack_to_python_object(python, &bag_reaching_the_maximum)
-                .expect("a bag nested to the maximum decodes");
-            assert_eq!(
-                encode_bag_to_msgpack(&decoded).expect("and encodes again"),
-                bag_reaching_the_maximum
-            );
+            let decoded = decode_msgpack_to_python_object(
+                python,
+                &msgpack_map_nesting_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH),
+            )
+            .expect("a map nested to the maximum decodes");
+            assert!(decoded.is_instance_of::<PyDict>());
 
             let refusal = decode_msgpack_to_python_object(
                 python,
-                &msgpack_bag_nesting_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH + 1),
+                &msgpack_map_nesting_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH + 1),
             )
             .unwrap_err();
             assert_decode_refused_as_nesting_past_the_maximum(&refusal, python);

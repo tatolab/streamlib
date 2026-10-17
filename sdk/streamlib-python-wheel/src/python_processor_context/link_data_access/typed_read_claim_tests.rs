@@ -8,17 +8,18 @@ use crate::python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progre
 use crate::python_class_from_source_for_tests::class_from_source_in_namespace;
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
-use pyo3::types::{IntoPyDict, PyDict};
+use pyo3::types::{IntoPyDict, PyBytes, PyDict};
 
 const OUTPUT_PORT: &str = "frames_to_downstream";
 const INPUT_PORT: &str = "frames_from_upstream";
 
 /// A frame class somebody else could write today, using only what the
-/// wheel exports: it asks the read in progress for the GPU capability and
-/// keeps the claim in a field. Nothing marks it, and nothing registers it.
+/// wheel exports: its payload is the surface id's UTF-8, and building it asks
+/// the read in progress for the GPU capability and keeps the claim in a field.
+/// Nothing marks it, and nothing registers it.
 const FRAME_CLASS_THE_WHEEL_DOES_NOT_SHIP: &str = "\
 class FrameSomebodyElseWrote:
-    def __init__(self, surface_id, **rest_of_the_bag):
+    def __init__(self, surface_id):
         self.surface_id = surface_id
         gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
         self.claim = (
@@ -26,6 +27,10 @@ class FrameSomebodyElseWrote:
             if gpu_limited_access is None
             else gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
         )
+
+    @classmethod
+    def from_bytes(cls, payload):
+        return cls(payload.decode('utf-8'))
 ";
 
 /// One link, wired to itself, plus a reader carrying a capability that
@@ -121,15 +126,13 @@ fn wire_one_link_into_a_reader(
     }
 }
 
-fn publish_a_frame_bag(python: Python<'_>, link: &ReadUnderTest, surface_id: &str) {
-    let bag = PyDict::new(python);
-    bag.set_item("surface_id", surface_id).unwrap();
-    bag.set_item("width", 32i64).unwrap();
-    bag.set_item("height", 32i64).unwrap();
-    bag.set_item("timestamp_ns", 1i64).unwrap();
+fn publish_a_frame_message(python: Python<'_>, link: &ReadUnderTest, surface_id: &str) {
     link.source
         .bind(python)
-        .call_method1("write_to_output_port", (OUTPUT_PORT, &bag))
+        .call_method1(
+            "write_to_output_port",
+            (OUTPUT_PORT, PyBytes::new(python, surface_id.as_bytes())),
+        )
         .unwrap();
 }
 
@@ -160,7 +163,7 @@ fn a_frame_read_into_a_type_pins_its_surface_until_the_object_goes_away() {
     Python::initialize();
     Python::attach(|python| {
         let link = wire_one_link_into_a_reader(python, "held", &share);
-        publish_a_frame_bag(python, &link, &surface_id);
+        publish_a_frame_message(python, &link, &surface_id);
 
         let frame = link
             .reader
@@ -187,7 +190,7 @@ fn a_frame_read_into_a_type_pins_its_surface_until_the_object_goes_away() {
 }
 
 /// The offer is the read's, not the thread's: the same class constructed
-/// outside a read claims nothing, which is what keeps a hand-rolled bag —
+/// outside a read claims nothing, which is what keeps a hand-rolled frame —
 /// possibly naming no live surface at all — an ordinary construction.
 #[test]
 fn the_same_class_constructed_outside_a_read_claims_nothing() {
@@ -201,7 +204,7 @@ fn the_same_class_constructed_outside_a_read_claims_nothing() {
 
         // Once through a read, so the offer has been opened on this thread
         // at least once — a stale offer would show up here.
-        publish_a_frame_bag(python, &link, &surface_id);
+        publish_a_frame_message(python, &link, &surface_id);
         let frame = link
             .reader
             .read(python, INPUT_PORT, Some(&frame_class))
@@ -209,9 +212,9 @@ fn the_same_class_constructed_outside_a_read_claims_nothing() {
             .unwrap();
         drop(frame);
 
-        let bag = PyDict::new(python);
-        bag.set_item("surface_id", &surface_id).unwrap();
-        let built_by_hand = frame_class.call((), Some(&bag)).unwrap();
+        let built_by_hand = frame_class
+            .call_method1("from_bytes", (PyBytes::new(python, surface_id.as_bytes()),))
+            .unwrap();
         assert!(
             built_by_hand.getattr("claim").unwrap().is_none(),
             "construction outside a read is offered nothing"
@@ -235,7 +238,7 @@ fn the_context_free_data_plane_offers_no_capability() {
     Python::initialize();
     Python::attach(|python| {
         let link = wire_one_link_into_a_reader(python, "contextfree", &share);
-        publish_a_frame_bag(python, &link, &surface_id);
+        publish_a_frame_message(python, &link, &surface_id);
 
         let frame = link
             .reader

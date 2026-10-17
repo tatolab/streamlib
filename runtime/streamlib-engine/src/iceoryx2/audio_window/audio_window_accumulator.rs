@@ -36,7 +36,8 @@ use rubato::{
     WindowFunction,
 };
 
-use super::super::input::BagBodyForTheReader;
+use super::super::MessageGroupBoundary;
+use super::super::input::{BagBodyForTheReader, MessageReadFromInputPort};
 use super::audio_block_bag_wire_codec::{
     AudioBlockReadFromTheWire, encode_an_audio_block_onto_the_wire,
     read_an_audio_block_off_the_wire,
@@ -440,8 +441,11 @@ impl AudioWindowAccumulator {
         self.next_window_start_output_frame += u64::from(self.contract.hop);
 
         Ok(Some(BagBodyForTheReader {
-            body: bag,
-            first_sample_or_publish_timestamp_ns: first_sample_timestamp_ns,
+            message: MessageReadFromInputPort {
+                payload_bytes: bag,
+                timestamp_ns: first_sample_timestamp_ns,
+                group_boundary: MessageGroupBoundary::StartsGroup,
+            },
             // A window is cut from bags rather than being one, so the stage has
             // no entry to read a link off. The port fills it in: a windowed
             // port takes exactly one link, so there is only one answer.

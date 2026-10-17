@@ -117,7 +117,7 @@ return bytes where they returned a dict; `read(port_name, into=T)` calls `T.from
 inside the typed-read GPU offer (`cast_decoded_bag_into_read_target` → `cast_payload_bytes_into_read_target`,
 the TypedDict arm gone). Rust: `OutputWriter::write`/`write_with_timestamp` renamed
 `write_msgpack`/`write_msgpack_with_timestamp`, `write_bytes_with_timestamp(port, &[u8], stamp,
-starts_group)` the wire call; `InputMailboxes::read::<T>` → `read_msgpack::<T>` beside `read_raw`.
+MessageGroupBoundary)` the wire call; `InputMailboxes::read::<T>` → `read_msgpack::<T>` beside `read_raw`.
 `tatolab.stream` ships `tatolab.stream.msgpack` — `pack(mapping) -> bytes`, `unpack(bytes)` over the
 `msgpack` PyPI package — and `MsgpackCast`, a mixin giving a dataclass or TypedDict-shaped class
 `from_bytes` (unpack, then the existing keyword construction) and `to_bytes`. `VideoFrame` and

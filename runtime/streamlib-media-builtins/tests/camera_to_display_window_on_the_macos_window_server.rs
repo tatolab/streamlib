@@ -91,10 +91,11 @@ mod apple_camera_to_display {
 
     impl ReactiveProcessor for CameraFrameCollector::Processor {
         fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-            while let Some((bag_bytes, envelope_timestamp_ns)) = self.inputs.read_raw("video")? {
+            while let Some(message) = self.inputs.read_raw("video")? {
+                let envelope_timestamp_ns = message.timestamp_ns;
                 let read_at_ns = MediaClock::now().as_nanos() as i64;
                 let mut seen = what_the_collector_saw().lock().unwrap();
-                let frame = match rmp_serde::from_slice::<VideoFrame>(&bag_bytes) {
+                let frame = match rmp_serde::from_slice::<VideoFrame>(&message.payload_bytes) {
                     Ok(frame) => frame,
                     Err(refusal) => {
                         seen.refusals.push(refusal.to_string());

@@ -10,7 +10,7 @@
 //! their whole body, so what is worth running twice is the round trip, not
 //! the assertions written twice.
 //!
-//! This is #1077 made reproducible. Its recorded symptom was
+//! The failure it guards against showed as
 //! `frames_encoded ≈ 50, frames_decoded = 0` — the decoder's first received
 //! frame was the encoder's second, the IDR never arrived, and the periodic
 //! IDRs were not recognised. The assertions below are exactly that shape
@@ -149,15 +149,13 @@ pub struct EncodedFrameBagTally;
 
 impl ReactiveProcessor for EncodedFrameBagTally::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some((bag_bytes, frame_header_timestamp_ns)) =
-            self.inputs.read_raw("encoded_video")?
-        {
+        while let Some(message) = self.inputs.read_raw("encoded_video")? {
             let mut tally = encoded_channel_tally().lock().unwrap();
-            match read_encoded_video_frame_bag(&bag_bytes) {
+            match read_encoded_video_frame_bag(&message.payload_bytes) {
                 Ok(encoded_frame) => tally.frames.push(TalliedEncodedFrame {
                     sequence_index: encoded_frame.sequence_index,
                     is_sync_point: encoded_frame.is_sync_point,
-                    frame_header_timestamp_ns,
+                    frame_header_timestamp_ns: message.timestamp_ns,
                 }),
                 Err(refusal) => tally.refusals.push(refusal.to_string()),
             }
@@ -181,14 +179,14 @@ pub struct DecodedVideoFrameCollector;
 
 impl ReactiveProcessor for DecodedVideoFrameCollector::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some((bag_bytes, frame_header_timestamp_ns)) = self.inputs.read_raw("video")? {
+        while let Some(message) = self.inputs.read_raw("video")? {
             let mut observations = decoded_channel_observations().lock().unwrap();
-            match rmp_serde::from_slice::<VideoFrame>(&bag_bytes) {
+            match rmp_serde::from_slice::<VideoFrame>(&message.payload_bytes) {
                 Ok(frame) => {
                     observations.frames.push(frame);
                     observations
                         .frame_header_timestamps_ns
-                        .push(frame_header_timestamp_ns);
+                        .push(message.timestamp_ns);
                 }
                 Err(cast_failure) => observations.unreadable_bags.push(cast_failure.to_string()),
             }
@@ -208,7 +206,7 @@ fn ensure_every_processor_type_is_registered() {
     });
 }
 
-/// #1077, read forwards. Encode a test pattern, decode it in the same graph,
+/// Encode a test pattern, decode it in the same graph,
 /// and require the decoded stream to be non-empty, to track the encoded one,
 /// and to run past the second sync point.
 ///

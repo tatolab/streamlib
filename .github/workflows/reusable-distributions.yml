@@ -141,6 +141,9 @@ jobs:
       - name: A scaffolded stream's nodes import beside this run's tatolab-stream
         run: |
           python3 -m venv /tmp/scaffold-venv
+          # `--no-index` keeps `tatolab-stream` to this run's build, so its one
+          # dependency comes from PyPI first.
+          /tmp/scaffold-venv/bin/pip install 'msgpack>=1.0'
           /tmp/scaffold-venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
           /tmp/scaffold-venv/bin/pip install 'numpy>=2.1'
           # BUSL-1.1's parameters are in its text, not its SPDX id, so the text

@@ -13,6 +13,7 @@ import os
 import sys
 
 from tatolab.stream import log, node
+from tatolab.stream.msgpack import pack, unpack
 
 BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS = 20
 
@@ -43,12 +44,14 @@ class ReportsItsInterpreterSource:
                 )
             )
             self.announced = True
-        ctx.outputs.write("bags_to_downstream", {"produced_by_interpreter": sys.executable})
+        ctx.outputs.write(
+            "bags_to_downstream", pack({"produced_by_interpreter": sys.executable})
+        )
 
 
 @node
 class CountsBagsFromUpstreamSink:
-    """Announces once it has processed enough bags to call the stream live."""
+    """Announces once it has processed enough messages to call the stream live."""
 
     def __init__(self) -> None:
         self.bags_processed = 0
@@ -57,8 +60,8 @@ class CountsBagsFromUpstreamSink:
     def bags_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        bag = ctx.inputs.read("bags_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("bags_from_upstream")
+        if payload is None:
             return
         self.bags_processed += 1
         if self.bags_processed == BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS:
@@ -68,7 +71,7 @@ class CountsBagsFromUpstreamSink:
                     {
                         "bags_processed": self.bags_processed,
                         "sink_interpreter": sys.executable,
-                        "upstream_interpreter": bag["produced_by_interpreter"],
+                        "upstream_interpreter": unpack(payload)["produced_by_interpreter"],
                     }
                 )
             )

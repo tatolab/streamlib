@@ -113,11 +113,20 @@ def test_every_runtime_backed_name_the_ticket_lists_is_held_by_tatolab_stream():
         "IOSurfaceMachPortExport",
         "NodeOwnedWindow",
         "NodeOwnedWindowEvents",
-        "encode_bag_to_msgpack_bytes",
-        "decode_msgpack_bytes_to_python_object",
         "monotonic_now_ns",
         "gpu_limited_access_of_the_typed_read_in_progress",
     } <= held_by_tatolab_stream
+
+
+def test_the_engine_exports_no_message_payload_codec():
+    """A message's payload is bytes the engine never encodes or decodes, so the
+    native module carries no codec for one and `tatolab.stream` declares none."""
+    for removed_codec_name in (
+        "encode_bag_to_msgpack_bytes",
+        "decode_msgpack_bytes_to_python_object",
+    ):
+        assert not hasattr(_engine, removed_codec_name)
+        assert not hasattr(tatolab.stream, removed_codec_name)
 
 
 def test_an_unbroken_copy_of_a_real_protocol_conforms():

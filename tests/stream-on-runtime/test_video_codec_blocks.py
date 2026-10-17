@@ -190,9 +190,9 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
     assert isinstance(decoded_frames, list), (
         f"no parseable decoded-frame report:\n{tatolabd.recent_stderr()}"
     )
-    first_bag, second_bag = decoded_frames
+    first_decoded_message, second_decoded_message = decoded_frames
 
-    frame = VideoFrame.from_bag(first_bag)
+    frame = VideoFrame(**first_decoded_message)
     assert (frame.width, frame.height) == (320, 180), (
         "the decoder must publish the conformance-windowed extent, never the "
         "coded picture"
@@ -202,11 +202,11 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
         "the decoded frame carries the stream's color"
     )
     assert frame.fps is None, (
-        "a decoded elementary stream knows no rate, so the bag must not "
+        "a decoded elementary stream knows no rate, so the message must not "
         "invent one"
     )
 
-    later_frame = VideoFrame.from_bag(second_bag)
+    later_frame = VideoFrame(**second_decoded_message)
     assert later_frame.timestamp_ns > frame.timestamp_ns, (
         "timestamps are the ordering primitive and must advance"
     )

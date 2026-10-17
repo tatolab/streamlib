@@ -185,7 +185,7 @@ impl ContinuousProcessor for TestPatternSource::Processor {
             mastering_display: None,
             texture_layout: None,
         };
-        self.outputs.write("video", &frame)
+        self.outputs.write_msgpack("video", &frame)
     }
 }
 

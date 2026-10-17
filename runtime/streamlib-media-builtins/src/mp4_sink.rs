@@ -128,13 +128,13 @@ impl ReactiveProcessor for Mp4Sink::Processor {
             return Ok(());
         };
 
-        while let Some((bag_bytes, frame_header_timestamp_ns, inbound_link_name)) =
+        while let Some((message, inbound_link_name)) =
             self.inputs.read_raw_from_inbound_link("tracks")?
         {
             file_writer.accept_bag(
                 inbound_link_name.as_str(),
-                &bag_bytes,
-                frame_header_timestamp_ns,
+                &message.payload_bytes,
+                message.timestamp_ns,
             )?;
         }
 

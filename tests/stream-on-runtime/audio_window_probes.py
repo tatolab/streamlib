@@ -27,6 +27,7 @@ from tatolab.stream import (
     monotonic_now_ns,
     node,
 )
+from tatolab.stream.msgpack import pack
 
 CONTIGUOUS_RESULT_MARKER = "MARKER:WINDOWS_SEEN "
 ROLLING_RESULT_MARKER = "MARKER:ROLLING_WINDOWS_SEEN "
@@ -158,19 +159,21 @@ class StereoToneSource:
 
         ctx.outputs.write(
             "audio",
-            {
-                "samples": struct.pack(f"<{len(scalars)}f", *scalars),
-                "sample_rate": SOURCE_SAMPLE_RATE,
-                "channels": SOURCE_CHANNELS,
-                "sample_count": SOURCE_FRAMES_PER_BLOCK,
-                "dtype": "f32",
-                # Derived from the samples before it rather than read fresh, so
-                # the stamps describe one gapless stream even though the
-                # publishing runs ahead of real time.
-                "first_sample_timestamp_ns": (
-                    anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE
-                ),
-            },
+            pack(
+                {
+                    "samples": struct.pack(f"<{len(scalars)}f", *scalars),
+                    "sample_rate": SOURCE_SAMPLE_RATE,
+                    "channels": SOURCE_CHANNELS,
+                    "sample_count": SOURCE_FRAMES_PER_BLOCK,
+                    "dtype": "f32",
+                    # Derived from the samples before it rather than read fresh,
+                    # so the stamps describe one gapless stream even though the
+                    # publishing runs ahead of real time.
+                    "first_sample_timestamp_ns": (
+                        anchor_ns + at * 1_000_000_000 // SOURCE_SAMPLE_RATE
+                    ),
+                }
+            ),
         )
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 

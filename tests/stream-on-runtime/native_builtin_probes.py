@@ -11,26 +11,27 @@ Reports the first two video-frame bags it receives as one JSON marker line on
 import json
 
 from tatolab.stream import log, node
+from tatolab.stream.msgpack import unpack
 
 RESULT_MARKER = "MARKER:FRAMES_SEEN "
 
 
 @node
 class VideoFrameProbe:
-    """Reports the first two video-frame bags the native source publishes."""
+    """Reports the first two video-frame messages the native source publishes."""
 
     def __init__(self) -> None:
-        self.bags_seen = []
+        self.messages_seen = []
 
     @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        if len(self.bags_seen) >= 2:
+        if len(self.messages_seen) >= 2:
             return
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None:
+        payload = ctx.inputs.read("video_from_upstream")
+        if payload is None:
             return
-        self.bags_seen.append(dict(bag))
-        if len(self.bags_seen) == 2:
-            log.info(RESULT_MARKER + json.dumps(self.bags_seen))
+        self.messages_seen.append(unpack(payload))
+        if len(self.messages_seen) == 2:
+            log.info(RESULT_MARKER + json.dumps(self.messages_seen))

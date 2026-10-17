@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab.stream.EncodedVideoFrame` — the encoded bag's cast, over a live link.
+"""`tatolab.stream.EncodedVideoFrame` — the encoded record's cast, over a live link.
 
 An encoded frame carries its payload inline, so what has to survive the wire
-is the payload's msgpack *type*: `bin`, which reaches Python as `bytes`. That
+is the payload's msgpack *type*: `bin`, which unpacks as `bytes`. That
 is what these tests drive, over real wired iceoryx2 ports rather than a
-stand-in, because a bag has to survive the wire before `into=` has anything to
+stand-in, because a message has to survive the wire before `into=` has anything to
 cast.
 
 Both ends live on this thread because iceoryx2's ports are `!Send`, and the
@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 
 from tatolab.runtime import _engine
-from tatolab.stream import ColorInfo, EncodedVideoFrame, NodeLinkDataAccess
+from tatolab.stream import ColorInfo, EncodedVideoFrame, NodeLinkDataAccess, msgpack
 from tatolab.stream.encoded_video_frame import _CODECS_ON_THE_WIRE
 
 pytestmark = pytest.mark.usefixtures(
@@ -46,9 +46,9 @@ BT709_COLOR_ON_THE_WIRE = {
 }
 
 
-def encoded_frame_bag(**overrides: Any) -> "dict[str, Any]":
+def encoded_frame_record(**overrides: Any) -> "dict[str, Any]":
     """A sync-point H.264 access unit at the coded extent of a 320×180 source."""
-    bag: "dict[str, Any]" = {
+    record: "dict[str, Any]" = {
         "codec": "h264",
         "bitstream": ANNEX_B_ACCESS_UNIT,
         "is_sync_point": True,
@@ -58,8 +58,8 @@ def encoded_frame_bag(**overrides: Any) -> "dict[str, Any]":
         "height": 192,
         "color": dict(BT709_COLOR_ON_THE_WIRE),
     }
-    bag.update(overrides)
-    return bag
+    record.update(overrides)
+    return record
 
 
 class WiredLinkUnderTest:
@@ -71,8 +71,8 @@ class WiredLinkUnderTest:
         self.source = source
         self.destination = destination
 
-    def deliver(self, bag: "dict[str, Any]") -> None:
-        self.source.write_to_output_port(OUTPUT_PORT, bag)
+    def deliver(self, record: "dict[str, Any]") -> None:
+        self.source.write_to_output_port(OUTPUT_PORT, msgpack.pack(record))
 
 
 @pytest.fixture
@@ -118,19 +118,20 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
 
 def test_the_bitstream_crosses_the_wire_as_bytes(wired_link: WiredLinkUnderTest):
     """The contract underneath the cast: `bitstream` is a byte buffer on the
-    wire, so an untyped read hands back `bytes` rather than a list of numbers.
+    wire, so the unpacked record holds `bytes` rather than a list of numbers.
 
     A producer whose access unit encoded as a msgpack array would still read
     back equal-looking data here — as a `list`, unreadable as a buffer by a
     muxer, a socket, or a consumer in another language.
     """
-    wired_link.deliver(encoded_frame_bag())
+    wired_link.deliver(encoded_frame_record())
 
-    bag = wired_link.destination.read_from_input_port(INPUT_PORT)
+    payload = wired_link.destination.read_from_input_port(INPUT_PORT)
 
-    assert bag is not None
-    assert type(bag["bitstream"]) is bytes
-    assert bag["bitstream"] == ANNEX_B_ACCESS_UNIT
+    assert payload is not None
+    record = msgpack.unpack(payload)
+    assert type(record["bitstream"]) is bytes
+    assert record["bitstream"] == ANNEX_B_ACCESS_UNIT
 
 
 def test_every_wire_key_survives_the_read_into_an_encoded_video_frame(
@@ -139,7 +140,7 @@ def test_every_wire_key_survives_the_read_into_an_encoded_video_frame(
     """All eight keys, off a live link, in one assertion each — this is the
     lock on the wire contract the codec built-ins publish against."""
     wired_link.deliver(
-        encoded_frame_bag(is_sync_point=False, group_index=3, sequence_index=91)
+        encoded_frame_record(is_sync_point=False, group_index=3, sequence_index=91)
     )
 
     frame = wired_link.destination.read_from_input_port(
@@ -164,8 +165,8 @@ def test_both_elementary_streams_read_through_the_same_cast(
     wired_link: WiredLinkUnderTest, codec: str
 ):
     """One cast serves both codecs: `codec` is metadata on an otherwise
-    identical bag, which is why the pair differs in an enumerant and a name."""
-    wired_link.deliver(encoded_frame_bag(codec=codec))
+    identical record, which is why the pair differs in an enumerant and a name."""
+    wired_link.deliver(encoded_frame_record(codec=codec))
 
     frame = wired_link.destination.read_from_input_port(
         INPUT_PORT, into=EncodedVideoFrame
@@ -178,9 +179,9 @@ def test_both_elementary_streams_read_through_the_same_cast(
 def test_a_key_this_cast_does_not_read_does_not_break_the_read(
     wired_link: WiredLinkUnderTest,
 ):
-    """The bag map is open: the day a producer adds a key must not be the day
+    """The record is an open map: the day a producer adds a key must not be the day
     every `read(port, into=EncodedVideoFrame)` starts raising."""
-    wired_link.deliver(encoded_frame_bag(a_future_key="ignored"))
+    wired_link.deliver(encoded_frame_record(a_future_key="ignored"))
 
     frame = wired_link.destination.read_from_input_port(
         INPUT_PORT, into=EncodedVideoFrame
@@ -191,13 +192,13 @@ def test_a_key_this_cast_does_not_read_does_not_break_the_read(
     assert not hasattr(frame, "a_future_key")
 
 
-def test_a_bag_with_no_color_reads_as_unspecified(wired_link: WiredLinkUnderTest):
+def test_a_record_with_no_color_reads_as_unspecified(wired_link: WiredLinkUnderTest):
     """`color` is absent-means-unspecified — the H.273 rule — so a producer
     that writes none is describing an unspecified stream, not an unreadable
-    bag."""
-    bag = encoded_frame_bag()
-    del bag["color"]
-    wired_link.deliver(bag)
+    record."""
+    record = encoded_frame_record()
+    del record["color"]
+    wired_link.deliver(record)
 
     frame = wired_link.destination.read_from_input_port(
         INPUT_PORT, into=EncodedVideoFrame

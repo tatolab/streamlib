@@ -9,7 +9,7 @@ implementation, held to it member for member by the wheel's conformance gate.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, overload
 
 from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
@@ -17,7 +17,20 @@ from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 if TYPE_CHECKING:
     from ._gpu_protocols import GpuContextFullAccess, GpuContextLimitedAccess
 
-_BagReadTarget = TypeVar("_BagReadTarget")
+_MessageReadTarget = TypeVar("_MessageReadTarget")
+_MessageReadTarget_co = TypeVar("_MessageReadTarget_co", covariant=True)
+
+
+class CastFromMessagePayloadBytes(Protocol[_MessageReadTarget_co]):
+    """What `read(port, into=…)` takes: anything whose `from_bytes` builds the read's result.
+
+    A class with a `from_bytes` classmethod is one — `into=VideoFrame` reads a
+    `VideoFrame` — and so is `msgpack_typed_dict_cast(SomeTypedDict)`.
+    """
+
+    def from_bytes(self, payload: bytes, /) -> _MessageReadTarget_co:
+        """Build the read's result from one message's payload."""
+        ...
 
 
 @runtime_backed_protocol
@@ -114,40 +127,47 @@ class NodeLinkDataAccess(Protocol):
         ...
 
     def any_input_port_has_data(self) -> bool:
-        """Whether any input port has a bag waiting."""
+        """Whether any input port has a message waiting."""
         ...
 
     @overload
     def read_from_input_port(
         self, port_name: str, *, into: None = None
-    ) -> Any | None: ...
+    ) -> bytes | None: ...
     @overload
     def read_from_input_port(
-        self, port_name: str, *, into: Callable[..., _BagReadTarget]
-    ) -> _BagReadTarget | None: ...
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[_MessageReadTarget],
+    ) -> _MessageReadTarget | None: ...
     def read_from_input_port(
-        self, port_name: str, *, into: Callable[..., Any] | None = None
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[Any] | None = None,
     ) -> Any:
-        """The next bag on `port_name`, read into `into` when given, or `None`."""
+        """The next message's payload on `port_name`, cast by `into` when given, or `None`."""
         ...
 
     def read_from_input_port_with_timestamp(
         self, port_name: str
-    ) -> tuple[Any, int] | tuple[None, None]:
-        """The next bag on `port_name` with its timestamp, or `(None, None)`."""
+    ) -> tuple[bytes, int] | tuple[None, None]:
+        """The next message's payload on `port_name` with its timestamp, or `(None, None)`."""
         ...
 
     def input_port_has_data(self, port_name: str) -> bool:
-        """Whether `port_name` has a bag waiting."""
+        """Whether `port_name` has a message waiting."""
         ...
 
     def write_to_output_port(
         self,
         port_name: str,
-        bag: Mapping[str, Any],
+        payload: bytes,
         timestamp_ns: int | None = None,
+        starts_group: bool = True,
     ) -> None:
-        """Publish one bag to every downstream link on `port_name`."""
+        """Publish one message to every downstream link on `port_name`."""
         ...
 
 
@@ -231,85 +251,100 @@ class LinkInputDataReader(Protocol):
     """
 
     @overload
-    def read(self, port_name: str, *, into: None = None) -> Any | None: ...
+    def read(self, port_name: str, *, into: None = None) -> bytes | None: ...
     @overload
     def read(
-        self, port_name: str, *, into: Callable[..., _BagReadTarget]
-    ) -> _BagReadTarget | None: ...
-    def read(self, port_name: str, *, into: Callable[..., Any] | None = None) -> Any:
-        """The next bag on `port_name`, read into `into`.
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[_MessageReadTarget],
+    ) -> _MessageReadTarget | None: ...
+    def read(
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[Any] | None = None,
+    ) -> Any:
+        """The next message's payload on `port_name`, or `None` when none is waiting.
 
-        The opt-in strictness dial. A TypedDict casts for free — the bag
-        arrives as itself, unvalidated. A dataclass or pydantic model is
-        constructed from the bag's entries, so a bag that does not fit raises
-        here, at the consuming read.
+        With `into`, the payload is handed to `into.from_bytes` and its result
+        returned, so a payload that does not fit raises here, at the consuming
+        read. `into=VideoFrame` constructs and validates;
+        `into=msgpack_typed_dict_cast(SomeTypedDict)` types the map and checks
+        nothing.
         """
         ...
 
     def read_with_timestamp(
         self, port_name: str
-    ) -> tuple[Any, int] | tuple[None, None]:
-        """The next bag on `port_name` with its timestamp, or `(None, None)`."""
+    ) -> tuple[bytes, int] | tuple[None, None]:
+        """The next message's payload on `port_name` with its timestamp, or `(None, None)`."""
         ...
 
     @overload
     def read_from_inbound_link(
         self, port_name: str, *, into: None = None
-    ) -> tuple[Any, str] | None: ...
+    ) -> tuple[bytes, str] | None: ...
     @overload
     def read_from_inbound_link(
-        self, port_name: str, *, into: Callable[..., _BagReadTarget]
-    ) -> tuple[_BagReadTarget, str] | None: ...
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[_MessageReadTarget],
+    ) -> tuple[_MessageReadTarget, str] | None: ...
     def read_from_inbound_link(
-        self, port_name: str, *, into: Callable[..., Any] | None = None
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[Any] | None = None,
     ) -> Any:
-        """The next bag on `port_name` with the link it arrived on, or `None`.
+        """The next message's payload on `port_name` with the link it arrived on, or `None`.
 
-        Any number of links may enter one input port, and each one is a
-        separate producer. This is how a many-input node tells them
-        apart: the name is the source channel the link subscribed to —
-        `{source node id}/{source output port}`, the name `graph` and
-        `tap` show. The engine knows it and a producer cannot misstate it.
+        Any number of links may enter one input port, each a separate producer.
+        The name is the source channel the link subscribed to —
+        `{source node id}/{source output port}`, the name `graph` and `tap`
+        show — which the engine knows and a producer cannot misstate.
 
-        Bags from one link arrive in that link's order. Nothing is promised
-        about how two links interleave, so a reader that needs time order
-        reasons per link.
-
-        `into` is the same strictness dial `read` carries.
+        Messages from one link arrive in that link's order; nothing is promised
+        about how two links interleave. `into` casts as it does for `read`.
         """
         ...
 
     @overload
     def read_from_inbound_link_with_timestamp(
         self, port_name: str, *, into: None = None
-    ) -> tuple[Any, str, int] | None: ...
+    ) -> tuple[bytes, str, int] | None: ...
     @overload
     def read_from_inbound_link_with_timestamp(
-        self, port_name: str, *, into: Callable[..., _BagReadTarget]
-    ) -> tuple[_BagReadTarget, str, int] | None: ...
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[_MessageReadTarget],
+    ) -> tuple[_MessageReadTarget, str, int] | None: ...
     def read_from_inbound_link_with_timestamp(
-        self, port_name: str, *, into: Callable[..., Any] | None = None
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[Any] | None = None,
     ) -> Any:
-        """The next bag on `port_name` with its link and its timestamp.
+        """The next message's payload on `port_name` with its link and its timestamp.
 
-        The fan-in read and the timestamped read at once, which a many-track
-        sink needs together: the link names the producer, and the stamp is the
-        one that producer wrote — the source frame's instant, not the moment of
-        the read. Restating a producer's timing downstream needs both.
+        The stamp is the one the producer wrote — the source frame's instant,
+        not the moment of the read.
         """
         ...
 
     def inbound_link_names(self, port_name: str) -> list[str]:
         """Every link feeding `port_name`, in wiring order.
 
-        Readable in `setup()` — links are wired before it runs — which is how
-        a sink learns how many producers it owes before the first bag
-        arrives. A port nothing is connected to lists none.
+        Readable in `setup()` — links are wired before it runs — so a sink
+        learns how many producers it owes before the first message arrives. A
+        port nothing is connected to lists none.
         """
         ...
 
     def has_data(self, port_name: str) -> bool:
-        """Whether `port_name` has a bag waiting."""
+        """Whether `port_name` has a message waiting."""
         ...
 
 
@@ -325,14 +360,18 @@ class LinkOutputDataWriter(Protocol):
     def write(
         self,
         port_name: str,
-        bag: Mapping[str, Any],
+        payload: bytes,
         timestamp_ns: int | None = None,
+        starts_group: bool = True,
     ) -> None:
-        """Publish one bag to every downstream link on `port_name`.
+        """Publish one message carrying `payload` to every downstream link on `port_name`.
 
-        A bag over the channel's payload ceiling is refused here and counted
-        against this port, never raised. Loss from a consumer that cannot keep
-        up is a separate mechanism and lands at the consuming port.
+        `payload` is `bytes` and nothing else — `tatolab.stream.msgpack.pack`
+        encodes a record. Omitting `timestamp_ns` stamps the monotonic now.
+        `starts_group=True` says the message stands alone; only encoded media
+        passes `False`, for a message a decoder cannot enter at. A payload over
+        the channel's ceiling is dropped and counted against this port, never
+        raised.
         """
         ...
 

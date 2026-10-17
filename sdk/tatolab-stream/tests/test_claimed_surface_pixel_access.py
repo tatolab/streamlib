@@ -3,11 +3,10 @@
 
 """The composable that makes a cast object the tensor-protocol producer.
 
-`[cast-object-tensor-protocol]` says the object `read(port, into=T)` hands back
-speaks `__dlpack__` itself, and that `tatolab.stream` ships the protocol as one public
-piece any cast type composes — `VideoFrame` being built from it is the proof it
-holds no privileged position. So the type under test here is a *user-authored*
-one: if the protocol only worked for the class we ship, these would fail.
+The object `read(port, into=T)` hands back speaks `__dlpack__` itself, through
+one public piece any cast type composes. The type under test here is a
+*user-authored* one: if the protocol only worked for the class we ship, these
+would fail.
 
 The capability is stood in for. The real one needs a running engine and a
 surface-share service, which the runtime's own tests cover; what is left here
@@ -472,9 +471,9 @@ def test_the_generated_constructor_spelling_refuses_an_undeclared_bag_key(offere
 
     assert DepthFrame(**FRAME_BAG, a_key_a_future_producer_adds="ignored")
 
-    # Splatted rather than written as keywords, because that is what the read
-    # does — `read(port, into=T)` calls `T(**bag)` with whatever the wire
-    # carried, which no type checker gets to see.
+    # Splatted rather than written as keywords, because that is what
+    # `MsgpackCast.from_bytes` does with whatever the wire carried, which no
+    # type checker gets to see.
     overlay_bag_from_a_newer_producer: "dict[str, Any]" = {
         "surface_id": "surface-7",
         "a_key_a_future_producer_adds": "ignored",

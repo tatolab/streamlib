@@ -183,6 +183,7 @@ jobs:
           EXTENSION_IMPORT_PACKAGE_NAME: ${{ inputs.extension_import_package_name }}
         run: |
           python3 -m venv /tmp/extension-wheel-check
+          /tmp/extension-wheel-check/bin/pip install 'msgpack>=1.0'
           /tmp/extension-wheel-check/bin/pip install \
             --no-index --find-links /tmp/tatolab-stream-distribution \
             "${{ inputs.extension_package_directory }}"/dist/*.whl

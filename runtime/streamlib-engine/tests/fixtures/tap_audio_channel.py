@@ -30,11 +30,12 @@ from typing import NamedTuple
 
 import known_audio_signal
 
-# The transport frame every bag arrives inside: a 64-byte port key, then the
-# timestamp, then the payload length. Read here so the frame's stamp can be
-# compared with the block's own. Both are written by the producer, so what the
-# comparison proves is that nothing re-stamped the frame at publication — NOT
-# that the stamp is the device's, which needs evidence this tool cannot see.
+# The transport frame every message arrives inside: a 64-byte port key, then
+# the timestamp, then the payload length, then the flags. Read here so the
+# frame's stamp can be compared with the block's own. Both are written by the
+# producer, so what the comparison proves is that nothing re-stamped the frame
+# at publication — NOT that the stamp is the device's, which needs evidence
+# this tool cannot see.
 FRAME_PORT_KEY_BYTES = 64
 
 # How far a block may sit from where the one before it predicted, as a fraction
@@ -104,7 +105,7 @@ def audio_blocks_from_tapped_bags(tapped_bags, preview_bound_bytes=None):
         if not isinstance(decoded, dict):
             raise ValueError(f"bag {index} is not a named map: {type(decoded).__name__}")
         try:
-            block = AudioBlock.from_bag(decoded)
+            block = AudioBlock(**decoded)
         except (ValueError, TypeError) as refusal:
             raise ValueError(f"bag {index}: {refusal}") from refusal
         tapped.append(TappedAudioBlock(block, frame_timestamp_ns(framed)))

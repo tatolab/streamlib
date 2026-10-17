@@ -195,6 +195,7 @@ jobs:
             libvulkan-dev
             glslc
             python3-dev
+            python3-msgpack
             cmake
             ninja-build
             strace
@@ -465,8 +466,8 @@ jobs:
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
 
-      # The wheel's own suite on the unit's own wheel: the casts and the bag
-      # codec, a processor interpreter's bootstrap and helper process, and the
+      # The wheel's own suite on the unit's own wheel: the casts, a processor
+      # interpreter's bootstrap and helper process, and the
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
       # stubtest compares the rest of `_engine.pyi` to the binary.
       - name: Wheel stubs and Python suite (GPU-free half)
@@ -496,6 +497,22 @@ jobs:
             "$RUNNER_TEMP/lend-check-venv/bin/python" -m pytest -v \
             tests_against_the_runtime_unit_lend/
 
+      - name: Unpack the runtime unit under a test root
+        run: |
+          rm -rf target/tatolab-runtime
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
+
+      - name: The suite's venv, from its lockfile
+        working-directory: tests/stream-on-runtime
+        run: uv sync --frozen
+
+      - name: Integration suite (all but rig-only)
+        working-directory: tests/stream-on-runtime
+        run: .venv/bin/pytest -v -m "not rig_only_capability"
+
+      # The engine's suite runs before the extension's steps, so a consumer
+      # the engine has moved past cannot hide the engine's own result.
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
@@ -527,20 +544,6 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.webrtc._native
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
-
-      - name: Unpack the runtime unit under a test root
-        run: |
-          rm -rf target/tatolab-runtime
-          mkdir -p target/tatolab-runtime
-          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
-
-      - name: The suite's venv, from its lockfile
-        working-directory: tests/stream-on-runtime
-        run: uv sync --frozen
-
-      - name: Integration suite (all but rig-only)
-        working-directory: tests/stream-on-runtime
-        run: .venv/bin/pytest -v -m "not rig_only_capability"
 
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.
@@ -647,9 +650,13 @@ jobs:
           cargo run --locked -q -p xtask -- lint-logging
           cargo run --locked -q -p xtask -- check-no-inheritable-descriptor
 
+      # The tests embed the interpreter setup-python installed and import
+      # `tatolab.stream` from source, so its one dependency goes there.
       - name: Wheel crate unit tests
         if: github.event_name != 'pull_request'
-        run: cargo test --locked -p streamlib-python-wheel --lib -- --test-threads=1
+        run: |
+          python -m pip install 'msgpack>=1.0'
+          cargo test --locked -p streamlib-python-wheel --lib -- --test-threads=1
 
       - name: Install MoltenVK and find the Metal device under it
         if: github.event_name != 'pull_request'
@@ -803,8 +810,8 @@ jobs:
           sudo chmod 0755 "$machine_runtime_lock_directory"
           sudo chmod 0666 "$machine_runtime_lock_directory/runtime.lock"
 
-      # The wheel's own suite on the unit's own wheel: the casts and the bag
-      # codec, a processor interpreter's bootstrap and helper process, and the
+      # The wheel's own suite on the unit's own wheel: the casts, a processor
+      # interpreter's bootstrap and helper process, and the
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
       # stubtest compares the rest of `_engine.pyi` to the binary.
       - name: Wheel stubs and Python suite (GPU-free half)
@@ -844,6 +851,9 @@ jobs:
 
           "$tatolab_executable" new /tmp/scaffold-check --test-pattern
           python3 -m venv /tmp/scaffold-check/.venv
+          # `--no-index` keeps `tatolab-stream` to this run's build, so its one
+          # dependency comes from PyPI first.
+          /tmp/scaffold-check/.venv/bin/pip install 'msgpack>=1.0'
           /tmp/scaffold-check/.venv/bin/pip install --no-index --find-links "$RUNNER_TEMP/tatolab-stream-dist" tatolab-stream
           /tmp/scaffold-check/.venv/bin/pip install 'numpy>=2.1'
           if /tmp/scaffold-check/.venv/bin/python -c '

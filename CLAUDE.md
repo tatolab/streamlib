@@ -137,11 +137,15 @@ built-in publishes on means you skipped it.
   `_built_in_nodes.py` differs from the runtime's built-ins, and pyright gates the callers. All
   run in CI. A new pyclass a node is handed is not done until its Protocol exists; one only the
   bootstrap uses needs its `_engine.pyi` entry.
-- **Typing is load-bearing on the read side and absent on the write side.** `read(port_name,
-  into=T)` narrows to `T | None` and catches a wrong attribute; `write(port_name, bag)` takes
-  `Mapping[str, Any]` and catches nothing — a typo'd key, a `str` where the wire wants an
-  `int`, and a missing required key all reach the runtime silently. Spell a bag literal
-  against the wire contract in `docs/plan/ARCHITECTURE.md`, never from memory.
+- **A message's payload is bytes; typing is load-bearing on the read side and absent inside
+  the record on the write side.** `write(port_name, payload, timestamp_ns=None,
+  starts_group=True)` refuses anything that is not `bytes`, under pyright and at runtime.
+  `read(port_name)` narrows to `bytes | None`, and `read(port_name, into=T)` to `T | None`
+  through `T.from_bytes`, catching a wrong attribute. The dict handed to
+  `tatolab.stream.msgpack.pack` is checked by nothing — a typo'd key, a `str` where the wire
+  wants an `int`, and a missing required key all reach the runtime silently — unless a
+  `MsgpackCast` dataclass's `to_bytes` builds it. Spell a record against the wire contract
+  in `docs/plan/ARCHITECTURE.md`, never from memory.
 
 ## Non-negotiables
 - All Vulkan calls live in the RHI (`runtime/streamlib-engine/src/vulkan/rhi/` +

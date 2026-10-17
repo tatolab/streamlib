@@ -6,18 +6,14 @@
 The object `ctx.inputs.read(port, into=T)` hands back is the tensor-protocol
 producer: compose `ClaimedSurfacePixelAccess` and `torch.from_dlpack(frame)`
 works straight off the read, with no resolve and no lock in the caller's hands.
-The gradient reads bare first, then the two write doors — `writable()` for a
-GPU edit, `cpu()` for the CPU reach, whose name is the whole warning.
-
-Nothing here is privileged. The claim rides the same public offer any
-constructing class may already take, and `VideoFrame` is built from this piece
-like any other cast type — which is what keeps the shipped frame from holding a
-position a user-authored type cannot reach.
+The bare view is read-only by declaration; `writable()` is the GPU write door
+and `cpu()` the CPU one. The claim rides the same public offer any constructing
+class may take, and `VideoFrame` is built from this piece like any other cast
+type.
 
 A write through the bare view is out of contract. DLPack's read-only flag
 exists only in the versioned exchange and consumers may ignore it, so the lock
-this holds declares read intent rather than enforcing it — the same honest
-posture as the raw-handle use bound.
+this holds declares read intent rather than enforcing it.
 """
 
 from __future__ import annotations
@@ -97,14 +93,10 @@ def _claim_taken_on(
 ) -> "GpuSurfaceCheckOutLease | None":
     try:
         return gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
-    except Exception as refusal:  # noqa: BLE001 — see below
-        # Deliberately every failure, not just the refusals this path is known
-        # to raise today: the claim crosses a socket, and whatever comes back
-        # from below it, none of it makes the delivered bag unreadable. An
-        # unclaimed object falls back to the protection pool depth gives it,
-        # which is what an untyped read gets; raising here would turn a
-        # delivered frame into an exception at the read. Nothing is hidden by
-        # the breadth — the first one is reported.
+    except Exception as refusal:  # noqa: BLE001
+        # Every failure: the claim crosses a socket, and none of what comes
+        # back makes the delivered message unreadable. An unclaimed object
+        # rides pool depth, as an untyped read does; the first is reported.
         _report_the_first_refused_claim(surface_id, refusal)
         return None
 
@@ -112,21 +104,18 @@ def _claim_taken_on(
 def _no_typed_read_offered_the_means_error(cast_type_name: str) -> RuntimeError:
     return RuntimeError(
         f"this {cast_type_name} was not built by a typed read, so nothing offered it the "
-        f"means to reach its surface's pixels. Read the bag with "
+        f"means to reach its surface's pixels. Read the message with "
         f"`ctx.inputs.read(port, into={cast_type_name})` — the view rides the claim that "
         f"read takes."
     )
 
 
 def _build_the_fields_the_cast_type_declared(
-    cast_object: "ClaimedSurfacePixelAccess", bag_entries: "dict[str, Any]"
+    cast_object: "ClaimedSurfacePixelAccess", message_entries: "dict[str, Any]"
 ) -> None:
-    """Assign the concrete type's declared dataclass fields from the bag.
+    """Assign the concrete type's declared dataclass fields from the message's entries.
 
-    The bag is an open map, so a key this type does not declare is dropped
-    rather than refused: the day a producer adds one must not be the day every
-    typed read starts raising, which would take the claim with it.
-
+    A message is an open map, so a key this type does not declare is dropped.
     A composer that is not a dataclass declares nothing here and keeps its own
     constructor's state — this still takes its claim.
     """
@@ -134,15 +123,15 @@ def _build_the_fields_the_cast_type_declared(
         return
     assign = object.__setattr__
     for declared in dataclasses.fields(cast_object):
-        if declared.name in bag_entries:
-            assign(cast_object, declared.name, bag_entries[declared.name])
+        if declared.name in message_entries:
+            assign(cast_object, declared.name, message_entries[declared.name])
         elif declared.default is not dataclasses.MISSING:
             assign(cast_object, declared.name, declared.default)
         elif declared.default_factory is not dataclasses.MISSING:
             assign(cast_object, declared.name, declared.default_factory())
         else:
             raise ValueError(
-                f"the bag does not build a {type(cast_object).__name__}: "
+                f"the message does not build a {type(cast_object).__name__}: "
                 f"missing key {declared.name!r}"
             )
 
@@ -225,12 +214,11 @@ class PixelAccessToOneClaimedSurface:
         a window's `show()`, above all — is the surface the claim protects and
         never one a mutable composer re-pointed the field at since.
 
-        The name says which id this is, not that a claim succeeded. It is
-        present whether or not one was taken: a refused claim, and an object
-        no typed read constructed (`VideoFrame.from_bag`, or one built by
-        hand), both leave the frame riding pool depth, which still has pixels
-        to name. Naming a surface the producer has since recycled is refused
-        loudly wherever the id is used, never answered with another frame.
+        It is present whether or not a claim was taken: a refused claim, and an
+        object no typed read constructed (`VideoFrame.from_bytes` on a payload
+        in hand, or one built by hand), both leave the frame riding pool depth.
+        Naming a surface the producer has since recycled is refused loudly
+        wherever the id is used, never answered with another frame.
         """
         return self._the_surface_id_the_claim_was_taken_on
 
@@ -238,7 +226,7 @@ class PixelAccessToOneClaimedSurface:
         """The imported surface behind every door, resolved on first reach.
 
         Not at construction: importing a surface's memory is real per-frame
-        work, and most reads want the bag's metadata and never a pixel.
+        work, and most reads want the message's metadata and never a pixel.
         """
         already_resolved = self._resolved_handle_on_the_claimed_surface
         if already_resolved is not None:
@@ -359,14 +347,12 @@ class ClaimedSurfacePixelAccess:
     `pixel_access_to_the_surface_declared_in` — the bare doors below refuse a
     type holding several rather than guess which surface was meant.
 
-    `@dataclass(frozen=True, init=False)` is the spelling to write. Inheriting
-    this class's constructor is what makes a cast type survive an open map: the
-    wire's bag carries whatever its producer puts there, and a type that
-    refuses an undeclared key turns the day a producer adds one into the day
-    every typed read raises. A `@dataclass(frozen=True)` whose `__init__` the
-    decorator generates does claim — through `__post_init__` — but enforces its
-    own signature, so it is only safe against a bag whose keys it fully
-    controls.
+    A type composes `MsgpackCast` beside this to be a `read(port, into=T)`
+    target over a msgpack payload. `@dataclass(frozen=True, init=False)` is the
+    spelling to write: this class's constructor drops a key the type does not
+    declare, so a producer adding one never breaks the read. A
+    `@dataclass(frozen=True)` whose `__init__` the decorator generates claims
+    through `__post_init__` but refuses an undeclared key.
     """
 
     #: Declared by the type that composed this, inherited by anything
@@ -399,12 +385,8 @@ class ClaimedSurfacePixelAccess:
         if surface_id_field is not None:
             cls._the_fields_this_cast_type_names_its_surfaces_with = (surface_id_field,)
         elif surface_id_fields is not None:
-            # A `str` is itself a `Sequence[str]`, so the plural keyword would
-            # otherwise take one field name apart into a surface per character
-            # — past the empty and duplicate checks, into a type that claims
-            # nothing and refuses every door naming single letters. The
-            # singular keyword next door takes a bare string, which is what
-            # makes the slip worth naming.
+            # A `str` is itself a `Sequence[str]`, which would declare one
+            # surface per character.
             if isinstance(surface_id_fields, str):
                 raise TypeError(
                     f"{cls.__name__} passed one field name, {surface_id_fields!r}, to "
@@ -426,26 +408,23 @@ class ClaimedSurfacePixelAccess:
                     f"{declared!r}: one claim per surface, so each field is named once"
                 )
             cls._the_fields_this_cast_type_names_its_surfaces_with = declared
-        # Absent means "keep what the type being extended declared". A default
-        # reapplied per class would silently re-point a subclass of a type that
-        # named its own fields back at `surface_id`.
+        # Absent keeps what the type being extended declared.
 
-    def __init__(self, **bag_entries: Any) -> None:
-        """Build the declared fields from the bag's entries, then claim.
+    def __init__(self, **message_entries: Any) -> None:
+        """Build the declared fields from the message's entries, then claim.
 
         This is what `@dataclass(frozen=True, init=False)` inherits. A type that
         writes its own constructor — to validate, or to cast nested metadata —
         calls this with the values it settled on, which is how `VideoFrame` is
         built.
         """
-        _build_the_fields_the_cast_type_declared(self, bag_entries)
-        # The settled attributes, so both construction hooks claim on the same
-        # values; the bag entry is the fallback for a composer that declared no
+        _build_the_fields_the_cast_type_declared(self, message_entries)
+        # The message entry is the fallback for a composer that declared no
         # dataclass fields for this to have assigned.
         declared_fields = self._the_fields_this_cast_type_names_its_surfaces_with
         self._take_the_claims_on(
             {
-                field: getattr(self, field, bag_entries.get(field))
+                field: getattr(self, field, message_entries.get(field))
                 for field in declared_fields
             }
         )
@@ -455,7 +434,7 @@ class ClaimedSurfacePixelAccess:
         generated, which never routes through this class's own.
 
         That constructor enforces its own signature, so this spelling refuses
-        bag keys the type does not declare — see the class doc. A composer
+        message keys the type does not declare — see the class doc. A composer
         overriding this owes it a `super().__post_init__()`; without one the
         type silently claims nothing.
         """

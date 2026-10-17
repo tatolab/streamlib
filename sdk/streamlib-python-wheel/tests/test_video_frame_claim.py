@@ -21,8 +21,10 @@ from tatolab.runtime import _engine
 from tatolab.stream import (
     ClaimedSurfacePixelAccess,
     ColorInfo,
+    MsgpackCast,
     VideoFrame,
     gpu_limited_access_of_the_typed_read_in_progress,
+    msgpack,
 )
 
 pytestmark = pytest.mark.usefixtures(
@@ -30,7 +32,7 @@ pytestmark = pytest.mark.usefixtures(
     "log_records_this_process_sends_its_stand_in_parent",
 )
 
-FRAME_BAG = {
+FRAME_RECORD = {
     "surface_id": "surface-7",
     "width": 1280,
     "height": 720,
@@ -51,18 +53,19 @@ def claim_taken_on(frame: ClaimedSurfacePixelAccess) -> Any:
 # ---- the spelling itself, over a real link ---------------------------------
 
 
-class FrameThatRecordsWhatTheReadOffered:
+class FrameThatRecordsWhatTheReadOffered(MsgpackCast):
     """A frame class the wheel does not ship, written the way anyone could —
-    it keeps whatever the read put on offer, so a test can name it."""
+    it keeps whatever the read put on offer while `from_bytes` ran, so a test
+    can name it."""
 
-    def __init__(self, surface_id: str, **rest_of_the_bag: object) -> None:
+    def __init__(self, surface_id: str, **rest_of_the_record: object) -> None:
         self.surface_id = surface_id
         self.offered = gpu_limited_access_of_the_typed_read_in_progress()
 
 
 def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu():
-    """`ctx.inputs.read(port, into=VideoFrame)` end to end: a bag crosses real
-    iceoryx2 ports and arrives as a frame with its metadata cast.
+    """`ctx.inputs.read(port, into=VideoFrame)` end to end: a message crosses
+    real iceoryx2 ports and arrives as a frame with its metadata cast.
 
     This context is built without an escalate bridge, so its GPU capability
     reaches nothing — which is the case that matters here. The read offers that
@@ -94,16 +97,19 @@ def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu()
     ctx = _engine.open_runtime_context_full_access_for_helper_process(
         {}, destination, "runtime-under-test", "processor-under-test"
     )
-    bag_from_upstream = {
-        **FRAME_BAG,
-        "fps": 30,
-        "color_info": {"primaries": "bt709"},
-        # A producer's own key this cast does not read. The bag is an open map,
-        # and the day one is added must not be the day typed reads start
-        # raising — which would take the frame's protection with it.
-        "a_key_a_future_producer_adds": "ignored",
-    }
-    source.write_to_output_port(OUTPUT_PORT, bag_from_upstream)
+    payload_from_upstream = msgpack.pack(
+        {
+            **FRAME_RECORD,
+            "fps": 30,
+            "color_info": {"primaries": "bt709"},
+            # A producer's own key this cast does not read. The record is an
+            # open map, and the day one is added must not be the day typed
+            # reads start raising — which would take the frame's protection
+            # with it.
+            "a_key_a_future_producer_adds": "ignored",
+        }
+    )
+    source.write_to_output_port(OUTPUT_PORT, payload_from_upstream)
 
     frame = ctx.inputs.read(INPUT_PORT, into=VideoFrame)
 
@@ -115,9 +121,10 @@ def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu()
     )
 
     # And that None is a refusal the frame swallowed, not an offer that never
-    # happened. Read the same bag into a class that keeps what it was offered:
-    # this fails if the read stops offering, whatever the shipped type does.
-    source.write_to_output_port(OUTPUT_PORT, bag_from_upstream)
+    # happened. Read the same payload into a class that keeps what it was
+    # offered: this fails if the read stops offering, whatever the shipped type
+    # does.
+    source.write_to_output_port(OUTPUT_PORT, payload_from_upstream)
     recording = ctx.inputs.read(INPUT_PORT, into=FrameThatRecordsWhatTheReadOffered)
     assert recording is not None
     offered = recording.offered

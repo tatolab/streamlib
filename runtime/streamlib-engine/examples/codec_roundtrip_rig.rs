@@ -302,7 +302,7 @@ mod linux_rig {
                 mastering_display: None,
                 texture_layout: None,
             };
-            self.outputs.write("video", &frame)?;
+            self.outputs.write_msgpack("video", &frame)?;
 
             if self
                 .frames_published
@@ -819,7 +819,7 @@ mod linux_rig {
             // Stamped at publication rather than at the recorded decode time:
             // a `tfdt` is an offset from the recording's own epoch, not an
             // instant on this run's monotonic clock.
-            self.outputs.write("encoded_video", &frame)?;
+            self.outputs.write_msgpack("encoded_video", &frame)?;
 
             self.access_units_published += 1;
             if self.access_units_published == replay.access_units.len() {

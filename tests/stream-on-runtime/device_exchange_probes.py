@@ -59,7 +59,7 @@ def _report(probe_body) -> None:
 
 
 class _FrameProbeBase:
-    """Reads exactly one frame bag, then reports through `_report`."""
+    """Reads exactly one frame message, then reports through `_report`."""
 
     @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
@@ -71,11 +71,11 @@ class _FrameProbeBase:
         raise NotImplementedError
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None or self.frames_seen >= 1:
+        payload = ctx.inputs.read("video_from_upstream")
+        if payload is None or self.frames_seen >= 1:
             return
         self.frames_seen += 1
-        _report(lambda: self._probe(ctx, VideoFrame.from_bag(bag)))
+        _report(lambda: self._probe(ctx, VideoFrame.from_bytes(payload)))
 
 
 @node
@@ -231,7 +231,7 @@ class LaggedConsumerHoldsItsFrameProbe:
 
     The read is `into=VideoFrame` and that is load-bearing, not style: a claim
     is offered for the duration of a typed read and taken by the type being
-    constructed. Reading the bag untyped and calling `VideoFrame.from_bag` on
+    constructed. Reading the payload untyped and calling `VideoFrame.from_bytes` on
     it afterwards takes no claim at all, so the held frame would ride pool
     depth like any other — and this probe would assert a lease it never took.
 

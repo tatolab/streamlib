@@ -18,6 +18,7 @@ use crate::core::graph::{
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 use crate::core::test_support::a_temporary_directory_at_owner_only_mode;
 use crate::core::{Result, RuntimeContextLimitedAccess};
+use crate::iceoryx2::MessageGroupBoundary;
 
 use crate::core::test_support::links_between_streams_harness::{
     EveryEventOfOneStream, THE_ENGINE_ANSWERS_WITHIN, bags_tallied_as,
@@ -31,7 +32,12 @@ pub(crate) struct BagSourceOfALinkBetweenStreams;
 
 impl crate::core::ContinuousProcessor for BagSourceOfALinkBetweenStreams::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.outputs.write_raw("video", b"a bag", 0)
+        self.outputs.write_bytes_with_timestamp(
+            "video",
+            b"a bag",
+            0,
+            MessageGroupBoundary::StartsGroup,
+        )
     }
 }
 

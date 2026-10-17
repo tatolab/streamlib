@@ -23,8 +23,8 @@ use streamlib::sdk::descriptors::{ProcessorClassImportPath, ProcessorDescriptor}
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
-    FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE,
-    MAX_PORT_KEY_SIZE,
+    FRAME_HEADER_FLAGS_SIZE, FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE,
+    FRAME_HEADER_TIMESTAMP_NS_SIZE, MAX_PORT_KEY_SIZE,
 };
 use streamlib::sdk::json_schema::{
     GraphResponse, PortDescriptorOutput, PortInfoOutput, ProcessorDescriptorOutput,
@@ -686,13 +686,14 @@ fn look_at_what_a_channel_carries_recipe(
                 "tap",
                 format!(
                     "`channel`: `{channel}`, `count`: 1. A bag's `hex_preview` is the channel's \
-                     wire bytes: a {FRAME_HEADER_SIZE}-byte frame header — a \
+                     wire bytes: an {FRAME_HEADER_SIZE}-byte frame header — a \
                      {MAX_PORT_KEY_SIZE}-byte port key, the producer's timestamp as \
                      {FRAME_HEADER_TIMESTAMP_NS_SIZE} little-endian bytes of monotonic \
-                     nanoseconds, then the payload length as {FRAME_HEADER_PAYLOAD_LEN_SIZE} \
-                     little-endian bytes — followed by that many bytes of one msgpack map, the \
-                     bag. `received` of 0 means nothing was published inside the sample window; \
-                     tap again."
+                     nanoseconds, the payload length as {FRAME_HEADER_PAYLOAD_LEN_SIZE} \
+                     little-endian bytes, then {FRAME_HEADER_FLAGS_SIZE} little-endian bytes of \
+                     flags whose bit 0 marks a message that starts a group — followed by that \
+                     many bytes of payload, one msgpack map for every built-in. `received` of 0 \
+                     means nothing was published inside the sample window; tap again."
                 ),
             ),
             graph_recipe_step_calling_a_tool_that_names_no_stream(

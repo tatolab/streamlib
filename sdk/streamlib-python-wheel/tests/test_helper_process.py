@@ -37,6 +37,7 @@ from tatolab.runtime._processor_interpreter_bootstrap import (
     ParentProcessLogSink,
     load_processor_class,
 )
+from tatolab.stream import msgpack
 
 pytestmark = pytest.mark.usefixtures(
     "private_iceoryx2_domain_for_this_test_process",
@@ -46,6 +47,11 @@ pytestmark = pytest.mark.usefixtures(
 FRAME_LENGTH_PREFIX = struct.Struct(">I")
 
 PROBE_MODULE = "helper_process_probes"
+
+
+def frame_index_payload(frame_index: int) -> bytes:
+    """The msgpack record the pass-through probes read and forward."""
+    return msgpack.pack({"frame_index": frame_index})
 
 
 class StandInParent:
@@ -182,11 +188,8 @@ def test_a_helper_handed_no_iceoryx2_domain_root_refuses_to_start_by_name(
 ):
     """A helper opens its node only in the domain its parent resolved. One that
     guessed a root instead — from its working directory, iceoryx2's defaults or
-    a config file — would open in a domain the parent is not in, where no bag
-    ever arrives and nothing errors.
-
-    Fail-without-fix: fall back to any root when the variable is absent and the
-    constructor below returns a data plane that silently reaches nobody.
+    a config file — would open in a domain the parent is not in, where no
+    message ever arrives and nothing errors.
     """
     monkeypatch.delenv("STREAMLIB_ICEORYX2_DOMAIN_ROOT")
 
@@ -199,29 +202,23 @@ def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
     it, and a link may be taken away again later. Its declared ports stay
     usable throughout: a read finds nothing, a write goes nowhere, and neither
     raises. Only a port the class never declared is refused, by name.
-
-    Fail-without-fix: without the declaration the write below raises on every
-    frame a live-added effect sees before its output is connected.
     """
     link_data_access = _engine.open_node_link_data_access_for_helper_process()
     link_data_access.declare_ports(["frames_from_upstream"], ["frames_to_downstream"])
 
     assert link_data_access.read_from_input_port("frames_from_upstream") is None
     assert link_data_access.input_port_has_data("frames_from_upstream") is False
-    link_data_access.write_to_output_port("frames_to_downstream", {"frame_index": 1})
+    link_data_access.write_to_output_port("frames_to_downstream", frame_index_payload(1))
 
     with pytest.raises(RuntimeError, match="never_declared"):
         link_data_access.read_from_input_port("never_declared")
     with pytest.raises(RuntimeError, match="never_declared"):
-        link_data_access.write_to_output_port("never_declared", {"frame_index": 1})
+        link_data_access.write_to_output_port("never_declared", frame_index_payload(1))
 
 
 def test_a_port_lookup_casts_its_argument_to_the_declared_name():
     """`@node` declares each port under its cast name, so every lookup casts
     too: `Video` and `VIDEO` reach the port declared as `video`.
-
-    Fail-without-fix: an uncast lookup raises "not one this processor declared"
-    for every spelling here but the cast one.
     """
     link_data_access = _engine.open_node_link_data_access_for_helper_process()
     link_data_access.declare_ports(["video"], ["frames-out"])
@@ -229,7 +226,7 @@ def test_a_port_lookup_casts_its_argument_to_the_declared_name():
     assert link_data_access.read_from_input_port("Video") is None
     assert link_data_access.read_from_input_port_with_timestamp("VIDEO") == (None, None)
     assert link_data_access.input_port_has_data("Vidéo") is False
-    link_data_access.write_to_output_port("Frames Out", {"frame_index": 1})
+    link_data_access.write_to_output_port("Frames Out", frame_index_payload(1))
 
     with pytest.raises(ValueError, match="cannot name anything"):
         link_data_access.read_from_input_port("..")
@@ -237,7 +234,8 @@ def test_a_port_lookup_casts_its_argument_to_the_declared_name():
 
 def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     """The whole point of the wiring envelope: two helpers open their own ends
-    of one channel from what the parent sent, and a bag crosses between them.
+    of one channel from what the parent sent, and a message crosses between
+    them as the same bytes.
 
     Both planes live on this thread because iceoryx2's ports are `!Send`, and
     the destination is wired first because a send with no subscriber attached
@@ -253,12 +251,10 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
 
-    source.write_to_output_port("frames_to_downstream", {"frame_index": 11})
+    source.write_to_output_port("frames_to_downstream", frame_index_payload(11))
 
     assert destination.any_input_port_has_data()
-    assert destination.read_from_input_port("frames_from_upstream") == {
-        "frame_index": 11
-    }
+    assert destination.read_from_input_port("frames_from_upstream") == frame_index_payload(11)
 
 
 def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_ports_depth():
@@ -266,14 +262,14 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     reads through a ring its own port's depth, so a shallow port that opens a
     channel first never sizes it for the deeper one that joins.
 
-    Ten bags published while neither reads: the four-deep port reads four, the
-    sixteen-deep port reads all ten. Fail-without-fix: open the service at the
-    port's ring depth and the second destination's open is refused
+    Ten messages published while neither reads: the four-deep port reads four,
+    the sixteen-deep port reads all ten. A service opened at the port's ring
+    depth would refuse the second destination's open
     (`DoesNotSupportRequestedMinBufferSize`).
     """
     from tatolab.stream import NodeLinkDataAccess
 
-    bags_published_while_neither_reads = 10
+    messages_published_while_neither_reads = 10
     shallow_wiring = engine_shaped_link_wiring("input", "L-shallow-port")
     shallow_wiring["input_port_ring_depth"] = 4
     deep_wiring = engine_shaped_link_wiring("input", "L-deep-port")
@@ -299,32 +295,30 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     source = _engine.open_node_link_data_access_for_helper_process()
     processor_interpreter_bootstrap.wire_link_data_access(source, {"outputs": [source_wiring]})
 
-    for frame_index in range(bags_published_while_neither_reads):
-        source.write_to_output_port("frames_to_downstream", {"frame_index": frame_index})
+    for frame_index in range(messages_published_while_neither_reads):
+        source.write_to_output_port("frames_to_downstream", frame_index_payload(frame_index))
 
-    def every_bag_read(destination: NodeLinkDataAccess) -> list:
+    def every_frame_index_read(destination: NodeLinkDataAccess) -> list:
         read = []
-        while (bag := destination.read_from_input_port("frames_from_upstream")) is not None:
-            read.append(bag["frame_index"])
+        while (payload := destination.read_from_input_port("frames_from_upstream")) is not None:
+            read.append(msgpack.unpack(payload)["frame_index"])
         return read
 
-    assert every_bag_read(shallow_destination) == [6, 7, 8, 9]
-    assert every_bag_read(deep_destination) == list(range(bags_published_while_neither_reads))
+    assert every_frame_index_read(shallow_destination) == [6, 7, 8, 9]
+    assert every_frame_index_read(deep_destination) == list(
+        range(messages_published_while_neither_reads)
+    )
 
 
 def test_a_disconnected_links_ports_are_free_for_its_reconnect():
-    """The child half of #1554: a disconnect must release the ports this
-    process opened, or the same link cannot be wired a second time.
+    """A disconnect must release the ports this process opened, or the same
+    link cannot be wired a second time.
 
     This envelope caps the notify service at one notifier (the engine sends its
     fixed inbound-link cap; the fixture shrinks it), so a notifier still held
     from the first connect makes the reconnect's `create_notifier` the second
     on a max-1 service — `ExceedsMaxSupportedNotifiers`. The engine cannot reclaim these
     from the parent: the publisher, notifier and subscriber all belong here.
-
-    Fail-without-fix: make `unwire_output_link` / `unwire_input_link` no-ops
-    (the behaviour before this fix, when `close_iceoryx2_service` skipped
-    out-of-process endpoints entirely) and the second `connect()` raises.
 
     The Python-surface mirror of the engine's
     `disconnect_reconnect_cycle_reclaims_notifier_and_data_service`.
@@ -360,22 +354,16 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     disconnect()
     connect()
 
-    source.write_to_output_port("frames_to_downstream", {"frame_index": 13})
-    assert destination.read_from_input_port("frames_from_upstream") == {
-        "frame_index": 13
-    }, "the reconnected link must carry data through freshly opened ports"
+    source.write_to_output_port("frames_to_downstream", frame_index_payload(13))
+    assert destination.read_from_input_port("frames_from_upstream") == frame_index_payload(13), (
+        "the reconnected link must carry data through freshly opened ports"
+    )
 
 
 def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
     """A direction this side does not know is a parent that has drifted from
     this protocol. It must take nothing down and release nothing — guessing a
     direction would drop a port that is still carrying frames.
-
-    Fail-without-fix: route the unknown direction to `unwire_input_link`
-    instead of warning (the plausible mis-implementation, since the child's
-    plane is fully built either way) and the read below raises
-    `RuntimeError: Link error: Unknown input port` — the mailbox went with
-    the subscriber that was dropped out from under it.
     """
     link_id = "L-unknown-direction"
     destination = _engine.open_node_link_data_access_for_helper_process()
@@ -399,10 +387,10 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
         destination, {"direction": "sideways", "link_id": link_id}
     )
 
-    source.write_to_output_port("frames_to_downstream", {"frame_index": 14})
-    assert destination.read_from_input_port("frames_from_upstream") == {
-        "frame_index": 14
-    }, "an unrecognised direction must leave both ends of the link wired"
+    source.write_to_output_port("frames_to_downstream", frame_index_payload(14))
+    assert destination.read_from_input_port("frames_from_upstream") == frame_index_payload(14), (
+        "an unrecognised direction must leave both ends of the link wired"
+    )
 
 
 # =============================================================================
@@ -1159,10 +1147,10 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
             upstream,
             {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
         )
-        # The helper is parked on its listener by now, so the bag arrives by
-        # waking the wait — the path that raised.
+        # The helper is parked on its listener by now, so the message arrives
+        # by waking the wait.
         time.sleep(0.2)
-        upstream.write_to_output_port("frames_to_downstream", {"frame_index": 3})
+        upstream.write_to_output_port("frames_to_downstream", frame_index_payload(3))
         deadline = time.monotonic() + 5.0
         forwarded = None
         while forwarded is None and time.monotonic() < deadline:
@@ -1170,7 +1158,8 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
                 forwarded = downstream.read_from_input_port("frames_from_upstream")
             else:
                 time.sleep(0.01)
-        assert forwarded == {"frame_index": 3, "tag": "untagged"}, (
+        assert forwarded is not None
+        assert msgpack.unpack(forwarded) == {"frame_index": 3, "tag": "untagged"}, (
             "a notify on a listener above descriptor 1024 must wake the helper"
         )
 
@@ -1462,17 +1451,18 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
         for answer in (stand_in_parent.receive(), stand_in_parent.receive())
     }
 
-    # A bag published before the child's subscriber is up is dropped by the
-    # channel, so publish until one comes back.
+    # A message published before the child's subscriber is up is dropped by
+    # the channel, so publish until one comes back.
     deadline = time.monotonic() + 10.0
     forwarded = None
     while forwarded is None and time.monotonic() < deadline:
-        upstream.write_to_output_port("frames_to_downstream", {"frame_index": 7})
+        upstream.write_to_output_port("frames_to_downstream", frame_index_payload(7))
         time.sleep(0.05)
         if downstream.any_input_port_has_data():
             forwarded = downstream.read_from_input_port("frames_from_upstream")
-    assert forwarded == {"frame_index": 7, "tag": "untagged"}, (
-        "a bag must cross the input wired after setup and come back over the "
+    assert forwarded is not None
+    assert msgpack.unpack(forwarded) == {"frame_index": 7, "tag": "untagged"}, (
+        "a message must cross the input wired after setup and come back over the "
         "output wired after setup"
     )
 
@@ -1692,7 +1682,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     # Faster than the probe processes, so its input never runs dry during the
     # burst and the loop never reaches its idle branch.
     for index in range(80):
-        upstream.write_to_output_port("frames_to_downstream", {"frame_index": index})
+        upstream.write_to_output_port("frames_to_downstream", frame_index_payload(index))
         time.sleep(0.001)
 
     forwarded = 0
@@ -1705,9 +1695,9 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
                 quiet_since = time.monotonic()
             continue
         time.sleep(0.01)
-    assert forwarded >= 8, f"the probe forwarded only {forwarded} bags of the burst"
+    assert forwarded >= 8, f"the probe forwarded only {forwarded} messages of the burst"
     assert counting.drain_calls >= 8, (
-        f"the listener was drained {counting.drain_calls} times while {forwarded} bags "
+        f"the listener was drained {counting.drain_calls} times while {forwarded} messages "
         f"were processed back to back — it must be drained on every pass"
     )
 

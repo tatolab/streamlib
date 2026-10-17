@@ -71,11 +71,12 @@ def main(stream_builder: StreamBuilder) -> None:
 # one — meets a live node.
 BAG_MARKING_EFFECT_SOURCE_TEMPLATE = '''\
 from tatolab.stream import RuntimeContextLimitedAccess, node
+from tatolab.stream.msgpack import pack, unpack
 
 
 @node
 class BagMarkingEffect:
-    """Forwards every bag with one key added, so a consumer can tell it passed through."""
+    """Forwards every message with one key added, so a consumer can tell it passed through."""
 
     @node.input(delivery_profile="{delivery_profile}")
     def bags_from_upstream(self) -> None: ...
@@ -84,18 +85,20 @@ class BagMarkingEffect:
     def marked_bags_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("bags_from_upstream")
-        if bag is not None:
-            ctx.outputs.write("marked_bags_to_downstream", {{**bag, "marked_by_inserted_effect": True}})
+        payload = ctx.inputs.read("bags_from_upstream")
+        if payload is not None:
+            marked_message = {{**unpack(payload), "marked_by_inserted_effect": True}}
+            ctx.outputs.write("marked_bags_to_downstream", pack(marked_message))
 '''
 
 MARKED_BAG_SINK_SOURCE_TEMPLATE = '''\
 from tatolab.stream import RuntimeContextLimitedAccess, log, node
+from tatolab.stream.msgpack import unpack
 
 
 @node
 class MarkedBagSink:
-    """Says so once when a bag arrives carrying the inserted effect's mark."""
+    """Says so once when a message arrives carrying the inserted effect's mark."""
 
     def __init__(self) -> None:
         self.announced = False
@@ -104,8 +107,10 @@ class MarkedBagSink:
     def bags_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("bags_from_upstream")
-        if bag is not None and bag.get("marked_by_inserted_effect") and not self.announced:
+        payload = ctx.inputs.read("bags_from_upstream")
+        if payload is None or self.announced:
+            return
+        if unpack(payload).get("marked_by_inserted_effect"):
             self.announced = True
             log.info("MARKER:SINK_RECEIVED_A_MARKED_BAG")
 '''

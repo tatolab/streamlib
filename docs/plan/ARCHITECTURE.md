@@ -398,8 +398,10 @@ entry reads as **message** (the glossary).
   abstraction the doctrine forbids. It is not a raw byte port — no link reads or writes
   bytes; the pair converts between a bag and bytes in the caller's own hands.
   `docs/decisions/extension-model.md` records why. [moq-data-tracks — SHIPPED #2171;
-  package-split-and-lend — SHIPPED #2686]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_bag_codec_export.py -->
+  package-split-and-lend — SHIPPED #2686; amended by moq-relays: the whole entry is deleted —
+  the pair is gone from the runtime, and msgpack is `tatolab.stream.msgpack`, a helper the
+  stream package ships (§Processor model); built #2801]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py -k test_the_engine_exports_no_message_payload_codec -->
 - **DECIDED** — An extension wheel is built the way a third party would build one, which
   is the dogfooding the pivot exists for: a standalone maturin project under `packages/`
   with its own workspace root and lockfile — not a member of the engine workspace —
@@ -2356,9 +2358,9 @@ entry reads as **message** (the glossary).
 - **DECIDED** — A camera frame carries one capture instant on both of its stamps. The
   seam's hand-off carries `capture_timestamp_ns`, resolved under one rule every arm shares
   (`VideoCaptureInstantResolver`), and `CameraSource` assigns it to the frame's own
-  `timestamp_ns` **and** passes the same value to `write_with_timestamp` — never the implicit
-  write, whose `MediaClock::now()` stamps publication, and never the call swap alone, which
-  sets only the envelope. The encoder reads the payload's stamp, `Mp4Sink` the
+  `timestamp_ns` **and** passes the same value to `write_msgpack_with_timestamp` — never
+  the implicit write, whose `MediaClock::now()` stamps publication, and never the call swap
+  alone, which sets only the envelope. The encoder reads the payload's stamp, `Mp4Sink` the
   envelope's; both name the instant of capture on both floors. A device stamp is trusted only
   when it is on the machine's monotonic clock and non-zero — V4L2's dequeued-buffer stamp with
   its timestamp flags, AVFoundation's sample presentation stamp converted from the session's

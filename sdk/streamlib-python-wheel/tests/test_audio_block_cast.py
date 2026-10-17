@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab.stream.AudioBlock` — the audio bag's cast, over a live link.
+"""`tatolab.stream.AudioBlock` — the audio record's cast, over a live link.
 
-An audio block carries its payload inline, so what has to survive the wire is
-the payload's msgpack *type*: `bin`, which reaches Python as `bytes`. That is
-what these tests drive, over real wired iceoryx2 ports rather than a stand-in,
-because a bag has to survive the wire before `into=` has anything to cast.
+An audio block carries its samples inline, so what has to survive the wire is
+the samples' msgpack *type*: `bin`, which unpacks as `bytes`. That is what
+these tests drive, over real wired iceoryx2 ports rather than a stand-in,
+because a message has to survive the wire before `into=` has anything to cast.
 
 Both ends live on this thread because iceoryx2's ports are `!Send`, and the
 destination is wired first because a send with no subscriber attached is
@@ -22,7 +22,7 @@ import numpy
 import pytest
 
 from tatolab.runtime import _engine
-from tatolab.stream import AudioBlock, NodeLinkDataAccess
+from tatolab.stream import AudioBlock, NodeLinkDataAccess, msgpack
 
 pytestmark = pytest.mark.usefixtures(
     "private_iceoryx2_domain_for_this_test_process",
@@ -41,7 +41,7 @@ def interleaved_i16_bytes(scalars: "list[int]") -> bytes:
     return struct.pack(f"<{len(scalars)}h", *scalars)
 
 
-def stereo_block_bag(scalars: "list[float]") -> "dict[str, Any]":
+def stereo_block_record(scalars: "list[float]") -> "dict[str, Any]":
     """A two-channel `f32` block carrying `scalars`, interleaved."""
     return {
         "samples": interleaved_f32_bytes(scalars),
@@ -62,8 +62,8 @@ class WiredLinkUnderTest:
         self.source = source
         self.destination = destination
 
-    def deliver(self, bag: "dict[str, Any]") -> None:
-        self.source.write_to_output_port(OUTPUT_PORT, bag)
+    def deliver(self, record: "dict[str, Any]") -> None:
+        self.source.write_to_output_port(OUTPUT_PORT, msgpack.pack(record))
 
 
 @pytest.fixture
@@ -107,28 +107,29 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     yield WiredLinkUnderTest(source, destination)
 
 
-def test_the_payload_crosses_the_wire_as_bytes(wired_link: WiredLinkUnderTest):
+def test_the_samples_cross_the_wire_as_bytes(wired_link: WiredLinkUnderTest):
     """The contract underneath the cast: `samples` is a byte buffer on the
-    wire, so an untyped read hands back `bytes` rather than a list of numbers.
+    wire, so the unpacked record holds `bytes` rather than a list of numbers.
 
     A producer whose samples encoded as a msgpack array would still read back
     equal-looking data here — as a `list`, five bytes per sample instead of
     four, and unreadable as a buffer by a consumer in another language.
     """
-    payload = interleaved_f32_bytes([-1.0, -0.5, 0.0, 0.5])
-    wired_link.deliver(stereo_block_bag([-1.0, -0.5, 0.0, 0.5]))
+    samples = interleaved_f32_bytes([-1.0, -0.5, 0.0, 0.5])
+    wired_link.deliver(stereo_block_record([-1.0, -0.5, 0.0, 0.5]))
 
-    bag = wired_link.destination.read_from_input_port(INPUT_PORT)
+    payload = wired_link.destination.read_from_input_port(INPUT_PORT)
 
-    assert bag is not None
-    assert type(bag["samples"]) is bytes
-    assert bag["samples"] == payload
+    assert payload is not None
+    record = msgpack.unpack(payload)
+    assert type(record["samples"]) is bytes
+    assert record["samples"] == samples
 
 
 def test_a_block_read_off_the_wire_casts_to_an_audio_block(
     wired_link: WiredLinkUnderTest,
 ):
-    wired_link.deliver(stereo_block_bag([-1.0, -0.5, 0.0, 0.5]))
+    wired_link.deliver(stereo_block_record([-1.0, -0.5, 0.0, 0.5]))
 
     block = wired_link.destination.read_from_input_port(INPUT_PORT, into=AudioBlock)
 
@@ -140,19 +141,19 @@ def test_a_block_read_off_the_wire_casts_to_an_audio_block(
     assert block.first_sample_timestamp_ns == 123_456_789
 
 
-def test_the_samples_are_a_numpy_view_over_the_bag_bytes(
+def test_the_samples_are_a_numpy_view_over_the_unpacked_bytes(
     wired_link: WiredLinkUnderTest,
 ):
     """The one thing the cast guarantees about copies: it adds none.
 
-    The four copies between shared memory and here are the helper hop every
-    bag pays and this changes nothing about them — but the array is a view
-    over the bytes the read produced, not a fifth copy of them. Asserted by
+    The copies between shared memory and here are the helper hop every
+    message pays and this changes nothing about them — but the array is a view
+    over the bytes the unpack produced, not another copy of them. Asserted by
     identity through numpy's base chain, which `shares_memory` alone would not
     show: two copies of the same values do not share memory, but neither does
     that prove which object the array is looking at.
     """
-    wired_link.deliver(stereo_block_bag([-1.0, -0.5, 0.0, 0.5]))
+    wired_link.deliver(stereo_block_record([-1.0, -0.5, 0.0, 0.5]))
 
     block = wired_link.destination.read_from_input_port(INPUT_PORT, into=AudioBlock)
     assert isinstance(block, AudioBlock)
@@ -166,7 +167,7 @@ def test_the_samples_are_a_numpy_view_over_the_bag_bytes(
     assert samples.tolist() == [[-1.0, -0.5], [0.0, 0.5]]
     assert samples.shape == (2, 2)
     assert samples.dtype == numpy.dtype("<f4")
-    assert not samples.flags.writeable, "the bag's bytes are immutable"
+    assert not samples.flags.writeable, "the unpacked bytes are immutable"
 
 
 def test_an_i16_block_reads_through_the_same_field(wired_link: WiredLinkUnderTest):
@@ -197,7 +198,7 @@ def test_a_payload_of_the_wrong_length_is_refused_at_the_read(
     is a producer bug, and the read is where it has to surface — reshaped, it
     would be a plausible-looking wrong answer or an error about shapes that
     names nothing."""
-    truncated = stereo_block_bag([-1.0, -0.5, 0.0, 0.5])
+    truncated = stereo_block_record([-1.0, -0.5, 0.0, 0.5])
     truncated["sample_count"] = 3
     wired_link.deliver(truncated)
 
@@ -208,13 +209,72 @@ def test_a_payload_of_the_wrong_length_is_refused_at_the_read(
 def test_a_key_this_cast_does_not_read_does_not_break_the_read(
     wired_link: WiredLinkUnderTest,
 ):
-    """The bag map is open: the day a producer adds a key must not be the day
-    every `read(port, into=AudioBlock)` starts raising."""
-    bag = stereo_block_bag([-1.0, -0.5, 0.0, 0.5])
-    bag["a_future_key"] = "ignored"
-    wired_link.deliver(bag)
+    """The record is an open map: the day a producer adds a key must not be the
+    day every `read(port, into=AudioBlock)` starts raising."""
+    record = stereo_block_record([-1.0, -0.5, 0.0, 0.5])
+    record["a_future_key"] = "ignored"
+    wired_link.deliver(record)
 
     block = wired_link.destination.read_from_input_port(INPUT_PORT, into=AudioBlock)
 
     assert isinstance(block, AudioBlock)
     assert block.sample_count == 2
+
+
+def test_a_window_the_engines_stage_emits_casts_to_an_audio_block(
+    request: pytest.FixtureRequest,
+):
+    """The joint between the two languages: blocks packed here are decoded by
+    the engine's audio-window stage, and the window it re-encodes in Rust is
+    what `into=AudioBlock` builds from. A key renamed on either side surfaces
+    here rather than at a microphone."""
+    unique = f"window{os.getpid()}_{request.node.name}"
+    channel_service_name = f"{unique}/audio"
+    notify_service_name = f"{unique}_dest/notify"
+    link_id = f"L-{unique}"
+    destination = _engine.open_node_link_data_access_for_helper_process()
+    destination.wire_input_link(
+        INPUT_PORT, channel_service_name, channel_service_name,
+        notify_service_name,
+        "read_next_in_order", 8, 8, 2, 1, link_id,
+        audio_window={
+            "sample_rate": 16_000,
+            "channels": 1,
+            "dtype": "f32",
+            "window_size": 512,
+            "hop": 512,
+        },
+    )  # fmt: skip
+    source = _engine.open_node_link_data_access_for_helper_process()
+    source.wire_output_link(
+        OUTPUT_PORT, channel_service_name, notify_service_name,
+        16_384, 1 << 20, 8, 2, 1, link_id,
+    )  # fmt: skip
+
+    source_frames_per_block = 512
+    for block_index in range(8):
+        source.write_to_output_port(
+            OUTPUT_PORT,
+            AudioBlock(
+                samples=interleaved_f32_bytes(
+                    [0.25] * (source_frames_per_block * 2)
+                ),
+                sample_rate=48_000,
+                channels=2,
+                sample_count=source_frames_per_block,
+                dtype="f32",
+                first_sample_timestamp_ns=block_index
+                * source_frames_per_block
+                * 1_000_000_000
+                // 48_000,
+            ).to_bytes(),
+        )
+
+    window = destination.read_from_input_port(INPUT_PORT, into=AudioBlock)
+
+    assert isinstance(window, AudioBlock)
+    assert window.sample_rate == 16_000
+    assert window.channels == 1
+    assert window.sample_count == 512
+    assert window.dtype == "f32"
+    assert window.samples.shape == (512, 1)

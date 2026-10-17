@@ -213,6 +213,7 @@ from tatolab.stream import (
     monotonic_now_ns,
     node,
 )
+from tatolab.stream.msgpack import pack
 
 SAMPLE_RATE = 16_000
 FRAMES_PER_BLOCK = 300
@@ -234,15 +235,17 @@ class GappedMonoSource:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.outputs.write(
             "audio",
-            {
-                "samples": bytes(4 * FRAMES_PER_BLOCK),
-                "sample_rate": SAMPLE_RATE,
-                "channels": 1,
-                "sample_count": FRAMES_PER_BLOCK,
-                "dtype": "f32",
-                "first_sample_timestamp_ns": self.anchor_ns
-                + self.blocks * GAP_BETWEEN_BLOCKS_NS,
-            },
+            pack(
+                {
+                    "samples": bytes(4 * FRAMES_PER_BLOCK),
+                    "sample_rate": SAMPLE_RATE,
+                    "channels": 1,
+                    "sample_count": FRAMES_PER_BLOCK,
+                    "dtype": "f32",
+                    "first_sample_timestamp_ns": self.anchor_ns
+                    + self.blocks * GAP_BETWEEN_BLOCKS_NS,
+                }
+            ),
         )
         self.blocks += 1
 
