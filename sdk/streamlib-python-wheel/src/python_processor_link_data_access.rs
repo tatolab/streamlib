@@ -21,7 +21,8 @@ use std::sync::{Arc, OnceLock};
 
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyBytes, PyDict, PyType};
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
@@ -29,7 +30,8 @@ use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    MessageGroupBoundary, OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
+    MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner, ReadMode,
+    ResolvedAudioWindowContract,
 };
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 
@@ -214,28 +216,20 @@ impl PythonProcessorLinkDataAccess {
         into: Option<&Bound<'py, PyAny>>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, String, i64)>> {
-        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
-            return Ok(None);
-        };
-        let read = python
-            .detach(|| input_mailboxes.read_raw_from_inbound_link(port_name))
-            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
-        let Some((message, inbound_link_name)) = read else {
-            return Ok(None);
-        };
-        let payload = payload_bytes_cast_into_the_read_target_when_named(
-            python,
-            port_name,
-            &message.payload_bytes,
-            into,
-            offered_gpu_limited_access,
-        )?;
-        Ok(Some((
-            payload,
-            inbound_link_name.as_str().to_string(),
-            message.timestamp_ns,
-        )))
+        Ok(self
+            .read_message_naming_its_inbound_link_with_its_payload_cast(
+                python,
+                port_name,
+                into,
+                offered_gpu_limited_access,
+            )?
+            .map(|(payload, message, inbound_link_name)| {
+                (
+                    payload,
+                    inbound_link_name.as_str().to_string(),
+                    message.timestamp_ns,
+                )
+            }))
     }
 
     /// The next message on `port_name` as a `tatolab.stream.Message` — its
@@ -248,6 +242,41 @@ impl PythonProcessorLinkDataAccess {
         into: Option<&Bound<'py, PyAny>>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        static TATOLAB_STREAM_MESSAGE_CLASS: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+        let Some((payload, message, inbound_link_name)) = self
+            .read_message_naming_its_inbound_link_with_its_payload_cast(
+                python,
+                port_name,
+                into,
+                offered_gpu_limited_access,
+            )?
+        else {
+            return Ok(None);
+        };
+        let message_fields = PyDict::new(python);
+        message_fields.set_item("payload", payload)?;
+        message_fields.set_item("timestamp_ns", message.timestamp_ns)?;
+        message_fields.set_item(
+            "starts_group",
+            message.group_boundary == MessageGroupBoundary::StartsGroup,
+        )?;
+        message_fields.set_item("lost_since_last_read", message.lost_since_last_read)?;
+        message_fields.set_item("inbound_link", inbound_link_name.as_str())?;
+        TATOLAB_STREAM_MESSAGE_CLASS
+            .import(python, "tatolab.stream._message", "Message")?
+            .call((), Some(&message_fields))
+            .map(Some)
+    }
+
+    /// The one fan-in read body: the next message on `port_name`, its payload
+    /// as `bytes` or cast by `into`, and the inbound link it arrived on.
+    fn read_message_naming_its_inbound_link_with_its_payload_cast<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
+        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+    ) -> PyResult<Option<(Bound<'py, PyAny>, MessageReadFromInputPort, InboundLinkName)>> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
             return Ok(None);
@@ -265,17 +294,7 @@ impl PythonProcessorLinkDataAccess {
             into,
             offered_gpu_limited_access,
         )?;
-        python
-            .import("tatolab.stream._message")?
-            .getattr("Message")?
-            .call1((
-                payload,
-                message.timestamp_ns,
-                message.group_boundary == MessageGroupBoundary::StartsGroup,
-                message.lost_since_last_read,
-                inbound_link_name.as_str(),
-            ))
-            .map(Some)
+        Ok(Some((payload, message, inbound_link_name)))
     }
 
     /// Every inbound link feeding `port_name`, in wiring order.

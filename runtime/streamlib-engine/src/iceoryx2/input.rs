@@ -77,33 +77,14 @@ pub struct MessageReadFromInputPort {
     pub lost_since_last_read: u64,
 }
 
-/// A bag taken off a port's mailbox, and the dropped-bag count of the link it
-/// arrived on, which still holds the losses ahead of it the reader has not been
-/// told of.
-struct BagTakenOffTheMailbox {
-    bag_body: BagBodyForTheReader,
-    dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
-}
-
-impl BagTakenOffTheMailbox {
-    /// The bag as the reader receives it, told of every loss ahead of it.
-    fn told_of_the_losses_ahead_of_it(self) -> BagBodyForTheReader {
-        let mut bag_body = self.bag_body;
-        bag_body.message.lost_since_last_read =
-            told_of_the_losses_the_reader_has_not_been(self.dropped_bag_counter.as_ref());
-        bag_body
-    }
-}
-
-/// The losses `dropped_bag_counter`'s link has ahead of the latest bag taken off
-/// the mailbox that the reader has not been told of; zero where no link
-/// delivered the bag.
-fn told_of_the_losses_the_reader_has_not_been(
-    dropped_bag_counter: Option<&InboundLinkDroppedBagCounter>,
-) -> u64 {
-    dropped_bag_counter
-        .map(InboundLinkDroppedBagCounter::take_dropped_bags_the_reader_has_not_been_told_of)
-        .unwrap_or(0)
+/// Where a bag taken off a port's mailbox goes.
+#[derive(Clone, Copy)]
+enum WhereABagTakenOffTheMailboxGoes<'stage> {
+    /// To the reader, told of the losses ahead of it.
+    ToTheReader,
+    /// Into the windowed port's stage, while it is still the stage installed;
+    /// the window cut from the bag is told of the losses instead.
+    IntoTheStageWhileItIsInstalled(&'stage SharedAudioWindowStage),
 }
 
 /// Decode one msgpack payload into the type a reader named.
@@ -1020,9 +1001,9 @@ impl InputMailboxesInner {
         // here, with the `ports` mutex released — it guards the port map, and a
         // resampler pass is not port-map work.
         match audio_windowing {
-            InstalledInputPortAudioWindowing::NotWindowed => Ok(self
-                .pop_one_bag_off_the_mailbox(port, None)?
-                .map(BagTakenOffTheMailbox::told_of_the_losses_ahead_of_it)),
+            InstalledInputPortAudioWindowing::NotWindowed => {
+                self.pop_one_bag_off_the_mailbox(port, WhereABagTakenOffTheMailboxGoes::ToTheReader)
+            }
             // Nothing, and deliberately not the bag underneath: a port whose
             // contract is unsettled has no exact size to cut one to.
             InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat => Ok(None),
@@ -1033,32 +1014,46 @@ impl InputMailboxesInner {
     }
 
     /// Pop the next queued frame for `port` per its read mode and strip its
-    /// header, or `None` when the mailbox is empty — or, given a stage, when
+    /// header, or `None` when the mailbox is empty — or, bound for a stage, when
     /// that stage is no longer the one installed on the port, so a read that
     /// outlived a rewire takes none of the new wiring's bags.
+    ///
+    /// A bag bound for the reader is told of its losses under the port map
+    /// lock, the lock every push and pop of a mailbox runs under, so no
+    /// eviction or other pop lands between the pop and the telling.
     fn pop_one_bag_off_the_mailbox(
         &self,
         port: &str,
-        only_while_this_stage_is_installed: Option<&SharedAudioWindowStage>,
-    ) -> Result<Option<BagTakenOffTheMailbox>> {
-        let raw = {
+        where_the_bag_goes: WhereABagTakenOffTheMailboxGoes<'_>,
+    ) -> Result<Option<BagBodyForTheReader>> {
+        let (delivered, lost_since_last_read) = {
             let ports = self.ports.lock();
             let port_config = ports.get(port).ok_or_else(|| unknown_input_port(port))?;
-            if only_while_this_stage_is_installed
-                .is_some_and(|stage| !port_config.audio_windowing.installs_stage(stage))
+            if let WhereABagTakenOffTheMailboxGoes::IntoTheStageWhileItIsInstalled(stage) =
+                where_the_bag_goes
+                && !port_config.audio_windowing.installs_stage(stage)
             {
                 return Ok(None);
             }
-            match port_config.mailbox.read_mode() {
+            let popped = match port_config.mailbox.read_mode() {
                 ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
                 ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
-            }
-        };
-        let Some(delivered) = raw else {
-            return Ok(None);
+            };
+            let Some(delivered) = popped else {
+                return Ok(None);
+            };
+            let lost_since_last_read = match where_the_bag_goes {
+                WhereABagTakenOffTheMailboxGoes::ToTheReader => {
+                    delivered.dropped_bag_counter.as_ref().map_or(
+                        0,
+                        InboundLinkDroppedBagCounter::take_dropped_bags_the_reader_has_not_been_told_of,
+                    )
+                }
+                WhereABagTakenOffTheMailboxGoes::IntoTheStageWhileItIsInstalled(_) => 0,
+            };
+            (delivered, lost_since_last_read)
         };
         let inbound_link_name = delivered.inbound_link_name;
-        let dropped_bag_counter = delivered.dropped_bag_counter;
         let mut frame_bytes_from_wire = delivered.payload;
 
         let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
@@ -1076,17 +1071,14 @@ impl InputMailboxesInner {
             0,
         );
         frame_bytes_from_wire.truncate(stamped_payload_bytes);
-        Ok(Some(BagTakenOffTheMailbox {
-            bag_body: BagBodyForTheReader {
-                message: MessageReadFromInputPort {
-                    payload_bytes: frame_bytes_from_wire,
-                    timestamp_ns: header.timestamp_ns,
-                    group_boundary: header.group_boundary(),
-                    lost_since_last_read: 0,
-                },
-                inbound_link_name,
+        Ok(Some(BagBodyForTheReader {
+            message: MessageReadFromInputPort {
+                payload_bytes: frame_bytes_from_wire,
+                timestamp_ns: header.timestamp_ns,
+                group_boundary: header.group_boundary(),
+                lost_since_last_read,
             },
-            dropped_bag_counter,
+            inbound_link_name,
         }))
     }
 
@@ -1110,25 +1102,31 @@ impl InputMailboxesInner {
         loop {
             let ready_window = stage.lock().next_ready_window()?;
             if let Some(window) = ready_window {
-                let lost_since_last_read = told_of_the_losses_the_reader_has_not_been(
-                    feeding_link
-                        .as_ref()
-                        .map(|feeding| &feeding.dropped_bag_counter),
-                );
+                let (lost_since_last_read, inbound_link_name) =
+                    feeding_link.as_ref().map_or((0, None), |feeding| {
+                        (
+                            feeding
+                                .dropped_bag_counter
+                                .take_dropped_bags_the_reader_has_not_been_told_of(),
+                            Some(feeding.inbound_link_name.clone()),
+                        )
+                    });
                 return Ok(Some(BagBodyForTheReader {
                     message: MessageReadFromInputPort {
                         lost_since_last_read,
                         ..window.message
                     },
-                    inbound_link_name: feeding_link
-                        .as_ref()
-                        .map(|feeding| feeding.inbound_link_name.clone()),
+                    inbound_link_name,
                 }));
             }
-            let Some(bag) = self.pop_one_bag_off_the_mailbox(port, Some(stage))? else {
+            let Some(bag) = self.pop_one_bag_off_the_mailbox(
+                port,
+                WhereABagTakenOffTheMailboxGoes::IntoTheStageWhileItIsInstalled(stage),
+            )?
+            else {
                 return Ok(None);
             };
-            let flush = stage.lock().accept(&bag.bag_body.message.payload_bytes)?;
+            let flush = stage.lock().accept(&bag.message.payload_bytes)?;
             if let Some(flush) = flush {
                 Self::count_a_flush_on_the_link_feeding(port, feeding_link.as_ref(), flush);
             }

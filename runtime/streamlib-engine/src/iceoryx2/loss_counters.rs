@@ -121,6 +121,8 @@ impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
 /// so a queued bag carries that part as it stood when it was queued. A bag the
 /// mailbox evicted was the oldest queued, so it is ahead of every bag of the
 /// link still queued, and a bag reads that part as it stands when it is taken.
+/// Both placements hold only while every push and pop of the link's mailbox is
+/// serialized, as `InputMailboxesInner` serializes them under its port map lock.
 #[derive(Default)]
 struct InboundLinkDroppedBagCount {
     dropped_bags: CumulativeCount,
@@ -165,7 +167,7 @@ impl InboundLinkDroppedBagCounter {
     }
 
     /// Record one bag of this link's that the mailbox evicted to make room.
-    pub fn record_one_bag_evicted_from_the_mailbox(&self) {
+    pub(super) fn record_one_bag_evicted_from_the_mailbox(&self) {
         self.0
             .evicted_from_the_mailbox
             .fetch_add(1, Ordering::Relaxed);
@@ -179,7 +181,7 @@ impl InboundLinkDroppedBagCounter {
 
     /// The bags lost before reaching the mailbox, as the count stands now — what
     /// a bag queued now has ahead of it from that cause.
-    pub fn dropped_before_reaching_the_mailbox(&self) -> u64 {
+    pub(super) fn dropped_before_reaching_the_mailbox(&self) -> u64 {
         self.0
             .dropped_before_reaching_the_mailbox
             .load(Ordering::Relaxed)
@@ -188,7 +190,7 @@ impl InboundLinkDroppedBagCounter {
     /// Note a bag taken off the mailbox that had
     /// `dropped_before_reaching_the_mailbox_when_queued` ahead of it when it was
     /// queued; every eviction counted so far is ahead of it too.
-    pub fn note_a_bag_taken_off_the_mailbox(
+    pub(super) fn note_a_bag_taken_off_the_mailbox(
         &self,
         dropped_before_reaching_the_mailbox_when_queued: u64,
     ) {
@@ -202,7 +204,7 @@ impl InboundLinkDroppedBagCounter {
     /// The bags lost ahead of the latest bag taken off the mailbox that no
     /// earlier call returned — the `lost_since_last_read` of the message that
     /// bag is handed to the reader as.
-    pub fn take_dropped_bags_the_reader_has_not_been_told_of(&self) -> u64 {
+    pub(super) fn take_dropped_bags_the_reader_has_not_been_told_of(&self) -> u64 {
         let dropped_ahead = self
             .0
             .dropped_ahead_of_the_latest_bag_taken_off_the_mailbox

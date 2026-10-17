@@ -91,7 +91,9 @@ pub struct PortMailboxDeliveredBag {
 ///
 /// Stores raw wire-format `[u8]` slices (header + data) as `Vec<u8>`.
 /// Uses a crossbeam ArrayQueue internally for lock-free, thread-safe access.
-/// Multiple threads can push and pop concurrently (MPMC).
+/// Multiple threads can push and pop concurrently (MPMC); the queue stays
+/// sound, but a link's losses land on the right bag only while its owner
+/// serializes every push and pop.
 pub struct PortMailbox {
     queue: ArrayQueue<PortMailboxQueuedFrame>,
     capacity: usize,
