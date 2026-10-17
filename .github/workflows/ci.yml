@@ -650,9 +650,13 @@ jobs:
           cargo run --locked -q -p xtask -- lint-logging
           cargo run --locked -q -p xtask -- check-no-inheritable-descriptor
 
+      # The tests embed the interpreter setup-python installed and import
+      # `tatolab.stream` from source, so its one dependency goes there.
       - name: Wheel crate unit tests
         if: github.event_name != 'pull_request'
-        run: cargo test --locked -p streamlib-python-wheel --lib -- --test-threads=1
+        run: |
+          python -m pip install 'msgpack>=1.0'
+          cargo test --locked -p streamlib-python-wheel --lib -- --test-threads=1
 
       - name: Install MoltenVK and find the Metal device under it
         if: github.event_name != 'pull_request'
