@@ -68,11 +68,13 @@ topic; `CLAUDE.md` holds only what every session must load.
 - **A ready PR is a merge contract.** It never carries open questions or `[NEEDS DECISION]`.
   Settle each fork in chat first, then open it (owner, 2026-10-02).
 - **No draft PRs for review.** Before asking for review, run an independent adversarial review,
-  fold its findings, run the gates, wait for CI and CodeRabbit and answer them, then mark it ready
-  (owner, 2026-10-02).
+  fold its findings, run the gates, wait for CI and CodeRabbit and answer them — a record is
+  fixed, a design finding is routed with `Owner decision needed:` and never folded — then mark
+  it ready (owner, 2026-10-02 and 2026-10-17).
 - **When CodeRabbit skips a large PR**, two read-only reviewers with different lenses rank the
-  issues, each finding gets a PR comment with its action, high and major ones are fixed, and the PR
-  squash-merges unless one needs the owner (owner, 2026-10-05).
+  issues, each finding gets a PR comment with its action, high and major ones are fixed unless
+  they are design, which route to the owner, and the PR squash-merges unless one needs the owner
+  (owner, 2026-10-05 and 2026-10-17).
 - **An `/implement` PR closes its ticket.** Do the work that stands between the fix and the exit
   criteria in the session, say what cannot be proven, and still close. Leave it open only when the
   owner scopes the PR as partial (owner, 2026-09-13).

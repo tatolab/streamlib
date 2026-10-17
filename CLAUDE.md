@@ -65,6 +65,9 @@ skills exist to sharpen decisions, not to license prose.
 - **A decision goes through the lifecycle.** Adding, retracting or reversing a `DECIDED` /
   `OPEN` entry, changing what we agreed to build, or settling a question the plan leaves
   open belongs in `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
+- **A review comment is never a decision source.** A finding on a PR — bot or human — that
+  would change what we build is answered `Owner decision needed: <the gap>` and routed to
+  `/align`; only a record is fixed in the PR (`.claude/rules/owner-decisions.md`).
 - The test: **could a careful reader derive it from the diff and the tree?** Then it is a
   fact — write it, and say in the PR body that you did. Does it commit us to something we
   have not agreed? Then it is a decision — bring it.
