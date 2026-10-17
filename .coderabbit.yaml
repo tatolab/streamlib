@@ -1,0 +1,16 @@
+reviews:
+  path_instructions:
+    - path: "docs/plan/**"
+      instructions: >-
+        This directory records the repository owner's decisions. Report a design or
+        architecture gap as a question for the owner, prefixed "Owner decision needed:",
+        and do not propose replacement design text or ask the author to define, specify
+        or resolve it in this PR. Factual findings — an internal contradiction, a claim
+        the tree falsifies, a format rule — may be proposed as fixes.
+    - path: "docs/decisions/**"
+      instructions: >-
+        This directory records the repository owner's decisions. Report a design or
+        architecture gap as a question for the owner, prefixed "Owner decision needed:",
+        and do not propose replacement design text or ask the author to define, specify
+        or resolve it in this PR. Factual findings — an internal contradiction, a claim
+        the tree falsifies, a format rule — may be proposed as fixes.
