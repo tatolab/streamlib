@@ -159,6 +159,11 @@ Tailscale reach is incidental: a local relay is on the machine, so the tailnet r
 - **Whole groups drop** (2026-10-17): a message dropped mid-group leaves a reader decoding
   against a picture it never got until the next keyframe; dropping to the next `starts_group`
   is a brief freeze and a clean picture, and it is what moq-lite's own `max_age` does.
+- **A reported loss drops the same way, and a group's first message after it is kept**
+  (2026-10-17): the decoders and the publisher treat a nonzero `lost_since_last_read` as they
+  treat backpressure, discarding to the next `starts_group`. A loss is reported on the first
+  message after the lost one, so when that message itself starts a group the gap is behind it
+  and the reader resumes there; discarding it would drop a whole group for nothing.
 - **Track time, not arrival time** (2026-10-17): stamping at arrival bakes network jitter into
   every reader's timing; re-basing the track's own timestamps is the stack's player's model.
 

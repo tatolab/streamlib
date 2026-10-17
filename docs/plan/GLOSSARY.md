@@ -65,7 +65,7 @@ _Avoid_: "transport processor", "network transport".
 **Publisher** _(engine)_: the runtime's one component, in `tatolabd` beside the adapters, that
 forwards every exposed port's messages to the relays its level reaches, holding no logic —
 bytes as written, anything exposed, groups from the envelope, whole groups dropped under
-backpressure, the catalog from the ports' entries. _Avoid_: "publish" as the user's verb
+backpressure or a reported loss, the catalog from the ports' entries. _Avoid_: "publish" as the user's verb
 (that is **expose**), "broadcaster".
 
 **Relay adapter** _(engine)_: one crate implementing the relay-adapter SDK's trait, carrying
