@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.47.1](https://github.com/tatolab/streamlib/compare/v0.47.0...v0.47.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **webrtc:** streamlib-webrtc writes and reads bytes payloads — msgpack records, the group flag from the sync point, its tatolabd under a test machine root ([#2833](https://github.com/tatolab/streamlib/issues/2833)) ([0d5b72a](https://github.com/tatolab/streamlib/commit/0d5b72af50f2d89a3c6025461138bb72cf877953))
+
 ## [0.47.0](https://github.com/tatolab/streamlib/compare/v0.46.14...v0.47.0) (2026-10-17)
 
 
