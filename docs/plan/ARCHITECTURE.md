@@ -3134,7 +3134,8 @@ entry reads as **message** (the glossary).
   entry, the encoder writing it after its first frame; `color` rides the bitstream's VUI;
   `is_sync_point` is the envelope's `starts_group`; the ordering pair is deleted — loss on an
   ordered encoded link is the engine's per-link count the reader exposes as
-  `lost_since_last_read`, a decoder discarding to the next `starts_group`, and a write the
+  `lost_since_last_read`, a decoder discarding to the next `starts_group` — resuming at the
+  message reporting the loss when that message itself starts a group — and a write the
   channel ceiling refuses makes the encoder's next frame a keyframe, counted in `graph`'s
   refused-write count; `H264Decoder` reads that payload (owner, 2026-10-16 and 2026-10-17)]
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_video_frame -->
@@ -3906,9 +3907,11 @@ entry reads as **message** (the glossary).
   at once. Per exposed port it holds one reader on the port's channel — the subscriber slot
   every channel reserves, which `tap` held — and forwards each message's payload bytes as
   written to every joined relay that has a subscriber, stamping each object from the
-  message's envelope and nothing else. Under backpressure it drops the rest of the current
-  group and resumes at the next `starts_group`, never a message inside a group. It decodes no
-  payload, imports no class, and knows no port's encoding. Which exposed ports it offers is a
+  message's envelope and nothing else. Under backpressure, and on a message whose
+  `lost_since_last_read` is nonzero, it drops the rest of the current group and resumes at
+  the next `starts_group` — the message reporting the loss, when that message itself starts a
+  group — never a message inside a group. It decodes no payload, imports no class, and knows
+  no port's encoding. Which exposed ports it offers is a
   predicate that says "all": anything can be published and any port can go public, and a port
   whose bytes mean nothing off the machine — a `VideoFrame` record naming a surface — is
   forwarded all the same, so what was published is what a subscriber sees. Owner, 2026-10-16
