@@ -2480,9 +2480,9 @@ pub(crate) mod tests {
         assert_eq!(refusal.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     }
 
-    /// One 1024-sample stereo `f32` `AudioBlock`, msgpack-framed — the exact
-    /// size this rig's PipeWire arm publishes.
-    const AUDIO_BLOCK_BAG_BYTES: usize = 8366;
+    /// One 1024-sample stereo `f32` `AudioBlock`: its 8 290-byte msgpack payload
+    /// behind the frame header, the exact size this rig's PipeWire arm publishes.
+    const AUDIO_BLOCK_MESSAGE_BYTES: usize = streamlib::sdk::iceoryx2::FRAME_HEADER_SIZE + 8290;
 
     async fn tap_sample_from(
         runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
@@ -2495,10 +2495,10 @@ pub(crate) mod tests {
     /// one msgpack map) — which makes the default cap load-bearing for every
     /// data model that rides its payload inline, audio first among them.
     ///
-    /// Mental revert: set the default cap under 8 366 and this reddens.
+    /// Mental revert: set the default cap under `AUDIO_BLOCK_MESSAGE_BYTES` and this reddens.
     #[tokio::test]
     async fn tools_call_tap_carries_a_whole_audio_block_without_being_asked_to() {
-        let audio_bag = vec![0xABu8; AUDIO_BLOCK_BAG_BYTES];
+        let audio_bag = vec![0xABu8; AUDIO_BLOCK_MESSAGE_BYTES];
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
             vec![audio_bag],
             0,
@@ -2513,7 +2513,7 @@ pub(crate) mod tests {
         let bag = &sample["bags"][0];
         assert_eq!(
             bag["byte_len"].as_u64().unwrap(),
-            AUDIO_BLOCK_BAG_BYTES as u64
+            AUDIO_BLOCK_MESSAGE_BYTES as u64
         );
         assert_eq!(
             bag["hex_truncated"], false,
@@ -2521,7 +2521,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             bag["hex_preview"].as_str().unwrap().len(),
-            AUDIO_BLOCK_BAG_BYTES * 2,
+            AUDIO_BLOCK_MESSAGE_BYTES * 2,
             "the hex is the whole bag, so a consumer can decode it"
         );
     }
