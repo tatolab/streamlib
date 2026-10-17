@@ -29,11 +29,8 @@
 //! - `fanout_1_to_n` — one channel publisher feeding N ∈ {1,2,4,8}
 //!   subscribers. `write_bytes_with_timestamp` issues a SINGLE zero-copy loan + send
 //!   that reaches every subscriber; only the per-destination `notify()` is
-//!   O(N). Throughput is
-//!   reported as frames-delivered (N per call), so the curve stays
-//!   near-flat per delivered frame — the signature the retired
-//!   per-connection copy loop (one frame build + send PER subscriber,
-//!   O(N) copies) could not produce.
+//!   O(N). Throughput is reported as frames delivered (N per call), so
+//!   the curve stays near-flat per delivered frame.
 //!
 //! Run: `cargo bench -p streamlib-engine --bench output_writer_ffi_hop`.
 //! The bench writes to a per-run-unique iceoryx2 service name so
@@ -310,8 +307,8 @@ fn drain_fanout_in_line(fx: &FanoutFixture) {
 
 /// One publisher fanning out to N ∈ {1,2,4,8} subscribers. Throughput is
 /// reported as frames delivered (N per `write_bytes_with_timestamp` call), so a flat
-/// per-delivered-frame cost is the single-loan signature; the retired
-/// per-connection copy loop would show cost climbing linearly with N.
+/// per-delivered-frame cost is the single-loan signature; a cost climbing
+/// linearly with N means a copy per subscriber.
 fn bench_write_bytes_with_timestamp_fanout(c: &mut Criterion) {
     let payload = vec![0u8; 256];
     let mut group = c.benchmark_group("output_writer_write_bytes_with_timestamp/fanout_1_to_n");
