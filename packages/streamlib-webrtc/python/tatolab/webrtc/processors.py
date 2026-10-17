@@ -15,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 import threading
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Literal, NamedTuple, Protocol
 
 from tatolab.stream import (
     EncodedAudioPacket,
@@ -24,6 +24,7 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
+    msgpack,
     node,
 )
 
@@ -129,6 +130,24 @@ class ReceivedPacket(Protocol):
 _TRACK_KIND_BY_CODEC: "dict[str, VideoOrAudio]" = {"h264": "video", "opus": "audio"}
 
 
+def encoded_bag_unpacked_from(payload: bytes, inbound_link: str) -> "dict[str, Any]":
+    """The msgpack map one encoded bag's payload carries, refused by its link when it is not one."""
+    try:
+        bag = msgpack.unpack(payload)
+    except ValueError as undecodable:
+        raise ValueError(
+            f"WhipPublisher: a bag on `{inbound_link}` is not msgpack, so it is "
+            f"neither an encoded video frame nor an encoded audio packet."
+        ) from undecodable
+    if not isinstance(bag, dict):
+        raise ValueError(
+            f"WhipPublisher: a bag on `{inbound_link}` carries a msgpack "
+            f"{type(bag).__name__}, not the map an encoded video frame or an "
+            f"encoded audio packet is."
+        )
+    return bag
+
+
 def resolve_track_kind(
     codec: Any,
     inbound_link: str,
@@ -184,9 +203,8 @@ HIGHEST_CHANNELS_RTP_CARRIES = 2
 def refuse_audio_rtp_cannot_carry(channels: Any, inbound_link: str) -> None:
     """Refuse a multichannel Opus packet by name rather than send it anyway.
 
-    `Mp4Sink` set the precedent: a track it cannot write honestly is refused,
-    not written broken. Forwarded here, the far end would decode garbage and
-    nothing upstream would say why.
+    Forwarded, the far end would decode garbage and nothing upstream would say
+    why.
     """
     if isinstance(channels, int) and channels > HIGHEST_CHANNELS_RTP_CARRIES:
         raise ValueError(
@@ -283,7 +301,8 @@ class WhipPublisher:
         read = ctx.inputs.read_from_inbound_link_with_timestamp(TRACKS_INPUT_PORT)
         if read is None:
             return
-        bag, inbound_link, timestamp_ns = read
+        payload, inbound_link, timestamp_ns = read
+        bag = encoded_bag_unpacked_from(payload, inbound_link)
 
         kind = self._track_kind_of(bag, inbound_link)
         if kind == "audio":
@@ -483,13 +502,18 @@ class WhepPlayer:
             media = session.next_media(PLAYER_POLL_TIMEOUT_MS)
             if media is None:
                 continue
-            port, bag = _bag_for(media)
-            self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
+            message = _message_for(media)
+            self._report_a_bag_the_link_will_drop(message.port, message.payload)
             try:
-                outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
+                outputs.write(
+                    message.port,
+                    message.payload,
+                    timestamp_ns=media.timestamp_ns,
+                    starts_group=message.starts_group,
+                )
             except Exception as write_failure:
-                raise LinkOutputWriteFailure(port) from write_failure
-            self._report_progress(port)
+                raise LinkOutputWriteFailure(message.port) from write_failure
+            self._report_progress(message.port)
 
     def _report_progress(self, port: str) -> None:
         written = self._bags_written.get(port, 0) + 1
@@ -499,14 +523,14 @@ class WhepPlayer:
         elif written % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
             log.info(f"WhepPlayer: `{port}` bags_written={written}")
 
-    def _report_a_bag_the_link_will_drop(self, port: str, bitstream: bytes) -> None:
-        if len(bitstream) <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
+    def _report_a_bag_the_link_will_drop(self, port: str, payload: bytes) -> None:
+        if len(payload) <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
             return
         if self._reported_an_oversized_bag:
             return
         self._reported_an_oversized_bag = True
         log.error(
-            f"WhepPlayer: a {len(bitstream)}-byte bag on `{port}` is past the "
+            f"WhepPlayer: a {len(payload)}-byte bag on `{port}` is past the "
             f"{HELPER_LINK_PAYLOAD_CEILING_BYTES}-byte link ceiling and will be "
             f"dropped without reaching the decoder. Reported once."
         )
@@ -534,21 +558,37 @@ class WhepPlayer:
         self._stop.set()
 
 
-def _bag_for(
+class MessageThePlayerWritesToOneOutputPort(NamedTuple):
+    """One received item as the player publishes it."""
+
+    port: str
+    payload: bytes
+    starts_group: bool
+
+
+def _message_for(
     media: "_native.PlayedVideoAccessUnit | _native.PlayedOpusPacket",
-) -> "tuple[str, dict[str, Any]]":
-    """The port and the bag literal one received item is published on."""
+) -> MessageThePlayerWritesToOneOutputPort:
+    """The port, the payload and the group flag one received item is published with.
+
+    A decoder enters a video stream only at a sync point, so only one opens a
+    group; every Opus packet is one.
+    """
     if isinstance(media, _native.PlayedOpusPacket):
-        return ENCODED_AUDIO_OUTPUT_PORT, encoded_audio_packet_bag(media)
-    return ENCODED_VIDEO_OUTPUT_PORT, encoded_video_frame_bag(media)
+        return MessageThePlayerWritesToOneOutputPort(
+            port=ENCODED_AUDIO_OUTPUT_PORT,
+            payload=msgpack.pack(encoded_audio_packet_bag(media)),
+            starts_group=True,
+        )
+    return MessageThePlayerWritesToOneOutputPort(
+        port=ENCODED_VIDEO_OUTPUT_PORT,
+        payload=msgpack.pack(encoded_video_frame_bag(media)),
+        starts_group=media.is_sync_point,
+    )
 
 
 def encoded_video_frame_bag(access_unit: "ReceivedAccessUnit") -> "dict[str, Any]":
-    """One access unit, spelled against the encoded-video wire contract.
-
-    Spelled here rather than in Rust so the keys sit beside the cast that reads
-    them back, and there is one spelling rather than two that can drift.
-    """
+    """One access unit, spelled against the encoded-video wire contract."""
     bag: "dict[str, Any]" = {
         "codec": "h264",
         "bitstream": access_unit.bitstream,
