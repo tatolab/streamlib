@@ -103,6 +103,26 @@ impl PythonLinkInputDataReader {
             )
     }
 
+    /// The next message on `port_name` as a `Message` — payload, stamp, group
+    /// flag, the messages its link lost since the previous read from it, and
+    /// the link — or `None`.
+    ///
+    /// `into` casts the payload as it does for `read`.
+    #[pyo3(signature = (port_name, *, into = None))]
+    fn read_message<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.link_data_access.get().read_message_from_input_port(
+            python,
+            port_name,
+            into,
+            Some(self.gpu_limited_access_context.bind(python)),
+        )
+    }
+
     /// Every link feeding `port_name`, in wiring order.
     ///
     /// Readable in `setup()`, which is how a sink learns how many producers it

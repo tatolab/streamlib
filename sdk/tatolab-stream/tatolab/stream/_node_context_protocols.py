@@ -16,6 +16,7 @@ from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 
 if TYPE_CHECKING:
     from ._gpu_protocols import GpuContextFullAccess, GpuContextLimitedAccess
+    from ._message import Message
 
 _MessageReadTarget = TypeVar("_MessageReadTarget")
 _MessageReadTarget_co = TypeVar("_MessageReadTarget_co", covariant=True)
@@ -331,6 +332,34 @@ class LinkInputDataReader(Protocol):
 
         The stamp is the one the producer wrote — the source frame's instant,
         not the moment of the read.
+        """
+        ...
+
+    @overload
+    def read_message(
+        self, port_name: str, *, into: None = None
+    ) -> Message[bytes] | None: ...
+    @overload
+    def read_message(
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[_MessageReadTarget],
+    ) -> Message[_MessageReadTarget] | None: ...
+    def read_message(
+        self,
+        port_name: str,
+        *,
+        into: CastFromMessagePayloadBytes[Any] | None = None,
+    ) -> Any:
+        """The next message on `port_name` with its stamp, group flag, losses and link, or `None`.
+
+        `lost_since_last_read` counts the messages its link lost since the
+        previous message read from that link, so a reader that needs every
+        message of a group — a decoder — discards until the next message whose
+        `starts_group` is set. `into` casts the payload as it does for `read`.
+        A message no link delivered is refused by name, and the refusal
+        consumes it.
         """
         ...
 
