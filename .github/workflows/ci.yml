@@ -497,6 +497,22 @@ jobs:
             "$RUNNER_TEMP/lend-check-venv/bin/python" -m pytest -v \
             tests_against_the_runtime_unit_lend/
 
+      - name: Unpack the runtime unit under a test root
+        run: |
+          rm -rf target/tatolab-runtime
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
+
+      - name: The suite's venv, from its lockfile
+        working-directory: tests/stream-on-runtime
+        run: uv sync --frozen
+
+      - name: Integration suite (all but rig-only)
+        working-directory: tests/stream-on-runtime
+        run: .venv/bin/pytest -v -m "not rig_only_capability"
+
+      # The engine's suite runs before the extension's steps, so a consumer
+      # the engine has moved past cannot hide the engine's own result.
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine.
       - name: "Extension: build streamlib-webrtc into a venv holding tatolab-stream"
@@ -528,20 +544,6 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.webrtc._native
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
-
-      - name: Unpack the runtime unit under a test root
-        run: |
-          rm -rf target/tatolab-runtime
-          mkdir -p target/tatolab-runtime
-          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
-
-      - name: The suite's venv, from its lockfile
-        working-directory: tests/stream-on-runtime
-        run: uv sync --frozen
-
-      - name: Integration suite (all but rig-only)
-        working-directory: tests/stream-on-runtime
-        run: .venv/bin/pytest -v -m "not rig_only_capability"
 
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.
