@@ -64,6 +64,38 @@ def test_pack_takes_a_mapping_that_is_not_a_dict():
     assert unpack(pack(MappingProxyType({"width": 4}))) == {"width": 4}
 
 
+def test_pack_refuses_a_key_that_is_not_a_string_naming_its_path():
+    with pytest.raises(TypeError, match="string keys .* the int key 1 at the top level"):
+        pack({1: "x"})  # pyright: ignore[reportArgumentType]
+
+
+def test_pack_refuses_a_nested_key_that_is_not_a_string_naming_its_path():
+    with pytest.raises(TypeError, match="string keys .* the int key 2 under 'outer' > 0"):
+        pack({"outer": [{2: "y"}]})
+
+
+def _nested_record(container_depth: int) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for _ in range(container_depth - 1):
+        record = {"inner": record}
+    return record
+
+
+def test_pack_takes_a_record_nesting_128_containers():
+    assert unpack(pack(_nested_record(128))) == _nested_record(128)
+
+
+def test_pack_refuses_a_record_nesting_more_than_128_containers():
+    with pytest.raises(ValueError, match="nest more than 128 deep"):
+        pack(_nested_record(129))
+
+
+def test_unpack_reads_a_map_with_integer_keys_as_a_rust_producer_may_write():
+    integer_keyed_map = bytes([0x81, 0x01, MSGPACK_FIXSTR_MARKER_BASE | 1, ord("x")])
+
+    assert unpack(integer_keyed_map) == {1: "x"}
+
+
 def test_the_module_is_reachable_as_tatolab_stream_msgpack():
     assert tatolab.stream.msgpack.pack is pack
     assert tatolab.stream.msgpack.unpack is unpack

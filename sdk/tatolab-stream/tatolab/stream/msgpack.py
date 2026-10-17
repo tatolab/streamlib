@@ -36,12 +36,58 @@ _TypedDictReadTarget = TypeVar("_TypedDictReadTarget")
 _MESSAGE_KEY_FIELD_METADATA = "tatolab.stream.msgpack.message_key"
 
 
+# The bound the runtime's tap decoder keeps, so whatever packs can be tapped.
+MAXIMUM_NESTED_CONTAINER_DEPTH = 128
+
+
+def _describe_container_path(container_path: tuple[str | int, ...]) -> str:
+    if not container_path:
+        return "at the top level"
+    return "under " + " > ".join(
+        repr(step) if isinstance(step, str) else str(step) for step in container_path
+    )
+
+
+def _refuse_what_no_reader_can_read(
+    value: Any, container_path: tuple[str | int, ...], container_depth: int
+) -> None:
+    if not isinstance(value, (Mapping, list, tuple)):
+        return
+    if container_depth > MAXIMUM_NESTED_CONTAINER_DEPTH:
+        raise ValueError(
+            f"pack() refuses containers that nest more than "
+            f"{MAXIMUM_NESTED_CONTAINER_DEPTH} deep; this one does "
+            f"{_describe_container_path(container_path)}"
+        )
+    if isinstance(value, Mapping):
+        for key, element in value.items():
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"pack() encodes maps with string keys at every level; got the "
+                    f"{type(key).__name__} key {key!r} "
+                    f"{_describe_container_path(container_path)}"
+                )
+            _refuse_what_no_reader_can_read(
+                element, (*container_path, key), container_depth + 1
+            )
+    else:
+        for index, element in enumerate(value):
+            _refuse_what_no_reader_can_read(
+                element, (*container_path, index), container_depth + 1
+            )
+
+
 def pack(mapping: Mapping[str, Any]) -> bytes:
-    """Encode `mapping` as msgpack bytes, `bytes` values as msgpack `bin`."""
+    """Encode `mapping` as msgpack bytes, `bytes` values as msgpack `bin`.
+
+    Every map has string keys and containers nest at most 128 deep, the record
+    itself the outermost; anything else is refused at the write, by its path.
+    """
     if not isinstance(mapping, Mapping):
         raise TypeError(
             f"pack() encodes a mapping with string keys; got {type(mapping).__name__}"
         )
+    _refuse_what_no_reader_can_read(mapping, (), 1)
     packed = msgpack.packb(
         mapping if isinstance(mapping, dict) else dict(mapping), use_bin_type=True
     )
@@ -49,8 +95,11 @@ def pack(mapping: Mapping[str, Any]) -> bytes:
 
 
 def unpack(payload: bytes) -> Any:
-    """Decode msgpack bytes into ordinary Python data, msgpack `str` as `str`."""
-    return msgpack.unpackb(payload, raw=False)
+    """Decode msgpack bytes into ordinary Python data, msgpack `str` as `str`.
+
+    A map's keys come back as written, so a Rust producer's integer-keyed map reads.
+    """
+    return msgpack.unpackb(payload, raw=False, strict_map_key=False)
 
 
 def _message_value_of(value: Any) -> Any:
