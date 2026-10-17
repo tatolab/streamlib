@@ -2636,6 +2636,65 @@ mod tests {
         );
     }
 
+    /// A message lost on a running `ordered` link is told to the reader's next
+    /// read, beside the group flag the producer wrote, and to no read after it.
+    ///
+    /// The consumer reads one message, then nothing while the source writes six
+    /// past its ring. Fail-without-fix: leave the reads naming no loss and the
+    /// consumer reads sixteen messages that look contiguous over a gap of six.
+    #[test]
+    fn a_message_lost_on_a_running_ordered_link_is_told_to_the_next_read() {
+        const BAGS_PAST_THE_RING: usize = 6;
+
+        let mut link = NativeLinkWiredForLossCounting::wire(
+            "lost-since-last-read/ordered",
+            DeliveryProfile::Ordered.resolve(),
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        );
+        let dest_id = link.dest_id.clone();
+        let link_id = link.link_id.to_string();
+        let write_one_message = |group_boundary| {
+            link.source_output
+                .write_bytes_with_timestamp("out1", b"a message", 0, group_boundary)
+                .expect("the source publishes onto the wired channel");
+        };
+
+        write_one_message(MessageGroupBoundary::StartsGroup);
+        let first = link
+            .dest_input
+            .read_raw("in1")
+            .unwrap()
+            .expect("the consumer reads its first message");
+        for _ in 0..DeliveryProfile::ORDERED_DEPTH + BAGS_PAST_THE_RING {
+            write_one_message(MessageGroupBoundary::ContinuesGroup);
+        }
+        let after_the_overrun: Vec<_> =
+            std::iter::from_fn(|| link.dest_input.read_raw("in1").unwrap()).collect();
+
+        assert_eq!(first.lost_since_last_read, 0);
+        assert_eq!(first.group_boundary, MessageGroupBoundary::StartsGroup);
+        assert_eq!(after_the_overrun.len(), DeliveryProfile::ORDERED_DEPTH);
+        assert_eq!(
+            after_the_overrun
+                .iter()
+                .map(|message| message.lost_since_last_read)
+                .collect::<Vec<_>>(),
+            std::iter::once(BAGS_PAST_THE_RING as u64)
+                .chain(std::iter::repeat_n(0, DeliveryProfile::ORDERED_DEPTH - 1))
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            after_the_overrun
+                .iter()
+                .all(|message| message.group_boundary == MessageGroupBoundary::ContinuesGroup)
+        );
+        assert_eq!(
+            link.rendered_metrics_of(&dest_id).unwrap()["dropped_bags_by_link"],
+            serde_json::json!({ link_id.as_str(): BAGS_PAST_THE_RING }),
+            "telling the reader leaves the cumulative count `graph` renders as it was"
+        );
+    }
+
     /// A `newest` consumer passing over bags is the profile working, in its
     /// ring and in its mailbox alike, and its link shows no loss for either.
     ///
@@ -4119,6 +4178,56 @@ mod tests {
         assert_eq!(
             link.rendered_metrics_of_the_destination()["dropped_bags_by_link"],
             serde_json::json!({ link.link_id.as_str(): BAGS_PAST_THE_RING }),
+        );
+    }
+
+    /// A stalled windowed consumer's next window is told of the bags its ring
+    /// overwrote, and no window after it is.
+    ///
+    /// Each block is one 512-sample window. Fail-without-fix: leave a window's
+    /// losses at the stage's zero and every window reads as though nothing was
+    /// lost.
+    #[test]
+    fn a_stalled_windowed_consumers_next_window_is_told_what_its_ring_overwrote() {
+        const BAGS_PAST_THE_RING: usize = 6;
+        const WINDOW_FRAMES: usize = 512;
+        const WINDOW_DURATION_NS: i64 = 32_000_000;
+        let link = NativeLinkIntoAWindowedPort::wire();
+        let write_block = |block_index: usize| {
+            link.source_output
+                .write_bytes_with_timestamp(
+                    "out1",
+                    &a_mono_16k_audio_block(WINDOW_FRAMES, block_index as i64 * WINDOW_DURATION_NS),
+                    0,
+                    MessageGroupBoundary::StartsGroup,
+                )
+                .expect("the source publishes onto the windowed channel");
+        };
+
+        write_block(0);
+        let first_window = link
+            .dest_input
+            .read_raw("audio")
+            .unwrap()
+            .expect("one block is one window");
+        for block_index in 1..=WINDOWED_PORT_SUBSCRIBER_RING_DEPTH + BAGS_PAST_THE_RING {
+            write_block(block_index);
+        }
+        let (losses_told_after_the_overrun, _) = CapturedTracingWarnings::captured_while(|| {
+            std::iter::from_fn(|| link.dest_input.read_raw("audio").unwrap())
+                .map(|window| window.lost_since_last_read)
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(first_window.lost_since_last_read, 0);
+        assert_eq!(
+            losses_told_after_the_overrun.first(),
+            Some(&(BAGS_PAST_THE_RING as u64))
+        );
+        assert_eq!(
+            losses_told_after_the_overrun.iter().sum::<u64>(),
+            BAGS_PAST_THE_RING as u64,
+            "each loss is told once; got {losses_told_after_the_overrun:?}"
         );
     }
 

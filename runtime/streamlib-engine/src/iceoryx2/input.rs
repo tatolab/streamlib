@@ -61,7 +61,7 @@ pub(super) struct BagBodyForTheReader {
 }
 
 /// One message read off an input port: its payload as the producer wrote it, its
-/// stamp, and whether it starts a group.
+/// stamp, whether it starts a group, and what its link lost ahead of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageReadFromInputPort {
     /// The payload exactly as the producer wrote it.
@@ -70,6 +70,40 @@ pub struct MessageReadFromInputPort {
     pub timestamp_ns: i64,
     /// Whether the message opens a group; a window always opens one.
     pub group_boundary: MessageGroupBoundary,
+    /// The bags this message's inbound link lost between the previous message
+    /// read from that link and this one; for a window, the bags lost ahead of
+    /// those it was cut from. Each loss is told once, and the link's cumulative
+    /// count `graph` renders is never zeroed.
+    pub lost_since_last_read: u64,
+}
+
+/// A bag taken off a port's mailbox, and the dropped-bag count of the link it
+/// arrived on, which still holds the losses ahead of it the reader has not been
+/// told of.
+struct BagTakenOffTheMailbox {
+    bag_body: BagBodyForTheReader,
+    dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
+}
+
+impl BagTakenOffTheMailbox {
+    /// The bag as the reader receives it, told of every loss ahead of it.
+    fn told_of_the_losses_ahead_of_it(self) -> BagBodyForTheReader {
+        let mut bag_body = self.bag_body;
+        bag_body.message.lost_since_last_read =
+            told_of_the_losses_the_reader_has_not_been(self.dropped_bag_counter.as_ref());
+        bag_body
+    }
+}
+
+/// The losses `dropped_bag_counter`'s link has ahead of the latest bag taken off
+/// the mailbox that the reader has not been told of; zero where no link
+/// delivered the bag.
+fn told_of_the_losses_the_reader_has_not_been(
+    dropped_bag_counter: Option<&InboundLinkDroppedBagCounter>,
+) -> u64 {
+    dropped_bag_counter
+        .map(InboundLinkDroppedBagCounter::take_dropped_bags_the_reader_has_not_been_told_of)
+        .unwrap_or(0)
 }
 
 /// Decode one msgpack payload into the type a reader named.
@@ -87,6 +121,7 @@ fn unknown_input_port(port: &str) -> Error {
 struct WindowedPortInboundLink {
     link_id: String,
     inbound_link_name: InboundLinkName,
+    dropped_bag_counter: InboundLinkDroppedBagCounter,
     discarded_sample_counter: Option<InboundLinkDiscardedSampleCounter>,
 }
 
@@ -766,6 +801,7 @@ impl InputMailboxesInner {
                 .map(|only| WindowedPortInboundLink {
                     link_id: only.link_id.clone(),
                     inbound_link_name: only.inbound_link_name.clone(),
+                    dropped_bag_counter: only.dropped_bag_counter.clone(),
                     discarded_sample_counter: only.discarded_sample_counter.clone(),
                 }),
         }
@@ -984,9 +1020,9 @@ impl InputMailboxesInner {
         // here, with the `ports` mutex released — it guards the port map, and a
         // resampler pass is not port-map work.
         match audio_windowing {
-            InstalledInputPortAudioWindowing::NotWindowed => {
-                self.pop_one_bag_off_the_mailbox(port, None)
-            }
+            InstalledInputPortAudioWindowing::NotWindowed => Ok(self
+                .pop_one_bag_off_the_mailbox(port, None)?
+                .map(BagTakenOffTheMailbox::told_of_the_losses_ahead_of_it)),
             // Nothing, and deliberately not the bag underneath: a port whose
             // contract is unsettled has no exact size to cut one to.
             InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat => Ok(None),
@@ -1004,7 +1040,7 @@ impl InputMailboxesInner {
         &self,
         port: &str,
         only_while_this_stage_is_installed: Option<&SharedAudioWindowStage>,
-    ) -> Result<Option<BagBodyForTheReader>> {
+    ) -> Result<Option<BagTakenOffTheMailbox>> {
         let raw = {
             let ports = self.ports.lock();
             let port_config = ports.get(port).ok_or_else(|| unknown_input_port(port))?;
@@ -1022,6 +1058,7 @@ impl InputMailboxesInner {
             return Ok(None);
         };
         let inbound_link_name = delivered.inbound_link_name;
+        let dropped_bag_counter = delivered.dropped_bag_counter;
         let mut frame_bytes_from_wire = delivered.payload;
 
         let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
@@ -1039,13 +1076,17 @@ impl InputMailboxesInner {
             0,
         );
         frame_bytes_from_wire.truncate(stamped_payload_bytes);
-        Ok(Some(BagBodyForTheReader {
-            message: MessageReadFromInputPort {
-                payload_bytes: frame_bytes_from_wire,
-                timestamp_ns: header.timestamp_ns,
-                group_boundary: header.group_boundary(),
+        Ok(Some(BagTakenOffTheMailbox {
+            bag_body: BagBodyForTheReader {
+                message: MessageReadFromInputPort {
+                    payload_bytes: frame_bytes_from_wire,
+                    timestamp_ns: header.timestamp_ns,
+                    group_boundary: header.group_boundary(),
+                    lost_since_last_read: 0,
+                },
+                inbound_link_name,
             },
-            inbound_link_name,
+            dropped_bag_counter,
         }))
     }
 
@@ -1069,17 +1110,25 @@ impl InputMailboxesInner {
         loop {
             let ready_window = stage.lock().next_ready_window()?;
             if let Some(window) = ready_window {
+                let lost_since_last_read = told_of_the_losses_the_reader_has_not_been(
+                    feeding_link
+                        .as_ref()
+                        .map(|feeding| &feeding.dropped_bag_counter),
+                );
                 return Ok(Some(BagBodyForTheReader {
+                    message: MessageReadFromInputPort {
+                        lost_since_last_read,
+                        ..window.message
+                    },
                     inbound_link_name: feeding_link
                         .as_ref()
                         .map(|feeding| feeding.inbound_link_name.clone()),
-                    ..window
                 }));
             }
             let Some(bag) = self.pop_one_bag_off_the_mailbox(port, Some(stage))? else {
                 return Ok(None);
             };
-            let flush = stage.lock().accept(&bag.message.payload_bytes)?;
+            let flush = stage.lock().accept(&bag.bag_body.message.payload_bytes)?;
             if let Some(flush) = flush {
                 Self::count_a_flush_on_the_link_feeding(port, feeding_link.as_ref(), flush);
             }
@@ -2096,6 +2145,7 @@ mod tests {
                 payload_bytes: b"continues-a-group".to_vec(),
                 timestamp_ns: 111,
                 group_boundary: MessageGroupBoundary::ContinuesGroup,
+                lost_since_last_read: 0,
             })
         );
         assert_eq!(
@@ -2105,11 +2155,167 @@ mod tests {
                     payload_bytes: b"starts-a-group".to_vec(),
                     timestamp_ns: 222,
                     group_boundary: MessageGroupBoundary::StartsGroup,
+                    lost_since_last_read: 0,
                 },
                 InboundLinkName::from("psource/out"),
             ))
         );
         assert_eq!(mailboxes.read_raw("in").unwrap(), None);
+    }
+
+    /// Every message a port hands a reader, as its payload and its
+    /// `lost_since_last_read`, until the port runs dry.
+    fn payloads_and_losses_read_off(
+        mailboxes: &InputMailboxesInner,
+        port: &str,
+    ) -> Vec<(String, u64)> {
+        std::iter::from_fn(|| mailboxes.read_raw(port).unwrap())
+            .map(|message| {
+                (
+                    String::from_utf8(message.payload_bytes).unwrap(),
+                    message.lost_since_last_read,
+                )
+            })
+            .collect()
+    }
+
+    /// Bags the ring overwrote behind bags already queued are told to the first
+    /// bag read after them, never to the queued bags ahead of them.
+    ///
+    /// Two bags sit in the mailbox when the ring overwrites three more; the read
+    /// of the first receives the ring's survivors before it pops. Fail-without-fix:
+    /// tell each read the link's count as it stands at the read, and the first
+    /// queued bag — which preceded the gap — is told of all three, so a decoder
+    /// resuming at it decodes across the gap.
+    #[test]
+    fn a_ring_gap_behind_queued_bags_is_told_to_the_first_bag_after_it() {
+        const RING_DEPTH: usize = 4;
+        const BAGS_THE_RING_OVERWROTE: usize = 3;
+        let (publisher, subscriber) =
+            open_channel_for_one_link("loss-placement/ring-gap", RING_DEPTH);
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-ring-gap",
+            &InboundLinkName::from("psource/out"),
+            subscriber,
+        );
+
+        publish_one_frame(&publisher, "out", b"queued-0");
+        publish_one_frame(&publisher, "out", b"queued-1");
+        mailboxes.receive_pending();
+        for index in 0..RING_DEPTH + BAGS_THE_RING_OVERWROTE {
+            publish_one_frame(&publisher, "out", format!("after-{index}").as_bytes());
+        }
+
+        assert_eq!(
+            payloads_and_losses_read_off(&mailboxes, "in"),
+            [
+                ("queued-0", 0),
+                ("queued-1", 0),
+                ("after-3", BAGS_THE_RING_OVERWROTE as u64),
+                ("after-4", 0),
+                ("after-5", 0),
+                ("after-6", 0),
+            ]
+            .map(|(payload, lost)| (payload.to_string(), lost)),
+        );
+    }
+
+    /// A bag the mailbox evicted is told to the next bag read from its link,
+    /// though that bag was queued before the eviction was counted.
+    ///
+    /// Four bags reach a two-deep mailbox in one receive, so the third and the
+    /// fourth each evict one. Fail-without-fix: tell each bag the link's whole
+    /// count as it stood when the bag was queued, and the third is told of one
+    /// loss and the fourth of the other — the fourth was never behind a loss.
+    #[test]
+    fn an_evicted_bag_is_told_to_the_next_bag_read_from_its_link() {
+        let (publisher, subscriber) = open_channel_for_one_link("loss-placement/eviction", 8);
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 2, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-eviction",
+            &InboundLinkName::from("psource/out"),
+            subscriber,
+        );
+
+        for index in 0..4 {
+            publish_one_frame(&publisher, "out", format!("bag-{index}").as_bytes());
+        }
+
+        assert_eq!(
+            payloads_and_losses_read_off(&mailboxes, "in"),
+            [("bag-2".to_string(), 2), ("bag-3".to_string(), 0)],
+        );
+        assert_eq!(
+            mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_snapshot_by_inbound_link()["L-eviction"],
+            2,
+            "telling the reader zeroes nothing: `graph` still renders the cumulative count"
+        );
+    }
+
+    /// Under fan-in each read is told its own link's losses, never the other
+    /// link's. Each link's first receive is the baseline its ring gaps are read
+    /// against, so both deliver once before one is overrun.
+    ///
+    /// Fail-without-fix: keep one reader-side tally per port and the first bag
+    /// read from the healthy link is told of the overrun link's losses.
+    #[test]
+    fn a_fan_in_read_is_told_only_the_losses_of_the_link_it_arrived_on() {
+        const RING_DEPTH: usize = 2;
+        let (overrun_publisher, overrun_subscriber) =
+            open_channel_for_one_link("loss-placement/fan-in/overrun", RING_DEPTH);
+        let (healthy_publisher, healthy_subscriber) =
+            open_channel_for_one_link("loss-placement/fan-in/healthy", RING_DEPTH);
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-overrun",
+            &InboundLinkName::from("poverrun/out"),
+            overrun_subscriber,
+        );
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-healthy",
+            &InboundLinkName::from("phealthy/out"),
+            healthy_subscriber,
+        );
+
+        publish_one_frame(&overrun_publisher, "out", b"overrun-first");
+        publish_one_frame(&healthy_publisher, "out", b"healthy-first");
+        mailboxes.receive_pending();
+        for index in 0..RING_DEPTH + 3 {
+            publish_one_frame(
+                &overrun_publisher,
+                "out",
+                format!("overrun-{index}").as_bytes(),
+            );
+        }
+        publish_one_frame(&healthy_publisher, "out", b"healthy-second");
+
+        let mut losses_told_by_link: std::collections::BTreeMap<String, Vec<u64>> =
+            std::collections::BTreeMap::new();
+        while let Some((message, inbound_link_name)) =
+            mailboxes.read_raw_from_inbound_link("in").unwrap()
+        {
+            losses_told_by_link
+                .entry(inbound_link_name.as_str().to_string())
+                .or_default()
+                .push(message.lost_since_last_read);
+        }
+        assert_eq!(
+            losses_told_by_link,
+            std::collections::BTreeMap::from([
+                ("phealthy/out".to_string(), vec![0, 0]),
+                ("poverrun/out".to_string(), vec![0, 3, 0]),
+            ]),
+        );
     }
 
     /// A frame too short to carry a frame header consumed a sequence number and

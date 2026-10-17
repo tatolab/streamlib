@@ -445,10 +445,12 @@ impl AudioWindowAccumulator {
                 payload_bytes: bag,
                 timestamp_ns: first_sample_timestamp_ns,
                 group_boundary: MessageGroupBoundary::StartsGroup,
+                lost_since_last_read: 0,
             },
             // A window is cut from bags rather than being one, so the stage has
-            // no entry to read a link off. The port fills it in: a windowed
-            // port takes exactly one link, so there is only one answer.
+            // no entry to read a link or its losses off. The port fills both
+            // in: a windowed port takes exactly one link, so there is only one
+            // answer.
             inbound_link_name: None,
         }))
     }
