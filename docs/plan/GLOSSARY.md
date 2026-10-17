@@ -124,10 +124,9 @@ machine joins for an internet address. Never the runtime. _Avoid_: "gateway", "t
 
 **Codec block**: one of the codec built-ins — encoder or decoder inside the runtime
 (`H264Encoder`, `OpusDecoder`, ...), configured like any built-in; its per-frame path never
-enters an interpreter. `Mp4Sink`, the one muxer, is deleted at the sharing step: a stream's
-last mile is a MoQ client's. The next codec follows the built-in criterion and is not a codec
-block by default. _Avoid_: "codec processor" (user-authored shape), "codec plugin"
-(pre-pivot).
+enters an interpreter. There is no muxer: a stream's last mile is a MoQ client's. The next
+codec follows the built-in criterion and is not a codec block by default. _Avoid_: "codec
+processor" (user-authored shape), "codec plugin" (pre-pivot).
 
 **Conversion**: rewriting a pre-pivot consumer from scratch in the current idiom — the
 old directory mined for logic only and deleted in the same PR. _Avoid_: "upgrade",
