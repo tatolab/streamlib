@@ -4,12 +4,10 @@
 //! Annex-B access units — the video codec seam's wire — into length-prefixed
 //! samples and the parameter sets that describe them, and back again.
 //!
-//! Neither of the places an access unit is held off the wire keeps parameter
-//! sets in band: ISO/IEC 14496-15 puts them in an `avc1`/`hvc1` sample entry's
-//! `avcC`/`hvcC` and nowhere else, and VideoToolbox keeps them in a
-//! `CMFormatDescription`. So the walk below sorts each access unit's NAL
-//! units into the two piles both want them in — parameter sets out,
-//! everything else length-prefixed into the sample.
+//! VideoToolbox keeps parameter sets out of band, in a `CMFormatDescription`,
+//! the way an ISO/IEC 14496-15 `avcC`/`hvcC` configuration record does. So the
+//! walk below sorts each access unit's NAL units into two piles — parameter
+//! sets out, everything else length-prefixed into the sample.
 //!
 //! [`annex_b_access_unit_from_length_prefixed_sample`] is that walk run
 //! backwards. The two live together so a round-trip test can hold them to
@@ -174,7 +172,8 @@ impl ParameterSetsFromAnnexBAccessUnit {
     }
 }
 
-/// One access unit split the way a container or a codec API wants it.
+/// One access unit split the way a codec API that holds its parameter sets
+/// out of band wants it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LengthPrefixedSampleFromAnnexBAccessUnit {
     /// Every non-parameter-set NAL unit, each preceded by its
@@ -308,8 +307,8 @@ impl std::fmt::Display for SampleIsNotLengthPrefixedNalUnits {
 ///
 /// The inverse of [`length_prefix_annex_b_access_unit`], reading each NAL
 /// unit behind a `length_prefix_width`-wide length. A sync sample on its own
-/// decodes nothing — its parameter sets were kept out in the sample entry or
-/// format description — so a reader passes those sets here and a non-sync
+/// decodes nothing — its parameter sets were kept out in the format
+/// description — so a reader passes those sets here and a non-sync
 /// sample passes none, which is what the encoder emitted.
 pub fn annex_b_access_unit_from_length_prefixed_sample<ParameterSet: AsRef<[u8]>>(
     length_prefixed_sample_bytes: &[u8],
@@ -493,10 +492,9 @@ mod tests {
         assert_eq!(bytes.len(), 4 + 2 + 4 + 300);
     }
 
-    /// The pair held to each other: split an access unit the way a decoder
-    /// handed a format description does, then join it the way an encoder
-    /// reading one does, and land on the bytes the encoder published. This is the only test that can catch the two
-    /// drifting apart, which is why they live in one module.
+    /// Split an access unit the way the VideoToolbox decode session does,
+    /// rejoin it the way the encode session does, and land on the bytes the
+    /// encoder published.
     #[test]
     fn a_sync_points_sample_and_its_parameter_sets_rejoin_into_the_access_unit_they_came_from() {
         let sequence_parameter_set: &[u8] = &[0x67, 0x42, 0x00, 0x1F, 0xAA, 0xBB];
@@ -505,14 +503,9 @@ mod tests {
         let published = annex_b(&[sequence_parameter_set, picture_parameter_set, idr_slice]);
 
         let split = length_prefix_annex_b_access_unit(&published, VideoCodecElementaryStream::H264);
-        // The order a sample entry hands them back in: `avcC` states its
-        // sequence sets before its picture sets.
-        let parameter_sets: Vec<Vec<u8>> = split
+        let parameter_sets: Vec<&[u8]> = split
             .parameter_sets
-            .sequence_parameter_set_nal_units
-            .iter()
-            .chain(split.parameter_sets.picture_parameter_set_nal_units.iter())
-            .cloned()
+            .in_configuration_record_order()
             .collect();
 
         let rejoined = annex_b_access_unit_from_length_prefixed_sample(
@@ -542,15 +535,9 @@ mod tests {
         ]);
 
         let split = length_prefix_annex_b_access_unit(&published, VideoCodecElementaryStream::H265);
-        // `hvcC` orders its arrays by `nal_unit_type`, which is VPS 32, SPS
-        // 33, PPS 34 — the order they were published in.
-        let parameter_sets: Vec<Vec<u8>> = split
+        let parameter_sets: Vec<&[u8]> = split
             .parameter_sets
-            .video_parameter_set_nal_units
-            .iter()
-            .chain(split.parameter_sets.sequence_parameter_set_nal_units.iter())
-            .chain(split.parameter_sets.picture_parameter_set_nal_units.iter())
-            .cloned()
+            .in_configuration_record_order()
             .collect();
 
         let rejoined = annex_b_access_unit_from_length_prefixed_sample(

@@ -131,7 +131,7 @@ mod linux_rig {
     }
 
     /// Which source arm feeds the graph.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum RoundTripSourceArm {
         /// Replay the checked-in reference PNGs — deterministic, and the
         /// only arm a PSNR score can be computed against.
@@ -487,7 +487,7 @@ mod linux_rig {
         register_media_builtin_processor_types();
 
         let app = App::new()?;
-        let source = match &arguments.source_arm {
+        let source = match arguments.source_arm {
             RoundTripSourceArm::PsnrReferenceFixtures => app
                 .add_local::<PsnrReferenceFixtureSource::Processor>(
                 PsnrReferenceFixtureSourceConfig {

@@ -84,8 +84,8 @@ impl OpusEncoderApplication {
 /// the tuning.
 ///
 /// In-band FEC and DTX are off and are not knobs. DTX replaces silence with
-/// nothing — a gap the plan's own doctrine says must stay derivable from the stamps
-/// rather than be invented back by a decoder.
+/// nothing — a gap the plan's own doctrine says must stay derivable from the
+/// stamps rather than be invented back by a decoder.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
