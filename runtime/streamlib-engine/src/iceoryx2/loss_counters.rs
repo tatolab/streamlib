@@ -121,8 +121,9 @@ impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
 /// so a queued bag carries that part as it stood when it was queued. A bag the
 /// mailbox evicted was the oldest queued, so it is ahead of every bag of the
 /// link still queued, and a bag reads that part as it stands when it is taken.
-/// Both placements hold only while every push and pop of the link's mailbox is
-/// serialized, as `InputMailboxesInner` serializes them under its port map lock.
+/// Each part lands on the right bag only while every push and pop of the link's
+/// mailbox is serialized, as `InputMailboxesInner` serializes them under its
+/// port map lock.
 #[derive(Default)]
 struct InboundLinkDroppedBagCount {
     dropped_bags: CumulativeCount,
