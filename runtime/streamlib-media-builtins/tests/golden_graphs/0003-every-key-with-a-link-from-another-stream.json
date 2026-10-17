@@ -210,22 +210,6 @@
       "components": {
         "state": "Running"
       }
-    },
-    {
-      "id": "golden13",
-      "name": "mp4sink",
-      "type": "tatolab.stream:Mp4Sink",
-      "config": {
-        "path": "recording.mp4"
-      },
-      "config_checksum": 0,
-      "ports": {
-        "inputs": [],
-        "outputs": []
-      },
-      "components": {
-        "state": "Running"
-      }
     }
   ],
   "links": [
@@ -329,34 +313,6 @@
       "components": {}
     },
     {
-      "id": "goldenlink08",
-      "source": {
-        "node": "h264encoder",
-        "port": "encoded_video"
-      },
-      "target": {
-        "node": "mp4sink",
-        "port": "tracks"
-      },
-      "capacity": 16,
-      "state": "wired",
-      "components": {}
-    },
-    {
-      "id": "goldenlink09",
-      "source": {
-        "node": "opusencoder",
-        "port": "encoded_audio"
-      },
-      "target": {
-        "node": "mp4sink",
-        "port": "tracks"
-      },
-      "capacity": 16,
-      "state": "wired",
-      "components": {}
-    },
-    {
       "id": "goldenlink10",
       "source": {
         "stream": "camera-rig",
@@ -390,23 +346,6 @@
       "error_reason": "Invalid configuration: output port 'goldencamerarig01.video' would feed 33 destinations, and a channel carries at most 32",
       "components": {
         "state": "Error"
-      }
-    },
-    {
-      "id": "goldenlink12",
-      "source": {
-        "stream": "camera-rig",
-        "node": "h264encoder",
-        "port": "encoded_video"
-      },
-      "target": {
-        "node": "mp4sink",
-        "port": "tracks"
-      },
-      "capacity": 16,
-      "state": "wired",
-      "components": {
-        "state": "Wired"
       }
     }
   ],

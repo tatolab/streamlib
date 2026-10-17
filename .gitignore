@@ -24,10 +24,6 @@ sdk/streamlib-python-wheel/python/tatolab/runtime/_vulkan_driver/
 # Output files
 output/
 *.mp4
-# ...except the one recording that is a checked-in test asset: `xtask
-# mp4-inspect`'s tests read bytes `Mp4Sink` actually wrote, and a built-ins
-# test regenerates and compares them so the two cannot drift.
-!xtask/tests/fixtures/*.mp4
 output.log
 
 # IDE

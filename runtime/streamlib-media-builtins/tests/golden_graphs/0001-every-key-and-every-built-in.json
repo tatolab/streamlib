@@ -210,22 +210,6 @@
       "components": {
         "state": "Running"
       }
-    },
-    {
-      "id": "golden13",
-      "name": "mp4sink",
-      "type": "tatolab.stream:Mp4Sink",
-      "config": {
-        "path": "recording.mp4"
-      },
-      "config_checksum": 0,
-      "ports": {
-        "inputs": [],
-        "outputs": []
-      },
-      "components": {
-        "state": "Running"
-      }
     }
   ],
   "links": [
@@ -351,34 +335,6 @@
       "target": {
         "node": "speakersink",
         "port": "audio"
-      },
-      "capacity": 16,
-      "state": "wired",
-      "components": {}
-    },
-    {
-      "id": "goldenlink10",
-      "source": {
-        "node": "h264encoder",
-        "port": "encoded_video"
-      },
-      "target": {
-        "node": "mp4sink",
-        "port": "tracks"
-      },
-      "capacity": 16,
-      "state": "wired",
-      "components": {}
-    },
-    {
-      "id": "goldenlink11",
-      "source": {
-        "node": "opusencoder",
-        "port": "encoded_audio"
-      },
-      "target": {
-        "node": "mp4sink",
-        "port": "tracks"
       },
       "capacity": 16,
       "state": "wired",

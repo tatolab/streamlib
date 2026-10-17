@@ -26,7 +26,6 @@ pub mod codec_proof_image_measurement;
 pub mod generate_built_in_node_classes;
 pub mod generate_third_party_notices;
 pub mod lint_logging;
-mod mp4_inspect;
 pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod source_call_site_scan;
@@ -651,12 +650,6 @@ enum Commands {
     #[command(subcommand)]
     Psnr(psnr::PsnrCommand),
 
-    /// Report what a recording actually contains — tracks and the inbound
-    /// link each one was named after, sample entries, fragments and durations
-    /// — as JSON. Pure Rust over `mp4-atom`, the same pin `Mp4Sink` writes
-    /// with, so nothing downstream needs ffprobe.
-    Mp4Inspect(mp4_inspect::Mp4InspectCommand),
-
     /// Regenerate `tatolab/stream/_built_in_nodes.py` — one Python class per
     /// built-in, with a `TypedDict` for its config — from the runtime's own
     /// descriptors. `--check` is the CI gate: it fails when the checked-in
@@ -748,7 +741,6 @@ fn main() -> Result<()> {
             ),
         )?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
-        Commands::Mp4Inspect(inspect_command) => mp4_inspect::run(inspect_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {
             generate_built_in_node_classes::run(&workspace_root()?, check)?
         }

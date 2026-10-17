@@ -56,8 +56,7 @@ const MULTISTREAM_PACKET_FRAMING_HEADROOM_BYTES: usize = 256;
 #[schemars(crate = "streamlib::sdk::schemars")]
 pub enum OpusEncoderApplication {
     /// Broadcast and high fidelity: the decoded audio should be as close as
-    /// possible to the input. The default, because a recording rung wants
-    /// fidelity rather than intelligibility under loss.
+    /// possible to the input.
     #[default]
     #[serde(rename = "audio")]
     Audio,
@@ -84,9 +83,8 @@ impl OpusEncoderApplication {
 /// framing are the port's window contract, and what is left is the rate and
 /// the tuning.
 ///
-/// In-band FEC and DTX are off and are not knobs. FEC spends bitrate on
-/// redundancy a recording never reads, and DTX replaces silence with nothing
-/// — a gap the plan's own doctrine says must stay derivable from the stamps
+/// In-band FEC and DTX are off and are not knobs. DTX replaces silence with
+/// nothing — a gap the plan's own doctrine says must stay derivable from the stamps
 /// rather than be invented back by a decoder.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]

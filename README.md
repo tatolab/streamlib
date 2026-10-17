@@ -30,8 +30,8 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
   CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
   `frame.cpu()`.
 - **Native built-ins for the parts with deadlines**: camera, window, test pattern, microphone,
-  speaker, H.264 / H.265 / Opus codecs, MP4 recording, and a virtual camera on Linux — native code
-  inside the runtime, configured from Python.
+  speaker, H.264 / H.265 / Opus codecs, and a virtual camera on Linux — native code inside the
+  runtime, configured from Python.
 - **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
   sample what a link carries, look at a frame, read the logs, and add, connect or remove nodes while
   the stream runs — the same operations the `tatolab` CLI uses.
@@ -56,7 +56,7 @@ Python and shared with people and agents. Today a stream runs on one machine, an
 agents work on it there.
 
 - **Live video and audio with a model in the loop** — a camera into torch on the GPU, the result in a
-  window, in an MP4, or on a virtual camera that other applications can pick.
+  window or on a virtual camera that other applications can pick.
 - **Agents that watch and change a running stream** — over MCP, on the machine itself, or from
   another machine over ssh.
 - **Tailscale users, first.** Reaching a stream on another machine of your tailnet is
@@ -596,7 +596,6 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 | `MicrophoneSource`, `SpeakerSink` | The machine's audio backend, as timestamped sample blocks. |
 | `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` | Hardware codecs: Vulkan Video on Linux, VideoToolbox on macOS. |
 | `OpusEncoder`, `OpusDecoder` | libopus. |
-| `Mp4Sink` | Encoded video and audio to one fragmented MP4, one track per inbound link. |
 | `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
 
 From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a

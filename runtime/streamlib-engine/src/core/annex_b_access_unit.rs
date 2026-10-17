@@ -493,9 +493,9 @@ mod tests {
         assert_eq!(bytes.len(), 4 + 2 + 4 + 300);
     }
 
-    /// The pair held to each other: split an access unit the way the sink
-    /// does, then join it the way a reader does, and land on the bytes the
-    /// encoder published. This is the only test that can catch the two
+    /// The pair held to each other: split an access unit the way a decoder
+    /// handed a format description does, then join it the way an encoder
+    /// reading one does, and land on the bytes the encoder published. This is the only test that can catch the two
     /// drifting apart, which is why they live in one module.
     #[test]
     fn a_sync_points_sample_and_its_parameter_sets_rejoin_into_the_access_unit_they_came_from() {
@@ -523,9 +523,8 @@ mod tests {
         .expect("the sample the splitter just wrote is length-prefixed");
         assert_eq!(
             rejoined, published,
-            "a recorded sync point plus its sample entry has to be the access unit the \
-             encoder published, byte for byte — that is what makes a decode-back a proof \
-             about the container rather than about a second encode"
+            "a sync point's sample plus its parameter sets has to be the access unit the \
+             encoder published, byte for byte"
         );
     }
 

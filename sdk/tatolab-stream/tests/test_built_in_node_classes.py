@@ -50,8 +50,8 @@ def test_the_built_in_class_cannot_be_instantiated(built_in_node_class):
 
 
 def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
-    with pytest.raises(TypeError, match=r"stream_builder\.add\(Mp4Sink, config="):
-        tatolab.stream.Mp4Sink()  # pyright: ignore[reportCallIssue]
+    with pytest.raises(TypeError, match=r"stream_builder\.add\(CameraSource, config="):
+        tatolab.stream.CameraSource()  # pyright: ignore[reportCallIssue]
 
 
 @stream

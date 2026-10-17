@@ -240,10 +240,10 @@ mod tests {
     /// range-checks the mapping entries, the structural test below only reads
     /// length, sum and distinctness, and the round trip cannot see a
     /// permutation because the encoder and the decoder read the same wrong
-    /// row, so it cancels. What a slip actually produces is an MP4 whose
-    /// `dOps` StreamCount, CoupledCount and ChannelMapping send 5.1 audio to
-    /// the wrong speakers in every third-party player — silent here,
-    /// obvious there.
+    /// row, so it cancels. What a slip actually produces is a stream whose
+    /// StreamCount, CoupledCount and ChannelMapping send 5.1 audio to the
+    /// wrong speakers in every third-party player — silent here, obvious
+    /// there.
     #[test]
     fn the_family_one_table_matches_libopus_vorbis_mappings_transcribed_a_second_time() {
         let libopus_vorbis_mappings: [(u8, u8, &[u8]); 8] = [
