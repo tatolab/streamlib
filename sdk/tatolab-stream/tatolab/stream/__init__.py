@@ -76,6 +76,7 @@ from ._node_context_protocols import (
 from ._node_context_protocols import (
     gpu_limited_access_of_the_typed_read_in_progress as gpu_limited_access_of_the_typed_read_in_progress,
 )
+from ._message import Message as Message
 from ._node_declaration import AudioWindowContract as AudioWindowContract
 from ._node_declaration import node as node
 from ._node_owned_window_protocols import NodeOwnedWindow as NodeOwnedWindow
@@ -164,6 +165,7 @@ __all__ = [
     "LinkInputDataReader",
     "LinkOutputDataWriter",
     "MasteringDisplay",
+    "Message",
     "MicrophoneSource",
     "MicrophoneSourceConfig",
     "ModelInputTensor",

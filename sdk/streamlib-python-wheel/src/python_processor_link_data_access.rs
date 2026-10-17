@@ -238,6 +238,46 @@ impl PythonProcessorLinkDataAccess {
         )))
     }
 
+    /// The next message on `port_name` as a `tatolab.stream.Message` — its
+    /// payload, stamp, group flag, losses and inbound link — or `None` when the
+    /// mailbox is empty.
+    pub(crate) fn read_message_from_input_port<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
+        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
+            return Ok(None);
+        };
+        let read = python
+            .detach(|| input_mailboxes.read_raw_from_inbound_link(port_name))
+            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
+        let Some((message, inbound_link_name)) = read else {
+            return Ok(None);
+        };
+        let payload = payload_bytes_cast_into_the_read_target_when_named(
+            python,
+            port_name,
+            &message.payload_bytes,
+            into,
+            offered_gpu_limited_access,
+        )?;
+        python
+            .import("tatolab.stream._message")?
+            .getattr("Message")?
+            .call1((
+                payload,
+                message.timestamp_ns,
+                message.group_boundary == MessageGroupBoundary::StartsGroup,
+                message.lost_since_last_read,
+                inbound_link_name.as_str(),
+            ))
+            .map(Some)
+    }
+
     /// Every inbound link feeding `port_name`, in wiring order.
     pub(crate) fn inbound_links_of_input_port(&self, port_name: &str) -> PyResult<Vec<String>> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
