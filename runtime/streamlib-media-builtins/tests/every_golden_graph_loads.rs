@@ -29,8 +29,8 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
         "2dd8a602a81595b922fc772116491b7d812a12ba7e7707708aa2b95a2d1a6020",
     ),
     (
-        "0003-every-key-with-a-link-from-another-stream.json",
-        "17cef4c1b095094a562647f15f20f3529d32955d85732159eb596bd6fc8ee725",
+        "0004-every-key-with-a-relay-track-source.json",
+        "5128d0ff15e295845e980574e1494a1f60b20fccd05751676c4493dde1798ac2",
     ),
 ];
 
@@ -70,8 +70,7 @@ fn node_types_in(graph_document: &serde_json::Value) -> Vec<ProcessorClassImport
 }
 
 /// `graph_document` without the nodes named in `node_names`, and every link
-/// and exposure that names one of them; a link's source in another stream
-/// names a node of that stream, never one of these.
+/// and exposure that names one of them.
 fn without_the_nodes(
     graph_document: &serde_json::Value,
     node_names: &BTreeSet<String>,
@@ -89,17 +88,12 @@ fn without_the_nodes(
     };
     retain_in("nodes", &|node| !is_removed(&node["name"]));
     retain_in("links", &|link| {
-        let source_is_removed =
-            link["source"].get("stream").is_none() && is_removed(&link["source"]["node"]);
-        !source_is_removed && !is_removed(&link["target"]["node"])
+        !is_removed(&link["source"]["node"]) && !is_removed(&link["target"]["node"])
     });
     retain_in("exposed", &|exposure| !is_removed(&exposure["node"]));
     remaining
 }
 
-/// A golden naming a built-in this floor compiles out is refused for it,
-/// naming the floor, and loads whole once those nodes are taken out — which is
-/// as much of it as this floor can run.
 /// Load `graph` as the one stream of a fresh engine, in a project directory of
 /// its own.
 fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Result<()> {
@@ -113,6 +107,9 @@ fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Resul
         .map(drop)
 }
 
+/// A golden naming a built-in this floor compiles out is refused for it,
+/// naming the floor, and loads whole once those nodes are taken out — which is
+/// as much of it as this floor can run.
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
     register_media_builtin_processor_types();
@@ -153,110 +150,6 @@ fn every_golden_graph_loads_on_this_floor() {
         load_on_a_fresh_engine(&the_rest).unwrap_or_else(|refusal| {
             panic!("{path:?} without {node_names_compiled_out_here:?} no longer loads: {refusal}")
         });
-    }
-}
-
-/// A golden holding a link from a stream the fresh engine does not load reads
-/// that link back `awaiting_remote`, its reason naming that stream, without the
-/// stream ever starting — whatever state the golden recorded it in.
-#[test]
-fn a_link_from_another_stream_loads_awaiting_that_stream() {
-    register_media_builtin_processor_types();
-    let path = golden_graph_paths()
-        .into_iter()
-        .find(|path| {
-            path.file_name()
-                .is_some_and(|name| name == "0003-every-key-with-a-link-from-another-stream.json")
-        })
-        .expect("golden 0003 is checked in");
-    let graph_document = golden_graph_document(&path);
-    let node_names_compiled_out_here: BTreeSet<String> = node_types_in(&graph_document)
-        .into_iter()
-        .zip(
-            graph_document["nodes"]
-                .as_array()
-                .expect("a graph holds nodes"),
-        )
-        .filter(|(node_type, _)| {
-            PROCESSOR_REGISTRY
-                .refuse_a_built_in_node_type_absent_on_this_floor(node_type)
-                .is_err()
-        })
-        .filter_map(|(_, node)| node["name"].as_str().map(str::to_string))
-        .collect();
-    let graph = GraphSnapshot::from_graph_document(without_the_nodes(
-        &graph_document,
-        &node_names_compiled_out_here,
-    ))
-    .expect("golden 0003 reads");
-
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().expect("a runtime constructs");
-    let stream = runner
-        .load_stream_from_graph_snapshot(
-            &graph,
-            OptionsForLoadingOneStream::in_project_directory(project_directory.path()),
-        )
-        .expect("golden 0003 loads");
-    let rendered = stream.to_json().expect("the loaded graph renders");
-    let links_from_another_stream: Vec<&serde_json::Value> = rendered["links"]
-        .as_array()
-        .expect("a graph renders its links")
-        .iter()
-        .filter(|link| link["source"]["stream"].is_string())
-        .collect();
-
-    assert!(
-        !links_from_another_stream.is_empty(),
-        "golden 0003 holds a link from another stream on every floor: {rendered}"
-    );
-    for link in links_from_another_stream {
-        assert_eq!(link["source"]["stream"], "camera-rig", "{link}");
-        assert_eq!(link["state"], "awaiting_remote", "{link}");
-        assert_eq!(
-            link["awaiting_remote_reason"],
-            "the stream `camera-rig` is not loaded on this machine; the link wires when it loads",
-            "{link}"
-        );
-        assert!(link.get("error_reason").is_none(), "{link}");
-    }
-}
-
-/// A link from another stream that golden 0003 records in `error` carries a
-/// wiring refusal the engine still makes: a source port closed to other
-/// streams leaves its reader `awaiting_remote`, so its exposure refusal is
-/// never a link's `error_reason`.
-#[test]
-fn golden_0003_records_no_link_from_another_stream_in_error_for_a_closed_port() {
-    let path = golden_graph_paths()
-        .into_iter()
-        .find(|path| {
-            path.file_name()
-                .is_some_and(|name| name == "0003-every-key-with-a-link-from-another-stream.json")
-        })
-        .expect("golden 0003 is checked in");
-    let graph_document = golden_graph_document(&path);
-    let error_reasons_of_links_from_another_stream: Vec<&str> = graph_document["links"]
-        .as_array()
-        .expect("a graph holds links")
-        .iter()
-        .filter(|link| link["source"]["stream"].is_string() && link["state"] == "error")
-        .map(|link| {
-            link["error_reason"]
-                .as_str()
-                .expect("a link in error says why")
-        })
-        .collect();
-
-    assert!(
-        !error_reasons_of_links_from_another_stream.is_empty(),
-        "golden 0003 records a link from another stream in error"
-    );
-    for error_reason in error_reasons_of_links_from_another_stream {
-        assert!(
-            !error_reason.contains("reads only a port that is private or public"),
-            "{error_reason}"
-        );
     }
 }
 
