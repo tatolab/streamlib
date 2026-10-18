@@ -2,7 +2,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Fixture-driven encode/decode PSNR harness (issues #305, #2085).
+# Fixture-driven encode/decode PSNR harness.
 #
 # Drives the engine-owned `codec_roundtrip_rig` — fixture source -> encoder ->
 # decoder, the decoded port exposed, with the control plane hosted — and scores
@@ -15,12 +15,11 @@
 # tap finds no channel and the run scores nothing.
 #
 # One rig run per reference, and that is the pairing contract. A decoded
-# frame is an ordinary video frame carrying nothing to pair on, so pairing a decoded sample to
-# the reference that produced it either needs a join this wire does not carry,
-# or a best-match search that a channel swap would satisfy by re-pairing a
-# swapped red onto `solid_blue.png`. Running one reference at a time makes the
-# pairing exact by construction, and each run is a cold start, which is the
-# shape #756 and #335 ask for anyway.
+# frame is an ordinary video frame carrying nothing to pair on, so pairing a
+# decoded sample to the reference that produced it either needs a join this
+# wire does not carry, or a best-match search that a channel swap would satisfy
+# by re-pairing a swapped red onto `solid_blue.png`. Running one reference at a
+# time makes the pairing exact by construction, and each run is a cold start.
 #
 # Usage:
 #   runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh [output_dir] [codec]
@@ -204,13 +203,13 @@ stop_rig() {
     RIG_NEEDED_SIGKILL=0
     if [ -n "$RIG_PID" ] && kill -0 "$RIG_PID" 2>/dev/null; then
         # SIGTERM so the graph tears down the way a real stop does — a killed
-        # rig would hide exactly the shutdown race #335 is about.
+        # rig would hide exactly the teardown race a stop must survive.
         kill -TERM "$RIG_PID" 2>/dev/null || true
         for _ in $(seq 1 50); do
             kill -0 "$RIG_PID" 2>/dev/null || break
             sleep 0.2
         done
-        # A rig still alive after 10 s of SIGTERM is the #335 shutdown race, not
+        # A rig still alive after 10 s of SIGTERM is that teardown race, not
         # a slow exit. SIGKILL frees the GPU for the next arm; the caller is
         # told, so the kill can never launder a hung teardown into a PASS.
         if kill -0 "$RIG_PID" 2>/dev/null; then
