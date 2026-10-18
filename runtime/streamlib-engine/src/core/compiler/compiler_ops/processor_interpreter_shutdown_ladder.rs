@@ -23,6 +23,7 @@ use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
 
 use super::subprocess_bridge::HelperProcessShutdownCommand;
+use crate::core::child_process_lifetime::a_child_process_has_exited_without_being_reaped;
 use crate::core::runtime::ShutdownEscalationOfOneStream;
 
 /// How long a Python callback has to return before the ladder interrupts it.
@@ -69,41 +70,6 @@ pub(crate) enum HelperProcessShutdownOutcome {
     Reaped(ExitStatus),
     /// The child outlived every rung. It is named rather than waited on.
     AbandonedAfterTheLadder,
-}
-
-/// Whether `process_id` has exited, leaving it collectable but not collected.
-///
-/// `WNOWAIT` is the whole point: the zombie stays, so the pid — and the process
-/// group id that equals it — cannot be handed to anybody else between this
-/// answer and the signal that follows it. `Child::try_wait` cannot be used for
-/// the same question, because it collects.
-pub(crate) fn a_helper_process_has_exited_without_being_reaped(process_id: u32) -> bool {
-    // SAFETY: a zeroed `siginfo_t` is a valid buffer for `waitid` to fill, and
-    // the call reports rather than collects.
-    let mut reported: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `reported` is a valid, live `siginfo_t` for the duration.
-    let waited = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            process_id as libc::id_t,
-            &mut reported,
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    // `WNOHANG` returns 0 with nothing reported while the child is still
-    // running, and the zeroed pid is how that case is told from a real one.
-    waited == 0 && reported_process_id(&reported) == process_id as libc::pid_t
-}
-
-#[cfg(target_os = "linux")]
-fn reported_process_id(reported: &libc::siginfo_t) -> libc::pid_t {
-    // SAFETY: `si_pid` reads the union arm a `SIGCHLD`-shaped report fills.
-    unsafe { reported.si_pid() }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn reported_process_id(reported: &libc::siginfo_t) -> libc::pid_t {
-    reported.si_pid
 }
 
 /// What waiting one slice of a cooperative rung for a helper's reply found.
@@ -164,7 +130,7 @@ impl HelperProcessShutdownLadder {
         // A helper that is already gone answers nothing and needs no interrupt.
         // Skipped rather than waited out, so a crash before shutdown does not
         // buy six seconds and a callback warning naming a zombie.
-        if !a_helper_process_has_exited_without_being_reaped(self.child.id()) {
+        if !a_child_process_has_exited_without_being_reaped(self.child.id()) {
             self.walk_the_cooperative_rungs(&mut await_lifecycle_reply);
         }
         self.end_the_process_group_and_reap()
@@ -251,7 +217,7 @@ impl HelperProcessShutdownLadder {
             if self.shutdown_escalation_of_its_stream.is_forced() {
                 return CooperativeRungEnded::ShutdownForced;
             }
-            if a_helper_process_has_exited_without_being_reaped(self.child.id()) {
+            if a_child_process_has_exited_without_being_reaped(self.child.id()) {
                 return CooperativeRungEnded::ChildAlreadyExited;
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -369,7 +335,7 @@ pub(crate) fn wait_for_a_child_to_become_collectable_within(
     budget: Duration,
 ) -> bool {
     let deadline = Instant::now() + budget;
-    while !a_helper_process_has_exited_without_being_reaped(child.id()) {
+    while !a_child_process_has_exited_without_being_reaped(child.id()) {
         if Instant::now() >= deadline {
             return false;
         }
@@ -571,7 +537,7 @@ signal.signal(signal.SIGINT, leave_through_the_interrupt)
         let process_id = stub.child.id();
 
         assert!(
-            !a_helper_process_has_exited_without_being_reaped(process_id),
+            !a_child_process_has_exited_without_being_reaped(process_id),
             "a helper that is still parked was reported dead"
         );
 
@@ -586,7 +552,7 @@ signal.signal(signal.SIGINT, leave_through_the_interrupt)
 
     fn a_pid_becomes_collectable_within(process_id: u32, budget: Duration) -> bool {
         let deadline = Instant::now() + budget;
-        while !a_helper_process_has_exited_without_being_reaped(process_id) {
+        while !a_child_process_has_exited_without_being_reaped(process_id) {
             if Instant::now() >= deadline {
                 return false;
             }

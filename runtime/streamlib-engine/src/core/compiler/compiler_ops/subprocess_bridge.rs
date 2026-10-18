@@ -366,6 +366,21 @@ pub struct SubprocessBridge {
 }
 
 impl SubprocessBridge {
+    /// [`Self::new`] for a helper whose node carries no catalog entries, for a
+    /// caller outside the engine that wires a bridge over its own socketpair.
+    pub fn for_a_helper_whose_node_carries_no_catalog_entries(
+        stream: UnixStream,
+        sandbox: GpuContextLimitedAccess,
+        processor_id: String,
+    ) -> Result<Self> {
+        Self::new(
+            stream,
+            sandbox,
+            processor_id,
+            CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        )
+    }
+
     /// Wrap a socketpair parent end and spawn the reader thread and the
     /// escalate worker, which dispatches against `sandbox` and the helper's
     /// node's `catalog_entries`.

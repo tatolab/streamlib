@@ -4579,8 +4579,7 @@ mod tests {
     }
 
     fn the_machine_these_tests_run_on() -> crate::core::runtime::MachineName {
-        crate::core::runtime::MachineName::from_a_tailnet_dns_name("desk.tail2950db.ts.net.")
-            .expect("a tailnet name names a machine")
+        crate::core::runtime::MachineName::from_a_hostname("desk").expect("`desk` names a machine")
     }
 
     /// A port in this stream is named by its address with or without this
@@ -4609,7 +4608,6 @@ mod tests {
             format!("{source_node_name}/out1"),
             format!("main/{source_node_name}/out1"),
             format!("desk/main/{source_node_name}/out1"),
-            format!("desk.tail2950db.ts.net/main/{source_node_name}/out1"),
         ] {
             let resolved = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
                 .unwrap_or_else(|refusal| panic!("{address}: {refusal}"));

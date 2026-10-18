@@ -67,10 +67,11 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
 
 # A thin sample of the Rust closure, one per link shape: the same-host IPC
 # transport, the binding layer this wheel is built on, the GLSL compiler that
-# pulled the vendored C++ in, and the control plane's HTTP server. Enough to
-# catch a notices file generated against the wrong manifest; not so many that a
-# dependency swap fails an unrelated test.
-SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "shaderc", "axum")
+# pulled the vendored C++ in, the control plane's HTTP server, and the local
+# relay the runtime unit carries beside `tatolabd`, whose closure is its own.
+# Enough to catch a notices file generated against the wrong manifest; not so
+# many that a dependency swap fails an unrelated test.
+SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "shaderc", "axum", "moq-relay")
 
 NOTICES_LICENSE_FILE_NAME = "THIRD-PARTY-NOTICES.md"
 BUSL_LICENSE_FILE_NAME = "LICENSE"

@@ -6,8 +6,8 @@
 Read from the lend `cargo xtask build-runtime` lays out at
 `target/tatolab-runtime/lib/tatolab/lend`, with that directory first on
 `PYTHONPATH` — the same files a processor interpreter borrows and the wheel
-carries — and from `tatolabd` and `tatolab` in the unit's `bin/` beside it.
-Imported from anywhere else, the tests that read binaries fail.
+carries — and from `tatolabd`, `tatolab` and `moq-relay` in the unit's `bin/`
+beside it. Imported from anywhere else, the tests that read binaries fail.
 
 With `TATOLAB_RUNTIME_UNIT_GLIBC_FLOOR` set, as the release's Linux tarball
 build sets it, no ELF in the unit may need a newer glibc than that floor.
@@ -107,8 +107,9 @@ MacOSVersion = tuple[int, int, int]
 # goes unchecked, because only a manylinux build can meet one.
 RUNTIME_UNIT_GLIBC_FLOOR_ENVIRONMENT_VARIABLE = "TATOLAB_RUNTIME_UNIT_GLIBC_FLOOR"
 
-# The runtime unit's own executables, in its `bin/`.
-RUNTIME_UNIT_EXECUTABLE_NAMES = ("tatolabd", "tatolab")
+# The runtime unit's own executables, in its `bin/`: the runtime, the CLI and
+# the local relay `cargo xtask build-runtime` stages beside them.
+RUNTIME_UNIT_EXECUTABLE_NAMES = ("tatolabd", "tatolab", "moq-relay")
 
 GlibcVersion = tuple[int, ...]
 
@@ -455,7 +456,7 @@ def mach_o_binaries_the_lend_carries(native_binaries_the_lend_carries) -> list[P
 
 @pytest.fixture(scope="module")
 def runtime_unit_executables(lend_directory: Path) -> list[Path]:
-    """`tatolabd` and `tatolab`, from the `bin/` beside the lend's `lib/`."""
+    """`tatolabd`, `tatolab` and `moq-relay`, from the `bin/` beside the lend's `lib/`."""
     runtime_unit_root = lend_directory.parents[2]
     executables = [
         runtime_unit_root / "bin" / executable_name for executable_name in RUNTIME_UNIT_EXECUTABLE_NAMES
@@ -554,7 +555,7 @@ def test_every_native_binary_the_lend_carries_parses(
 def test_the_runtime_units_executables_link_nothing_the_host_may_not_supply(
     runtime_unit_executables,
 ):
-    """`tatolabd` and `tatolab` reach machines this project never sees, as the wheel does."""
+    """The unit's executables reach machines this project never sees, as the wheel does."""
     outside_the_policy_per_executable = {}
     for executable in runtime_unit_executables:
         linked_libraries = _libraries_linked_by(executable)

@@ -3,10 +3,10 @@
 
 //! Hosting the machine's streams: the engine built over the state directory,
 //! the previous run's crash counted against the kept streams, the local API
-//! served at its fixed socket, every kept stream neither stopped nor failed
-//! re-loaded, the run until a machine shutdown is requested and every stream
-//! has ended, and a teardown that drops the engine — or leaves it beneath the
-//! threads a stream abandoned.
+//! served at its fixed socket, the local relay joined, every kept stream
+//! neither stopped nor failed re-loaded, the run until a machine shutdown is
+//! requested and every stream has ended, and a teardown that drops the engine
+//! — or leaves it beneath the threads a stream abandoned.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -26,6 +26,7 @@ use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
 use crate::display_server_environment_from_the_user_manager::DisplayServerEnvironmentAtTheRuntimesStart;
+use crate::local_relay_children::join_the_local_relay;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
 
 /// How long the end of the run waits for a stream action the local API began —
@@ -86,9 +87,11 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
 
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
+    let mut local_relay = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
             local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
+            local_relay = join_the_local_relay(&engine);
             log_the_kept_streams_reloaded_at_the_start(
                 &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
             );
@@ -117,6 +120,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                 &mut streams_loaded_at_or_after_the_machine_shutdown_request,
                 every_stream_ended_during_the_wait.streams_seen_during_the_wait,
             );
+            // Once every stream has ended, inside the run's shutdown.
+            drop(local_relay.take());
             if streams_loaded_at_or_after_the_machine_shutdown_request
                 .iter()
                 .any(|stream| stream_teardown_abandoned_by_its_watchdog(stream).is_some())

@@ -17,7 +17,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 
 Reading rule since the 2026-10-16 align (`[moq-relays]`, which amends the 2026-10-04
 `[moq-on-the-tailnet]` pivot): the `tap` and `exchange` verbs, every window, `remote_output`
-and the cross-stream link, the Tailscale read, and the msgpack encoding inside `write` and
+and the cross-stream link, and the msgpack encoding inside `write` and
 `read` go at the sharing step. An entry describing one is a fact about the shipped tree until
 the change that removes it ships and folds it out — never direction, and nothing new is built
 on it. Off a stream, the direction is §Networking's `[moq-relays]` entries. "Bag" in an older
@@ -2563,18 +2563,20 @@ entry reads as **message** (the glossary).
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
-  Wall clock is permitted on exactly three observability surfaces and nowhere else: log
-  record `host_ts` and `source_ts`, and log file naming — their job is correlating with
-  the outside world, which monotonic time cannot do. A wall-clock value never enters the
-  data plane and is never compared against a media timestamp; a fourth surface is a plan
-  change, not a judgement call. The list is mechanically enforced, with no per-line pragma
-  and no opt-out attribute: the permitted surfaces are a closed set in the gate, so a fourth
-  is a source change that surfaces in review rather than a line quietly appended, and an
+  Wall clock is permitted on exactly four surfaces and nowhere else: log record `host_ts`
+  and `source_ts`, log file naming, and the local relay certificate's validity — its UTC
+  `notBefore` / `notAfter`, issued and aged by the one file that writes the certificate
+  (owner, 2026-10-17) — their job is correlating with the outside world, which monotonic
+  time cannot do. A wall-clock value never enters the data plane and is never compared
+  against a media timestamp; another surface is a plan change, not a judgement call. The
+  list is mechanically enforced, with no per-line pragma and no opt-out attribute: the
+  permitted surfaces are a closed set in the gate, so a fifth is a source change that
+  surfaces in review rather than a line quietly appended, and an
   entry whose file stops reading a wall clock is a licence the gate makes you hand back. The
   allowlist is per-file, which is why a data-plane file never joins it — a machine-global
   unique name comes from the engine's unique-name primitive, never from reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
-  SHIPPED #2408]
+  SHIPPED #2408; moq-relays]
   <!-- verify: cargo test -p streamlib-engine --lib now_lands_in_the_kernel_monotonic_domain -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_engine_media_clock -->
   <!-- verify: cargo test -p streamlib-python-wheel --lib python_logging::tests::a_wheel_stamp_and_an_engine_stamp_taken_back_to_back_differ_by_microseconds -->
@@ -3554,11 +3556,8 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_on_one_machine_both_construct_and_name_it_alike -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_machine_is_refused_naming_that_machine -->
-  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::no_tailscale_names_the_machine_by_its_hostname -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_status_that_names_no_tailnet_machine_leaves_the_hostname_saying_why -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
-  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams graph_answers_the_machine_by_its_hostname_cast_and_no_streams -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket the_retired_verbs_and_flags_are_usage_errors -->
 - **DECIDED** — A link's ends are both on this machine, in one stream. As built, a link end
@@ -3645,16 +3644,13 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_refuses_a_fixture_address_naming_no_port_where_it_is_written -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_the_builders_address_refusals_are_the_compiles_refusal -->
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
-  that relay's credential assigns. As built, the engine reads the local Tailscale's status for
-  its own name and the tailnet's machines, falling back to the hostname. [runtime-hosting —
-  SHIPPED #2715; amended by moq-relays: the Tailscale read is deleted — the machine is its
-  hostname cast on every machine, and a relay adapter's root prefixes the broadcast there]
+  that relay's credential assigns. As built, the engine names the machine by its hostname cast
+  and reads nothing of Tailscale. [runtime-hosting — SHIPPED #2715; amended by moq-relays: a
+  relay adapter's root prefixes the broadcast there]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
-  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::no_tailscale_names_the_machine_by_its_hostname -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_status_that_names_no_tailnet_machine_leaves_the_hostname_saying_why -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_names_the_machine_cast -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
-  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams graph_answers_the_machine_by_its_hostname_cast_and_no_streams -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_naming_another_machine_is_refused_by_name -->
 - **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
@@ -3872,7 +3868,7 @@ entry reads as **message** (the glossary).
   it deletes the windows (§Media I/O), `Mp4Sink`, `remote_output` and the cross-stream link,
   the Tailscale read, `tap` and `exchange`, in the same change, inventorying every site; the
   CPU encoder arm (§Product) is deferred past it. Until
-  it ships the tree holds no MoQ and nothing links one machine to another. Owner, 2026-10-04
+  it ships nothing links one machine to another. Owner, 2026-10-04
   and 2026-10-16. [moq-relays; zenoh-and-moq-wheel-removal — SHIPPED #2633, #2643, #2645,
   #2649]
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data

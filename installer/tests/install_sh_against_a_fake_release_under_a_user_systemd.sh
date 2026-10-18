@@ -44,7 +44,8 @@ printf '%s %s\n' "$release_version" "\$\$" > "\$HOME/stand-in-tatolabd-running"
 exec sleep infinity
 EOF
 	printf '#!/bin/sh\necho "tatolab %s"\n' "$release_version" >"$release_contents/bin/tatolab"
-	chmod +x "$release_contents/bin/tatolabd" "$release_contents/bin/tatolab"
+	printf '#!/bin/sh\nexec sleep 3600\n' >"$release_contents/bin/moq-relay"
+	chmod +x "$release_contents/bin/tatolabd" "$release_contents/bin/tatolab" "$release_contents/bin/moq-relay"
 	touch "$release_contents/lib/tatolab/lend/tatolab/runtime/__init__.py"
 	if [ "$release_shape" != without-the-bundled-vulkan-icd-manifest ]; then
 		printf '{}\n' >"$release_contents/$bundled_vulkan_icd_manifest_in_a_release"

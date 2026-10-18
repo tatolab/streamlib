@@ -1,0 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-relay-adapter-sdk"
+description = "The one interface every relay adapter implements: joining a relay, the exposure levels it serves, the root it puts the machine's broadcasts under, the credential the runtime dials with, and its connection events."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.48.1" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.48.1" }
+schemars = "0.8"
+secrecy = "0.10.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+url = "2.5.8"
+
+[lints]
+workspace = true

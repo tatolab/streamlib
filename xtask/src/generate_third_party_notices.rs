@@ -47,6 +47,10 @@
 //! refuses it is `cargo deny check licenses`, which reads the same crate as
 //! `unlicensed`.
 
+use crate::stage_local_relay::{
+    LOCAL_RELAY_CRATE_FEATURES, LOCAL_RELAY_CRATE_NAME, LOCAL_RELAY_EXECUTABLE_FILE_NAME,
+    PINNED_LOCAL_RELAY_CRATE_VERSION, stage_the_local_relay,
+};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -74,7 +78,9 @@ deliberately.
 const ENGINE_WORKSPACE_SCOPE_AND_REGENERATION_PROSE: &str = r"Scope is the whole workspace's dependency closure across every target, which is
 a superset of what any one artifact links — the wheel ships this file entire
 rather than a per-artifact subset, because over-attribution costs a longer file
-and under-attribution is a term unmet.
+and under-attribution is a term unmet. The local relay the runtime unit carries,
+`moq-relay`, is no workspace member, so its own closure follows in a section of
+its own.
 
 **Generated — do not edit.** Regenerate with `cargo xtask
 generate-third-party-notices`; the licence policy that decides what may appear
@@ -599,13 +605,19 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
 
     let project_root = target.project_root(workspace_root);
     let mut notices = target.preamble();
-    notices.push_str(&run_cargo_about_generate(workspace_root, &project_root)?);
+    notices.push_str(&run_cargo_about_generate(
+        workspace_root,
+        &project_root.join("Cargo.toml"),
+        CargoAboutFeatureSelection::EveryFeature,
+    )?);
 
     // One dispatch, whose value is what the log then reports: two matches on
     // one enum encode one fact — whether the appendix went on — and a third
     // variant could make them disagree.
     let notices_appended = match target {
         NoticesGenerationTarget::EngineWorkspace => {
+            notices.push('\n');
+            notices.push_str(&render_the_local_relays_closure(workspace_root)?);
             let source_trees = NoticeSourceTrees {
                 registry_crate_roots: locate_registry_crate_roots(workspace_root)?,
                 workspace_root: workspace_root.to_path_buf(),
@@ -630,7 +642,27 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
     Ok(())
 }
 
-/// Render the Rust closure's notices by shelling out to `cargo about`.
+/// Which features `cargo about` resolves a manifest's graph with.
+#[derive(Debug, Clone, Copy)]
+enum CargoAboutFeatureSelection {
+    /// Every feature, the graph `deny.toml` validates.
+    EveryFeature,
+    /// No default features, and these, the graph a crate is built with.
+    DefaultFeaturesOffWith(&'static str),
+}
+
+impl CargoAboutFeatureSelection {
+    fn cargo_about_arguments(self) -> Vec<&'static str> {
+        match self {
+            Self::EveryFeature => vec!["--all-features"],
+            Self::DefaultFeaturesOffWith(features) => {
+                vec!["--no-default-features", "--features", features]
+            }
+        }
+    }
+}
+
+/// Render a manifest's Rust closure's notices by shelling out to `cargo about`.
 ///
 /// Run from the workspace root whatever the target, so the shared `about.toml`
 /// and `about.hbs` resolve the same way for every project — an extension's
@@ -644,7 +676,11 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
 /// The workspace's own crates warn on every run and are the expected noise —
 /// they carry `license-file`, and a file titled *third-party* notices is not
 /// where our own terms belong.
-fn run_cargo_about_generate(workspace_root: &Path, project_root: &Path) -> Result<String> {
+fn run_cargo_about_generate(
+    workspace_root: &Path,
+    manifest_path: &Path,
+    feature_selection: CargoAboutFeatureSelection,
+) -> Result<String> {
     let output = std::process::Command::new("cargo")
         // `--locked` not only for symmetry: this runs before the `cargo metadata
         // --locked` behind the vendored lookup, so without it a stale lock is
@@ -661,11 +697,12 @@ fn run_cargo_about_generate(workspace_root: &Path, project_root: &Path) -> Resul
         //
         // No `--workspace`: the root manifest is virtual, so every member is
         // already in scope and the flag leaves the output byte-identical.
-        .args(["about", "generate", "--locked", "--all-features"])
+        .args(["about", "generate", "--locked"])
+        .args(feature_selection.cargo_about_arguments())
         .arg("--config")
         .arg(CARGO_ABOUT_CONFIG_FILE_NAME)
         .arg("--manifest-path")
-        .arg(project_root.join("Cargo.toml"))
+        .arg(manifest_path)
         .arg(CARGO_ABOUT_TEMPLATE_FILE_NAME)
         .current_dir(workspace_root)
         .output()
@@ -683,6 +720,65 @@ fn run_cargo_about_generate(workspace_root: &Path, project_root: &Path) -> Resul
     }
 
     String::from_utf8(output.stdout).context("`cargo about generate` emitted non-UTF-8")
+}
+
+/// The local relay's own closure, rendered from its crate's own manifest and
+/// lockfile with the features the runtime unit builds it with, under a heading
+/// of its own.
+fn render_the_local_relays_closure(workspace_root: &Path) -> Result<String> {
+    stage_the_local_relay(workspace_root)?;
+    let relay_crate_root = local_relay_crate_source_in_the_registry()?;
+    let rendered = run_cargo_about_generate(
+        workspace_root,
+        &relay_crate_root.join("Cargo.toml"),
+        CargoAboutFeatureSelection::DefaultFeaturesOffWith(LOCAL_RELAY_CRATE_FEATURES),
+    )?;
+    Ok(format!(
+        "## The local relay\n\nThe runtime unit's `bin/{LOCAL_RELAY_EXECUTABLE_FILE_NAME}` is \
+         `{LOCAL_RELAY_CRATE_NAME}` {PINNED_LOCAL_RELAY_CRATE_VERSION}, built from its own \
+         lockfile with the features `{LOCAL_RELAY_CRATE_FEATURES}`. Its closure:\n\n{}",
+        markdown_with_every_heading_one_level_deeper(&rendered)
+    ))
+}
+
+/// The pinned relay crate's source as `cargo install` unpacked it under
+/// `$CARGO_HOME/registry/src/`.
+fn local_relay_crate_source_in_the_registry() -> Result<PathBuf> {
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
+        .context("neither CARGO_HOME nor HOME is set, so the registry cannot be found")?;
+    let registry_sources = cargo_home.join("registry").join("src");
+    let crate_directory_name =
+        format!("{LOCAL_RELAY_CRATE_NAME}-{PINNED_LOCAL_RELAY_CRATE_VERSION}");
+    std::fs::read_dir(&registry_sources)
+        .with_context(|| format!("reading {}", registry_sources.display()))?
+        .filter_map(|registry| registry.ok())
+        .map(|registry| registry.path().join(&crate_directory_name))
+        .find(|crate_root| crate_root.join("Cargo.toml").is_file())
+        .with_context(|| {
+            format!(
+                "no {crate_directory_name} under {}; `cargo xtask stage-local-relay` unpacks it",
+                registry_sources.display()
+            )
+        })
+}
+
+/// `markdown` with each heading outside a fenced block one level deeper, so a
+/// rendered closure nests under a heading of its own.
+fn markdown_with_every_heading_one_level_deeper(markdown: &str) -> String {
+    let mut inside_a_fence = false;
+    let mut deepened = String::with_capacity(markdown.len());
+    for line in markdown.split_inclusive('\n') {
+        if line.starts_with("```") {
+            inside_a_fence = !inside_a_fence;
+        }
+        if !inside_a_fence && line.starts_with('#') {
+            deepened.push('#');
+        }
+        deepened.push_str(line);
+    }
+    deepened
 }
 
 /// Find every vendoring crate's registry checkout through `cargo metadata`.
@@ -1349,10 +1445,31 @@ mod tests {
         assert_every_path_resolves_to_readable_text(&paths);
     }
 
-    /// The preamble moved out of `about.hbs` and into this file. It is the one
-    /// part of a generated notices file a human wrote, so a stray edit here
-    /// would rewrite the opening of a legal notice on the next regeneration
-    /// with nothing to catch it.
+    #[test]
+    fn a_rendered_closure_nests_one_level_deeper_leaving_fenced_licence_text_alone() {
+        let rendered =
+            "## Overview\n\n- MIT\n\n### MIT License\n\n````text\n# not a heading\n````\n";
+        assert_eq!(
+            markdown_with_every_heading_one_level_deeper(rendered),
+            "### Overview\n\n- MIT\n\n#### MIT License\n\n````text\n# not a heading\n````\n"
+        );
+    }
+
+    #[test]
+    fn the_committed_engine_notices_carry_the_local_relays_closure() {
+        let committed =
+            fs::read_to_string(workspace_root().join(THIRD_PARTY_NOTICES_FILE_NAME)).expect("read");
+        assert!(
+            committed.contains(&format!(
+                "`{LOCAL_RELAY_CRATE_NAME}` {PINNED_LOCAL_RELAY_CRATE_VERSION}"
+            )),
+            "the committed notices do not name the pinned local relay"
+        );
+    }
+
+    /// The preamble is the one part of a generated notices file a human
+    /// wrote, so a stray edit to it would rewrite the opening of a legal
+    /// notice on the next regeneration with nothing to catch it.
     #[test]
     fn the_committed_engine_notices_open_with_the_preamble_this_file_renders() {
         let committed =

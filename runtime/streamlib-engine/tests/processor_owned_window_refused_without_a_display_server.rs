@@ -56,7 +56,7 @@ fn a_process_with_no_display_server_answers_the_create_op_with_the_pumps_own_err
 
     let (parent_end, helper_end) =
         UnixStream::pair().expect("a socketpair stands in for the spawned helper's");
-    let bridge = SubprocessBridge::new(
+    let bridge = SubprocessBridge::for_a_helper_whose_node_carries_no_catalog_entries(
         parent_end,
         gpu_context_limited_access,
         "processor-owned-window-headless".to_string(),

@@ -164,7 +164,7 @@ fn a_helper_process_mints_names_polls_and_closes_a_window_entirely_over_the_wire
 
     let (parent_end, helper_end) =
         UnixStream::pair().expect("a socketpair stands in for the spawned helper's");
-    let bridge = SubprocessBridge::new(
+    let bridge = SubprocessBridge::for_a_helper_whose_node_carries_no_catalog_entries(
         parent_end,
         gpu_context_limited_access.clone(),
         "processor-owned-window-over-the-wire".to_string(),

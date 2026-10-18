@@ -1,0 +1,39 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-relay-adapter-local"
+description = "The machine's local relay: `moq-relay` from the runtime unit run as two supervised children of `tatolabd` — a loopback listener serving every exposed port and an every-interface listener serving public ones — with the certificates, the admission answers and the publish token `tatolabd` provides."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.48.1" }
+streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
+# The admission request and grant `moq-relay` speaks over `--auth-url`.
+moq-auth = { version = "=0.2.1", default-features = false }
+# The token `tatolabd` mints for itself; already linked by `moq-auth`.
+aws-lc-rs = "1"
+axum = { workspace = true }
+libc = { workspace = true }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
+schemars = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = "0.3.47"
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# A MoQ client of the stack the relay is, to dial the children as any reader does.
+moq-tokio = { version = "=0.19.28" }
+
+[lints]
+workspace = true

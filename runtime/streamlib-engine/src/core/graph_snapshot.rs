@@ -511,7 +511,7 @@ mod tests {
 
     const A_CAMERA_CLASS: &str = "my_app.nodes:CameraNode";
 
-    /// The machine every graph here is checked on, `desk` off a tailnet.
+    /// The machine every graph here is checked on, `desk`.
     fn a_machine_named_desk() -> MachineName {
         MachineName::from_a_hostname("desk").expect("`desk` names a machine")
     }
