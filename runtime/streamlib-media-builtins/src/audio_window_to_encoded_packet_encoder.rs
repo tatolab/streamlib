@@ -313,7 +313,8 @@ impl AudioWindowToEncodedPacketEncoder {
     }
 
     /// The catalog entry the port does not carry yet.
-    pub fn take_audio_entry_owed_to_the_port(&mut self) -> Option<AudioEntry> {
+    #[cfg(test)]
+    pub(crate) fn take_audio_entry_owed_to_the_port(&mut self) -> Option<AudioEntry> {
         self.audio_entry_owed_to_the_port.take()
     }
 

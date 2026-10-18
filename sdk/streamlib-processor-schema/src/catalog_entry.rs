@@ -119,7 +119,8 @@ pub struct VideoEntry {
 }
 
 /// An `audio` entry.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioEntry {
     /// The WebCodecs codec string (`opus`, `mp4a.40.2`).
     pub codec: String,
@@ -199,17 +200,6 @@ impl From<AudioEntry> for CatalogEntry {
     }
 }
 
-/// An `audio` entry's fields as hang spells them, read back.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AudioEntryInHangsSpelling {
-    codec: String,
-    sample_rate: u32,
-    number_of_channels: u32,
-    #[serde(default)]
-    description: Option<String>,
-}
-
 /// Why a catalog entry does not read as an [`AudioEntry`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CatalogEntryIsNotAnAudioEntry {
@@ -230,15 +220,10 @@ impl TryFrom<&CatalogEntry> for AudioEntry {
                 section: catalog_entry.section,
             });
         }
-        let in_hangs_spelling = AudioEntryInHangsSpelling::deserialize(&catalog_entry.entry)
-            .map_err(|failure| CatalogEntryIsNotAnAudioEntry::FieldsDoNotRead {
+        AudioEntry::deserialize(&catalog_entry.entry).map_err(|failure| {
+            CatalogEntryIsNotAnAudioEntry::FieldsDoNotRead {
                 reason: failure.to_string(),
-            })?;
-        Ok(AudioEntry {
-            codec: in_hangs_spelling.codec,
-            sample_rate: in_hangs_spelling.sample_rate,
-            number_of_channels: in_hangs_spelling.number_of_channels,
-            description: in_hangs_spelling.description,
+            }
         })
     }
 }

@@ -514,7 +514,7 @@ mod tests {
         assert_eq!(
             session_preparation_for_a_group_start(
                 Some(&fed),
-                &fed.clone(),
+                &fed,
                 MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart
             ),
             SessionPreparationForAGroupStart::ParserFlushAfterALoss
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(
             session_preparation_for_a_group_start(
                 Some(&fed),
-                &fed.clone(),
+                &fed,
                 MessageGroupLossRecoveryDisposition::Read
             ),
             SessionPreparationForAGroupStart::Nothing

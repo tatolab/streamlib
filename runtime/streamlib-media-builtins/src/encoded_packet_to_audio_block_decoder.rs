@@ -194,37 +194,20 @@ impl EncodedPacketToAudioBlockDecoder {
                  Opus stream — {refusal}"
             ))
         };
-        let upstream_audio_entry = upstream_catalog_entry
-            .map(AudioEntry::try_from)
-            .transpose()
-            .map_err(|refusal| refused(&refusal))?;
-        if let Some(upstream_audio_entry) = &upstream_audio_entry
-            && upstream_audio_entry.codec != OPUS_CATALOG_CODEC_STRING
-        {
+        let Some(upstream_catalog_entry) = upstream_catalog_entry else {
+            return Ok(OpusIdentificationHeader {
+                channels: self.channels_fixed_by_the_first_packets_toc(opus_packet_bytes)?,
+                pre_skip: 0,
+            });
+        };
+        let upstream_audio_entry =
+            AudioEntry::try_from(upstream_catalog_entry).map_err(|refusal| refused(&refusal))?;
+        if upstream_audio_entry.codec != OPUS_CATALOG_CODEC_STRING {
             return Err(refused(&format!(
                 "it names codec `{}`, not `{OPUS_CATALOG_CODEC_STRING}`",
                 upstream_audio_entry.codec
             )));
         }
-        let Some(upstream_audio_entry) = upstream_audio_entry else {
-            let channels = match self.channels_the_first_packets_toc_coded {
-                Some(channels) => channels,
-                None => {
-                    let channels = channels_coded_by_the_opus_packet_toc(opus_packet_bytes)
-                        .ok_or_else(|| {
-                            Error::Runtime(format!(
-                                "{OPUS_DECODER_PROCESSOR_NAME}: an empty packet has no TOC byte \
-                                 to read a channel count from"
-                            ))
-                        })?;
-                    *self.channels_the_first_packets_toc_coded.insert(channels)
-                }
-            };
-            return Ok(OpusIdentificationHeader {
-                channels,
-                pre_skip: 0,
-            });
-        };
         let Some(hex_encoded_opus_head) = upstream_audio_entry.description else {
             return Ok(OpusIdentificationHeader {
                 channels: upstream_audio_entry.number_of_channels,
@@ -242,6 +225,19 @@ impl EncodedPacketToAudioBlockDecoder {
         self.stream_format_from_the_upstream_opus_head =
             Some((hex_encoded_opus_head, stream_format));
         Ok(stream_format)
+    }
+
+    fn channels_fixed_by_the_first_packets_toc(&mut self, opus_packet_bytes: &[u8]) -> Result<u32> {
+        if let Some(channels) = self.channels_the_first_packets_toc_coded {
+            return Ok(channels);
+        }
+        let channels = channels_coded_by_the_opus_packet_toc(opus_packet_bytes).ok_or_else(|| {
+            Error::Runtime(format!(
+                "{OPUS_DECODER_PROCESSOR_NAME}: an empty packet has no TOC byte to read a channel \
+                 count from"
+            ))
+        })?;
+        Ok(*self.channels_the_first_packets_toc_coded.insert(channels))
     }
 
     fn decode_one_packet_in_stream_format(
