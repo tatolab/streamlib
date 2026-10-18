@@ -674,7 +674,11 @@ impl VulkanGraphicsKernelInner {
                 ..d
             }),
         };
-        self.cmd_bind_and_draw_inner(command_buffer, frame_index, offscreen_draw)?;
+        self.record_bind_and_draw_into_the_command_buffer(
+            command_buffer,
+            frame_index,
+            offscreen_draw,
+        )?;
 
         unsafe {
             self.device.cmd_end_rendering(command_buffer);
@@ -710,7 +714,7 @@ impl VulkanGraphicsKernelInner {
         Ok(())
     }
 
-    fn cmd_bind_and_draw_inner(
+    fn record_bind_and_draw_into_the_command_buffer(
         &self,
         command_buffer: vk::CommandBuffer,
         frame_index: u32,

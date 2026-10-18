@@ -869,7 +869,7 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     ///
     /// Call [`GpuContextLimitedAccess::escalate`] on the returned handle to
     /// temporarily obtain a [`GpuContextFullAccess`] for mid-run
-    /// reconfiguration (new video session, resized swapchain, etc.).
+    /// reconfiguration (a new video session, etc.).
     /// Escalation serializes against processor setup via the shared
     /// setup mutex.
     pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {

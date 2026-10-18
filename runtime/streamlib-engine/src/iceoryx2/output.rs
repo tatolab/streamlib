@@ -318,20 +318,20 @@ impl OutputWriterInner {
                 ))
             })?;
         let refused_bag_board_entry_mirror = bag_count_board_entry_mirror.clone();
-        if bag_counters.mirror_every_new_total_into(
-            Box::new(move |refused_bags| {
-                refused_bag_board_entry_mirror.mirror_refused_bags(refused_bags)
-            }),
-            Box::new(move |written_bags| {
-                bag_count_board_entry_mirror.mirror_written_bags(written_bags)
-            }),
-        ) {
-            Ok(())
-        } else {
-            Err(Error::Link(format!(
-                "output port '{output_port}' already mirrors its bag counts onto a board entry"
-            )))
-        }
+        bag_counters
+            .mirror_every_new_total_into(
+                Box::new(move |refused_bags| {
+                    refused_bag_board_entry_mirror.mirror_refused_bags(refused_bags)
+                }),
+                Box::new(move |written_bags| {
+                    bag_count_board_entry_mirror.mirror_written_bags(written_bags)
+                }),
+            )
+            .map_err(|_| {
+                Error::Link(format!(
+                    "output port '{output_port}' already mirrors its bag counts onto a board entry"
+                ))
+            })
     }
 
     /// This processor's per-output-port refused-bag and written-bag counts,

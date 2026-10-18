@@ -83,8 +83,7 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
         let recorder = full.create_command_recorder("camera_capture")?;
         let conversion_timeline = full.create_timeline_semaphore(0)?;
         // Never read outside this stage, so it is allocated local rather than
-        // exportable — NVIDIA caps DMA-BUF-exportable allocations once a
-        // swapchain exists.
+        // exportable.
         let scratch_texture = full.device().create_texture_local(
             &TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
                 .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC),
@@ -158,8 +157,7 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
             .processor_output_pixel_buffer_pool
             .acquire_the_next_output_pixel_buffer(self.width, self.height, PixelFormat::Rgba32)?;
 
-        // Display path consumes RGBA8_UNORM treated as sRGB-encoded by the
-        // swapchain; #817 replaces this with the negotiated VkColorSpaceKHR.
+        // The pooled RGBA frame every source lands in is sRGB-encoded.
         let output_transfer = TransferId::Srgb;
         let kernel = self
             .color_converter

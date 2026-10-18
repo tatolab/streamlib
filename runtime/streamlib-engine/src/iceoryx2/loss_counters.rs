@@ -332,14 +332,14 @@ impl DiscardedSampleCountsByInboundLink {
 /// One output port's two cumulative counts: bags refused at its channel's
 /// payload ceiling, and bags sent on its channel.
 #[derive(Default)]
-struct OutputPortBagCount {
+struct OutputPortRefusedAndWrittenBagCounts {
     refused_bags: CumulativeCount,
     written_bags: CumulativeCount,
 }
 
 /// One output port's bag counters. Cloning shares the counts.
 #[derive(Clone, Default)]
-pub struct OutputPortBagCounters(Arc<OutputPortBagCount>);
+pub struct OutputPortBagCounters(Arc<OutputPortRefusedAndWrittenBagCounts>);
 
 impl OutputPortBagCounters {
     /// Record one bag this port refused, and return the port's refused total
@@ -353,24 +353,27 @@ impl OutputPortBagCounters {
         self.0.written_bags.add(1);
     }
 
-    /// Write every new total of both counts through its mirror; `false` where
-    /// the counts are already mirrored.
+    /// Write every new total of both counts through its mirror, or refuse
+    /// where the counts are already mirrored.
     pub(crate) fn mirror_every_new_total_into(
         &self,
         refused_bags_mirror: LossCountMirror,
         written_bags_mirror: LossCountMirror,
-    ) -> bool {
+    ) -> Result<(), OutputPortBagCountsAlreadyMirrored> {
         self.0
             .refused_bags
             .mirror_every_new_total_into(refused_bags_mirror)
-            .is_ok()
-            && self
-                .0
-                .written_bags
-                .mirror_every_new_total_into(written_bags_mirror)
-                .is_ok()
+            .map_err(|_| OutputPortBagCountsAlreadyMirrored)?;
+        self.0
+            .written_bags
+            .mirror_every_new_total_into(written_bags_mirror)
+            .map_err(|_| OutputPortBagCountsAlreadyMirrored)
     }
 }
+
+/// A second mirror refused on an output port's counts, which already have one.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct OutputPortBagCountsAlreadyMirrored;
 
 /// Every output port's bag counters for one producing processor.
 ///
@@ -380,7 +383,7 @@ impl OutputPortBagCounters {
 /// with the port's last link, the same life a link's count has.
 #[derive(Default)]
 pub struct BagCountsByOutputPort {
-    per_output_port: CumulativeCountsByName<OutputPortBagCount>,
+    per_output_port: CumulativeCountsByName<OutputPortRefusedAndWrittenBagCounts>,
 }
 
 impl BagCountsByOutputPort {
@@ -527,7 +530,13 @@ mod tests {
     #[test]
     fn a_ports_counters_install_their_mirrors_once() {
         let counters = BagCountsByOutputPort::default().counters_for_output_port("video");
-        assert!(counters.mirror_every_new_total_into(Box::new(|_| {}), Box::new(|_| {})));
-        assert!(!counters.mirror_every_new_total_into(Box::new(|_| {}), Box::new(|_| {})));
+        assert_eq!(
+            counters.mirror_every_new_total_into(Box::new(|_| {}), Box::new(|_| {})),
+            Ok(())
+        );
+        assert_eq!(
+            counters.mirror_every_new_total_into(Box::new(|_| {}), Box::new(|_| {})),
+            Err(OutputPortBagCountsAlreadyMirrored)
+        );
     }
 }

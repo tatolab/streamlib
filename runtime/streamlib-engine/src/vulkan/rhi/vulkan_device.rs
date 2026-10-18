@@ -3051,8 +3051,8 @@ impl HostVulkanDevice {
     ///
     /// Cross-device meaning: the source DMA-BUF was allocated by a
     /// different DRM device (e.g. UVC camera kernel driver) than this
-    /// `VkDevice`. Same-device DMA-BUF imports (e.g. swapchain images
-    /// from the compositor) are unaffected and always safe.
+    /// `VkDevice`. Same-device DMA-BUF imports (e.g. a helper process's
+    /// import of this device's own frames) are unaffected and always safe.
     ///
     /// Returns `false` on NVIDIA Linux today: failed cross-device DMA-BUF
     /// imports flake the engine's OPAQUE_FD allocation budget for the

@@ -1461,7 +1461,7 @@ pub struct GpuContext {
     >,
     /// Serializes [`GpuContextLimitedAccess::escalate`] scopes across
     /// threads so concurrent GPU resource creation (video
-    /// sessions, DPB images, swapchain) can't race on the device. The
+    /// sessions, DPB images) can't race on the device. The
     /// compiler acquires this during Phase 4 of spawn_processor and
     /// releases it after waiting for the device to go idle. A flag +
     /// Condvar rather than a `Mutex<()>` guard, so enter and exit can
@@ -2295,10 +2295,8 @@ impl GpuContext {
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::STORAGE_BINDING,
         );
-        // Same-process texture cache path — skip the DMA-BUF export pool so
-        // repeated decode-output allocations don't exhaust NVIDIA's DMA-BUF
-        // budget after the display swapchain is created
-        // (docs/learnings/nvidia-dma-buf-after-swapchain.md).
+        // Same-process texture cache path: nothing outside this process reads
+        // it, so it skips the DMA-BUF export pool.
         let texture = self.device.create_texture_local(&desc)?;
 
         let upload = unsafe {
@@ -4482,8 +4480,7 @@ impl GpuContextLimitedAccess {
     /// This is the single primitive for GPU resource-creation work
     /// outside `setup()` — used by the compiler to run each
     /// processor's setup() and by running processors that need to
-    /// reconfigure (acquire a new video session, resize a swapchain,
-    /// etc.).
+    /// reconfigure (acquire a new video session, etc.).
     ///
     /// Acquires the gate, constructs a `GpuContextFullAccess`, runs
     /// the closure, then waits device idle and releases the gate. A
@@ -4629,7 +4626,7 @@ impl GpuContextFullAccess {
 // `GpuContextLimitedAccess` exposes the Sandbox surface only: pool acquires
 // (pre-reserved), texture sampling, writes to mapped pixel buffers, read-only
 // queries, and the shared command queue. Methods that allocate new GPU
-// memory, create sessions/swapchains/descriptors, or hand out raw device
+// memory, create sessions/descriptors, or hand out raw device
 // handles live exclusively on [`GpuContextFullAccess`] and are reachable from
 // `process()` only via [`GpuContextLimitedAccess::escalate`].
 // -----------------------------------------------------------------------------

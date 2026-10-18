@@ -447,11 +447,8 @@ impl SimpleEncoder {
     ///
     /// Creates the RGB→NV12 converter (an NV12 VkImage, per-plane views, compute
     /// pipeline, command pool/buffer) now instead of on the first `encode_image`
-    /// call. Eager allocation here is for first-frame latency; the exportable
-    /// VMA blocks the NV12 image rides through are pre-warmed at
-    /// `HostVulkanDevice::new()` (see
-    /// docs/learnings/nvidia-dma-buf-after-swapchain.md), so callers no
-    /// longer need to invoke this before the display swapchain.
+    /// call, for first-frame latency; the exportable VMA blocks the NV12 image
+    /// rides through are pre-warmed at `HostVulkanDevice::new()`.
     pub fn prepare_gpu_encode_resources(&mut self) -> Result<(), VideoError> {
         self.prepare_gpu_encode_resources_impl()
     }
