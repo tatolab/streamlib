@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.48.0](https://github.com/tatolab/streamlib/compare/v0.47.1...v0.48.0) (2026-10-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **media:** `tatolab.stream.Mp4Sink` and `Mp4SinkConfig` are gone; a graph naming `tatolab.stream:Mp4Sink` no longer loads.
+
+### Miscellaneous
+
+* **media:** Mp4Sink is deleted — a stream's last mile is a MoQ client's, never the runtime's ([#2838](https://github.com/tatolab/streamlib/issues/2838)) ([e82d554](https://github.com/tatolab/streamlib/commit/e82d554e39c01b15fd0a3493de68a32d54d16143))
+
 ## [0.47.1](https://github.com/tatolab/streamlib/compare/v0.47.0...v0.47.1) (2026-10-17)
 
 
