@@ -110,6 +110,7 @@ pub(crate) fn start_channel_tap(
         ReservedSlotOfAChannelToForward {
             node,
             channel,
+            ring_depth: sizing.channel_service_creation_depth,
             sizing,
             count,
         },

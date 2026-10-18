@@ -171,7 +171,7 @@ reads them). Consumers (`examples/camera-audio-recorder`, `camera-webrtc-publish
   rest of the current group and resumes at the next `StartsGroup`. The catalog is a
   `hang::catalog::Catalog` assembled from the ports' entries by section under their track names,
   re-published as `catalog.json` and `catalog.json.z` when an entry or the exposed set changes;
-  a port with no entry is a track the catalog does not list. `offers(port) -> bool` says "all".
+  a port with no entry is a track the catalog does not list. Every exposed port is forwarded; no predicate chooses which.
 - **The adapter SDK** `runtime/streamlib-relay-adapter-sdk`: `trait RelayAdapter { fn kind(); fn
   settings_schema(); fn join(&mut self, settings) -> Result<Joined>; fn levels_served(); fn
   broadcast_root(&self, machine) -> BroadcastPath; fn credential_for_dial(&self) -> …; fn events()

@@ -229,6 +229,7 @@ fn subscribe_holding_the_source_side_open(
             node: iceoryx2_node,
             channel: source_side.channel_service_name.clone(),
             sizing: source_side.channel_sizing,
+            ring_depth: crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
             count: None,
         },
         ExposedOutputPortMessageForwarding::<UniquePublisherId>::default(),

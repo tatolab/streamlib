@@ -147,12 +147,42 @@ impl TatolabdPublishingTheStream {
     }
 
     fn put_the_port_at(&self, port: &str, level: &str) {
+        self.put_the_port_of_the_node_at("writer", port, level);
+    }
+
+    fn put_the_port_of_the_node_at(&self, node: &str, port: &str, level: &str) {
+        self.call(
+            "expose_port",
+            serde_json::json!({"stream": STREAM, "node": node, "port": port, "level": level}),
+        );
+    }
+
+    /// Add a numbered-message writer named `node` to the running stream.
+    fn add_a_writer_named(&self, node: &str) {
+        self.call(
+            "add_node",
+            serde_json::json!({
+                "stream": STREAM,
+                "type": WRITER_NODE_TYPE,
+                "name": node,
+            }),
+        );
+    }
+
+    fn remove_the_node_named(&self, node: &str) {
+        self.call(
+            "remove_node",
+            serde_json::json!({"stream": STREAM, "name": node}),
+        );
+    }
+
+    fn call(&self, tool_name: &str, tool_arguments: serde_json::Value) {
         let answer = call_a_tool_over_the_local_api(
             &self.machine_root.local_api_socket_path(),
-            "expose_port",
-            serde_json::json!({"stream": STREAM, "node": "writer", "port": port, "level": level}),
+            tool_name,
+            tool_arguments,
         );
-        assert!(!answer.is_error, "{}", answer.text);
+        assert!(!answer.is_error, "`{tool_name}`: {}", answer.text);
     }
 }
 
@@ -172,6 +202,25 @@ struct ObjectRead {
 }
 
 impl BroadcastReadAtAListener {
+    /// The first group of `track_name` once it is served, asking again until
+    /// [`MOQ_BUDGET`] runs out; `None` when it never is.
+    async fn the_first_group_of_once_it_is_served(
+        &self,
+        track_name: &str,
+    ) -> Option<moq_net::group::Consumer> {
+        let deadline = tokio::time::Instant::now() + MOQ_BUDGET;
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(mut ordered) = self.subscribe_to(track_name).await
+                && let Ok(Ok(Some(group))) =
+                    tokio::time::timeout(Duration::from_secs(2), ordered.next_group()).await
+            {
+                return Some(group);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        None
+    }
+
     async fn subscribe_to(
         &self,
         track_name: &str,
@@ -370,19 +419,69 @@ fn lowering_a_port_ends_its_subscribers_and_raising_it_announces_it_again() {
     publishing.put_the_port_at(PUBLIC_PORT, "public");
     let at_every_interface_again = publishing.the_broadcast_at(LocalRelayListener::EveryInterface);
     publishing.async_runtime.block_on(async {
-        let mut reached_again = None;
-        let deadline = tokio::time::Instant::now() + MOQ_BUDGET;
-        while reached_again.is_none() && tokio::time::Instant::now() < deadline {
-            if let Ok(mut ordered) = at_every_interface_again.subscribe_to(&public_track).await
-                && let Ok(Ok(Some(group))) =
-                    tokio::time::timeout(Duration::from_secs(2), ordered.next_group()).await
-            {
-                reached_again = Some(group);
-            }
-        }
         assert!(
-            reached_again.is_some(),
+            at_every_interface_again
+                .the_first_group_of_once_it_is_served(&public_track)
+                .await
+                .is_some(),
             "a port raised to public again is not announced off loopback"
+        );
+    });
+    publishing.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// The graph changed while it runs, as an agent changes it through the local
+/// API: a node added and exposed is published, its subscribers end when it is
+/// removed, one added again under its name is published again, and the port
+/// that was there all along carries on throughout.
+#[test]
+fn a_node_added_exposed_removed_and_added_again_live_is_published_withdrawn_and_published_again() {
+    let mut publishing = TatolabdPublishingTheStream::start();
+    let at_loopback = publishing.the_broadcast_at(LocalRelayListener::Loopback);
+    let added_track = format!("added/{PUBLIC_PORT}");
+    let original_track = format!("writer/{PUBLIC_PORT}");
+
+    publishing.add_a_writer_named("added");
+    publishing.put_the_port_of_the_node_at("added", PUBLIC_PORT, "public");
+    let mut added_read = publishing.async_runtime.block_on(async {
+        at_loopback
+            .the_first_group_of_once_it_is_served(&added_track)
+            .await
+            .expect("a node added and exposed live is published");
+        let objects = at_loopback.the_next_objects_of(&added_track, 6).await;
+        assert_the_objects_are_the_messages_as_written(&objects);
+        at_loopback.subscribe_to(&added_track).await.unwrap()
+    });
+
+    publishing.remove_the_node_named("added");
+    publishing.async_runtime.block_on(async {
+        let ended = tokio::time::timeout(MOQ_BUDGET, async {
+            loop {
+                match added_read.next_group().await {
+                    Ok(Some(_)) => continue,
+                    _ => return,
+                }
+            }
+        })
+        .await;
+        assert!(
+            ended.is_ok(),
+            "a removed node's track still reaches its subscriber"
+        );
+        assert_the_objects_are_the_messages_as_written(
+            &at_loopback.the_next_objects_of(&original_track, 6).await,
+        );
+    });
+
+    publishing.add_a_writer_named("added");
+    publishing.put_the_port_of_the_node_at("added", PUBLIC_PORT, "public");
+    publishing.async_runtime.block_on(async {
+        assert!(
+            at_loopback
+                .the_first_group_of_once_it_is_served(&added_track)
+                .await
+                .is_some(),
+            "a node added again under a removed one's name is not published"
         );
     });
     publishing.runtime.interrupt_and_expect_a_clean_exit();

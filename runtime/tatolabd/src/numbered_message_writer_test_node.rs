@@ -31,7 +31,7 @@ impl ContinuousProcessor for NumberedMessageWriterTestNode::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         let message_number = self.next_message_number;
         self.next_message_number += 1;
-        let group_boundary = if message_number % MESSAGES_PER_GROUP == 0 {
+        let group_boundary = if message_number.is_multiple_of(MESSAGES_PER_GROUP) {
             MessageGroupBoundary::StartsGroup
         } else {
             MessageGroupBoundary::ContinuesGroup

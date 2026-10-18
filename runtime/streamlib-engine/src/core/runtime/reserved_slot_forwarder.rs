@@ -50,12 +50,14 @@ pub(crate) trait ReservedSlotBagForwarding: Send + 'static {
     fn dropped_into_a_full_receiver(&mut self, dropped: Self::Forwarded, channel: &str);
 }
 
-/// The reserved slot of one channel, as the compiler opened the channel, and
-/// how many items to forward from it before ending, or `None` for no bound.
+/// The reserved slot of one channel, as the compiler opened the channel; the
+/// ring its subscriber takes, no deeper than the channel; and how many items
+/// to forward from it before ending, or `None` for no bound.
 pub(crate) struct ReservedSlotOfAChannelToForward {
     pub(crate) node: Iceoryx2Node,
     pub(crate) channel: String,
     pub(crate) sizing: ChannelSizing,
+    pub(crate) ring_depth: usize,
     pub(crate) count: Option<usize>,
 }
 
@@ -122,7 +124,8 @@ pub(crate) fn start_reserved_slot_forwarder<Forwarding: ReservedSlotBagForwardin
     forwarding: Forwarding,
 ) -> Result<ReservedSlotForwarder<Forwarding::Forwarded>> {
     let (forward_tx, receiver) = tokio::sync::mpsc::channel::<Forwarding::Forwarded>(
-        slot.sizing.channel_service_creation_depth,
+        slot.ring_depth
+            .min(slot.sizing.channel_service_creation_depth),
     );
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -184,6 +187,7 @@ impl<Forwarding: ReservedSlotBagForwarding> ReaderOfAReservedSlot<Forwarding> {
                     node,
                     channel,
                     sizing,
+                    ring_depth,
                     count,
                 },
             mut forwarding,
@@ -203,20 +207,21 @@ impl<Forwarding: ReservedSlotBagForwarding> ReaderOfAReservedSlot<Forwarding> {
                 return;
             }
         };
-        let subscriber =
-            match service.create_reserved_slot_subscriber(sizing.channel_service_creation_depth) {
-                Ok(subscriber) => subscriber,
-                Err(ChannelReservedSlotSubscribeError::ReservedSlotOccupied) => {
-                    let _ = ready_tx.send(Err(Error::TapSlotOccupied(channel)));
-                    return;
-                }
-                Err(ChannelReservedSlotSubscribeError::Transport(detail)) => {
-                    let _ = ready_tx.send(Err(Error::Runtime(format!(
-                        "failed to subscribe to the reserved slot of channel '{channel}': {detail}"
-                    ))));
-                    return;
-                }
-            };
+        let subscriber = match service
+            .create_reserved_slot_subscriber(ring_depth.min(sizing.channel_service_creation_depth))
+        {
+            Ok(subscriber) => subscriber,
+            Err(ChannelReservedSlotSubscribeError::ReservedSlotOccupied) => {
+                let _ = ready_tx.send(Err(Error::TapSlotOccupied(channel)));
+                return;
+            }
+            Err(ChannelReservedSlotSubscribeError::Transport(detail)) => {
+                let _ = ready_tx.send(Err(Error::Runtime(format!(
+                    "failed to subscribe to the reserved slot of channel '{channel}': {detail}"
+                ))));
+                return;
+            }
+        };
         let _ = ready_tx.send(Ok(()));
 
         let mut forwarded: usize = 0;
