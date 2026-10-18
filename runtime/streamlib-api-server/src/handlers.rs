@@ -643,6 +643,7 @@ fn tap_error_close_frame(error: &Error) -> (u16, String) {
     let (code, reason) = match error {
         Error::TapChannelNotFound(channel) => (4404, format!("tap channel not found: {channel}")),
         Error::TapSlotOccupied(channel) => (4409, format!("tap slot already occupied: {channel}")),
+        refusal @ Error::TapOfAnOutputPortThePublisherReads(_) => (4409, refusal.to_string()),
         other => (
             axum::extract::ws::close_code::ERROR,
             format!("tap attach failed: {other}"),
@@ -721,6 +722,7 @@ pub(crate) mod router_surface_tests {
             Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
 
+        crate::control_plane_stub_support::the_exposed_port_subscription_is_unreachable!("route");
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
     }
 

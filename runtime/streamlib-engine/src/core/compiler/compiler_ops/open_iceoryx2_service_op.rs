@@ -8,7 +8,7 @@
 //! (`{source_processor}/{source_output_port}`), so one source output port maps
 //! to exactly one iceoryx2 data service: ONE publisher fans a single zero-copy
 //! loan out to its N compile-time-known subscribers (one per `connect()` link),
-//! plus one reserved slot for a phase-3.5 tap. The paired Event (notify) service
+//! plus one reserved slot the runtime's publisher reads. The paired Event (notify) service
 //! stays destination-keyed (`streamlib/{dest}/notify`) so a destination waits on
 //! ONE listener fd regardless of fan-in.
 
@@ -24,8 +24,9 @@ use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent,
     InputLinkPortRef, Link, LinkReadingAnotherStreamComponent, LinkState, LinkStateComponent,
     LinkUniqueId, LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
-    ProcessorLossCounts, ProcessorMetrics, SourceSideOfALinkWiredOn,
+    OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortExposureLevel,
+    ProcessorInstanceComponent, ProcessorLossCounts, ProcessorMetrics,
+    SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
 };
 use crate::core::output_port_catalog_entries::CatalogEntriesOfOutputPorts;
 use crate::core::processors::{
@@ -392,6 +393,68 @@ pub(crate) fn open_the_source_side_of_a_link(
         wired_on,
         source_output_port: source_port.to_string(),
         catalog_entries_of_the_sources_output_ports,
+    })
+}
+
+/// What the runtime's publisher holds open on an exposed output port's source
+/// while it reads the port's channel through the reserved slot: the channel's
+/// name and sizing, the source's side, and the services. Dropping it releases
+/// the source's side, then the services.
+pub(crate) struct SourceSideHeldOpenForTheRuntimesPublisher {
+    pub(crate) channel_service_name: String,
+    pub(crate) channel_sizing: ChannelSizing,
+    _source_side: SourceSideHeldOpenForAReaderOutsideItsStream,
+    _services: Iceoryx2ServicesHeldOpenForLinkComponent,
+}
+
+/// Open the source's side of output port `source` on `source_graph` for the
+/// runtime's publisher, as a link's source side is opened, whether or not a
+/// link out of the port exists: the channel's single publisher is installed
+/// when none is, and held until what this hands back drops. The publisher's
+/// end is a destination of its own, notified through a notify service no
+/// listener waits on, since it polls the reserved slot.
+pub(crate) fn open_the_source_side_for_the_runtimes_publisher(
+    source_graph: &mut Graph,
+    source: &OutputLinkPortRef,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<SourceSideHeldOpenForTheRuntimesPublisher> {
+    let the_runtimes_publisher = ProcessorUniqueId::new();
+    let link_id = LinkUniqueId::new();
+    let destination = DestinationOfALinkAsItsWiringReadsIt {
+        notify_service_name: notify_service_name_for(&the_runtimes_publisher),
+        dest_proc_id: the_runtimes_publisher,
+        dest_port: "the-runtimes-publisher".to_string(),
+        link_wiring_of_a_destination_out_of_process: None,
+        audio_windowing: None,
+        input_port_delivery: DeliveryProfile::Ordered.resolve(),
+        max_notifiers: MAX_INBOUND_LINKS_PER_DESTINATION,
+    };
+    let opened = open_the_source_side_of_a_link(
+        source_graph,
+        source,
+        &link_id,
+        &destination,
+        iceoryx2_node,
+    )?;
+    let wired_on = opened.wired_on.as_ref().ok_or_else(|| {
+        Error::Link(format!(
+            "output port '{source}' belongs to a processor holding no output writer, so it \
+             publishes nothing"
+        ))
+    })?;
+    let source_side = SourceSideHeldOpenForAReaderOutsideItsStream::released_when_dropped(
+        wired_on,
+        source.port_name(),
+        &link_id,
+    );
+    Ok(SourceSideHeldOpenForTheRuntimesPublisher {
+        channel_service_name: opened.channel_service_name,
+        channel_sizing: opened.channel_sizing,
+        _source_side: source_side,
+        _services: Iceoryx2ServicesHeldOpenForLinkComponent {
+            channel_data_service: opened.channel_data_service,
+            destination_notify_service: opened.destination_notify_service,
+        },
     })
 }
 
@@ -791,10 +854,11 @@ fn subscriber_ring_depth_of_input_port(
 /// An address that does not parse is refused as [`Error::InvalidPortAddress`];
 /// one naming another machine as [`Error::PortAddressNamesAnotherMachine`];
 /// one naming another stream as [`Error::InvalidPortAddress`] naming both, since
-/// a stream taps its own ports. A channel's iceoryx2 data service only exists
-/// once a link has wired its source, so an address that neither a link of this
-/// stream nor a reader from another stream reads is genuinely untappable and
-/// answers [`Error::TapChannelNotFound`].
+/// a stream taps its own ports. An exposed port is the runtime's publisher's to
+/// read through the channel's one reserved slot, and is refused as
+/// [`Error::TapOfAnOutputPortThePublisherReads`]. A channel's iceoryx2 data
+/// service only exists once a link has wired its source, so an address no link
+/// of this stream reads is untappable and answers [`Error::TapChannelNotFound`].
 pub(crate) fn find_the_source_a_caller_named(
     graph: &Graph,
     this_machine: &crate::core::runtime::MachineName,
@@ -818,6 +882,19 @@ pub(crate) fn find_the_source_a_caller_named(
         .id
         .clone();
     let source = OutputLinkPortRef::new(processor_id, address.port_name());
+    let the_runtimes_publisher_reads_it = graph
+        .traversal()
+        .v(source.processor_id())
+        .first()
+        .and_then(|node| node.get::<ExposedOutputPortsComponent>())
+        .is_some_and(|exposed_ports| {
+            exposed_ports.level_of(source.port_name()) != OutputPortExposureLevel::Internal
+        });
+    if the_runtimes_publisher_reads_it {
+        return Err(Error::TapOfAnOutputPortThePublisherReads(
+            port_address.to_string(),
+        ));
+    }
     if channel_destination_count(graph, &source) > 0 {
         Ok(source)
     } else {
@@ -4697,21 +4774,11 @@ mod tests {
         );
     }
 
-    /// A port whose only readers are links in other streams is tapped by its
-    /// address, since those links installed its publisher; once their
-    /// registrations are dropped it answers `TapChannelNotFound` again.
-    ///
-    /// Fail-without-fix: count the links of this stream alone and the tap is
-    /// refused a channel another stream's link keeps live.
+    /// A port exposed private or public is refused to a tap, naming the
+    /// runtime's publisher, which reads it through the channel's one reserved
+    /// slot; back at internal, a port nothing reads has no channel to tap.
     #[test]
-    fn a_port_read_only_from_other_streams_is_named_by_its_address() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use crate::core::graph::{
-            OutputPortExposureLevel, OutputPortReaderOutsideItsStream, ReaderOfAnExposedOutputPort,
-        };
-
+    fn an_exposed_port_is_refused_to_a_tap_naming_the_runtimes_publisher() {
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
         let source_node_name = graph
@@ -4723,48 +4790,43 @@ mod tests {
             .clone();
         let address = format!("main/{source_node_name}/out1");
         let this_machine = the_machine_these_tests_run_on();
+        let put_out1_at = |graph: &mut Graph, level| {
+            let source = graph
+                .traversal_mut()
+                .v(src_id.as_str())
+                .first_mut()
+                .expect("the source is in its graph");
+            if !source.has::<ExposedOutputPortsComponent>() {
+                source
+                    .insert_component_without_rendering_it(ExposedOutputPortsComponent::default());
+            }
+            let _ = source
+                .get_mut::<ExposedOutputPortsComponent>()
+                .unwrap()
+                .set_level("out1", level);
+        };
+
+        for level in [
+            OutputPortExposureLevel::Private,
+            OutputPortExposureLevel::Public,
+        ] {
+            put_out1_at(&mut graph, level);
+            let refusal = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
+                .expect_err("an exposed port is the publisher's to read");
+            assert!(
+                matches!(refusal, Error::TapOfAnOutputPortThePublisherReads(_)),
+                "{level}: {refusal:?}"
+            );
+            assert!(refusal.to_string().contains("publisher"), "{refusal}");
+        }
+
+        put_out1_at(&mut graph, OutputPortExposureLevel::Internal);
         assert!(
             matches!(
                 find_the_source_a_caller_named(&graph, &this_machine, "main", &address),
                 Err(Error::TapChannelNotFound(_))
             ),
-            "a port nothing reads has no channel to tap"
-        );
-
-        let still_registered = Arc::new(AtomicBool::new(true));
-        let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("out1", OutputPortExposureLevel::Private);
-        assert!(
-            exposed_ports
-                .register_reader(
-                    "out1",
-                    ReaderOfAnExposedOutputPort::new(
-                        Arc::clone(&still_registered),
-                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                        Box::new(|_why| {}),
-                    ),
-                )
-                .is_ok()
-        );
-        graph
-            .traversal_mut()
-            .v(src_id.as_str())
-            .first_mut()
-            .expect("the source is in its graph")
-            .insert_component_without_rendering_it(exposed_ports);
-
-        let resolved = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
-            .expect("a port another stream's link reads is tapped by its address");
-        assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
-        assert_eq!(resolved.port_name(), "out1");
-
-        still_registered.store(false, Ordering::Release);
-        assert!(
-            matches!(
-                find_the_source_a_caller_named(&graph, &this_machine, "main", &address),
-                Err(Error::TapChannelNotFound(_))
-            ),
-            "a reader whose registration was dropped keeps no channel tappable"
+            "an internal port nothing reads has no channel to tap"
         );
     }
 
@@ -4880,7 +4942,7 @@ mod tests {
         use crate::core::graph::{
             OutputPortExposureLevel, OutputPortInAnotherStreamOnThisMachine,
             OutputPortReaderOutsideItsStream, ReaderOfAnExposedOutputPort,
-            SourceSideOfALinkReadingAnotherStream,
+            SourceSideHeldOpenForAReaderOutsideItsStream,
         };
         use crate::core::json_schema::LinkStateOutput;
         use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
@@ -5092,7 +5154,7 @@ mod tests {
 
             assert!(two_graphs.source_output.has_channel_publisher("out1"));
             assert_eq!(two_graphs.source_output.channel_notifier_count("out1"), 1);
-            let source_side = SourceSideOfALinkReadingAnotherStream::released_when_dropped(
+            let source_side = SourceSideHeldOpenForAReaderOutsideItsStream::released_when_dropped(
                 wired_on
                     .as_ref()
                     .expect("a native source's side is its output writer"),
@@ -5295,13 +5357,14 @@ mod tests {
                 let (_, wired_on) =
                     wire_across(&mut source_graph, &source_id, &mut reading_graph, &link_id)
                         .expect("the link wires across two graphs");
-                let source_side = SourceSideOfALinkReadingAnotherStream::released_when_dropped(
-                    wired_on
-                        .as_ref()
-                        .expect("a helper source's side is its link wiring"),
-                    "out1",
-                    &link_id,
-                );
+                let source_side =
+                    SourceSideHeldOpenForAReaderOutsideItsStream::released_when_dropped(
+                        wired_on
+                            .as_ref()
+                            .expect("a helper source's side is its link wiring"),
+                        "out1",
+                        &link_id,
+                    );
                 drop(wired_on);
                 if !source_processor_still_there {
                     drop(source_instance);

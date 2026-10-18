@@ -25,7 +25,7 @@ use crate::core::graph::{
     LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent,
     OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortInAnotherStreamOnThisMachine,
     OutputPortReaderOutsideItsStream, PendingDeletionComponent, ProcessorInstanceComponent,
-    ReaderOfAnExposedOutputPort, SourceSideOfALinkReadingAnotherStream,
+    ReaderOfAnExposedOutputPort, SourceSideHeldOpenForAReaderOutsideItsStream,
     WiringOfALinkReadingAnotherStream, a_link_reading_another_stream_is_still_on_wiring_attempt,
     a_link_reading_another_stream_is_still_to_be_wired,
     why_a_link_awaits_a_source_stream_not_loaded,
@@ -343,7 +343,7 @@ struct OpenedSourceSideOnTheSourceStream {
     // Dropped unused, in declaration order: the reader comes off the source's port first, so a
     // cut not begun never begins; then the source's side is released; then the services go.
     exposure_registration: ExposedOutputPortReaderRegistration,
-    source_side: SourceSideOfALinkReadingAnotherStream,
+    source_side: SourceSideHeldOpenForAReaderOutsideItsStream,
     opened_source_side: OpenedSourceSideOfALink,
 }
 
@@ -452,7 +452,7 @@ fn open_the_source_side_on_the_source_stream(
             readers_to_drop,
         );
     };
-    let source_side = SourceSideOfALinkReadingAnotherStream::released_when_dropped(
+    let source_side = SourceSideHeldOpenForAReaderOutsideItsStream::released_when_dropped(
         wired_on,
         &source_port,
         link_id,

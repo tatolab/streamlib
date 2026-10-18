@@ -18,6 +18,7 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe, cut_off_every_reader_each_under_its_own_unwind_guard,
     node_named_or_refused, output_port_exposure_allows_the_reader, port_names_listed_for_a_refusal,
 };
+use crate::core::pubsub::OutputPortExposureChange;
 use crate::core::{Error, Result};
 
 /// One reader's registration against an exposed output port. Dropping it
@@ -39,19 +40,19 @@ impl Drop for ExposedOutputPortReaderRegistration {
 impl LoadedStreamInThisRuntime {
     /// Put output port `port_name` of node `node_name` at `level` while the
     /// stream runs, cutting off at once every reader from outside the stream
-    /// the new level no longer allows, and re-planning every link in another
-    /// stream reading this one when the port is newly open to them. Nothing
-    /// restarts.
+    /// the new level no longer allows, saying so on
+    /// [`topics::OUTPUT_PORT_EXPOSURE`](crate::core::pubsub::topics::OUTPUT_PORT_EXPOSURE),
+    /// and re-planning every link in another stream reading this one when the
+    /// port is newly open to them. Nothing restarts.
     pub fn set_output_port_exposure_level(
         &self,
         node_name: &str,
         port_name: &str,
         level: OutputPortExposureLevel,
     ) -> Result<()> {
-        let (port_address, level_before, readers_leaving_the_port) =
+        let (node_display_name, port_cast, level_before, readers_leaving_the_port) =
             self.compiler.scope(|graph, _tx| -> Result<_> {
                 let (node, port_cast) = self.the_output_port_named(graph, node_name, port_name)?;
-                let port_address = format!("{}/{port_cast}", node.display_name);
                 let level_before = exposure_level_of_output_port(node, &port_cast);
                 if level != OutputPortExposureLevel::Internal
                     && !node.has::<ExposedOutputPortsComponent>()
@@ -64,8 +65,14 @@ impl LoadedStreamInThisRuntime {
                     .get_mut::<ExposedOutputPortsComponent>()
                     .map(|exposed_ports| exposed_ports.set_level(&port_cast, level))
                     .unwrap_or_default();
-                Ok((port_address, level_before, readers_leaving_the_port))
+                Ok((
+                    node.display_name.clone(),
+                    port_cast,
+                    level_before,
+                    readers_leaving_the_port,
+                ))
             })?;
+        let port_address = format!("{node_display_name}/{port_cast}");
         tracing::debug!(
             stream = %self.stream_name(),
             port = %port_address,
@@ -78,6 +85,13 @@ impl LoadedStreamInThisRuntime {
             self.stream_name(),
             &format_args!("`{port_address}`"),
         );
+        OutputPortExposureChange::LevelSet {
+            stream_name: self.stream_name().to_string(),
+            node_name: node_display_name,
+            port_name: port_cast,
+            level,
+        }
+        .publish();
         let another_stream_on_this_machine = OutputPortReaderLocation::ElsewhereOnThisMachine;
         if !output_port_exposure_allows_the_reader(level_before, another_stream_on_this_machine)
             && output_port_exposure_allows_the_reader(level, another_stream_on_this_machine)
@@ -299,7 +313,7 @@ fn a_reader_the_port_does_not_allow(
 /// The node `node_name` names in `graph`, the graph of the stream
 /// `stream_name`, and the cast name of its output port `port_name`, each
 /// refused by name — listing what the stream holds — when it is not there.
-fn the_output_port_named_on_this_graph<'graph>(
+pub(crate) fn the_output_port_named_on_this_graph<'graph>(
     graph: &'graph mut Graph,
     stream_name: &str,
     node_name: &str,

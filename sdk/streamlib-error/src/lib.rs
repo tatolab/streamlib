@@ -374,6 +374,12 @@ pub enum Error {
     )]
     TapSlotOccupied(String),
 
+    #[error(
+        "channel '{0}' carries an exposed output port, and the runtime's publisher reads it \
+         through the channel's one reserved slot — read the port's track at a relay instead"
+    )]
+    TapOfAnOutputPortThePublisherReads(String),
+
     #[error("Bag key '{key}' is not present")]
     BagKeyMissing { key: String },
 

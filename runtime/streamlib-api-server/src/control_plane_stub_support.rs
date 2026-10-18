@@ -4,6 +4,29 @@
 //! Shared test scaffolding for the control plane's two front ends and for
 //! the tests that assert on what it logs.
 
+/// The exposed-port subscription a control-plane stub never reaches: the
+/// control plane does not read an exposed port's channel.
+macro_rules! the_exposed_port_subscription_is_unreachable {
+    ($surface:literal) => {
+        fn subscribe_to_an_exposed_output_port(
+            &self,
+            _node_name: String,
+            _port_name: String,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<
+                ::streamlib::sdk::runtime::ExposedOutputPortSubscription,
+            >,
+        > {
+            unreachable!(concat!(
+                "the control plane serves no exposed-port subscription ",
+                $surface
+            ))
+        }
+    };
+}
+pub(crate) use the_exposed_port_subscription_is_unreachable;
+
 /// Implement every graph-mutating [`RuntimeOperations`] method, and the one
 /// stream's own shutdown request, as `unreachable!`, naming `$surface`
 /// (`"route"` / `"tool"`) in each graph-mutation panic.

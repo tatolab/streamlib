@@ -4,7 +4,7 @@
 use crate::core::error::Result;
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
-use crate::core::runtime::TapSubscription;
+use crate::core::runtime::{ExposedOutputPortSubscription, TapSubscription};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
@@ -92,8 +92,10 @@ pub trait RuntimeOperations: Send + Sync {
     /// so an attach fails with [`Error::TapSlotOccupied`] only once every slot
     /// is held. An unwired / unknown channel fails with
     /// [`Error::TapChannelNotFound`], an address naming another machine with
-    /// [`Error::PortAddressNamesAnotherMachine`], and one naming another stream
-    /// or not parsing with [`Error::InvalidPortAddress`].
+    /// [`Error::PortAddressNamesAnotherMachine`], one naming another stream or
+    /// not parsing with [`Error::InvalidPortAddress`], and an exposed port —
+    /// whose reserved slot the runtime's publisher holds — with
+    /// [`Error::TapOfAnOutputPortThePublisherReads`].
     ///
     /// There is no sync variant: a tap yields a live streaming handle, not a
     /// one-shot result, so blocking on it is never the intent. Host-side only —
@@ -106,11 +108,25 @@ pub trait RuntimeOperations: Send + Sync {
     /// [`Error::InvalidPortAddress`]: crate::core::error::Error::InvalidPortAddress
     /// [`Error::PortAddressNamesAnotherMachine`]: crate::core::error::Error::PortAddressNamesAnotherMachine
     /// [`Error::NotSupported`]: crate::core::error::Error::NotSupported
+    /// [`Error::TapOfAnOutputPortThePublisherReads`]: crate::core::error::Error::TapOfAnOutputPortThePublisherReads
     fn tap_async(
         &self,
         channel: String,
         count: Option<usize>,
     ) -> BoxFuture<'_, Result<TapSubscription>>;
+
+    /// Subscribe to output port `port_name` of node `node_name` through its
+    /// channel's reserved slot — the runtime's publisher's one read of an
+    /// exposed port — yielding each message as written with its stamp, group
+    /// flag and the bags lost ahead of it. The port's channel is held open
+    /// whether or not a link out of it exists, until the subscription drops.
+    /// Refused while the port is internal, while its node does not run, and
+    /// while the slot is held.
+    fn subscribe_to_an_exposed_output_port(
+        &self,
+        node_name: String,
+        port_name: String,
+    ) -> BoxFuture<'_, Result<ExposedOutputPortSubscription>>;
 
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)

@@ -1054,6 +1054,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                     self.stream_name(),
                     &channel,
                 )?;
+
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
                     graph,
                     iceoryx2_node,
@@ -1081,6 +1082,19 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                     "channel-tap start task failed to join: {join_error}"
                 ))
             })?
+        })
+    }
+
+    fn subscribe_to_an_exposed_output_port(
+        &self,
+        node_name: String,
+        port_name: String,
+    ) -> BoxFuture<'_, Result<crate::core::runtime::ExposedOutputPortSubscription>> {
+        self.in_this_streams_log_route(async move {
+            self.subscribe_to_an_exposed_output_port_reading_its_reserved_slot(
+                &node_name, &port_name,
+            )
+            .await
         })
     }
 
