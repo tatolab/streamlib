@@ -8,9 +8,11 @@
 # decoder, the decoded port exposed, with the control plane hosted — and scores
 # the decoded frames with `cargo xtask psnr score`.
 #
-# The rig is tapped for bags on the decoded channel and each sampled surface id
-# is exchanged for that frame's exact pixels over the control plane's bytes
-# route; the graph is unchanged by being watched.
+# The scoring below taps the decoded channel and exchanges each sampled surface
+# id for that frame's exact pixels over the control plane's bytes route. The
+# rig exposes the decoded port and links nothing to it, so that channel exists
+# only once a reader outside the graph subscribes to the port: until then the
+# tap finds no channel and the run scores nothing.
 #
 # One rig run per reference, and that is the pairing contract. A decoded bag
 # carries nothing to pair on — `sequence_index` is an encoded-frame field, and

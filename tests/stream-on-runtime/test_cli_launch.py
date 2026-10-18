@@ -742,14 +742,10 @@ def assert_the_effect_carried_live_video(
         f"{what_ran}'s effect wrote only {frames_written} frames in "
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is a slideshow, not live video"
     )
-    # iceoryx2 counts repeat notifications and sends no further wakeup until a
-    # listener drains, so a consumer that never drains its listener fails
-    # nothing; a transport queuing a wakeup per send fills that listener and
-    # then fails delivery on every frame, each failure a kilobytes-wide
-    # iceoryx2 dump. That saturation takes ~280 notifications, one per frame
-    # the source publishes: `TestPatternSource` publishes ~30/s — ~360 by 12s,
-    # comfortably past the onset. Shorten the observation below ~9.4s and this
-    # assertion stops discriminating.
+    # Every reader in the scaffold drains its listener, so this guards the
+    # run's records rather than the undrained-listener regression, which
+    # `an_undrained_listener_is_delivered_every_send_and_drains_the_whole_count`
+    # in `iceoryx2/output.rs` locks.
     # The text iceoryx2 logs for a notify that did not reach a listener.
     undeliverable_notifications = output.count("Unable to send notification")
     assert undeliverable_notifications == 0, (

@@ -26,15 +26,15 @@
 //! it from rotting between rig runs.
 //!
 //! Scoring is not this binary's job: it serves its engine's local API and
-//! stays up, and the decoded port is exposed so a reader outside the process
-//! scores its exact pixels — the graph unchanged by being watched.
+//! stays up with the decoded port exposed. Nothing in the graph reads that
+//! port, so it has no channel to tap or exchange from until a reader outside
+//! the graph subscribes to it.
 //!
-//! A scorer joins the two taps on the **frame-header timestamp**, not on
-//! `sequence_index`. The ordering pair is an encoded-frame field and a
-//! decoded frame is an ordinary video-frame bag, which carries no such pair;
-//! what the decoder does propagate, unchanged, is the encoded frame's own
-//! timestamp. So: tap the encoded channel for `sequence_index` → timestamp,
-//! tap the decoded channel for timestamp → `surface_id`, and exchange that.
+//! A scorer joins encoded and decoded frames on the **frame-header
+//! timestamp**, not on `sequence_index`. The ordering pair is an encoded-frame
+//! field and a decoded frame is an ordinary video-frame bag, which carries no
+//! such pair; what the decoder does propagate, unchanged, is the encoded
+//! frame's own timestamp.
 //!
 //! ```text
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig
@@ -42,7 +42,6 @@
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1 --camera-max-width 3840 --camera-max-height 2160
-//! tatolab exchange --channel <decoder_id>/video --out /tmp/decoded --count 4
 //! ```
 
 fn main() -> streamlib::sdk::error::Result<()> {
@@ -521,8 +520,7 @@ mod linux_rig {
             Some("decoder"),
         )?;
         // Hosted, not optional: an unobservable rig can only be watched, and
-        // the codec proof is scored by tapping the decoded channel and
-        // exchanging its surface ids for exact pixels.
+        // the codec proof is scored by a reader of the exposed decoded port.
         let local_api_served_for_the_engine =
             streamlib_api_server::serve_the_local_api_for_an_engine(app.runner())?;
 
