@@ -581,8 +581,9 @@ impl VulkanGraphicsKernelInner {
                 })?;
 
             // An earlier submission on this queue can still be touching a
-            // target — a display lets a pool slot go at compose submit — so
-            // the transition waits on every prior stage and write.
+            // target — a pool slot can be handed back while a reader's submit
+            // is still in flight — so the transition waits on every prior
+            // stage and write.
             let mut barriers: Vec<vk::ImageMemoryBarrier2> =
                 Vec::with_capacity(color_targets.len());
             use crate::host_rhi::HostTextureExt;

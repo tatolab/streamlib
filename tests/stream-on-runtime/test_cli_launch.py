@@ -900,14 +900,14 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     assert THE_STREAM_STOPPED_LOG_LINE not in tatolabd.stderr_text, (
         "the stream stopped although the bad save was to leave it running"
     )
-    frames_written_through_the_bad_save = frames_the_scaffolded_effect_wrote(tatolabd)
+    frames_written_before_the_good_save = frames_the_scaffolded_effect_wrote(tatolabd)
 
     effect_module.write_text(the_scaffolded_effect_edited(last_good_effect_source))
     assert_the_effect_carried_live_video(
         tatolabd,
         the_first_streams_output(tatolabd),
-        frames_written_through_the_bad_save,
-        "the stream running when the bad save landed, through the replace",
+        frames_written_before_the_good_save,
+        "the stream running when the bad save landed, up to the good save",
     )
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=2)
     tatolabd.await_marker("EDITED_EFFECT", timeout=NODE_READY_TIMEOUT_SECONDS)

@@ -17,8 +17,6 @@ pub mod permissions;
 pub mod responsible_gui_application;
 pub mod surface_share;
 
-pub mod main_thread;
-
 pub mod thread_priority;
 pub(crate) mod videotoolbox_video_codec_backend;
 

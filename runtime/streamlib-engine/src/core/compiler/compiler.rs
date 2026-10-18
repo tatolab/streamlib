@@ -164,10 +164,6 @@ impl Compiler {
             operations.len()
         );
 
-        // Compile directly - processors handle their own runtime thread needs
-        // via RuntimeContext::run_on_runtime_thread_blocking() in their setup() if required.
-        // This avoids forcing all compilation to runtime thread when most processors
-        // don't need it (only Apple framework processors like Camera, Display).
         Self::compile(
             Arc::clone(&self.graph),
             operations,

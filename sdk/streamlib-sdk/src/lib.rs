@@ -154,9 +154,7 @@ pub mod sdk {
     // ---- Permission helpers ----
 
     pub mod permissions {
-        pub use streamlib_engine::{
-            request_audio_permission, request_camera_permission, request_display_permission,
-        };
+        pub use streamlib_engine::{request_audio_permission, request_camera_permission};
     }
 
     // ---- Platform info ----
