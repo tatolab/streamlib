@@ -2563,18 +2563,19 @@ entry reads as **message** (the glossary).
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
-  Wall clock is permitted on exactly three observability surfaces and nowhere else: log
-  record `host_ts` and `source_ts`, and log file naming — their job is correlating with
-  the outside world, which monotonic time cannot do. A wall-clock value never enters the
-  data plane and is never compared against a media timestamp; a fourth surface is a plan
-  change, not a judgement call. The list is mechanically enforced, with no per-line pragma
+  Wall clock is permitted on exactly four surfaces and nowhere else: log record `host_ts`
+  and `source_ts`, log file naming, and the local relay certificate's validity — its UTC
+  `notBefore` / `notAfter`, issued and aged by the one file that writes the certificate
+  (owner, 2026-10-17) — their job is correlating with the outside world, which monotonic
+  time cannot do. A wall-clock value never enters the data plane and is never compared
+  against a media timestamp; another surface is a plan change, not a judgement call. The list is mechanically enforced, with no per-line pragma
   and no opt-out attribute: the permitted surfaces are a closed set in the gate, so a fourth
   is a source change that surfaces in review rather than a line quietly appended, and an
   entry whose file stops reading a wall clock is a licence the gate makes you hand back. The
   allowlist is per-file, which is why a data-plane file never joins it — a machine-global
   unique name comes from the engine's unique-name primitive, never from reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
-  SHIPPED #2408]
+  SHIPPED #2408; moq-relays]
   <!-- verify: cargo test -p streamlib-engine --lib now_lands_in_the_kernel_monotonic_domain -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_engine_media_clock -->
   <!-- verify: cargo test -p streamlib-python-wheel --lib python_logging::tests::a_wheel_stamp_and_an_engine_stamp_taken_back_to_back_differ_by_microseconds -->

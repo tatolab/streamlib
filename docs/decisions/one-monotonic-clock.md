@@ -12,13 +12,21 @@ language, and before writing code that assumes a timestamp starts near zero.
 
 One concept — the machine's monotonic clock — in every language the project speaks, on
 the data plane. Scoped by the owner (2026-08-03) to what a processor stamps, reads, or
-compares: frames, bags, audio ticks, `ctx.time`. Wall clock survives on exactly three
-observability surfaces — log record `host_ts` and `source_ts`, and log file naming —
-because correlating with the outside world and with other hosts' logs is a job monotonic
-time cannot do. Everything else is monotonic; a wall-clock value never enters the data
-plane and is never compared against a media timestamp. Adding a fourth wall-clock surface
-is a plan change, not a judgement call, and `cargo xtask check-clock-usage` enforces the
-list mechanically.
+compares: frames, bags, audio ticks, `ctx.time`. Wall clock survives on exactly four
+surfaces — log record `host_ts` and `source_ts`, log file naming, and the local relay
+certificate's validity — because correlating with the outside world, with other hosts'
+logs and with a browser checking a certificate's UTC `notBefore` / `notAfter`, is a job
+monotonic time cannot do. Everything else is monotonic; a wall-clock value never enters
+the data plane and is never compared against a media timestamp. Adding another wall-clock
+surface is a plan change, not a judgement call, and `cargo xtask check-clock-usage`
+enforces the list mechanically.
+
+> ~~Wall clock survives on exactly three observability surfaces — log record `host_ts`
+> and `source_ts`, and log file naming.~~ — Superseded 2026-10-17 by the owner's ruling
+> that the local relay certificate's validity is a fourth surface: a browser pins a
+> self-signed certificate only when it is valid for at most fourteen days, its validity is
+> UTC, and replacing it before it runs out across a machine's sleep needs the wall clock,
+> since the monotonic clocks stop during suspend.
 
 > ~~Wall clock survives on exactly four observability surfaces — log record `host_ts` and
 > `source_ts`, log file naming, and the control-plane pubsub event timestamp.~~ —
