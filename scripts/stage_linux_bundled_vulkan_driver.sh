@@ -285,9 +285,21 @@ with open(sys.argv[2], "w") as staged_manifest:
   refuse_unless_portable_to_every_glibc_floor_host "$staged_directory"
 }
 
-if [ -d "$cache_entry" ]; then
+# An entry counts only with all three files in it: a restored `target/` can
+# carry the entry's directory with nothing in it.
+cache_entry_holds_the_three_bundled_files() {
+  [ -f "$cache_entry/libvulkan.so.1" ] &&
+    [ -f "$cache_entry/libvulkan_lvp.so" ] &&
+    [ -f "$cache_entry/lvp_icd.x86_64.json" ]
+}
+
+if cache_entry_holds_the_three_bundled_files; then
   echo "bundled Vulkan driver: cache hit at $cache_entry"
 else
+  if [ -e "$cache_entry" ]; then
+    echo "bundled Vulkan driver: $cache_entry is incomplete; removing it to build again"
+    rm -rf "$cache_entry"
+  fi
   echo "bundled Vulkan driver: cache miss, building into $cache_entry"
   mkdir -p "$cache_root"
   if running_inside_the_pinned_image; then
@@ -313,8 +325,8 @@ else
       --env BUNDLED_VULKAN_DRIVER_CACHE_OWNER="$(id -u):$(id -g)" \
       "$MANYLINUX_2_28_IMAGE" \
       bash "/workspace/scripts/$(basename "${BASH_SOURCE[0]}")" --fill-the-cache-only
-    if [ ! -d "$cache_entry" ]; then
-      echo "error: the build inside $MANYLINUX_2_28_IMAGE left no $cache_entry" >&2
+    if ! cache_entry_holds_the_three_bundled_files; then
+      echo "error: the build inside $MANYLINUX_2_28_IMAGE left no complete $cache_entry" >&2
       exit 1
     fi
   fi
