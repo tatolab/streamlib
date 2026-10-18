@@ -36,6 +36,12 @@ streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.
 streamlib-api-server = { path = "../streamlib-api-server" }
 # The machine runtime lock and the state directory the runtime takes at start.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.48.1" }
+# The machine's local relay, and the interface every relay adapter implements.
+streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
+streamlib-relay-adapter-local = { path = "../streamlib-relay-adapter-local" }
+serde_json = { workspace = true }
+# Where the local relay's admission sockets are answered.
+tokio = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
 tracing = { workspace = true }
 # The crash-on-demand test node, in a test build alone.
@@ -44,11 +50,9 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-serde_json = { workspace = true }
 libc = { workspace = true }
 # The tests call the runtime's stream tools over its local API with rmcp's own client.
 rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
-tokio = { version = "1.48.0", features = ["rt"] }
 
 [lints]
 workspace = true
