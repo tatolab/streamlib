@@ -17,6 +17,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use moq_auth::{Event, Grant, Pattern, Patterns, Request, Token};
+use streamlib::sdk::unix_socket_path_cleared_for_bind::{
+    UnixSocketPathRefusedForBind, clear_unix_socket_path_for_bind,
+};
 use streamlib_relay_adapter_sdk::RELAY_DIAL_TOKEN_QUERY_PARAMETER;
 use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
 use streamlib_relay_adapter_sdk::url::form_urlencoded;
@@ -64,8 +67,10 @@ impl LocalRelayAdmission {
 
     fn the_request_presents_the_runtimes_token(&self, request: &Request) -> bool {
         let runtime_publish_token = self.runtime_publish_token.expose_secret().as_bytes();
-        tokens_the_request_presents(request)
-            .any(|presented| equal_in_constant_time(&presented, runtime_publish_token))
+        tokens_the_request_presents(request).any(|presented| {
+            aws_lc_rs::constant_time::verify_slices_are_equal(&presented, runtime_publish_token)
+                .is_ok()
+        })
     }
 }
 
@@ -76,7 +81,6 @@ fn tokens_the_request_presents(request: &Request) -> impl Iterator<Item = Vec<u8
         form_urlencoded::parse(query.as_bytes())
             .filter(|(name, _)| name == RELAY_DIAL_TOKEN_QUERY_PARAMETER)
             .map(|(_, value)| value.into_owned().into_bytes())
-            .collect::<Vec<_>>()
     });
     let from_the_setup = request
         .token
@@ -84,17 +88,6 @@ fn tokens_the_request_presents(request: &Request) -> impl Iterator<Item = Vec<u8
         .filter(|token| token.kind == Token::OUT_OF_BAND)
         .map(|token| token.value.clone());
     from_the_query.chain(from_the_setup)
-}
-
-/// Whether `presented` equals `expected`, taking the same time whichever byte
-/// differs.
-fn equal_in_constant_time(presented: &[u8], expected: &[u8]) -> bool {
-    presented.len() == expected.len()
-        && presented
-            .iter()
-            .zip(expected)
-            .fold(0u8, |difference, (left, right)| difference | (left ^ right))
-            == 0
 }
 
 /// The admission socket of one child, answered until dropped.
@@ -106,6 +99,8 @@ pub struct LocalRelayAdmissionResponder {
 /// Why an admission socket could not be served.
 #[derive(Debug, thiserror::Error)]
 pub enum LocalRelayAdmissionResponderRefusal {
+    #[error("the local relay's admission socket cannot be bound: {0}")]
+    PathNotClear(#[from] UnixSocketPathRefusedForBind),
     #[error("the local relay's admission socket {} could not be bound: {source}", path.display())]
     NotBound {
         path: PathBuf,
@@ -115,7 +110,8 @@ pub enum LocalRelayAdmissionResponderRefusal {
 
 impl LocalRelayAdmissionResponder {
     /// Serve `admission` at `socket_path` on `async_runtime`, replacing a
-    /// socket file a previous run left there.
+    /// socket file a previous run left there and refusing one a live process
+    /// answers on.
     pub fn serve(
         admission: Arc<LocalRelayAdmission>,
         socket_path: &Path,
@@ -125,11 +121,7 @@ impl LocalRelayAdmissionResponder {
             path: socket_path.to_path_buf(),
             source,
         };
-        match std::fs::remove_file(socket_path) {
-            Ok(()) => {}
-            Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {}
-            Err(failure) => return Err(not_bound(failure)),
-        }
+        clear_unix_socket_path_for_bind(socket_path)?;
         let standard_listener =
             std::os::unix::net::UnixListener::bind(socket_path).map_err(not_bound)?;
         standard_listener.set_nonblocking(true).map_err(not_bound)?;
@@ -281,6 +273,31 @@ mod tests {
         assert_eq!(
             admission().answer(&request),
             LocalRelayAdmissionAnswer::SessionEnded
+        );
+    }
+
+    #[test]
+    fn a_socket_a_live_process_answers_on_is_refused_rather_than_displaced() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let socket_path = directory.path().join("admission.sock");
+        let _live = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        let refusal = LocalRelayAdmissionResponder::serve(
+            Arc::new(admission()),
+            &socket_path,
+            async_runtime.handle(),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            matches!(
+                refusal,
+                LocalRelayAdmissionResponderRefusal::PathNotClear(_)
+            ),
+            "{refusal}"
         );
     }
 

@@ -11,7 +11,8 @@
 //! process id is written to a pidfile, and a child a crashed `tatolabd` left
 //! behind is found by that file and ended before a new one starts, so its
 //! port is never left bound. A child that exits is started again after a
-//! backoff.
+//! backoff. A child is signalled only while it is unreaped, so its pid cannot
+//! have been handed to another process.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -22,11 +23,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use streamlib::sdk::child_process_spawn_preparation::{
+use streamlib::sdk::child_process_lifetime::{
+    a_child_process_has_exited_without_being_reaped,
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };
 use streamlib_relay_adapter_sdk::{RelayConnectionState, RelayInstanceId};
+
+use crate::lock_ignoring_poison;
 
 /// The first wait before a child that exited is started again.
 const FIRST_RESTART_BACKOFF: Duration = Duration::from_secs(1);
@@ -46,6 +50,9 @@ const LEFT_BEHIND_CHILD_DISAPPEARANCE_BUDGET: Duration = Duration::from_secs(5);
 
 /// How often a disappearance or an exit is looked for.
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// How often the supervisor looks for its running child's exit.
+const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The suffix Linux puts on `/proc/<pid>/exe` once the executable it names has
 /// been replaced on disk.
@@ -125,17 +132,19 @@ impl LocalRelayChildSupervisor {
         };
         self.stopping.store(true, Ordering::SeqCst);
         drop(self.wake_the_supervisor.take());
-        if let Some(process_id) = self.running_child_process_id() {
-            signal_the_process(process_id, libc::SIGTERM);
+        if let Some(process_id) = self.running_child_process_id()
+            && self.signal_the_child_while_unreaped(process_id, libc::SIGTERM)
+        {
             let grace_ends = Instant::now() + STOPPED_CHILD_GRACE;
             while self.running_child_process_id() == Some(process_id) {
                 if Instant::now() >= grace_ends {
-                    tracing::warn!(
-                        relay = %self.relay_id,
-                        "the local relay child {process_id} outlived its {STOPPED_CHILD_GRACE:?} \
-                         grace after SIGTERM and is killed"
-                    );
-                    signal_the_process(process_id, libc::SIGKILL);
+                    if self.signal_the_child_while_unreaped(process_id, libc::SIGKILL) {
+                        tracing::warn!(
+                            relay = %self.relay_id,
+                            "the local relay child {process_id} outlived its \
+                             {STOPPED_CHILD_GRACE:?} grace after SIGTERM and is killed"
+                        );
+                    }
                     break;
                 }
                 std::thread::sleep(PROCESS_POLL_INTERVAL);
@@ -144,6 +153,17 @@ impl LocalRelayChildSupervisor {
         if supervisor_thread.join().is_err() {
             tracing::error!(relay = %self.relay_id, "the local relay's supervisor thread panicked");
         }
+    }
+
+    /// Send `signal` to child `process_id` while it is still the running,
+    /// unreaped child, so a pid the system has freed is never signalled.
+    fn signal_the_child_while_unreaped(&self, process_id: u32, signal: libc::c_int) -> bool {
+        let running = lock_ignoring_poison(&self.running_child_process_id);
+        if *running != Some(process_id) {
+            return false;
+        }
+        signal_the_process(process_id, signal);
+        true
     }
 }
 
@@ -180,8 +200,7 @@ fn keep_the_child_running(
                         launch.configuration_path.display()
                     );
                     let started = Instant::now();
-                    let exit = wait_for_the_child(child);
-                    *lock_ignoring_poison(running_child_process_id) = None;
+                    let exit = reap_the_child_once_it_exits(child, running_child_process_id);
                     if stopping.load(Ordering::SeqCst) {
                         return;
                     }
@@ -237,7 +256,17 @@ fn start_the_child(launch: &LocalRelayChildLaunch) -> std::io::Result<Child> {
     Ok(child)
 }
 
-fn wait_for_the_child(mut child: Child) -> std::io::Result<ExitStatus> {
+/// Wait for `child` to exit without reaping it, then clear the running slot
+/// and reap it under the slot's lock, so `stop` never signals a freed pid.
+fn reap_the_child_once_it_exits(
+    mut child: Child,
+    running_child_process_id: &Mutex<Option<u32>>,
+) -> std::io::Result<ExitStatus> {
+    while !a_child_process_has_exited_without_being_reaped(child.id()) {
+        std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+    }
+    let mut running = lock_ignoring_poison(running_child_process_id);
+    *running = None;
     child.wait()
 }
 
@@ -366,12 +395,6 @@ fn signal_the_process(process_id: u32, signal: libc::c_int) {
         // SAFETY: `kill` takes scalars and touches no memory of this process.
         unsafe { libc::kill(process_id, signal) };
     }
-}
-
-fn lock_ignoring_poison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]

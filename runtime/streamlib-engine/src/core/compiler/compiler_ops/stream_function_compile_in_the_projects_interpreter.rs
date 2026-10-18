@@ -21,7 +21,7 @@ use super::processor_interpreter_spawn_host::{
     standard_error_tail_as_a_refusal_quotes_it, standard_output_head_as_a_refusal_quotes_it,
     stream_interpreter_command_in_its_project_directory, wait_for_a_stream_interpreter_to_exit,
 };
-use crate::core::child_process_spawn_preparation::{
+use crate::core::child_process_lifetime::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };

@@ -41,6 +41,13 @@ pub(crate) fn join_the_local_relay(engine: &Runner) -> Option<LocalRelayChildren
             return None;
         }
     };
+    let runtime_publish_token = match mint_the_runtimes_relay_publish_token() {
+        Ok(runtime_publish_token) => runtime_publish_token,
+        Err(refusal) => {
+            tracing::error!("no local relay runs: {refusal}");
+            return None;
+        }
+    };
     let admission_async_runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_name("local-relay-admission")
@@ -59,7 +66,7 @@ pub(crate) fn join_the_local_relay(engine: &Runner) -> Option<LocalRelayChildren
         relay_executable,
         relays_directory: engine.runtime_directory().relays_directory(),
         machine_name: engine.machine_name().clone(),
-        runtime_publish_token: mint_the_runtimes_relay_publish_token(),
+        runtime_publish_token,
         async_runtime: admission_async_runtime.handle().clone(),
     };
 

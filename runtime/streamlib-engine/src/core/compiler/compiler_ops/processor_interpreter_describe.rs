@@ -25,7 +25,7 @@ use super::processor_interpreter_spawn_host::{
 };
 use super::python_processor_declaration::PythonProcessorDeclaration;
 use super::subprocess_bridge::ESCALATE_FD_ENV;
-use crate::core::child_process_spawn_preparation::{
+use crate::core::child_process_lifetime::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };

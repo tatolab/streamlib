@@ -76,7 +76,7 @@ pub mod sdk {
     // `pub use streamlib_engine::*` items below and the Tier-3
     // `engine_internal` namespace.
 
-    pub use streamlib_engine::core::child_process_spawn_preparation;
+    pub use streamlib_engine::core::child_process_lifetime;
     pub use streamlib_engine::core::color;
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;

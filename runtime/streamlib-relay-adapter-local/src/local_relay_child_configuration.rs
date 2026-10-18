@@ -66,7 +66,7 @@ struct RelayAuthTable {
 
 impl LocalRelayChildConfiguration {
     /// The file's text.
-    pub fn rendered_as_toml(&self) -> String {
+    pub fn rendered_as_toml(&self) -> Result<String, LocalRelayChildConfigurationRefusal> {
         let file = RelayConfigurationFile {
             listen: RelayListenTable {
                 bind: self.bind_address.to_string(),
@@ -81,21 +81,32 @@ impl LocalRelayChildConfiguration {
                 },
             },
             auth: RelayAuthTable {
-                url: admission_url_of_the_socket(&self.admission_socket_path),
+                url: admission_url_of_the_socket(&self.admission_socket_path)?,
             },
             drain_timeout: CHILD_DRAIN_TIMEOUT,
         };
-        toml::to_string(&file).expect("the relay configuration's tables always serialize")
+        Ok(toml::to_string(&file)?)
     }
 }
 
 /// The `unix://` URL `moq-relay` speaks HTTP to `socket_path` over; the relay
 /// reads the socket back with `Url::to_file_path`, so the path is
 /// percent-encoded as a URL path.
-fn admission_url_of_the_socket(socket_path: &Path) -> String {
-    let mut admission_url = Url::parse("unix:///").expect("a constant URL parses");
+fn admission_url_of_the_socket(
+    socket_path: &Path,
+) -> Result<String, LocalRelayChildConfigurationRefusal> {
+    let mut admission_url = Url::parse("unix:///")?;
     admission_url.set_path(&path_text(socket_path));
-    admission_url.into()
+    Ok(admission_url.into())
+}
+
+/// Why a child's configuration could not be rendered.
+#[derive(Debug, thiserror::Error)]
+pub enum LocalRelayChildConfigurationRefusal {
+    #[error("its admission socket's URL could not be formed: {0}")]
+    AdmissionUrlNotFormed(#[from] streamlib_relay_adapter_sdk::url::ParseError),
+    #[error("its configuration could not be rendered as TOML: {0}")]
+    NotRendered(#[from] toml::ser::Error),
 }
 
 fn path_text(path: &Path) -> String {
@@ -114,7 +125,7 @@ mod tests {
             private_key_path: PathBuf::from("/run/r/local-loopback/private-key.pem"),
             admission_socket_path: PathBuf::from("/run/r/local-loopback/admission.sock"),
         };
-        let rendered: toml::Value = configuration.rendered_as_toml().parse().unwrap();
+        let rendered: toml::Value = configuration.rendered_as_toml().unwrap().parse().unwrap();
         assert_eq!(
             rendered,
             toml::toml! {
@@ -141,7 +152,7 @@ mod tests {
             private_key_path: PathBuf::from("/k.pem"),
             admission_socket_path: PathBuf::from("/a.sock"),
         };
-        let rendered: toml::Value = configuration.rendered_as_toml().parse().unwrap();
+        let rendered: toml::Value = configuration.rendered_as_toml().unwrap().parse().unwrap();
         assert_eq!(rendered["listen"]["bind"].as_str(), Some("[::]:4445"));
         assert_eq!(
             rendered["web"]["http"]["listen"].as_str(),
@@ -152,7 +163,10 @@ mod tests {
     #[test]
     fn an_admission_socket_path_is_read_back_whole_from_its_url() {
         let socket_path = PathBuf::from("/tmp/tl dir/run/relays/local-loopback/admission.sock");
-        let admission_url: Url = admission_url_of_the_socket(&socket_path).parse().unwrap();
+        let admission_url: Url = admission_url_of_the_socket(&socket_path)
+            .unwrap()
+            .parse()
+            .unwrap();
         assert_eq!(admission_url.scheme(), "unix");
         assert_eq!(admission_url.to_file_path(), Ok(socket_path));
     }

@@ -120,6 +120,19 @@ mod tests {
     }
 
     #[test]
+    fn the_tests_that_start_a_local_relay_read_it_from_this_install_root() {
+        let staged_relative_to_the_workspace = format!(
+            "{LOCAL_RELAY_INSTALL_ROOT_RELATIVE_TO_WORKSPACE}/bin/{LOCAL_RELAY_EXECUTABLE_FILE_NAME}"
+        );
+        for test_support in [
+            include_str!("../../runtime/streamlib-relay-adapter-local/tests/common/mod.rs"),
+            include_str!("../../runtime/tatolabd/tests/common/mod.rs"),
+        ] {
+            assert!(test_support.contains(&format!("../../{staged_relative_to_the_workspace}")));
+        }
+    }
+
+    #[test]
     fn the_unit_and_tatolabd_agree_on_the_relays_file_name() {
         let tatolabd_side = include_str!("../../runtime/streamlib-relay-adapter-local/src/lib.rs");
         assert!(tatolabd_side.contains(&format!(

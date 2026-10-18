@@ -35,7 +35,7 @@ pub use local_relay_admission::{
 };
 pub use local_relay_certificate::{
     LOCAL_RELAY_CERTIFICATE_REGENERATION_AGE, LOCAL_RELAY_CERTIFICATE_VALIDITY,
-    LocalRelayCertificateFiles, ProvisionedLocalRelayCertificate,
+    LocalRelayCertificateFiles, LocalRelayCertificateRefusal, ProvisionedLocalRelayCertificate,
 };
 pub use local_relay_child_configuration::LocalRelayChildConfiguration;
 pub use local_relay_child_supervision::{LocalRelayChildLaunch, LocalRelayChildSupervisor};
@@ -60,16 +60,36 @@ const OWNER_ONLY_DIRECTORY_MODE: u32 = 0o700;
 
 /// The token `tatolabd` mints for itself at its start: the one credential a
 /// local relay lets publish. Held in memory alone, never written to disk.
-pub fn mint_the_runtimes_relay_publish_token() -> SecretString {
+pub fn mint_the_runtimes_relay_publish_token()
+-> Result<SecretString, RuntimeRelayPublishTokenRefusal> {
     let mut random_bytes = [0u8; RUNTIME_RELAY_PUBLISH_TOKEN_BYTES];
     aws_lc_rs::rand::fill(&mut random_bytes)
-        .expect("the system's random source answers a runtime starting");
-    SecretString::from(
-        random_bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
-    )
+        .map_err(|_| RuntimeRelayPublishTokenRefusal::NoRandomSource)?;
+    Ok(SecretString::from(lowercase_hex(&random_bytes)))
+}
+
+/// Why the runtime's publish token could not be minted.
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeRelayPublishTokenRefusal {
+    #[error("the system's random source did not answer, so no publish token can be minted")]
+    NoRandomSource,
+}
+
+/// `bytes` as lowercase hex.
+pub(crate) fn lowercase_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// The value behind `mutex`, whichever thread panicked holding it last.
+pub(crate) fn lock_ignoring_poison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// What every local relay instance of one `tatolabd` shares.
@@ -96,8 +116,8 @@ pub struct LocalRelayAdapter {
     joined: Option<JoinedLocalRelayChild>,
 }
 
-/// What a joined instance runs, ended in this field order: the child, then
-/// its admission, then its certificate's rotation.
+/// What a joined instance runs, ended as it drops in this field order: the
+/// child, then its admission, then its certificate's rotation.
 struct JoinedLocalRelayChild {
     supervisor: LocalRelayChildSupervisor,
     _admission_responder: LocalRelayAdmissionResponder,
@@ -156,7 +176,7 @@ impl LocalRelayAdapter {
         }
     }
 
-    fn start_the_child(
+    fn provision_the_instance_and_start_its_supervised_child(
         &self,
         settings: &LocalRelayInstanceSettings,
     ) -> Result<(JoinedLocalRelayChild, JoinedRelay), RelayAdapterRefusal> {
@@ -198,14 +218,15 @@ impl LocalRelayAdapter {
             private_key_path: certificate_files.private_key_path,
             admission_socket_path,
         };
-        std::fs::write(&configuration_path, configuration.rendered_as_toml()).map_err(
-            |failure| {
-                self.join_refused(format!(
-                    "its configuration {} could not be written: {failure}",
-                    configuration_path.display()
-                ))
-            },
-        )?;
+        let rendered_configuration = configuration
+            .rendered_as_toml()
+            .map_err(|failure| self.join_refused(failure))?;
+        std::fs::write(&configuration_path, rendered_configuration).map_err(|failure| {
+            self.join_refused(format!(
+                "its configuration {} could not be written: {failure}",
+                configuration_path.display()
+            ))
+        })?;
 
         self.connection_state
             .send_replace(RelayConnectionState::Joining);
@@ -226,7 +247,7 @@ impl LocalRelayAdapter {
             "http://{}/",
             self.listener.address_dialed_on_this_machine(port)
         ))
-        .expect("a socket address makes an http URL");
+        .map_err(|failure| self.join_refused(failure))?;
         Ok((
             JoinedLocalRelayChild {
                 supervisor,
@@ -255,15 +276,21 @@ impl RelayAdapter for LocalRelayAdapter {
         let settings: LocalRelayInstanceSettings =
             relay_instance_settings_from_json(&self.relay_id, settings)?;
         self.leave();
-        let (joined, joined_relay) = self.start_the_child(&settings)?;
-        self.joined = Some(joined);
-        Ok(joined_relay)
+        match self.provision_the_instance_and_start_its_supervised_child(&settings) {
+            Ok((joined, joined_relay)) => {
+                self.joined = Some(joined);
+                Ok(joined_relay)
+            }
+            Err(refusal) => {
+                self.connection_state
+                    .send_replace(RelayConnectionState::NotJoined);
+                Err(refusal)
+            }
+        }
     }
 
     fn leave(&mut self) {
-        if let Some(mut joined) = self.joined.take() {
-            joined.supervisor.stop();
-        }
+        drop(self.joined.take());
         self.connection_state
             .send_replace(RelayConnectionState::NotJoined);
     }
@@ -306,11 +333,9 @@ impl LocalRelayCertificateRotation {
         relay_id: RelayInstanceId,
         certificate_files: LocalRelayCertificateFiles,
         subject_alt_names: Vec<String>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, LocalRelayCertificateRotationRefusal> {
         let served = Arc::new(Mutex::new(
-            certificate_files
-                .write_a_fresh_certificate_issued_now(&subject_alt_names)
-                .map_err(|refusal| refusal.to_string())?,
+            certificate_files.write_a_fresh_certificate_issued_now(&subject_alt_names)?,
         ));
         let (stop_rotating, stop_requested) = mpsc::channel::<()>();
         let rotation_thread = std::thread::Builder::new()
@@ -330,7 +355,7 @@ impl LocalRelayCertificateRotation {
                     }
                 }
             })
-            .map_err(|failure| format!("its certificate rotation could not start: {failure}"))?;
+            .map_err(LocalRelayCertificateRotationRefusal::ThreadNotStarted)?;
         Ok(Self {
             served,
             stop_rotating: Some(stop_rotating),
@@ -339,12 +364,19 @@ impl LocalRelayCertificateRotation {
     }
 
     fn served_sha256_fingerprint_hex(&self) -> String {
-        self.served
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        lock_ignoring_poison(&self.served)
             .sha256_fingerprint_hex
             .clone()
     }
+}
+
+/// Why an instance's certificate rotation could not start.
+#[derive(Debug, thiserror::Error)]
+enum LocalRelayCertificateRotationRefusal {
+    #[error(transparent)]
+    NotProvisioned(#[from] LocalRelayCertificateRefusal),
+    #[error("its certificate rotation could not start: {0}")]
+    ThreadNotStarted(std::io::Error),
 }
 
 fn replace_the_certificate_once_due(
@@ -353,9 +385,7 @@ fn replace_the_certificate_once_due(
     subject_alt_names: &[String],
     served: &Mutex<ProvisionedLocalRelayCertificate>,
 ) {
-    let mut served = served
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut served = lock_ignoring_poison(served);
     if !served.is_due_for_regeneration_now() {
         return;
     }
@@ -396,13 +426,18 @@ mod tests {
 
     #[test]
     fn each_minted_token_is_fresh_and_carries_thirty_two_random_bytes() {
-        let first = mint_the_runtimes_relay_publish_token();
-        let second = mint_the_runtimes_relay_publish_token();
+        let first = mint_the_runtimes_relay_publish_token().unwrap();
+        let second = mint_the_runtimes_relay_publish_token().unwrap();
         assert_eq!(
             first.expose_secret().len(),
             RUNTIME_RELAY_PUBLISH_TOKEN_BYTES * 2
         );
         assert_ne!(first.expose_secret(), second.expose_secret());
+    }
+
+    #[test]
+    fn bytes_render_as_lowercase_hex_two_digits_each() {
+        assert_eq!(lowercase_hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
     }
 
     #[test]

@@ -88,7 +88,7 @@ impl JoinedLocalRelayUnderTest {
                 relay_executable: the_staged_local_relay_executable(),
                 relays_directory: relays_directory.path().to_path_buf(),
                 machine_name: MachineName::from_a_hostname("desk").unwrap(),
-                runtime_publish_token: mint_the_runtimes_relay_publish_token(),
+                runtime_publish_token: mint_the_runtimes_relay_publish_token().unwrap(),
                 async_runtime: async_runtime.handle().clone(),
             },
         );

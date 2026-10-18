@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 
 use super::processor_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
-    a_helper_process_has_exited_without_being_reaped,
     wait_for_a_child_to_become_collectable_within,
 };
 use super::subprocess_bridge::{
@@ -32,7 +31,8 @@ use super::subprocess_bridge::{
     refusal_of_a_link_into_a_helper_process_that_failed, spawn_fd_line_reader,
 };
 use super::subprocess_escalate::CatalogEntriesAHelperPlacedProcessorReaches;
-use crate::core::child_process_spawn_preparation::{
+use crate::core::child_process_lifetime::{
+    a_child_process_has_exited_without_being_reaped,
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };
@@ -1226,7 +1226,7 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
         let Some(child) = self.child.as_ref() else {
             return;
         };
-        if !a_helper_process_has_exited_without_being_reaped(child.id()) {
+        if !a_child_process_has_exited_without_being_reaped(child.id()) {
             return;
         }
         tracing::error!(
@@ -1432,7 +1432,7 @@ if os.fork() == 0:
     fn a_helper_process_becomes_collectable_within(process_id: u32, budget: Duration) -> bool {
         let deadline = Instant::now() + budget;
         while Instant::now() < deadline {
-            if a_helper_process_has_exited_without_being_reaped(process_id) {
+            if a_child_process_has_exited_without_being_reaped(process_id) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(10));

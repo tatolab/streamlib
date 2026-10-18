@@ -16,7 +16,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use sha2::{Digest, Sha256};
+use crate::lowercase_hex;
 
 /// How long a certificate is valid, the most a browser pins.
 pub const LOCAL_RELAY_CERTIFICATE_VALIDITY: Duration = Duration::from_secs(14 * 24 * 60 * 60);
@@ -149,10 +149,7 @@ fn replace_the_file_whole(
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    lowercase_hex(aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes).as_ref())
 }
 
 #[cfg(test)]

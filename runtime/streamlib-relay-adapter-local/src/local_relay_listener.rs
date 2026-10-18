@@ -56,9 +56,14 @@ impl LocalRelayListener {
         }
     }
 
-    /// Where the runtime on this machine dials this listener on `port`.
+    /// Where the runtime on this machine dials this listener on `port`: the
+    /// loopback of the family the listener binds, which answers whether or not
+    /// the host's wildcard IPv6 bind also takes IPv4.
     pub fn address_dialed_on_this_machine(self, port: u16) -> SocketAddr {
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+        match self {
+            Self::Loopback => SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+            Self::EveryInterface => SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port),
+        }
     }
 
     /// The exposure levels whose ports this listener serves.
