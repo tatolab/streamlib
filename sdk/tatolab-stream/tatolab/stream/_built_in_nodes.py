@@ -75,6 +75,7 @@ class CameraSource(BuiltInNode[CameraSourceConfig]):
 
     Outputs:
         `video`: Live camera video frames.
+            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
 
     Config: `CameraSourceConfig`.
     """
@@ -174,6 +175,7 @@ class H264Decoder(BuiltInNode[H264DecoderConfig]):
 
     Outputs:
         `video`: Decoded video frames.
+            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
 
     Config: `H264DecoderConfig`.
     """
@@ -275,6 +277,7 @@ class H265Decoder(BuiltInNode[H265DecoderConfig]):
 
     Outputs:
         `video`: Decoded video frames.
+            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
 
     Config: `H265DecoderConfig`.
     """
@@ -371,6 +374,7 @@ class MicrophoneSource(BuiltInNode[MicrophoneSourceConfig]):
 
     Outputs:
         `audio`: Timestamped blocks of interleaved capture samples.
+            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
 
     Config: `MicrophoneSourceConfig`.
     """
@@ -409,6 +413,7 @@ class OpusDecoder(BuiltInNode[OpusDecoderConfig]):
 
     Outputs:
         `audio`: Decoded audio blocks at 48 kHz in the packet's own channel count.
+            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
 
     Config: `OpusDecoderConfig`.
     """
@@ -529,6 +534,7 @@ class TestPatternSource(BuiltInNode[TestPatternSourceConfig]):
 
     Outputs:
         `video`: Test-pattern video frames.
+            Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
 
     Config: `TestPatternSourceConfig`.
     """

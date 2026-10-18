@@ -82,6 +82,12 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) bytes_per_row: Option<String>,
 
+    /// The current catalog entry of the output port feeding the input port a
+    /// `read_inbound_link_catalog_entry` named. Absent when that port carries
+    /// none or nothing feeds the input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) catalog_entry: Option<streamlib_processor_schema::CatalogEntry>,
+
     /// Whether the user asked to close this window since the last drain. Set
     /// on `drain_processor_owned_window_events` responses, and true exactly
     /// once per gesture — the drain that reports it also clears it. An owner

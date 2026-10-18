@@ -27,6 +27,7 @@ use crate::core::graph::{
     OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
     ProcessorLossCounts, ProcessorMetrics, SourceSideOfALinkWiredOn,
 };
+use crate::core::output_port_catalog_entries::CatalogEntriesOfOutputPorts;
 use crate::core::processors::{
     OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
 };
@@ -169,6 +170,8 @@ pub(crate) struct OpenedSourceSideOfALink {
     destination_notify_service: Iceoryx2NotifyService,
     wire_reply_awaited_from_the_source: Option<Arc<OutOfProcessLinkWireReply>>,
     wired_on: Option<SourceSideOfALinkWiredOn>,
+    source_output_port: String,
+    catalog_entries_of_the_sources_output_ports: Arc<CatalogEntriesOfOutputPorts>,
 }
 
 /// How a link stands once both its sides are opened.
@@ -259,6 +262,14 @@ pub(crate) fn open_the_source_side_of_a_link(
     let channel_service_name = channel_service_name(source)?;
     let link_wiring_of_a_source_out_of_process =
         out_of_process_link_wiring_of(source_graph, &source_proc_id);
+    let catalog_entries_of_the_sources_output_ports = source_graph
+        .traversal()
+        .v(&source_proc_id)
+        .first()
+        .map(|source_node| Arc::clone(source_node.catalog_entries_of_output_ports()))
+        .ok_or_else(|| {
+            Error::ProcessorNotFound(format!("source processor '{source_proc_id}' not found"))
+        })?;
     let destination_windows_its_reads = destination.audio_windowing.is_some();
     if destination_windows_its_reads {
         refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
@@ -379,6 +390,8 @@ pub(crate) fn open_the_source_side_of_a_link(
         destination_notify_service,
         wire_reply_awaited_from_the_source,
         wired_on,
+        source_output_port: source_port.to_string(),
+        catalog_entries_of_the_sources_output_ports,
     })
 }
 
@@ -392,35 +405,55 @@ pub(crate) fn open_the_destination_side_of_a_link(
     opened_source_side: &OpenedSourceSideOfALink,
     destination: DestinationOfALinkAsItsWiringReadsIt,
 ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
-    if let Some(dest_link_wiring) = &destination.link_wiring_of_a_destination_out_of_process {
-        return wire_subprocess_dest(
-            dest_graph,
-            dest_link_wiring,
-            &destination.dest_proc_id,
-            &destination.dest_port,
-            &opened_source_side.channel_service_name,
-            &destination.notify_service_name,
-            destination.input_port_delivery,
-            opened_source_side.channel_sizing,
-            destination.max_notifiers,
+    let dest_proc_id = destination.dest_proc_id.clone();
+    let dest_port = destination.dest_port.clone();
+    let wire_reply_awaited_from_the_destination =
+        if let Some(dest_link_wiring) = &destination.link_wiring_of_a_destination_out_of_process {
+            wire_subprocess_dest(
+                dest_graph,
+                dest_link_wiring,
+                &destination.dest_proc_id,
+                &destination.dest_port,
+                &opened_source_side.channel_service_name,
+                &destination.notify_service_name,
+                destination.input_port_delivery,
+                opened_source_side.channel_sizing,
+                destination.max_notifiers,
+                link_id,
+                destination.audio_windowing,
+            )?
+        } else {
+            let dest_processor = get_single_processor(dest_graph, &destination.dest_proc_id)?;
+            wire_rust_dest(
+                dest_graph,
+                &destination.dest_proc_id,
+                &dest_processor,
+                &destination.dest_port,
+                link_id,
+                &opened_source_side.channel_service_name,
+                destination.input_port_delivery,
+                &opened_source_side.channel_data_service,
+                &opened_source_side.destination_notify_service,
+                destination.audio_windowing,
+            )?;
+            None
+        };
+    dest_graph
+        .traversal()
+        .v(&dest_proc_id)
+        .first()
+        .ok_or_else(|| {
+            Error::ProcessorNotFound(format!("destination processor '{dest_proc_id}' not found"))
+        })?
+        .upstream_catalog_entries_by_inbound_link()
+        .record_inbound_link(
+            &dest_port,
             link_id,
-            destination.audio_windowing,
+            InboundLinkName::from(opened_source_side.channel_service_name.as_str()),
+            &opened_source_side.source_output_port,
+            Arc::clone(&opened_source_side.catalog_entries_of_the_sources_output_ports),
         );
-    }
-    let dest_processor = get_single_processor(dest_graph, &destination.dest_proc_id)?;
-    wire_rust_dest(
-        dest_graph,
-        &destination.dest_proc_id,
-        &dest_processor,
-        &destination.dest_port,
-        link_id,
-        &opened_source_side.channel_service_name,
-        destination.input_port_delivery,
-        &opened_source_side.channel_data_service,
-        &opened_source_side.destination_notify_service,
-        destination.audio_windowing,
-    )?;
-    Ok(None)
+    Ok(wire_reply_awaited_from_the_destination)
 }
 
 /// Reclaim one `connect()` link's iceoryx2 ports on `disconnect`.
@@ -540,6 +573,11 @@ pub(crate) fn release_the_destination_side_of_a_link(
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) {
+    if let Some(dest_node) = graph.traversal().v(dest_proc_id).first() {
+        dest_node
+            .upstream_catalog_entries_by_inbound_link()
+            .forget_inbound_link(link_id);
+    }
     if let Some(dest_link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) {
         dest_link_wiring.unwire_a_link_reporting_a_far_side_that_kept_its_port(
             crate::core::PortDirection::Input,
@@ -3002,6 +3040,111 @@ mod tests {
             ordered_consumer_input.drain("in1").len(),
             BAGS_PUBLISHED_WHILE_NEITHER_CONSUMER_READS,
             "the ordered port receives every bag its deeper ring holds"
+        );
+    }
+
+    /// The processor a stream's spawn creates for node `proc_id`, through the
+    /// node types the stream resolves.
+    fn the_processor_a_spawn_creates_for(graph: &mut Graph, proc_id: &str) -> ProcessorInstance {
+        graph
+            .node_types_this_stream_resolves()
+            .create(
+                graph
+                    .traversal()
+                    .v(proc_id)
+                    .first()
+                    .expect("the node is in the graph"),
+            )
+            .expect("the node's type creates its processor")
+    }
+
+    /// A native reader reads the catalog entry its upstream output port carries
+    /// now off the inbound link the compiler wired, and `graph` renders that
+    /// entry under the upstream's port; disconnecting the link leaves the
+    /// reader nothing to read. Both processors are created the way a stream's
+    /// spawn creates them, so the writer and the mailboxes reach their nodes'
+    /// entries only if that path hands them over.
+    #[test]
+    fn a_native_reader_reads_its_upstreams_current_catalog_entry_off_the_wired_link() {
+        use crate::core::descriptors::{CatalogEntry, VideoEntry};
+
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let source = the_processor_a_spawn_creates_for(&mut graph, &source_id);
+        let source_output = crate::iceoryx2::OutputWriter::from_inner_arc(
+            source
+                .iceoryx2_output_writer_inner()
+                .expect("an output-only mock holds an output writer"),
+        );
+        attach_processor_instance(&mut graph, &source_id, source);
+        let dest_id = add_mock_input_only(&mut graph);
+        let dest = the_processor_a_spawn_creates_for(&mut graph, &dest_id);
+        let dest_input = crate::iceoryx2::InputMailboxes::from_inner_arc(
+            dest.iceoryx2_input_mailboxes_inner()
+                .expect("an input-only mock holds input mailboxes"),
+        );
+        attach_processor_instance(&mut graph, &dest_id, dest);
+
+        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+        open_iceoryx2_service(&mut graph, &link_id, &node).expect("the link wires");
+        assert_eq!(
+            dest_input
+                .inbound_link_catalog_entry("in1", None)
+                .expect("a port fed by one link answers"),
+            None,
+            "the upstream port declared no entry"
+        );
+
+        let encoded_video = CatalogEntry::from(VideoEntry {
+            codec: "avc1.64001f".to_string(),
+            coded_width: Some(1280),
+            coded_height: Some(720),
+            description: None,
+        });
+        source_output
+            .set_catalog_entry("out1", encoded_video.clone())
+            .expect("an entry hang reads replaces the port's");
+        let inbound_link_name = dest_input
+            .inbound_link_names("in1")
+            .pop()
+            .expect("the wired link is named");
+        assert_eq!(
+            dest_input
+                .inbound_link_catalog_entry("in1", Some(&inbound_link_name))
+                .expect("the named link answers"),
+            Some(encoded_video.clone())
+        );
+        let rendered_source =
+            serde_json::to_value(crate::core::json_schema::ProcessorNodeOutput::from(
+                graph
+                    .traversal()
+                    .v(ProcessorUniqueId::from(source_id.as_str()))
+                    .first()
+                    .expect("the source is in the graph"),
+            ))
+            .expect("the node renders");
+        assert_eq!(
+            rendered_source["ports"]["outputs"][0]["catalog_entry"],
+            serde_json::to_value(&encoded_video).expect("the entry serializes")
+        );
+
+        source_output
+            .set_catalog_entry(
+                "out1",
+                CatalogEntry {
+                    section: crate::core::descriptors::CatalogSection::Video,
+                    entry: serde_json::json!({"codedWidth": 1280}),
+                },
+            )
+            .expect_err("an entry with no codec is refused");
+
+        close_iceoryx2_service(&mut graph, &link_id).expect("the link disconnects");
+        assert_eq!(
+            dest_input
+                .inbound_link_catalog_entry("in1", None)
+                .expect("an unfed port answers"),
+            None
         );
     }
 

@@ -122,6 +122,7 @@ fn wire_one_link_into_a_reader(
                 PythonGpuContextLimitedAccess::new_for_helper_process(Some(exchange_client)),
             )
             .unwrap(),
+            escalate_request_to_parent: None,
         },
     }
 }

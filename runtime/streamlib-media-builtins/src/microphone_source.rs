@@ -100,7 +100,11 @@ pub struct MicrophoneSourceConfig {
     execution = manual,
     scheduling = realtime,
     config = crate::microphone_source::MicrophoneSourceConfig,
-    output("audio", description = "Timestamped blocks of interleaved capture samples"),
+    output(
+        "audio",
+        description = "Timestamped blocks of interleaved capture samples",
+        catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" }
+    ),
 )]
 pub struct MicrophoneSource {
     capture_stream: Option<Box<dyn AudioCaptureStream>>,

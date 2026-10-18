@@ -48,7 +48,11 @@ use crate::encoded_packet_to_audio_block_decoder::{
         delivery_profile = "ordered",
         description = "Opus encoded-audio-packet bags to decode"
     ),
-    output("audio", description = "Decoded audio blocks at 48 kHz in the packet's own channel count"),
+    output(
+        "audio",
+        description = "Decoded audio blocks at 48 kHz in the packet's own channel count",
+        catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" }
+    ),
 )]
 pub struct OpusDecoder {
     decode_body: EncodedPacketToAudioBlockDecoder,

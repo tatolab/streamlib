@@ -7,6 +7,7 @@
 
 use super::super::handle_escalate_op;
 use super::super::handle_lifecycle::EscalateHandleRegistry;
+use crate::core::compiler::compiler_ops::subprocess_escalate::CatalogEntriesAHelperPlacedProcessorReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestCopySurfaceToSurface;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
     EscalateRequest, EscalateResponse,
@@ -214,6 +215,7 @@ fn copy_through_the_escalate_op(
     let response = handle_escalate_op(
         &GpuContextLimitedAccess::new(gpu.clone()),
         &EscalateHandleRegistry::new(),
+        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
         EscalateRequest::CopySurfaceToSurface(EscalateRequestCopySurfaceToSurface {
             request_id: "copy-1".into(),
             source_surface_id: source_surface_id.into(),

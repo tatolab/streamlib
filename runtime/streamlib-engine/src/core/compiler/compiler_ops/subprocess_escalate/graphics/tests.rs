@@ -19,6 +19,7 @@ use super::linux_and_macos::{
     graphics_binding_kind_to_wire, graphics_pipeline_state_from_wire,
     surface_bound_graphics_binding_kind,
 };
+use crate::core::compiler::compiler_ops::subprocess_escalate::CatalogEntriesAHelperPlacedProcessorReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateGraphicsBindingKind, EscalateRequestRegisterGraphicsKernel,
     EscalateRequestRegisterGraphicsKernelBinding,
@@ -238,6 +239,7 @@ fn register_graphics_kernel_or_panic(
     let response = handle_escalate_op(
         sandbox,
         registry,
+        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RegisterGraphicsKernel(req),
     )
     .expect("must produce a response");
@@ -883,6 +885,7 @@ fn register_with_invalid_vertex_hex_returns_err() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
+        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RegisterGraphicsKernel(make_register_req(
             "req-bad-v",
             "xyz123",
@@ -913,6 +916,7 @@ fn register_with_invalid_fragment_hex_returns_err() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
+        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
         EscalateRequest::RegisterGraphicsKernel(make_register_req("req-bad-f", "deadbeef", "qq")),
     )
     .expect("must produce a response");
@@ -938,8 +942,13 @@ fn run_with_invalid_push_constants_hex_returns_err() {
     let registry = EscalateHandleRegistry::new();
     let mut req = make_run_req("req-bad-push", "kernel-x", "surface-y");
     req.push_constants_hex = "xyz".to_string();
-    let response = handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
-        .expect("must produce a response");
+    let response = handle_escalate_op(
+        &sandbox,
+        &registry,
+        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        EscalateRequest::RunGraphicsDraw(req),
+    )
+    .expect("must produce a response");
     match response {
         EscalateResponse::Err(err) => {
             assert_eq!(err.request_id, "req-bad-push");
@@ -974,6 +983,7 @@ fn a_draw_naming_a_resource_no_escalate_op_mints_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RunGraphicsDraw(with_vertex_buffer),
         )
         .expect("must produce a response"),
@@ -993,6 +1003,7 @@ fn a_draw_naming_a_resource_no_escalate_op_mints_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RunGraphicsDraw(indexed),
         )
         .expect("must produce a response"),
@@ -1010,6 +1021,7 @@ fn a_draw_naming_a_resource_no_escalate_op_mints_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RunGraphicsDraw(indexed_without_a_buffer),
         )
         .expect("must produce a response"),
@@ -1033,8 +1045,13 @@ fn a_draw_naming_a_depth_target_is_refused() {
     let mut req = make_run_req("req-depth", "kernel-x", "surface-y");
     req.depth_target_uuid = Some("depth-uuid".to_string());
     let message = refusal_message(
-        handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
-            .expect("must produce a response"),
+        handle_escalate_op(
+            &sandbox,
+            &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            EscalateRequest::RunGraphicsDraw(req),
+        )
+        .expect("must produce a response"),
     );
     assert!(
         message.contains("depth_target_uuid is set"),
@@ -1056,8 +1073,13 @@ fn a_draw_naming_other_than_one_colour_target_is_refused() {
     let mut req = make_run_req("req-targets", "kernel-x", "surface-y");
     req.color_target_uuids = vec!["a".to_string(), "b".to_string()];
     let message = refusal_message(
-        handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
-            .expect("must produce a response"),
+        handle_escalate_op(
+            &sandbox,
+            &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            EscalateRequest::RunGraphicsDraw(req),
+        )
+        .expect("must produce a response"),
     );
     assert!(
         message.contains("exactly one colour attachment"),
@@ -1076,6 +1098,7 @@ fn drawing_with_an_unregistered_kernel_id_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RunGraphicsDraw(make_run_req(
                 "req-bad-id",
                 "never-registered",
@@ -1110,6 +1133,7 @@ fn a_binding_declared_for_a_stage_no_graphics_pipeline_has_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterGraphicsKernel(req),
         )
         .expect("must produce a response"),
@@ -1268,6 +1292,7 @@ fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
         handle_escalate_op(
             &sandbox,
             &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
             EscalateRequest::RegisterGraphicsKernel(req),
         )
         .expect("must produce a response"),
@@ -1367,8 +1392,13 @@ fn a_draw_reads_the_surface_its_binding_names_and_publishes_the_targets_layout()
     }];
     run.extent_width = 64;
     run.extent_height = 64;
-    let response = handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-        .expect("must produce a response");
+    let response = handle_escalate_op(
+        &sandbox,
+        &registry,
+        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        EscalateRequest::RunGraphicsDraw(run),
+    )
+    .expect("must produce a response");
     match response {
         EscalateResponse::Ok(ok) => {
             assert_eq!(ok.request_id, "run-draw");
@@ -1515,8 +1545,13 @@ fn the_pixels_a_draw_does_not_cover_read_transparent_black() {
         width: 32,
         height: 64,
     });
-    match handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-        .expect("must produce a response")
+    match handle_escalate_op(
+        &sandbox,
+        &registry,
+        &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+        EscalateRequest::RunGraphicsDraw(run),
+    )
+    .expect("must produce a response")
     {
         EscalateResponse::Ok(_) => {}
         other => panic!("the scissored draw failed: {other:?}"),
@@ -1591,8 +1626,13 @@ fn a_draw_binding_its_own_colour_target_is_refused() {
     run.extent_width = 64;
     run.extent_height = 64;
     let message = refusal_message(
-        handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-            .expect("must produce a response"),
+        handle_escalate_op(
+            &sandbox,
+            &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            EscalateRequest::RunGraphicsDraw(run),
+        )
+        .expect("must produce a response"),
     );
     assert!(
         message.contains("already thrown away"),
@@ -1673,8 +1713,13 @@ fn a_draw_every_frame_never_enters_the_escalate_gate() {
             "gateless-draw-source",
             "gateless-draw-target",
         );
-        handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-            .expect("must produce a response")
+        handle_escalate_op(
+            &sandbox,
+            &registry,
+            &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+            EscalateRequest::RunGraphicsDraw(run),
+        )
+        .expect("must produce a response")
     });
     drop(held);
 }
@@ -1712,8 +1757,13 @@ fn a_draw_waits_while_another_holder_stages_bindings_on_its_kernel() {
                 "held-draw-source",
                 "held-draw-target",
             );
-            handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-                .expect("must produce a response")
+            handle_escalate_op(
+                &sandbox,
+                &registry,
+                &CatalogEntriesAHelperPlacedProcessorReaches::default(),
+                EscalateRequest::RunGraphicsDraw(run),
+            )
+            .expect("must produce a response")
         },
     );
     drop(held_textures);

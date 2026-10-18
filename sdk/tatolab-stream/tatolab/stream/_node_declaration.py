@@ -23,6 +23,8 @@ import inspect
 import typing
 from typing import Any, Callable, Optional, TypeVar
 
+from .catalog import AudioEntry, BinaryEntry, CatalogEntry, JsonEntry, TextEntry, VideoEntry
+
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
@@ -257,6 +259,20 @@ NodeClassUnderDeclaration = TypeVar("NodeClassUnderDeclaration", bound=type)
 MethodUnderDecoration = TypeVar("MethodUnderDecoration", bound=Callable[..., Any])
 
 
+_CATALOG_ENTRY_TYPES = (VideoEntry, AudioEntry, TextEntry, JsonEntry, BinaryEntry)
+
+
+def _catalog_entry_declaration(catalog: object, port_name: str) -> "dict[str, Any]":
+    """The marker form of `catalog`: its section and its fields as hang spells them."""
+    if not isinstance(catalog, _CATALOG_ENTRY_TYPES):
+        raise TypeError(
+            f"output port {port_name!r} declares catalog={catalog!r} — a catalog entry is "
+            f"one of tatolab.stream.catalog's "
+            f"{', '.join(entry_type.__name__ for entry_type in _CATALOG_ENTRY_TYPES)}"
+        )
+    return {"section": catalog.section, "entry": catalog.to_dict()}
+
+
 class NodeDeclarationDecorator:
     """The type of [`node`]: `@node` itself, carrying the port decorators
     `@node.input` and `@node.output`."""
@@ -390,23 +406,26 @@ class NodeDeclarationDecorator:
         name: Optional[str] = None,
         *,
         description: str = "",
+        catalog: "CatalogEntry | None" = None,
     ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
         """Mark a method as declaring an output port.
 
         Same shape as [`node.input`], minus the delivery profile — delivery is the
         consuming port's policy. Messages are written with
-        `ctx.outputs.write(port_name, payload_bytes)`.
+        `ctx.outputs.write(port_name, payload_bytes)`. `catalog` is the port's
+        catalog entry, one of the `tatolab.stream.catalog` entries, which a
+        reader follows and `graph` renders; nothing checks a payload against it.
         """
 
         def attach_output_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
-            setattr(
-                method,
-                _OUTPUT_PORT_MARKER_ATTRIBUTE,
-                {
-                    "name": name or method.__name__,
-                    "description": description,
-                },
-            )
+            port_name = name or method.__name__
+            marker: "dict[str, Any]" = {
+                "name": port_name,
+                "description": description,
+            }
+            if catalog is not None:
+                marker["catalog_entry"] = _catalog_entry_declaration(catalog, port_name)
+            setattr(method, _OUTPUT_PORT_MARKER_ATTRIBUTE, marker)
             return method
 
         return attach_output_port_marker
@@ -600,12 +619,13 @@ def _collect_declared_ports(
                 declared_input["audio_window"] = marker["audio_window"]
             input_ports.append(declared_input)
         else:
-            output_ports.append(
-                {
-                    "name": port_name,
-                    "description": marker["description"],
-                }
-            )
+            declared_output: "dict[str, Any]" = {
+                "name": port_name,
+                "description": marker["description"],
+            }
+            if "catalog_entry" in marker:
+                declared_output["catalog_entry"] = marker["catalog_entry"]
+            output_ports.append(declared_output)
     return input_ports, output_ports
 
 

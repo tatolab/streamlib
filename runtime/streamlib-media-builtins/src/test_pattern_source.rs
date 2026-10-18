@@ -97,7 +97,11 @@ enum TestPatternSurfaceState {
     description = "Synthetic SMPTE-style color-bar source — demos a pipeline with no camera attached",
     execution = continuous(interval_ms = 33),
     config = crate::test_pattern_source::TestPatternSourceConfig,
-    output("video", description = "Test-pattern video frames"),
+    output(
+        "video",
+        description = "Test-pattern video frames",
+        catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" }
+    ),
 )]
 pub struct TestPatternSource {
     surface_state: TestPatternSurfaceState,

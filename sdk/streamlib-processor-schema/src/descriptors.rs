@@ -9,7 +9,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioWindowContract, ProcessorClassImportPath, ProcessorClassShortName, ProcessorScheduling,
+    AudioWindowContract, CatalogEntry, ProcessorClassImportPath, ProcessorClassShortName,
+    ProcessorScheduling,
 };
 
 /// Runtime environment for a processor.
@@ -38,6 +39,10 @@ pub struct PortDescriptor {
     /// output port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<AudioWindowContract>,
+    /// Catalog entry declared by an *output* port in hang's layout. `None` on
+    /// a port that declares none and on every input port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_entry: Option<CatalogEntry>,
 }
 
 impl PortDescriptor {
@@ -48,6 +53,7 @@ impl PortDescriptor {
             required,
             delivery_profile: None,
             audio_window: None,
+            catalog_entry: None,
         }
     }
 
@@ -62,6 +68,13 @@ impl PortDescriptor {
     /// audio input port; an output port declares none.
     pub fn with_audio_window_contract(mut self, audio_window: AudioWindowContract) -> Self {
         self.audio_window = Some(audio_window);
+        self
+    }
+
+    /// Builder-style override for the catalog entry. Meaningful only on an
+    /// output port.
+    pub fn with_catalog_entry(mut self, catalog_entry: impl Into<CatalogEntry>) -> Self {
+        self.catalog_entry = Some(catalog_entry.into());
         self
     }
 }

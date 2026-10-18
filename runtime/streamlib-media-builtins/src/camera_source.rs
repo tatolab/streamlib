@@ -66,7 +66,11 @@ pub struct CameraSourceConfig {
     execution = manual,
     scheduling = high,
     config = crate::camera_source::CameraSourceConfig,
-    output("video", description = "Live camera video frames"),
+    output(
+        "video",
+        description = "Live camera video frames",
+        catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" }
+    ),
 )]
 pub struct CameraSource {
     capture_stream: Option<Box<dyn VideoCaptureStream>>,

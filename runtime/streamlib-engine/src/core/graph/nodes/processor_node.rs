@@ -8,7 +8,12 @@ use super::super::components::{
 };
 use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
+use std::sync::Arc;
+
 use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::output_port_catalog_entries::{
+    CatalogEntriesOfOutputPorts, UpstreamCatalogEntriesByInboundLink,
+};
 use crate::core::utils::compute_json_checksum;
 
 /// Node in the processor graph with embedded component storage.
@@ -32,6 +37,13 @@ pub struct ProcessorNode {
     /// Serializers for each inserted component type.
     #[serde(skip, default = "default_component_serializers")]
     component_serializers: Vec<ComponentSerializer>,
+    /// The entries this node's output ports carry now, shared with whatever
+    /// replaces them and with every node an inbound link reads them from.
+    #[serde(skip)]
+    catalog_entries_of_output_ports: Arc<CatalogEntriesOfOutputPorts>,
+    /// The upstream entries this node's inbound links reach.
+    #[serde(skip)]
+    upstream_catalog_entries_by_inbound_link: Arc<UpstreamCatalogEntriesByInboundLink>,
 }
 
 impl PartialEq for ProcessorNode {
@@ -72,6 +84,8 @@ impl ProcessorNode {
         outputs: Vec<PortInfo>,
     ) -> Self {
         let config_checksum = config.as_ref().map(compute_json_checksum).unwrap_or(0);
+        let catalog_entries_of_output_ports =
+            Arc::new(CatalogEntriesOfOutputPorts::as_declared_by(&outputs));
         Self {
             id: ProcessorUniqueId::new(),
             processor_type,
@@ -81,7 +95,21 @@ impl ProcessorNode {
             ports: ProcessorNodePorts { inputs, outputs },
             components: ComponentMap::new(),
             component_serializers: Vec::new(),
+            catalog_entries_of_output_ports,
+            upstream_catalog_entries_by_inbound_link: Arc::default(),
         }
+    }
+
+    /// The entries this node's output ports carry now.
+    pub(crate) fn catalog_entries_of_output_ports(&self) -> &Arc<CatalogEntriesOfOutputPorts> {
+        &self.catalog_entries_of_output_ports
+    }
+
+    /// The upstream entries this node's inbound links reach.
+    pub(crate) fn upstream_catalog_entries_by_inbound_link(
+        &self,
+    ) -> &Arc<UpstreamCatalogEntriesByInboundLink> {
+        &self.upstream_catalog_entries_by_inbound_link
     }
 
     /// Update config and recompute checksum.

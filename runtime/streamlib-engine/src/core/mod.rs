@@ -38,6 +38,7 @@ pub mod json_schema;
 pub mod machine_global_unique_name;
 pub mod media_clock;
 pub mod nal_unit_raw_byte_sequence_payload;
+pub(crate) mod output_port_catalog_entries;
 pub mod prelude;
 pub mod processors;
 pub mod pubsub;
