@@ -637,7 +637,10 @@ mod tests {
             level: OutputPortExposureLevel::Public,
             catalog_entry: None,
         };
-        assert_eq!(next_exposed(&mut receiver), [exposed_out1.clone()]);
+        assert_eq!(
+            next_exposed(&mut receiver),
+            std::slice::from_ref(&exposed_out1)
+        );
 
         let entry: CatalogEntry = BinaryEntry {
             mode: CatalogDataTrackMode::Snapshot,

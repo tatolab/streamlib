@@ -39,7 +39,7 @@ impl ReservedSlotBagForwarding for TapBagForwarding {
 
     fn dropped_into_a_full_receiver(&mut self, _dropped: Vec<u8>, channel: &str) {
         let total = self.dropped_bags.fetch_add(1, Ordering::AcqRel) + 1;
-        if total == 1 || total % TAP_DROP_WARN_INTERVAL == 0 {
+        if total == 1 || total.is_multiple_of(TAP_DROP_WARN_INTERVAL) {
             tracing::warn!(
                 channel = %channel,
                 dropped_bags = total,
