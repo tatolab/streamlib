@@ -76,7 +76,6 @@ pub mod sdk {
     // `pub use streamlib_engine::*` items below and the Tier-3
     // `engine_internal` namespace.
 
-    pub use streamlib_engine::core::annex_b_access_unit;
     pub use streamlib_engine::core::color;
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;
@@ -85,11 +84,9 @@ pub mod sdk {
     pub use streamlib_engine::core::execution;
     pub use streamlib_engine::core::graph;
     pub use streamlib_engine::core::graph_snapshot;
-    pub use streamlib_engine::core::h265_sequence_parameter_set;
     pub use streamlib_engine::core::helper_process_transport;
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
-    pub use streamlib_engine::core::nal_unit_raw_byte_sequence_payload;
     pub use streamlib_engine::core::prelude;
     pub use streamlib_engine::core::processor_interpreter;
     pub use streamlib_engine::core::pubsub;

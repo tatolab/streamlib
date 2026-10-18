@@ -41,8 +41,8 @@ def main(stream_builder: StreamBuilder) -> None:
 blocks another. An exposed output gets an address other streams, agents and browsers can read.
 
 This package holds the authoring API (`@stream`, `@node`, `StreamBuilder`), typed classes for
-every built-in node (camera, display, microphone, speaker, H.264, H.265 and Opus codecs, MP4
-recording, and more), and the protocols your nodes are handed at run time. It installs and imports without the runtime,
+every built-in node (camera, display, microphone, speaker, H.264, H.265 and Opus codecs, and
+more), and the protocols your nodes are handed at run time. It installs and imports without the runtime,
 with complete type hints, so your editor, type checker and unit tests work on any machine.
 
 ## Add it to an existing project

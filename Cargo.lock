@@ -559,12 +559,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "byteorder"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
-
-[[package]]
 name = "bytes"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1095,27 +1089,6 @@ name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
-
-[[package]]
-name = "derive_more"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
-dependencies = [
- "derive_more-impl",
-]
-
-[[package]]
-name = "derive_more-impl"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
-dependencies = [
- "proc-macro2",
- "quote",
- "rustc_version",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "digest"
@@ -2399,33 +2372,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mp4"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
-dependencies = [
- "byteorder",
- "bytes",
- "num-rational",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "mp4-atom"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3d7433df407a636db7047600422af07145adf6ee25e0622745b0131516dbc3c"
-dependencies = [
- "derive_more",
- "num",
- "pastey",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2548,7 +2494,6 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
- "serde",
 ]
 
 [[package]]
@@ -4595,7 +4540,6 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "mach2",
- "mp4-atom",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-audio-toolbox",
@@ -4695,8 +4639,6 @@ version = "0.47.1"
 dependencies = [
  "dispatch2",
  "libc",
- "mp4",
- "mp4-atom",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
@@ -6405,7 +6347,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "mp4-atom",
  "png",
  "proc-macro2",
  "serde",

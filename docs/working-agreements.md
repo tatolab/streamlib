@@ -106,9 +106,9 @@ topic; `CLAUDE.md` holds only what every session must load.
   before saying what something needs, and label anything untested (owner, 2026-09-06).
 - **No acceptance depends on hardware the rig lacks.** Propose a substitute from what is attached
   and say what it does not prove (owner, 2026-10-05).
-- **Round-tripping is not conformance.** A format writer is tested against an independent parser;
-  `Mp4Sink` once omitted a required box for its whole life because its tests parsed with the
-  writing crate. A per-item self-consistency check cannot see one item replayed forever.
+- **Round-tripping is not conformance.** A format writer is tested against an independent parser:
+  a writer whose tests parse with the writing crate can omit a required box for its whole life.
+  A per-item self-consistency check cannot see one item replayed forever.
 - **Never `--all-features`.** It turns on the vendored VMA's `bind` feature and bindgen overwrites
   `vendor/tatolab-vulkanalia-vma/src/vma.rs`. Fix with `git checkout --` on that file, and tell any
   spawned agent that runs cargo.

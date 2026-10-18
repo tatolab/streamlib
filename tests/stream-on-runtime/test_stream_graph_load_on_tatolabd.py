@@ -51,7 +51,6 @@ from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 from tatolab.stream import (
     DisplayWindow,
-    Mp4Sink,
     TestPatternSource,
     VirtualCameraSink,
     _built_in_nodes,
@@ -72,11 +71,6 @@ BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES = [
     for built_in_node_class in EVERY_BUILT_IN_NODE_CLASS
     if built_in_node_class is not VirtualCameraSink or sys.platform.startswith("linux")
 ]
-
-# A setting a built-in's config requires; every other built-in loads with `{}`.
-THE_CONFIG_A_BUILT_IN_CANNOT_LOAD_WITHOUT: "dict[type[BuiltInNode[Any]], dict[str, object]]" = {
-    Mp4Sink: {"path": "recording.mp4"},
-}
 
 OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
 
@@ -152,7 +146,7 @@ def test_a_graph_naming_every_compiled_built_in_by_its_type_loads(
                 {
                     "name": built_in_node_class.__name__,
                     "type": built_in_node_class.type,
-                    "config": THE_CONFIG_A_BUILT_IN_CANNOT_LOAD_WITHOUT.get(built_in_node_class, {}),
+                    "config": {},
                 }
                 for built_in_node_class in BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES
             ],

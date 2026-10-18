@@ -32,9 +32,6 @@ pub mod h265_encoder;
 pub mod h273_color_vui_translation;
 pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
-pub mod mp4_fragmented_file_writer;
-pub mod mp4_sink;
-pub mod mp4_track_sample_entry;
 #[cfg(test)]
 mod msgpack_wire_test_support;
 pub mod opus_decoder;
@@ -72,7 +69,6 @@ pub use h264_encoder::H264Encoder;
 pub use h265_decoder::H265Decoder;
 pub use h265_encoder::H265Encoder;
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
-pub use mp4_sink::Mp4Sink;
 pub use opus_decoder::OpusDecoder;
 pub use opus_encoder::OpusEncoder;
 pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
@@ -102,7 +98,6 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<speaker_sink::SpeakerSink::Processor>();
     PROCESSOR_REGISTRY.register::<opus_encoder::OpusEncoder::Processor>();
     PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
-    PROCESSOR_REGISTRY.register::<mp4_sink::Mp4Sink::Processor>();
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     PROCESSOR_REGISTRY.register::<display_window::DisplayWindow::Processor>();

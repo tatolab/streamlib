@@ -28,8 +28,6 @@ __all__ = [
     "H265EncoderConfig",
     "MicrophoneSource",
     "MicrophoneSourceConfig",
-    "Mp4Sink",
-    "Mp4SinkConfig",
     "OpusDecoder",
     "OpusDecoderConfig",
     "OpusEncoder",
@@ -380,60 +378,6 @@ class MicrophoneSource(BuiltInNode[MicrophoneSourceConfig]):
     type: ClassVar[str] = "tatolab.stream:MicrophoneSource"
 
 
-class _Mp4SinkConfigRequiredKeys(TypedDict):
-    """The keys `Mp4Sink`'s config cannot leave out."""
-
-    path: str
-    """The file to write, created or truncated at `setup()`: a stream re-run with the
-    same `path` overwrites its last recording.
-    """
-
-
-class Mp4SinkConfig(_Mp4SinkConfigRequiredKeys, total=False):
-    """`Mp4Sink`'s config: the keys `stream_builder.add` takes."""
-
-
-class Mp4Sink(BuiltInNode[Mp4SinkConfig]):
-    """Records encoded video and audio bags to one fragmented MP4 file, one track per
-    inbound link.
-
-    Any number of links may enter `tracks`, and each inbound link is one track, named by
-    its source channel name — `<lowercased producer node id>/<output port>`, what
-    `graph` and `tap` already show — so two cameras are two video tracks and three
-    microphones three audio tracks with nothing configured between them. A track's kind
-    is its bags' `codec`: `h264` and `h265` a video track, `opus` an audio track,
-    anything else refused by name. A path that cannot be opened, or a sink no link
-    enters, is refused by name at `setup()`.
-
-    The layout is fragmented: `ftyp`, one `moov`, then `moof` + `mdat` per fragment with
-    one `traf` per track. `moov` is written once every track has delivered its first
-    sync-point bag, since a sample entry needs the parameter sets or the Opus header; a
-    link still silent is named once a second, and latched by name if the samples held
-    for it reach the writer's budget, so the tracks that did deliver start recording
-    rather than wait for one that never will. A fragment closes at the first video
-    track's sync points, or once a second when no video track is wired. Because a
-    fragment is complete when it lands, a file plays to its last closed fragment even if
-    the process dies — `teardown()` closes the open one, held-back frames included, but
-    teardown is never a promise.
-
-    Refusals latch per track and never per file, since one `moov` holds one sample entry
-    per track and there is no second to switch to: a parameter set that changes
-    mid-file, a track whose `codec` changes, an Opus track whose `channels` change, and
-    an Opus track above two channels each stop that track — named once, with its last
-    written stamp — while every other track keeps recording. A bag stamped at or before
-    its track's last written one is dropped and counted, a producer bug on an `ordered`
-    input.
-
-    Inputs:
-        `tracks` (ordered): Encoded video or audio bags; each inbound link becomes one
-            track named by its source channel.
-
-    Config: `Mp4SinkConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:Mp4Sink"
-
-
 class OpusDecoderConfig(TypedDict, total=False):
     """`OpusDecoder`'s config: the keys `stream_builder.add` takes."""
 
@@ -480,8 +424,7 @@ class OpusEncoderConfig(TypedDict, total=False):
 
     Values:
         `audio`: Broadcast and high fidelity: the decoded audio should be as close as
-            possible to the input. The default, because a recording rung wants fidelity
-            rather than intelligibility under loss.
+            possible to the input.
         `voip`: Speech: listening quality and intelligibility matter most.
         `lowdelay`: Lowest achievable latency, at a cost in quality.
     """

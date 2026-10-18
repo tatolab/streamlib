@@ -2360,8 +2360,8 @@ entry reads as **message** (the glossary).
   (`VideoCaptureInstantResolver`), and `CameraSource` assigns it to the frame's own
   `timestamp_ns` **and** passes the same value to `write_msgpack_with_timestamp` — never
   the implicit write, whose `MediaClock::now()` stamps publication, and never the call swap
-  alone, which sets only the envelope. The encoder reads the payload's stamp, `Mp4Sink` the
-  envelope's; both name the instant of capture on both floors. A device stamp is trusted only
+  alone, which sets only the envelope. The encoder reads the payload's stamp; both name the
+  instant of capture on both floors. A device stamp is trusted only
   when it is on the machine's monotonic clock and non-zero — V4L2's dequeued-buffer stamp with
   its timestamp flags, AVFoundation's sample presentation stamp converted from the session's
   synchronisation clock to host time; anything else falls back to the dequeue instant and is
@@ -3046,15 +3046,14 @@ entry reads as **message** (the glossary).
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-29-audio-port-window-contract.md -->
 - **DECIDED** — Codec blocks are native built-ins beside camera, display and the audio
   pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`,
-  `OpusEncoder`, `OpusDecoder`, `Mp4Sink` — instantiated and configured the one way a
+  `OpusEncoder`, `OpusDecoder` — instantiated and configured the one way a
   built-in is configured (`stream_builder.add(H264Encoder)`), per-frame paths never entering an
   interpreter, serving Python and Rust apps alike. Video blocks are built on the video
   codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple. There is no JPEG
   block: `JpegDecoder` is retired unbuilt, the parked nvJPEG backend and its `libnvjpeg`
   probe are deleted, and JPEG decode exists only inside camera capture. AV1 and VP9 remain ported but unexposed until a consumer demands them.
-  `Mp4Sink` is a sink rather than a codec and holds no session. The seven name the shipped
-  set, not a rule: the next codec follows the built-in criterion in §Packages & extension
-  model.
+  The six name the shipped set, not a rule: the next codec follows the built-in criterion in
+  §Packages & extension model.
   Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
   GOP knobs are ticket-level, like every other built-in's config. The four video blocks
@@ -3069,11 +3068,12 @@ entry reads as **message** (the glossary).
   #2127, #2128; macos-capability-parity — SHIPPED #2412, #2413; extension-model; amended by
   jpeg-after-the-robotics-cut: `JpegDecoder` is retired with robotics out of scope, and the
   nvJPEG tree and probe go with it (owner, 2026-10-04)]
+  Rejected: a muxer built-in writing a stream's tracks to a file — a stream's last mile is
+  the user's, through any MoQ client of a relay, never the runtime's (owner, 2026-10-17).
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_encoder_publishes_the_bag_convention -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::a_tone_survives_the_round_trip_at_one_two_and_six_channels -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::the_file_opens_with_the_brands_and_one_trak_per_link_named_after_its_producer -->
 - **DECIDED** — The video codec backend seam has the video device seam's shape: a
   `VideoCodecBackend` opening a `VideoEncodeSession` or `VideoDecodeSession`, probed once per
   process through the shared walk and logged once, no dial, a refusing backend naming
@@ -3091,16 +3091,14 @@ entry reads as **message** (the glossary).
   parameter sets in the format description; the arm converts at its own edge — 4-byte start
   codes, the parameter sets in front of every sync point and nowhere else — so the published
   `EncodedVideoFrame` is one wire on both floors, through the one platform-free Annex-B walk
-  (`core/annex_b_access_unit.rs`) the arm, `Mp4Sink` and the proof rig share. What an arm
+  (`core/annex_b_access_unit.rs`). What an arm
   cannot honour refuses by name at `setup()`: on VideoToolbox `effort_level`, a
   `keyframe_interval_seconds` of 0, and a decoder with no hardware support; on a Linux device
   without Vulkan Video, session construction names the missing direction instead of
   aborting. The decoders' `max_width`/`max_height` differ by floor: Linux sizes the DPB for
   the coded extent; on Apple, where CoreMedia reports only the cropped extent, a picture past
   the cap is refused. [macos-capability-parity — SHIPPED #2412, #2413; macos-platform-floor —
-  SHIPPED #2374; amended by moq-relays: `Mp4Sink` is deleted at the sharing step — a stream's
-  last mile, writing a track to a file, is any MoQ client's, never the runtime's (owner,
-  2026-10-17)]
+  SHIPPED #2374]
   <!-- verify: cargo test -p streamlib-engine --lib the_video_codec_chain_is_probed_once_and_hands_back_the_same_backend_every_time -->
   <!-- verify: cargo test -p streamlib-engine --lib the_linux_video_codec_chain_offers_vulkan_video_before_falling_through_to_the_refusing_backend -->
   <!-- verify: cargo test -p streamlib-engine --lib the_macos_video_codec_chain_offers_videotoolbox_before_falling_through_to_the_refusing_backend -->
@@ -3359,188 +3357,37 @@ entry reads as **message** (the glossary).
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2125]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_elf_the_lend_carries_links_only_what_the_host_may_supply -->
-- **DECIDED** — `Mp4Sink` muxes the encoded elementary streams the blocks produce
-  (H.264/H.265 video, Opus audio) in pure Rust through `mp4-atom` — no ffmpeg subprocess,
-  no raw-frame transcode path, no new `DT_NEEDED` entry.
-  [codec-blocks; opus-mp4-recording-rung — SHIPPED #2127; amended by moq-relays: `Mp4Sink` is
-  deleted — a stream's last mile, writing a track to a file, is the user's through any MoQ
-  client of a relay, never the runtime's (owner, 2026-10-17)]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_elf_the_lend_carries_links_only_what_the_host_may_supply -->
-- **DECIDED** — `Mp4Sink` is `reactive`/`high` with one `ordered` input, `tracks`, and no
-  output. Any number of links may enter it and **each inbound link is one track**, named
-  by its source channel name, so two cameras are two video tracks and three microphones
-  three audio tracks with no configuration. A link is already the engine's unit of a
-  stream and MP4, CMAF, MoQ and WebRTC all model a stream as a track, so a fixed
-  video-plus-audio pair is not the shape — and a caption or data
-  track then needs only a bag convention, not a sink change. The track's kind is the bag's
-  `codec`: `h264`/`h265` a video track, `opus` an audio track, anything else refused by
-  name. At `setup()` the sink enumerates its inbound links, refusing by name when there
-  are none; it opens `path` (required, created or truncated) and refuses by name a path it
-  cannot open, the named-device shape. Truncating is the call: an app is re-run from the
-  same `stream.py`, wall-clock file naming would be a fourth surface the clock entry bans, and
-  refusing an existing file fails every second run.
-  [opus-mp4-recording-rung — SHIPPED #2127; amended by moq-relays: deleted with `Mp4Sink`]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_sink::tests::the_only_port_is_one_ordered_input_and_there_is_no_output -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_sink::tests::the_config_names_the_file_and_nothing_else -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::the_file_opens_with_the_brands_and_one_trak_per_link_named_after_its_producer -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_bag_on_a_link_the_sink_never_enumerated_is_an_error_not_a_latch -->
-- **DECIDED** — The layout is fragmented: `ftyp`, one `moov` with every track's sample
-  entry and `trex`, then `moof` + `mdat` per fragment, one `traf` per track. `moov` is
-  written once every track has delivered its first sync-point bag, since sample entries
-  need the parameter sets and the Opus header; a link still silent is named once a second,
-  and cannot hold the others' samples without bound. A fragment closes at the first video
-  track's sync points — each second when no video is wired — and carries every track's
-  samples stamped within that span. Why fragmented: teardown is not a promise (a panicked
-  thread, SIGKILL, the untrusted tier) and a flat file whose trailing `moov` never lands
-  is nothing, while this one plays to its last closed fragment; and it is the shape (CMAF)
-  a networking sender emits, so the writer is reused there rather than being a dead end.
-  [opus-mp4-recording-rung — SHIPPED #2127; amended by moq-relays: deleted with `Mp4Sink`]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::the_header_waits_until_every_link_has_delivered_a_sync_point -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_fragment_closes_at_the_pacing_video_tracks_sync_points -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_file_truncated_at_any_fragment_boundary_re_parses_cleanly -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_link_that_never_delivers_cannot_hold_the_others_samples_without_bound -->
-- **DECIDED** — Video sample entries are `avc1`/`avcC` and `hvc1`/`hvcC` from the first
-  sync-point access unit's parameter sets: H.264's profile, compatibility and level bytes
-  are the SPS payload's first three; H.265's profile-tier-level, chroma and bit depths come
-  from the engine's own SPS parser, platform-free in `core/h265_sequence_parameter_set.rs`,
-  never a second one for the same bytes. Parameter-set NALs
-  are stripped from samples — ISO/IEC 14496-15 forbids in-band sets under `avc1`/`hvc1`,
-  and `hvc1` is what Apple hardware plays. Every remaining NAL is 4-byte length-prefixed, the walk being the
-  engine's one platform-free Annex-B walk, shared with the VideoToolbox arm, rather than a
-  fourth splitter; a sync-point bag is a sync
-  sample. A parameter set that changes mid-file, a track whose `codec` changes, and an
-  Opus track whose `channels` changes are each refused by name, **per track and never per
-  file**: there is no second sample entry to switch to — one lives only in the one `moov`
-  (14496-12 §6.1.2) and `dOps` shall carry the identification header's count
-  (Opus-in-ISOBMFF §4.3.2) — so the sink says so once naming the link and that track's
-  last written stamp, stops writing it, reads and discards every later bag it carries, and
-  every other track keeps recording. A `moof` owes a `traf` to no track (§8.8.6), so a
-  track that stops appearing is a legal file, and one microphone's format change must not
-  end two cameras' recording. The refusal is the built-in's own latch, the shape both
-  encoders already use: a `reactive` processor has no `Error` state to reach — the runner
-  logs an `Err` from `process()` and carries on. [opus-mp4-recording-rung — SHIPPED #2127;
-  macos-capability-parity — SHIPPED #2413, #2414; amended by moq-relays: deleted with
-  `Mp4Sink`]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib an_h265_and_opus_recording_is_byte_identical_to_the_golden_file -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_track_sample_entry::tests::avcc_takes_profile_compatibility_and_level_from_the_sps_payloads_first_three_bytes -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_track_sample_entry::tests::hvcc_takes_chroma_and_bit_depths_from_the_engines_own_parser -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::no_parameter_set_nal_survives_into_any_sample -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::every_sample_nal_inside_mdat_is_four_byte_length_prefixed -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_mid_file_parameter_set_change_stops_that_track_and_leaves_the_others_recording -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::an_opus_track_whose_channel_count_changes_stops_naming_both_counts -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::fragments_keep_closing_after_the_only_video_track_latches -->
-- **DECIDED** — An Opus track is the `Opus` sample entry with `dOps` (version 0, the bag's
-  `channels`, PreSkip = `pre_skip`, InputSampleRate 48 000, gain 0; mapping family 0),
-  timescale 48 000, each sample's duration its `sample_count` — except the sample before a
-  capture gap, whose duration is extended to cover it so the dropout is represented rather
-  than elided (§8.8.12.2; the trigger is a stamp a whole packet or more past the accounted
-  position, so arrival jitter is never written in as timing). **PreSkip is the encoder's
-  reported lookahead (312 at 48 kHz), deliberately below the 80 ms (3 840) floor
-  Opus-in-ISOBMFF §4.3.2 states.** That floor is RFC 7845 §4.2's recommendation for
-  *cropping an existing stream* rendered as a `shall`; the spec's own §4.7 example writes
-  312, and no shipping muxer writes anything else (FFmpeg, GStreamer `qtmux`,
-  gst-plugins-rs `fmp4mux`, Xiph `libopusenc`). The field is not informative in practice —
-  FFmpeg, Chromium, ExoPlayer and Android all discard exactly this many decoded samples —
-  so 3 840 would destroy 73.5 ms of real audio and lead the video by it. With no edit list
-  (the epoch rule), a player that keeps media time after the trim places the first real
-  sample 6.5 ms late: the residual every FFmpeg- and GStreamer-authored Opus MP4 carries,
-  below any lip-sync threshold, and present in every option.
-  [opus-mp4-recording-rung — SHIPPED #2127; amended by moq-relays: deleted with `Mp4Sink`]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_track_sample_entry::tests::an_opus_entry_states_the_bags_channels_and_the_encoders_lookahead -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::an_opus_track_states_its_channels_and_the_encoders_pre_skip -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::an_opus_samples_duration_is_its_own_sample_count -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_capture_gap_lands_in_the_preceding_samples_duration_while_that_sample_is_still_pending -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_capture_gap_after_a_fragment_closed_lands_in_the_next_fragments_decode_time -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::arrival_jitter_below_one_packet_is_not_written_into_the_container_as_timing -->
-- **DECIDED** — **Three to eight channels record no Opus track yet.** `mp4-atom` 0.15
-  writes `ChannelMappingFamily` 0 unconditionally and refuses any other value on read, so
-  mapping family 1 has no representation in the container writer. Such a track is refused
-  by name, naming the container rather than the codec: `OpusEncoder` still mints the
-  stream — the layout places 1–8 channels — and only recording it does not follow. Owner
-  ruling 2026-09-03, taken over hand-splicing the `dOps` bytes (which is the hand-written
-  box writer this rung rejected) and over carrying a second vendored fork. The gap is
-  tracked as #2139; `camera-audio-recorder` is mono or stereo, so the showcase is
-  unaffected. [opus-mp4-recording-rung — SHIPPED #2127; amended by moq-relays: deleted with
-  `Mp4Sink`]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_track_sample_entry::tests::a_channel_count_needing_mapping_family_one_is_refused_naming_the_container -->
-- **DECIDED** — Time is the plan's own subtraction written into the container: the epoch
-  is the earliest first stamp across tracks, each track's first `tfdt` is its own offset
-  from it, no edit list, no drift correction. Video timescale is 1 000 000 000 — a legal
-  `u32`, so the monotonic-nanosecond deltas the whole data plane shares land exactly, with
-  no 90 kHz rounding carry across a long recording — with 64-bit `tfdt`; a video sample's
-  duration is the delta to the next, so one frame per track is held back and the last
-  takes its predecessor's at teardown. A bag stamped at or before its track's last written
-  one is dropped and counted, a producer bug on an `ordered` input, named as such.
-  [opus-mp4-recording-rung — SHIPPED #2127; amended by moq-relays: deleted with `Mp4Sink`]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::each_tracks_first_tfdt_is_its_own_offset_from_the_earliest_stamp -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_video_samples_duration_is_the_delta_to_its_successor -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_bag_stamped_at_or_before_the_last_written_one_is_dropped_and_counted -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_run_ending_on_a_sync_point_still_gives_its_last_frame_a_duration -->
-- **DECIDED** — `teardown()` closes the open fragment, held-back frames included, and owes
-  nothing else. [opus-mp4-recording-rung — SHIPPED #2127; amended by moq-relays: deleted with
-  `Mp4Sink`]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::the_checked_in_inspector_fixture_is_what_this_writer_produces -->
-- **DECIDED** — `OpusEncoder`, `OpusDecoder` and `Mp4Sink` reach Python as generated
-  classes like every built-in, with no Linux split — nothing here is platform-bound, so they
-  register unconditionally beside the audio built-ins. Their descriptors' docs, carried into
-  the generated classes, state the engine's own behavior rather than an aspiration: the encoder's
-  window and first-block mint, its two config keys, the decoder's entry and gap rule, the
-  sink's track-per-link rule, its `moov` wait, fragment rule and truncate-at-setup.
-  `Mp4Sink` records on both floors: the SPS reader, RBSP bit reader and emulation-prevention
-  removal it reads live in the platform-free `core/h265_sequence_parameter_set.rs` and
-  `core/nal_unit_raw_byte_sequence_payload.rs`, re-exported through `streamlib::sdk`, so
-  nothing it reads sits under the Vulkan Video tree.
-  [opus-mp4-recording-rung — SHIPPED #2126, #2128; macos-capability-parity — SHIPPED #2414;
-  stream-graph — SHIPPED #2618; package-split-and-lend — SHIPPED #2684; amended by
-  moq-relays: `Mp4Sink`'s part is deleted with it]
+- **DECIDED** — `OpusEncoder` and `OpusDecoder` reach Python as generated classes like every
+  built-in, with no Linux split — nothing here is platform-bound, so they register
+  unconditionally beside the audio built-ins. Their descriptors' docs, carried into the
+  generated classes, state the engine's own behavior rather than an aspiration: the encoder's
+  window and first-block mint, its two config keys, the decoder's entry and gap rule.
+  [opus-mp4-recording-rung — SHIPPED #2126, #2128; stream-graph — SHIPPED #2618;
+  package-split-and-lend — SHIPPED #2684]
   <!-- verify: pytest tests/stream-on-runtime/test_opus_blocks.py::test_the_round_trip_wires_without_an_adapter -->
-  <!-- verify: pytest tests/stream-on-runtime/test_mp4_sink.py::test_two_encoders_wire_into_the_one_input_without_an_adapter -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
 - **DECIDED** — The rung's CI-run, GPU-free proof: the stage with `channels` absent emits
   the source's count and converts when one is declared, in Rust and through the Python
   declaration; the link-naming read returns the link a synthetic frame was pushed on, with
   counting untouched; the `EncodedAudioPacket` wire and cast; the Opus bodies against the
   real library with no `Runtime` — a tone through encode → decode within a stated floor
-  for one, two and six channels, `pre_skip` aligning the first sample, a gap resetting;
-  and container bytes — the writer body driven with synthetic bags over checked-in H.264
-  SPS/PPS and H.265 VPS/SPS/PPS fixtures, re-parsed with `mp4-atom`. The same inspection
-  ships as `cargo xtask mp4-inspect <file>` — tracks, names, sample entries, fragments,
-  durations as JSON — so nothing downstream needs ffprobe.
-  [opus-mp4-recording-rung — SHIPPED #2123, #2124, #2125, #2126, #2127; amended by
-  moq-relays: the container bytes, the writer body and `mp4-inspect` go with `Mp4Sink`]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::annex_b_access_unit -->
-  <!-- verify: cargo test -p xtask mp4_inspect -->
-  <!-- verify: cargo test -p xtask mp4_inspect::tests::a_real_sink_recording_reports_both_tracks_under_their_link_names -->
+  for one, two and six channels, `pre_skip` aligning the first sample, a gap resetting.
+  [opus-mp4-recording-rung — SHIPPED #2123, #2124, #2125, #2126, #2127]
 - **DECIDED** — `requires_gpu` and said in the module docstring:
   `test_opus_blocks.py` — a Python known-signal source → `OpusEncoder` → probes →
   `OpusDecoder` → probes: every bag casts, `sequence_index` advances by one,
-  `sample_count` is 960, decoded blocks are 48 kHz `f32` in the source's channels;
-  `test_mp4_sink.py` — two sources into one sink give a file whose `mp4-inspect` names two
-  tracks after their producers. [opus-mp4-recording-rung — SHIPPED #2126, #2128; amended by
-  moq-relays: `test_mp4_sink.py` goes with `Mp4Sink`]
+  `sample_count` is 960, decoded blocks are 48 kHz `f32` in the source's channels.
+  [opus-mp4-recording-rung — SHIPPED #2126, #2128]
   <!-- verify: pytest tests/stream-on-runtime/test_opus_blocks.py -->
-  <!-- verify: pytest tests/stream-on-runtime/test_mp4_sink.py -->
-- **DECIDED** — Live, two arms on engine-owned fixtures beside `audio_loopback_stream.py`
+- **DECIDED** — Live, one arm on an engine-owned fixture beside `audio_loopback_stream.py`
   and `codec_roundtrip_stream.py`. `opus_roundtrip_stream.py`: `KnownAudioSignalSource →
   OpusEncoder → OpusDecoder → CapturedAudioWaveformRecorder`, scored by
   `known_audio_signal.py` — tone identity and the DTMF timing grid intact within its own
   floor, a lossy codec's verdict being the analysis's, never a sample-exact match — with
   no audio device in the path, so a failure here with the loopback green is the codec's.
-  `recording_stream.py`: the vivid camera and the known signal → `H264Encoder` and
-  `OpusEncoder` → `Mp4Sink`, stopped by SIGTERM (a run needing SIGKILL is a hard fail —
-  teardown is what closes the last fragment), then `mp4-inspect` PASS, then the
-  decode-back: `codec_roundtrip_rig --source mp4:<path>` demuxes the video track with
-  `mp4-atom`, turns length prefixes back into start codes, re-prepends the parameter sets
-  from the sample entry and replays it through `H264Decoder` to `xtask psnr
-  channel-means`, locked to the per-codec vivid baseline within ±0.05. That lock is the
-  whole argument: the container sits in the middle of the path the codec rig already
-  scored, so a mismatch is a regression in the writer and never a reason for a third
-  baseline. [opus-mp4-recording-rung — SHIPPED #2126, #2128; amended by moq-relays:
-  `recording_stream.py` and the decode-back go with `Mp4Sink`, and the live arms become
-  tools outside the runtime reading the local relay (§Networking)]
+  [opus-mp4-recording-rung — SHIPPED #2126, #2128; amended by moq-relays: the live arm
+  becomes a tool outside the runtime reading the local relay (§Networking)]
   <!-- verify: bash runtime/streamlib-engine/tests/fixtures/verify_opus_roundtrip.sh -->
-  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_recording.sh -->
 - **DECIDED** — The held codec consumers resolve through this align, per §Consumers: a held
   codec package is mined for its logic and deletes in the change that ships its block, and a
   codec proof example deletes into the engine-owned proof rig — its job becomes the rig's
@@ -3594,7 +3441,7 @@ entry reads as **message** (the glossary).
   wheel's own Rust — each in its own processor interpreter, on the tokio runtime the wheel
   brings up there on first use. [extension-model; networking-extension-wheels — SHIPPED
   #2151; package-split-and-lend — SHIPPED #2691]
-- **DECIDED** — Many tracks follow the `Mp4Sink` shape: the publisher takes one track per
+- **DECIDED** — Many tracks are many links: the publisher takes one track per
   inbound link and derives its session media description from them. The player exposes one
   output per track kind — `encoded_video` and `encoded_audio` — never one port per track:
   ports are declared statically by decorator, and a decoder downstream wants a port it can
@@ -3637,8 +3484,8 @@ entry reads as **message** (the glossary).
   tokio runtime and the rustls provider once, on first use, in whichever process the
   sessions run in. [networking-extension-wheels — SHIPPED #2150; package-split-and-lend —
   SHIPPED #2673, #2691]
-- **DECIDED** — `WhipPublisher`: `@node`, one fan-in input `tracks` (`ordered`), the
-  `Mp4Sink` shape — each inbound link is one RTP track, video or audio by the bag's
+- **DECIDED** — `WhipPublisher`: `@node`, one fan-in input `tracks` (`ordered`) —
+  each inbound link is one RTP track, video or audio by the bag's
   `codec`, the session's SDP built from the links `inbound_link_names` reports at
   `setup()`; config `url` and optional `bearer_token`. `WhepPlayer`:
   `@node(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
@@ -3753,7 +3600,6 @@ entry reads as **message** (the glossary).
   stamped at arrival. The relay's object carries the writer's stamp and the node's doc says
   both. Owner, 2026-10-17. [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643;
   moq-relays]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
   machines become comparable; until then the per-clock rule above stands, and the relay
