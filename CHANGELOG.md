@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.49.0](https://github.com/tatolab/streamlib/compare/v0.48.3...v0.49.0) (2026-10-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** the runtime opens no windows — DisplayWindow, the processor-owned window, the present path and winit are deleted; the virtual camera keeps its compositor; the scaffold and the gates move off DisplayWindow ([#2845](https://github.com/tatolab/streamlib/issues/2845))
+
+### Miscellaneous
+
+* **engine:** the runtime opens no windows — DisplayWindow, the processor-owned window, the present path and winit are deleted; the virtual camera keeps its compositor; the scaffold and the gates move off DisplayWindow ([#2845](https://github.com/tatolab/streamlib/issues/2845)) ([43bb609](https://github.com/tatolab/streamlib/commit/43bb60997563467e21c48ee1885e7fff1f23c4d7))
+
 ## [0.48.3](https://github.com/tatolab/streamlib/compare/v0.48.2...v0.48.3) (2026-10-18)
 
 
