@@ -217,9 +217,16 @@ impl OutputWriterInner {
         &self,
         catalog_entries_of_output_ports: Arc<CatalogEntriesOfOutputPorts>,
     ) {
-        let _ = self
+        if self
             .catalog_entries_of_output_ports
-            .set(catalog_entries_of_output_ports);
+            .set(catalog_entries_of_output_ports)
+            .is_err()
+        {
+            tracing::warn!(
+                "an output writer already reaches its node's catalog entries; a second node's are \
+                 ignored"
+            );
+        }
     }
 
     /// Replace `output_port`'s catalog entry, refusing an entry hang does not

@@ -405,54 +405,55 @@ pub(crate) fn open_the_destination_side_of_a_link(
     opened_source_side: &OpenedSourceSideOfALink,
     destination: DestinationOfALinkAsItsWiringReadsIt,
 ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
-    let dest_node = dest_graph
+    let dest_proc_id = destination.dest_proc_id.clone();
+    let dest_port = destination.dest_port.clone();
+    let wire_reply_awaited_from_the_destination =
+        if let Some(dest_link_wiring) = &destination.link_wiring_of_a_destination_out_of_process {
+            wire_subprocess_dest(
+                dest_graph,
+                dest_link_wiring,
+                &destination.dest_proc_id,
+                &destination.dest_port,
+                &opened_source_side.channel_service_name,
+                &destination.notify_service_name,
+                destination.input_port_delivery,
+                opened_source_side.channel_sizing,
+                destination.max_notifiers,
+                link_id,
+                destination.audio_windowing,
+            )?
+        } else {
+            let dest_processor = get_single_processor(dest_graph, &destination.dest_proc_id)?;
+            wire_rust_dest(
+                dest_graph,
+                &destination.dest_proc_id,
+                &dest_processor,
+                &destination.dest_port,
+                link_id,
+                &opened_source_side.channel_service_name,
+                destination.input_port_delivery,
+                &opened_source_side.channel_data_service,
+                &opened_source_side.destination_notify_service,
+                destination.audio_windowing,
+            )?;
+            None
+        };
+    dest_graph
         .traversal()
-        .v(&destination.dest_proc_id)
+        .v(&dest_proc_id)
         .first()
         .ok_or_else(|| {
-            Error::ProcessorNotFound(format!(
-                "destination processor '{}' not found",
-                destination.dest_proc_id
-            ))
-        })?;
-    dest_node
+            Error::ProcessorNotFound(format!("destination processor '{dest_proc_id}' not found"))
+        })?
         .upstream_catalog_entries_by_inbound_link()
         .record_inbound_link(
-            &destination.dest_port,
-            link_id.as_str(),
+            &dest_port,
+            link_id,
             InboundLinkName::from(opened_source_side.channel_service_name.as_str()),
             &opened_source_side.source_output_port,
             Arc::clone(&opened_source_side.catalog_entries_of_the_sources_output_ports),
         );
-    if let Some(dest_link_wiring) = &destination.link_wiring_of_a_destination_out_of_process {
-        return wire_subprocess_dest(
-            dest_graph,
-            dest_link_wiring,
-            &destination.dest_proc_id,
-            &destination.dest_port,
-            &opened_source_side.channel_service_name,
-            &destination.notify_service_name,
-            destination.input_port_delivery,
-            opened_source_side.channel_sizing,
-            destination.max_notifiers,
-            link_id,
-            destination.audio_windowing,
-        );
-    }
-    let dest_processor = get_single_processor(dest_graph, &destination.dest_proc_id)?;
-    wire_rust_dest(
-        dest_graph,
-        &destination.dest_proc_id,
-        &dest_processor,
-        &destination.dest_port,
-        link_id,
-        &opened_source_side.channel_service_name,
-        destination.input_port_delivery,
-        &opened_source_side.channel_data_service,
-        &opened_source_side.destination_notify_service,
-        destination.audio_windowing,
-    )?;
-    Ok(None)
+    Ok(wire_reply_awaited_from_the_destination)
 }
 
 /// Reclaim one `connect()` link's iceoryx2 ports on `disconnect`.
@@ -575,7 +576,7 @@ pub(crate) fn release_the_destination_side_of_a_link(
     if let Some(dest_node) = graph.traversal().v(dest_proc_id).first() {
         dest_node
             .upstream_catalog_entries_by_inbound_link()
-            .forget_inbound_link(link_id.as_str());
+            .forget_inbound_link(link_id);
     }
     if let Some(dest_link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) {
         dest_link_wiring.unwire_a_link_reporting_a_far_side_that_kept_its_port(

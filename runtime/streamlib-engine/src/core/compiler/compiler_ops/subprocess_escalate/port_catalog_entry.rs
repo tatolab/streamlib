@@ -142,7 +142,7 @@ mod tests {
             .upstream_catalog_entries_by_its_inbound_links
             .record_inbound_link(
                 "video_in",
-                "link-1",
+                &crate::core::graph::LinkUniqueId::from("link-1"),
                 InboundLinkName::from("encoder/encoded_video"),
                 "encoded_video",
                 Arc::clone(&catalog_entries_of_the_writer.catalog_entries_of_its_output_ports),

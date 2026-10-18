@@ -15,7 +15,7 @@ use crate::core::descriptors::{
     refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
-use crate::core::output_port_catalog_entries::refuse_a_catalog_entry_hang_does_not_read;
+use crate::core::processors::refuse_catalog_entries_hang_does_not_read;
 
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
@@ -72,6 +72,8 @@ impl PythonProcessorDeclaration {
 
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
+        refuse_catalog_entries_hang_does_not_read(&descriptor)
+            .map_err(|refusal| refusal.to_string())?;
 
         Ok(Self {
             descriptor,
@@ -222,13 +224,6 @@ fn read_port_descriptors(
             .get("catalog_entry")
             .filter(|declared| !declared.is_null())
         {
-            if matches!(direction, PortDirection::Input) {
-                return Err(format!(
-                    "input port {:?} declares a catalog entry — an entry describes what a \
-                     producer writes, so only an output port carries one",
-                    port.name
-                ));
-            }
             let catalog_entry = read_catalog_entry(catalog_entry, &port.name)?;
             port = port.with_catalog_entry(catalog_entry);
         }
@@ -237,17 +232,14 @@ fn read_port_descriptors(
     Ok(ports)
 }
 
-/// Read one `catalog_entry` declaration off a described output port, refusing
-/// one hang's catalog types do not read.
+/// Read one `catalog_entry` declaration off a described port. Whether hang
+/// reads it, and whether its port may carry one, is the registration check's.
 fn read_catalog_entry(
     catalog_entry: &serde_json::Value,
     port_name: &str,
 ) -> std::result::Result<CatalogEntry, String> {
-    let catalog_entry = serde_json::from_value::<CatalogEntry>(catalog_entry.clone())
-        .map_err(|refusal| format!("output port {port_name:?}: catalog entry {refusal}"))?;
-    refuse_a_catalog_entry_hang_does_not_read(port_name, &catalog_entry)
-        .map_err(|refusal| refusal.to_string())?;
-    Ok(catalog_entry)
+    serde_json::from_value::<CatalogEntry>(catalog_entry.clone())
+        .map_err(|refusal| format!("port {port_name:?}: catalog entry {refusal}"))
 }
 
 /// Read one `audio_window` declaration off a described port.
@@ -600,7 +592,7 @@ mod tests {
             "catalog_entry": {"section": "json", "entry": {"mode": "stream"}},
         }])));
         assert!(
-            refusal.contains("input port \"audio\"") && refusal.contains("only an output port"),
+            refusal.contains("input port `audio`") && refusal.contains("only an output port"),
             "got {refusal}"
         );
     }

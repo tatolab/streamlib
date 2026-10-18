@@ -463,13 +463,21 @@ impl InputMailboxesInner {
         &self,
         upstream_catalog_entries_by_inbound_link: Arc<UpstreamCatalogEntriesByInboundLink>,
     ) {
-        let _ = self
+        if self
             .upstream_catalog_entries_by_inbound_link
-            .set(upstream_catalog_entries_by_inbound_link);
+            .set(upstream_catalog_entries_by_inbound_link)
+            .is_err()
+        {
+            tracing::warn!(
+                "input mailboxes already reach their node's upstream catalog entries; a second \
+                 node's are ignored"
+            );
+        }
     }
 
     /// The current catalog entry of the output port feeding `port` over
-    /// `inbound_link`, or over its one link when `None`.
+    /// `inbound_link`, or over its one link when `None`. Mailboxes created for
+    /// no node have no links, so they answer `None`.
     pub fn inbound_link_catalog_entry(
         &self,
         port: &str,

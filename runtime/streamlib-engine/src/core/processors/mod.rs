@@ -37,6 +37,7 @@ pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProce
 // re-exported — `sdk::processors` is a blanket glob, and nothing outside this
 // crate has any business holding another helper's board.
 pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
+pub(crate) use processor_instance_factory::refuse_catalog_entries_hang_does_not_read;
 pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };

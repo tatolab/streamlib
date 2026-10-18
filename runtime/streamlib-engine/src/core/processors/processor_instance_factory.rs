@@ -670,11 +670,10 @@ pub(crate) fn refuse_catalog_entries_hang_does_not_read(
         .iter()
         .find(|input_port| input_port.catalog_entry.is_some())
     {
-        return Err(Error::Link(format!(
-            "processor `{}` declares a catalog entry on input port `{}` — an entry describes \
-             what a producer writes, so only an output port carries one",
-            descriptor.processor_class_import_path, input_port.name
-        )));
+        return Err(Error::DescriptorCatalogEntryOnInputPort {
+            processor_class_import_path: descriptor.processor_class_import_path.clone(),
+            port_name: input_port.name.clone(),
+        });
     }
     descriptor
         .outputs

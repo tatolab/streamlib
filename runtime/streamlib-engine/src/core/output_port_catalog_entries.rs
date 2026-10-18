@@ -16,7 +16,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::core::descriptors::{CatalogEntry, CatalogSection};
 use crate::core::error::{Error, Result};
-use crate::core::graph::{PortInfo, cast_exposed_name_to_url_safe};
+use crate::core::graph::{LinkUniqueId, PortInfo, cast_exposed_name_to_url_safe};
 use crate::iceoryx2::InboundLinkName;
 
 /// Refuse an entry hang's own catalog types do not read, naming the port and
@@ -88,11 +88,7 @@ impl CatalogEntriesOfOutputPorts {
             declared_output_ports.sort_unstable();
             return Err(Error::Link(format!(
                 "no output port `{output_port}` to carry a catalog entry — the node declares {}",
-                if declared_output_ports.is_empty() {
-                    "none".to_string()
-                } else {
-                    declared_output_ports.join(", ")
-                }
+                listed_or_none(&declared_output_ports)
             )));
         };
         *current_entry = Some(catalog_entry);
@@ -100,11 +96,19 @@ impl CatalogEntriesOfOutputPorts {
     }
 }
 
+fn listed_or_none(names: &[&str]) -> String {
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
 /// The output port one inbound link reads, and the entries of the node that
 /// holds it.
 #[derive(Debug)]
 struct UpstreamOutputPortOfAnInboundLink {
-    link_id: String,
+    link_id: LinkUniqueId,
     inbound_link_name: InboundLinkName,
     upstream_output_port: String,
     upstream_catalog_entries: Arc<CatalogEntriesOfOutputPorts>,
@@ -123,7 +127,7 @@ impl UpstreamCatalogEntriesByInboundLink {
     pub fn record_inbound_link(
         &self,
         input_port: &str,
-        link_id: &str,
+        link_id: &LinkUniqueId,
         inbound_link_name: InboundLinkName,
         upstream_output_port: &str,
         upstream_catalog_entries: Arc<CatalogEntriesOfOutputPorts>,
@@ -132,9 +136,9 @@ impl UpstreamCatalogEntriesByInboundLink {
         let upstream_ports = upstream_ports_by_input_port
             .entry(input_port.to_string())
             .or_default();
-        upstream_ports.retain(|upstream_port| upstream_port.link_id != link_id);
+        upstream_ports.retain(|upstream_port| &upstream_port.link_id != link_id);
         upstream_ports.push(UpstreamOutputPortOfAnInboundLink {
-            link_id: link_id.to_string(),
+            link_id: link_id.clone(),
             inbound_link_name,
             upstream_output_port: upstream_output_port.to_string(),
             upstream_catalog_entries,
@@ -142,10 +146,10 @@ impl UpstreamCatalogEntriesByInboundLink {
     }
 
     /// Forget link `link_id`, wherever it was wired.
-    pub fn forget_inbound_link(&self, link_id: &str) {
+    pub fn forget_inbound_link(&self, link_id: &LinkUniqueId) {
         let mut upstream_ports_by_input_port = self.upstream_ports_by_input_port.lock();
         for upstream_ports in upstream_ports_by_input_port.values_mut() {
-            upstream_ports.retain(|upstream_port| upstream_port.link_id != link_id);
+            upstream_ports.retain(|upstream_port| &upstream_port.link_id != link_id);
         }
         upstream_ports_by_input_port.retain(|_, upstream_ports| !upstream_ports.is_empty());
     }
@@ -167,11 +171,12 @@ impl UpstreamCatalogEntriesByInboundLink {
             .map(Vec::as_slice)
             .unwrap_or_default();
         let inbound_link_names = || {
-            upstream_ports
-                .iter()
-                .map(|upstream_port| upstream_port.inbound_link_name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            listed_or_none(
+                &upstream_ports
+                    .iter()
+                    .map(|upstream_port| upstream_port.inbound_link_name.as_str())
+                    .collect::<Vec<_>>(),
+            )
         };
         let upstream_port = match (inbound_link, upstream_ports) {
             (None, []) => return Ok(None),
@@ -191,11 +196,7 @@ impl UpstreamCatalogEntriesByInboundLink {
                     Error::Link(format!(
                         "input port `{input_port}` has no inbound link `{inbound_link}` — its \
                          links are: {}",
-                        if upstream_ports.is_empty() {
-                            "none".to_string()
-                        } else {
-                            inbound_link_names()
-                        }
+                        inbound_link_names()
                     ))
                 })?,
         };
@@ -372,7 +373,7 @@ mod tests {
 
         inbound.record_inbound_link(
             "video_in",
-            "link-1",
+            &LinkUniqueId::from("link-1"),
             InboundLinkName::from("camera/video"),
             "video",
             Arc::clone(&upstream),
@@ -399,7 +400,7 @@ mod tests {
             "the reader sees the upstream's current entry, not the one at wiring"
         );
 
-        inbound.forget_inbound_link("link-1");
+        inbound.forget_inbound_link(&LinkUniqueId::from("link-1"));
         assert_eq!(
             inbound
                 .catalog_entry_of_inbound_link("video_in", None)
@@ -419,14 +420,14 @@ mod tests {
         let inbound = UpstreamCatalogEntriesByInboundLink::default();
         inbound.record_inbound_link(
             "tracks",
-            "link-1",
+            &LinkUniqueId::from("link-1"),
             InboundLinkName::from("first/video"),
             "video",
             first,
         );
         inbound.record_inbound_link(
             "tracks",
-            "link-2",
+            &LinkUniqueId::from("link-2"),
             InboundLinkName::from("second/video"),
             "video",
             second,

@@ -202,6 +202,16 @@ pub enum Error {
         port_name: String,
     },
 
+    #[error(
+        "processor `{processor_class_import_path}` declares a catalog entry on input port \
+         `{port_name}` — an entry describes what a producer writes, so only an output port \
+         carries one"
+    )]
+    DescriptorCatalogEntryOnInputPort {
+        processor_class_import_path: ProcessorClassImportPath,
+        port_name: String,
+    },
+
     /// An output port's catalog entry the players' own catalog types do not read.
     #[error(
         "output port `{port_name}` carries a {section} catalog entry hang does not read: {refusal}"

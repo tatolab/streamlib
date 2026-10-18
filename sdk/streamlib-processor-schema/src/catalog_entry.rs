@@ -48,6 +48,17 @@ impl CatalogSection {
         }
     }
 
+    /// The name of the section's entry type, as an author writes it.
+    pub fn entry_type_name(self) -> &'static str {
+        match self {
+            CatalogSection::Video => "VideoEntry",
+            CatalogSection::Audio => "AudioEntry",
+            CatalogSection::Text => "TextEntry",
+            CatalogSection::Json => "JsonEntry",
+            CatalogSection::Binary => "BinaryEntry",
+        }
+    }
+
     /// The section a catalog key names, or `None`.
     pub fn from_catalog_key(catalog_key: &str) -> Option<CatalogSection> {
         CatalogSection::ALL

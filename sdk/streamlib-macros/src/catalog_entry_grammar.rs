@@ -13,19 +13,11 @@ use std::collections::BTreeMap;
 
 use proc_macro2::Span;
 use streamlib_processor_schema::{
-    AudioEntry, BinaryEntry, CatalogDataTrackMode, CatalogEntry, JsonEntry, TextEntry, VideoEntry,
+    AudioEntry, BinaryEntry, CatalogDataTrackMode, CatalogEntry, CatalogSection, JsonEntry,
+    TextEntry, VideoEntry,
 };
 use syn::spanned::Spanned;
 use syn::{Expr, ExprStruct, Lit, Member};
-
-/// The entry types the key takes, by the name an author writes.
-const CATALOG_ENTRY_TYPE_NAMES: [&str; 5] = [
-    "VideoEntry",
-    "AudioEntry",
-    "TextEntry",
-    "JsonEntry",
-    "BinaryEntry",
-];
 
 /// One field's literal, as written.
 enum CatalogEntryFieldLiteral {
@@ -40,14 +32,16 @@ struct CatalogEntryFieldsWritten {
     entry_type_name: String,
     entry_span: Span,
     fields: BTreeMap<String, (Span, CatalogEntryFieldLiteral)>,
+    fields_the_type_has: Vec<&'static str>,
 }
 
 impl CatalogEntryFieldsWritten {
-    fn take(&mut self, field_name: &str) -> Option<(Span, CatalogEntryFieldLiteral)> {
+    fn take(&mut self, field_name: &'static str) -> Option<(Span, CatalogEntryFieldLiteral)> {
+        self.fields_the_type_has.push(field_name);
         self.fields.remove(field_name)
     }
 
-    fn optional_text(&mut self, field_name: &str) -> syn::Result<Option<String>> {
+    fn optional_text(&mut self, field_name: &'static str) -> syn::Result<Option<String>> {
         match self.take(field_name) {
             None => Ok(None),
             Some((_, CatalogEntryFieldLiteral::Text(text))) => Ok(Some(text)),
@@ -55,7 +49,7 @@ impl CatalogEntryFieldsWritten {
         }
     }
 
-    fn optional_count(&mut self, field_name: &str) -> syn::Result<Option<u32>> {
+    fn optional_count(&mut self, field_name: &'static str) -> syn::Result<Option<u32>> {
         match self.take(field_name) {
             None => Ok(None),
             Some((_, CatalogEntryFieldLiteral::Count(count))) => Ok(Some(count)),
@@ -65,8 +59,8 @@ impl CatalogEntryFieldsWritten {
 
     fn required<T>(
         &mut self,
-        field_name: &str,
-        read: impl FnOnce(&mut Self, &str) -> syn::Result<Option<T>>,
+        field_name: &'static str,
+        read: impl FnOnce(&mut Self, &'static str) -> syn::Result<Option<T>>,
     ) -> syn::Result<T> {
         read(self, field_name)?.ok_or_else(|| {
             syn::Error::new(
@@ -98,8 +92,8 @@ impl CatalogEntryFieldsWritten {
         )
     }
 
-    /// Refuse a field the entry type does not have, naming the ones it does.
-    fn refuse_any_field_left(self, fields_the_type_has: &[&str]) -> syn::Result<()> {
+    /// Refuse a field the entry type does not have, naming the ones it read.
+    fn refuse_any_field_left(self) -> syn::Result<()> {
         match self.fields.into_iter().next() {
             None => Ok(()),
             Some((field_name, (span, _))) => Err(syn::Error::new(
@@ -108,7 +102,7 @@ impl CatalogEntryFieldsWritten {
                     "output port `{}`: `{}` has no field `{field_name}` — it takes {}",
                     self.port_name,
                     self.entry_type_name,
-                    fields_the_type_has
+                    self.fields_the_type_has
                         .iter()
                         .map(|name| format!("`{name}`"))
                         .collect::<Vec<_>>()
@@ -135,23 +129,31 @@ pub(crate) fn parse_catalog_entry(
         ));
     };
     let mut written = catalog_entry_fields_written(entry_struct, port_name)?;
-    match written.entry_type_name.as_str() {
-        "VideoEntry" => {
+    let Some(section) = CatalogSection::ALL
+        .into_iter()
+        .find(|section| section.entry_type_name() == written.entry_type_name)
+    else {
+        return Err(syn::Error::new(
+            entry_struct.path.span(),
+            format!(
+                "output port `{port_name}`: `catalog` takes one of {}, not `{}`",
+                rendered_entry_type_names(),
+                written.entry_type_name
+            ),
+        ));
+    };
+    match section {
+        CatalogSection::Video => {
             let video = VideoEntry {
                 codec: written.required("codec", CatalogEntryFieldsWritten::optional_text)?,
                 coded_width: written.optional_count("coded_width")?,
                 coded_height: written.optional_count("coded_height")?,
                 description: written.optional_text("description")?,
             };
-            written.refuse_any_field_left(&[
-                "codec",
-                "coded_width",
-                "coded_height",
-                "description",
-            ])?;
+            written.refuse_any_field_left()?;
             Ok(video.into())
         }
-        "AudioEntry" => {
+        CatalogSection::Audio => {
             let audio = AudioEntry {
                 codec: written.required("codec", CatalogEntryFieldsWritten::optional_text)?,
                 sample_rate: written
@@ -162,50 +164,38 @@ pub(crate) fn parse_catalog_entry(
                 )?,
                 description: written.optional_text("description")?,
             };
-            written.refuse_any_field_left(&[
-                "codec",
-                "sample_rate",
-                "number_of_channels",
-                "description",
-            ])?;
+            written.refuse_any_field_left()?;
             Ok(audio.into())
         }
-        "TextEntry" => {
+        CatalogSection::Text => {
             let text = TextEntry {
                 format: written.required("format", CatalogEntryFieldsWritten::optional_text)?,
             };
-            written.refuse_any_field_left(&["format"])?;
+            written.refuse_any_field_left()?;
             Ok(text.into())
         }
-        "JsonEntry" => {
+        CatalogSection::Json => {
             let json = JsonEntry {
                 mode: written.required("mode", |written, _| written.mode())?,
             };
-            written.refuse_any_field_left(&["mode"])?;
+            written.refuse_any_field_left()?;
             Ok(json.into())
         }
-        "BinaryEntry" => {
+        CatalogSection::Binary => {
             let binary = BinaryEntry {
                 mode: written.required("mode", |written, _| written.mode())?,
                 mime: written.optional_text("mime")?,
             };
-            written.refuse_any_field_left(&["mode", "mime"])?;
+            written.refuse_any_field_left()?;
             Ok(binary.into())
         }
-        other => Err(syn::Error::new(
-            entry_struct.path.span(),
-            format!(
-                "output port `{port_name}`: `catalog` takes one of {}, not `{other}`",
-                rendered_entry_type_names()
-            ),
-        )),
     }
 }
 
 fn rendered_entry_type_names() -> String {
-    CATALOG_ENTRY_TYPE_NAMES
+    CatalogSection::ALL
         .iter()
-        .map(|name| format!("`{name}`"))
+        .map(|section| format!("`{}`", section.entry_type_name()))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -256,6 +246,7 @@ fn catalog_entry_fields_written(
         entry_type_name,
         entry_span: entry_struct.span(),
         fields,
+        fields_the_type_has: Vec::new(),
     })
 }
 
