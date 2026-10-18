@@ -1976,6 +1976,7 @@ mod tests {
         let (_listener, disconnected) = listen_on(&streams.b, |event| {
             matches!(event, RuntimeEvent::RuntimeDidDisconnect { .. })
         });
+        let held_weakly_before_the_cut = Arc::weak_count(&streams.b);
         streams
             .a
             .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Internal)
@@ -1983,6 +1984,17 @@ mod tests {
         disconnected
             .recv_timeout(A_CUT_LANDS_WITHIN)
             .expect("the cut disconnects the link");
+        // The cut's task says it disconnected before it lets go of `b`, and a
+        // hold let go of while the next level is counted would read as a re-plan
+        // missing.
+        let deadline = std::time::Instant::now() + A_CUT_LANDS_WITHIN;
+        while Arc::weak_count(&streams.b) > held_weakly_before_the_cut {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the cut still holds `b` after {A_CUT_LANDS_WITHIN:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(
             re_plans_on_b_spawned_by_putting_camera_out1_of_a_at(
                 &streams,

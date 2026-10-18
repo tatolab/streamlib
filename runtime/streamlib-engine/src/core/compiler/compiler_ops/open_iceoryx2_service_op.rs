@@ -407,6 +407,9 @@ const THE_RUNTIMES_PUBLISHER_AS_A_DESTINATION_PORT: &str = "the-runtimes-publish
 pub(crate) struct SourceSideHeldOpenForTheRuntimesPublisher {
     pub(crate) channel_service_name: String,
     pub(crate) channel_sizing: ChannelSizing,
+    /// Where a helper source answers whether it opened its port; `None` for a
+    /// source with nothing to answer.
+    pub(crate) wire_reply_awaited_from_the_source: Option<Arc<OutOfProcessLinkWireReply>>,
     _source_side: SourceSideHeldOpenForAReaderOutsideItsStream,
     _services: Iceoryx2ServicesHeldOpenForLinkComponent,
 }
@@ -454,6 +457,7 @@ pub(crate) fn open_the_source_side_for_the_runtimes_publisher(
     Ok(SourceSideHeldOpenForTheRuntimesPublisher {
         channel_service_name: opened.channel_service_name,
         channel_sizing: opened.channel_sizing,
+        wire_reply_awaited_from_the_source: opened.wire_reply_awaited_from_the_source,
         _source_side: source_side,
         _services: Iceoryx2ServicesHeldOpenForLinkComponent {
             channel_data_service: opened.channel_data_service,
@@ -3341,6 +3345,54 @@ mod tests {
         assert_eq!(
             link_state_in_graph(&graph, &link_id),
             (LinkStateOutput::Wired, None)
+        );
+    }
+
+    /// The runtime's publisher opens a helper source's port as a link's source
+    /// side would — the helper is handed the port's wiring and owes its answer,
+    /// which the hold keeps — whether or not a link out of the port exists, and
+    /// tells the helper to drop the port once the hold goes.
+    #[test]
+    fn the_runtimes_publisher_opens_a_helper_sources_port_and_keeps_its_answer() {
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+        let late_wired_links = far_side.late_wired_links.clone();
+        let wire_answers_owed = far_side.wire_answers_owed.clone();
+        let reclaimed_links = far_side.reclaimed_links.clone();
+        attach_processor_instance(
+            &mut graph,
+            &source_id,
+            ProcessorInstance::new(Box::new(
+                OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    far_side,
+                    ProcessExecution::Reactive,
+                ),
+            )),
+        );
+
+        let held = open_the_source_side_for_the_runtimes_publisher(
+            &mut graph,
+            &OutputLinkPortRef::new(&source_id, "out1"),
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .expect("a helper source's port opens for the publisher");
+
+        let handed_over = late_wired_links.lock().clone();
+        assert_eq!(handed_over.len(), 1, "{handed_over:?}");
+        assert_eq!(handed_over[0].0, crate::core::PortDirection::Output);
+        assert_eq!(handed_over[0].1["name"], "out1");
+        let answer_kept = held
+            .wire_reply_awaited_from_the_source
+            .clone()
+            .expect("a helper source owes its answer");
+        assert!(Arc::ptr_eq(&answer_kept, &wire_answers_owed.lock()[0]));
+
+        drop(held);
+        assert_eq!(
+            reclaimed_links.lock().len(),
+            1,
+            "the helper is told to drop the port the publisher held open"
         );
     }
 

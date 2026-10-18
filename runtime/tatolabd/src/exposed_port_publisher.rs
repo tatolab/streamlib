@@ -10,18 +10,20 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use bytes::Bytes;
 use hang::catalog::Section;
 use moq_net::{Timescale, Timestamp};
 use streamlib::sdk::descriptors::{CatalogEntry, CatalogSection};
+use streamlib::sdk::graph::ProcessorUniqueId;
 use streamlib::sdk::iceoryx2::{
     MessageGroupBoundary, MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate,
     MessageReadFromInputPort,
 };
 use streamlib::sdk::runtime::{
-    ExposedOutputPortOfALoadedStream, ExposedOutputPortSubscription, ExposureChangeReceiver,
-    Runner, RuntimeOperations,
+    ExposedOutputPortOfALoadedStream, ExposedOutputPortSourceWiring, ExposedOutputPortSubscription,
+    ExposureChangeReceiver, Runner, RuntimeOperations,
 };
 use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
 use streamlib_relay_adapter_sdk::{
@@ -184,6 +186,9 @@ struct ExposedOutputPortAddress {
     stream_name: String,
     node_name: String,
     port_name: String,
+    /// Tells a node removed and added again under its name from the one it
+    /// replaced.
+    node_id: ProcessorUniqueId,
 }
 
 impl ExposedOutputPortAddress {
@@ -192,6 +197,7 @@ impl ExposedOutputPortAddress {
             stream_name: exposed_port.stream_name.clone(),
             node_name: exposed_port.node_name.clone(),
             port_name: exposed_port.port_name.clone(),
+            node_id: exposed_port.node_id.clone(),
         }
     }
 
@@ -458,6 +464,9 @@ struct ForwardedExposedPort {
 impl Drop for ForwardedExposedPort {
     fn drop(&mut self) {
         self.reading.abort();
+        // The reading task may still hold the writer, so its tracks are
+        // withdrawn here rather than when the writer drops.
+        lock_the_writer(&self.track_writer).withdraw_every_track_but_those_at(|_| false);
     }
 }
 
@@ -639,10 +648,34 @@ async fn subscribe_to(
         .map_err(|refusal| refusal.to_string())
 }
 
+/// How often a subscription to a helper source is asked whether the helper
+/// has opened its port.
+const HOW_OFTEN_A_HELPERS_ANSWER_IS_ASKED_FOR: Duration = Duration::from_millis(50);
+
+/// Write what `subscription` reads into `track_writer`, once its source has
+/// opened its end of the channel; a helper's refusal ends the read, said once.
 async fn read_into(
     mut subscription: ExposedOutputPortSubscription,
     track_writer: Arc<Mutex<ExposedPortTrackWriter>>,
 ) {
+    loop {
+        match subscription.source_wiring() {
+            ExposedOutputPortSourceWiring::Wired => break,
+            ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer => {
+                tokio::time::sleep(HOW_OFTEN_A_HELPERS_ANSWER_IS_ASKED_FOR).await
+            }
+            ExposedOutputPortSourceWiring::RefusedByItsHelper { reason } => {
+                tracing::warn!(
+                    "the exposed port `{}/{}/{}` is not published: its helper could not open \
+                     its port: {reason}",
+                    subscription.stream_name(),
+                    subscription.node_name(),
+                    subscription.port_name()
+                );
+                return;
+            }
+        }
+    }
     while let Some(message) = subscription.next_message().await {
         lock_the_writer(&track_writer).write_message(message);
     }

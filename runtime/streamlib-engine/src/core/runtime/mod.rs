@@ -52,7 +52,8 @@ pub(crate) use engine_teardown_watchdog::{
     count_threads_abandoned_in_this_process,
 };
 pub use exposed_output_port_subscription::{
-    ExposedOutputPortOfALoadedStream, ExposedOutputPortSubscription, ExposureChangeReceiver,
+    ExposedOutputPortOfALoadedStream, ExposedOutputPortSourceWiring, ExposedOutputPortSubscription,
+    ExposureChangeReceiver,
 };
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,

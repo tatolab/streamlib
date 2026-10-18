@@ -26,8 +26,9 @@ use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     ExposedOutputPortsComponent, GraphNodeWithComponents, OutputLinkPortRef,
-    OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
+    OutputPortExposureLevel, OutputPortReaderOutsideItsStream, ProcessorUniqueId,
 };
+use crate::core::processors::OutOfProcessLinkWireOutcome;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
 use crate::iceoryx2::{BagsAGapInTheNumberingSaysWereLost, FrameHeader, MessageReadFromInputPort};
 
@@ -38,6 +39,9 @@ pub struct ExposedOutputPortOfALoadedStream {
     pub stream_name: String,
     /// The node's name.
     pub node_name: String,
+    /// The node's id for this load, which a node removed and added again
+    /// under its name does not keep.
+    pub node_id: ProcessorUniqueId,
     /// The port's cast name.
     pub port_name: String,
     /// Private or public; an internal port is not exposed.
@@ -137,6 +141,7 @@ impl LoadedStreamInThisRuntime {
                             .map(|(port_name, level)| ExposedOutputPortOfALoadedStream {
                                 stream_name: self.stream_name().to_string(),
                                 node_name: node.display_name.clone(),
+                                node_id: node.id.clone(),
                                 port_name: port_name.to_string(),
                                 level,
                                 catalog_entry: catalog_entries.current_entry_of(port_name),
@@ -162,68 +167,90 @@ impl LoadedStreamInThisRuntime {
             .engine_resources_shared_by_every_stream()
             .iceoryx2_node
             .clone();
-        let (node_display_name, port_cast, source_side) =
-            self.compiler.scope(|graph, _tx| -> Result<_> {
-                refuse_a_reader_the_port_does_not_allow(
-                    graph,
-                    self.stream_name(),
-                    node_name,
-                    port_name,
-                    OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                )?;
-                let (node, port_cast) = the_output_port_named_on_this_graph(
-                    graph,
-                    self.stream_name(),
-                    node_name,
-                    port_name,
-                )?;
-                if !node.runs_its_processor() {
-                    return Err(Error::Link(format!(
-                        "node `{}` of the stream `{}` is not running, so its port `{port_cast}` \
-                         publishes nothing yet",
-                        node.display_name,
-                        self.stream_name()
-                    )));
-                }
-                let node_display_name = node.display_name.clone();
-                let source = OutputLinkPortRef::new(node.id.clone(), port_cast.as_str());
-                let source_side = open_the_source_side_for_the_runtimes_publisher(
-                    graph,
-                    &source,
-                    &iceoryx2_node,
-                )?;
-                Ok((node_display_name, port_cast, source_side))
-            })?;
-        let channel = source_side.channel_service_name.clone();
-        let sizing = source_side.channel_sizing;
-        let forwarder = tokio::task::spawn_blocking(
+        let compiler = Arc::clone(&self.compiler);
+        let stream_name = self.stream_name().to_string();
+        let node_name = node_name.to_string();
+        let port_name = port_name.to_string();
+        // A stream's graph lock is held across a compile, which may take a
+        // processor's whole setup, so the subscription waits off the async workers.
+        tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
-                start_reserved_slot_forwarder(
-                    ReservedSlotOfAChannelToForward {
-                        node: iceoryx2_node,
-                        channel,
-                        sizing,
-                        count: None,
-                    },
-                    ExposedOutputPortMessageForwarding::<UniquePublisherId>::default(),
+                subscribe_holding_the_source_side_open(
+                    &compiler,
+                    iceoryx2_node,
+                    stream_name,
+                    &node_name,
+                    &port_name,
                 )
             }),
         )
         .await
         .map_err(|join_failure| {
             Error::Runtime(format!(
-                "the start of an exposed port's reserved-slot reader failed to join: \
-                 {join_failure}"
+                "a subscription to an exposed port failed to join: {join_failure}"
             ))
-        })??;
-        Ok(ExposedOutputPortSubscription {
-            forwarder,
-            _source_side: source_side,
-            stream_name: self.stream_name().to_string(),
-            node_name: node_display_name,
-            port_name: port_cast,
-        })
+        })?
     }
+}
+
+fn subscribe_holding_the_source_side_open(
+    compiler: &crate::core::compiler::Compiler,
+    iceoryx2_node: crate::iceoryx2::Iceoryx2Node,
+    stream_name: String,
+    node_name: &str,
+    port_name: &str,
+) -> Result<ExposedOutputPortSubscription> {
+    let (node_display_name, port_cast, source_side) =
+        compiler.scope(|graph, _tx| -> Result<_> {
+            refuse_a_reader_the_port_does_not_allow(
+                graph,
+                &stream_name,
+                node_name,
+                port_name,
+                OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            )?;
+            let (node, port_cast) =
+                the_output_port_named_on_this_graph(graph, &stream_name, node_name, port_name)?;
+            if !node.runs_its_processor() {
+                return Err(Error::Link(format!(
+                    "node `{}` of the stream `{stream_name}` is not running, so its port \
+                     `{port_cast}` publishes nothing yet",
+                    node.display_name,
+                )));
+            }
+            let node_display_name = node.display_name.clone();
+            let source = OutputLinkPortRef::new(node.id.clone(), port_cast.as_str());
+            let source_side =
+                open_the_source_side_for_the_runtimes_publisher(graph, &source, &iceoryx2_node)?;
+            Ok((node_display_name, port_cast, source_side))
+        })?;
+    let forwarder = start_reserved_slot_forwarder(
+        ReservedSlotOfAChannelToForward {
+            node: iceoryx2_node,
+            channel: source_side.channel_service_name.clone(),
+            sizing: source_side.channel_sizing,
+            count: None,
+        },
+        ExposedOutputPortMessageForwarding::<UniquePublisherId>::default(),
+    )?;
+    Ok(ExposedOutputPortSubscription {
+        forwarder,
+        source_side,
+        stream_name,
+        node_name: node_display_name,
+        port_name: port_cast,
+    })
+}
+
+/// Whether the source of an exposed port has opened its end of the channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExposedOutputPortSourceWiring {
+    /// The source publishes on the channel.
+    Wired,
+    /// The source's helper process has not yet said whether it opened its port.
+    AwaitingItsHelpersAnswer,
+    /// The source's helper process could not open its port, and said why.
+    RefusedByItsHelper { reason: String },
 }
 
 /// A live read of one exposed output port: each message its node writes, as
@@ -232,7 +259,7 @@ impl LoadedStreamInThisRuntime {
 pub struct ExposedOutputPortSubscription {
     // Dropped first: the reader stops before the channel it reads is released.
     forwarder: ReservedSlotForwarder<MessageReadFromInputPort>,
-    _source_side: SourceSideHeldOpenForTheRuntimesPublisher,
+    source_side: SourceSideHeldOpenForTheRuntimesPublisher,
     stream_name: String,
     node_name: String,
     port_name: String,
@@ -253,6 +280,23 @@ impl ExposedOutputPortSubscription {
     /// ended.
     pub async fn next_message(&mut self) -> Option<MessageReadFromInputPort> {
         self.forwarder.recv().await
+    }
+
+    /// Whether the port's source has opened its end of the channel; a helper
+    /// source answers after the subscription returns.
+    pub fn source_wiring(&self) -> ExposedOutputPortSourceWiring {
+        let Some(wire_reply) = &self.source_side.wire_reply_awaited_from_the_source else {
+            return ExposedOutputPortSourceWiring::Wired;
+        };
+        match wire_reply.the_far_sides_answer() {
+            None => ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer,
+            Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide) => {
+                ExposedOutputPortSourceWiring::Wired
+            }
+            Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { reason }) => {
+                ExposedOutputPortSourceWiring::RefusedByItsHelper { reason }
+            }
+        }
     }
 
     /// The stream the port belongs to.
@@ -630,9 +674,11 @@ mod tests {
             .stream
             .set_output_port_exposure_level("camera", "out2", OutputPortExposureLevel::Internal)
             .unwrap();
+        let camera_id = camera.stream.the_node_named("camera").unwrap().processor_id;
         let exposed_out1 = ExposedOutputPortOfALoadedStream {
             stream_name: "a".to_string(),
             node_name: "camera".to_string(),
+            node_id: camera_id,
             port_name: "out1".to_string(),
             level: OutputPortExposureLevel::Public,
             catalog_entry: None,
