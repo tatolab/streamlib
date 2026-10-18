@@ -67,6 +67,13 @@ pub enum OpusIdentificationHeaderRefusal {
     MissingMagicSignature,
     /// A major version past 0; RFC 7845 §5.1 says a reader refuses it.
     UnsupportedVersion { version: u8 },
+    /// A channel layout other than the one this decoder mints for the count:
+    /// family 0 for one or two channels, family 1 in Vorbis order for three to
+    /// eight.
+    LayoutThisDecoderDoesNotMint {
+        channels: u8,
+        channel_mapping_family: u8,
+    },
     /// Not hex.
     NotHex,
 }
@@ -88,6 +95,16 @@ impl std::fmt::Display for OpusIdentificationHeaderRefusal {
                 "OpusHead version {version} is past the major version RFC 7845 defines"
             ),
             Self::NotHex => write!(formatter, "the description is not hex-encoded"),
+            Self::LayoutThisDecoderDoesNotMint {
+                channels,
+                channel_mapping_family,
+            } => write!(
+                formatter,
+                "the OpusHead lays {channels} channels out under mapping family \
+                 {channel_mapping_family} with a stream layout other than the one this decoder \
+                 mints — family 0 for one or two channels, family 1 in Vorbis order for three \
+                 to eight"
+            ),
         }
     }
 }
@@ -152,6 +169,31 @@ impl OpusIdentificationHeader {
             return Err(OpusIdentificationHeaderRefusal::Truncated {
                 header_bytes: header.len(),
             });
+        }
+        let layout_this_decoder_mints =
+            OpusStreamLayoutForSourceChannelCount::resolve(u32::from(channels)).ok();
+        let declared_layout_is_the_one_minted = match layout_this_decoder_mints {
+            Some(OpusStreamLayoutForSourceChannelCount::MappingFamilyZeroSingleStream {
+                ..
+            }) => channel_mapping_family == 0,
+            Some(OpusStreamLayoutForSourceChannelCount::MappingFamilyOneMultistream(
+                multistream,
+            )) => {
+                channel_mapping_family == 1
+                    && header[19] == multistream.streams
+                    && header[20] == multistream.coupled_streams
+                    && header[21..21 + usize::from(channels)]
+                        == *multistream.vorbis_channel_order_mapping
+            }
+            None => false,
+        };
+        if !declared_layout_is_the_one_minted {
+            return Err(
+                OpusIdentificationHeaderRefusal::LayoutThisDecoderDoesNotMint {
+                    channels,
+                    channel_mapping_family,
+                },
+            );
         }
         Ok(Self {
             channels: u32::from(channels),
@@ -285,5 +327,38 @@ mod tests {
             Some(1)
         );
         assert_eq!(channels_coded_by_the_opus_packet_toc(&[]), None);
+    }
+
+    /// A foreign producer's four channels as four uncoupled streams decode
+    /// wrongly under the layout this decoder mints, so the header is refused
+    /// rather than misread.
+    #[test]
+    fn a_layout_other_than_the_one_minted_is_refused_naming_it() {
+        let mut four_uncoupled_streams =
+            OpusIdentificationHeader::hex_encoded_for_encoder(4, 312).unwrap();
+        // Stream count 4, coupled 0, in place of the Vorbis-order 2 and 2.
+        four_uncoupled_streams.replace_range(38..42, "0400");
+        assert_eq!(
+            OpusIdentificationHeader::parse_hex_encoded(&four_uncoupled_streams),
+            Err(
+                OpusIdentificationHeaderRefusal::LayoutThisDecoderDoesNotMint {
+                    channels: 4,
+                    channel_mapping_family: 1
+                }
+            )
+        );
+
+        let mut ambisonics_family =
+            OpusIdentificationHeader::hex_encoded_for_encoder(4, 312).unwrap();
+        ambisonics_family.replace_range(36..38, "02");
+        assert_eq!(
+            OpusIdentificationHeader::parse_hex_encoded(&ambisonics_family),
+            Err(
+                OpusIdentificationHeaderRefusal::LayoutThisDecoderDoesNotMint {
+                    channels: 4,
+                    channel_mapping_family: 2
+                }
+            )
+        );
     }
 }

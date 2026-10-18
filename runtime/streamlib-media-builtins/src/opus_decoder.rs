@@ -74,10 +74,12 @@ impl ReactiveProcessor for OpusDecoder::Processor {
         if !self.inputs.has_data("encoded_audio") {
             return Ok(());
         }
-        while let Some(message) = self.inputs.read_raw("encoded_audio")? {
+        while let Some((message, inbound_link)) =
+            self.inputs.read_raw_from_inbound_link("encoded_audio")?
+        {
             let upstream_catalog_entry = self
                 .inputs
-                .inbound_link_catalog_entry("encoded_audio", None)?;
+                .inbound_link_catalog_entry("encoded_audio", Some(&inbound_link))?;
             if let Some(block) = self
                 .decode_body
                 .decode_one_arriving_message(&message, upstream_catalog_entry.as_ref())?

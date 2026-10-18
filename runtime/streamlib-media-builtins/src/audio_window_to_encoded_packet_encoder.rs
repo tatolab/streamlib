@@ -260,11 +260,21 @@ impl AudioWindowToEncodedPacketEncoder {
                     }
                 };
                 match mint_encoder_for_window(config, window, layout) {
-                    Ok(minted) => {
-                        self.audio_entry_owed_to_the_port =
-                            Some(audio_entry_for(window.channels, minted.pre_skip)?);
-                        empty_slot.insert(minted)
-                    }
+                    Ok(minted) => match audio_entry_for(window.channels, minted.pre_skip) {
+                        Ok(audio_entry) => {
+                            self.audio_entry_owed_to_the_port = Some(audio_entry);
+                            empty_slot.insert(minted)
+                        }
+                        Err(entry_failure) => {
+                            self.mint_already_failed = true;
+                            tracing::error!(
+                                "{OPUS_ENCODER_PROCESSOR_NAME}: the encoder's catalog entry \
+                                 could not be written; every later window is discarded: \
+                                 {entry_failure}"
+                            );
+                            return Err(entry_failure);
+                        }
+                    },
                     Err(mint_failure) => {
                         self.mint_already_failed = true;
                         tracing::error!(

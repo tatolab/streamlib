@@ -145,9 +145,9 @@ pub struct EncodedPacketToAudioBlockDecoder {
     group_loss_recovery_gate: MessageGroupLossRecoveryGate,
     anchor: Option<DecodedRunAnchor>,
     blocks_published: u64,
-    /// The upstream `OpusHead` last read and what it said, so a packet
-    /// re-parses it only when the entry changed.
-    stream_format_from_the_upstream_opus_head: Option<(String, OpusIdentificationHeader)>,
+    /// The upstream entry last read and the stream format it named, so a
+    /// packet converts and parses it only when the entry changed.
+    stream_format_from_the_upstream_entry: Option<(CatalogEntry, OpusIdentificationHeader)>,
     /// The channel count the first packet's TOC coded, for a stream whose
     /// entry names none. Read once: libopus codes a stereo stream's packets
     /// mono at low rates, so the flag of any later packet is no count.
@@ -164,6 +164,29 @@ impl EncodedPacketToAudioBlockDecoder {
         message: &MessageReadFromInputPort,
         upstream_catalog_entry: Option<&CatalogEntry>,
     ) -> Result<Option<AudioBlock>> {
+        // Admitted before anything can fail, so a reported loss is never
+        // dropped with a message this decoder could not read.
+        let disposition = self
+            .group_loss_recovery_gate
+            .admit_message(message.group_boundary, message.lost_since_last_read);
+        if disposition == MessageGroupLossRecoveryDisposition::DiscardUntilTheNextGroupStart {
+            return Ok(None);
+        }
+        let decode_outcome =
+            self.decode_one_admitted_message(message, disposition, upstream_catalog_entry);
+        if decode_outcome.is_err() {
+            self.group_loss_recovery_gate
+                .discard_the_rest_of_the_current_group();
+        }
+        decode_outcome
+    }
+
+    fn decode_one_admitted_message(
+        &mut self,
+        message: &MessageReadFromInputPort,
+        disposition: MessageGroupLossRecoveryDisposition,
+        upstream_catalog_entry: Option<&CatalogEntry>,
+    ) -> Result<Option<AudioBlock>> {
         let media_frame =
             read_hang_legacy_container_media_frame(&message.payload_bytes).map_err(|refusal| {
                 Error::Runtime(format!("{OPUS_DECODER_PROCESSOR_NAME}: {refusal}"))
@@ -174,6 +197,7 @@ impl EncodedPacketToAudioBlockDecoder {
         )?;
         self.decode_one_packet_in_stream_format(
             message,
+            disposition,
             media_frame.codec_payload_bytes,
             stream_format,
         )
@@ -201,6 +225,12 @@ impl EncodedPacketToAudioBlockDecoder {
                 pre_skip: 0,
             });
         };
+        if let Some((cached_upstream_entry, stream_format)) =
+            &self.stream_format_from_the_upstream_entry
+            && cached_upstream_entry == upstream_catalog_entry
+        {
+            return Ok(*stream_format);
+        }
         let upstream_audio_entry =
             AudioEntry::try_from(upstream_catalog_entry).map_err(|refusal| refused(&refusal))?;
         if upstream_audio_entry.codec != OPUS_CATALOG_CODEC_STRING {
@@ -209,22 +239,18 @@ impl EncodedPacketToAudioBlockDecoder {
                 upstream_audio_entry.codec
             )));
         }
-        let Some(hex_encoded_opus_head) = upstream_audio_entry.description else {
-            return Ok(OpusIdentificationHeader {
+        let stream_format = match upstream_audio_entry.description {
+            Some(hex_encoded_opus_head) => {
+                OpusIdentificationHeader::parse_hex_encoded(&hex_encoded_opus_head)
+                    .map_err(|refusal| refused(&refusal))?
+            }
+            None => OpusIdentificationHeader {
                 channels: upstream_audio_entry.number_of_channels,
                 pre_skip: 0,
-            });
+            },
         };
-        if let Some((cached_opus_head, stream_format)) =
-            &self.stream_format_from_the_upstream_opus_head
-            && *cached_opus_head == hex_encoded_opus_head
-        {
-            return Ok(*stream_format);
-        }
-        let stream_format = OpusIdentificationHeader::parse_hex_encoded(&hex_encoded_opus_head)
-            .map_err(|refusal| refused(&refusal))?;
-        self.stream_format_from_the_upstream_opus_head =
-            Some((hex_encoded_opus_head, stream_format));
+        self.stream_format_from_the_upstream_entry =
+            Some((upstream_catalog_entry.clone(), stream_format));
         Ok(stream_format)
     }
 
@@ -244,15 +270,13 @@ impl EncodedPacketToAudioBlockDecoder {
     fn decode_one_packet_in_stream_format(
         &mut self,
         message: &MessageReadFromInputPort,
+        disposition: MessageGroupLossRecoveryDisposition,
         opus_packet_bytes: &[u8],
         stream_format: OpusIdentificationHeader,
     ) -> Result<Option<AudioBlock>> {
         let lost_since_last_read = message.lost_since_last_read;
         let packet_timestamp_ns = message.timestamp_ns;
-        let mut re_entering = match self
-            .group_loss_recovery_gate
-            .admit_message(message.group_boundary, lost_since_last_read)
-        {
+        let mut re_entering = match disposition {
             MessageGroupLossRecoveryDisposition::Read => false,
             MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart => {
                 if self.group_loss_recovery_gate.group_starts_entered_at() > 1 {
@@ -820,6 +844,7 @@ mod tests {
         let refusal = EncodedPacketToAudioBlockDecoder::default()
             .decode_one_packet_in_stream_format(
                 &media_frame_message(&opus_packet_bytes, 0, 0),
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
                 &opus_packet_bytes,
                 OpusIdentificationHeader {
                     channels: 2,
@@ -841,6 +866,7 @@ mod tests {
         let block = EncodedPacketToAudioBlockDecoder::default()
             .decode_one_packet_in_stream_format(
                 &media_frame_message(&opus_packet_bytes, 0, 0),
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
                 &opus_packet_bytes,
                 OpusIdentificationHeader {
                     channels: 2,
@@ -857,6 +883,7 @@ mod tests {
         let refusal = EncodedPacketToAudioBlockDecoder::default()
             .decode_one_packet_in_stream_format(
                 &media_frame_message(&[0xfc, 0xff, 0xfe], 0, 0),
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
                 &[0xfc, 0xff, 0xfe],
                 OpusIdentificationHeader {
                     channels: 12,
@@ -989,6 +1016,70 @@ mod tests {
                 channels: 6,
                 pre_skip: 0
             }
+        );
+    }
+
+    /// The loss rides the message that could not be read, so the gate takes
+    /// it before the read fails, and the next packet re-enters: a fresh
+    /// priming trim, re-anchored on its own stamp.
+    #[test]
+    fn a_loss_reported_on_an_unreadable_message_still_re_enters_at_the_next_packet() {
+        let channels = 2;
+        let source = a_tone(channels, 4 * WINDOW_SAMPLE_COUNT);
+        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
+        let mut decoder = EncodedPacketToAudioBlockDecoder::default();
+        let mut upstream_catalog_entry = None;
+        let mut blocks = Vec::new();
+        for window_index in 0..4u32 {
+            let window = a_window_from(&source, channels, window_index, 0);
+            let opus_packet_bytes = encoder
+                .encode_one_window(&OpusEncoderConfig::default(), &window)
+                .expect("encodes")
+                .expect("publishes");
+            if let Some(owed_entry) = upstream_entry_owed_by(&mut encoder) {
+                upstream_catalog_entry = Some(owed_entry);
+            }
+            if window_index == 2 {
+                let unreadable_message_reporting_a_loss = MessageReadFromInputPort {
+                    payload_bytes: Vec::new(),
+                    timestamp_ns: window.first_sample_timestamp_ns,
+                    group_boundary: MessageGroupBoundary::StartsGroup,
+                    lost_since_last_read: 3,
+                };
+                decoder
+                    .decode_one_arriving_message(
+                        &unreadable_message_reporting_a_loss,
+                        upstream_catalog_entry.as_ref(),
+                    )
+                    .expect_err("an empty message is no media frame");
+                continue;
+            }
+            blocks.extend(
+                decoder
+                    .decode_one_arriving_message(
+                        &media_frame_message(
+                            &opus_packet_bytes,
+                            window.first_sample_timestamp_ns,
+                            0,
+                        ),
+                        upstream_catalog_entry.as_ref(),
+                    )
+                    .expect("decodes"),
+            );
+        }
+
+        assert_eq!(decoder.packets_lost_on_the_link(), 3);
+        let first_after_the_loss = blocks.last().expect("the last packet decodes");
+        assert_eq!(
+            first_after_the_loss.sample_count,
+            WINDOW_SAMPLE_COUNT - 312,
+            "the packet after the loss re-enters, priming and trimming again"
+        );
+        assert_eq!(
+            first_after_the_loss.first_sample_timestamp_ns,
+            3 * i64::from(WINDOW_SAMPLE_COUNT) * NANOSECONDS_PER_SECOND
+                / i64::from(OPUS_SAMPLE_RATE_HZ),
+            "and re-anchors on its own stamp rather than bridging the loss"
         );
     }
 }

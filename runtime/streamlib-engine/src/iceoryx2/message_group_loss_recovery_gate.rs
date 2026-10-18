@@ -58,6 +58,13 @@ impl MessageGroupLossRecoveryGate {
         }
     }
 
+    /// Give up the group the reader is in: a message it admitted could not be
+    /// read or decoded, so what follows in that group references something the
+    /// reader never had. Messages discard until the next group start.
+    pub fn discard_the_rest_of_the_current_group(&mut self) {
+        self.inside_an_entered_group = false;
+    }
+
     /// Messages the link reported lost, summed over every read.
     pub fn messages_lost_on_the_link(&self) -> u64 {
         self.messages_lost_on_the_link
@@ -159,5 +166,20 @@ mod tests {
         );
         assert_eq!(gate.messages_lost_on_the_link(), 2);
         assert_eq!(gate.messages_discarded_awaiting_a_group_start(), 0);
+    }
+
+    /// An admitted group start the reader could not decode leaves nothing for
+    /// the group's continuations to reference.
+    #[test]
+    fn a_group_given_up_discards_its_continuations_until_the_next_start() {
+        let mut gate = MessageGroupLossRecoveryGate::default();
+        assert_eq!(gate.admit_message(StartsGroup, 0), EnterAtThisGroupStart);
+        gate.discard_the_rest_of_the_current_group();
+        assert_eq!(
+            gate.admit_message(ContinuesGroup, 0),
+            DiscardUntilTheNextGroupStart
+        );
+        assert_eq!(gate.admit_message(StartsGroup, 0), EnterAtThisGroupStart);
+        assert_eq!(gate.admit_message(ContinuesGroup, 0), Read);
     }
 }

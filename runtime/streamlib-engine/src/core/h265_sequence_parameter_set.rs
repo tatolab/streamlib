@@ -238,7 +238,7 @@ pub struct ProfileTierLevel {
 
 impl ProfileTierLevel {
     /// The WebCodecs / RFC 6381 codec string for a stream with this profile,
-    /// tier and level — `hvc1.1.6.L93.B0` for 1080p Main at level 3.1.
+    /// tier and level — `hvc1.1.6.L93.90` for x265's 1080p Main at level 3.1.
     pub fn hvc1_codec_string(&self) -> String {
         hang::catalog::H265 {
             in_band: false,

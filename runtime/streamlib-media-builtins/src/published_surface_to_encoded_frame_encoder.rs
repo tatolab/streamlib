@@ -327,6 +327,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             if let Err(entry_refusal) = outputs.set_catalog_entry(output_port, video_entry.clone())
             {
                 self.next_frame_must_be_a_sync_point = true;
+                self.dropping_access_units_until_the_next_sync_point = true;
                 return Err(entry_refusal);
             }
             self.video_entry_on_the_port = self.video_entry_owed_to_the_port.take();
@@ -398,7 +399,13 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                         );
                     }
                 }
-                Err(write_failure) => return Err(write_failure),
+                // The rest of the batch is lost with this one, and what the
+                // session encodes next references it.
+                Err(write_failure) => {
+                    self.next_frame_must_be_a_sync_point = true;
+                    self.dropping_access_units_until_the_next_sync_point = true;
+                    return Err(write_failure);
+                }
             }
         }
         Ok(())
@@ -772,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_failing_for_any_other_reason_is_returned() {
+    fn a_write_failing_for_any_other_reason_is_returned_and_forces_the_next_sync_point() {
         let mut encode_body =
             PublishedSurfaceToEncodedFrameEncoder::<H264EncoderCodecIdentity>::default();
         let failure = encode_body
@@ -782,7 +789,10 @@ mod tests {
             )
             .expect_err("a link failure is not a ceiling refusal");
         assert!(matches!(failure, Error::Link(_)));
-        assert!(!encode_body.next_frame_must_be_a_sync_point);
+        assert!(
+            encode_body.next_frame_must_be_a_sync_point,
+            "the access units after a failed write reference it, so the next frame is a sync point"
+        );
     }
 
     /// A session that records what each encode asked of it and hands back

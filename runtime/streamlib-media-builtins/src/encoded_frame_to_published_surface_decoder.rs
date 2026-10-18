@@ -204,6 +204,22 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         if disposition == MessageGroupLossRecoveryDisposition::DiscardUntilTheNextGroupStart {
             return Ok(());
         }
+        let decode_outcome = self.decode_one_admitted_message(message, disposition, staged);
+        if decode_outcome.is_err() {
+            self.group_loss_recovery_gate
+                .discard_the_rest_of_the_current_group();
+        }
+        decode_outcome
+    }
+
+    /// Decode a message the loss gate admitted. Any failure leaves the rest of
+    /// its group without a reference, which the caller acts on.
+    fn decode_one_admitted_message(
+        &mut self,
+        message: &MessageReadFromInputPort,
+        disposition: MessageGroupLossRecoveryDisposition,
+        staged: &mut Vec<DecodedFrameAwaitingPublication>,
+    ) -> Result<()> {
         let media_frame =
             read_hang_legacy_container_media_frame(&message.payload_bytes).map_err(|refusal| {
                 Error::Runtime(format!("{}: {refusal}", Identity::PROCESSOR_NAME))
