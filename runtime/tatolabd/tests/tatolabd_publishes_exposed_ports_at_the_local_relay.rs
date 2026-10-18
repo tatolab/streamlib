@@ -7,7 +7,8 @@
 //! them; the broadcast's catalog is hang's and lists the port carrying an
 //! entry; an internal port is at no relay; lowering a port's level ends its
 //! subscribers; and a `RelayTrackSource` in another stream reads a private
-//! port through loopback, its groups and spacing kept. A stream's start
+//! port through loopback, its groups and spacing kept, and feeds a decoder
+//! another stream's private H.264 port. A stream's start
 //! creates the GPU context: `cargo test -p tatolabd --features
 //! hardware-tests,machine-directories-under-a-test-root`, after
 //! `cargo xtask stage-local-relay`.
@@ -18,6 +19,8 @@
 ))]
 
 mod common;
+#[path = "../../streamlib-engine/tests/support/rig_only_capability_skip.rs"]
+mod rig_only_capability_skip;
 
 use std::time::Duration;
 
@@ -216,24 +219,66 @@ impl TatolabdPublishingTheStream {
     /// `port` of the writer in [`STREAM`] through the loopback listener, and
     /// expose its output private.
     fn add_a_relay_track_source_reading(&self, node: &str, port: &str) {
+        self.add_a_relay_track_source_reading_the_port_of(node, STREAM, "writer", port);
+        self.expose_in_the_reader_stream(node, "track");
+    }
+
+    /// Add to [`READER_STREAM`] a `RelayTrackSource` named `node` reading
+    /// `source_stream`'s `source_node`/`source_port` through the loopback
+    /// listener.
+    fn add_a_relay_track_source_reading_the_port_of(
+        &self,
+        node: &str,
+        source_stream: &str,
+        source_node: &str,
+        source_port: &str,
+    ) {
+        self.add_a_relay_track_source_at(
+            &self.dial_url_of(LocalRelayListener::Loopback),
+            node,
+            &format!(
+                "{}/{source_stream}/{source_node}/{source_port}",
+                self.machine
+            ),
+        );
+    }
+
+    /// Add to [`READER_STREAM`] a `RelayTrackSource` named `node` reading
+    /// `track_address` at `relay_url`.
+    fn add_a_relay_track_source_at(&self, relay_url: &Url, node: &str, track_address: &str) {
         self.call(
             "add_node",
             serde_json::json!({
                 "stream": READER_STREAM,
                 "type": "tatolab.stream:RelayTrackSource",
                 "name": node,
-                "config": {
-                    "relay_url": self.dial_url_of(LocalRelayListener::Loopback).as_str(),
-                    "track_address": format!("{}/{STREAM}/writer/{port}", self.machine),
-                },
+                "config": {"relay_url": relay_url.as_str(), "track_address": track_address},
             }),
         );
+    }
+
+    fn expose_in_the_reader_stream(&self, node: &str, port: &str) {
         self.call(
             "expose_port",
             serde_json::json!({
-                "stream": READER_STREAM, "node": node, "port": "track", "level": "private",
+                "stream": READER_STREAM, "node": node, "port": port, "level": "private",
             }),
         );
+    }
+
+    /// The bags `node` of `stream_name` has written on `port`, read off `graph`.
+    fn bags_written_by(&self, stream_name: &str, node: &str, port: &str) -> u64 {
+        let graph = the_local_apis_answer_to_get(
+            &self.machine_root.local_api_socket_path(),
+            &format!("/api/graph?stream={stream_name}"),
+        );
+        graph["nodes"]
+            .as_array()
+            .and_then(|nodes| nodes.iter().find(|graph_node| graph_node["name"] == node))
+            .and_then(|graph_node| {
+                graph_node["components"]["metrics"]["written_bags_by_output_port"][port].as_u64()
+            })
+            .unwrap_or(0)
     }
 
     fn remove_the_node_named(&self, node: &str) {
@@ -695,4 +740,193 @@ fn a_relay_track_source_in_another_stream_reads_a_private_port_through_loopback_
         assert_eq!(carried_entry["mime"], "text/plain");
     });
     publishing.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// Whether this machine has no Vulkan Video encode and decode, printing the
+/// skip line when so.
+fn this_machine_lacks_vulkan_video() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let device = streamlib::sdk::engine::host_rhi::HostVulkanDevice::new()
+            .expect("a Vulkan device comes up on this machine");
+        rig_only_capability_skip::skip_unless_this_machine_has(
+            rig_only_capability_skip::RigOnlyCapability::VulkanVideo,
+            device.supports_video_encode() && device.supports_video_decode(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
+/// A stream encoding H.264 behind a private port: the test pattern into
+/// `H264Encoder`, whose `encoded_video` is private.
+fn a_stream_encoding_h264_on_a_private_port(stream_name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "stream": stream_name,
+        "nodes": [
+            {"name": "testpattern", "type": "tatolab.stream:TestPatternSource",
+             "config": {"width": 320, "height": 240}},
+            {"name": "encoder", "type": "tatolab.stream:H264Encoder", "config": {}},
+        ],
+        "links": [{
+            "source": {"node": "testpattern", "port": "video"},
+            "target": {"node": "encoder", "port": "video"},
+        }],
+        "exposed": [{"node": "encoder", "port": "encoded_video", "level": "private"}],
+    })
+}
+
+/// Stream B decodes stream A's private H.264 port: a `RelayTrackSource` at the
+/// loopback listener feeds `H264Decoder`, which publishes pictures. The source
+/// carries the encoder's `VideoEntry`, and restates each media frame's own
+/// timestamp — the hang container's varint — on this machine's clock, so the
+/// spacing of the stamps it writes is the spacing of the varints.
+#[test]
+fn a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port() {
+    if this_machine_lacks_vulkan_video() {
+        return;
+    }
+    const ENCODING_STREAM: &str = "camera-rig";
+    let mut publishing = TatolabdPublishingTheStream::start_with_the_streams(&[
+        (
+            ENCODING_STREAM,
+            a_stream_encoding_h264_on_a_private_port(ENCODING_STREAM),
+        ),
+        (
+            READER_STREAM,
+            serde_json::json!({
+                "stream": READER_STREAM,
+                "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
+            }),
+        ),
+    ]);
+    publishing.add_a_relay_track_source_reading_the_port_of(
+        "fromcamera",
+        ENCODING_STREAM,
+        "encoder",
+        "encoded_video",
+    );
+    publishing.call(
+        "add_node",
+        serde_json::json!({
+            "stream": READER_STREAM, "type": "tatolab.stream:H264Decoder", "name": "decoder",
+        }),
+    );
+    publishing.call(
+        "connect",
+        serde_json::json!({
+            "stream": READER_STREAM,
+            "from_node": "fromcamera", "from_port": "track",
+            "to_node": "decoder", "to_port": "encoded_video",
+        }),
+    );
+    publishing.expose_in_the_reader_stream("fromcamera", "track");
+    publishing.expose_in_the_reader_stream("decoder", "video");
+
+    let deadline = std::time::Instant::now() + MOQ_BUDGET;
+    while publishing.bags_written_by(READER_STREAM, "decoder", "video") < 30 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the decoder fed by the relay source published fewer than 30 pictures in {MOQ_BUDGET:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let reader_at_loopback =
+        publishing.the_broadcast_of_the_stream_at(READER_STREAM, LocalRelayListener::Loopback);
+    publishing.async_runtime.block_on(async {
+        let objects = reader_at_loopback
+            .the_next_objects_of("fromcamera/track", 20)
+            .await;
+        let varint_timestamps_ns: Vec<u128> = objects
+            .iter()
+            .map(|object| {
+                u128::from(
+                    streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame(
+                        &object.payload,
+                    )
+                    .expect("the source writes the encoder's media frames as received")
+                    .timestamp_microseconds,
+                ) * 1_000
+            })
+            .collect();
+        for (pair, varint_pair) in objects.windows(2).zip(varint_timestamps_ns.windows(2)) {
+            assert_eq!(
+                pair[1].timestamp_ns - pair[0].timestamp_ns,
+                varint_pair[1] - varint_pair[0],
+                "the source's stamps keep the spacing of the media frames' own timestamps"
+            );
+        }
+
+        let catalog_track = reader_at_loopback
+            .broadcast
+            .track(hang::Catalog::DEFAULT_NAME)
+            .unwrap();
+        let mut catalog_consumer =
+            hang::catalog::Consumer::<()>::new(catalog_track.subscribe(None).await.unwrap());
+        let catalog = loop {
+            let catalog = tokio::time::timeout(MOQ_BUDGET, catalog_consumer.next())
+                .await
+                .expect("the reader stream's catalog lists the source's video entry")
+                .expect("hang reads the catalog")
+                .expect("the catalog track is live");
+            if catalog.video.renditions.contains_key("fromcamera/track") {
+                break catalog;
+            }
+        };
+        let video_entry = &catalog.video.renditions["fromcamera/track"];
+        assert!(
+            video_entry.codec.to_string().starts_with("avc1."),
+            "the source carries the encoder's entry: {video_entry:?}"
+        );
+        assert_eq!(
+            (video_entry.coded_width, video_entry.coded_height),
+            (Some(320), Some(240))
+        );
+    });
+    publishing.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// Two runtimes, the way two machines read each other: the second's
+/// `RelayTrackSource` dials the first's every-interface listener for a public
+/// port, and what it writes — read back off the second runtime's own
+/// broadcast — is the first's objects in their groups, their spacing kept.
+#[test]
+fn a_relay_track_source_in_a_second_runtime_reads_the_first_runtimes_public_port() {
+    let mut first_runtime = TatolabdPublishingTheStream::start();
+    let mut second_runtime = TatolabdPublishingTheStream::start_with_the_streams(&[(
+        READER_STREAM,
+        serde_json::json!({
+            "stream": READER_STREAM,
+            "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
+        }),
+    )]);
+    second_runtime.add_a_relay_track_source_at(
+        &first_runtime.dial_url_of(LocalRelayListener::EveryInterface),
+        "fromfirst",
+        &format!("{}/{STREAM}/writer/{PUBLIC_PORT}", first_runtime.machine),
+    );
+    second_runtime.expose_in_the_reader_stream("fromfirst", "track");
+    let at_the_second_runtimes_loopback =
+        second_runtime.the_broadcast_of_the_stream_at(READER_STREAM, LocalRelayListener::Loopback);
+
+    second_runtime.async_runtime.block_on(async {
+        at_the_second_runtimes_loopback
+            .the_track_once_it_is_served("fromfirst/track")
+            .await;
+        let objects = at_the_second_runtimes_loopback
+            .the_next_objects_of("fromfirst/track", 12)
+            .await;
+        assert_the_objects_are_grouped_as_the_node_wrote_them(&objects);
+        for pair in objects.windows(2) {
+            let messages_between = the_number_in(&pair[1]) - the_number_in(&pair[0]);
+            assert_eq!(
+                pair[1].timestamp_ns - pair[0].timestamp_ns,
+                u128::from(messages_between) * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,
+                "the second runtime keeps the first's spacing: {objects:?}"
+            );
+        }
+    });
+    second_runtime.runtime.interrupt_and_expect_a_clean_exit();
+    first_runtime.runtime.interrupt_and_expect_a_clean_exit();
 }
