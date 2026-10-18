@@ -27,8 +27,10 @@ use crate::encoded_packet_to_audio_block_decoder::{
                   and declares no window contract: an encoded link carries whole packets, and \
                   reframing a compressed bitstream is not a thing the stage could do. The \
                   channel count and the encoder's lookahead come from the `OpusHead` in the \
-                  upstream port's catalog entry; with none there, the packet's TOC names one or \
-                  two channels and nothing is trimmed. A message that is not a media frame, an \
+                  upstream port's catalog entry. An audio entry carrying no `OpusHead` names \
+                  the channel count; with no entry at all, the first packet's TOC fixes one or \
+                  two channels for the run. Either way nothing is trimmed. A message that is \
+                  not a media frame, an upstream entry that is not an `opus` audio entry, an \
                   `OpusHead` that does not read, and a `pre_skip` past the 5 760 samples one \
                   Opus packet can span are refused by name. `audio` publishes ordinary \
                   `AudioBlock` bags — `f32` at 48 000 Hz in the stream's own channel count.\n\n\

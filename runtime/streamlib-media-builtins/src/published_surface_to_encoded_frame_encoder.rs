@@ -315,7 +315,8 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
 
     /// Publish staged access units on `output_port`, setting the catalog
     /// entry a mint owes the port first so it lands ahead of the first media
-    /// frame it describes.
+    /// frame it describes. A refused entry drops the staged access units, so
+    /// the next frame is encoded as a sync point.
     pub fn publish_to_output_port(
         &mut self,
         outputs: &OutputWriter,
@@ -323,7 +324,11 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         staged: Vec<EncodedAccessUnitAwaitingPublication>,
     ) -> Result<()> {
         if let Some(video_entry) = &self.video_entry_owed_to_the_port {
-            outputs.set_catalog_entry(output_port, video_entry.clone())?;
+            if let Err(entry_refusal) = outputs.set_catalog_entry(output_port, video_entry.clone())
+            {
+                self.next_frame_must_be_a_sync_point = true;
+                return Err(entry_refusal);
+            }
             self.video_entry_on_the_port = self.video_entry_owed_to_the_port.take();
         }
         self.publish_staged_access_units(
@@ -826,20 +831,21 @@ mod tests {
     #[test]
     fn the_frame_after_a_refused_write_asks_the_session_for_a_sync_point() {
         let force_sync_point_by_encode = std::sync::Arc::default();
-        let mut encode_body =
-            PublishedSurfaceToEncodedFrameEncoder::<H264EncoderCodecIdentity>::default();
-        encode_body.encode_session = Some(EncodeSessionMintedFromUpstream {
-            session: Box::new(SessionRecordingForcedSyncPoints {
-                force_sync_point_by_encode: std::sync::Arc::clone(&force_sync_point_by_encode),
+        let mut encode_body = PublishedSurfaceToEncodedFrameEncoder::<H264EncoderCodecIdentity> {
+            encode_session: Some(EncodeSessionMintedFromUpstream {
+                session: Box::new(SessionRecordingForcedSyncPoints {
+                    force_sync_point_by_encode: std::sync::Arc::clone(&force_sync_point_by_encode),
+                }),
+                minted_width: 1280,
+                minted_height: 720,
+                coded_width: 1280,
+                coded_height: 720,
+                minted_color: None,
+                color_change_already_warned: false,
+                video_entry_derived: true,
             }),
-            minted_width: 1280,
-            minted_height: 720,
-            coded_width: 1280,
-            coded_height: 720,
-            minted_color: None,
-            color_change_already_warned: false,
-            video_entry_derived: true,
-        });
+            ..Default::default()
+        };
         let config = HardwareVideoEncoderConfig::default();
 
         let mut refused_frame_access_units = Vec::new();

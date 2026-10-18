@@ -7,8 +7,9 @@
 //! no `Runtime` — the shape the video decode body already takes.
 //!
 //! The channel count and the encoder's lookahead come from the upstream
-//! port's `OpusHead`; a stream whose entry carries none decodes at the
-//! channel count the packet's TOC codes, with nothing trimmed.
+//! port's `OpusHead`. An audio entry carrying none names the channel count;
+//! with no entry at all the first packet's TOC fixes it for the run. Either
+//! way nothing is trimmed.
 //!
 //! Two things it does not do, both doctrine rather than omission: it never
 //! conceals and it never invents. A read reporting a loss is the answer to
