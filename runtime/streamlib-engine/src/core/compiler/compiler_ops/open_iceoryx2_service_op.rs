@@ -35,7 +35,7 @@ use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
     effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
 };
@@ -658,7 +658,7 @@ fn channel_destination_count(graph: &Graph, source: &OutputLinkPortRef) -> usize
 
 /// The `max_subscribers` every channel data service is created with:
 /// [`MAX_DESTINATIONS_PER_CHANNEL`] destination slots plus
-/// [`RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`] — fixed, never the current
+/// [`RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL`] — fixed, never the current
 /// fan-out, because iceoryx2 pins the count at create time and a link connected
 /// to a running source must fit a slot that already exists.
 ///
@@ -672,7 +672,7 @@ fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef) -> Result<
              carries at most {MAX_DESTINATIONS_PER_CHANNEL}"
         )));
     }
-    Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL)
+    Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL)
 }
 
 /// Whether a destination being wired from a source, held in a graph other
@@ -2959,7 +2959,7 @@ mod tests {
         Iceoryx2Node::for_this_test_process()
             .open_or_create_service(
                 &channel_service_name,
-                MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+                MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL,
                 DeliveryProfile::NEWEST_DEPTH,
             )
             .expect("a helper opening at its own port's depth joins or creates the service")
@@ -4283,7 +4283,7 @@ mod tests {
             .open_or_create_service(
                 &channel_service_name(&OutputLinkPortRef::new(source_id.as_str(), "out1"))
                     .expect("the mock's output port derives a channel name"),
-                MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+                MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL,
                 DeliveryProfile::ORDERED_DEPTH,
             )
             .expect("a tap joins the running channel");
@@ -4538,7 +4538,7 @@ mod tests {
         assert_eq!(
             channel_max_subscribers(&graph, &OutputLinkPortRef::new(src_uid.clone(), "out1"))
                 .expect("three destinations fit the cap"),
-            MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+            MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL,
             "the channel is sized for the cap plus the tap's slot, not for the three \
              destinations it feeds today",
         );

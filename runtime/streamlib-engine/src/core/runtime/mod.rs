@@ -22,6 +22,7 @@ pub(crate) use operations_runtime::{
     EnginesTokioRuntimeForWorkSpawnedAgainstAStream, LinksReadingAStreamToRePlan,
     mark_this_thread_as_a_processor_execution_thread, the_cut_of_a_link_reading_another_stream,
 };
+mod reserved_slot_forwarder;
 #[allow(clippy::module_inception)]
 mod runtime;
 mod runtime_crash_pinned_on_a_stream;

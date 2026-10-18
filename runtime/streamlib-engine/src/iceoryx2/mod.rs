@@ -79,7 +79,7 @@ pub use payload::MessageGroupBoundary;
 
 pub(crate) use node::ChannelSizing;
 pub use node::{
-    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelTapSubscribeError,
+    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError,
     ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
     Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
     create_iceoryx2_node_in_engine_owned_domain, engine_owned_iceoryx2_config,
@@ -91,7 +91,7 @@ pub use payload::{
     FRAME_HEADER_FLAG_STARTS_GROUP, FRAME_HEADER_FLAGS_SIZE, FRAME_HEADER_PAYLOAD_LEN_SIZE,
     FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader, FramePayloadRefusal,
     MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
     TappedFramePayloadRefusal, UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
