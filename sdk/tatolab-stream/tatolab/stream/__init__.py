@@ -18,6 +18,7 @@ compiles with no runtime installed. The built-in nodes are generated from the
 runtime's own declarations, each with a `TypedDict` for its config.
 """
 
+from . import catalog as catalog
 from . import clock as clock
 from . import log as log
 from . import msgpack as msgpack
@@ -200,6 +201,7 @@ __all__ = [
     "VideoFrame",
     "VirtualCameraSink",
     "VirtualCameraSinkConfig",
+    "catalog",
     "clock",
     "compile_stream_to_graph",
     "gpu_limited_access_of_the_typed_read_in_progress",

@@ -2239,6 +2239,13 @@ mod tests {
         instance
             .install_iceoryx2_resources()
             .expect("the mock accepts its iceoryx2 resources");
+        instance.reach_the_catalog_entries_of(
+            graph
+                .traversal()
+                .v(proc_id)
+                .first()
+                .expect("the mock's node is in the graph"),
+        );
         let output_inner = instance.iceoryx2_output_writer_inner();
         let input_inner = instance.iceoryx2_input_mailboxes_inner();
         let instance = attach_processor_instance(graph, proc_id, instance);
@@ -3039,6 +3046,92 @@ mod tests {
             ordered_consumer_input.drain("in1").len(),
             BAGS_PUBLISHED_WHILE_NEITHER_CONSUMER_READS,
             "the ordered port receives every bag its deeper ring holds"
+        );
+    }
+
+    /// A native reader reads the catalog entry its upstream output port carries
+    /// now off the inbound link the compiler wired, and `graph` renders that
+    /// entry under the upstream's port; disconnecting the link leaves the
+    /// reader nothing to read.
+    #[test]
+    fn a_native_reader_reads_its_upstreams_current_catalog_entry_off_the_wired_link() {
+        use crate::core::descriptors::{CatalogEntry, VideoEntry};
+        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let (_, source_output, _) =
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let source_output = crate::iceoryx2::OutputWriter::from_inner_arc(
+            source_output.expect("an output-only mock holds an output writer"),
+        );
+        let dest_id = add_mock_input_only(&mut graph);
+        let (_, _, dest_input) =
+            attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
+        let dest_input = crate::iceoryx2::InputMailboxes::from_inner_arc(
+            dest_input.expect("an input-only mock holds input mailboxes"),
+        );
+
+        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+        open_iceoryx2_service(&mut graph, &link_id, &node).expect("the link wires");
+        assert_eq!(
+            dest_input
+                .inbound_link_catalog_entry("in1", None)
+                .expect("a port fed by one link answers"),
+            None,
+            "the upstream port declared no entry"
+        );
+
+        let encoded_video = CatalogEntry::from(VideoEntry {
+            codec: "avc1.64001f".to_string(),
+            coded_width: Some(1280),
+            coded_height: Some(720),
+            description: None,
+        });
+        source_output
+            .set_catalog_entry("out1", encoded_video.clone())
+            .expect("an entry hang reads replaces the port's");
+        let inbound_link_name = dest_input
+            .inbound_link_names("in1")
+            .pop()
+            .expect("the wired link is named");
+        assert_eq!(
+            dest_input
+                .inbound_link_catalog_entry("in1", Some(&inbound_link_name))
+                .expect("the named link answers"),
+            Some(encoded_video.clone())
+        );
+        let rendered_source =
+            serde_json::to_value(crate::core::json_schema::ProcessorNodeOutput::from(
+                graph
+                    .traversal()
+                    .v(ProcessorUniqueId::from(source_id.as_str()))
+                    .first()
+                    .expect("the source is in the graph"),
+            ))
+            .expect("the node renders");
+        assert_eq!(
+            rendered_source["ports"]["outputs"][0]["catalog_entry"],
+            serde_json::to_value(&encoded_video).expect("the entry serializes")
+        );
+
+        source_output
+            .set_catalog_entry(
+                "out1",
+                CatalogEntry {
+                    section: crate::core::descriptors::CatalogSection::Video,
+                    entry: serde_json::json!({"codedWidth": 1280}),
+                },
+            )
+            .expect_err("an entry with no codec is refused");
+
+        close_iceoryx2_service(&mut graph, &link_id).expect("the link disconnects");
+        assert_eq!(
+            dest_input
+                .inbound_link_catalog_entry("in1", None)
+                .expect("an unfed port answers"),
+            None
         );
     }
 

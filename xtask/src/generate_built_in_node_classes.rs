@@ -36,6 +36,48 @@ struct BuiltInNodePortDescriptor {
     description: String,
     #[serde(default)]
     delivery_profile: Option<String>,
+    #[serde(default)]
+    catalog_entry: Option<BuiltInNodePortCatalogEntry>,
+}
+
+/// The catalog entry an output port of a [`BuiltInNodeDescriptor`] declares.
+#[derive(Debug, Deserialize)]
+struct BuiltInNodePortCatalogEntry {
+    section: String,
+    entry: Map<String, Value>,
+}
+
+impl BuiltInNodePortCatalogEntry {
+    /// The entry as a Python author writes it with `tatolab.stream.catalog`:
+    /// `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
+    fn as_python_catalog_entry(&self, refused_item_label: &str) -> Result<String> {
+        let entry_class_name = match self.section.as_str() {
+            "video" => "VideoEntry",
+            "audio" => "AudioEntry",
+            "text" => "TextEntry",
+            "json" => "JsonEntry",
+            "binary" => "BinaryEntry",
+            other => bail!(
+                "{refused_item_label} declares a catalog entry in no section hang has: {other}"
+            ),
+        };
+        let keyword_arguments = self
+            .entry
+            .iter()
+            .map(|(field_name, value)| match value {
+                Value::String(text) => Ok(format!("{field_name}={}", Value::from(text.as_str()))),
+                Value::Number(number) => Ok(format!("{field_name}={number}")),
+                other => bail!(
+                    "{refused_item_label}'s catalog entry field `{field_name}` is {other}, which no \
+                     catalog entry class takes"
+                ),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(format!(
+            "{entry_class_name}({})",
+            keyword_arguments.join(", ")
+        ))
+    }
 }
 
 /// The generated module, relative to the workspace root.
@@ -244,6 +286,13 @@ fn render_port_paragraph(
             paragraph,
             "\n    `{port_name}`{delivery_profile}: {description}"
         )?;
+        if let Some(catalog_entry) = &port.catalog_entry {
+            write!(
+                paragraph,
+                "\n        Catalog entry: `{}`.",
+                catalog_entry.as_python_catalog_entry(refused_item_label)?
+            )?;
+        }
     }
     Ok(paragraph)
 }
@@ -863,6 +912,33 @@ class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
         assert!(rendered.contains("        `done`: Done.\n"), "{rendered}");
         assert!(
             rendered.contains("    __test__: ClassVar[bool] = False\n"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn an_output_ports_catalog_entry_renders_under_the_port_as_a_python_author_writes_it() {
+        let descriptor = json!({
+            "type": "tatolab.stream:FrameSource",
+            "description": "Frames",
+            "inputs": [],
+            "outputs": [{
+                "name": "video",
+                "description": "Frames",
+                "required": true,
+                "delivery_profile": null,
+                "catalog_entry": {
+                    "section": "binary",
+                    "entry": {"mode": "snapshot", "mime": "application/msgpack"}
+                }
+            }]
+        });
+        let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
+        assert!(
+            rendered.contains(
+                "        `video`: Frames.\n            Catalog entry: \
+                 `BinaryEntry(mode=\"snapshot\", mime=\"application/msgpack\")`.\n"
+            ),
             "{rendered}"
         );
     }

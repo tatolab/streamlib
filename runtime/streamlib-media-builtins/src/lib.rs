@@ -168,6 +168,42 @@ mod built_in_node_type_tests {
         );
     }
 
+    /// A built-in writing a msgpack record declares its port a binary
+    /// snapshot track of `application/msgpack`. Registration drops a built-in
+    /// whose entry hang does not read, so each one present here also parsed.
+    #[test]
+    fn every_built_in_writing_a_msgpack_record_declares_its_port_a_msgpack_snapshot_track() {
+        use streamlib::sdk::descriptors::{BinaryEntry, CatalogDataTrackMode, CatalogEntry};
+
+        register_media_builtin_processor_types();
+        let msgpack_snapshot_entry = CatalogEntry::from(BinaryEntry {
+            mode: CatalogDataTrackMode::Snapshot,
+            mime: Some("application/msgpack".to_string()),
+        });
+        for (class_name, output_port) in [
+            ("CameraSource", "video"),
+            ("TestPatternSource", "video"),
+            ("H264Decoder", "video"),
+            ("H265Decoder", "video"),
+            ("MicrophoneSource", "audio"),
+            ("OpusDecoder", "audio"),
+        ] {
+            let descriptor = PROCESSOR_REGISTRY
+                .descriptor(&ProcessorClassImportPath::of_built_in_node(class_name))
+                .unwrap_or_else(|| panic!("{class_name} is registered"));
+            let declared_entry = descriptor
+                .outputs
+                .iter()
+                .find(|port| port.name == output_port)
+                .and_then(|port| port.catalog_entry.clone());
+            assert_eq!(
+                declared_entry,
+                Some(msgpack_snapshot_entry.clone()),
+                "{class_name}.{output_port}"
+            );
+        }
+    }
+
     /// Each built-in's config derives `deny_unknown_fields` by hand, so this is
     /// what fails when one does not — a fourteenth built-in included.
     #[test]

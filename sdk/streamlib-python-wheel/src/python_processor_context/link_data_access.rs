@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use pyo3::exceptions::{PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
@@ -17,6 +19,9 @@ use super::gpu_context::PythonGpuContextLimitedAccess;
 pub(crate) struct PythonLinkInputDataReader {
     pub(super) link_data_access: Py<PythonProcessorLinkDataAccess>,
     pub(super) gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
+    /// The bridge's blocking round trip to the parent, which holds the
+    /// catalog entries a read asks after.
+    pub(super) escalate_request_to_parent: Option<Py<PyAny>>,
 }
 
 #[pymethods]
@@ -140,12 +145,42 @@ impl PythonLinkInputDataReader {
             .get()
             .input_port_has_data(python, port_name)
     }
+
+    /// The catalog entry the output port feeding `port_name` carries now, as
+    /// `{"section": ..., "entry": {...}}`, or `None`.
+    ///
+    /// A port fed by more than one link names the one to read with
+    /// `inbound_link`.
+    #[pyo3(signature = (port_name, *, inbound_link = None))]
+    fn inbound_link_catalog_entry<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        inbound_link: Option<&str>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let op = PyDict::new(python);
+        op.set_item("op", "read_inbound_link_catalog_entry")?;
+        op.set_item("port", port_name)?;
+        if let Some(inbound_link) = inbound_link {
+            op.set_item("inbound_link", inbound_link)?;
+        }
+        let response = catalog_entry_round_trip_to_parent(
+            python,
+            self.escalate_request_to_parent.as_ref(),
+            &op,
+        )?;
+        let catalog_entry = response.call_method1("get", ("catalog_entry",))?;
+        Ok((!catalog_entry.is_none()).then_some(catalog_entry))
+    }
 }
 
 /// A processor's output ports, as `ctx.outputs`.
 #[pyclass(name = "LinkOutputDataWriter", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonLinkOutputDataWriter {
     pub(super) link_data_access: Py<PythonProcessorLinkDataAccess>,
+    /// The bridge's blocking round trip to the parent, which holds the
+    /// catalog entries this processor's ports carry.
+    pub(super) escalate_request_to_parent: Option<Py<PyAny>>,
 }
 
 #[pymethods]
@@ -169,6 +204,55 @@ impl PythonLinkOutputDataWriter {
             starts_group,
         )
     }
+
+    /// Replace the catalog entry `port_name` carries with `entry`, one of
+    /// `tatolab.stream.catalog`'s entries. The parent parses it with hang's
+    /// catalog types and refuses one they do not read.
+    fn set_catalog_entry(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        entry: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let not_a_catalog_entry = |_| {
+            PyTypeError::new_err(format!(
+                "output port {port_name:?}: set_catalog_entry takes one of tatolab.stream.catalog's \
+                 entries, got {}",
+                entry
+                    .get_type()
+                    .name()
+                    .map(|type_name| type_name.to_string())
+                    .unwrap_or_default()
+            ))
+        };
+        let section = entry.getattr("section").map_err(not_a_catalog_entry)?;
+        let fields = entry.call_method0("to_dict").map_err(not_a_catalog_entry)?;
+        let op = PyDict::new(python);
+        op.set_item("op", "set_output_port_catalog_entry")?;
+        op.set_item("port", port_name)?;
+        op.set_item("section", section)?;
+        op.set_item("entry", fields)?;
+        catalog_entry_round_trip_to_parent(python, self.escalate_request_to_parent.as_ref(), &op)?;
+        Ok(())
+    }
+}
+
+/// One catalog-entry escalate round trip to the parent, whose refusal raises
+/// as the bridge raises it.
+fn catalog_entry_round_trip_to_parent<'py>(
+    python: Python<'py>,
+    escalate_request_to_parent: Option<&Py<PyAny>>,
+    op: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyAny>> {
+    escalate_request_to_parent
+        .ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "a catalog entry lives on the parent's graph, and this context has no route to \
+                 the parent",
+            )
+        })?
+        .bind(python)
+        .call1((op,))
 }
 
 /// The typed cast's claim, over a real link and a real surface-share service.

@@ -56,7 +56,11 @@ impl HardwareVideoCodecProcessorIdentity for H265DecoderCodecIdentity {
         delivery_profile = "ordered",
         description = "H.265 encoded-frame bags to decode"
     ),
-    output("video", description = "Decoded video frames"),
+    output(
+        "video",
+        description = "Decoded video frames",
+        catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" }
+    ),
 )]
 pub struct H265Decoder {
     decode_body: EncodedFrameToPublishedSurfaceDecoder<H265DecoderCodecIdentity>,
