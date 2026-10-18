@@ -52,6 +52,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "open_device_export_staging")]
     OpenDeviceExportStaging(EscalateRequestOpenDeviceExportStaging),
 
+    #[serde(rename = "read_inbound_link_catalog_entry")]
+    ReadInboundLinkCatalogEntry(EscalateRequestReadInboundLinkCatalogEntry),
+
     #[serde(rename = "refill_device_export_staging")]
     RefillDeviceExportStaging(EscalateRequestRefillDeviceExportStaging),
 
@@ -87,6 +90,9 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "run_ray_tracing_kernel")]
     RunRayTracingKernel(EscalateRequestRunRayTracingKernel),
+
+    #[serde(rename = "set_output_port_catalog_entry")]
+    SetOutputPortCatalogEntry(EscalateRequestSetOutputPortCatalogEntry),
 
     #[serde(rename = "show_surface_on_processor_owned_window")]
     ShowSurfaceOnProcessorOwnedWindow(EscalateRequestShowSurfaceOnProcessorOwnedWindow),
@@ -2039,6 +2045,41 @@ pub(crate) struct EscalateRequestShowSurfaceOnProcessorOwnedWindow {
     /// when the caller names a bare surface id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) producer_published_texture_layout: Option<i32>,
+}
+
+/// Read the current catalog entry of the output port feeding one of the
+/// helper's input ports. Reads no payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestReadInboundLinkCatalogEntry {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The helper's input port.
+    pub(crate) port: String,
+
+    /// The inbound link to read through, by the name a read reports it under.
+    /// Absent on a port fed by one link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) inbound_link: Option<String>,
+}
+
+/// Replace the catalog entry one of the helper's output ports carries. The
+/// host parses it with hang's catalog types and refuses one they do not read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestSetOutputPortCatalogEntry {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The helper's output port.
+    pub(crate) port: String,
+
+    /// The catalog section the entry belongs in.
+    pub(crate) section: streamlib_processor_schema::CatalogSection,
+
+    /// The section's fields, spelled as hang spells them.
+    pub(crate) entry: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

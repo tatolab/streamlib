@@ -29,6 +29,7 @@ mod helper_log_record;
 mod hex_encoded_wire_bytes;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
+mod port_catalog_entry;
 mod processor_owned_window;
 mod ray_tracing;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -38,6 +39,7 @@ mod surface_copy;
 mod tests;
 
 use self::handle_lifecycle::EscalateHandleRegistry;
+pub(crate) use self::port_catalog_entry::CatalogEntriesAHelperPlacedProcessorReaches;
 use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestCloseProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
 };
@@ -74,6 +76,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
         EscalateRequest::OpenCpuReadbackStaging(p) => Some(&p.request_id),
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
+        EscalateRequest::ReadInboundLinkCatalogEntry(p) => Some(&p.request_id),
         EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::CopyDeviceExportStagingBackToSurface(p) => Some(&p.request_id),
         EscalateRequest::RegisterComputeKernel(p) => Some(&p.request_id),
@@ -86,6 +89,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RegisterRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::RunRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
+        EscalateRequest::SetOutputPortCatalogEntry(p) => Some(&p.request_id),
         EscalateRequest::CreateProcessorOwnedWindow(p) => Some(&p.request_id),
         EscalateRequest::ShowSurfaceOnProcessorOwnedWindow(p) => Some(&p.request_id),
         EscalateRequest::DrainProcessorOwnedWindowEvents(p) => Some(&p.request_id),
@@ -94,7 +98,8 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
     }
 }
 
-/// Dispatch an [`EscalateRequest`] against `sandbox`. Returns
+/// Dispatch an [`EscalateRequest`] against `sandbox`, or — for a catalog-entry
+/// op — against the `catalog_entries` of the helper's node. Returns
 /// `Some(EscalateResponse)` for request/response ops so the bridge can
 /// write a reply; returns `None` for fire-and-forget ops
 /// ([`EscalateRequest::Log`]) whose effect lands directly in the unified
@@ -110,6 +115,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
+    catalog_entries: &CatalogEntriesAHelperPlacedProcessorReaches,
     op: EscalateRequest,
 ) -> Option<EscalateResponse> {
     let rid = request_id(&op).map(str::to_string).unwrap_or_default();
@@ -135,6 +141,12 @@ pub(crate) fn handle_escalate_op(
         EscalateRequest::WaitDeviceIdle(req) => {
             Some(device_idle::handle_wait_device_idle(sandbox, rid, req))
         }
+        EscalateRequest::SetOutputPortCatalogEntry(req) => Some(
+            port_catalog_entry::handle_set_output_port_catalog_entry(catalog_entries, rid, req),
+        ),
+        EscalateRequest::ReadInboundLinkCatalogEntry(req) => Some(
+            port_catalog_entry::handle_read_inbound_link_catalog_entry(catalog_entries, rid, req),
+        ),
         EscalateRequest::OpenCpuReadbackStaging(req) => Some(
             export_staging::handle_open_cpu_readback_staging(sandbox, rid, req),
         ),
@@ -304,13 +316,14 @@ impl EscalateParseError {
 pub(crate) fn process_bridge_message(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
+    catalog_entries: &CatalogEntriesAHelperPlacedProcessorReaches,
     value: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     let parsed = try_parse_escalate_request(value)?;
     let response = match parsed {
         // Fire-and-forget ops (log) return `None` from the handler — no
         // reply is written back to the subprocess.
-        Ok(op) => handle_escalate_op(sandbox, registry, op)?,
+        Ok(op) => handle_escalate_op(sandbox, registry, catalog_entries, op)?,
         Err(err) => err.into_response(),
     };
     Some(envelope_response(response))
