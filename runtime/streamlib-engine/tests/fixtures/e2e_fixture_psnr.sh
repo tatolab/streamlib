@@ -14,9 +14,8 @@
 # only once a reader outside the graph subscribes to the port: until then the
 # tap finds no channel and the run scores nothing.
 #
-# One rig run per reference, and that is the pairing contract. A decoded bag
-# carries nothing to pair on — `sequence_index` is an encoded-frame field, and
-# a decoded frame is an ordinary video frame — so pairing a decoded sample to
+# One rig run per reference, and that is the pairing contract. A decoded
+# frame is an ordinary video frame carrying nothing to pair on, so pairing a decoded sample to
 # the reference that produced it either needs a join this wire does not carry,
 # or a best-match search that a channel swap would satisfy by re-pairing a
 # swapped red onto `solid_blue.png`. Running one reference at a time makes the

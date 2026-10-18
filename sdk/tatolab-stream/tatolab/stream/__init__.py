@@ -98,8 +98,6 @@ from .claimed_surface_pixel_access import (
 from .clock import MonotonicTimer as MonotonicTimer
 from .clock import monotonic_now_ns as monotonic_now_ns
 from .clock import start_monotonic_timer as start_monotonic_timer
-from .encoded_audio_packet import EncodedAudioPacket as EncodedAudioPacket
-from .encoded_video_frame import EncodedVideoFrame as EncodedVideoFrame
 from .glsl_pixel_effect import GlslPixelEffect as GlslPixelEffect
 from .glsl_pixel_effect import GlslPixelEffectDialType as GlslPixelEffectDialType
 from .model_input_tensor_kernel import ModelInputTensor as ModelInputTensor
@@ -132,8 +130,6 @@ __all__ = [
     "ColorInfo",
     "ComputeKernel",
     "ContentLight",
-    "EncodedAudioPacket",
-    "EncodedVideoFrame",
     "Exposure",
     "GlslPixelEffect",
     "GlslPixelEffectDialType",

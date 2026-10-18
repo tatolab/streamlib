@@ -96,17 +96,22 @@ class H264DecoderConfig(TypedDict, total=False):
 
 
 class H264Decoder(BuiltInNode[H264DecoderConfig]):
-    """Decodes H.264 Annex-B encoded-frame bags to published video surfaces via hardware
-    decode — Vulkan Video on Linux, VideoToolbox on macOS.
+    """Decodes H.264 media frames to published video surfaces via hardware decode —
+    Vulkan Video on Linux, VideoToolbox on macOS.
 
-    `encoded_video` takes encoded-frame bags in the wire shape `H264Encoder` publishes;
-    a bag the decoder cannot read is refused by name, never reshaped. `video` publishes
-    an ordinary `VideoFrame` on a pooled RGBA pixel-buffer surface at the
-    conformance-windowed extent — never the coded picture — carrying the encoded frame's
-    own timestamp and `color_info`, with `fps`, `texture_layout` and the HDR sidecars
-    absent, so an encoder and a `read(port, into=VideoFrame)` consume it unchanged. A
-    decoded frame is buffer-backed, so it reaches a Python kernel through a DLPack
-    landing copy, never by bare surface id.
+    `encoded_video` takes media frames in the layout `H264Encoder` publishes and the
+    moq-dev players read — a QUIC varint timestamp, then one Annex-B access unit, a
+    keyframe opening a group — from any producer; a message that is not one is refused
+    by name. The decoder enters the stream at a group start and, after a read reports a
+    loss, discards to the next one, so it never publishes a picture built from
+    references it did not see. A keyframe whose parameter sets differ from the ones
+    before it reconfigures the session. `video` publishes an ordinary `VideoFrame` on a
+    pooled RGBA pixel-buffer surface at the conformance-windowed extent — never the
+    coded picture — carrying the message's timestamp and the `color_info` the SPS VUI
+    signals, with `fps`, `texture_layout` and the HDR sidecars absent, so an encoder and
+    a `read(port, into=VideoFrame)` consume it unchanged. A decoded frame is
+    buffer-backed, so it reaches a Python kernel through a DLPack landing copy, never by
+    bare surface id.
 
     The decode session is minted at `setup()`. On a device with no hardware decoder for
     the codec — no Vulkan Video decode queue, or no VideoToolbox hardware decoder —
@@ -114,7 +119,7 @@ class H264Decoder(BuiltInNode[H264DecoderConfig]):
     run raises rather than the graph running with an empty channel.
 
     Inputs:
-        `encoded_video` (ordered): H.264 encoded-frame bags to decode.
+        `encoded_video` (ordered): H.264 media frames to decode.
 
     Outputs:
         `video`: Decoded video frames.
@@ -158,14 +163,19 @@ class H264EncoderConfig(TypedDict, total=False):
 
 
 class H264Encoder(BuiltInNode[H264EncoderConfig]):
-    """Encodes published video surfaces to H.264 Annex-B encoded-frame bags via hardware
-    encode — Vulkan Video on Linux, VideoToolbox on macOS.
+    """Encodes published video surfaces to H.264 via hardware encode — Vulkan Video on
+    Linux, VideoToolbox on macOS.
 
     `video` takes any published `VideoFrame` — buffer-backed (camera, test pattern) or
-    texture-backed (a kernel output). `encoded_video` publishes one Annex-B access unit
-    per bag, beside the stream metadata keys. A frame the encoder cannot consume is
-    logged and dropped while the node keeps running. The session mints from the first
-    frame's dimensions and re-mints when the upstream extent changes.
+    texture-backed (a kernel output). `encoded_video` publishes one media frame per
+    access unit, the layout the moq-dev players read: a QUIC varint timestamp in
+    microseconds, then the Annex-B access unit, parameter sets inline before each
+    keyframe. A keyframe opens a group. After its first frame the port's catalog entry
+    is a `VideoEntry` naming the codec string the stream's SPS spells and the coded
+    extent, with no `description`. A frame the encoder cannot consume is logged and
+    dropped while the node keeps running; a write the channel ceiling refuses makes the
+    next frame a keyframe. The session mints from the first frame's dimensions and
+    re-mints when the upstream extent changes.
 
     On a device without a hardware encoder for the codec the session fails to mint: the
     failure latches and every later frame is discarded with one error line; no exception
@@ -175,7 +185,7 @@ class H264Encoder(BuiltInNode[H264EncoderConfig]):
         `video` (ordered): Video frames to encode.
 
     Outputs:
-        `encoded_video`: H.264 encoded-frame bags.
+        `encoded_video`: H.264 media frames, one access unit each.
 
     Config: `H264EncoderConfig`.
     """
@@ -198,17 +208,22 @@ class H265DecoderConfig(TypedDict, total=False):
 
 
 class H265Decoder(BuiltInNode[H265DecoderConfig]):
-    """Decodes H.265 Annex-B encoded-frame bags to published video surfaces via hardware
-    decode — Vulkan Video on Linux, VideoToolbox on macOS.
+    """Decodes H.265 media frames to published video surfaces via hardware decode —
+    Vulkan Video on Linux, VideoToolbox on macOS.
 
-    `encoded_video` takes encoded-frame bags in the wire shape `H265Encoder` publishes;
-    a bag the decoder cannot read is refused by name, never reshaped. `video` publishes
-    an ordinary `VideoFrame` on a pooled RGBA pixel-buffer surface at the
-    conformance-windowed extent — never the coded picture — carrying the encoded frame's
-    own timestamp and `color_info`, with `fps`, `texture_layout` and the HDR sidecars
-    absent, so an encoder and a `read(port, into=VideoFrame)` consume it unchanged. A
-    decoded frame is buffer-backed, so it reaches a Python kernel through a DLPack
-    landing copy, never by bare surface id.
+    `encoded_video` takes media frames in the layout `H265Encoder` publishes and the
+    moq-dev players read — a QUIC varint timestamp, then one Annex-B access unit, a
+    keyframe opening a group — from any producer; a message that is not one is refused
+    by name. The decoder enters the stream at a group start and, after a read reports a
+    loss, discards to the next one, so it never publishes a picture built from
+    references it did not see. A keyframe whose parameter sets differ from the ones
+    before it reconfigures the session. `video` publishes an ordinary `VideoFrame` on a
+    pooled RGBA pixel-buffer surface at the conformance-windowed extent — never the
+    coded picture — carrying the message's timestamp and the `color_info` the SPS VUI
+    signals, with `fps`, `texture_layout` and the HDR sidecars absent, so an encoder and
+    a `read(port, into=VideoFrame)` consume it unchanged. A decoded frame is
+    buffer-backed, so it reaches a Python kernel through a DLPack landing copy, never by
+    bare surface id.
 
     The decode session is minted at `setup()`. On a device with no hardware decoder for
     the codec — no Vulkan Video decode queue, or no VideoToolbox hardware decoder —
@@ -216,7 +231,7 @@ class H265Decoder(BuiltInNode[H265DecoderConfig]):
     run raises rather than the graph running with an empty channel.
 
     Inputs:
-        `encoded_video` (ordered): H.265 encoded-frame bags to decode.
+        `encoded_video` (ordered): H.265 media frames to decode.
 
     Outputs:
         `video`: Decoded video frames.
@@ -260,14 +275,19 @@ class H265EncoderConfig(TypedDict, total=False):
 
 
 class H265Encoder(BuiltInNode[H265EncoderConfig]):
-    """Encodes published video surfaces to H.265 Annex-B encoded-frame bags via hardware
-    encode — Vulkan Video on Linux, VideoToolbox on macOS.
+    """Encodes published video surfaces to H.265 via hardware encode — Vulkan Video on
+    Linux, VideoToolbox on macOS.
 
     `video` takes any published `VideoFrame` — buffer-backed (camera, test pattern) or
-    texture-backed (a kernel output). `encoded_video` publishes one Annex-B access unit
-    per bag, beside the stream metadata keys. A frame the encoder cannot consume is
-    logged and dropped while the node keeps running. The session mints from the first
-    frame's dimensions and re-mints when the upstream extent changes.
+    texture-backed (a kernel output). `encoded_video` publishes one media frame per
+    access unit, the layout the moq-dev players read: a QUIC varint timestamp in
+    microseconds, then the Annex-B access unit, parameter sets inline before each
+    keyframe. A keyframe opens a group. After its first frame the port's catalog entry
+    is a `VideoEntry` naming the codec string the stream's SPS spells and the coded
+    extent, with no `description`. A frame the encoder cannot consume is logged and
+    dropped while the node keeps running; a write the channel ceiling refuses makes the
+    next frame a keyframe. The session mints from the first frame's dimensions and
+    re-mints when the upstream extent changes.
 
     On a device without a hardware encoder for the codec the session fails to mint: the
     failure latches and every later frame is discarded with one error line; no exception
@@ -277,7 +297,7 @@ class H265Encoder(BuiltInNode[H265EncoderConfig]):
         `video` (ordered): Video frames to encode.
 
     Outputs:
-        `encoded_video`: H.265 encoded-frame bags.
+        `encoded_video`: H.265 media frames, one access unit each.
 
     Config: `H265EncoderConfig`.
     """
@@ -330,32 +350,34 @@ class OpusDecoderConfig(TypedDict, total=False):
 
 
 class OpusDecoder(BuiltInNode[OpusDecoderConfig]):
-    """Decodes Opus encoded-audio-packet bags to audio blocks via libopus.
+    """Decodes Opus media frames to audio blocks via libopus.
 
-    `encoded_audio` takes encoded-audio-packet bags in the wire shape `OpusEncoder`
-    publishes, and declares no window contract — an encoded link carries whole packets,
-    and reframing a compressed bitstream is not a thing the stage could do. A bag the
-    decoder cannot read is refused by name: a `codec` other than `opus`, a `bitstream`
-    that is not msgpack bin, a `sample_rate` other than 48 000, or a `pre_skip` past the
-    5 760 samples one Opus packet can span. `audio` publishes ordinary `AudioBlock` bags
-    — `f32` at 48 000 Hz in the packet's own channel count.
+    `encoded_audio` takes media frames in the layout `OpusEncoder` publishes and the
+    moq-dev players read — a QUIC varint timestamp, then one Opus packet — and declares
+    no window contract: an encoded link carries whole packets, and reframing a
+    compressed bitstream is not a thing the stage could do. The channel count and the
+    encoder's lookahead come from the `OpusHead` in the upstream port's catalog entry;
+    with none there, the packet's TOC names one or two channels and nothing is trimmed.
+    A message that is not a media frame, an `OpusHead` that does not read, and a
+    `pre_skip` past the 5 760 samples one Opus packet can span are refused by name.
+    `audio` publishes ordinary `AudioBlock` bags — `f32` at 48 000 Hz in the stream's
+    own channel count.
 
-    It enters the stream at any packet, since every Opus packet is a sync point, and
-    trims the encoder's `pre_skip` lookahead at entry — so the first block after entry
-    is short by exactly that many samples and every block after it spans the packet's
-    full `sample_count`. Stamps are derived from the entry packet's own stamp plus the
-    samples emitted since, so the first emitted sample is the stamped instant rather
-    than one lookahead later.
+    It enters the stream at any packet, since every Opus packet opens a group, and trims
+    the encoder's `pre_skip` lookahead at entry — so the first block after entry is
+    short by exactly that many samples. Stamps are derived from the entry packet's own
+    stamp plus the samples emitted since, so the first emitted sample is the stamped
+    instant rather than one lookahead later.
 
-    A `sequence_index` step other than one is a gap: the decoder resets, re-enters at
-    that packet, and logs how many it did not see. Nothing is invented to bridge it — no
-    concealment, no FEC decode — so the gap stays derivable from the stamps either side.
+    A read reporting lost packets resets the decoder, re-enters at that packet, and logs
+    how many it did not see. Nothing is invented to bridge the loss — no concealment, no
+    FEC decode — so it stays derivable from the stamps either side.
 
     Inputs:
-        `encoded_audio` (ordered): Opus encoded-audio-packet bags to decode.
+        `encoded_audio` (ordered): Opus media frames to decode.
 
     Outputs:
-        `audio`: Decoded audio blocks at 48 kHz in the packet's own channel count.
+        `audio`: Decoded audio blocks at 48 kHz in the stream's own channel count.
             Catalog entry: `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
 
     Config: `OpusDecoderConfig`.
@@ -384,29 +406,33 @@ class OpusEncoderConfig(TypedDict, total=False):
 
 
 class OpusEncoder(BuiltInNode[OpusEncoderConfig]):
-    """Encodes 20 ms windows of audio to Opus encoded-audio-packet bags via libopus.
+    """Encodes 20 ms windows of audio to Opus via libopus.
 
     `audio` declares `audio_window(sample_rate=48000, dtype="f32", window_size=960,
     hop=960)` and states no channel count, so the engine resamples to Opus's own clock,
     converts to `f32` and frames into 20 ms windows while the count follows whatever the
     source publishes — one microphone and one ambisonic rig reach this encoder with
     nothing configured between them. One to eight channels; more is refused by name.
-    `encoded_audio` publishes one Opus packet per bag, beside the codec, ordering pair
-    and stream format.
+    `encoded_audio` publishes one media frame per Opus packet, the layout the moq-dev
+    players read: a QUIC varint timestamp in microseconds, then the packet, each one
+    opening its own group. The port's catalog entry is an `AudioEntry` — `opus`, 48 000
+    Hz, the channel count — carrying the `OpusHead` hex-encoded in `description`, so a
+    decoder learns the channel count and the encoder's lookahead before the first
+    packet.
 
     The libopus encoder is minted from the first window's channel count — one or two
     channels as a single stream, three to eight as a multistream under channel mapping
     family 1 — and re-mints when the source's count changes, which libopus offers no
     other mechanism for. A re-mint costs prediction state, not decodability, and
-    `sequence_index` does not reset across it, so a consumer still reads a gap as loss
-    and never as a restart. In-band FEC and DTX are off and are not knobs.
+    replaces the port's catalog entry with one naming the new count. In-band FEC and DTX
+    are off and are not knobs.
 
     Inputs:
         `audio` (ordered): Audio to encode, resampled and framed to 20 ms at Opus's own
             rate in the source's own channel count.
 
     Outputs:
-        `encoded_audio`: Opus encoded-audio-packet bags.
+        `encoded_audio`: Opus media frames, one packet each.
 
     Config: `OpusEncoderConfig`.
     """

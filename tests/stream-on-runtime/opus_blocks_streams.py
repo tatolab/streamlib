@@ -5,7 +5,7 @@
 
 from tatolab.stream import OpusDecoder, OpusEncoder, StreamBuilder, stream
 
-from opus_blocks_probes import DecodedAudioBlockProbe, EncodedAudioPacketProbe, StereoToneSource
+from opus_blocks_probes import DecodedAudioBlockProbe, EncodedOpusMediaFrameProbe, StereoToneSource
 
 
 @stream
@@ -41,7 +41,7 @@ def stereo_tone_through_the_opus_pair_probed_on_both_links(stream_builder: Strea
     source = stream_builder.add(StereoToneSource)
     encoder = stream_builder.add(OpusEncoder)
     decoder = stream_builder.add(OpusDecoder)
-    encoded_probe = stream_builder.add(EncodedAudioPacketProbe)
+    encoded_probe = stream_builder.add(EncodedOpusMediaFrameProbe)
     decoded_probe = stream_builder.add(DecodedAudioBlockProbe)
 
     stream_builder.connect(source.output("audio"), encoder.input("audio"))
