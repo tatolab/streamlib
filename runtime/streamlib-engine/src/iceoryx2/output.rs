@@ -32,10 +32,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use super::helper_process_loss_count_board::OutputPortBagCountBoardMirror;
-use super::loss_counters::{
-    OutputPortRefusedBagCounter, OutputPortWrittenBagCounter, RefusedBagCountsByOutputPort,
-    WrittenBagCountsByOutputPort,
-};
+use super::loss_counters::{BagCountsByOutputPort, OutputPortBagCounters};
 use super::{
     ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader,
     MessageGroupBoundary,
@@ -135,17 +132,15 @@ struct ChannelEgress {
     /// here rather than at each refusal, so the number the decision refuses on
     /// and the number it reports cannot drift. A frame past it is refused with
     /// [`Error::PayloadExceedsChannelCeiling`], counted on
-    /// [`Self::refused_bag_counter`], and the stream continues.
+    /// [`Self::bag_counters`], and the stream continues.
     largest_admitted_frame_bytes: usize,
     /// Best-effort tracking of the publisher's current data-segment capacity so
     /// a PowerOfTwo growth event is observable. Sample bytes, never frame bytes:
     /// primed to the hint's own sample size, and bumped (to `next_power_of_two`)
     /// the first time a loan's sample exceeds it.
     current_slot_capacity_bytes: usize,
-    /// This port's share of the writer's refused-bag counts.
-    refused_bag_counter: OutputPortRefusedBagCounter,
-    /// This port's share of the writer's written-bag counts.
-    written_bag_counter: OutputPortWrittenBagCounter,
+    /// This port's share of the writer's refused-bag and written-bag counts.
+    bag_counters: OutputPortBagCounters,
 }
 
 /// One outbound `connect()` link from a source output port, and the notifier
@@ -192,8 +187,7 @@ pub struct OutputWriterInner {
     /// The output ports the processor declared. A write to one of these that
     /// has no channel yet is a drop; a write to any other name is a refusal.
     declared_output_ports: Mutex<HashSet<String>>,
-    refused_bag_counts: Arc<RefusedBagCountsByOutputPort>,
-    written_bag_counts: Arc<WrittenBagCountsByOutputPort>,
+    bag_counts: Arc<BagCountsByOutputPort>,
     /// The node's output-port catalog entries, reached once the processor is
     /// created for its node.
     catalog_entries_of_output_ports: std::sync::OnceLock<Arc<CatalogEntriesOfOutputPorts>>,
@@ -212,8 +206,7 @@ impl OutputWriterInner {
         Self {
             channels: Mutex::new(HashMap::new()),
             declared_output_ports: Mutex::new(HashSet::new()),
-            refused_bag_counts: Arc::new(RefusedBagCountsByOutputPort::default()),
-            written_bag_counts: Arc::new(WrittenBagCountsByOutputPort::default()),
+            bag_counts: Arc::new(BagCountsByOutputPort::default()),
             catalog_entries_of_output_ports: std::sync::OnceLock::new(),
         }
     }
@@ -298,8 +291,7 @@ impl OutputWriterInner {
                     streamlib_ipc_types::iceoryx2_sample_bytes_for_a_channel_frame(
                         expected_payload_bytes + FRAME_HEADER_SIZE,
                     ),
-                refused_bag_counter: self.refused_bag_counts.counter_for_output_port(output_port),
-                written_bag_counter: self.written_bag_counts.counter_for_output_port(output_port),
+                bag_counters: self.bag_counts.counters_for_output_port(output_port),
             },
         );
     }
@@ -314,54 +306,41 @@ impl OutputWriterInner {
         output_port: &str,
         bag_count_board_entry_mirror: OutputPortBagCountBoardMirror,
     ) -> Result<()> {
-        let (refused_bag_counter, written_bag_counter) = self
+        let bag_counters = self
             .channels
             .lock()
             .get(output_port)
-            .map(|egress| {
-                (
-                    egress.refused_bag_counter.clone(),
-                    egress.written_bag_counter.clone(),
-                )
-            })
+            .map(|egress| egress.bag_counters.clone())
             .ok_or_else(|| {
                 Error::Link(format!(
                     "output port '{output_port}' has no channel publisher, so there are no bag \
                      counts of it to mirror"
                 ))
             })?;
-        let already_mirrored = || {
-            Error::Link(format!(
-                "output port '{output_port}' already mirrors its bag counts onto a board entry"
-            ))
-        };
         let refused_bag_board_entry_mirror = bag_count_board_entry_mirror.clone();
-        refused_bag_counter
-            .mirror_every_new_total_into(Box::new(move |refused_bags| {
+        if bag_counters.mirror_every_new_total_into(
+            Box::new(move |refused_bags| {
                 refused_bag_board_entry_mirror.mirror_refused_bags(refused_bags)
-            }))
-            .map_err(|_| already_mirrored())?;
-        written_bag_counter
-            .mirror_every_new_total_into(Box::new(move |written_bags| {
+            }),
+            Box::new(move |written_bags| {
                 bag_count_board_entry_mirror.mirror_written_bags(written_bags)
-            }))
-            .map_err(|_| already_mirrored())
+            }),
+        ) {
+            Ok(())
+        } else {
+            Err(Error::Link(format!(
+                "output port '{output_port}' already mirrors its bag counts onto a board entry"
+            )))
+        }
     }
 
-    /// This processor's per-output-port refused-bag counts, shared with the
-    /// graph node's [`ProcessorMetrics`] so `graph` reads them live.
+    /// This processor's per-output-port refused-bag and written-bag counts,
+    /// shared with the graph node's [`ProcessorMetrics`] so `graph` reads them
+    /// live.
     ///
     /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
-    pub fn refused_bag_counts_by_output_port(&self) -> Arc<RefusedBagCountsByOutputPort> {
-        Arc::clone(&self.refused_bag_counts)
-    }
-
-    /// This processor's per-output-port written-bag counts, shared with the
-    /// graph node's [`ProcessorMetrics`] so `graph` reads them live.
-    ///
-    /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
-    pub fn written_bag_counts_by_output_port(&self) -> Arc<WrittenBagCountsByOutputPort> {
-        Arc::clone(&self.written_bag_counts)
+    pub fn bag_counts_by_output_port(&self) -> Arc<BagCountsByOutputPort> {
+        Arc::clone(&self.bag_counts)
     }
 
     /// Record one outbound `connect()` link from this output port, with the
@@ -411,8 +390,7 @@ impl OutputWriterInner {
         egress.links.retain(|link| link.link_id != link_id);
         if egress.links.is_empty() {
             channels.remove(output_port);
-            self.refused_bag_counts.forget_output_port(output_port);
-            self.written_bag_counts.forget_output_port(output_port);
+            self.bag_counts.forget_output_port(output_port);
             true
         } else {
             false
@@ -453,7 +431,7 @@ impl OutputWriterInner {
             total_len,
             egress.chunk_ceiling_bytes,
             &mut egress.current_slot_capacity_bytes,
-            || egress.refused_bag_counter.record_one_refused_bag(),
+            || egress.bag_counters.record_one_refused_bag(),
         );
         streamlib_ipc_types::emit_channel_egress_admission_tracing(
             None,
@@ -505,7 +483,7 @@ impl OutputWriterInner {
         egress.next_sequence_number =
             sequence_number_following_a_send(egress.next_sequence_number, &send_outcome);
         send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
-        egress.written_bag_counter.record_one_written_bag();
+        egress.bag_counters.record_one_written_bag();
 
         // Wake every downstream listener fd. notify() may transiently fail
         // (e.g. a listener not yet created) — log and continue rather than
@@ -751,13 +729,13 @@ mod tests {
     /// The refused-bag count `graph` would render for `output_port`.
     fn refused_bag_count_of(inner: &OutputWriterInner, output_port: &str) -> u64 {
         inner
-            .refused_bag_counts_by_output_port()
+            .bag_counts_by_output_port()
             .refused_bag_count_snapshot_by_output_port()[output_port]
     }
 
     fn written_bag_count_of(inner: &OutputWriterInner, output_port: &str) -> u64 {
         inner
-            .written_bag_counts_by_output_port()
+            .bag_counts_by_output_port()
             .written_bag_count_snapshot_by_output_port()[output_port]
     }
 
@@ -1470,7 +1448,7 @@ mod tests {
             "L-only",
             crate::iceoryx2::a_notifier_nothing_listens_on(&unique_suffix("refusals-leave/notify")),
         );
-        let refused_bag_counts = inner.refused_bag_counts_by_output_port();
+        let bag_counts = inner.bag_counts_by_output_port();
         inner
             .write_bytes_with_timestamp("out", &[0u8; 128], 0, MessageGroupBoundary::StartsGroup)
             .unwrap_err();
@@ -1479,7 +1457,7 @@ mod tests {
         assert!(inner.remove_channel_link("out", "L-only"));
 
         assert!(
-            refused_bag_counts
+            bag_counts
                 .refused_bag_count_snapshot_by_output_port()
                 .is_empty()
         );

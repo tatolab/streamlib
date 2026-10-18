@@ -599,8 +599,8 @@ pub struct GraphicsKernelDescriptor<'a> {
     pub pipeline_state: GraphicsPipelineState,
     /// Number of descriptor sets in the ring.
     ///
-    /// Render-loop callers pass `frame_index ∈ [0, descriptor_sets_in_flight)`
-    /// to `set_*` and `cmd_bind_and_draw`. Must be ≥ 1.
+    /// Callers pass `frame_index ∈ [0, descriptor_sets_in_flight)` to `set_*`
+    /// and to the draw. Must be ≥ 1.
     pub descriptor_sets_in_flight: u32,
 }
 
@@ -611,8 +611,8 @@ pub enum IndexType {
     Uint32,
 }
 
-/// Viewport rectangle for `cmd_bind_and_draw*` when the pipeline declares
-/// dynamic viewport state.
+/// Viewport rectangle for a draw when the pipeline declares dynamic viewport
+/// state.
 #[derive(Debug, Clone, Copy)]
 pub struct Viewport {
     pub x: f32,

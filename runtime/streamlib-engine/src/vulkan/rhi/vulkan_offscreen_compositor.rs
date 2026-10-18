@@ -73,9 +73,9 @@ const OFFSCREEN_BLIT_VERT_SPV: &[u8] =
 const OFFSCREEN_BLIT_FRAG_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.frag.spv"));
 
-/// Descriptor-set slots the compositor's kernel rotates through: one in flight
-/// on the GPU while the next is staged (`docs/learnings/vulkan-frames-in-flight.md`).
-const OFFSCREEN_COMPOSITOR_DESCRIPTOR_SETS_IN_FLIGHT: u32 = 2;
+/// The one descriptor-set slot the kernel has: every composition submits and
+/// waits, so a slot's bindings never outlive the draw that staged them.
+const OFFSCREEN_COMPOSITOR_DESCRIPTOR_SET_SLOT: u32 = 0;
 
 /// Push-constant block of `offscreen_blit.frag`: `vec2 scale` + `vec2 offset`.
 #[repr(C)]
@@ -86,16 +86,14 @@ struct OffscreenBlitPushConstants {
 }
 
 /// The vertex-buffer-free fullscreen triangle `offscreen_blit.vert` expects.
-fn fullscreen_triangle_draw_call() -> DrawCall {
-    DrawCall {
-        vertex_count: 3,
-        instance_count: 1,
-        first_vertex: 0,
-        first_instance: 0,
-        viewport: None,
-        scissor: None,
-    }
-}
+const FULLSCREEN_TRIANGLE_DRAW_CALL: DrawCall = DrawCall {
+    vertex_count: 3,
+    instance_count: 1,
+    first_vertex: 0,
+    first_instance: 0,
+    viewport: None,
+    scissor: None,
+};
 
 fn build_offscreen_blit_kernel(
     vulkan_device: &Arc<HostVulkanDevice>,
@@ -129,7 +127,7 @@ fn build_offscreen_blit_kernel(
             attachment_formats: AttachmentFormats::color_only(attachment_format),
             dynamic_state: GraphicsDynamicState::ViewportScissor,
         },
-        descriptor_sets_in_flight: OFFSCREEN_COMPOSITOR_DESCRIPTOR_SETS_IN_FLIGHT,
+        descriptor_sets_in_flight: 1,
     };
     VulkanGraphicsKernel::new(vulkan_device, &descriptor)
 }
@@ -148,60 +146,23 @@ impl VulkanOffscreenCompositor {
         })
     }
 
-    /// The attachment format the kernel was built against.
-    pub fn attachment_format(&self) -> TextureFormat {
-        self.attachment_format
-    }
-
-    fn reject_attachment_format_mismatch(
-        &self,
-        actual: TextureFormat,
-        destination_description: &str,
-    ) -> Result<()> {
-        if actual == self.attachment_format {
-            return Ok(());
-        }
-        Err(Error::GpuError(format!(
-            "VulkanOffscreenCompositor: kernel was built for {:?} but {destination_description} \
-             is {actual:?} — compose onto it with a compositor built for its format",
-            self.attachment_format
-        )))
-    }
-
-    /// Stage the descriptor-ring slot: bind `source` at binding 0 and stage the
-    /// scaling push constants.
-    fn stage_source_and_scaling(
-        &self,
-        frame_index: u32,
-        source: &Texture,
-        destination_extent: (u32, u32),
-        scaling: OffscreenCompositorScalingMode,
-    ) -> Result<()> {
-        self.kernel.set_sampled_texture(frame_index, 0, source)?;
-        let (scale_x, scale_y) = scaling.uv_scale_for_source_in_destination(
-            (source.width(), source.height()),
-            destination_extent,
-        );
-        self.kernel.set_push_constants_value(
-            frame_index,
-            &OffscreenBlitPushConstants {
-                scale: [scale_x, scale_y],
-                offset: [0.0, 0.0],
-            },
-        )
-    }
-
     /// Compose `source` into `destination`. Submits and waits; `destination` is
     /// left in `COLOR_ATTACHMENT_OPTIMAL`, `source` in `SHADER_READ_ONLY_OPTIMAL`.
     pub fn compose_to_offscreen_texture(
         &self,
-        frame_index: u32,
         destination: &Texture,
         source: &Texture,
         source_current_layout: VulkanLayout,
         scaling: OffscreenCompositorScalingMode,
     ) -> Result<()> {
-        self.reject_attachment_format_mismatch(destination.format(), "the offscreen destination")?;
+        if destination.format() != self.attachment_format {
+            return Err(Error::GpuError(format!(
+                "VulkanOffscreenCompositor: kernel was built for {:?} but the destination is \
+                 {:?} — compose onto it with a compositor built for its format",
+                self.attachment_format,
+                destination.format()
+            )));
+        }
         // Sampling and rendering the same image is a feedback loop, undefined
         // without ATTACHMENT_FEEDBACK_LOOP setup this kernel doesn't do.
         // Compare the underlying VkImages: distinct `Texture` wrappers can
@@ -238,15 +199,27 @@ impl VulkanOffscreenCompositor {
         }
 
         let destination_extent = (destination.width(), destination.height());
-        self.stage_source_and_scaling(frame_index, source, destination_extent, scaling)?;
+        self.kernel
+            .set_sampled_texture(OFFSCREEN_COMPOSITOR_DESCRIPTOR_SET_SLOT, 0, source)?;
+        let (scale_x, scale_y) = scaling.uv_scale_for_source_in_destination(
+            (source.width(), source.height()),
+            destination_extent,
+        );
+        self.kernel.set_push_constants_value(
+            OFFSCREEN_COMPOSITOR_DESCRIPTOR_SET_SLOT,
+            &OffscreenBlitPushConstants {
+                scale: [scale_x, scale_y],
+                offset: [0.0, 0.0],
+            },
+        )?;
         self.kernel.offscreen_render(
-            frame_index,
+            OFFSCREEN_COMPOSITOR_DESCRIPTOR_SET_SLOT,
             &[OffscreenColorTarget {
                 texture: destination,
                 clear_color: Some([0.0, 0.0, 0.0, 1.0]),
             }],
             destination_extent,
-            OffscreenDraw::Draw(fullscreen_triangle_draw_call()),
+            OffscreenDraw::Draw(FULLSCREEN_TRIANGLE_DRAW_CALL),
         )
     }
 }
@@ -349,7 +322,7 @@ mod tests {
         };
         let compositor = VulkanOffscreenCompositor::new(&device, TextureFormat::Bgra8Unorm)
             .expect("compositor must construct");
-        assert_eq!(compositor.attachment_format(), TextureFormat::Bgra8Unorm);
+        assert_eq!(compositor.attachment_format, TextureFormat::Bgra8Unorm);
     }
 
     #[test]
@@ -362,7 +335,6 @@ mod tests {
         let texture = make_solid_texture(&device, 64, 64, TextureFormat::Bgra8Unorm, [0; 4]);
         let err = compositor
             .compose_to_offscreen_texture(
-                0,
                 &texture,
                 &texture,
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -386,7 +358,6 @@ mod tests {
         let source = make_solid_texture(&device, 64, 64, TextureFormat::Bgra8Unorm, [255; 4]);
         let err = compositor
             .compose_to_offscreen_texture(
-                0,
                 &destination,
                 &source,
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -498,7 +469,6 @@ mod tests {
             VulkanOffscreenCompositor::new(device, TextureFormat::Bgra8Unorm).expect("compositor");
         compositor
             .compose_to_offscreen_texture(
-                0,
                 &destination,
                 &source,
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL,

@@ -2848,8 +2848,8 @@ impl GpuContext {
         crate::vulkan::rhi::VulkanOffscreenCompositor::new(&self.device.inner, attachment_format)
     }
 
-    /// Draw `source` onto `destination` — scaled, aspect-managed, no window —
-    /// through a compositor cached on this context for `destination`'s format.
+    /// Draw `source` onto `destination` — scaled and aspect-managed — through a
+    /// compositor cached on this context for `destination`'s format.
     ///
     /// Submits and waits: `destination` comes back in
     /// `COLOR_ATTACHMENT_OPTIMAL` and `source` in `SHADER_READ_ONLY_OPTIMAL`.
@@ -2877,10 +2877,7 @@ impl GpuContext {
                 }
             }
         };
-        // One slot, always, because the lock is held across stage and submit.
-        const ONLY_DESCRIPTOR_RING_SLOT: u32 = 0;
         compositor.lock().compose_to_offscreen_texture(
-            ONLY_DESCRIPTOR_RING_SLOT,
             destination,
             source,
             source_current_layout,

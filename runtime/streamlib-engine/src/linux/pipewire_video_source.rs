@@ -604,12 +604,7 @@ impl PipeWireCameraNode {
             ))
         })?;
 
-        // One descriptor-ring slot, always: `offscreen_render` submits and
-        // waits, so the staged bindings never outlive the frame that staged
-        // them.
-        const ONLY_DESCRIPTOR_RING_SLOT: u32 = 0;
         self.compositor.compose_to_offscreen_texture(
-            ONLY_DESCRIPTOR_RING_SLOT,
             destination,
             source.texture(),
             source.current_layout(),

@@ -1162,7 +1162,6 @@ fn publish_loss_counts_on_processor_node(
     processor: &ProcessorInstance,
 ) {
     let input_inner = processor.iceoryx2_input_mailboxes_inner();
-    let output_inner = processor.iceoryx2_output_writer_inner();
     insert_loss_counts_on_processor_node_once(
         graph,
         proc_id,
@@ -1174,12 +1173,9 @@ fn publish_loss_counts_on_processor_node(
             discarded_sample_counts_by_inbound_link: input_inner
                 .map(|input_inner| input_inner.discarded_sample_counts_by_inbound_link())
                 .unwrap_or_default(),
-            refused_bag_counts_by_output_port: output_inner
-                .as_ref()
-                .map(|output_inner| output_inner.refused_bag_counts_by_output_port())
-                .unwrap_or_default(),
-            written_bag_counts_by_output_port: output_inner
-                .map(|output_inner| output_inner.written_bag_counts_by_output_port())
+            bag_counts_by_output_port: processor
+                .iceoryx2_output_writer_inner()
+                .map(|output_inner| output_inner.bag_counts_by_output_port())
                 .unwrap_or_default(),
         }),
     );

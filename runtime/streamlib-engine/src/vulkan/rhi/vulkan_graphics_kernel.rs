@@ -9,27 +9,11 @@
 //! every stage's SPIR-V on construction, validates the merged declaration
 //! against the shaders, and exposes typed setters by slot.
 //!
-//! Render-loop shape:
-//!
-//! ```text
-//!     // per frame, caller indexes into a ring of `descriptor_sets_in_flight`:
-//!     let frame = current_frame % descriptor_sets_in_flight;
-//!     kernel.set_sampled_texture(frame, 0, &texture)?;
-//!     kernel.set_push_constants_value(frame, &push)?;
-//!
-//!     device.cmd_begin_rendering(cmd, &rendering_info);  // caller-managed
-//!     kernel.cmd_bind_and_draw(cmd, frame, &DrawCall { ... })?;
-//!     device.cmd_end_rendering(cmd);                      // caller-managed
-//! ```
-//!
-//! The caller drives render-pass scope (begin/end-rendering) because the
-//! same render pass typically dispatches multiple kernels. The kernel
-//! records `vkCmdBindPipeline` / `vkCmdSetViewport` / `vkCmdSetScissor` /
-//! `vkCmdBindDescriptorSets` / `vkCmdPushConstants` /
-//! `vkCmdBindVertexBuffers` / `vkCmdBindIndexBuffer` /
-//! `vkCmdDraw[Indexed]` and lets the caller manage everything else
-//! (command buffer submission, layout transitions on inputs, fence /
-//! semaphore signaling, presentation).
+//! A draw stages a descriptor-ring slot through the `set_*` setters, then
+//! renders into offscreen color attachments with
+//! [`VulkanGraphicsKernel::offscreen_render`], which owns its command buffer,
+//! the render-pass scope and the submit. Layout transitions on inputs stay the
+//! caller's.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -83,7 +67,7 @@ pub struct VulkanGraphicsKernelInner {
     descriptor_pool: vk::DescriptorPool,
     /// Ring of descriptor sets, one per `descriptor_sets_in_flight` slot.
     descriptor_sets: Vec<vk::DescriptorSet>,
-    /// Per-slot pending state for staged setters; `cmd_bind_and_draw*` flushes
+    /// Per-slot pending state for staged setters; a draw flushes
     /// for the slot it's targeting.
     pending: Mutex<Vec<PendingState>>,
     /// Lazy default sampler for [`GraphicsBindingKind::SampledTexture`] bindings.
@@ -533,24 +517,6 @@ impl VulkanGraphicsKernelInner {
             });
             Ok(())
         })
-    }
-
-    /// Record bind + push + draw into `command_buffer` for the given
-    /// `frame_index`. Caller is responsible for the surrounding render-pass
-    /// scope (`vkCmdBeginRendering` / `vkCmdEndRendering`).
-    ///
-    /// Drains the slot's pending `set_*` state on entry — back-to-back
-    /// draws to the same `frame_index` must re-stage every binding +
-    /// push-constant block. Mirrors `VulkanComputeKernel::dispatch`'s
-    /// drain-then-record contract; missing bindings surface as a clear
-    /// error rather than corrupting GPU state.
-    pub fn cmd_bind_and_draw(
-        &self,
-        command_buffer: vk::CommandBuffer,
-        frame_index: u32,
-        draw: &DrawCall,
-    ) -> Result<()> {
-        self.cmd_bind_and_draw_inner(command_buffer, frame_index, DrawKind::Draw(*draw))
     }
 
     /// Render into one or more offscreen color attachments using slot 0 of
@@ -1394,17 +1360,6 @@ impl VulkanGraphicsKernel {
     ) -> Result<()> {
         self.host_inner()
             .set_index_buffer(frame_index, buffer, offset, index_type)
-    }
-
-    /// Record bind + push + draw into `command_buffer` — a raw
-    /// `vk::CommandBuffer` the caller minted and owns.
-    pub fn cmd_bind_and_draw(
-        &self,
-        cmd: vk::CommandBuffer,
-        frame_index: u32,
-        draw: &DrawCall,
-    ) -> Result<()> {
-        self.host_inner().cmd_bind_and_draw(cmd, frame_index, draw)
     }
 
     /// Offscreen render. See [`VulkanGraphicsKernelInner::offscreen_render`].
@@ -2974,7 +2929,17 @@ void main() {
         let pipeline_state = default_pipeline_state();
         let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let kernel = VulkanGraphicsKernel::new(&device, &descriptor).expect("kernel construction");
-        // Don't bind anything before drawing — must fail with a clear error,
+        let color_target_descriptor =
+            crate::core::rhi::TextureDescriptor::new(16, 16, TextureFormat::Bgra8Unorm)
+                .with_usage(crate::core::rhi::TextureUsages::RENDER_ATTACHMENT);
+        let color_target = crate::core::rhi::Texture::from_vulkan(
+            crate::vulkan::rhi::HostVulkanTexture::new_device_local(
+                &device,
+                &color_target_descriptor,
+            )
+            .expect("color target allocation"),
+        );
+        // Nothing staged before the draw — it must fail with a clear error,
         // not corrupt GPU state.
         let draw = crate::core::rhi::DrawCall {
             vertex_count: 3,
@@ -2985,7 +2950,15 @@ void main() {
             scissor: Some(ScissorRect::full(16, 16)),
         };
         let err = kernel
-            .cmd_bind_and_draw(vk::CommandBuffer::null(), 0, &draw)
+            .offscreen_render(
+                0,
+                &[OffscreenColorTarget {
+                    texture: &color_target,
+                    clear_color: None,
+                }],
+                (16, 16),
+                OffscreenDraw::Draw(draw),
+            )
             .err()
             .expect("expected missing-binding error");
         let msg = format!("{err}");

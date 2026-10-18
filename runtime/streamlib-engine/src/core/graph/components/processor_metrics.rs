@@ -7,9 +7,8 @@ use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
 use crate::iceoryx2::{
-    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
-    HelperPlacedProcessorLossCounts, ProcessorLossCountSnapshot, RefusedBagCountsByOutputPort,
-    WrittenBagCountsByOutputPort,
+    BagCountsByOutputPort, DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
+    HelperPlacedProcessorLossCounts, ProcessorLossCountSnapshot,
 };
 
 /// Runtime metrics for a processor.
@@ -57,12 +56,10 @@ pub struct LossCountsOfPortsInThisProcess {
     /// flushed, counted per inbound link and shared live with its input
     /// mailboxes.
     pub discarded_sample_counts_by_inbound_link: Arc<DiscardedSampleCountsByInboundLink>,
-    /// Bags this processor wrote that its output ports refused at the channel
-    /// ceiling, counted per output port and shared live with its output writer.
-    pub refused_bag_counts_by_output_port: Arc<RefusedBagCountsByOutputPort>,
-    /// Bags this processor's output ports sent, counted per output port and
-    /// shared live with its output writer.
-    pub written_bag_counts_by_output_port: Arc<WrittenBagCountsByOutputPort>,
+    /// Bags this processor's output ports refused at the channel ceiling and
+    /// bags they sent, counted per output port and shared live with its output
+    /// writer.
+    pub bag_counts_by_output_port: Arc<BagCountsByOutputPort>,
 }
 
 impl ProcessorLossCounts {
@@ -77,10 +74,10 @@ impl ProcessorLossCounts {
                     .discarded_sample_counts_by_inbound_link
                     .discarded_sample_count_snapshot_by_inbound_link(),
                 refused_bags_by_output_port: counted_here
-                    .refused_bag_counts_by_output_port
+                    .bag_counts_by_output_port
                     .refused_bag_count_snapshot_by_output_port(),
                 written_bags_by_output_port: counted_here
-                    .written_bag_counts_by_output_port
+                    .bag_counts_by_output_port
                     .written_bag_count_snapshot_by_output_port(),
             },
             Self::CountedInItsHelperProcess(helper_placed) => helper_placed.loss_count_snapshot(),
@@ -191,14 +188,14 @@ mod tests {
 
     #[test]
     fn a_processors_metrics_render_every_output_ports_refusals_beside_its_inbound_losses() {
-        let refused = Arc::new(RefusedBagCountsByOutputPort::default());
-        let video = refused.counter_for_output_port("video");
-        let _ = refused.counter_for_output_port("audio");
+        let bag_counts = Arc::new(BagCountsByOutputPort::default());
+        let video = bag_counts.counters_for_output_port("video");
+        let _ = bag_counts.counters_for_output_port("audio");
         video.record_one_refused_bag();
         video.record_one_refused_bag();
 
         let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
-            refused_bag_counts_by_output_port: refused,
+            bag_counts_by_output_port: bag_counts,
             ..Default::default()
         })
         .to_json();
@@ -209,7 +206,7 @@ mod tests {
                 "frames_dropped": 0,
                 "dropped_bags_by_link": {},
                 "refused_bags_by_output_port": { "audio": 0, "video": 2 },
-                "written_bags_by_output_port": {}
+                "written_bags_by_output_port": { "audio": 0, "video": 0 }
             }),
             "refusals stay per output port and never enter the inbound bag total"
         );
@@ -217,18 +214,15 @@ mod tests {
 
     #[test]
     fn a_processors_metrics_render_every_output_ports_sent_bags_apart_from_its_refusals() {
-        let refused = Arc::new(RefusedBagCountsByOutputPort::default());
-        let written = Arc::new(WrittenBagCountsByOutputPort::default());
-        let _ = refused.counter_for_output_port("video");
-        let video = written.counter_for_output_port("video");
-        let _ = written.counter_for_output_port("audio");
+        let bag_counts = Arc::new(BagCountsByOutputPort::default());
+        let video = bag_counts.counters_for_output_port("video");
+        let _ = bag_counts.counters_for_output_port("audio");
         for _ in 0..60 {
             video.record_one_written_bag();
         }
 
         let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
-            refused_bag_counts_by_output_port: refused,
-            written_bag_counts_by_output_port: written,
+            bag_counts_by_output_port: bag_counts,
             ..Default::default()
         })
         .to_json();
@@ -238,7 +232,7 @@ mod tests {
             serde_json::json!({
                 "frames_dropped": 0,
                 "dropped_bags_by_link": {},
-                "refused_bags_by_output_port": { "video": 0 },
+                "refused_bags_by_output_port": { "audio": 0, "video": 0 },
                 "written_bags_by_output_port": { "audio": 0, "video": 60 }
             }),
             "a sent bag is counted per output port and is never a loss"
