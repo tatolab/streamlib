@@ -1,20 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bans wall-clock reads outside the three observability surfaces the plan
-//! permits them on (`docs/plan/ARCHITECTURE.md` §Media I/O
-//! `[one-monotonic-clock]`; rationale in `docs/decisions/one-monotonic-clock.md`).
+//! Bans wall-clock reads outside the surfaces the plan permits them on: three
+//! observability surfaces and the local relay's certificate validity
+//! (`docs/plan/ARCHITECTURE.md` §Media I/O `[one-monotonic-clock]`; rationale
+//! in `docs/decisions/one-monotonic-clock.md`).
 //!
 //! Monotonic is the only legal clock on the data plane. A wall-clock value and a
 //! media timestamp share a unit and are different quantities, so a subtraction
 //! across them is always a bug — and it is an easy bug to write, because
-//! `SystemTime::now()` is the reflexive spelling for "what time is it". The three
-//! surfaces that keep wall clock correlate StreamLib with the outside world and
-//! with other hosts' logs, a job monotonic time cannot do.
+//! `SystemTime::now()` is the reflexive spelling for "what time is it". The
+//! surfaces that keep wall clock correlate StreamLib with the outside world —
+//! other hosts' logs, and a browser checking a certificate's UTC validity — a
+//! job monotonic time cannot do.
 //!
 //! There is no per-line pragma and no opt-out attribute. The file allowlist is
-//! the only way past this gate, every entry names one of exactly three
-//! [`ObservabilitySurface`] variants, and a fourth surface is a plan change — so
+//! the only way past this gate, every entry names one of the
+//! [`PermittedWallClockSurfaceKind`] variants, and another surface is a plan change — so
 //! widening the list means adding a variant, which no one does by accident.
 //!
 //! Cheap substring scan, no `syn` and no compile. Whole-line `//` and `#`
@@ -55,38 +57,41 @@ const SCAN_ROOTS: &[&str] = &[
 
 /// Files whose *source text* spells a banned pattern without reading a clock —
 /// this gate's own constants and fixtures. Not allowlist entries: the
-/// permitted-surface list stays exactly the three the plan names, and nothing
+/// permitted-surface list stays exactly the ones the plan names, and nothing
 /// here is licensed to read a wall clock.
 const SCAN_EXEMPT_FILES: &[&str] = &["xtask/src/check_clock_usage.rs"];
 
-/// The three surfaces the plan permits a wall-clock read on. Adding a fourth is a
-/// plan change, so it is a variant here before it is a line in the allowlist.
+/// The surfaces the plan permits a wall-clock read on. Adding another is a plan
+/// change, so it is a variant here before it is a line in the allowlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObservabilitySurface {
+pub enum PermittedWallClockSurfaceKind {
     LogRecordHostTimestamp,
     LogRecordSourceTimestamp,
     LogFileName,
+    CertificateValidity,
 }
 
-impl ObservabilitySurface {
-    pub const ALL: &'static [ObservabilitySurface] = &[
-        ObservabilitySurface::LogRecordHostTimestamp,
-        ObservabilitySurface::LogRecordSourceTimestamp,
-        ObservabilitySurface::LogFileName,
+impl PermittedWallClockSurfaceKind {
+    pub const ALL: &'static [PermittedWallClockSurfaceKind] = &[
+        PermittedWallClockSurfaceKind::LogRecordHostTimestamp,
+        PermittedWallClockSurfaceKind::LogRecordSourceTimestamp,
+        PermittedWallClockSurfaceKind::LogFileName,
+        PermittedWallClockSurfaceKind::CertificateValidity,
     ];
 
     pub const fn label(self) -> &'static str {
         match self {
-            ObservabilitySurface::LogRecordHostTimestamp => "log record `host_ts`",
-            ObservabilitySurface::LogRecordSourceTimestamp => "log record `source_ts`",
-            ObservabilitySurface::LogFileName => "log file naming",
+            PermittedWallClockSurfaceKind::LogRecordHostTimestamp => "log record `host_ts`",
+            PermittedWallClockSurfaceKind::LogRecordSourceTimestamp => "log record `source_ts`",
+            PermittedWallClockSurfaceKind::LogFileName => "log file naming",
+            PermittedWallClockSurfaceKind::CertificateValidity => "certificate validity",
         }
     }
 }
 
 pub struct PermittedWallClockSurface {
     pub path: &'static str,
-    pub surface: ObservabilitySurface,
+    pub surface: PermittedWallClockSurfaceKind,
     pub reason: &'static str,
 }
 
@@ -95,23 +100,28 @@ pub struct PermittedWallClockSurface {
 const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
     PermittedWallClockSurface {
         path: "runtime/streamlib-engine/src/core/logging/worker.rs",
-        surface: ObservabilitySurface::LogRecordHostTimestamp,
+        surface: PermittedWallClockSurfaceKind::LogRecordHostTimestamp,
         reason: "stamps host receipt, the authoritative sort key across a merged log stream",
     },
     PermittedWallClockSurface {
         path: "runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate/helper_log_record/mod.rs",
-        surface: ObservabilitySurface::LogRecordHostTimestamp,
+        surface: PermittedWallClockSurfaceKind::LogRecordHostTimestamp,
         reason: "stamps host receipt for records relayed from a helper process",
     },
     PermittedWallClockSurface {
         path: "sdk/streamlib-python-wheel/python/tatolab/runtime/_processor_interpreter_bootstrap.py",
-        surface: ObservabilitySurface::LogRecordSourceTimestamp,
+        surface: PermittedWallClockSurfaceKind::LogRecordSourceTimestamp,
         reason: "stamps the record at its Python origin, before the relay hop",
     },
     PermittedWallClockSurface {
         path: "runtime/streamlib-engine/src/core/logging/loaded_stream_log_route.rs",
-        surface: ObservabilitySurface::LogFileName,
+        surface: PermittedWallClockSurfaceKind::LogFileName,
         reason: "mints `started_at_millis`, which humans read off a stream's JSONL file name",
+    },
+    PermittedWallClockSurface {
+        path: "runtime/streamlib-relay-adapter-local/src/local_relay_certificate.rs",
+        surface: PermittedWallClockSurfaceKind::CertificateValidity,
+        reason: "sets and ages the local relay certificate's UTC `notBefore` / `notAfter`, which a browser checks against its own clock",
     },
 ];
 
@@ -189,10 +199,10 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     if report.violations.is_empty() {
         println!(
             "✓ check-clock-usage: {} file(s) scanned across {:?}, no wall-clock read outside \
-             the {} permitted observability surface(s)",
+             the {} permitted surface(s)",
             report.files_scanned,
             SCAN_ROOTS,
-            ObservabilitySurface::ALL.len(),
+            PermittedWallClockSurfaceKind::ALL.len(),
         );
         return Ok(());
     }
@@ -211,13 +221,13 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         );
     }
     eprintln!(
-        "\nWall clock is permitted on exactly {} observability surfaces — {} — and nowhere else. \
+        "\nWall clock is permitted on exactly {} surfaces — {} — and nowhere else. \
          A wall-clock value never enters the data plane and is never compared against, subtracted \
          from, or substituted for a media timestamp: the two share a unit and are different \
          quantities. Use {}. Widening the list is a plan change \
          (`docs/plan/ARCHITECTURE.md` §Media I/O), not a judgement call.",
-        ObservabilitySurface::ALL.len(),
-        ObservabilitySurface::ALL
+        PermittedWallClockSurfaceKind::ALL.len(),
+        PermittedWallClockSurfaceKind::ALL
             .iter()
             .map(|surface| surface.label())
             .collect::<Vec<_>>()
@@ -692,15 +702,15 @@ mod tests {
     }
 
     #[test]
-    fn every_permitted_entry_names_one_of_the_three_surfaces() {
+    fn every_permitted_entry_names_one_of_the_permitted_surfaces() {
         for permitted in PERMITTED_WALL_CLOCK_SURFACES {
             assert!(
-                ObservabilitySurface::ALL.contains(&permitted.surface),
-                "{} names a surface outside the permitted three",
+                PermittedWallClockSurfaceKind::ALL.contains(&permitted.surface),
+                "{} names a surface outside the permitted ones",
                 permitted.path,
             );
         }
-        for surface in ObservabilitySurface::ALL {
+        for surface in PermittedWallClockSurfaceKind::ALL {
             assert!(
                 PERMITTED_WALL_CLOCK_SURFACES
                     .iter()
