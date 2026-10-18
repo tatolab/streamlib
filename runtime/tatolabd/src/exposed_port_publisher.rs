@@ -113,15 +113,46 @@ async fn publish_every_exposed_port(
         forwarded_ports: HashMap::new(),
         why_each_port_is_not_forwarded_yet: HashMap::new(),
     };
-    while let Some(exposed_output_ports) = exposure_changes.next_exposed_output_ports().await {
+    let mut latest_exposed_output_ports = Vec::new();
+    let mut retried_after = A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER;
+    loop {
+        let something_changed = if publisher.why_each_port_is_not_forwarded_yet.is_empty() {
+            exposure_changes.changed().await;
+            true
+        } else {
+            tokio::select! {
+                () = exposure_changes.changed() => true,
+                () = tokio::time::sleep(retried_after) => false,
+            }
+        };
+        if something_changed {
+            let Some(exposed_output_ports) = exposure_changes.the_exposed_output_ports_now().await
+            else {
+                return;
+            };
+            latest_exposed_output_ports = exposed_output_ports;
+            retried_after = A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER;
+        } else {
+            retried_after =
+                (retried_after * 2).min(A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY);
+        }
         let Some(engine) = engine_while_it_runs.upgrade() else {
             return;
         };
         publisher
-            .forward_exactly(&engine, exposed_output_ports)
+            .forward_exactly(&engine, latest_exposed_output_ports.clone())
             .await;
     }
 }
+
+/// How long after a subscription is refused it is first tried again, with no
+/// change to the exposed set between: a node not yet running, a reserved slot
+/// not yet let go.
+const A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER: Duration = Duration::from_millis(250);
+
+/// The longest a refused subscription waits to be tried again, the wait
+/// doubling from [`A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER`].
+const A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY: Duration = Duration::from_secs(10);
 
 /// One relay's session, through which every broadcast at it is published.
 struct RelayDialedByThePublisher {
@@ -334,6 +365,7 @@ fn the_catalog_merged_from_the_entries_of<'entry>(
 /// One exposed port's track at one relay, and the group being written to it.
 struct ExposedPortTrackAtARelay {
     relay_id: RelayInstanceId,
+    levels_served: Vec<OutputPortExposureLevel>,
     track: moq_net::track::Producer,
     group_being_written: Option<moq_net::group::Producer>,
 }
@@ -354,7 +386,9 @@ impl ExposedPortTrackAtARelay {
 /// Writes one exposed port's messages to its track at every relay it reaches:
 /// each message one object stamped from its envelope, a new group at each
 /// group start. After a loss the rest of the current group is abandoned and
-/// writing resumes at the next group start, never inside a group.
+/// writing resumes at the next group start, never inside a group. A relay that
+/// does not serve the level the port is at as a message is written gets
+/// nothing of it, before its track is withdrawn.
 struct ExposedPortTrackWriter {
     group_loss_recovery_gate: MessageGroupLossRecoveryGate,
     tracks_at_each_relay: Vec<ExposedPortTrackAtARelay>,
@@ -368,7 +402,11 @@ impl ExposedPortTrackWriter {
         }
     }
 
-    fn write_message(&mut self, message: MessageReadFromInputPort) {
+    fn write_message(
+        &mut self,
+        message: MessageReadFromInputPort,
+        level_now: OutputPortExposureLevel,
+    ) {
         let disposition = self
             .group_loss_recovery_gate
             .admit_message(message.group_boundary, message.lost_since_last_read);
@@ -381,6 +419,10 @@ impl ExposedPortTrackWriter {
         let timestamp = the_object_timestamp_of(message.timestamp_ns);
         let payload = Bytes::from(message.payload_bytes);
         for track in &mut self.tracks_at_each_relay {
+            if !track.levels_served.contains(&level_now) {
+                track.finish_the_group_being_written();
+                continue;
+            }
             if message.group_boundary == MessageGroupBoundary::StartsGroup {
                 track.finish_the_group_being_written();
                 track.group_being_written = match track.track.append_group() {
@@ -413,9 +455,15 @@ impl ExposedPortTrackWriter {
             .any(|track| &track.relay_id == relay_id)
     }
 
-    fn add_the_track_at(&mut self, relay_id: RelayInstanceId, track: moq_net::track::Producer) {
+    fn add_the_track_at(
+        &mut self,
+        relay_id: RelayInstanceId,
+        levels_served: Vec<OutputPortExposureLevel>,
+        track: moq_net::track::Producer,
+    ) {
         self.tracks_at_each_relay.push(ExposedPortTrackAtARelay {
             relay_id,
+            levels_served,
             track,
             group_being_written: None,
         });
@@ -486,9 +534,10 @@ struct ExposedPortPublisher {
 }
 
 impl ExposedPortPublisher {
-    /// Forward exactly `exposed_output_ports`: subscribe to each not yet
-    /// forwarded, move each whose level changed onto the relays it now
-    /// reaches, withdraw every other, and publish each broadcast's catalog.
+    /// Forward exactly those of `exposed_output_ports` a joined relay serves:
+    /// subscribe to each not yet forwarded, move each whose level changed onto
+    /// the relays it now reaches, withdraw every other, and publish each
+    /// broadcast's catalog.
     async fn forward_exactly(
         &mut self,
         engine: &Runner,
@@ -497,6 +546,11 @@ impl ExposedPortPublisher {
         let still_exposed: HashMap<ExposedOutputPortAddress, ExposedOutputPortOfALoadedStream> =
             exposed_output_ports
                 .into_iter()
+                .filter(|exposed_port| {
+                    self.relays
+                        .iter()
+                        .any(|relay| relay.serves(exposed_port.level))
+                })
                 .map(|exposed_port| (ExposedOutputPortAddress::of(&exposed_port), exposed_port))
                 .collect();
         self.forwarded_ports.retain(|address, forwarded| {
@@ -590,7 +644,11 @@ impl ExposedPortPublisher {
                         "the exposed port `{address}` is announced as the track `{}`",
                         address.track_name()
                     );
-                    track_writer.add_the_track_at(relay.relay_id.clone(), track);
+                    track_writer.add_the_track_at(
+                        relay.relay_id.clone(),
+                        relay.levels_served.clone(),
+                        track,
+                    );
                 }
                 Err(refusal) => tracing::error!(
                     relay = %relay.relay_id,
@@ -653,24 +711,27 @@ async fn subscribe_to(
 const HOW_OFTEN_A_HELPERS_ANSWER_IS_ASKED_FOR: Duration = Duration::from_millis(50);
 
 /// Write what `subscription` reads into `track_writer`, once its source has
-/// opened its end of the channel; a helper's refusal ends the read, said once.
+/// opened its end of the channel. When the read ends — a helper's refusal,
+/// said once, or the subscription ending — its tracks are withdrawn at once.
 async fn read_into(
     mut subscription: ExposedOutputPortSubscription,
     track_writer: Arc<Mutex<ExposedPortTrackWriter>>,
 ) {
-    if let Err(reason) = the_source_opened_its_end(|| subscription.source_wiring()).await {
-        tracing::warn!(
+    match the_source_opened_its_end(|| subscription.source_wiring()).await {
+        Ok(()) => {
+            while let Some(message) = subscription.next_message().await {
+                lock_the_writer(&track_writer).write_message(message, subscription.level_now());
+            }
+        }
+        Err(reason) => tracing::warn!(
             "the exposed port `{}/{}/{}` is not published: its helper could not open its \
              port: {reason}",
             subscription.stream_name(),
             subscription.node_name(),
             subscription.port_name()
-        );
-        return;
+        ),
     }
-    while let Some(message) = subscription.next_message().await {
-        lock_the_writer(&track_writer).write_message(message);
-    }
+    lock_the_writer(&track_writer).withdraw_every_track_but_those_at(|_| false);
 }
 
 /// Wait until `source_wiring` says the source opened its end of the channel,
@@ -781,7 +842,14 @@ mod tests {
         let track = a_standalone_track();
         let mut reader = ReaderOfAStandaloneTrack::subscribed_to(&track);
         let mut writer = ExposedPortTrackWriter::new();
-        writer.add_the_track_at(RelayInstanceId("local-loopback".into()), track);
+        writer.add_the_track_at(
+            RelayInstanceId("local-loopback".into()),
+            vec![
+                OutputPortExposureLevel::Private,
+                OutputPortExposureLevel::Public,
+            ],
+            track,
+        );
 
         for message in [
             a_message(b"k0", StartsGroup, 0),
@@ -792,7 +860,7 @@ mod tests {
             a_message(b"d3", ContinuesGroup, 0),
             a_message(b"k2-after-a-loss", StartsGroup, 1),
         ] {
-            writer.write_message(message);
+            writer.write_message(message, OutputPortExposureLevel::Public);
             reader.take_what_arrived();
         }
         assert_eq!(
@@ -809,15 +877,68 @@ mod tests {
     #[test]
     fn a_track_added_inside_a_group_begins_at_the_next_group_start() {
         let mut writer = ExposedPortTrackWriter::new();
-        writer.write_message(a_message(b"k0", StartsGroup, 0));
+        writer.write_message(
+            a_message(b"k0", StartsGroup, 0),
+            OutputPortExposureLevel::Public,
+        );
         let track = a_standalone_track();
         let mut reader = ReaderOfAStandaloneTrack::subscribed_to(&track);
-        writer.add_the_track_at(RelayInstanceId("local-every-interface".into()), track);
-        writer.write_message(a_message(b"d0", ContinuesGroup, 0));
+        writer.add_the_track_at(
+            RelayInstanceId("local-every-interface".into()),
+            vec![OutputPortExposureLevel::Public],
+            track,
+        );
+        writer.write_message(
+            a_message(b"d0", ContinuesGroup, 0),
+            OutputPortExposureLevel::Public,
+        );
         reader.take_what_arrived();
-        writer.write_message(a_message(b"k1", StartsGroup, 0));
+        writer.write_message(
+            a_message(b"k1", StartsGroup, 0),
+            OutputPortExposureLevel::Public,
+        );
         reader.take_what_arrived();
         assert_eq!(reader.groups_read, vec![vec![b"k1".to_vec()]]);
+    }
+
+    /// A level lowered while the port is written takes it off a relay that no
+    /// longer serves it from the next message on, before any read of the
+    /// exposed set withdraws the track; the relay that still serves it carries on.
+    #[test]
+    fn a_lowered_level_stops_the_writes_to_a_relay_that_no_longer_serves_it_at_once() {
+        use OutputPortExposureLevel::{Internal, Private, Public};
+        let loopback_track = a_standalone_track();
+        let every_interface_track = a_standalone_track();
+        let mut at_loopback = ReaderOfAStandaloneTrack::subscribed_to(&loopback_track);
+        let mut at_every_interface =
+            ReaderOfAStandaloneTrack::subscribed_to(&every_interface_track);
+        let mut writer = ExposedPortTrackWriter::new();
+        writer.add_the_track_at(
+            RelayInstanceId("local-loopback".into()),
+            vec![Private, Public],
+            loopback_track,
+        );
+        writer.add_the_track_at(
+            RelayInstanceId("local-every-interface".into()),
+            vec![Public],
+            every_interface_track,
+        );
+
+        for (message, level_now) in [
+            (a_message(b"k0", StartsGroup, 0), Public),
+            (a_message(b"d0", ContinuesGroup, 0), Private),
+            (a_message(b"k1", StartsGroup, 0), Private),
+            (a_message(b"k2", StartsGroup, 0), Internal),
+        ] {
+            writer.write_message(message, level_now);
+            at_loopback.take_what_arrived();
+            at_every_interface.take_what_arrived();
+        }
+        assert_eq!(
+            at_loopback.groups_read,
+            vec![vec![b"k0".to_vec(), b"d0".to_vec()], vec![b"k1".to_vec()]]
+        );
+        assert_eq!(at_every_interface.groups_read, vec![vec![b"k0".to_vec()]]);
     }
 
     /// The catalog copies each entry under its section, keyed by the track

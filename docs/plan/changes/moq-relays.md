@@ -172,8 +172,9 @@ reads them). Consumers (`examples/camera-audio-recorder`, `camera-webrtc-publish
 - **The publisher** is `D/exposed_port_publisher.rs`, one per `tatolabd`, holding one subscription per
   exposed port of every loaded stream and, per adapter instance whose levels include the port's,
   one `moq_net::broadcast::Producer` per stream named `<root>/<machine>/<stream>.hang`, one track
-  `<node>/<port>`, each object written with `group.write_frame(Timestamp::from(timestamp_ns),
-  payload)`, a new group at `StartsGroup`. Under backpressure (the forwarder full) it abandons the
+  `<node>/<port>` on a nanosecond timescale, each object written with
+  `group.write_frame(Timestamp::from_nanos(timestamp_ns), payload)` (a stamp before zero reads as
+  zero), a new group at `StartsGroup`. Under backpressure (the forwarder full) it abandons the
   rest of the current group and resumes at the next `StartsGroup`. The catalog is a
   `hang::catalog::Catalog` assembled from the ports' entries by section under their track names,
   re-published as `catalog.json` and `catalog.json.z` when an entry or the exposed set changes;

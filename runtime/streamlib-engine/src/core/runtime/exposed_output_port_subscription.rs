@@ -25,8 +25,9 @@ use crate::core::compiler::compiler_ops::{
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    ExposedOutputPortsComponent, GraphNodeWithComponents, OutputLinkPortRef,
-    OutputPortExposureLevel, OutputPortReaderOutsideItsStream, ProcessorUniqueId,
+    ExposedOutputPortsComponent, GraphNodeWithComponents, LevelOfAnExposedOutputPortNow,
+    OutputLinkPortRef, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
+    ProcessorUniqueId,
 };
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
@@ -91,37 +92,57 @@ impl ExposureChangeReceiver {
 
     /// The exposed output ports of every loaded stream: at once on the first
     /// call, then once something changed since the previous one. `None` once
-    /// the engine is gone, or once a read of them failed, which is logged.
+    /// the engine is gone.
     pub async fn next_exposed_output_ports(
         &mut self,
     ) -> Option<Vec<ExposedOutputPortOfALoadedStream>> {
+        self.changed().await;
+        self.the_exposed_output_ports_now().await
+    }
+
+    /// Wait until something changed since the previous wait; at once the first
+    /// time. Dropping the wait before it ends loses no change.
+    pub async fn changed(&mut self) {
         self.change_arrived.notified().await;
-        let engine = self.engine.clone();
-        // A stream's graph lock is held across a compile, which may take a
-        // processor's whole setup, so the read waits off the async workers.
-        let read = tokio::task::spawn_blocking(move || {
-            let engine = engine.upgrade()?;
-            Some(
-                engine
-                    .every_loaded_stream()
-                    .iter()
-                    .flat_map(|stream| stream.exposed_output_ports())
-                    .collect(),
-            )
-        })
-        .await;
-        match read {
-            Ok(exposed_output_ports) => exposed_output_ports,
-            Err(read_failure) => {
-                tracing::error!(
-                    "the exposed output ports could not be read, so no change to them is read \
-                     again: {read_failure}"
-                );
-                None
+    }
+
+    /// The exposed output ports of every loaded stream as they stand, or `None`
+    /// once the engine is gone. A read that fails is logged and made again.
+    pub async fn the_exposed_output_ports_now(
+        &self,
+    ) -> Option<Vec<ExposedOutputPortOfALoadedStream>> {
+        loop {
+            let engine = self.engine.clone();
+            // A stream's graph lock is held across a compile, which may take a
+            // processor's whole setup, so the read waits off the async workers.
+            let read = tokio::task::spawn_blocking(move || {
+                let engine = engine.upgrade()?;
+                Some(
+                    engine
+                        .every_loaded_stream()
+                        .iter()
+                        .flat_map(|stream| stream.exposed_output_ports())
+                        .collect(),
+                )
+            })
+            .await;
+            match read {
+                Ok(exposed_output_ports) => return exposed_output_ports,
+                Err(read_failure) => {
+                    tracing::error!(
+                        "the exposed output ports could not be read, and are read again in \
+                         {A_FAILED_READ_OF_THE_EXPOSED_SET_IS_MADE_AGAIN_AFTER:?}: {read_failure}"
+                    );
+                    tokio::time::sleep(A_FAILED_READ_OF_THE_EXPOSED_SET_IS_MADE_AGAIN_AFTER).await;
+                }
             }
         }
     }
 }
+
+/// How long after a failed read of the exposed set it is read again.
+const A_FAILED_READ_OF_THE_EXPOSED_SET_IS_MADE_AGAIN_AFTER: std::time::Duration =
+    std::time::Duration::from_secs(1);
 
 impl LoadedStreamInThisRuntime {
     /// Every output port this stream exposes now, with its level and current
@@ -200,7 +221,7 @@ fn subscribe_holding_the_source_side_open(
     node_name: &str,
     port_name: &str,
 ) -> Result<ExposedOutputPortSubscription> {
-    let (node_display_name, port_cast, source_side) =
+    let (node_display_name, port_cast, level_now, source_side) =
         compiler.scope(|graph, _tx| -> Result<_> {
             refuse_a_reader_the_port_does_not_allow(
                 graph,
@@ -219,10 +240,18 @@ fn subscribe_holding_the_source_side_open(
                 )));
             }
             let node_display_name = node.display_name.clone();
+            let level_now = node
+                .get::<ExposedOutputPortsComponent>()
+                .and_then(|exposed_ports| exposed_ports.level_now_of(&port_cast))
+                .ok_or_else(|| {
+                    Error::Link(format!(
+                        "port `{port_cast}` of node `{node_display_name}` is not exposed"
+                    ))
+                })?;
             let source = OutputLinkPortRef::new(node.id.clone(), port_cast.as_str());
             let source_side =
                 open_the_source_side_for_the_runtimes_publisher(graph, &source, &iceoryx2_node)?;
-            Ok((node_display_name, port_cast, source_side))
+            Ok((node_display_name, port_cast, level_now, source_side))
         })?;
     let forwarder = start_reserved_slot_forwarder(
         ReservedSlotOfAChannelToForward {
@@ -237,6 +266,7 @@ fn subscribe_holding_the_source_side_open(
     Ok(ExposedOutputPortSubscription {
         forwarder,
         source_side,
+        level_now,
         stream_name,
         node_name: node_display_name,
         port_name: port_cast,
@@ -261,6 +291,7 @@ pub struct ExposedOutputPortSubscription {
     // Dropped first: the reader stops before the channel it reads is released.
     forwarder: ReservedSlotForwarder<MessageReadFromInputPort>,
     source_side: SourceSideHeldOpenForTheRuntimesPublisher,
+    level_now: LevelOfAnExposedOutputPortNow,
     stream_name: String,
     node_name: String,
     port_name: String,
@@ -291,6 +322,12 @@ impl ExposedOutputPortSubscription {
                 .wire_reply_awaited_from_the_source
                 .as_deref(),
         )
+    }
+
+    /// The level the port is at now, set the moment the level is, and
+    /// internal for good once the port is no longer exposed or its node left.
+    pub fn level_now(&self) -> OutputPortExposureLevel {
+        self.level_now.read()
     }
 
     /// The stream the port belongs to.
@@ -624,6 +661,30 @@ mod tests {
             written_while_not_reading + 1,
             "every message is read or told as lost"
         );
+    }
+
+    /// A subscription reads its port's level the moment it is set, with no
+    /// read of the exposed set between; once internal it stays internal, even
+    /// when the port is exposed again, since that is another exposure.
+    #[test]
+    fn a_subscription_reads_a_level_the_moment_it_is_set() {
+        use OutputPortExposureLevel::{Internal, Private, Public};
+        let camera = ARunningCameraWithNoLinks::load();
+        camera
+            .stream
+            .set_output_port_exposure_level("camera", "out1", Public)
+            .unwrap();
+        let subscription = camera.subscribe("out1").unwrap();
+        assert_eq!(subscription.level_now(), Public);
+
+        for level in [Private, Internal, Public] {
+            camera
+                .stream
+                .set_output_port_exposure_level("camera", "out1", level)
+                .unwrap();
+            let read_as = if level == Public { Internal } else { level };
+            assert_eq!(subscription.level_now(), read_as, "after setting {level}");
+        }
     }
 
     #[test]

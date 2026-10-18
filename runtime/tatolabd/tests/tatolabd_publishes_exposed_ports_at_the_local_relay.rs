@@ -273,30 +273,45 @@ fn the_number_in(object: &ObjectRead) -> u64 {
 
 /// Every object is the bytes the node wrote, stamped from its envelope, in
 /// the groups the node opened: each group starts at a multiple of three and
-/// holds the messages after it until the next.
+/// holds the messages after it until the next. A reader that falls behind may
+/// be handed a later group in place of an earlier one, as live delivery does,
+/// but never part of a group.
 fn assert_the_objects_are_the_messages_as_written(objects: &[ObjectRead]) {
-    let numbers: Vec<u64> = objects.iter().map(the_number_in).collect();
-    assert!(
-        numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
-        "the objects are consecutive messages: {numbers:?}"
-    );
     for object in objects {
         assert_eq!(
             object.timestamp_ns,
             u128::from(the_number_in(object)) * 1_000_000
         );
     }
-    assert_eq!(
-        numbers[0] % MESSAGES_PER_GROUP,
-        0,
-        "a subscriber enters at a group the writer opened: {numbers:?}"
-    );
-    let group_sequences: Vec<u64> = objects.iter().map(|object| object.group_sequence).collect();
-    for (pair, numbers) in group_sequences.windows(2).zip(numbers.windows(2)) {
+    let mut groups: Vec<(u64, Vec<u64>)> = Vec::new();
+    for object in objects {
+        match groups.last_mut() {
+            Some((group_sequence, numbers)) if *group_sequence == object.group_sequence => {
+                numbers.push(the_number_in(object))
+            }
+            _ => groups.push((object.group_sequence, vec![the_number_in(object)])),
+        }
+    }
+    for (group_sequence, numbers) in &groups {
         assert_eq!(
-            pair[1] != pair[0],
-            numbers[1] % MESSAGES_PER_GROUP == 0,
-            "a new group begins exactly where the writer opened one: {numbers:?} in {pair:?}"
+            numbers[0] % MESSAGES_PER_GROUP,
+            0,
+            "group {group_sequence} starts where the writer opened one: {numbers:?}"
+        );
+        assert!(
+            numbers
+                .iter()
+                .enumerate()
+                .all(|(offset, number)| *number == numbers[0] + offset as u64)
+                && numbers.len() as u64 <= MESSAGES_PER_GROUP,
+            "group {group_sequence} holds the messages of one group the writer opened, in \
+             order: {numbers:?}"
+        );
+    }
+    for pair in groups.windows(2) {
+        assert!(
+            pair[1].0 > pair[0].0 && pair[1].1[0] > *pair[0].1.last().unwrap(),
+            "groups arrive in the writer's order: {groups:?}"
         );
     }
 }
