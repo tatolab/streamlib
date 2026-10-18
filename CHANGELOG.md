@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.51.0](https://github.com/tatolab/streamlib/compare/v0.50.0...v0.51.0) (2026-10-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** one publisher in tatolabd forwards every exposed port to the local relay as a track, with the catalog merged from the ports' entries ([#2853](https://github.com/tatolab/streamlib/issues/2853))
+
+### Features
+
+* **engine:** one publisher in tatolabd forwards every exposed port to the local relay as a track, with the catalog merged from the ports' entries ([#2853](https://github.com/tatolab/streamlib/issues/2853)) ([ead0597](https://github.com/tatolab/streamlib/commit/ead05970664b202cfc5d1ef16e1828158ecfc64c))
+
 ## [0.50.0](https://github.com/tatolab/streamlib/compare/v0.49.0...v0.50.0) (2026-10-18)
 
 
