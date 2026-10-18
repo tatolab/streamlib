@@ -19,16 +19,16 @@ terms are in [`LICENSE`](LICENSE) and are not reproduced below.
 
 ## Overview
 
-- **MIT License** — 559 crates
+- **MIT License** — 590 crates
 - **Apache License 2.0** — 26 crates
 - **BSD 3-Clause "New" or "Revised" License** — 24 crates
+- **Unicode License v3** — 19 crates
 - **BSD Zero Clause License** — 3 crates
 - **ISC License** — 2 crates
 - **zlib License** — 2 crates
 - **BSD 2-Clause "Simplified" License** — 1 crate
 - **Boost Software License 1.0** — 1 crate
 - **Mozilla Public License 2.0** — 1 crate
-- **Unicode License v3** — 1 crate
 
 ## Licence texts
 
@@ -5660,6 +5660,43 @@ void Test(const TestContext& ctx);
 
 Used by:
 
+- [wasmtimer 0.4.3](https://github.com/whizsid/wasmtimer-rs)
+
+````text
+// Copyright 2019 Pierre Krieger
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+mod js;
+pub mod std;
+#[cfg(feature = "tokio")]
+pub(crate) mod timer;
+#[cfg(feature = "tokio")]
+pub mod tokio;
+#[cfg(feature = "tokio-util")]
+pub mod tokio_util;
+
+````
+
+### MIT License
+
+Used by:
+
 - [atomic-waker 1.1.2](https://github.com/smol-rs/atomic-waker)
 - [futures-lite 2.6.1](https://github.com/smol-rs/futures-lite)
 
@@ -5997,7 +6034,9 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [idna 1.1.0](https://github.com/servo/rust-url/)
 - [percent-encoding 2.3.2](https://github.com/servo/rust-url/)
+- [url 2.5.8](https://github.com/servo/rust-url)
 
 ````text
 Copyright (c) 2013-2025 The rust-url developers
@@ -6325,7 +6364,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [flate2 1.1.9](https://github.com/rust-lang/flate2-rs)
+- [flate2 1.1.10](https://github.com/rust-lang/flate2-rs)
 
 ````text
 Copyright (c) 2014-2026 Alex Crichton
@@ -6392,6 +6431,8 @@ Used by:
 - [either 1.15.0](https://github.com/rayon-rs/either)
 - [itertools 0.13.0](https://github.com/rust-itertools/itertools)
 - [petgraph 0.8.3](https://github.com/petgraph/petgraph)
+- [serde_with 3.22.0](https://github.com/jonasbb/serde_with/)
+- [serde_with_macros 3.22.0](https://github.com/jonasbb/serde_with/)
 
 ````text
 Copyright (c) 2015
@@ -6502,6 +6543,7 @@ Used by:
 - [peeking_take_while 0.1.2](https://github.com/fitzgen/peeking_take_while)
 - [unicode-normalization 0.1.25](https://github.com/unicode-rs/unicode-normalization)
 - [unicode-segmentation 1.12.0](https://github.com/unicode-rs/unicode-segmentation)
+- [unicode-xid 0.2.6](https://github.com/unicode-rs/unicode-xid)
 
 ````text
 Copyright (c) 2015 The Rust Project Developers
@@ -7330,6 +7372,40 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [stable_deref_trait 1.2.1](https://github.com/storyyeller/stable_deref_trait)
+
+````text
+Copyright (c) 2017 Robert Grosse
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+````
+
+### MIT License
+
+Used by:
+
 - [foreign-types-macros 0.2.3](https://github.com/sfackler/foreign-types)
 - [foreign-types-shared 0.3.1](https://github.com/sfackler/foreign-types)
 - [foreign-types 0.5.0](https://github.com/sfackler/foreign-types)
@@ -7355,6 +7431,40 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+````
+
+### MIT License
+
+Used by:
+
+- [generator 0.8.11](https://github.com/Xudong-Huang/generator-rs.git)
+
+````text
+Copyright (c) 2017 Xudong Huang
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 ````
 
 ### MIT License
@@ -7570,6 +7680,41 @@ Used by:
 
 ````text
 Copyright (c) 2018 The Servo Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
+- [pin-utils 0.1.1](https://github.com/rust-lang/pin-utils)
+
+````text
+Copyright (c) 2018 The pin-utils authors
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -8062,6 +8207,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [loom 0.7.2](https://github.com/tokio-rs/loom)
 - [slab 0.4.12](https://github.com/tokio-rs/slab)
 
 ````text
@@ -9152,6 +9298,41 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [idna_adapter 1.2.2](https://github.com/hsivonen/idna_adapter)
+
+````text
+Copyright (c) The rust-url developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
 - [tar 0.4.45](https://github.com/alexcrichton/tar-rs)
 
 ````text
@@ -9222,6 +9403,23 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [synstructure 0.14.0](https://github.com/mystor/synstructure)
+
+````text
+Copyright 2016 Nika Layzell
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
 - [rand 0.10.3](https://github.com/rust-random/rand)
 - [rand 0.8.5](https://github.com/rust-random/rand)
 - [rand 0.9.4](https://github.com/rust-random/rand)
@@ -9257,6 +9455,36 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
+- [wasmtimer 0.4.3](https://github.com/whizsid/wasmtimer-rs)
+
+````text
+Copyright 2019 Pierre Krieger
+Copyright (c) 2019 Tokio Contributors
+Copyright 2023 Ramesh Kithsiri
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS
+OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ````
 
@@ -9364,6 +9592,41 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
+
+````
+
+### MIT License
+
+Used by:
+
+- [utf8_iter 1.0.4](https://github.com/hsivonen/utf8_iter)
+
+````text
+Copyright Mozilla Foundation
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 ````
 
@@ -9479,8 +9742,11 @@ SOFTWARE.
 
 Used by:
 
+- [darling 0.23.0](https://github.com/TedDriggs/darling)
 - [darling 0.24.1](https://github.com/TedDriggs/darling)
+- [darling_core 0.23.0](https://github.com/TedDriggs/darling)
 - [darling_core 0.24.1](https://github.com/TedDriggs/darling)
+- [darling_macro 0.23.0](https://github.com/TedDriggs/darling)
 - [darling_macro 0.24.1](https://github.com/TedDriggs/darling)
 
 ````text
@@ -9982,6 +10248,36 @@ SOFTWARE.
 
 Used by:
 
+- [convert_case 0.10.0](https://github.com/rutrum/convert-case)
+
+````text
+MIT License
+
+Copyright (c) 2025 rutrum
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+````
+
+### MIT License
+
+Used by:
+
 - [block2 0.5.1](https://github.com/madsmtm/objc2)
 - [block2 0.6.2](https://github.com/madsmtm/objc2)
 - [block 0.1.6](http://github.com/SSheldon/rust-block)
@@ -9992,6 +10288,7 @@ Used by:
 - [dispatch2 0.3.1](https://github.com/madsmtm/objc2)
 - [dispatch 0.2.0](http://github.com/SSheldon/rust-dispatch)
 - [dpi 0.1.2](https://github.com/rust-windowing/winit)
+- [hang 0.21.16](https://github.com/moq-dev/moq)
 - [iceoryx2-bb-concurrency 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
 - [iceoryx2-bb-container 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
 - [iceoryx2-bb-derive-macros 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
@@ -10014,7 +10311,12 @@ Used by:
 - [iceoryx2-pal-posix 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
 - [iceoryx2-pal-print 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
 - [iceoryx2 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [kio 0.6.2](https://github.com/moq-dev/moq)
 - [malloc_buf 0.0.6](https://github.com/SSheldon/malloc_buf)
+- [moq-flate 0.2.0](https://github.com/moq-dev/moq)
+- [moq-json 0.5.13](https://github.com/moq-dev/moq)
+- [moq-net 0.3.15](https://github.com/moq-dev/moq)
+- [moq-pattern 0.1.2](https://github.com/moq-dev/moq)
 - [ndk-context 0.1.1](https://github.com/rust-windowing/android-ndk-rs)
 - [ndk-sys 0.6.0+11769913](https://github.com/rust-mobile/ndk)
 - [ndk 0.9.0](https://github.com/rust-mobile/ndk)
@@ -10055,6 +10357,8 @@ Used by:
 - v4l2-sys-mit 0.3.0
 - [wasip2 1.0.2+wasi-0.2.9](https://github.com/bytecodealliance/wasi-rs)
 - [wasip3 0.4.0+wasi-0.3.0-rc-2026-01-06](https://github.com/bytecodealliance/wasi-rs)
+- [web-async 0.1.5](https://github.com/kixelated/web-rs)
+- [web-transport-trait 0.4.0](https://github.com/moq-dev/web-transport)
 - [windows-core 0.62.2](https://github.com/microsoft/windows-rs)
 - [windows-implement 0.60.2](https://github.com/microsoft/windows-rs)
 - [windows-interface 0.59.3](https://github.com/microsoft/windows-rs)
@@ -10213,6 +10517,7 @@ SOFTWARE.
 Used by:
 
 - [miniz_oxide 0.8.9](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
+- [miniz_oxide 0.9.1](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 
 ````text
 MIT License
@@ -10248,6 +10553,7 @@ SOFTWARE.
 Used by:
 
 - [miniz_oxide 0.8.9](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
+- [miniz_oxide 0.9.1](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 
 ````text
 MIT License
@@ -10462,6 +10768,7 @@ Used by:
 - [concurrent-queue 2.5.0](https://github.com/smol-rs/concurrent-queue)
 - [ctrlc 3.5.2](https://github.com/Detegr/rust-ctrlc.git)
 - [cudarc 0.19.4](https://github.com/chelsea0x3b/cudarc)
+- [displaydoc 0.2.7](https://github.com/yaahc/displaydoc)
 - [dyn-clone 1.0.20](https://github.com/dtolnay/dyn-clone)
 - [endi 1.1.1](https://github.com/zeenix/endi)
 - [event-listener-strategy 0.5.4](https://github.com/smol-rs/event-listener-strategy)
@@ -10989,6 +11296,38 @@ The MIT License (MIT)
 
 Copyright (c) 2015-2020 Julien Cretin
 Copyright (c) 2017-2020 Google Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
+- [derive_more-impl 2.1.1](https://github.com/JelteF/derive_more)
+- [derive_more 2.1.1](https://github.com/JelteF/derive_more)
+
+````text
+The MIT License (MIT)
+
+Copyright (c) 2016 Jelte Fennema
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -11855,6 +12194,79 @@ Except as contained in this notice, the name of a copyright holder shall
 not be used in advertising or otherwise to promote the sale, use or other
 dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
+
+````
+
+### Unicode License v3
+
+Used by:
+
+- [icu_collections 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_locale_core 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_normalizer 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_normalizer_data 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_properties 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_properties_data 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_provider 2.3.1](https://github.com/unicode-org/icu4x)
+- [litemap 0.8.3](https://github.com/unicode-org/icu4x)
+- [potential_utf 0.1.6](https://github.com/unicode-org/icu4x)
+- [tinystr 0.8.4](https://github.com/unicode-org/icu4x)
+- [writeable 0.6.4](https://github.com/unicode-org/icu4x)
+- [yoke-derive 0.8.4](https://github.com/unicode-org/icu4x)
+- [yoke 0.8.3](https://github.com/unicode-org/icu4x)
+- [zerofrom-derive 0.1.8](https://github.com/unicode-org/icu4x)
+- [zerofrom 0.1.8](https://github.com/unicode-org/icu4x)
+- [zerotrie 0.2.5](https://github.com/unicode-org/icu4x)
+- [zerovec-derive 0.11.6](https://github.com/unicode-org/icu4x)
+- [zerovec 0.11.8](https://github.com/unicode-org/icu4x)
+
+````text
+UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 2020-2024 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
+
+SPDX-License-Identifier: Unicode-3.0
+
+—
+
+Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
+ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
 
 ````
 
