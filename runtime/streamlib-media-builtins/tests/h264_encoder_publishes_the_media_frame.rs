@@ -3,15 +3,16 @@
 
 #![cfg(target_os = "linux")]
 
-//! Camera → `H264Encoder` in a real graph: frames leave as well-formed
-//! Annex-B encoded-frame bags matching the wire convention.
+//! Camera → `H264Encoder` in a real graph: frames leave as the media frames a
+//! moq-dev player reads — a varint timestamp then an Annex-B access unit, a
+//! keyframe opening a group — under a catalog entry naming the codec string
+//! the stream's own SPS spells.
 //!
 //! This is the only thing that runs the encoder's production seam — the
 //! lazy session mint inside its escalate window, the per-frame resolve and
-//! submit, and the bag publish. The unit tests either side exercise the
-//! parts (dimension resolution, VUI translation, the wire codec) and none
-//! of them notices if `process()` stops publishing what the convention
-//! states.
+//! submit, the catalog entry and the publish. The unit tests either side
+//! exercise the parts and none of them notices if `process()` stops
+//! publishing what a player reads.
 //!
 //! Rig-tier by construction, not by choice: starting the `App`'s stream
 //! brings up a real `GpuContext`, the mint needs a Vulkan Video encode queue,
@@ -25,12 +26,12 @@ use std::time::{Duration, Instant};
 
 use streamlib::sdk::App;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
+use streamlib::sdk::descriptors::{CatalogEntry, CatalogSection};
 use streamlib::sdk::error::Result;
+use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
+use streamlib::sdk::iceoryx2::MessageGroupBoundary;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ReactiveProcessor};
-use streamlib_media_builtins::{
-    CameraSource, EncodedVideoCodec, EncodedVideoFrame, H264Encoder, read_encoded_video_frame_bag,
-    register_media_builtin_processor_types,
-};
+use streamlib_media_builtins::{CameraSource, H264Encoder, register_media_builtin_processor_types};
 
 /// How long a processor may take to open the camera, bring up the GPU, and
 /// reach Running.
@@ -40,23 +41,34 @@ const READINESS_TIMEOUT: Duration = Duration::from_secs(20);
 /// `keyframe_interval_seconds × the session's fps` counted in *encoded
 /// frames*, and the session's fps is whatever the camera negotiated — so a
 /// wall-clock run length proves nothing about how many sync points landed.
-/// The graph runs until this many bags and this many sync points are
+/// The graph runs until this many media frames and this many keyframes are
 /// collected, under a generous cap.
-const ENOUGH_COLLECTED_BAGS: usize = 10;
+const ENOUGH_COLLECTED_MEDIA_FRAMES: usize = 10;
 const ENOUGH_SYNC_POINTS: usize = 2;
 const COLLECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// One collected bag: the decoded convention fields plus the frame-header
-/// timestamp it rode with.
-struct CollectedEncodedFrameBag {
-    encoded_frame: EncodedVideoFrame,
+/// One collected media frame and the envelope it rode in.
+struct CollectedMediaFrame {
+    varint_timestamp_microseconds: u64,
+    annex_b_access_unit_bytes: Vec<u8>,
+    group_boundary: MessageGroupBoundary,
+    lost_since_last_read: u64,
     frame_header_timestamp_ns: i64,
+    /// The encoder port's catalog entry as the collector read it beside
+    /// this message.
+    upstream_catalog_entry: Option<CatalogEntry>,
+}
+
+impl CollectedMediaFrame {
+    fn starts_group(&self) -> bool {
+        self.group_boundary == MessageGroupBoundary::StartsGroup
+    }
 }
 
 /// What the collector saw, readable by the test after the graph stops.
 #[derive(Default)]
 struct EncodedChannelObservations {
-    collected: Vec<CollectedEncodedFrameBag>,
+    collected: Vec<CollectedMediaFrame>,
     refusals: Vec<String>,
 }
 
@@ -67,28 +79,34 @@ fn encoded_channel_observations() -> &'static Mutex<EncodedChannelObservations> 
     OBSERVATIONS.get_or_init(Mutex::default)
 }
 
-/// Reads every bag off the encoded channel through the convention's own
-/// refusal-naming reader — what any downstream consumer of an encoded
-/// stream does.
+/// Reads every message off the encoded channel as a media frame, and the
+/// upstream port's catalog entry beside it — what a player does.
 #[streamlib::sdk::processor(
-    description = "Collects encoded-frame bags for the test's assertions",
+    description = "Collects media frames for the test's assertions",
     execution = reactive,
     input(
         "encoded_video",
         delivery_profile = "ordered",
-        description = "Encoded-frame bags under test"
+        description = "Media frames under test"
     )
 )]
-pub struct EncodedFrameBagCollector;
+pub struct MediaFrameCollector;
 
-impl ReactiveProcessor for EncodedFrameBagCollector::Processor {
+impl ReactiveProcessor for MediaFrameCollector::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw("encoded_video")? {
+            let upstream_catalog_entry = self
+                .inputs
+                .inbound_link_catalog_entry("encoded_video", None)?;
             let mut observations = encoded_channel_observations().lock().unwrap();
-            match read_encoded_video_frame_bag(&message.payload_bytes) {
-                Ok(encoded_frame) => observations.collected.push(CollectedEncodedFrameBag {
-                    encoded_frame,
+            match read_hang_legacy_container_media_frame(&message.payload_bytes) {
+                Ok(media_frame) => observations.collected.push(CollectedMediaFrame {
+                    varint_timestamp_microseconds: media_frame.timestamp_microseconds,
+                    annex_b_access_unit_bytes: media_frame.codec_payload_bytes.to_vec(),
+                    group_boundary: message.group_boundary,
+                    lost_since_last_read: message.lost_since_last_read,
                     frame_header_timestamp_ns: message.timestamp_ns,
+                    upstream_catalog_entry,
                 }),
                 Err(refusal) => observations.refusals.push(refusal.to_string()),
             }
@@ -103,7 +121,7 @@ fn ensure_every_processor_type_is_registered() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
         register_media_builtin_processor_types();
-        PROCESSOR_REGISTRY.register::<EncodedFrameBagCollector::Processor>();
+        PROCESSOR_REGISTRY.register::<MediaFrameCollector::Processor>();
     });
 }
 
@@ -135,16 +153,16 @@ fn h264_nal_unit_types(access_unit: &[u8]) -> Vec<u8> {
     nal_unit_types
 }
 
-/// The ticket's rig demo, made reproducible: a camera's frames leave the
-/// graph as tapped Annex-B bags whose fields match the convention, with
-/// sync-point cadence at the GOP boundary and sane bitstream sizes.
+/// A camera's frames leave the graph as media frames a player reads: the
+/// varint carries the envelope's stamp in microseconds, a keyframe and only a
+/// keyframe opens a group and carries its parameter sets, and the port's
+/// catalog entry names the codec string the SPS spells.
 ///
-/// Mental revert: delete the `publish_encoded_frame_bag` call from
-/// `H264Encoder::process()`. Every processor still reaches Running and the
-/// collector collects nothing — the emptiness assertion below is what
-/// notices.
+/// Mental revert: publish every access unit with `StartsGroup`. The group
+/// flag then no longer tracks the IDRs, and the keyframe assertion below is
+/// what notices.
 #[test]
-fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
+fn camera_frames_leave_the_graph_as_media_frames_a_player_reads() {
     use streamlib::sdk::context::probe_video_device_backend;
     let this_machine_has_a_camera = probe_video_device_backend()
         .list_capture_devices()
@@ -180,7 +198,7 @@ fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
         .expect("the encoder");
     let collector = app
         .add(
-            EncodedFrameBagCollector::Processor::processor_class_import_path(),
+            MediaFrameCollector::Processor::processor_class_import_path(),
             serde_json::json!({}),
             Some("collector"),
         )
@@ -198,13 +216,13 @@ fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
     let enough_was_collected = loop {
         {
             let observations = encoded_channel_observations().lock().unwrap();
-            let sync_points_collected = observations
+            let keyframes_collected = observations
                 .collected
                 .iter()
-                .filter(|collected| collected.encoded_frame.is_sync_point)
+                .filter(|collected| collected.starts_group())
                 .count();
-            if observations.collected.len() >= ENOUGH_COLLECTED_BAGS
-                && sync_points_collected >= ENOUGH_SYNC_POINTS
+            if observations.collected.len() >= ENOUGH_COLLECTED_MEDIA_FRAMES
+                && keyframes_collected >= ENOUGH_SYNC_POINTS
             {
                 break true;
             }
@@ -227,87 +245,92 @@ fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
     assert_eq!(
         observations.refusals,
         Vec::<String>::new(),
-        "every published bag must read back through the convention's own reader"
+        "every published message must read as a media frame"
     );
     assert!(
         enough_was_collected,
-        "a camera run must land {ENOUGH_COLLECTED_BAGS} encoded bags carrying \
-         {ENOUGH_SYNC_POINTS} sync points inside {COLLECTION_TIMEOUT:?}; got {} bags with {} \
-         sync points — an encoder whose session mint failed leaves this stream empty",
+        "a camera run must land {ENOUGH_COLLECTED_MEDIA_FRAMES} media frames carrying \
+         {ENOUGH_SYNC_POINTS} keyframes inside {COLLECTION_TIMEOUT:?}; got {} frames with {} \
+         keyframes — an encoder whose session mint failed leaves this stream empty",
         observations.collected.len(),
         observations
             .collected
             .iter()
-            .filter(|collected| collected.encoded_frame.is_sync_point)
+            .filter(|collected| collected.starts_group())
             .count()
     );
-
-    let first = &observations.collected[0].encoded_frame;
     assert!(
-        first.is_sync_point && first.sequence_index == 0 && first.group_index == 0,
-        "the stream opens at a sync point with the ordering pair at zero"
+        observations.collected[0].starts_group(),
+        "the stream opens at a keyframe, which opens a group"
     );
 
-    let mut previous: Option<&CollectedEncodedFrameBag> = None;
-    let mut sync_point_count = 0usize;
+    let mut previous_frame_header_timestamp_ns = None;
     for collected in &observations.collected {
-        let encoded_frame = &collected.encoded_frame;
-        assert_eq!(encoded_frame.codec, EncodedVideoCodec::H264);
-        assert!(
-            encoded_frame.width > 0 && encoded_frame.height > 0,
-            "the coded extent is the session's aligned extent, never zero"
+        assert_eq!(
+            collected.varint_timestamp_microseconds,
+            (collected.frame_header_timestamp_ns / 1_000) as u64,
+            "the varint is the envelope's stamp in microseconds"
+        );
+        assert_eq!(
+            collected.lost_since_last_read, 0,
+            "a collector keeping up loses nothing"
         );
         assert!(
-            !encoded_frame.annex_b_access_unit_bytes.is_empty()
-                && annex_b_nal_header_offset(&encoded_frame.annex_b_access_unit_bytes, 0).is_some(),
-            "every bitstream is a start-code-prefixed Annex-B access unit"
+            annex_b_nal_header_offset(&collected.annex_b_access_unit_bytes, 0).is_some(),
+            "every payload after the varint is a start-code-prefixed Annex-B access unit"
         );
-        assert!(
-            collected.frame_header_timestamp_ns > 0,
-            "the timestamp rides the frame header"
+        let nal_unit_types = h264_nal_unit_types(&collected.annex_b_access_unit_bytes);
+        let is_an_idr = nal_unit_types.contains(&5);
+        assert_eq!(
+            collected.starts_group(),
+            is_an_idr,
+            "a message opens a group exactly when it carries an IDR, got NAL types \
+             {nal_unit_types:?}"
         );
-        if encoded_frame.is_sync_point {
-            sync_point_count += 1;
-            let nal_unit_types = h264_nal_unit_types(&encoded_frame.annex_b_access_unit_bytes);
+        if is_an_idr {
             assert!(
                 nal_unit_types.contains(&7) && nal_unit_types.contains(&8),
-                "a sync point is a self-sufficient decode entry: SPS (7) and PPS (8) ride \
-                 every IDR bag, got NAL types {nal_unit_types:?}"
+                "a keyframe is a self-sufficient decode entry: SPS (7) and PPS (8) ride \
+                 inline, got NAL types {nal_unit_types:?}"
             );
         }
-        if let Some(previous) = previous {
-            let previous_frame = &previous.encoded_frame;
+        if let Some(previous) = previous_frame_header_timestamp_ns {
             assert!(
-                encoded_frame.sequence_index > previous_frame.sequence_index,
-                "sequence_index is strictly monotonic in publication order"
-            );
-            assert!(
-                collected.frame_header_timestamp_ns >= previous.frame_header_timestamp_ns,
+                collected.frame_header_timestamp_ns >= previous,
                 "frame-header timestamps never run backwards on an ordered channel"
             );
-            // Group cadence is exact between adjacent frames — a drop-proof
-            // spelling of "the group advances at sync points and only there".
-            if encoded_frame.sequence_index == previous_frame.sequence_index + 1 {
-                let expected_group =
-                    previous_frame.group_index + u64::from(encoded_frame.is_sync_point);
-                assert_eq!(
-                    encoded_frame.group_index, expected_group,
-                    "group_index advances exactly at sync points"
-                );
-            }
         }
-        previous = Some(collected);
+        previous_frame_header_timestamp_ns = Some(collected.frame_header_timestamp_ns);
     }
+
+    let catalog_entry = observations.collected[0]
+        .upstream_catalog_entry
+        .as_ref()
+        .expect("the entry is set before the first media frame it describes");
+    assert_eq!(catalog_entry.section, CatalogSection::Video);
+    let codec_string = catalog_entry.entry["codec"]
+        .as_str()
+        .expect("a video entry names its codec");
     assert!(
-        sync_point_count >= ENOUGH_SYNC_POINTS,
-        "the collected stream carries the periodic sync points the run waited for, got \
-         {sync_point_count}"
+        codec_string.starts_with("avc1.64"),
+        "the Vulkan Video arm encodes High, and the entry spells what the SPS says: \
+         {codec_string}"
+    );
+    assert!(
+        catalog_entry.entry["codedWidth"]
+            .as_u64()
+            .is_some_and(|width| width > 0)
+            && catalog_entry.entry["codedHeight"]
+                .as_u64()
+                .is_some_and(|height| height > 0),
+        "the entry carries the session's coded extent: {catalog_entry:?}"
+    );
+    assert!(
+        catalog_entry.entry.get("description").is_none(),
+        "an absent description is how a player knows the parameter sets ride inline"
     );
 
-    let opening_access_unit_bytes = observations.collected[0]
-        .encoded_frame
-        .annex_b_access_unit_bytes
-        .len();
+    let opening_access_unit_bytes = observations.collected[0].annex_b_access_unit_bytes.len();
     assert!(
         opening_access_unit_bytes > 1_000,
         "an IDR of a camera frame is KBs, got {opening_access_unit_bytes} bytes"

@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The encode body both hardware video encoder built-ins are: published
-//! video surfaces in, encoded-frame bags out, via the video codec seam.
+//! video surfaces in, media frames out — hang's legacy container around one
+//! Annex-B access unit, a sync point opening a group — via the video codec
+//! seam.
 //!
 //! The session mints lazily inside a one-shot `escalate` window on the first
 //! frame, so its dimensions track upstream; config width/height are
@@ -11,9 +13,13 @@
 //! extent mid-run gets a fresh session at the new extent — new parameter
 //! sets, opening at a sync point — rather than a refusal.
 //!
-//! Ports live on the processors that own this body; nothing here reads or
-//! writes a link. What it hands back is a list of bags to publish, and the
-//! timestamp each one rides under.
+//! Ports live on the processors that own this body, which hand it the write.
+//! The port's catalog entry is derived from the first sync point a session
+//! emits: the codec string its SPS spells and the session's coded extent.
+//!
+//! A write the channel ceiling refuses loses an access unit the next ones
+//! reference, so the access units after it are dropped up to the next sync
+//! point and the next frame is encoded as one.
 
 use std::marker::PhantomData;
 
@@ -23,11 +29,14 @@ use streamlib::sdk::context::{
     VideoEncodeKnobs, VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
     probe_video_codec_backend,
 };
+use streamlib::sdk::descriptors::VideoEntry;
 use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::hang_legacy_container_media_frame::hang_legacy_container_media_frame_bytes;
+use streamlib::sdk::iceoryx2::MessageGroupBoundary;
 use streamlib::sdk::schemars::JsonSchema;
+use streamlib::sdk::video_bitstream::parameter_sets_of_annex_b_access_unit;
 
-use crate::encoded_stream_ordering::EncodedStreamOrderingPairCounter;
-use crate::encoded_video_frame::EncodedVideoFrame;
+use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
 use crate::video_frame::{ColorInfo, VideoFrame};
@@ -40,6 +49,10 @@ const DEFAULT_IDR_INTERVAL_SECONDS: u32 = 2;
 
 /// Encode-progress log cadence, in frames.
 const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
+
+/// Refused writes between reports; the port's refused-write count in `graph`
+/// carries every one.
+const REFUSED_WRITE_REPORT_INTERVAL: u64 = 20;
 
 /// Configuration for the hardware video encoder built-ins. Everything is
 /// optional: dimensions and rate track the upstream frames, and the knobs
@@ -74,11 +87,12 @@ pub struct HardwareVideoEncoderConfig {
     pub effort_level: Option<u32>,
 }
 
-/// One encoded frame the caller still has to write, and the timestamp it
+/// One access unit the caller still has to publish, and the timestamp it
 /// rides under — the packet's own when it carries one, the source frame's
-/// otherwise. The timestamp rides the frame header, never a bag field.
-pub struct EncodedFrameAwaitingPublication {
-    pub frame: EncodedVideoFrame,
+/// otherwise.
+pub struct EncodedAccessUnitAwaitingPublication {
+    pub annex_b_access_unit_bytes: Vec<u8>,
+    pub is_sync_point: bool,
     pub timestamp_ns: i64,
 }
 
@@ -89,23 +103,17 @@ struct EncodeSessionMintedFromUpstream {
     /// The source extent the session was minted for.
     minted_width: u32,
     minted_height: u32,
-    /// The codec-aligned coded extent, published on every bag as the extent
-    /// before the conformance crop.
+    /// The codec-aligned coded extent, the catalog entry's `codedWidth` and
+    /// `codedHeight`.
     coded_width: u32,
     coded_height: u32,
-    /// The color the session's SPS VUI was minted from — what every bag of
-    /// this session carries, because it describes the bitstream.
+    /// The color the session's SPS VUI was minted from.
     minted_color: Option<ColorInfo>,
     /// A mid-session color change is warned once, not per frame.
     color_change_already_warned: bool,
-}
-
-/// The per-bag facts read off the minted session, split out so the publish
-/// helper can borrow them while the session stays mutably borrowed elsewhere.
-struct MintedSessionBagFields {
-    coded_width: u32,
-    coded_height: u32,
-    color: Option<ColorInfo>,
+    /// Whether this session's first sync point has been read for the catalog
+    /// entry.
+    video_entry_derived: bool,
 }
 
 /// The encode state machine, shared by every hardware video encoder built-in
@@ -117,7 +125,16 @@ pub struct PublishedSurfaceToEncodedFrameEncoder<Identity: HardwareVideoCodecPro
     /// escalate gate — and its device-idle drain — on every camera frame.
     session_mint_already_failed: bool,
     gpu_context: Option<GpuContextLimitedAccess>,
-    ordering_pair_counter: EncodedStreamOrderingPairCounter,
+    /// The entry the port carries, and one a re-mint derived that it does not
+    /// carry yet.
+    video_entry_on_the_port: Option<VideoEntry>,
+    video_entry_owed_to_the_port: Option<VideoEntry>,
+    /// Set by a refused write, spent by the next encode.
+    next_frame_must_be_a_sync_point: bool,
+    /// Set by a refused write, cleared by the next sync point written.
+    dropping_access_units_until_the_next_sync_point: bool,
+    access_units_dropped_after_a_refused_write: u64,
+    refused_write_report_schedule: CumulativeCountReportThreshold,
     frames_encoded: u64,
     frames_that_failed_to_encode: u64,
     codec_identity: PhantomData<Identity>,
@@ -133,7 +150,14 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> Default
             encode_session: None,
             session_mint_already_failed: false,
             gpu_context: None,
-            ordering_pair_counter: EncodedStreamOrderingPairCounter::default(),
+            video_entry_on_the_port: None,
+            video_entry_owed_to_the_port: None,
+            next_frame_must_be_a_sync_point: false,
+            dropping_access_units_until_the_next_sync_point: false,
+            access_units_dropped_after_a_refused_write: 0,
+            refused_write_report_schedule: CumulativeCountReportThreshold::reporting_every(
+                REFUSED_WRITE_REPORT_INTERVAL,
+            ),
             frames_encoded: 0,
             frames_that_failed_to_encode: 0,
             codec_identity: PhantomData,
@@ -165,6 +189,8 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         tracing::info!(
             frames_encoded = self.frames_encoded,
             frames_that_failed_to_encode = self.frames_that_failed_to_encode,
+            access_units_dropped_after_a_refused_write =
+                self.access_units_dropped_after_a_refused_write,
             "{}: teardown",
             Identity::PROCESSOR_NAME
         );
@@ -173,7 +199,8 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         Ok(())
     }
 
-    /// Encode one published surface, handing back every bag it completed.
+    /// Encode one published surface, handing back every access unit it
+    /// completed.
     ///
     /// A frame arriving after a failed mint is drained and discarded, so
     /// upstream still sees a live consumer and the escalate gate is not
@@ -182,7 +209,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         &mut self,
         config: &HardwareVideoEncoderConfig,
         frame: &VideoFrame,
-        staged: &mut Vec<EncodedFrameAwaitingPublication>,
+        staged: &mut Vec<EncodedAccessUnitAwaitingPublication>,
     ) -> Result<()> {
         if self.encode_session.is_none() && self.session_mint_already_failed {
             return Ok(());
@@ -207,7 +234,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 Identity::PROCESSOR_NAME
             );
         }
-        let (packets, session_bag_fields) = {
+        let packets = {
             let minted = match &mut self.encode_session {
                 Some(minted) => minted,
                 empty_session_slot => {
@@ -239,7 +266,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                     width: frame.width,
                     height: frame.height,
                     timestamp_ns: frame.timestamp_ns,
-                    force_sync_point: false,
+                    force_sync_point: self.next_frame_must_be_a_sync_point,
                 }) {
                 Ok(packets) => packets,
                 Err(encode_failure) => {
@@ -250,12 +277,21 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                     )));
                 }
             };
-            (packets, minted.fields_every_published_bag_carries())
+            self.next_frame_must_be_a_sync_point = false;
+            if let Some(video_entry) =
+                minted.video_entry_from_its_first_sync_point::<Identity>(&packets)
+                && self.video_entry_on_the_port.as_ref() != Some(&video_entry)
+            {
+                self.video_entry_owed_to_the_port = Some(video_entry);
+            }
+            packets
         };
 
-        staged.extend(packets.into_iter().map(|packet| {
-            self.encoded_frame_bag_for(&session_bag_fields, packet, frame.timestamp_ns)
-        }));
+        staged.extend(
+            packets
+                .into_iter()
+                .map(|packet| access_unit_awaiting_publication(packet, frame.timestamp_ns)),
+        );
 
         self.frames_encoded += 1;
         if self.frames_encoded == 1 {
@@ -273,40 +309,117 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         Ok(())
     }
 
-    /// Turn one encoded packet into an encoded-frame bag with its ordering
-    /// pair accounted.
-    fn encoded_frame_bag_for(
+    /// The catalog entry the port does not carry yet, taken so the caller
+    /// sets it ahead of the first media frame it describes.
+    pub fn take_video_entry_owed_to_the_port(&mut self) -> Option<VideoEntry> {
+        let video_entry = self.video_entry_owed_to_the_port.take()?;
+        self.video_entry_on_the_port = Some(video_entry.clone());
+        Some(video_entry)
+    }
+
+    /// Publish staged access units as media frames through `write_media_frame`,
+    /// a sync point opening a group. A write the channel ceiling refuses
+    /// drops what follows up to the next sync point and makes the next frame
+    /// one; any other failure is returned.
+    pub fn publish_staged_access_units(
         &mut self,
-        session_fields: &MintedSessionBagFields,
-        packet: EncodedVideoAccessUnitFromSession,
-        source_frame_timestamp_ns: i64,
-    ) -> EncodedFrameAwaitingPublication {
-        let ordering_pair = self
-            .ordering_pair_counter
-            .account_published_bag(packet.is_sync_point);
-        EncodedFrameAwaitingPublication {
-            timestamp_ns: packet.timestamp_ns.unwrap_or(source_frame_timestamp_ns),
-            frame: EncodedVideoFrame {
-                codec: Identity::ENCODED_VIDEO_CODEC,
-                annex_b_access_unit_bytes: packet.annex_b_access_unit_bytes,
-                is_sync_point: packet.is_sync_point,
-                group_index: ordering_pair.group_index,
-                sequence_index: ordering_pair.sequence_index,
-                width: session_fields.coded_width,
-                height: session_fields.coded_height,
-                color: session_fields.color.clone(),
-            },
+        staged: Vec<EncodedAccessUnitAwaitingPublication>,
+        mut write_media_frame: impl FnMut(&[u8], i64, MessageGroupBoundary) -> Result<()>,
+    ) -> Result<()> {
+        for access_unit in staged {
+            if self.dropping_access_units_until_the_next_sync_point && !access_unit.is_sync_point {
+                self.access_units_dropped_after_a_refused_write += 1;
+                continue;
+            }
+            let media_frame_bytes = hang_legacy_container_media_frame_bytes(
+                access_unit.timestamp_ns,
+                &access_unit.annex_b_access_unit_bytes,
+            )
+            .map_err(|refusal| {
+                Error::Runtime(format!("{}: {refusal}", Identity::PROCESSOR_NAME))
+            })?;
+            let group_boundary = if access_unit.is_sync_point {
+                MessageGroupBoundary::StartsGroup
+            } else {
+                MessageGroupBoundary::ContinuesGroup
+            };
+            match write_media_frame(&media_frame_bytes, access_unit.timestamp_ns, group_boundary) {
+                Ok(()) => self.dropping_access_units_until_the_next_sync_point = false,
+                Err(Error::PayloadExceedsChannelCeiling {
+                    channel,
+                    payload_bytes,
+                    largest_admitted_frame_bytes,
+                    refused_bags_on_the_output_port,
+                    ..
+                }) => {
+                    self.next_frame_must_be_a_sync_point = true;
+                    self.dropping_access_units_until_the_next_sync_point = true;
+                    if self
+                        .refused_write_report_schedule
+                        .count_is_worth_reporting(refused_bags_on_the_output_port)
+                    {
+                        tracing::warn!(
+                            channel,
+                            payload_bytes,
+                            largest_admitted_frame_bytes,
+                            refused_bags_on_the_output_port,
+                            "{}: the channel ceiling refused an access unit — dropping to the \
+                             next sync point and encoding the next frame as one",
+                            Identity::PROCESSOR_NAME
+                        );
+                    }
+                }
+                Err(write_failure) => return Err(write_failure),
+            }
         }
+        Ok(())
+    }
+}
+
+/// One access unit, stamped with its packet's own timestamp when the arm
+/// carried one through and the source frame's otherwise.
+fn access_unit_awaiting_publication(
+    packet: EncodedVideoAccessUnitFromSession,
+    source_frame_timestamp_ns: i64,
+) -> EncodedAccessUnitAwaitingPublication {
+    EncodedAccessUnitAwaitingPublication {
+        timestamp_ns: packet.timestamp_ns.unwrap_or(source_frame_timestamp_ns),
+        annex_b_access_unit_bytes: packet.annex_b_access_unit_bytes,
+        is_sync_point: packet.is_sync_point,
     }
 }
 
 impl EncodeSessionMintedFromUpstream {
-    fn fields_every_published_bag_carries(&self) -> MintedSessionBagFields {
-        MintedSessionBagFields {
-            coded_width: self.coded_width,
-            coded_height: self.coded_height,
-            color: self.minted_color.clone(),
+    /// The catalog entry this session's first sync point describes, once:
+    /// the codec string its SPS spells and the session's coded extent, no
+    /// `description` because the parameter sets ride inline.
+    fn video_entry_from_its_first_sync_point<Identity: HardwareVideoCodecProcessorIdentity>(
+        &mut self,
+        packets: &[EncodedVideoAccessUnitFromSession],
+    ) -> Option<VideoEntry> {
+        if self.video_entry_derived {
+            return None;
         }
+        let first_sync_point = packets.iter().find(|packet| packet.is_sync_point)?;
+        self.video_entry_derived = true;
+        let Some(codec) = parameter_sets_of_annex_b_access_unit(
+            &first_sync_point.annex_b_access_unit_bytes,
+            Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
+        )
+        .codec_string_of_the_sequence_parameter_set(Identity::VIDEO_CODEC_ELEMENTARY_STREAM) else {
+            tracing::warn!(
+                "{}: the session's first sync point carries no readable SPS, so the port \
+                 publishes no catalog entry for this session",
+                Identity::PROCESSOR_NAME
+            );
+            return None;
+        };
+        Some(VideoEntry {
+            codec,
+            coded_width: Some(self.coded_width),
+            coded_height: Some(self.coded_height),
+            description: None,
+        })
     }
 
     fn matches_source_extent(&self, frame_width: u32, frame_height: u32) -> bool {
@@ -445,6 +558,7 @@ fn mint_encode_session_from_first_frame<Identity: HardwareVideoCodecProcessorIde
         coded_height,
         minted_color: frame.color_info.clone(),
         color_change_already_warned: false,
+        video_entry_derived: false,
     })
 }
 
@@ -513,26 +627,137 @@ mod tests {
         assert_eq!(config, HardwareVideoEncoderConfig::default());
     }
 
-    /// The whole point of the shared body: each built-in's identity is what
-    /// picks the session codec and the bag's `codec`, and mixing the two up
-    /// would produce a bitstream whose bag lies about it.
     #[test]
-    fn each_encoders_identity_names_one_codec_on_both_the_session_and_the_bag() {
+    fn each_encoders_identity_opens_a_session_for_its_own_codec() {
         assert_eq!(
             H264EncoderCodecIdentity::VIDEO_CODEC_ELEMENTARY_STREAM,
             VideoCodecElementaryStream::H264
         );
         assert_eq!(
-            H264EncoderCodecIdentity::ENCODED_VIDEO_CODEC.as_wire_str(),
-            "h264"
-        );
-        assert_eq!(
             H265EncoderCodecIdentity::VIDEO_CODEC_ELEMENTARY_STREAM,
             VideoCodecElementaryStream::H265
         );
+    }
+
+    fn access_unit(is_sync_point: bool, timestamp_ns: i64) -> EncodedAccessUnitAwaitingPublication {
+        EncodedAccessUnitAwaitingPublication {
+            annex_b_access_unit_bytes: vec![0x00, 0x00, 0x00, 0x01, 0x65],
+            is_sync_point,
+            timestamp_ns,
+        }
+    }
+
+    fn channel_ceiling_refusal() -> Error {
+        Error::PayloadExceedsChannelCeiling {
+            channel: "encoder.encoded_video".to_owned(),
+            payload_bytes: 9_000_000,
+            largest_admitted_frame_bytes: 8_000_000,
+            chunk_ceiling_bytes: 8_388_608,
+            tier: streamlib::sdk::error::ChannelTrustTierLabel::Trusted,
+            refused_bags_on_the_output_port: 1,
+        }
+    }
+
+    #[test]
+    fn each_access_unit_is_written_as_a_media_frame_a_sync_point_opening_a_group() {
+        let mut encode_body =
+            PublishedSurfaceToEncodedFrameEncoder::<H264EncoderCodecIdentity>::default();
+        let mut written = Vec::new();
+        encode_body
+            .publish_staged_access_units(
+                vec![access_unit(true, 1_000_000), access_unit(false, 34_000_000)],
+                |media_frame_bytes, timestamp_ns, group_boundary| {
+                    written.push((media_frame_bytes.to_vec(), timestamp_ns, group_boundary));
+                    Ok(())
+                },
+            )
+            .unwrap();
         assert_eq!(
-            H265EncoderCodecIdentity::ENCODED_VIDEO_CODEC.as_wire_str(),
-            "h265"
+            written,
+            vec![
+                (
+                    vec![0x43, 0xE8, 0x00, 0x00, 0x00, 0x01, 0x65],
+                    1_000_000,
+                    MessageGroupBoundary::StartsGroup
+                ),
+                (
+                    vec![0x80, 0x00, 0x84, 0xD0, 0x00, 0x00, 0x00, 0x01, 0x65],
+                    34_000_000,
+                    MessageGroupBoundary::ContinuesGroup
+                ),
+            ]
         );
+    }
+
+    /// The access units after a refused one reference it, so they are
+    /// dropped rather than handed to a decoder, and the next frame asks the
+    /// session for a sync point.
+    #[test]
+    fn a_refused_write_drops_to_the_next_sync_point_and_forces_one() {
+        let mut encode_body =
+            PublishedSurfaceToEncodedFrameEncoder::<H265EncoderCodecIdentity>::default();
+        let mut written_stamps = Vec::new();
+        encode_body
+            .publish_staged_access_units(
+                vec![
+                    access_unit(false, 1),
+                    access_unit(false, 2_000),
+                    access_unit(false, 3_000),
+                ],
+                |_, timestamp_ns, _| {
+                    if timestamp_ns == 1 {
+                        return Err(channel_ceiling_refusal());
+                    }
+                    written_stamps.push(timestamp_ns);
+                    Ok(())
+                },
+            )
+            .expect("a ceiling refusal is survived");
+        assert!(written_stamps.is_empty());
+        assert!(encode_body.next_frame_must_be_a_sync_point);
+        assert_eq!(encode_body.access_units_dropped_after_a_refused_write, 2);
+
+        encode_body
+            .publish_staged_access_units(
+                vec![access_unit(true, 4_000), access_unit(false, 5_000)],
+                |_, timestamp_ns, _| {
+                    written_stamps.push(timestamp_ns);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(written_stamps, vec![4_000, 5_000]);
+    }
+
+    #[test]
+    fn a_write_failing_for_any_other_reason_is_returned() {
+        let mut encode_body =
+            PublishedSurfaceToEncodedFrameEncoder::<H264EncoderCodecIdentity>::default();
+        let failure = encode_body
+            .publish_staged_access_units(vec![access_unit(true, 1_000)], |_, _, _| {
+                Err(Error::Link("the port is not wired".to_owned()))
+            })
+            .expect_err("a link failure is not a ceiling refusal");
+        assert!(matches!(failure, Error::Link(_)));
+        assert!(!encode_body.next_frame_must_be_a_sync_point);
+    }
+
+    #[test]
+    fn the_owed_catalog_entry_is_handed_over_once() {
+        let mut encode_body =
+            PublishedSurfaceToEncodedFrameEncoder::<H264EncoderCodecIdentity>::default();
+        let video_entry = VideoEntry {
+            codec: "avc1.64001f".to_owned(),
+            coded_width: Some(1280),
+            coded_height: Some(720),
+            description: None,
+        };
+        encode_body.video_entry_owed_to_the_port = Some(video_entry.clone());
+        assert_eq!(
+            encode_body.take_video_entry_owed_to_the_port(),
+            Some(video_entry.clone())
+        );
+        assert_eq!(encode_body.take_video_entry_owed_to_the_port(), None);
+        assert_eq!(encode_body.video_entry_on_the_port, Some(video_entry));
     }
 }

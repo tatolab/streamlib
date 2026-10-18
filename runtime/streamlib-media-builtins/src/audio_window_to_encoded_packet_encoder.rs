@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The `OpusEncoder` body: one 20 ms audio window in, one encoded-audio
-//! packet out.
+//! The `OpusEncoder` body: one 20 ms audio window in, one Opus packet out,
+//! and the port's catalog entry — the `OpusHead` hex-encoded in its
+//! `description` — owed whenever an encoder is minted.
 //!
 //! Separated from the port surface so it is driven directly by a test with
 //! no `Runtime` — the shape the video encode body already takes.
@@ -19,20 +20,22 @@
 //! What a re-mint costs is continuity, not decodability: a fresh instance
 //! has lost its prediction and analysis state, so the seam is a quality
 //! discontinuity in exactly the place the window stage already flushed its
-//! accumulator and resampler. `sequence_index` does not reset across it —
-//! the counter belongs to the encoder, not the instance — so a consumer
-//! still reads a gap as loss and never as a restart.
+//! accumulator and resampler. The new count reaches a decoder through the
+//! port's catalog entry.
 
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::descriptors::AudioEntry;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::schemars::JsonSchema;
 
 use crate::audio_block::{AudioBlock, AudioSampleDtype};
-use crate::encoded_audio_packet::{EncodedAudioCodec, EncodedAudioPacket};
-use crate::encoded_stream_ordering::EncodedStreamOrderingPairCounter;
+use crate::opus_identification_header::OpusIdentificationHeader;
 #[cfg(test)]
 use crate::opus_stream_layout::HIGHEST_CHANNEL_COUNT_OPUS_PLACES;
 use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
+
+/// The codec string an Opus catalog entry names.
+pub const OPUS_CATALOG_CODEC_STRING: &str = "opus";
 
 /// Registration name, and what every refusal and log line names itself by.
 pub const OPUS_ENCODER_PROCESSOR_NAME: &str = "OpusEncoder";
@@ -165,25 +168,26 @@ impl MintedOpusEncoderInstance {
     }
 }
 
-/// The encoder minted for one source channel count, and what a packet it
-/// produces carries beside its bytes.
+/// The encoder minted for one source channel count.
 struct MintedOpusEncoder {
     instance: MintedOpusEncoderInstance,
     /// The count this instance was constructed for. A window arriving with
     /// any other count re-mints, because libopus cannot be told a new one.
     minted_for_source_channels: u32,
-    /// The instance's reported lookahead, which every packet carries so a
-    /// decoder entering the stream knows what to discard.
+    /// The instance's reported lookahead, which the `OpusHead` carries so a
+    /// decoder knows what to discard.
     pre_skip: u32,
     /// Output buffer size, from the stream count the layout resolved to.
     highest_packet_bytes: usize,
 }
 
-/// Encodes 20 ms audio windows into encoded-audio-packet bags.
+/// Encodes 20 ms audio windows into Opus packets.
 #[derive(Default)]
 pub struct AudioWindowToEncodedPacketEncoder {
     minted: Option<MintedOpusEncoder>,
-    ordering_pair_counter: EncodedStreamOrderingPairCounter,
+    /// The entry a mint derived that the port does not carry yet.
+    audio_entry_owed_to_the_port: Option<AudioEntry>,
+    packets_encoded: u64,
     /// The channel count whose layout Opus cannot place, once refused.
     ///
     /// Keyed on the count rather than latched run-wide, because this refusal
@@ -207,13 +211,13 @@ pub struct AudioWindowToEncodedPacketEncoder {
 }
 
 impl AudioWindowToEncodedPacketEncoder {
-    /// Encode one window, or hand back `None` when this encoder has already
-    /// refused its source and is discarding what follows.
+    /// Encode one window into one Opus packet, or hand back `None` when this
+    /// encoder has already refused its source and is discarding what follows.
     pub fn encode_one_window(
         &mut self,
         config: &OpusEncoderConfig,
         window: &AudioBlock,
-    ) -> Result<Option<EncodedAudioPacket>> {
+    ) -> Result<Option<Vec<u8>>> {
         if self.mint_already_failed || self.channel_count_already_refused == Some(window.channels) {
             return Ok(None);
         }
@@ -252,7 +256,11 @@ impl AudioWindowToEncodedPacketEncoder {
                     }
                 };
                 match mint_encoder_for_window(config, window, layout) {
-                    Ok(minted) => empty_slot.insert(minted),
+                    Ok(minted) => {
+                        self.audio_entry_owed_to_the_port =
+                            Some(audio_entry_for(window.channels, minted.pre_skip)?);
+                        empty_slot.insert(minted)
+                    }
                     Err(mint_failure) => {
                         self.mint_already_failed = true;
                         tracing::error!(
@@ -268,29 +276,34 @@ impl AudioWindowToEncodedPacketEncoder {
         let opus_packet_bytes = minted
             .instance
             .encode_interleaved_f32(&interleaved_samples, minted.highest_packet_bytes)?;
-
-        // Every Opus packet is a decode entry point, so every one opens its
-        // own group; the counter still owns `sequence_index`, which is why
-        // it survives the re-mint above.
-        let ordering_pair = self.ordering_pair_counter.account_published_bag(true);
-
-        Ok(Some(EncodedAudioPacket {
-            codec: EncodedAudioCodec::Opus,
-            opus_packet_bytes,
-            is_sync_point: true,
-            group_index: ordering_pair.group_index,
-            sequence_index: ordering_pair.sequence_index,
-            sample_rate: OPUS_SAMPLE_RATE_HZ,
-            channels: window.channels,
-            sample_count: window.sample_count,
-            pre_skip: minted.pre_skip,
-        }))
+        self.packets_encoded += 1;
+        Ok(Some(opus_packet_bytes))
     }
 
-    /// How many packets this encoder has published, for the teardown line.
+    /// The catalog entry the port does not carry yet, taken so the caller
+    /// sets it ahead of the first packet it describes.
+    pub fn take_audio_entry_owed_to_the_port(&mut self) -> Option<AudioEntry> {
+        self.audio_entry_owed_to_the_port.take()
+    }
+
+    /// How many packets this encoder has encoded, for the teardown line.
     pub fn packets_encoded(&self) -> u64 {
-        self.ordering_pair_counter.bags_accounted()
+        self.packets_encoded
     }
+}
+
+/// The catalog entry an encoder of `channels` with this lookahead publishes.
+fn audio_entry_for(channels: u32, pre_skip: u32) -> Result<AudioEntry> {
+    let opus_identification_header = OpusIdentificationHeader::hex_encoded_for_encoder(
+        channels, pre_skip,
+    )
+    .map_err(|refusal| Error::Runtime(format!("{OPUS_ENCODER_PROCESSOR_NAME}: {refusal}")))?;
+    Ok(AudioEntry {
+        codec: OPUS_CATALOG_CODEC_STRING.to_owned(),
+        sample_rate: OPUS_SAMPLE_RATE_HZ,
+        number_of_channels: channels,
+        description: Some(opus_identification_header),
+    })
 }
 
 /// Read a window's payload as interleaved `f32`, refusing by name a block
@@ -457,27 +470,37 @@ mod tests {
         );
     }
 
+    fn opus_identification_header_of(audio_entry: &AudioEntry) -> OpusIdentificationHeader {
+        OpusIdentificationHeader::parse_hex_encoded(
+            audio_entry
+                .description
+                .as_deref()
+                .expect("an Opus entry carries its OpusHead"),
+        )
+        .expect("the OpusHead reads back")
+    }
+
     #[test]
-    fn the_encoder_mints_from_the_first_windows_channel_count() {
+    fn the_encoder_mints_from_the_first_windows_channel_count_and_owes_its_entry() {
         for channels in 1..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
             let mut encoder = AudioWindowToEncodedPacketEncoder::default();
-            let packet = encoder
+            let opus_packet_bytes = encoder
                 .encode_one_window(&OpusEncoderConfig::default(), &a_window_of(channels, 0))
                 .expect("encodes")
                 .expect("publishes a packet");
+            assert!(!opus_packet_bytes.is_empty());
 
+            let audio_entry = encoder
+                .take_audio_entry_owed_to_the_port()
+                .expect("the first packet's mint owes the port its entry");
+            assert_eq!(audio_entry.codec, "opus");
+            assert_eq!(audio_entry.sample_rate, OPUS_SAMPLE_RATE_HZ);
+            assert_eq!(audio_entry.number_of_channels, channels);
             assert_eq!(
-                packet.channels, channels,
-                "the packet carries the source's count"
+                opus_identification_header_of(&audio_entry).channels,
+                channels
             );
-            assert_eq!(packet.sample_rate, OPUS_SAMPLE_RATE_HZ);
-            assert_eq!(packet.sample_count, WINDOW_SAMPLE_COUNT);
-            assert_eq!(packet.codec, EncodedAudioCodec::Opus);
-            assert!(
-                packet.is_sync_point,
-                "every Opus packet is a decode entry point"
-            );
-            assert!(!packet.opus_packet_bytes.is_empty());
+            assert_eq!(encoder.take_audio_entry_owed_to_the_port(), None);
         }
     }
 
@@ -486,11 +509,12 @@ mod tests {
         let mut pre_skips = Vec::new();
         for channels in 1..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
             let mut encoder = AudioWindowToEncodedPacketEncoder::default();
-            let packet = encoder
+            encoder
                 .encode_one_window(&OpusEncoderConfig::default(), &a_window_of(channels, 0))
                 .expect("encodes")
                 .expect("publishes a packet");
-            pre_skips.push(packet.pre_skip);
+            let audio_entry = encoder.take_audio_entry_owed_to_the_port().unwrap();
+            pre_skips.push(opus_identification_header_of(&audio_entry).pre_skip);
         }
         // `OPUS_GET_LOOKAHEAD` is `Fs/400 + Fs/250` at every application but
         // `lowdelay`, so 48 kHz reports 312 whatever the channel count — the
@@ -503,41 +527,32 @@ mod tests {
     }
 
     #[test]
-    fn a_window_whose_channel_count_changes_re_mints_without_resetting_the_sequence() {
+    fn a_window_whose_channel_count_changes_re_mints_and_owes_the_port_a_new_entry() {
         let mut encoder = AudioWindowToEncodedPacketEncoder::default();
         let config = OpusEncoderConfig::default();
 
-        let mut published = Vec::new();
+        let mut entries_owed = Vec::new();
         for (window_index, channels) in [2, 2, 6, 6, 1].into_iter().enumerate() {
-            published.push(
+            encoder
+                .encode_one_window(
+                    &config,
+                    &a_window_of(channels, window_index as u32 * WINDOW_SAMPLE_COUNT),
+                )
+                .expect("encodes across the re-mint")
+                .expect("publishes a packet");
+            entries_owed.push(
                 encoder
-                    .encode_one_window(
-                        &config,
-                        &a_window_of(channels, window_index as u32 * WINDOW_SAMPLE_COUNT),
-                    )
-                    .expect("encodes across the re-mint")
-                    .expect("publishes a packet"),
+                    .take_audio_entry_owed_to_the_port()
+                    .map(|audio_entry| audio_entry.number_of_channels),
             );
         }
 
         assert_eq!(
-            published.iter().map(|p| p.channels).collect::<Vec<_>>(),
-            vec![2, 2, 6, 6, 1],
-            "every packet declares the count its own window arrived with"
+            entries_owed,
+            vec![Some(2), None, Some(6), None, Some(1)],
+            "each mint owes the entry naming its own count, and only a mint does"
         );
-        assert_eq!(
-            published
-                .iter()
-                .map(|p| p.sequence_index)
-                .collect::<Vec<_>>(),
-            vec![0, 1, 2, 3, 4],
-            "the counter belongs to the encoder, not the instance, so a re-mint is not a restart"
-        );
-        assert_eq!(
-            published.iter().map(|p| p.group_index).collect::<Vec<_>>(),
-            vec![0, 1, 2, 3, 4],
-            "every Opus packet is its own group"
-        );
+        assert_eq!(encoder.packets_encoded(), 5);
     }
 
     #[test]
@@ -593,15 +608,17 @@ mod tests {
             None
         );
 
-        let packet = encoder
+        encoder
             .encode_one_window(&config, &a_window_of(2, 2 * WINDOW_SAMPLE_COUNT))
             .expect("a supported count mints")
             .expect("and publishes");
-        assert_eq!(packet.channels, 2);
         assert_eq!(
-            packet.sequence_index, 0,
-            "nothing was published before it, so it opens the sequence"
+            encoder
+                .take_audio_entry_owed_to_the_port()
+                .map(|audio_entry| audio_entry.number_of_channels),
+            Some(2)
         );
+        assert_eq!(encoder.packets_encoded(), 1);
 
         // And going back is still discarded, without disturbing the encoder
         // that is now minted for stereo.
@@ -611,11 +628,10 @@ mod tests {
                 .expect("still discarded"),
             None
         );
-        let after = encoder
+        encoder
             .encode_one_window(&config, &a_window_of(2, 4 * WINDOW_SAMPLE_COUNT))
             .expect("stereo still encodes")
             .expect("and publishes");
-        assert_eq!(after.sequence_index, 1);
         assert_eq!(encoder.packets_encoded(), 2);
     }
 
@@ -674,7 +690,6 @@ mod tests {
                 )
                 .expect("encodes")
                 .expect("publishes")
-                .opus_packet_bytes
                 .len();
             high_rate_bytes += at_high_rate
                 .encode_one_window(
@@ -686,7 +701,6 @@ mod tests {
                 )
                 .expect("encodes")
                 .expect("publishes")
-                .opus_packet_bytes
                 .len();
         }
         assert!(

@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Built-in H.265 encoder: published video surfaces in, encoded-frame bags
-//! out.
+//! Built-in H.265 encoder: published video surfaces in, media frames out.
 //!
 //! The state machine is [`PublishedSurfaceToEncodedFrameEncoder`], shared
 //! with the H.264 encoder because the two differ in nothing but which
@@ -15,7 +14,6 @@ use streamlib::sdk::context::{
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ReactiveProcessor;
 
-use crate::encoded_video_frame::EncodedVideoCodec;
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
 use crate::published_surface_to_encoded_frame_encoder::PublishedSurfaceToEncodedFrameEncoder;
 use crate::video_frame::VideoFrame;
@@ -24,7 +22,6 @@ use crate::video_frame::VideoFrame;
 pub struct H265EncoderCodecIdentity;
 
 impl HardwareVideoCodecProcessorIdentity for H265EncoderCodecIdentity {
-    const ENCODED_VIDEO_CODEC: EncodedVideoCodec = EncodedVideoCodec::H265;
     const VIDEO_CODEC_ELEMENTARY_STREAM: VideoCodecElementaryStream =
         VideoCodecElementaryStream::H265;
     const PROCESSOR_NAME: &'static str = "H265Encoder";
@@ -32,14 +29,19 @@ impl HardwareVideoCodecProcessorIdentity for H265EncoderCodecIdentity {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Encodes published video surfaces to H.265 Annex-B encoded-frame bags via \
-                  hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.\n\n\
+    description = "Encodes published video surfaces to H.265 via hardware encode — Vulkan Video \
+                  on Linux, VideoToolbox on macOS.\n\n\
                   `video` takes any published `VideoFrame` — buffer-backed (camera, test \
                   pattern) or texture-backed (a kernel output). `encoded_video` publishes one \
-                  Annex-B access unit per bag, beside the stream metadata keys. A frame the \
-                  encoder cannot consume is logged and dropped while the node keeps \
-                  running. The session mints from the first frame's dimensions and re-mints when \
-                  the upstream extent changes.\n\n\
+                  media frame per access unit, the layout the moq-dev players read: a QUIC \
+                  varint timestamp in microseconds, then the Annex-B access unit, parameter sets \
+                  inline before each keyframe. A keyframe opens a group. After its first frame \
+                  the port's catalog entry is a `VideoEntry` naming the codec string the \
+                  stream's SPS spells and the coded extent, with no `description`. A frame the \
+                  encoder cannot consume is logged and dropped while the node keeps running; a \
+                  write the channel ceiling refuses makes the next frame a keyframe. The \
+                  session mints from the first frame's dimensions and re-mints when the \
+                  upstream extent changes.\n\n\
                   On a device without a hardware encoder for the codec the session fails to \
                   mint: the failure latches and every later frame is discarded with one error \
                   line; no exception reaches Python.",
@@ -47,7 +49,7 @@ impl HardwareVideoCodecProcessorIdentity for H265EncoderCodecIdentity {
     scheduling = high,
     config = crate::published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig,
     input("video", delivery_profile = "ordered", description = "Video frames to encode"),
-    output("encoded_video", description = "H.265 encoded-frame bags"),
+    output("encoded_video", description = "H.265 media frames, one access unit each"),
 )]
 pub struct H265Encoder {
     encode_body: PublishedSurfaceToEncodedFrameEncoder<H265EncoderCodecIdentity>,
@@ -68,20 +70,28 @@ impl ReactiveProcessor for H265Encoder::Processor {
         }
         let frame: VideoFrame = self.inputs.read_msgpack("video")?;
 
-        // Every bag the encode staged is written even when the call errored,
-        // so a failure part way through a frame's packets never discards the
-        // ones already produced.
+        // Every access unit the encode staged is written even when the call
+        // errored, so a failure part way through a frame's packets never
+        // discards the ones already produced.
         let mut staged = Vec::new();
         let encode_outcome =
             self.encode_body
                 .encode_one_published_surface(&self.config, &frame, &mut staged);
-        for encoded_frame in staged {
-            self.outputs.write_msgpack_with_timestamp(
-                "encoded_video",
-                &encoded_frame.frame,
-                encoded_frame.timestamp_ns,
-            )?;
+        if let Some(video_entry) = self.encode_body.take_video_entry_owed_to_the_port() {
+            self.outputs
+                .set_catalog_entry("encoded_video", video_entry)?;
         }
+        self.encode_body.publish_staged_access_units(
+            staged,
+            |media_frame_bytes, timestamp_ns, group_boundary| {
+                self.outputs.write_bytes_with_timestamp(
+                    "encoded_video",
+                    media_frame_bytes,
+                    timestamp_ns,
+                    group_boundary,
+                )
+            },
+        )?;
         encode_outcome
     }
 }

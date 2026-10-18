@@ -14,10 +14,10 @@ use crate::iceoryx2::MessageGroupBoundary;
 /// What a reader does with one arriving message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageGroupLossRecoveryDisposition {
-    /// Mid-group in a group this reader entered: read it.
+    /// Unbroken since this reader entered the stream: read it.
     Read,
-    /// A group start this reader enters at, first or after a loss: drop the
-    /// state the broken group left, then read it.
+    /// The group start this reader enters the stream at, first or after a
+    /// loss: drop the state the broken stream left, then read it.
     EnterAtThisGroupStart,
     /// Before a group start: the message depends on one this reader never saw.
     DiscardUntilTheNextGroupStart,
@@ -45,13 +45,11 @@ impl MessageGroupLossRecoveryGate {
             self.inside_an_entered_group = false;
         }
         match (self.inside_an_entered_group, group_boundary) {
-            (_, MessageGroupBoundary::StartsGroup) => {
+            (true, _) => MessageGroupLossRecoveryDisposition::Read,
+            (false, MessageGroupBoundary::StartsGroup) => {
                 self.inside_an_entered_group = true;
                 self.group_starts_entered_at += 1;
                 MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart
-            }
-            (true, MessageGroupBoundary::ContinuesGroup) => {
-                MessageGroupLossRecoveryDisposition::Read
             }
             (false, MessageGroupBoundary::ContinuesGroup) => {
                 self.messages_discarded_awaiting_a_group_start += 1;
@@ -70,7 +68,8 @@ impl MessageGroupLossRecoveryGate {
         self.messages_discarded_awaiting_a_group_start
     }
 
-    /// Group starts admitted, the first entry included.
+    /// Times the reader entered the stream at a group start, the first entry
+    /// included.
     pub fn group_starts_entered_at(&self) -> u64 {
         self.group_starts_entered_at
     }
@@ -134,17 +133,30 @@ mod tests {
         assert_eq!(gate.messages_discarded_awaiting_a_group_start(), 0);
     }
 
+    /// A group start in unbroken flow is read, not re-entered: re-entering
+    /// would flush a decoder at every keyframe.
+    #[test]
+    fn a_group_start_in_unbroken_flow_is_read_rather_than_re_entered() {
+        let mut gate = MessageGroupLossRecoveryGate::default();
+        assert_eq!(gate.admit_message(StartsGroup, 0), EnterAtThisGroupStart);
+        assert_eq!(gate.admit_message(ContinuesGroup, 0), Read);
+        assert_eq!(gate.admit_message(StartsGroup, 0), Read);
+        assert_eq!(gate.group_starts_entered_at(), 1);
+    }
+
     /// An audio link starts a group on every message, so a loss costs nothing
     /// but the lost messages themselves.
     #[test]
     fn a_stream_of_group_starts_loses_only_what_the_link_lost() {
         let mut gate = MessageGroupLossRecoveryGate::default();
-        for lost_since_last_read in [0, 0, 2, 0] {
-            assert_eq!(
-                gate.admit_message(StartsGroup, lost_since_last_read),
-                EnterAtThisGroupStart
-            );
-        }
+        let dispositions: Vec<_> = [0, 0, 2, 0]
+            .into_iter()
+            .map(|lost_since_last_read| gate.admit_message(StartsGroup, lost_since_last_read))
+            .collect();
+        assert_eq!(
+            dispositions,
+            [EnterAtThisGroupStart, Read, EnterAtThisGroupStart, Read]
+        );
         assert_eq!(gate.messages_lost_on_the_link(), 2);
         assert_eq!(gate.messages_discarded_awaiting_a_group_start(), 0);
     }
