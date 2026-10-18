@@ -6,7 +6,9 @@
 //! Ported from NVIDIA's `NvVideoParser` (`VulkanH265Parser.cpp`); the field
 //! shapes mirror the `StdVideoH265*` structures the Vulkan Video decoder fills.
 
-use crate::core::nal_unit_raw_byte_sequence_payload::RbspBitstreamReader;
+use crate::core::nal_unit_raw_byte_sequence_payload::{
+    RbspBitstreamReader, remove_emulation_prevention_bytes,
+};
 
 pub const MAX_NUM_SPS: usize = 16;
 pub const MAX_NUM_SUB_LAYERS: usize = 7;
@@ -216,11 +218,39 @@ pub struct VideoHrdParameters {
 // Profile / Tier / Level
 // ---------------------------------------------------------------------------
 
-/// Profile-tier-level info, ported from `StdVideoH265ProfileTierLevel`.
+/// Profile-tier-level info, ported from `StdVideoH265ProfileTierLevel`, plus
+/// the general fields an `hvc1` codec string spells (ISO/IEC 14496-15 §E.3).
 #[derive(Debug, Clone, Default)]
 pub struct ProfileTierLevel {
+    pub general_profile_space: u8,
+    pub general_tier_flag: bool,
     pub general_profile_idc: u32,
+    /// The 32 `general_profile_compatibility_flag`s, `flag[0]` the most
+    /// significant bit of the first byte.
+    pub general_profile_compatibility_flags: [u8; 4],
+    /// The 48 bits from `general_progressive_source_flag` through the reserved
+    /// bits before `general_level_idc`, in bitstream order.
+    pub general_constraint_indicator_flags: [u8; 6],
+    /// `general_level_idc` exactly as the bitstream carries it.
+    pub general_level_idc_in_the_bitstream: u8,
     pub general_level_idc: H265LevelIdc,
+}
+
+impl ProfileTierLevel {
+    /// The WebCodecs / RFC 6381 codec string for a stream with this profile,
+    /// tier and level — `hvc1.1.6.L93.90` for x265's 1080p Main at level 3.1.
+    pub fn hvc1_codec_string(&self) -> String {
+        hang::catalog::H265 {
+            in_band: false,
+            profile_space: self.general_profile_space,
+            profile_idc: self.general_profile_idc as u8,
+            profile_compatibility_flags: self.general_profile_compatibility_flags,
+            tier_flag: self.general_tier_flag,
+            level_idc: self.general_level_idc_in_the_bitstream,
+            constraint_flags: self.general_constraint_indicator_flags,
+        }
+        .to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -754,19 +784,11 @@ pub(crate) fn parse_h265_scaling_list_data(
 pub fn parse_h265_sequence_parameter_set(reader: &mut RbspBitstreamReader) -> Option<HevcSeqParam> {
     let mut sps = HevcSeqParam::default();
 
-    sps.sps_video_parameter_set_id = reader.u(4)? as u8;
-
-    // For single-layer (nuh_layer_id == 0) streams
-    sps.sps_max_sub_layers_minus1 = reader.u(3)? as u8;
-    if sps.sps_max_sub_layers_minus1 as usize >= MAX_NUM_SUB_LAYERS {
-        tracing::warn!("Too many sub-layers: {}", sps.sps_max_sub_layers_minus1);
-        return None;
-    }
-
-    sps.flags.sps_temporal_id_nesting_flag = reader.u(1)? != 0;
-
-    // profile_tier_level(true, sps_max_sub_layers_minus1)
-    sps.profile_tier_level = parse_h265_profile_tier_level(reader, sps.sps_max_sub_layers_minus1)?;
+    let opening = parse_h265_sequence_parameter_set_opening(reader)?;
+    sps.sps_video_parameter_set_id = opening.sps_video_parameter_set_id;
+    sps.sps_max_sub_layers_minus1 = opening.sps_max_sub_layers_minus1;
+    sps.flags.sps_temporal_id_nesting_flag = opening.sps_temporal_id_nesting_flag;
+    sps.profile_tier_level = opening.profile_tier_level;
 
     sps.sps_seq_parameter_set_id = reader.ue()? as u8;
     if sps.sps_seq_parameter_set_id as usize >= MAX_NUM_SPS {
@@ -957,27 +979,58 @@ pub fn parse_h265_sequence_parameter_set(reader: &mut RbspBitstreamReader) -> Op
     Some(sps)
 }
 
+/// The fields an H.265 SPS opens with, through `profile_tier_level()`.
+struct H265SequenceParameterSetOpening {
+    sps_video_parameter_set_id: u8,
+    sps_max_sub_layers_minus1: u8,
+    sps_temporal_id_nesting_flag: bool,
+    profile_tier_level: ProfileTierLevel,
+}
+
+fn parse_h265_sequence_parameter_set_opening(
+    reader: &mut RbspBitstreamReader,
+) -> Option<H265SequenceParameterSetOpening> {
+    let sps_video_parameter_set_id = reader.u(4)? as u8;
+    // For single-layer (nuh_layer_id == 0) streams
+    let sps_max_sub_layers_minus1 = reader.u(3)? as u8;
+    if sps_max_sub_layers_minus1 as usize >= MAX_NUM_SUB_LAYERS {
+        tracing::warn!("Too many sub-layers: {}", sps_max_sub_layers_minus1);
+        return None;
+    }
+    let sps_temporal_id_nesting_flag = reader.u(1)? != 0;
+    let profile_tier_level = parse_h265_profile_tier_level(reader, sps_max_sub_layers_minus1)?;
+    Some(H265SequenceParameterSetOpening {
+        sps_video_parameter_set_id,
+        sps_max_sub_layers_minus1,
+        sps_temporal_id_nesting_flag,
+        profile_tier_level,
+    })
+}
+
+/// Read the general profile, tier and level from one SPS NAL unit, NAL header
+/// included. `None` when the unit ends inside `profile_tier_level()`.
+pub fn h265_profile_tier_level_from_sequence_parameter_set_nal_unit(
+    sequence_parameter_set_nal_unit: &[u8],
+) -> Option<ProfileTierLevel> {
+    let raw_byte_sequence_payload =
+        remove_emulation_prevention_bytes(sequence_parameter_set_nal_unit.get(2..)?);
+    let mut reader = RbspBitstreamReader::new(&raw_byte_sequence_payload);
+    parse_h265_sequence_parameter_set_opening(&mut reader).map(|opening| opening.profile_tier_level)
+}
+
 /// Parse profile_tier_level() from the bitstream.
-/// Returns a simplified ProfileTierLevel with profile_idc and level_idc.
 pub(crate) fn parse_h265_profile_tier_level(
     reader: &mut RbspBitstreamReader,
     max_sub_layers_minus1: u8,
 ) -> Option<ProfileTierLevel> {
-    // general_profile_space(2), general_tier_flag(1), general_profile_idc(5)
-    let _profile_space = reader.u(2)?;
-    let _tier_flag = reader.u(1)?;
+    let general_profile_space = reader.u(2)? as u8;
+    let general_tier_flag = reader.u(1)? != 0;
     let general_profile_idc = reader.u(5)?;
-
-    // general_profile_compatibility_flags[32]
-    reader.u(32)?;
-
-    // progressive_source_flag, interlaced_source_flag, non_packed_constraint_flag,
-    // frame_only_constraint_flag = 4 bits
-    reader.u(4)?;
-    // 44 reserved zero bits
-    reader.u(32)?;
-    reader.u(12)?;
-
+    let general_profile_compatibility_flags = reader.u(32)?.to_be_bytes();
+    let mut general_constraint_indicator_flags = [0u8; 6];
+    for constraint_byte in &mut general_constraint_indicator_flags {
+        *constraint_byte = reader.u(8)? as u8;
+    }
     let general_level_idc = reader.u(8)? as u8;
 
     // Sub-layer profile/level presence flags
@@ -1005,7 +1058,12 @@ pub(crate) fn parse_h265_profile_tier_level(
     }
 
     Some(ProfileTierLevel {
+        general_profile_space,
+        general_tier_flag,
         general_profile_idc,
+        general_profile_compatibility_flags,
+        general_constraint_indicator_flags,
+        general_level_idc_in_the_bitstream: general_level_idc,
         general_level_idc: general_level_idc_to_vulkan(general_level_idc),
     })
 }
@@ -1097,6 +1155,84 @@ mod tests {
             2,
         );
         assert!(parsed.is_none());
+    }
+
+    /// The SPS each hardware arm actually emits. Vulkan Video sets only the
+    /// Main compatibility flag and writes `general_level_idc` as the spec's
+    /// byte, not the Vulkan enum index the decode side tolerates.
+    #[test]
+    fn each_arms_checked_in_sps_spells_its_hvc1_codec_string() {
+        for (file_name, expected_codec_string) in [
+            ("vulkan_video_h265_main_1280x720.sps", "hvc1.1.2.L93.90"),
+            ("videotoolbox_h265_main_320x180.sps", "hvc1.1.6.L60.B0"),
+        ] {
+            let sequence_parameter_set = std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/sequence_parameter_sets")
+                    .join(file_name),
+            )
+            .expect("a checked-in SPS fixture");
+            let profile_tier_level = h265_profile_tier_level_from_sequence_parameter_set_nal_unit(
+                &sequence_parameter_set,
+            )
+            .unwrap_or_else(|| panic!("{file_name} parses"));
+            assert_eq!(
+                profile_tier_level.hvc1_codec_string(),
+                expected_codec_string,
+                "{file_name}"
+            );
+        }
+    }
+
+    /// x265's 1080p Main level 3.1 SPS opening, emulation-prevention bytes
+    /// and all: `42 01 | 01 | 01 60 00 00 03 00 90 00 00 03 00 00 03 00 5d`.
+    #[test]
+    fn a_main_profile_sps_spells_its_hvc1_codec_string() {
+        let profile_tier_level = h265_profile_tier_level_from_sequence_parameter_set_nal_unit(&[
+            0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00,
+            0x00, 0x03, 0x00, 0x5D, 0xA0,
+        ])
+        .expect("a complete profile_tier_level");
+        assert_eq!(profile_tier_level.general_profile_idc, 1);
+        assert_eq!(profile_tier_level.general_level_idc_in_the_bitstream, 93);
+        assert_eq!(profile_tier_level.hvc1_codec_string(), "hvc1.1.6.L93.90");
+    }
+
+    #[test]
+    fn hang_reads_the_hvc1_string_back_to_the_same_profile_tier_and_level() {
+        let profile_tier_level = ProfileTierLevel {
+            general_profile_space: 0,
+            general_tier_flag: true,
+            general_profile_idc: 2,
+            general_profile_compatibility_flags: [0x20, 0, 0, 0],
+            general_constraint_indicator_flags: [0xB0, 0, 0, 0, 0, 0],
+            general_level_idc_in_the_bitstream: 153,
+            general_level_idc: H265LevelIdc::Level5_1,
+        };
+        let read_back: hang::catalog::H265 = profile_tier_level
+            .hvc1_codec_string()
+            .parse()
+            .expect("hang parses the string");
+        assert_eq!(
+            (
+                read_back.profile_idc,
+                read_back.tier_flag,
+                read_back.level_idc,
+                read_back.profile_compatibility_flags,
+                read_back.constraint_flags
+            ),
+            (2, true, 153, [0x20, 0, 0, 0], [0xB0, 0, 0, 0, 0, 0])
+        );
+    }
+
+    #[test]
+    fn an_sps_ending_inside_profile_tier_level_is_not_read() {
+        assert!(
+            h265_profile_tier_level_from_sequence_parameter_set_nal_unit(&[
+                0x42, 0x01, 0x01, 0x01, 0x60
+            ])
+            .is_none()
+        );
     }
 
     #[test]

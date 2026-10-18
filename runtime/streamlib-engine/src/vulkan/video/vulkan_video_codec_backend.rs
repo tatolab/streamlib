@@ -129,6 +129,9 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
                 source.width,
                 source.height,
             )?;
+        if source.force_sync_point {
+            self.encoder.force_idr();
+        }
         let packets = self.encoder.encode_source_texture(
             source_registration.texture(),
             source_registration.current_layout(),

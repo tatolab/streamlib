@@ -73,6 +73,9 @@ pub struct VideoEncodeSourceSurface<'a> {
     pub height: u32,
     /// The frame's timestamp, carried through to the access units it yields.
     pub timestamp_ns: i64,
+    /// Encode this frame as a sync point whatever the cadence says — what an
+    /// encoder whose last access unit never reached its port asks for.
+    pub force_sync_point: bool,
 }
 
 /// One access unit an encode session completed.

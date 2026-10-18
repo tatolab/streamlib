@@ -8,10 +8,10 @@ error — one line per frame rather than one array at the end, so a run
 that stalls half way still says how far it got.
 
 `EncodedFrameProbe` is the one under test: it reads the encoder's own output
-with `into=EncodedVideoFrame`, which is the whole claim the cast makes.
-`EncodedFrameTimestampProbe` reads the same link for its frame-header stamps,
-which `read_with_timestamp` is the only read that yields and which takes no
-`into=`. `DecodedVideoFrameProbe` reads the far side of the decoder, where the
+the way a moq-dev player does — each message a media frame, a keyframe
+opening a group, the port's catalog entry naming the codec.
+`EncodedFrameTimestampProbe` reads the same link for its frame-header stamps.
+`DecodedVideoFrameProbe` reads the far side of the decoder, where the
 published output is an ordinary video-frame message.
 
 The two stamp reports are uncapped, unlike the cast report. Each probe is its
@@ -22,7 +22,8 @@ overlap.
 
 import json
 
-from tatolab.stream import EncodedVideoFrame, log, node
+from hang_media_frame_reading import split_hang_legacy_container_media_frame
+from tatolab.stream import log, node
 from tatolab.stream.msgpack import unpack
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
@@ -33,9 +34,9 @@ ENCODED_FRAME_STAMP_MARKER = "MARKER:ENCODED_FRAME_STAMP "
 ENCODED_FRAMES_COMPLETE_MARKER = "MARKER:ENCODED_FRAMES_COMPLETE"
 
 # Long enough to span a group boundary: the pattern publishes 30 fps and the
-# app asks for a 1-second keyframe interval, so a sync point lands every 30
-# frames and this window holds two groups. Without a second group, "the group
-# index steps only at a sync point" is an assertion about nothing.
+# app asks for a 1-second keyframe interval, so a keyframe lands every 30
+# frames and this window holds two groups. Without a second group, "a group
+# opens at a keyframe" is an assertion about nothing.
 ENCODED_FRAMES_REPORTED = 40
 
 # Enough decoded stamps that the cross-check is about the stream, and enough
@@ -48,7 +49,7 @@ ENCODED_PORT = "encoded_video_from_upstream"
 
 @node
 class EncodedFrameProbe:
-    """Casts the encoder's output and reports each frame's wire fields."""
+    """Reads the encoder's output as media frames and reports each one."""
 
     def __init__(self) -> None:
         self.frames_admitted = 0
@@ -60,34 +61,32 @@ class EncodedFrameProbe:
     def process(self, ctx) -> None:
         if self.frames_admitted >= ENCODED_FRAMES_REPORTED:
             return
-        frame = ctx.inputs.read(ENCODED_PORT, into=EncodedVideoFrame)
-        if frame is None:
+        message = ctx.inputs.read_message(ENCODED_PORT)
+        if message is None:
             return
         # The doctrine every reader of an encoded stream owes it: enter only
-        # at a sync point. The first message off this link is not necessarily the
-        # producer's first — attaching mid-group hands over frames whose sync
-        # point is already gone.
+        # at a group start. The first message off this link is not necessarily
+        # the producer's first — attaching mid-group hands over frames whose
+        # keyframe is already gone.
         if not self.entered_the_stream:
-            if not frame.is_sync_point:
+            if not message.starts_group:
                 return
             self.entered_the_stream = True
         self.frames_admitted += 1
-        log.info(
-            ENCODED_FRAME_MARKER
-            + json.dumps(
-                {
-                    "codec": frame.codec,
-                    "is_sync_point": frame.is_sync_point,
-                    "group_index": frame.group_index,
-                    "sequence_index": frame.sequence_index,
-                    "width": frame.width,
-                    "height": frame.height,
-                    "opening_bytes": list(frame.annex_b_access_unit_bytes[:4]),
-                    "byte_count": len(frame.annex_b_access_unit_bytes),
-                    "carries_color": frame.color is not None,
-                }
-            )
+        varint_timestamp_microseconds, access_unit = split_hang_legacy_container_media_frame(
+            message.payload
         )
+        report = {
+            "starts_group": message.starts_group,
+            "lost_since_last_read": message.lost_since_last_read,
+            "varint_timestamp_microseconds": varint_timestamp_microseconds,
+            "timestamp_ns": message.timestamp_ns,
+            "opening_bytes": list(access_unit[:4]),
+            "byte_count": len(access_unit),
+        }
+        if self.frames_admitted == 1:
+            report["catalog_entry"] = ctx.inputs.inbound_link_catalog_entry(ENCODED_PORT)
+        log.info(ENCODED_FRAME_MARKER + json.dumps(report))
         if self.frames_admitted == ENCODED_FRAMES_REPORTED:
             log.info(ENCODED_FRAMES_COMPLETE_MARKER)
 
@@ -96,7 +95,7 @@ class EncodedFrameProbe:
 class EncodedFrameTimestampProbe:
     """Reports the frame-header stamp riding each of the encoder's messages.
 
-    No sync-point gate: this decodes nothing, so every message that arrives is one
+    No group gate: this decodes nothing, so every message that arrives is one
     whose stamp a decoded frame downstream may carry.
     """
 
@@ -107,13 +106,7 @@ class EncodedFrameTimestampProbe:
         payload, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)
         if payload is None:
             return
-        frame = EncodedVideoFrame.from_bytes(payload)
-        log.info(
-            ENCODED_FRAME_STAMP_MARKER
-            + json.dumps(
-                {"sequence_index": frame.sequence_index, "timestamp_ns": timestamp_ns}
-            )
-        )
+        log.info(ENCODED_FRAME_STAMP_MARKER + json.dumps({"timestamp_ns": timestamp_ns}))
 
 
 @node

@@ -156,6 +156,7 @@ fn regenerate_the_cross_floor_clips() {
                         width: CROSS_FLOOR_CLIP_WIDTH,
                         height: CROSS_FLOOR_CLIP_HEIGHT,
                         timestamp_ns: i64::from(frame_index + 1),
+                        force_sync_point: false,
                     })
                     .expect("the frame encodes")
                     .into_iter()
@@ -223,6 +224,7 @@ fn repeated_and_backwards_source_stamps_each_encode_carrying_their_own_stamp() {
                 width: CROSS_FLOOR_CLIP_WIDTH,
                 height: CROSS_FLOOR_CLIP_HEIGHT,
                 timestamp_ns: source_timestamp_ns,
+                force_sync_point: false,
             })
             .unwrap_or_else(|refusal| {
                 panic!("a frame stamped {source_timestamp_ns} must still encode: {refusal}")
@@ -290,6 +292,7 @@ fn a_decode_cap_below_the_picture_is_refused_and_one_at_it_is_not() {
             width: REFERENCE_WIDTH,
             height: REFERENCE_HEIGHT,
             timestamp_ns: 1,
+            force_sync_point: false,
         })
         .expect("the frame encodes")
         .remove(0);
@@ -397,6 +400,7 @@ fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream
                     width: REFERENCE_WIDTH,
                     height: REFERENCE_HEIGHT,
                     timestamp_ns,
+                    force_sync_point: false,
                 })
                 .expect("the frame encodes");
             assert_eq!(

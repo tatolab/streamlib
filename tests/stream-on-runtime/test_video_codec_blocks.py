@@ -14,10 +14,9 @@ the decoded frames arriving back at the source extent is the conformance
 crop, proven from Python for both codecs, and the encoded frames carrying
 the padded extent is the other half of the same fact.
 
-The encoded-channel test is where the cast meets the engine: what
-`EncodedVideoFrame` says an encoded bag is, asserted against bags the
-hardware encoder actually wrote. Its GPU-free half — the wire keys, the
-refusals, the payload's msgpack type — is `test_encoded_video_frame_cast.py`.
+The encoded-channel test reads the hardware encoder's output from Python the
+way a moq-dev player does: each message a media frame, a keyframe opening a
+group, and the port's catalog entry naming the codec string the SPS spells.
 """
 
 from collections.abc import Callable
@@ -76,6 +75,10 @@ ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS = {
     H265Decoder: an_h265_decoder_alone,
 }
 
+
+# What the catalog entry's codec string opens with: both arms encode H.264 at
+# High and H.265 at Main.
+CODEC_STRING_PREFIX_BY_CODEC = {"h264": "avc1.64", "h265": "hvc1.1."}
 
 CODEC_ROUND_TRIPS = {
     "h264": {
@@ -221,18 +224,17 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
 @pytest.mark.requires_gpu
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 @pytest.mark.rig_only_capability(reason="Vulkan Video")
-def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
+def test_the_encoded_channel_carries_media_frames_under_the_ports_catalog_entry(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]", codec
 ):
-    """The encoded-domain link, read from Python: every bag the hardware
-    encoder published casts to an `EncodedVideoFrame`, and what the cast then
-    reports is the wire contract the plan fixed.
+    """The encoded-domain link, read from Python as a player reads it: every
+    message the hardware encoder published is a media frame — the varint
+    timestamp, then one Annex-B access unit — a keyframe opens a group, and
+    the port's catalog entry names the codec string and the coded extent.
 
-    The probe enters the stream at a sync point, as every reader of an encoded
-    stream must — the first bag off a link is not necessarily the producer's
-    first. From there the ordering pair is the whole assertion: a
-    `sequence_index` step other than exactly one is loss, and `group_index`
-    moves only where a decoder could have entered.
+    The probe enters the stream at a group start, as every reader of an
+    encoded stream must — the first message off a link is not necessarily the
+    producer's first.
     """
     tatolabd = start_the_codec_round_trip(start_tatolabd_running_stream, codec)
     tatolabd.await_marker("ENCODED_FRAMES_COMPLETE")
@@ -245,47 +247,46 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
         f"{ENCODED_FRAMES_REPORTED}; standard error:\n{tatolabd.recent_stderr()}"
     )
 
-    assert encoded_frames[0]["is_sync_point"], (
-        "a reader enters an encoded stream only at a sync point, so the first "
-        "frame it admits is one by construction"
+    assert encoded_frames[0]["starts_group"], (
+        "a reader enters an encoded stream only at a group start, so the first "
+        "frame it admits opens one by construction"
     )
     for frame in encoded_frames:
-        assert frame["codec"] == codec, (
-            "the bag names the elementary stream its bitstream actually is"
+        assert frame["varint_timestamp_microseconds"] == frame["timestamp_ns"] // 1_000, (
+            "the media frame's varint is the envelope's stamp in microseconds"
         )
-        assert (frame["width"], frame["height"]) == (
-            CODED_EXTENT_OF_THE_320_BY_180_PATTERN
-        ), "an encoded bag carries the coded extent, before the conformance crop"
         assert any(
             frame["opening_bytes"][: len(start_code)] == start_code
             for start_code in ANNEX_B_START_CODES
         ), (
-            "the payload must be one Annex-B access unit, and this one opens "
-            f"{frame['opening_bytes']}"
+            "the payload after the varint must be one Annex-B access unit, and this "
+            f"one opens {frame['opening_bytes']}"
         )
         assert frame["byte_count"] > 0, "an access unit with no bytes decodes to nothing"
-        assert frame["carries_color"], (
-            "the encoder bakes the stream's color into its parameter sets, so "
-            "the bag says what it baked"
+        assert frame["lost_since_last_read"] == 0, (
+            "a probe keeping up loses nothing on its link"
         )
 
-    for earlier, later in zip(encoded_frames, encoded_frames[1:]):
-        assert later["sequence_index"] == earlier["sequence_index"] + 1, (
-            "`sequence_index` is monotonic in publication order and never "
-            f"resets, so the step {earlier['sequence_index']} → "
-            f"{later['sequence_index']} is loss on the link"
-        )
-        expected_group = earlier["group_index"] + (1 if later["is_sync_point"] else 0)
-        assert later["group_index"] == expected_group, (
-            "`group_index` counts sync points, so it steps at one and nowhere "
-            f"else: {earlier['group_index']} → {later['group_index']} across a "
-            f"frame with is_sync_point={later['is_sync_point']}"
-        )
+    assert any(frame["starts_group"] for frame in encoded_frames[1:]), (
+        "the window must span a group boundary — the stream asks for a 1-second "
+        "keyframe interval at the pattern's 30 fps for exactly this reason"
+    )
 
-    assert any(frame["is_sync_point"] for frame in encoded_frames[1:]), (
-        "the window must span a group boundary, or the group-index assertion "
-        "above is about nothing — the stream asks for a 1-second keyframe interval "
-        "at the pattern's 30 fps for exactly this reason"
+    catalog_entry = encoded_frames[0]["catalog_entry"]
+    assert catalog_entry is not None and catalog_entry["section"] == "video", (
+        f"the encoder's port carries a video entry once it has encoded: {catalog_entry}"
+    )
+    assert catalog_entry["entry"]["codec"].startswith(
+        CODEC_STRING_PREFIX_BY_CODEC[codec]
+    ), f"the entry spells the codec string the SPS carries: {catalog_entry}"
+    assert (
+        catalog_entry["entry"]["codedWidth"],
+        catalog_entry["entry"]["codedHeight"],
+    ) == CODED_EXTENT_OF_THE_320_BY_180_PATTERN, (
+        "the entry carries the coded extent, before the conformance crop"
+    )
+    assert "description" not in catalog_entry["entry"], (
+        "an absent description is how a player knows the parameter sets ride inline"
     )
 
 

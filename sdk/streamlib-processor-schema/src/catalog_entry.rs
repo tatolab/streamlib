@@ -119,7 +119,8 @@ pub struct VideoEntry {
 }
 
 /// An `audio` entry.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioEntry {
     /// The WebCodecs codec string (`opus`, `mp4a.40.2`).
     pub codec: String,
@@ -196,6 +197,34 @@ impl From<AudioEntry> for CatalogEntry {
                 ("description", audio.description.map(Value::from)),
             ]),
         }
+    }
+}
+
+/// Why a catalog entry does not read as an [`AudioEntry`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CatalogEntryIsNotAnAudioEntry {
+    /// The entry belongs in another section.
+    #[error("the catalog entry is a `{section}` entry, not an `audio` one")]
+    OfAnotherSection { section: CatalogSection },
+    /// The fields are not the ones an `audio` entry carries.
+    #[error("the `audio` entry's fields do not read: {reason}")]
+    FieldsDoNotRead { reason: String },
+}
+
+impl TryFrom<&CatalogEntry> for AudioEntry {
+    type Error = CatalogEntryIsNotAnAudioEntry;
+
+    fn try_from(catalog_entry: &CatalogEntry) -> Result<Self, Self::Error> {
+        if catalog_entry.section != CatalogSection::Audio {
+            return Err(CatalogEntryIsNotAnAudioEntry::OfAnotherSection {
+                section: catalog_entry.section,
+            });
+        }
+        AudioEntry::deserialize(&catalog_entry.entry).map_err(|failure| {
+            CatalogEntryIsNotAnAudioEntry::FieldsDoNotRead {
+                reason: failure.to_string(),
+            }
+        })
     }
 }
 
@@ -285,6 +314,36 @@ mod tests {
             .entry,
             json!({"mode": "snapshot", "mime": "application/msgpack"})
         );
+    }
+
+    #[test]
+    fn an_audio_entry_reads_back_from_its_catalog_entry() {
+        let audio = AudioEntry {
+            codec: "opus".into(),
+            sample_rate: 48_000,
+            number_of_channels: 6,
+            description: Some("4f707573".into()),
+        };
+        assert_eq!(
+            AudioEntry::try_from(&CatalogEntry::from(audio.clone())),
+            Ok(audio)
+        );
+        assert_eq!(
+            AudioEntry::try_from(&CatalogEntry::from(BinaryEntry {
+                mode: CatalogDataTrackMode::Snapshot,
+                mime: None,
+            })),
+            Err(CatalogEntryIsNotAnAudioEntry::OfAnotherSection {
+                section: CatalogSection::Binary
+            })
+        );
+        assert!(matches!(
+            AudioEntry::try_from(&CatalogEntry {
+                section: CatalogSection::Audio,
+                entry: json!({"codec": "opus"}),
+            }),
+            Err(CatalogEntryIsNotAnAudioEntry::FieldsDoNotRead { .. })
+        ));
     }
 
     #[test]

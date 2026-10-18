@@ -7,13 +7,11 @@ Each probe reports what it saw as JSON marker lines on `tatolabd`'s standard
 error — one line per packet or block rather than one array at the
 end, so a run that stalls half way still says how far it got.
 
-Both probes read with `read_with_timestamp` and cast what it hands back,
-rather than with `into=`: the frame-header stamp is what the trim and the
-derived-stamp assertions are about, and no `into=` read yields it. Nothing is
-given up by that — `into=T` calls `T.from_bytes`, the call these make, so the
-two are one validation path. `into=` over a live link is locked in
-`test_encoded_audio_packet_cast.py`; what these prove is that the path holds
-over messages libopus actually wrote.
+The encoded probe reads the encoder's output the way a moq-dev player does:
+each message a media frame — the varint timestamp, then one Opus packet — and
+the port's catalog entry carrying the `OpusHead`. The decoded probe reads with
+`read_with_timestamp`, because the frame-header stamp is what the trim and
+the derived-stamp assertions are about.
 
 `StereoToneSource` states its own format rather than discovering one, so the
 count the encoder follows is the test's fact and not the machine's. It carries
@@ -24,9 +22,9 @@ import json
 import math
 import struct
 
+from hang_media_frame_reading import split_hang_legacy_container_media_frame
 from tatolab.stream import (
     AudioBlock,
-    EncodedAudioPacket,
     RuntimeContextLimitedAccess,
     log,
     monotonic_now_ns,
@@ -125,12 +123,21 @@ class StereoToneSource:
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
 
-@node
-class EncodedAudioPacketProbe:
-    """Casts the encoder's output and reports each packet's wire fields.
+def opus_head_channels_and_pre_skip(hex_encoded_opus_head: str) -> tuple[int, int]:
+    """The channel count and pre-skip an `OpusHead` (RFC 7845 §5.1) carries."""
+    opus_head = bytes.fromhex(hex_encoded_opus_head)
+    if opus_head[:8] != b"OpusHead":
+        raise ValueError(f"not an OpusHead: {hex_encoded_opus_head}")
+    (pre_skip,) = struct.unpack_from("<H", opus_head, 10)
+    return opus_head[9], pre_skip
 
-    No sync-point gate, unlike the video probe: every Opus packet is one, so a
-    reader enters wherever it attached.
+
+@node
+class EncodedOpusMediaFrameProbe:
+    """Reads the encoder's output as media frames and reports each packet.
+
+    No group gate, unlike the video probe: every Opus packet opens a group, so
+    a reader enters wherever it attached.
     """
 
     def __init__(self) -> None:
@@ -142,28 +149,36 @@ class EncodedAudioPacketProbe:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.packets_admitted >= ENCODED_PACKETS_REPORTED:
             return
-        # The frame-header stamp beside the payload, because what the decoder
-        # anchors its run on is the packet's stamp and the cross-check needs
-        # both halves off one read.
-        payload, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)
-        if payload is None:
+        message = ctx.inputs.read_message(ENCODED_PORT)
+        if message is None:
             return
-        packet = EncodedAudioPacket.from_bytes(payload)
+        varint_timestamp_microseconds, opus_packet = split_hang_legacy_container_media_frame(
+            message.payload
+        )
+        catalog_entry = ctx.inputs.inbound_link_catalog_entry(ENCODED_PORT)
+        if catalog_entry is None:
+            raise RuntimeError(
+                "the encoder's port carries no catalog entry beside a packet it published"
+            )
+        opus_head_channels, pre_skip = opus_head_channels_and_pre_skip(
+            catalog_entry["entry"]["description"]
+        )
         self.packets_admitted += 1
         log.info(
             ENCODED_PACKET_MARKER
             + json.dumps(
                 {
-                    "codec": packet.codec,
-                    "is_sync_point": packet.is_sync_point,
-                    "group_index": packet.group_index,
-                    "sequence_index": packet.sequence_index,
-                    "sample_rate": packet.sample_rate,
-                    "channels": packet.channels,
-                    "sample_count": packet.sample_count,
-                    "pre_skip": packet.pre_skip,
-                    "byte_count": len(packet.opus_packet_bytes),
-                    "timestamp_ns": timestamp_ns,
+                    "starts_group": message.starts_group,
+                    "lost_since_last_read": message.lost_since_last_read,
+                    "varint_timestamp_microseconds": varint_timestamp_microseconds,
+                    "timestamp_ns": message.timestamp_ns,
+                    "byte_count": len(opus_packet),
+                    "catalog_section": catalog_entry["section"],
+                    "catalog_codec": catalog_entry["entry"]["codec"],
+                    "catalog_sample_rate": catalog_entry["entry"]["sampleRate"],
+                    "catalog_number_of_channels": catalog_entry["entry"]["numberOfChannels"],
+                    "opus_head_channels": opus_head_channels,
+                    "pre_skip": pre_skip,
                 }
             )
         )

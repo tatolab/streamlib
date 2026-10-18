@@ -12,10 +12,10 @@ No microphone: a Python source publishes a stereo tone at a stated rate, so
 the channel count the encoder follows and the rate the decoder reconstructs at
 are the test's own facts rather than the machine's.
 
-The encoded-channel test is where the cast meets the engine: what
-`EncodedAudioPacket` says an encoded bag is, asserted against bags libopus
-actually wrote. Its GPU-free half — the wire keys, the refusals, the payload's
-msgpack type — is `test_encoded_audio_packet_cast.py`.
+The encoded-channel test reads libopus's output from Python the way a moq-dev
+player does: each message a media frame opening its own group, and the
+port's catalog entry carrying the `OpusHead` a decoder takes its channel count
+and lookahead from.
 """
 
 from collections.abc import Callable
@@ -45,7 +45,7 @@ SAMPLES_IN_ONE_OPUS_PACKET = 960
 NANOSECONDS_PER_OPUS_PACKET = SAMPLES_IN_ONE_OPUS_PACKET * 1_000_000_000 // 48_000
 
 # libopus's lookahead at 48 kHz is `Fs/400 + Fs/250` = 312 samples, and 120 at
-# `lowdelay`. The assertions read `pre_skip` off the bag rather than naming
+# `lowdelay`. The assertions read `pre_skip` off the OpusHead rather than naming
 # either — what is under test is that the decoder trims exactly what the
 # encoder reported, not what this file believes libopus reports. The pairing
 # below does assume the reported lookahead divides evenly into nanoseconds at
@@ -119,17 +119,13 @@ def _reported(tatolabd: RuntimeProcessUnderTest, marker_name: str) -> "list[dict
 
 
 @pytest.mark.requires_gpu
-def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
+def test_the_encoded_channel_carries_media_frames_under_an_opus_head(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
-    """The encoded-domain link, read from Python: every bag libopus produced
-    casts to an `EncodedAudioPacket`, and what the cast then reports is the
-    wire contract the plan fixed.
-
-    Every Opus packet is a sync point, so unlike the video probe this one
-    enters at the first bag it sees and the ordering assertion is the whole
-    of the doctrine: a `sequence_index` step other than exactly one is loss,
-    and each packet is its own group.
+    """The encoded-domain link, read from Python as a player reads it: every
+    message libopus produced is a media frame — the varint timestamp, then one
+    Opus packet — opening its own group, and the port's catalog entry is an
+    audio entry whose `OpusHead` names the channel count and the lookahead.
     """
     tatolabd = start_the_opus_round_trip(start_tatolabd_running_stream)
     tatolabd.await_marker("ENCODED_PACKETS_COMPLETE")
@@ -143,39 +139,37 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
     )
 
     for packet in packets:
-        assert packet["codec"] == "opus", (
-            "the bag names the elementary stream its bitstream actually is"
+        assert packet["starts_group"] is True, (
+            "a decoder enters an Opus stream at any packet, so every packet opens "
+            "its own group"
         )
-        assert packet["is_sync_point"] is True, (
-            "a decoder enters an Opus stream at any packet, so the flag is a "
-            "constant of the convention"
+        assert packet["lost_since_last_read"] == 0, (
+            "a probe keeping up loses nothing on its link"
         )
-        assert packet["sample_rate"] == 48_000, (
+        assert packet["varint_timestamp_microseconds"] == packet["timestamp_ns"] // 1_000, (
+            "the media frame's varint is the envelope's stamp in microseconds"
+        )
+        assert packet["byte_count"] > 0, "a packet with no bytes decodes to nothing"
+        assert (packet["catalog_section"], packet["catalog_codec"]) == ("audio", "opus")
+        assert packet["catalog_sample_rate"] == 48_000, (
             "Opus codes at its own clock whatever the source was resampled from"
         )
-        assert packet["channels"] == SOURCE_CHANNELS, (
-            "the encoder declares no channel count, so the packet carries the "
-            "source's own"
-        )
-        assert packet["sample_count"] == SAMPLES_IN_ONE_OPUS_PACKET, (
-            "the input port's window contract frames at 20 ms, so every packet "
-            "spans 960 per-channel samples"
+        assert (
+            packet["catalog_number_of_channels"] == packet["opus_head_channels"] == SOURCE_CHANNELS
+        ), (
+            "the encoder declares no channel count, so its entry and its OpusHead "
+            "carry the source's own"
         )
         assert packet["pre_skip"] in PRE_SKIP_SAMPLES_A_CREDIBLE_ENCODER_REPORTS, (
             "`pre_skip` is the minted encoder's reported lookahead — a zero "
             f"would mean it was never asked, and {packet['pre_skip']} past a "
             "packet is not a lookahead"
         )
-        assert packet["byte_count"] > 0, "a packet with no bytes decodes to nothing"
 
     for earlier, later in zip(packets, packets[1:]):
-        assert later["sequence_index"] == earlier["sequence_index"] + 1, (
-            "`sequence_index` is monotonic in publication order and never "
-            f"resets, so the step {earlier['sequence_index']} → "
-            f"{later['sequence_index']} is loss on the link"
-        )
-        assert later["group_index"] == earlier["group_index"] + 1, (
-            "every packet is a sync point, so every packet is its own group"
+        assert later["timestamp_ns"] - earlier["timestamp_ns"] == NANOSECONDS_PER_OPUS_PACKET, (
+            "the input port's window contract frames at 20 ms, so consecutive "
+            f"packets are 20 ms apart: {earlier['timestamp_ns']} → {later['timestamp_ns']}"
         )
 
 

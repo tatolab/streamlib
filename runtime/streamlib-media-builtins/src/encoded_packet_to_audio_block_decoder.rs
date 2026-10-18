@@ -1,15 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The `OpusDecoder` body: one encoded-audio packet in, one audio block out.
+//! The `OpusDecoder` body: one Opus packet in, one audio block out.
 //!
 //! Separated from the port surface so it is driven directly by a test with
 //! no `Runtime` — the shape the video decode body already takes.
 //!
+//! The channel count and the encoder's lookahead come from the upstream
+//! port's `OpusHead`. An audio entry carrying none names the channel count;
+//! with no entry at all the first packet's TOC fixes it for the run. Either
+//! way nothing is trimmed.
+//!
 //! Two things it does not do, both doctrine rather than omission: it never
-//! conceals and it never invents. A `sequence_index` step other than one is
-//! loss, and the answer is to reset, re-enter at the next packet — which is
-//! every packet, since each one is a sync point — and log what was not seen.
+//! conceals and it never invents. A read reporting a loss is the answer to
+//! reset, re-enter at the next packet — which is every packet, since each
+//! one opens a group — and log what was not seen.
 //! No packet-loss concealment, no FEC decode: the gap stays derivable from
 //! the stamps either side of it, which is the whole of the drop-at-the-edge
 //! and flush-not-interpolate doctrine.
@@ -25,12 +30,20 @@
 //! instant, and each later block's derived stamp lands on the stamp of the
 //! packet whose input it carries.
 
+use streamlib::sdk::descriptors::{AudioEntry, CatalogEntry};
 use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
+use streamlib::sdk::iceoryx2::{
+    MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate, MessageReadFromInputPort,
+};
 
 use crate::audio_block::{AudioBlock, AudioSampleDtype};
-use crate::audio_window_to_encoded_packet_encoder::OPUS_SAMPLE_RATE_HZ;
-use crate::encoded_audio_packet::EncodedAudioPacket;
-use crate::encoded_stream_ordering::{ArrivingEncodedBagDisposition, EncodedStreamSyncPointGate};
+use crate::audio_window_to_encoded_packet_encoder::{
+    OPUS_CATALOG_CODEC_STRING, OPUS_SAMPLE_RATE_HZ,
+};
+use crate::opus_identification_header::{
+    OpusIdentificationHeader, channels_coded_by_the_opus_packet_toc,
+};
 use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
 
 /// Registration name, and what every refusal and log line names itself by.
@@ -39,11 +52,8 @@ pub const OPUS_DECODER_PROCESSOR_NAME: &str = "OpusDecoder";
 /// The most per-channel samples one Opus packet can span: RFC 6716 §2.1.4
 /// caps a packet at 120 ms, which is 5 760 samples at Opus's 48 kHz clock.
 ///
-/// This, not the bag's `sample_count`, sizes the decode buffer. `sample_count`
-/// is an unvalidated `u32` off the wire that any producer in any language can
-/// write, so believing it would let one declare `u32::MAX` and ask for a
-/// hundred gigabytes. The packet's own TOC byte is the authority on how long
-/// it is, and libopus reports that as the decoded count.
+/// This sizes the decode buffer: the packet's own TOC byte is the authority
+/// on how long it is, and libopus reports that as the decoded count.
 const HIGHEST_PER_CHANNEL_SAMPLES_IN_ONE_OPUS_PACKET: usize = 5_760;
 
 /// A `pre_skip` past this is a producer bug rather than an encoder lookahead.
@@ -102,7 +112,7 @@ struct MintedOpusDecoder {
     /// other count re-mints, because libopus cannot be told a new one.
     minted_for_channels: u32,
     /// Interleaved output, allocated once at mint to the longest packet the
-    /// format allows so no arriving bag can size an allocation.
+    /// format allows so no arriving packet can size an allocation.
     decode_scratch: Vec<f32>,
 }
 
@@ -128,57 +138,175 @@ struct DecodedRunAnchor {
     samples_still_to_trim: u32,
 }
 
-/// Decodes encoded-audio-packet bags into audio blocks.
+/// Decodes Opus packets into audio blocks.
 #[derive(Default)]
 pub struct EncodedPacketToAudioBlockDecoder {
     minted: Option<MintedOpusDecoder>,
-    sync_point_gate: EncodedStreamSyncPointGate,
+    group_loss_recovery_gate: MessageGroupLossRecoveryGate,
     anchor: Option<DecodedRunAnchor>,
     blocks_published: u64,
+    /// The upstream entry last read and the stream format it named, so a
+    /// packet converts and parses it only when the entry changed.
+    stream_format_from_the_upstream_entry: Option<(CatalogEntry, OpusIdentificationHeader)>,
+    /// The channel count the first packet's TOC coded, for a stream whose
+    /// entry names none. Read once: libopus codes a stereo stream's packets
+    /// mono at low rates, so the flag of any later packet is no count.
+    channels_the_first_packets_toc_coded: Option<u32>,
 }
 
 impl EncodedPacketToAudioBlockDecoder {
-    /// Decode one arriving packet, or hand back `None` when the doctrine
-    /// says to discard it or when the whole packet was encoder priming.
-    pub fn decode_one_arriving_packet(
+    /// Decode one arriving message — a media frame carrying one Opus packet —
+    /// in the stream format the upstream port's catalog entry names, or hand
+    /// back `None` when the doctrine says to discard it or when the whole
+    /// packet was encoder priming.
+    pub fn decode_one_arriving_message(
         &mut self,
-        packet: &EncodedAudioPacket,
-        packet_timestamp_ns: i64,
+        message: &MessageReadFromInputPort,
+        upstream_catalog_entry: Option<&CatalogEntry>,
     ) -> Result<Option<AudioBlock>> {
-        let mut re_entering = match self
-            .sync_point_gate
-            .admit(packet.sequence_index, packet.is_sync_point)
+        // Admitted before anything can fail, so a reported loss is never
+        // dropped with a message this decoder could not read.
+        let disposition = self
+            .group_loss_recovery_gate
+            .admit_message(message.group_boundary, message.lost_since_last_read);
+        if disposition == MessageGroupLossRecoveryDisposition::DiscardUntilTheNextGroupStart {
+            return Ok(None);
+        }
+        let decode_outcome =
+            self.decode_one_admitted_message(message, disposition, upstream_catalog_entry);
+        if decode_outcome.is_err() {
+            self.group_loss_recovery_gate
+                .discard_the_rest_of_the_current_group();
+        }
+        decode_outcome
+    }
+
+    fn decode_one_admitted_message(
+        &mut self,
+        message: &MessageReadFromInputPort,
+        disposition: MessageGroupLossRecoveryDisposition,
+        upstream_catalog_entry: Option<&CatalogEntry>,
+    ) -> Result<Option<AudioBlock>> {
+        let media_frame =
+            read_hang_legacy_container_media_frame(&message.payload_bytes).map_err(|refusal| {
+                Error::Runtime(format!("{OPUS_DECODER_PROCESSOR_NAME}: {refusal}"))
+            })?;
+        let stream_format = self.stream_format_for_the_packet(
+            upstream_catalog_entry,
+            media_frame.codec_payload_bytes,
+        )?;
+        self.decode_one_packet_in_stream_format(
+            message,
+            disposition,
+            media_frame.codec_payload_bytes,
+            stream_format,
+        )
+    }
+
+    /// The stream format a packet decodes in: the upstream port's `OpusHead`
+    /// when its catalog entry carries one; otherwise the entry's channel count,
+    /// or with no entry the count the first packet's TOC coded, with nothing to
+    /// trim. An entry that is no Opus entry, and an `OpusHead` that does not
+    /// read, are refused by name rather than passed over.
+    fn stream_format_for_the_packet(
+        &mut self,
+        upstream_catalog_entry: Option<&CatalogEntry>,
+        opus_packet_bytes: &[u8],
+    ) -> Result<OpusIdentificationHeader> {
+        let refused = |refusal: &dyn std::fmt::Display| {
+            Error::Runtime(format!(
+                "{OPUS_DECODER_PROCESSOR_NAME}: the upstream port's catalog entry describes no \
+                 Opus stream — {refusal}"
+            ))
+        };
+        let Some(upstream_catalog_entry) = upstream_catalog_entry else {
+            return Ok(OpusIdentificationHeader {
+                channels: self.channels_fixed_by_the_first_packets_toc(opus_packet_bytes)?,
+                pre_skip: 0,
+            });
+        };
+        if let Some((cached_upstream_entry, stream_format)) =
+            &self.stream_format_from_the_upstream_entry
+            && cached_upstream_entry == upstream_catalog_entry
         {
-            ArrivingEncodedBagDisposition::Decode => false,
-            ArrivingEncodedBagDisposition::ReEnterAtThisSyncPoint => {
-                if self.sync_point_gate.sync_points_entered_at() > 1 {
+            return Ok(*stream_format);
+        }
+        let upstream_audio_entry =
+            AudioEntry::try_from(upstream_catalog_entry).map_err(|refusal| refused(&refusal))?;
+        if upstream_audio_entry.codec != OPUS_CATALOG_CODEC_STRING {
+            return Err(refused(&format!(
+                "it names codec `{}`, not `{OPUS_CATALOG_CODEC_STRING}`",
+                upstream_audio_entry.codec
+            )));
+        }
+        let stream_format = match upstream_audio_entry.description {
+            Some(hex_encoded_opus_head) => {
+                OpusIdentificationHeader::parse_hex_encoded(&hex_encoded_opus_head)
+                    .map_err(|refusal| refused(&refusal))?
+            }
+            None => OpusIdentificationHeader {
+                channels: upstream_audio_entry.number_of_channels,
+                pre_skip: 0,
+            },
+        };
+        self.stream_format_from_the_upstream_entry =
+            Some((upstream_catalog_entry.clone(), stream_format));
+        Ok(stream_format)
+    }
+
+    fn channels_fixed_by_the_first_packets_toc(&mut self, opus_packet_bytes: &[u8]) -> Result<u32> {
+        if let Some(channels) = self.channels_the_first_packets_toc_coded {
+            return Ok(channels);
+        }
+        let channels = channels_coded_by_the_opus_packet_toc(opus_packet_bytes).ok_or_else(|| {
+            Error::Runtime(format!(
+                "{OPUS_DECODER_PROCESSOR_NAME}: an empty packet has no TOC byte to read a channel \
+                 count from"
+            ))
+        })?;
+        Ok(*self.channels_the_first_packets_toc_coded.insert(channels))
+    }
+
+    fn decode_one_packet_in_stream_format(
+        &mut self,
+        message: &MessageReadFromInputPort,
+        disposition: MessageGroupLossRecoveryDisposition,
+        opus_packet_bytes: &[u8],
+        stream_format: OpusIdentificationHeader,
+    ) -> Result<Option<AudioBlock>> {
+        let lost_since_last_read = message.lost_since_last_read;
+        let packet_timestamp_ns = message.timestamp_ns;
+        let mut re_entering = match disposition {
+            MessageGroupLossRecoveryDisposition::Read => false,
+            MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart => {
+                if self.group_loss_recovery_gate.group_starts_entered_at() > 1 {
                     tracing::warn!(
-                        packets_not_seen = self.sync_point_gate.bags_lost_to_gaps(),
-                        sequence_index = packet.sequence_index,
-                        samples_discarded_realigning = packet.pre_skip,
-                        "{OPUS_DECODER_PROCESSOR_NAME}: a gap in the encoded stream — resetting \
-                         and re-entering here. Nothing is invented to bridge it; the gap stays \
+                        packets_not_seen = lost_since_last_read,
+                        packets_lost_on_the_link =
+                            self.group_loss_recovery_gate.messages_lost_on_the_link(),
+                        samples_discarded_realigning = stream_format.pre_skip,
+                        "{OPUS_DECODER_PROCESSOR_NAME}: the link lost packets — resetting and \
+                         re-entering here. Nothing is invented to bridge the loss; it stays \
                          derivable from the stamps either side, and the samples discarded to \
                          re-align on this packet's stamp are counted rather than dropped quietly"
                     );
                 }
                 true
             }
-            // Unreachable while every Opus packet is a sync point, and kept
-            // rather than collapsed because the gate is the shared one: a
-            // producer that ever writes `is_sync_point = false` gets the
-            // doctrine rather than a decode of a packet this reader has no
-            // state for.
-            ArrivingEncodedBagDisposition::DiscardUntilTheNextSyncPoint => return Ok(None),
+            // Unreachable while every Opus packet opens a group, and kept
+            // rather than collapsed: a producer writing a packet that
+            // continues a group gets the doctrine rather than a decode of a
+            // packet this reader has no state for.
+            MessageGroupLossRecoveryDisposition::DiscardUntilTheNextGroupStart => return Ok(None),
         };
 
         if let Some(stale) = self
             .minted
-            .take_if(|minted| minted.minted_for_channels != packet.channels)
+            .take_if(|minted| minted.minted_for_channels != stream_format.channels)
         {
             tracing::info!(
                 minted_for_channels = stale.minted_for_channels,
-                packet_channels = packet.channels,
+                packet_channels = stream_format.channels,
                 "{OPUS_DECODER_PROCESSOR_NAME}: the producer's channel count changed — re-minting the decoder"
             );
             // A new instance holds none of the old one's state and primes
@@ -187,7 +315,7 @@ impl EncodedPacketToAudioBlockDecoder {
         }
         let minted = match &mut self.minted {
             Some(minted) => minted,
-            empty_slot => empty_slot.insert(mint_decoder_for_packet(packet)?),
+            empty_slot => empty_slot.insert(mint_decoder_for_stream_format(stream_format)?),
         };
 
         if re_entering {
@@ -195,34 +323,25 @@ impl EncodedPacketToAudioBlockDecoder {
             self.anchor = None;
         }
 
-        let channels = packet.channels as usize;
+        let channels = stream_format.channels as usize;
         let decoded_samples = minted
             .instance
-            .decode_into_interleaved_f32(&packet.opus_packet_bytes, &mut minted.decode_scratch)?;
+            .decode_into_interleaved_f32(opus_packet_bytes, &mut minted.decode_scratch)?;
         let decoded_interleaved = &minted.decode_scratch[..decoded_samples * channels];
 
-        if packet.sample_rate != OPUS_SAMPLE_RATE_HZ {
+        if stream_format.pre_skip > HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES {
             return Err(Error::Runtime(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: the packet declares {} Hz, but Opus codes at \
-                 {OPUS_SAMPLE_RATE_HZ} Hz and a decoder reconstructs at that rate whatever the \
-                 source was resampled from — refused rather than decoded at 48 kHz and \
-                 published as though it had always been 48 kHz",
-                packet.sample_rate
-            )));
-        }
-        if packet.pre_skip > HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES {
-            return Err(Error::Runtime(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: the packet declares a `pre_skip` of {} samples, \
+                "{OPUS_DECODER_PROCESSOR_NAME}: the OpusHead declares a `pre_skip` of {} samples, \
                  past the {HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES} one whole Opus packet spans — an \
                  encoder's lookahead at 48 kHz is 312. Refused rather than trimmed, because \
                  honouring it would emit nothing for the rest of the run without saying why",
-                packet.pre_skip
+                stream_format.pre_skip
             )));
         }
         let anchor = self.anchor.get_or_insert(DecodedRunAnchor {
             first_emitted_sample_timestamp_ns: packet_timestamp_ns,
             samples_emitted_since_anchor: 0,
-            samples_still_to_trim: packet.pre_skip,
+            samples_still_to_trim: stream_format.pre_skip,
         });
 
         let trimmed = (anchor.samples_still_to_trim as usize).min(decoded_samples);
@@ -245,7 +364,7 @@ impl EncodedPacketToAudioBlockDecoder {
         Ok(Some(AudioBlock {
             interleaved_sample_bytes,
             sample_rate: OPUS_SAMPLE_RATE_HZ,
-            channels: packet.channels,
+            channels: stream_format.channels,
             sample_count: emitted_samples as u32,
             dtype: AudioSampleDtype::F32,
             first_sample_timestamp_ns,
@@ -257,9 +376,9 @@ impl EncodedPacketToAudioBlockDecoder {
         self.blocks_published
     }
 
-    /// How many packets the `sequence_index` gaps say the link lost.
-    pub fn packets_lost_to_gaps(&self) -> u64 {
-        self.sync_point_gate.bags_lost_to_gaps()
+    /// How many packets the link reported lost.
+    pub fn packets_lost_on_the_link(&self) -> u64 {
+        self.group_loss_recovery_gate.messages_lost_on_the_link()
     }
 }
 
@@ -270,20 +389,23 @@ fn timestamp_offset_ns_for(samples_emitted_since_anchor: u64) -> i64 {
         as i64
 }
 
-fn mint_decoder_for_packet(packet: &EncodedAudioPacket) -> Result<MintedOpusDecoder> {
-    let layout =
-        OpusStreamLayoutForSourceChannelCount::resolve(packet.channels).map_err(|refusal| {
+fn mint_decoder_for_stream_format(
+    stream_format: OpusIdentificationHeader,
+) -> Result<MintedOpusDecoder> {
+    let layout = OpusStreamLayoutForSourceChannelCount::resolve(stream_format.channels).map_err(
+        |refusal| {
             Error::Runtime(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: this packet cannot be decoded — {refusal}"
+                "{OPUS_DECODER_PROCESSOR_NAME}: this stream cannot be decoded — {refusal}"
             ))
-        })?;
+        },
+    )?;
     let instance = match layout {
         OpusStreamLayoutForSourceChannelCount::MappingFamilyZeroSingleStream { channels } => {
             MintedOpusDecoderInstance::SingleStream(
                 opus::Decoder::new(OPUS_SAMPLE_RATE_HZ, channels).map_err(|failure| {
                     Error::Runtime(format!(
                         "{OPUS_DECODER_PROCESSOR_NAME}: libopus refused a {} channel decoder: {failure}",
-                        packet.channels
+                        stream_format.channels
                     ))
                 })?,
             )
@@ -300,25 +422,25 @@ fn mint_decoder_for_packet(packet: &EncodedAudioPacket) -> Result<MintedOpusDeco
                     Error::Runtime(format!(
                         "{OPUS_DECODER_PROCESSOR_NAME}: libopus refused a {} channel multistream decoder: \
                          {failure}",
-                        packet.channels
+                        stream_format.channels
                     ))
                 })?,
             )
         }
     };
     tracing::info!(
-        channels = packet.channels,
+        channels = stream_format.channels,
         channel_mapping_family = layout.channel_mapping_family(),
-        pre_skip = packet.pre_skip,
-        "{OPUS_DECODER_PROCESSOR_NAME}: minted the Opus decoder from the packet's channel count"
+        pre_skip = stream_format.pre_skip,
+        "{OPUS_DECODER_PROCESSOR_NAME}: minted the Opus decoder from the stream's channel count"
     );
     Ok(MintedOpusDecoder {
         instance,
-        minted_for_channels: packet.channels,
+        minted_for_channels: stream_format.channels,
         decode_scratch: vec![
             0f32;
             HIGHEST_PER_CHANNEL_SAMPLES_IN_ONE_OPUS_PACKET
-                * packet.channels as usize
+                * stream_format.channels as usize
         ],
     })
 }
@@ -329,6 +451,29 @@ mod tests {
     use crate::audio_window_to_encoded_packet_encoder::{
         AudioWindowToEncodedPacketEncoder, OpusEncoderConfig,
     };
+    use streamlib::sdk::hang_legacy_container_media_frame::write_hang_legacy_container_media_frame;
+    use streamlib::sdk::iceoryx2::MessageGroupBoundary;
+
+    /// One Opus packet as the decoder reads it off its link.
+    fn media_frame_message(
+        opus_packet_bytes: &[u8],
+        timestamp_ns: i64,
+        lost_since_last_read: u64,
+    ) -> MessageReadFromInputPort {
+        let mut payload_bytes = Vec::new();
+        write_hang_legacy_container_media_frame(
+            &mut payload_bytes,
+            timestamp_ns,
+            opus_packet_bytes,
+        )
+        .expect("a stamp inside the varint range");
+        MessageReadFromInputPort {
+            payload_bytes,
+            timestamp_ns,
+            group_boundary: MessageGroupBoundary::StartsGroup,
+            lost_since_last_read,
+        }
+    }
 
     const WINDOW_SAMPLE_COUNT: u32 = 960;
     const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
@@ -390,7 +535,29 @@ mod tests {
     struct RoundTrip {
         decoded_interleaved: Vec<f32>,
         blocks: Vec<AudioBlock>,
-        packets: Vec<(EncodedAudioPacket, i64)>,
+        packet_stamps: Vec<i64>,
+        /// What the encoder port's `OpusHead` said, for the assertions.
+        stream_format: OpusIdentificationHeader,
+    }
+
+    /// The catalog entry a decoder downstream of `encoder` reads off the
+    /// encoder's port, when the last window's mint owed it one.
+    fn upstream_entry_owed_by(
+        encoder: &mut AudioWindowToEncodedPacketEncoder,
+    ) -> Option<CatalogEntry> {
+        encoder
+            .take_audio_entry_owed_to_the_port()
+            .map(CatalogEntry::from)
+    }
+
+    fn opus_head_of(upstream_catalog_entry: &CatalogEntry) -> OpusIdentificationHeader {
+        OpusIdentificationHeader::parse_hex_encoded(
+            &AudioEntry::try_from(upstream_catalog_entry)
+                .expect("an audio entry")
+                .description
+                .expect("an Opus entry carries its OpusHead"),
+        )
+        .expect("the OpusHead reads back")
     }
 
     fn round_trip(channels: u32, windows: u32, anchor_ns: i64) -> RoundTrip {
@@ -407,19 +574,31 @@ mod tests {
         let mut round_trip = RoundTrip {
             decoded_interleaved: Vec::new(),
             blocks: Vec::new(),
-            packets: Vec::new(),
+            packet_stamps: Vec::new(),
+            stream_format: OpusIdentificationHeader {
+                channels,
+                pre_skip: 0,
+            },
         };
+        let mut upstream_catalog_entry = None;
         for window_index in 0..windows {
             let window = a_window_from(&source, channels, window_index, anchor_ns);
-            let packet = encoder
+            let opus_packet_bytes = encoder
                 .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes a packet");
+            if let Some(owed_entry) = upstream_entry_owed_by(&mut encoder) {
+                round_trip.stream_format = opus_head_of(&owed_entry);
+                upstream_catalog_entry = Some(owed_entry);
+            }
             round_trip
-                .packets
-                .push((packet.clone(), window.first_sample_timestamp_ns));
+                .packet_stamps
+                .push(window.first_sample_timestamp_ns);
             if let Some(block) = decoder
-                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns)
+                .decode_one_arriving_message(
+                    &media_frame_message(&opus_packet_bytes, window.first_sample_timestamp_ns, 0),
+                    upstream_catalog_entry.as_ref(),
+                )
                 .expect("decodes")
             {
                 round_trip
@@ -455,7 +634,11 @@ mod tests {
 
             // The first block is short by `pre_skip`, so the reconstruction
             // is that much shorter than the source it aligns with.
-            let pre_skip = round_trip.packets[0].0.pre_skip as usize;
+            let pre_skip = round_trip.stream_format.pre_skip as usize;
+            assert_eq!(
+                pre_skip, 312,
+                "the lookahead reached the decoder through the entry"
+            );
             assert_eq!(
                 round_trip.decoded_interleaved.len(),
                 (source.len() / channels as usize - pre_skip) * channels as usize,
@@ -490,7 +673,7 @@ mod tests {
         // entirely, and would lock nothing about `pre_skip` at all.
         assert_eq!(
             round_trip.blocks[0].sample_count,
-            WINDOW_SAMPLE_COUNT - round_trip.packets[0].0.pre_skip,
+            WINDOW_SAMPLE_COUNT - round_trip.stream_format.pre_skip,
             "the first block is short by exactly the priming the trim discarded, which is what \
              makes its first sample the stamped instant rather than 6.5 ms of encoder warm-up"
         );
@@ -500,7 +683,7 @@ mod tests {
     fn a_later_blocks_derived_stamp_lands_on_the_stamp_of_the_packet_whose_input_it_carries() {
         let anchor_ns = 1_000_000;
         let round_trip = round_trip(2, 6, anchor_ns);
-        let pre_skip = i64::from(round_trip.packets[0].0.pre_skip);
+        let pre_skip = i64::from(round_trip.stream_format.pre_skip);
 
         // Block 0 is short by `pre_skip`, so every later block starts that
         // much before its own packet's stamp — and lands exactly on the
@@ -517,63 +700,82 @@ mod tests {
         }
 
         let last = round_trip.blocks.last().expect("blocks were published");
-        let (last_packet, last_packet_stamp) =
-            round_trip.packets.last().expect("packets were published");
+        let last_packet_stamp = round_trip
+            .packet_stamps
+            .last()
+            .expect("packets were published");
         assert_eq!(
             last.first_sample_timestamp_ns,
             last_packet_stamp - pre_skip * NANOSECONDS_PER_SECOND / i64::from(OPUS_SAMPLE_RATE_HZ),
             "the decoded stream lags its input by the encoder's lookahead, and the derived \
              stamp says so rather than claiming the packet's own instant"
         );
-        assert_eq!(last.channels, last_packet.channels);
+        assert_eq!(last.channels, round_trip.stream_format.channels);
         assert_eq!(last.sample_rate, OPUS_SAMPLE_RATE_HZ);
         assert_eq!(last.dtype, AudioSampleDtype::F32);
     }
 
     #[test]
-    fn a_sequence_index_gap_resets_the_decoder_and_re_enters_counting_what_was_lost() {
+    fn a_reported_loss_resets_the_decoder_and_re_enters_counting_what_was_lost() {
         let channels = 2;
         let source = a_tone(channels, 12 * WINDOW_SAMPLE_COUNT);
         let mut encoder = AudioWindowToEncodedPacketEncoder::default();
         let mut decoder = EncodedPacketToAudioBlockDecoder::default();
         let config = OpusEncoderConfig::default();
 
-        let mut published_after_the_gap = Vec::new();
+        let mut upstream_catalog_entry = None;
+        let mut published_after_the_loss = Vec::new();
         for window_index in 0..12u32 {
             let window = a_window_from(&source, channels, window_index, 0);
-            let packet = encoder
+            let opus_packet_bytes = encoder
                 .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes");
-            // Four packets never reach the decoder.
+            if let Some(owed_entry) = upstream_entry_owed_by(&mut encoder) {
+                upstream_catalog_entry = Some(owed_entry);
+            }
+            // Four packets never reach the decoder, and the read after them
+            // says so.
             if (4..8).contains(&window_index) {
                 continue;
             }
+            let lost_since_last_read = if window_index == 8 { 4 } else { 0 };
             let block = decoder
-                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns)
-                .expect("decodes across the gap");
+                .decode_one_arriving_message(
+                    &media_frame_message(
+                        &opus_packet_bytes,
+                        window.first_sample_timestamp_ns,
+                        lost_since_last_read,
+                    ),
+                    upstream_catalog_entry.as_ref(),
+                )
+                .expect("decodes across the loss");
             if window_index >= 8 {
-                published_after_the_gap.push(block.expect("re-enters and publishes"));
+                published_after_the_loss.push(block.expect("re-enters and publishes"));
             }
         }
 
         assert_eq!(
-            decoder.packets_lost_to_gaps(),
+            decoder.packets_lost_on_the_link(),
             4,
-            "the gap is counted, not concealed"
+            "the loss is counted, not concealed"
         );
-        let first_after_the_gap = &published_after_the_gap[0];
+        let first_after_the_loss = &published_after_the_loss[0];
         assert_eq!(
-            first_after_the_gap.sample_count,
+            first_after_the_loss.sample_count,
             WINDOW_SAMPLE_COUNT - 312,
-            "re-entry primes again, so the first block after the gap is trimmed again"
+            "re-entry primes again, so the first block after the loss is trimmed again"
         );
         assert_eq!(
-            first_after_the_gap.first_sample_timestamp_ns,
+            first_after_the_loss.first_sample_timestamp_ns,
             8 * i64::from(WINDOW_SAMPLE_COUNT) * NANOSECONDS_PER_SECOND
                 / i64::from(OPUS_SAMPLE_RATE_HZ),
-            "the run re-anchors on the packet it re-entered at, so the gap stays derivable \
+            "the run re-anchors on the packet it re-entered at, so the loss stays derivable \
              from the stamps either side rather than being bridged"
+        );
+        assert_eq!(
+            published_after_the_loss[1].sample_count, WINDOW_SAMPLE_COUNT,
+            "a packet after the re-entry is read whole"
         );
     }
 
@@ -584,15 +786,22 @@ mod tests {
         let config = OpusEncoderConfig::default();
 
         let mut published = Vec::new();
+        let mut upstream_catalog_entry = None;
         for (window_index, channels) in [2u32, 2, 6, 6].into_iter().enumerate() {
             let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
             let window = a_window_from(&source, channels, 0, window_index as i64 * 20_000_000);
-            let packet = encoder
+            let opus_packet_bytes = encoder
                 .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes");
+            if let Some(owed_entry) = upstream_entry_owed_by(&mut encoder) {
+                upstream_catalog_entry = Some(owed_entry);
+            }
             if let Some(block) = decoder
-                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns)
+                .decode_one_arriving_message(
+                    &media_frame_message(&opus_packet_bytes, window.first_sample_timestamp_ns, 0),
+                    upstream_catalog_entry.as_ref(),
+                )
                 .expect("decodes across the re-mint")
             {
                 published.push(block);
@@ -602,7 +811,7 @@ mod tests {
         assert_eq!(
             published.iter().map(|b| b.channels).collect::<Vec<_>>(),
             vec![2, 2, 6, 6],
-            "every block carries the count its own packet declared"
+            "every block carries the count the entry named for its packet"
         );
         assert_eq!(
             published[2].sample_count,
@@ -615,57 +824,15 @@ mod tests {
         );
     }
 
-    /// `sample_count` is an unvalidated `u32` any producer can write. It must
-    /// not size an allocation: at eight channels a declared `u32::MAX` would
-    /// ask for about 137 GB. The packet's own TOC byte is the authority on how
-    /// long it is, and the buffer is sized from the format's own ceiling.
-    #[test]
-    fn a_packet_over_declaring_its_sample_count_neither_allocates_nor_misreports() {
-        let channels = 2;
-        let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
-        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
-        let window = a_window_from(&source, channels, 0, 0);
-        let mut packet = encoder
-            .encode_one_window(&OpusEncoderConfig::default(), &window)
+    fn one_stereo_packet() -> Vec<u8> {
+        let source = a_tone(2, WINDOW_SAMPLE_COUNT);
+        AudioWindowToEncodedPacketEncoder::default()
+            .encode_one_window(
+                &OpusEncoderConfig::default(),
+                &a_window_from(&source, 2, 0, 0),
+            )
             .expect("encodes")
-            .expect("publishes");
-        packet.sample_count = u32::MAX;
-
-        let block = EncodedPacketToAudioBlockDecoder::default()
-            .decode_one_arriving_packet(&packet, 0)
-            .expect("decodes from the packet, not from the declaration")
-            .expect("publishes a block");
-        assert_eq!(
-            block.sample_count,
-            WINDOW_SAMPLE_COUNT - 312,
-            "the emitted count comes from what libopus actually decoded, less the priming"
-        );
-    }
-
-    #[test]
-    fn a_packet_that_does_not_claim_opuss_own_clock_is_refused_rather_than_relabelled() {
-        let channels = 2;
-        let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
-        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
-        let window = a_window_from(&source, channels, 0, 0);
-        let mut packet = encoder
-            .encode_one_window(&OpusEncoderConfig::default(), &window)
-            .expect("encodes")
-            .expect("publishes");
-        packet.sample_rate = 44_100;
-
-        let refusal = EncodedPacketToAudioBlockDecoder::default()
-            .decode_one_arriving_packet(&packet, 0)
-            .expect_err("refused")
-            .to_string();
-        assert!(
-            refusal.contains("44100"),
-            "names the rate it was handed: {refusal}"
-        );
-        assert!(
-            refusal.contains("48000"),
-            "names the rate Opus codes at: {refusal}"
-        );
+            .expect("publishes")
     }
 
     /// An unbounded `pre_skip` would trim every sample of every packet for the
@@ -673,18 +840,17 @@ mod tests {
     /// the concealment this module refuses to do.
     #[test]
     fn a_pre_skip_past_a_whole_packet_is_refused_rather_than_silently_swallowing_the_run() {
-        let channels = 2;
-        let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
-        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
-        let window = a_window_from(&source, channels, 0, 0);
-        let mut packet = encoder
-            .encode_one_window(&OpusEncoderConfig::default(), &window)
-            .expect("encodes")
-            .expect("publishes");
-        packet.pre_skip = u32::MAX;
-
+        let opus_packet_bytes = one_stereo_packet();
         let refusal = EncodedPacketToAudioBlockDecoder::default()
-            .decode_one_arriving_packet(&packet, 0)
+            .decode_one_packet_in_stream_format(
+                &media_frame_message(&opus_packet_bytes, 0, 0),
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
+                &opus_packet_bytes,
+                OpusIdentificationHeader {
+                    channels: 2,
+                    pre_skip: u32::MAX,
+                },
+            )
             .expect_err("refused")
             .to_string();
         assert!(
@@ -697,31 +863,32 @@ mod tests {
         );
 
         // The bound refuses only the incredible: a real lookahead still trims.
-        packet.pre_skip = 312;
         let block = EncodedPacketToAudioBlockDecoder::default()
-            .decode_one_arriving_packet(&packet, 0)
+            .decode_one_packet_in_stream_format(
+                &media_frame_message(&opus_packet_bytes, 0, 0),
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
+                &opus_packet_bytes,
+                OpusIdentificationHeader {
+                    channels: 2,
+                    pre_skip: 312,
+                },
+            )
             .expect("a real lookahead decodes")
             .expect("publishes a block");
         assert_eq!(block.sample_count, WINDOW_SAMPLE_COUNT - 312);
     }
 
     #[test]
-    fn a_packet_naming_a_channel_count_opus_cannot_place_is_refused_by_name() {
-        let mut decoder = EncodedPacketToAudioBlockDecoder::default();
-        let refusal = decoder
-            .decode_one_arriving_packet(
-                &EncodedAudioPacket {
-                    codec: crate::encoded_audio_packet::EncodedAudioCodec::Opus,
-                    opus_packet_bytes: vec![0xfc, 0xff, 0xfe],
-                    is_sync_point: true,
-                    group_index: 0,
-                    sequence_index: 0,
-                    sample_rate: OPUS_SAMPLE_RATE_HZ,
+    fn a_stream_naming_a_channel_count_opus_cannot_place_is_refused_by_name() {
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .decode_one_packet_in_stream_format(
+                &media_frame_message(&[0xfc, 0xff, 0xfe], 0, 0),
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
+                &[0xfc, 0xff, 0xfe],
+                OpusIdentificationHeader {
                     channels: 12,
-                    sample_count: WINDOW_SAMPLE_COUNT,
                     pre_skip: 312,
                 },
-                0,
             )
             .expect_err("refused")
             .to_string();
@@ -729,6 +896,190 @@ mod tests {
         assert!(
             refusal.contains(OPUS_DECODER_PROCESSOR_NAME),
             "names the processor: {refusal}"
+        );
+    }
+
+    /// A stream whose upstream entry carries no `OpusHead` — a foreign
+    /// producer, or a port before its first packet — still decodes, at the
+    /// count the TOC codes and with nothing trimmed.
+    #[test]
+    fn with_no_opus_head_upstream_the_toc_names_the_channels_and_nothing_is_trimmed() {
+        let opus_packet_bytes = one_stereo_packet();
+        let mut decoder = EncodedPacketToAudioBlockDecoder::default();
+        assert_eq!(
+            decoder
+                .stream_format_for_the_packet(None, &opus_packet_bytes)
+                .unwrap(),
+            OpusIdentificationHeader {
+                channels: 2,
+                pre_skip: 0
+            }
+        );
+        let block = decoder
+            .decode_one_arriving_message(&media_frame_message(&opus_packet_bytes, 0, 0), None)
+            .unwrap()
+            .expect("publishes a block");
+        assert_eq!(block.sample_count, WINDOW_SAMPLE_COUNT);
+        assert_eq!(block.channels, 2);
+    }
+
+    #[test]
+    fn an_upstream_description_that_is_no_opus_head_is_refused_by_name() {
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .stream_format_for_the_packet(
+                Some(&CatalogEntry::from(AudioEntry {
+                    codec: "opus".to_owned(),
+                    sample_rate: 48_000,
+                    number_of_channels: 2,
+                    description: Some("00".repeat(19)),
+                })),
+                &one_stereo_packet(),
+            )
+            .expect_err("refused")
+            .to_string();
+        assert!(refusal.contains("OpusHead"), "{refusal}");
+        assert!(refusal.contains(OPUS_DECODER_PROCESSOR_NAME), "{refusal}");
+    }
+
+    #[test]
+    fn an_upstream_entry_naming_another_codec_is_refused_by_name() {
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .stream_format_for_the_packet(
+                Some(&CatalogEntry::from(AudioEntry {
+                    codec: "mp4a.40.2".to_owned(),
+                    sample_rate: 48_000,
+                    number_of_channels: 2,
+                    description: None,
+                })),
+                &one_stereo_packet(),
+            )
+            .expect_err("refused")
+            .to_string();
+        assert!(refusal.contains("mp4a.40.2"), "{refusal}");
+    }
+
+    #[test]
+    fn a_message_that_is_no_media_frame_is_refused_by_name() {
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .decode_one_arriving_message(
+                &MessageReadFromInputPort {
+                    payload_bytes: Vec::new(),
+                    timestamp_ns: 0,
+                    group_boundary: MessageGroupBoundary::StartsGroup,
+                    lost_since_last_read: 0,
+                },
+                None,
+            )
+            .expect_err("refused")
+            .to_string();
+        assert!(refusal.contains("media frame"), "{refusal}");
+    }
+
+    #[test]
+    fn with_no_entry_upstream_the_first_packets_toc_fixes_the_channel_count() {
+        let mut decoder = EncodedPacketToAudioBlockDecoder::default();
+        let stereo_toc_packet = one_stereo_packet();
+        let mono_toc_packet = [0b1111_1000, 0xFF, 0xFE];
+        assert_eq!(
+            decoder
+                .stream_format_for_the_packet(None, &stereo_toc_packet)
+                .unwrap()
+                .channels,
+            2
+        );
+        assert_eq!(
+            decoder
+                .stream_format_for_the_packet(None, &mono_toc_packet)
+                .unwrap()
+                .channels,
+            2,
+            "a later packet coded mono does not re-mint a stereo stream's decoder"
+        );
+    }
+
+    #[test]
+    fn an_entry_carrying_no_opus_head_names_the_channel_count() {
+        let stream_format = EncodedPacketToAudioBlockDecoder::default()
+            .stream_format_for_the_packet(
+                Some(&CatalogEntry::from(AudioEntry {
+                    codec: "opus".to_owned(),
+                    sample_rate: 48_000,
+                    number_of_channels: 6,
+                    description: None,
+                })),
+                &one_stereo_packet(),
+            )
+            .unwrap();
+        assert_eq!(
+            stream_format,
+            OpusIdentificationHeader {
+                channels: 6,
+                pre_skip: 0
+            }
+        );
+    }
+
+    /// The loss rides the message that could not be read, so the gate takes
+    /// it before the read fails, and the next packet re-enters: a fresh
+    /// priming trim, re-anchored on its own stamp.
+    #[test]
+    fn a_loss_reported_on_an_unreadable_message_still_re_enters_at_the_next_packet() {
+        let channels = 2;
+        let source = a_tone(channels, 4 * WINDOW_SAMPLE_COUNT);
+        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
+        let mut decoder = EncodedPacketToAudioBlockDecoder::default();
+        let mut upstream_catalog_entry = None;
+        let mut blocks = Vec::new();
+        for window_index in 0..4u32 {
+            let window = a_window_from(&source, channels, window_index, 0);
+            let opus_packet_bytes = encoder
+                .encode_one_window(&OpusEncoderConfig::default(), &window)
+                .expect("encodes")
+                .expect("publishes");
+            if let Some(owed_entry) = upstream_entry_owed_by(&mut encoder) {
+                upstream_catalog_entry = Some(owed_entry);
+            }
+            if window_index == 2 {
+                let unreadable_message_reporting_a_loss = MessageReadFromInputPort {
+                    payload_bytes: Vec::new(),
+                    timestamp_ns: window.first_sample_timestamp_ns,
+                    group_boundary: MessageGroupBoundary::StartsGroup,
+                    lost_since_last_read: 3,
+                };
+                decoder
+                    .decode_one_arriving_message(
+                        &unreadable_message_reporting_a_loss,
+                        upstream_catalog_entry.as_ref(),
+                    )
+                    .expect_err("an empty message is no media frame");
+                continue;
+            }
+            blocks.extend(
+                decoder
+                    .decode_one_arriving_message(
+                        &media_frame_message(
+                            &opus_packet_bytes,
+                            window.first_sample_timestamp_ns,
+                            0,
+                        ),
+                        upstream_catalog_entry.as_ref(),
+                    )
+                    .expect("decodes"),
+            );
+        }
+
+        assert_eq!(decoder.packets_lost_on_the_link(), 3);
+        let first_after_the_loss = blocks.last().expect("the last packet decodes");
+        assert_eq!(
+            first_after_the_loss.sample_count,
+            WINDOW_SAMPLE_COUNT - 312,
+            "the packet after the loss re-enters, priming and trimming again"
+        );
+        assert_eq!(
+            first_after_the_loss.first_sample_timestamp_ns,
+            3 * i64::from(WINDOW_SAMPLE_COUNT) * NANOSECONDS_PER_SECOND
+                / i64::from(OPUS_SAMPLE_RATE_HZ),
+            "and re-anchors on its own stamp rather than bridging the loss"
         );
     }
 }

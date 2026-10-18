@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Built-in Opus encoder: windowed audio blocks in, encoded-audio-packet
-//! bags out.
+//! Built-in Opus encoder: windowed audio blocks in, Opus media frames out.
 //!
 //! The state machine is [`AudioWindowToEncodedPacketEncoder`]. What lives
 //! here is the port surface, the registration name and the window contract.
@@ -24,20 +23,25 @@ use crate::audio_window_to_encoded_packet_encoder::{
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Encodes 20 ms windows of audio to Opus encoded-audio-packet bags via libopus.\n\n\
+    description = "Encodes 20 ms windows of audio to Opus via libopus.\n\n\
                   `audio` declares `audio_window(sample_rate=48000, dtype=\"f32\", \
                   window_size=960, hop=960)` and states no channel count, so the engine \
                   resamples to Opus's own clock, converts to `f32` and frames into 20 ms windows \
                   while the count follows whatever the source publishes — one microphone and one \
                   ambisonic rig reach this encoder with nothing configured between them. One to \
-                  eight channels; more is refused by name. `encoded_audio` publishes one Opus \
-                  packet per bag, beside the codec, ordering pair and stream format.\n\n\
+                  eight channels; more is refused by name. `encoded_audio` publishes one media \
+                  frame per Opus packet, the layout the moq-dev players read: a QUIC varint \
+                  timestamp in microseconds, then the packet, each one opening its own group. \
+                  The port's catalog entry is an `AudioEntry` — `opus`, 48 000 Hz, the channel \
+                  count — carrying the `OpusHead` hex-encoded in `description`, so a decoder \
+                  learns the channel count and the encoder's lookahead before the first \
+                  packet.\n\n\
                   The libopus encoder is minted from the first window's channel count — one or \
                   two channels as a single stream, three to eight as a multistream under channel \
                   mapping family 1 — and re-mints when the source's count changes, which libopus \
                   offers no other mechanism for. A re-mint costs prediction state, not \
-                  decodability, and `sequence_index` does not reset across it, so a consumer \
-                  still reads a gap as loss and never as a restart. \
+                  decodability, and replaces the port's catalog entry with one naming the new \
+                  count. \
                   In-band FEC and DTX are off and are not knobs.",
     execution = reactive,
     scheduling = high,
@@ -48,7 +52,7 @@ use crate::audio_window_to_encoded_packet_encoder::{
         audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960, hop = 960),
         description = "Audio to encode, resampled and framed to 20 ms at Opus's own rate in the source's own channel count"
     ),
-    output("encoded_audio", description = "Opus encoded-audio-packet bags"),
+    output("encoded_audio", description = "Opus media frames, one packet each"),
 )]
 pub struct OpusEncoder {
     encode_body: AudioWindowToEncodedPacketEncoder,
@@ -73,14 +77,19 @@ impl ReactiveProcessor for OpusEncoder::Processor {
         let window: AudioBlock = self.inputs.read_msgpack("audio")?;
         let window_timestamp_ns = window.first_sample_timestamp_ns;
 
-        let Some(packet) = self.encode_body.encode_one_window(&self.config, &window)? else {
+        let Some(opus_packet_bytes) = self.encode_body.encode_one_window(&self.config, &window)?
+        else {
             return Ok(());
         };
         // The timestamped write, never the implicit one: the packet names
         // the instant its first sample was captured, not the moment it was
         // published.
-        self.outputs
-            .write_msgpack_with_timestamp("encoded_audio", &packet, window_timestamp_ns)
+        self.encode_body.publish_to_output_port(
+            &self.outputs,
+            "encoded_audio",
+            &opus_packet_bytes,
+            window_timestamp_ns,
+        )
     }
 }
 

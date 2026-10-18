@@ -662,8 +662,7 @@ entry reads as **message** (the glossary).
   depending on what its own modules import and never on the runtime. A module belongs in it
   exactly when a stream or node module imports it: the declarations (`@node`, `@stream`, the
   `StreamBuilder`, the references, the compile entry), the config schema deriver, the data
-  types (`AudioBlock`, `EncodedAudioPacket`, `VideoFrame` and its colour types,
-  `EncodedVideoFrame`), the composable pieces (`ClaimedSurfacePixelAccess`,
+  types (`AudioBlock`, `VideoFrame` and its colour types), the composable pieces (`ClaimedSurfacePixelAccess`,
   `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the `ModelInputTensor` family,
   `NodeOutputTextureRing`), `clock`, `log`, and the cross-floor check the compile entry runs.
   `@node` registers nothing — it writes the class's declaration stamps — and the proof is the
@@ -3074,7 +3073,7 @@ entry reads as **message** (the glossary).
   the user's, through any MoQ client of a relay, never the runtime's (owner, 2026-10-17).
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
-  <!-- verify: cargo test -p streamlib-media-builtins --test h264_encoder_publishes_the_bag_convention -->
+  <!-- verify: cargo test -p streamlib-media-builtins --test h264_encoder_publishes_the_media_frame -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::a_tone_survives_the_round_trip_at_one_two_and_six_channels -->
 - **DECIDED** — The video codec backend seam has the video device seam's shape: a
   `VideoCodecBackend` opening a `VideoEncodeSession` or `VideoDecodeSession`, probed once per
@@ -3092,7 +3091,7 @@ entry reads as **message** (the glossary).
   aperture, which CoreMedia sets from the SPS display window. VideoToolbox speaks AVCC with
   parameter sets in the format description; the arm converts at its own edge — 4-byte start
   codes, the parameter sets in front of every sync point and nowhere else — so the published
-  `EncodedVideoFrame` is one wire on both floors, through the one platform-free Annex-B walk
+  access unit is one wire on both floors, through the one platform-free Annex-B walk
   (`core/annex_b_access_unit.rs`). What an arm
   cannot honour refuses by name at `setup()`: on VideoToolbox `effort_level`, a
   `keyframe_interval_seconds` of 0, and a decoder with no hardware support; on a Linux device
@@ -3138,7 +3137,9 @@ entry reads as **message** (the glossary).
   message reporting the loss when that message itself starts a group — and a write the
   channel ceiling refuses makes the encoder's next frame a keyframe, counted in `graph`'s
   refused-write count; `H264Decoder` reads that payload (owner, 2026-10-16 and 2026-10-17)]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_video_frame -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib published_surface_to_encoded_frame_encoder -->
+  <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_survives_a_loss_on_its_link -->
+  <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_survives_a_loss_on_its_link -->
 - **DECIDED** — A decoder publishes the display window, never the coded picture. Both
   codecs pad up to a block size — H.264 to the 16-sample macroblock, H.265 to the
   64-sample CTU — so a 1920×1080 source is coded at 1920×1088 by both, and only the
@@ -3201,7 +3202,7 @@ entry reads as **message** (the glossary).
   saturated primary differently, so that it cannot be read as a colour regression.
   [codec-blocks — SHIPPED #2085, #2086]
   <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
-- **DECIDED** — On the rig the decoder enters at `sequence_index=0` with zero frames
+- **DECIDED** — On the rig the decoder enters at the stream's first keyframe with zero frames
   discarded, and the encoder writes parameter sets on every IDR, so even a late subscriber re-enters within
   one GOP. A failed header extraction refuses rather than degrading to an empty header, and
   the minted header is checked with the engine's own NAL reader. Cam Link capture ran 18
@@ -3239,32 +3240,6 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
   <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
-- **DECIDED** — `tatolab.stream.EncodedVideoFrame` is the Python cast over the encoded-frame
-  bag's wire keys: pure Python beside `audio_block.py`, read with
-  `ctx.inputs.read("encoded_video", into=EncodedVideoFrame)`, owing no `.pyi` entry
-  because pyright checks it from source. It composes nothing surface-shaped — the
-  access unit rides inline and arrives as `bytes`, so there is no surface, no claim and
-  no lifetime contract, `AudioBlock`'s reasoning verbatim. Construction is the
-  validation and the wire keys are the constructor keywords; the bitstream is stored
-  under the Rust struct's own field name so one vocabulary serves both languages, and
-  it stays off the repr. `color` is absent-means-unspecified — the H.273 rule — and
-  every other key is required and refused by name when missing or mistyped: a
-  `bitstream` that is not `bytes`, a `codec` naming neither elementary stream, a `bool`
-  where an integer field is required, and a colour enumerant H.273 cannot place, that
-  last naming this bag's own `color` key and the axis rather than a video frame's
-  `color_info`. A key this cast does not read is read past, never refused. There is no
-  to-bag helper and no numpy property: an access unit is opaque to everything but a
-  decoder, a container or a socket, and producing an encoded bag from Python is
-  spelling the keys as a bag literal and writing it with the timestamped write —
-  the implicit one would stamp the moment of publication rather than the frame's own
-  instant. [python-codec-block-api — SHIPPED #2106, #2114; amended by moq-relays:
-  `EncodedVideoFrame` is deleted — an encoder's port carries the stack's media frame as bytes,
-  and a reader does with them what it does (owner, 2026-10-16)]
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_video_frame_cast.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_video_frame_cast.py -->
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_video_frame_cast.py::test_an_encoded_video_frame_takes_no_surface_and_holds_no_claim -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_video_frame_cast.py::test_the_bitstream_crosses_the_wire_as_bytes -->
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_video_frame_cast.py::test_the_cast_offers_no_way_back_onto_the_wire -->
 - **DECIDED** — The per-block ship bar the entry above states is met for a Python
   surface by agreement, never by a second rig: below the marker the path is
   byte-identical to the one the engine-owned rig scored, so the live proof is a
@@ -3300,20 +3275,8 @@ entry reads as **message** (the glossary).
   catalog entry a hang audio entry (`codec`, `sampleRate`, `numberOfChannels`, the OpusHead
   bytes in `description`) and `is_sync_point` the envelope's `starts_group`, one packet per
   group; `OpusDecoder` reads that payload (owner, 2026-10-16 and 2026-10-17)]
-  <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::encoded_audio_packet_msgpack_wire_carries_the_documented_keys -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::the_bitstream_crosses_the_wire_as_a_binary_payload_not_an_array -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::a_bag_with_no_encoded_packet_keys_is_refused_naming_the_keys -->
-- **DECIDED** — `tatolab.stream.EncodedAudioPacket` is the Python cast, pure Python beside
-  `encoded_video_frame.py`, read with `into=EncodedAudioPacket`, every rule of the video
-  cast verbatim: the wire keys are the constructor keywords, `bool` is refused where an
-  integer is required, unknown keys are read past, the payload is stored under the Rust
-  struct's own field name and stays off the repr, and there is no to-bag helper and no
-  numpy property. [opus-mp4-recording-rung — SHIPPED #2126; amended by moq-relays:
-  `EncodedAudioPacket` is deleted with `EncodedVideoFrame` (owner, 2026-10-16)]
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_audio_packet_cast.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_audio_packet_cast.py -->
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_audio_packet_cast.py::test_an_encoded_audio_packet_takes_no_surface_and_holds_no_claim -->
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_encoded_audio_packet_cast.py::test_the_cast_offers_no_way_back_onto_the_wire -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib opus_identification_header -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::with_no_opus_head_upstream_the_toc_names_the_channels_and_nothing_is_trimmed -->
 - **DECIDED** — `OpusEncoder` is `execution = reactive`, `scheduling = high` like the
   video blocks, input `audio` declaring `delivery_profile = "ordered"` and
   `audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960, hop = 960)` — no
@@ -3323,30 +3286,31 @@ entry reads as **message** (the glossary).
   encoder's first-frame pattern: one or two channels through libopus's `Encoder`, three
   to eight through `MSEncoder` with channel mapping family 1 (the standard surround order
   both MP4 and WebRTC accept), more than eight refused by name; a block whose count
-  changes re-mints, as an extent change re-mints video, without resetting the sequence.
+  changes re-mints, as an extent change re-mints video, and the port's catalog entry then
+  names the new count.
   Output `encoded_audio`; `pre_skip` is the minted encoder's reported lookahead. Config,
   both optional so `{}` is legal: `bitrate_bps` (absent → libopus's automatic rate) and
   `application` (`"audio"`, `"voip"`, `"lowdelay"`; absent → `"audio"`). FEC and DTX off.
   [opus-mp4-recording-rung — SHIPPED #2125]
   <!-- verify: cargo test -p streamlib-media-builtins --lib opus_encoder::tests::the_input_declares_a_window_contract_that_follows_its_sources_channel_count -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib audio_window_to_encoded_packet_encoder::tests::the_encoder_mints_from_the_first_windows_channel_count -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib audio_window_to_encoded_packet_encoder::tests::a_window_whose_channel_count_changes_re_mints_without_resetting_the_sequence -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib audio_window_to_encoded_packet_encoder::tests::the_encoder_mints_from_the_first_windows_channel_count_and_owes_its_entry -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib audio_window_to_encoded_packet_encoder::tests::a_window_whose_channel_count_changes_re_mints_and_owes_the_port_a_new_entry -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib opus_stream_layout::tests::three_to_eight_channels_ride_mapping_family_one_in_vorbis_order -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib opus_stream_layout::tests::a_channel_count_opus_cannot_place_is_refused_naming_the_count_and_the_range -->
 - **DECIDED** — `OpusDecoder` is `reactive`/`high`, input `encoded_audio` (`ordered`,
   declaring no window contract), output `audio` as `AudioBlock` bags: `f32`, `48000`, the
-  packet's `channels` and `sample_count`, stamp equal to the packet's, published through
-  the timestamped write; one or two channels through `Decoder`, three to eight through
+  stream's channel count, stamp derived from the packet's, published through the
+  timestamped write; one or two channels through `Decoder`, three to eight through
   `MSDecoder`. No config. It enters at any packet and trims `pre_skip` at entry so its
-  first emitted sample is the stamped instant. A `sequence_index` step other than one is a
-  gap: reset, re-enter, log the count, invent nothing — no concealment, no FEC decode.
+  first emitted sample is the stamped instant. A read reporting lost packets is a gap:
+  reset, re-enter, log the count, invent nothing — no concealment, no FEC decode.
   That is the drop-at-the-edge and flush-not-interpolate doctrine applied to a codec: a
   decoder that concealed a lost packet would invent 20 ms of audio, so the gap stays
   derivable from the stamps instead. [opus-mp4-recording-rung — SHIPPED #2125]
   <!-- verify: cargo test -p streamlib-media-builtins --lib opus_decoder::tests::the_encoded_input_is_ordered_and_declares_no_window_contract -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::a_tone_survives_the_round_trip_at_one_two_and_six_channels -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::the_first_emitted_sample_is_the_anchoring_packets_stamped_instant -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::a_sequence_index_gap_resets_the_decoder_and_re_enters_counting_what_was_lost -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::a_reported_loss_resets_the_decoder_and_re_enters_counting_what_was_lost -->
 - **DECIDED** — Opus links statically into the wheel: libopus is BSD-3-Clause and
   royalty-free, its attribution rides the wheel's third-party-notices surface, and no
   `DT_NEEDED` entry appears — the dlopen arm is for system audio servers, never for a
@@ -3371,14 +3335,15 @@ entry reads as **message** (the glossary).
 - **DECIDED** — The rung's CI-run, GPU-free proof: the stage with `channels` absent emits
   the source's count and converts when one is declared, in Rust and through the Python
   declaration; the link-naming read returns the link a synthetic frame was pushed on, with
-  counting untouched; the `EncodedAudioPacket` wire and cast; the Opus bodies against the
-  real library with no `Runtime` — a tone through encode → decode within a stated floor
-  for one, two and six channels, `pre_skip` aligning the first sample, a gap resetting.
+  counting untouched; the Opus bodies against the real library with no `Runtime` — a tone
+  through encode → decode within a stated floor for one, two and six channels, `pre_skip`
+  aligning the first sample, a reported loss resetting.
   [opus-mp4-recording-rung — SHIPPED #2123, #2124, #2125, #2126, #2127]
 - **DECIDED** — `requires_gpu` and said in the module docstring:
   `test_opus_blocks.py` — a Python known-signal source → `OpusEncoder` → probes →
-  `OpusDecoder` → probes: every bag casts, `sequence_index` advances by one,
-  `sample_count` is 960, decoded blocks are 48 kHz `f32` in the source's channels.
+  `OpusDecoder` → probes: every message is a media frame opening its own group under the
+  port's `OpusHead`, packets are 20 ms apart, decoded blocks are 48 kHz `f32` in the
+  source's channels.
   [opus-mp4-recording-rung — SHIPPED #2126, #2128]
   <!-- verify: pytest tests/stream-on-runtime/test_opus_blocks.py -->
 - **DECIDED** — Live, one arm on an engine-owned fixture beside `audio_loopback_stream.py`

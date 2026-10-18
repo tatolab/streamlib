@@ -31,7 +31,8 @@ use objc2_video_toolbox::{
     kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, kVTCompressionPropertyKey_ProfileLevel,
     kVTCompressionPropertyKey_Quality, kVTCompressionPropertyKey_RealTime,
     kVTCompressionPropertyKey_TransferFunction, kVTCompressionPropertyKey_YCbCrMatrix,
-    kVTProfileLevel_H264_High_AutoLevel, kVTProfileLevel_HEVC_Main_AutoLevel,
+    kVTEncodeFrameOptionKey_ForceKeyFrame, kVTProfileLevel_H264_High_AutoLevel,
+    kVTProfileLevel_HEVC_Main_AutoLevel,
     kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder,
 };
 use parking_lot::Mutex;
@@ -420,15 +421,20 @@ impl VideoEncodeSession for VideoToolboxEncodeSession {
         };
         self.frames_submitted += 1;
 
-        // SAFETY: a live session and pool pixel buffer; no per-frame
-        // properties or info out-pointer. The frame refcon carries the
+        let frame_properties = source
+            .force_sync_point
+            .then(frame_properties_forcing_a_key_frame);
+        // SAFETY: a live session and pool pixel buffer, frame properties that
+        // outlive the call, no info out-pointer. The frame refcon carries the
         // source's stamp and is never dereferenced.
         let encode_os_status = unsafe {
             self.compression_session.0.encode_frame(
                 &pool_pixel_buffer,
                 presentation_time_stamp,
                 kCMTimeInvalid,
-                None,
+                frame_properties
+                    .as_deref()
+                    .map(|frame_properties| frame_properties.as_opaque()),
                 frame_ref_con_carrying_source_timestamp(source.timestamp_ns),
                 std::ptr::null_mut(),
             )
@@ -488,6 +494,15 @@ fn coded_extent_videotoolbox_codes(
         width.next_multiple_of(block_size),
         height.next_multiple_of(block_size),
     )
+}
+
+/// The per-frame properties that make `VTCompressionSessionEncodeFrame` emit
+/// a sync sample.
+fn frame_properties_forcing_a_key_frame() -> CFRetained<CFDictionary<CFString, CFType>> {
+    // SAFETY: a VideoToolbox-exported constant.
+    let keys = unsafe { [kVTEncodeFrameOptionKey_ForceKeyFrame] };
+    let values: [&CFType; 1] = [CFBoolean::new(true)];
+    CFDictionary::from_slices(&keys, &values)
 }
 
 /// The attributes of the pool the session hands out source surfaces from:

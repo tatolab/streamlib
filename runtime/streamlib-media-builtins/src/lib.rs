@@ -18,11 +18,8 @@ pub(crate) mod consecutive_failure_report_schedule;
 pub(crate) mod cumulative_count_report_threshold;
 #[cfg(test)]
 mod emitted_log_line_test_support;
-pub mod encoded_audio_packet;
 pub mod encoded_frame_to_published_surface_decoder;
 pub mod encoded_packet_to_audio_block_decoder;
-pub mod encoded_stream_ordering;
-pub mod encoded_video_frame;
 pub mod h264_decoder;
 pub mod h264_encoder;
 pub mod h265_decoder;
@@ -34,6 +31,7 @@ pub mod microphone_source;
 mod msgpack_wire_test_support;
 pub mod opus_decoder;
 pub mod opus_encoder;
+pub mod opus_identification_header;
 pub mod opus_stream_layout;
 pub(crate) mod processor_thread_join;
 pub mod published_surface_to_encoded_frame_encoder;
@@ -48,18 +46,7 @@ mod worker_thread_test_support;
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
 pub use camera_source::{CameraSource, CameraSourceConfig};
-pub use encoded_audio_packet::{
-    EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
-    read_encoded_audio_packet_bag,
-};
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
-pub use encoded_stream_ordering::{
-    ArrivingEncodedBagDisposition, EncodedStreamOrderingPair, EncodedStreamOrderingPairCounter,
-    EncodedStreamSyncPointGate,
-};
-pub use encoded_video_frame::{
-    EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal, read_encoded_video_frame_bag,
-};
 pub use h264_decoder::H264Decoder;
 pub use h264_encoder::H264Encoder;
 pub use h265_decoder::H265Decoder;

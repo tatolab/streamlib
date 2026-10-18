@@ -31,10 +31,8 @@
 //! the graph subscribes to it.
 //!
 //! A scorer joins encoded and decoded frames on the **frame-header
-//! timestamp**, not on `sequence_index`. The ordering pair is an encoded-frame
-//! field and a decoded frame is an ordinary video-frame bag, which carries no
-//! such pair; what the decoder does propagate, unchanged, is the encoded
-//! frame's own timestamp.
+//! timestamp**: the decoder propagates the media frame's own timestamp,
+//! unchanged, onto the ordinary video-frame message it publishes.
 //!
 //! ```text
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig
