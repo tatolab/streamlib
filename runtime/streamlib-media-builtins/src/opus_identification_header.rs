@@ -10,6 +10,8 @@
 //! — family 0 for one and two channels, family 1 in Vorbis order for three to
 //! eight — and read for the two fields a decoder needs from it.
 
+use std::fmt::Write;
+
 use crate::audio_window_to_encoded_packet_encoder::OPUS_SAMPLE_RATE_HZ;
 use crate::opus_stream_layout::{OpusStreamLayoutForSourceChannelCount, OpusStreamLayoutRefusal};
 
@@ -25,6 +27,35 @@ pub struct OpusIdentificationHeader {
     pub channels: u32,
     /// Samples at 48 kHz to discard from the decoder's output at stream start.
     pub pre_skip: u32,
+}
+
+/// Why an encoder's `OpusHead` cannot be written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpusIdentificationHeaderCannotBeWritten {
+    /// The channel count resolves to no layout Opus places.
+    ChannelLayout(OpusStreamLayoutRefusal),
+    /// The header carries pre-skip in sixteen bits.
+    PreSkipPastSixteenBits { pre_skip: u32 },
+}
+
+impl From<OpusStreamLayoutRefusal> for OpusIdentificationHeaderCannotBeWritten {
+    fn from(refusal: OpusStreamLayoutRefusal) -> Self {
+        Self::ChannelLayout(refusal)
+    }
+}
+
+impl std::error::Error for OpusIdentificationHeaderCannotBeWritten {}
+
+impl std::fmt::Display for OpusIdentificationHeaderCannotBeWritten {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ChannelLayout(refusal) => refusal.fmt(formatter),
+            Self::PreSkipPastSixteenBits { pre_skip } => write!(
+                formatter,
+                "a pre-skip of {pre_skip} samples does not fit the OpusHead's sixteen-bit field"
+            ),
+        }
+    }
 }
 
 /// Why bytes are not an `OpusHead` this decoder reads.
@@ -67,13 +98,16 @@ impl OpusIdentificationHeader {
     pub fn hex_encoded_for_encoder(
         channels: u32,
         pre_skip: u32,
-    ) -> Result<String, OpusStreamLayoutRefusal> {
+    ) -> Result<String, OpusIdentificationHeaderCannotBeWritten> {
         let layout = OpusStreamLayoutForSourceChannelCount::resolve(channels)?;
+        let pre_skip = u16::try_from(pre_skip).map_err(|_| {
+            OpusIdentificationHeaderCannotBeWritten::PreSkipPastSixteenBits { pre_skip }
+        })?;
         let mut header = Vec::with_capacity(OPUS_HEAD_FIXED_FIELDS_BYTES + 2 + channels as usize);
         header.extend_from_slice(OPUS_HEAD_MAGIC_SIGNATURE);
         header.push(OPUS_HEAD_VERSION);
         header.push(channels as u8);
-        header.extend_from_slice(&(pre_skip.min(u32::from(u16::MAX)) as u16).to_le_bytes());
+        header.extend_from_slice(&pre_skip.to_le_bytes());
         header.extend_from_slice(&OPUS_SAMPLE_RATE_HZ.to_le_bytes());
         header.extend_from_slice(&0i16.to_le_bytes());
         header.push(layout.channel_mapping_family());
@@ -84,7 +118,12 @@ impl OpusIdentificationHeader {
             header.push(multistream.coupled_streams);
             header.extend_from_slice(multistream.vorbis_channel_order_mapping);
         }
-        Ok(header.iter().map(|byte| format!("{byte:02x}")).collect())
+        let mut hex_encoded_header = String::with_capacity(header.len() * 2);
+        for byte in header {
+            // Writing to a `String` cannot fail.
+            let _ = write!(hex_encoded_header, "{byte:02x}");
+        }
+        Ok(hex_encoded_header)
     }
 
     /// Read the channel count and pre-skip from a hex-encoded `OpusHead`.
@@ -198,8 +237,19 @@ mod tests {
     }
 
     #[test]
-    fn a_count_opus_cannot_place_has_no_header() {
-        assert!(OpusIdentificationHeader::hex_encoded_for_encoder(9, 312).is_err());
+    fn a_count_opus_cannot_place_and_a_pre_skip_past_sixteen_bits_have_no_header() {
+        assert!(matches!(
+            OpusIdentificationHeader::hex_encoded_for_encoder(9, 312),
+            Err(OpusIdentificationHeaderCannotBeWritten::ChannelLayout(_))
+        ));
+        assert_eq!(
+            OpusIdentificationHeader::hex_encoded_for_encoder(2, 70_000),
+            Err(
+                OpusIdentificationHeaderCannotBeWritten::PreSkipPastSixteenBits {
+                    pre_skip: 70_000
+                }
+            )
+        );
     }
 
     #[test]

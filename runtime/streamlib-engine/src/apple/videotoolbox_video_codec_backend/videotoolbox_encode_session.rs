@@ -496,8 +496,6 @@ fn coded_extent_videotoolbox_codes(
     )
 }
 
-/// The attributes of the pool the session hands out source surfaces from:
-/// IOSurface-backed NV12 at the session's extent.
 /// The per-frame properties that make `VTCompressionSessionEncodeFrame` emit
 /// a sync sample.
 fn frame_properties_forcing_a_key_frame() -> CFRetained<CFDictionary<CFString, CFType>> {
@@ -507,6 +505,8 @@ fn frame_properties_forcing_a_key_frame() -> CFRetained<CFDictionary<CFString, C
     CFDictionary::from_slices(&keys, &values)
 }
 
+/// The attributes of the pool the session hands out source surfaces from:
+/// IOSurface-backed NV12 at the session's extent.
 fn nv12_pool_surface_attributes(
     pool_pixel_format: PixelFormat,
     width: i32,

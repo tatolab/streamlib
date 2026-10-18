@@ -31,8 +31,8 @@ use streamlib::sdk::context::{
 };
 use streamlib::sdk::descriptors::VideoEntry;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::hang_legacy_container_media_frame::hang_legacy_container_media_frame_bytes;
-use streamlib::sdk::iceoryx2::MessageGroupBoundary;
+use streamlib::sdk::hang_legacy_container_media_frame::write_hang_legacy_container_media_frame;
+use streamlib::sdk::iceoryx2::{MessageGroupBoundary, OutputWriter};
 use streamlib::sdk::schemars::JsonSchema;
 use streamlib::sdk::video_bitstream::parameter_sets_of_annex_b_access_unit;
 
@@ -92,7 +92,8 @@ pub struct HardwareVideoEncoderConfig {
 /// otherwise.
 pub struct EncodedAccessUnitAwaitingPublication {
     pub annex_b_access_unit_bytes: Vec<u8>,
-    pub is_sync_point: bool,
+    /// A sync point opens a group; every other access unit continues one.
+    pub group_boundary: MessageGroupBoundary,
     pub timestamp_ns: i64,
 }
 
@@ -125,10 +126,12 @@ pub struct PublishedSurfaceToEncodedFrameEncoder<Identity: HardwareVideoCodecPro
     /// escalate gate — and its device-idle drain — on every camera frame.
     session_mint_already_failed: bool,
     gpu_context: Option<GpuContextLimitedAccess>,
-    /// The entry the port carries, and one a re-mint derived that it does not
-    /// carry yet.
+    /// The entry the port carries.
     video_entry_on_the_port: Option<VideoEntry>,
+    /// An entry a mint derived that the port does not carry yet.
     video_entry_owed_to_the_port: Option<VideoEntry>,
+    /// One media frame's bytes, reused across every write.
+    media_frame_scratch: Vec<u8>,
     /// Set by a refused write, spent by the next encode.
     next_frame_must_be_a_sync_point: bool,
     /// Set by a refused write, cleared by the next sync point written.
@@ -152,6 +155,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> Default
             gpu_context: None,
             video_entry_on_the_port: None,
             video_entry_owed_to_the_port: None,
+            media_frame_scratch: Vec::new(),
             next_frame_must_be_a_sync_point: false,
             dropping_access_units_until_the_next_sync_point: false,
             access_units_dropped_after_a_refused_write: 0,
@@ -214,12 +218,6 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         if self.encode_session.is_none() && self.session_mint_already_failed {
             return Ok(());
         }
-        let gpu_context = self.gpu_context.as_ref().ok_or_else(|| {
-            Error::Runtime(format!(
-                "{}: GPU context not initialized",
-                Identity::PROCESSOR_NAME
-            ))
-        })?;
 
         if let Some(stale_session) = self
             .encode_session
@@ -238,6 +236,12 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             let minted = match &mut self.encode_session {
                 Some(minted) => minted,
                 empty_session_slot => {
+                    let gpu_context = self.gpu_context.as_ref().ok_or_else(|| {
+                        Error::Runtime(format!(
+                            "{}: GPU context not initialized",
+                            Identity::PROCESSOR_NAME
+                        ))
+                    })?;
                     match mint_encode_session_from_first_frame::<Identity>(
                         gpu_context,
                         config,
@@ -309,41 +313,61 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         Ok(())
     }
 
-    /// The catalog entry the port does not carry yet, taken so the caller
-    /// sets it ahead of the first media frame it describes.
-    pub fn take_video_entry_owed_to_the_port(&mut self) -> Option<VideoEntry> {
-        let video_entry = self.video_entry_owed_to_the_port.take()?;
-        self.video_entry_on_the_port = Some(video_entry.clone());
-        Some(video_entry)
+    /// Publish staged access units on `output_port`, setting the catalog
+    /// entry a mint owes the port first so it lands ahead of the first media
+    /// frame it describes.
+    pub fn publish_to_output_port(
+        &mut self,
+        outputs: &OutputWriter,
+        output_port: &str,
+        staged: Vec<EncodedAccessUnitAwaitingPublication>,
+    ) -> Result<()> {
+        if let Some(video_entry) = &self.video_entry_owed_to_the_port {
+            outputs.set_catalog_entry(output_port, video_entry.clone())?;
+            self.video_entry_on_the_port = self.video_entry_owed_to_the_port.take();
+        }
+        self.publish_staged_access_units(
+            staged,
+            |media_frame_bytes, timestamp_ns, group_boundary| {
+                outputs.write_bytes_with_timestamp(
+                    output_port,
+                    media_frame_bytes,
+                    timestamp_ns,
+                    group_boundary,
+                )
+            },
+        )
     }
 
     /// Publish staged access units as media frames through `write_media_frame`,
     /// a sync point opening a group. A write the channel ceiling refuses
     /// drops what follows up to the next sync point and makes the next frame
     /// one; any other failure is returned.
-    pub fn publish_staged_access_units(
+    fn publish_staged_access_units(
         &mut self,
         staged: Vec<EncodedAccessUnitAwaitingPublication>,
         mut write_media_frame: impl FnMut(&[u8], i64, MessageGroupBoundary) -> Result<()>,
     ) -> Result<()> {
         for access_unit in staged {
-            if self.dropping_access_units_until_the_next_sync_point && !access_unit.is_sync_point {
+            if self.dropping_access_units_until_the_next_sync_point
+                && access_unit.group_boundary == MessageGroupBoundary::ContinuesGroup
+            {
                 self.access_units_dropped_after_a_refused_write += 1;
                 continue;
             }
-            let media_frame_bytes = hang_legacy_container_media_frame_bytes(
+            write_hang_legacy_container_media_frame(
+                &mut self.media_frame_scratch,
                 access_unit.timestamp_ns,
                 &access_unit.annex_b_access_unit_bytes,
             )
             .map_err(|refusal| {
                 Error::Runtime(format!("{}: {refusal}", Identity::PROCESSOR_NAME))
             })?;
-            let group_boundary = if access_unit.is_sync_point {
-                MessageGroupBoundary::StartsGroup
-            } else {
-                MessageGroupBoundary::ContinuesGroup
-            };
-            match write_media_frame(&media_frame_bytes, access_unit.timestamp_ns, group_boundary) {
+            match write_media_frame(
+                &self.media_frame_scratch,
+                access_unit.timestamp_ns,
+                access_unit.group_boundary,
+            ) {
                 Ok(()) => self.dropping_access_units_until_the_next_sync_point = false,
                 Err(Error::PayloadExceedsChannelCeiling {
                     channel,
@@ -385,7 +409,11 @@ fn access_unit_awaiting_publication(
     EncodedAccessUnitAwaitingPublication {
         timestamp_ns: packet.timestamp_ns.unwrap_or(source_frame_timestamp_ns),
         annex_b_access_unit_bytes: packet.annex_b_access_unit_bytes,
-        is_sync_point: packet.is_sync_point,
+        group_boundary: if packet.is_sync_point {
+            MessageGroupBoundary::StartsGroup
+        } else {
+            MessageGroupBoundary::ContinuesGroup
+        },
     }
 }
 
@@ -639,10 +667,13 @@ mod tests {
         );
     }
 
-    fn access_unit(is_sync_point: bool, timestamp_ns: i64) -> EncodedAccessUnitAwaitingPublication {
+    fn access_unit(
+        group_boundary: MessageGroupBoundary,
+        timestamp_ns: i64,
+    ) -> EncodedAccessUnitAwaitingPublication {
         EncodedAccessUnitAwaitingPublication {
             annex_b_access_unit_bytes: vec![0x00, 0x00, 0x00, 0x01, 0x65],
-            is_sync_point,
+            group_boundary,
             timestamp_ns,
         }
     }
@@ -665,7 +696,10 @@ mod tests {
         let mut written = Vec::new();
         encode_body
             .publish_staged_access_units(
-                vec![access_unit(true, 1_000_000), access_unit(false, 34_000_000)],
+                vec![
+                    access_unit(MessageGroupBoundary::StartsGroup, 1_000_000),
+                    access_unit(MessageGroupBoundary::ContinuesGroup, 34_000_000),
+                ],
                 |media_frame_bytes, timestamp_ns, group_boundary| {
                     written.push((media_frame_bytes.to_vec(), timestamp_ns, group_boundary));
                     Ok(())
@@ -700,9 +734,9 @@ mod tests {
         encode_body
             .publish_staged_access_units(
                 vec![
-                    access_unit(false, 1),
-                    access_unit(false, 2_000),
-                    access_unit(false, 3_000),
+                    access_unit(MessageGroupBoundary::ContinuesGroup, 1),
+                    access_unit(MessageGroupBoundary::ContinuesGroup, 2_000),
+                    access_unit(MessageGroupBoundary::ContinuesGroup, 3_000),
                 ],
                 |_, timestamp_ns, _| {
                     if timestamp_ns == 1 {
@@ -719,7 +753,10 @@ mod tests {
 
         encode_body
             .publish_staged_access_units(
-                vec![access_unit(true, 4_000), access_unit(false, 5_000)],
+                vec![
+                    access_unit(MessageGroupBoundary::StartsGroup, 4_000),
+                    access_unit(MessageGroupBoundary::ContinuesGroup, 5_000),
+                ],
                 |_, timestamp_ns, _| {
                     written_stamps.push(timestamp_ns);
                     Ok(())
@@ -734,30 +771,103 @@ mod tests {
         let mut encode_body =
             PublishedSurfaceToEncodedFrameEncoder::<H264EncoderCodecIdentity>::default();
         let failure = encode_body
-            .publish_staged_access_units(vec![access_unit(true, 1_000)], |_, _, _| {
-                Err(Error::Link("the port is not wired".to_owned()))
-            })
+            .publish_staged_access_units(
+                vec![access_unit(MessageGroupBoundary::StartsGroup, 1_000)],
+                |_, _, _| Err(Error::Link("the port is not wired".to_owned())),
+            )
             .expect_err("a link failure is not a ceiling refusal");
         assert!(matches!(failure, Error::Link(_)));
         assert!(!encode_body.next_frame_must_be_a_sync_point);
     }
 
+    /// A session that records what each encode asked of it and hands back
+    /// one access unit, a sync point exactly when one was asked for.
+    struct SessionRecordingForcedSyncPoints {
+        force_sync_point_by_encode: std::sync::Arc<std::sync::Mutex<Vec<bool>>>,
+    }
+
+    impl VideoEncodeSession for SessionRecordingForcedSyncPoints {
+        fn coded_extent(&self) -> (u32, u32) {
+            (1280, 720)
+        }
+
+        fn encode_published_surface(
+            &mut self,
+            source: &VideoEncodeSourceSurface<'_>,
+        ) -> Result<Vec<EncodedVideoAccessUnitFromSession>> {
+            self.force_sync_point_by_encode
+                .lock()
+                .unwrap()
+                .push(source.force_sync_point);
+            Ok(vec![EncodedVideoAccessUnitFromSession {
+                annex_b_access_unit_bytes: vec![0x00, 0x00, 0x00, 0x01, 0x41],
+                is_sync_point: source.force_sync_point,
+                timestamp_ns: Some(source.timestamp_ns),
+            }])
+        }
+    }
+
+    fn a_720p_frame(timestamp_ns: i64) -> VideoFrame {
+        VideoFrame {
+            surface_id: "surface".to_owned(),
+            width: 1280,
+            height: 720,
+            timestamp_ns,
+            color_info: None,
+            fps: None,
+            content_light: None,
+            mastering_display: None,
+            texture_layout: None,
+        }
+    }
+
+    /// The refusal reaches the session: the frame after a refused write is
+    /// encoded with a forced sync point, and only that frame.
     #[test]
-    fn the_owed_catalog_entry_is_handed_over_once() {
+    fn the_frame_after_a_refused_write_asks_the_session_for_a_sync_point() {
+        let force_sync_point_by_encode = std::sync::Arc::default();
         let mut encode_body =
             PublishedSurfaceToEncodedFrameEncoder::<H264EncoderCodecIdentity>::default();
-        let video_entry = VideoEntry {
-            codec: "avc1.64001f".to_owned(),
-            coded_width: Some(1280),
-            coded_height: Some(720),
-            description: None,
-        };
-        encode_body.video_entry_owed_to_the_port = Some(video_entry.clone());
+        encode_body.encode_session = Some(EncodeSessionMintedFromUpstream {
+            session: Box::new(SessionRecordingForcedSyncPoints {
+                force_sync_point_by_encode: std::sync::Arc::clone(&force_sync_point_by_encode),
+            }),
+            minted_width: 1280,
+            minted_height: 720,
+            coded_width: 1280,
+            coded_height: 720,
+            minted_color: None,
+            color_change_already_warned: false,
+            video_entry_derived: true,
+        });
+        let config = HardwareVideoEncoderConfig::default();
+
+        let mut refused_frame_access_units = Vec::new();
+        encode_body
+            .encode_one_published_surface(
+                &config,
+                &a_720p_frame(1_000),
+                &mut refused_frame_access_units,
+            )
+            .unwrap();
+        encode_body
+            .publish_staged_access_units(refused_frame_access_units, |_, _, _| {
+                Err(channel_ceiling_refusal())
+            })
+            .unwrap();
+        for timestamp_ns in [2_000, 3_000] {
+            let mut staged = Vec::new();
+            encode_body
+                .encode_one_published_surface(&config, &a_720p_frame(timestamp_ns), &mut staged)
+                .unwrap();
+            encode_body
+                .publish_staged_access_units(staged, |_, _, _| Ok(()))
+                .unwrap();
+        }
+
         assert_eq!(
-            encode_body.take_video_entry_owed_to_the_port(),
-            Some(video_entry.clone())
+            *force_sync_point_by_encode.lock().unwrap(),
+            vec![false, true, false]
         );
-        assert_eq!(encode_body.take_video_entry_owed_to_the_port(), None);
-        assert_eq!(encode_body.video_entry_on_the_port, Some(video_entry));
     }
 }

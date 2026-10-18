@@ -29,14 +29,17 @@
 //! instant, and each later block's derived stamp lands on the stamp of the
 //! packet whose input it carries.
 
-use streamlib::sdk::descriptors::{CatalogEntry, CatalogSection};
+use streamlib::sdk::descriptors::{AudioEntry, CatalogEntry};
 use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use streamlib::sdk::iceoryx2::{
-    MessageGroupBoundary, MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate,
+    MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate, MessageReadFromInputPort,
 };
 
 use crate::audio_block::{AudioBlock, AudioSampleDtype};
-use crate::audio_window_to_encoded_packet_encoder::OPUS_SAMPLE_RATE_HZ;
+use crate::audio_window_to_encoded_packet_encoder::{
+    OPUS_CATALOG_CODEC_STRING, OPUS_SAMPLE_RATE_HZ,
+};
 use crate::opus_identification_header::{
     OpusIdentificationHeader, channels_coded_by_the_opus_packet_toc,
 };
@@ -141,23 +144,117 @@ pub struct EncodedPacketToAudioBlockDecoder {
     group_loss_recovery_gate: MessageGroupLossRecoveryGate,
     anchor: Option<DecodedRunAnchor>,
     blocks_published: u64,
+    /// The upstream `OpusHead` last read and what it said, so a packet
+    /// re-parses it only when the entry changed.
+    stream_format_from_the_upstream_opus_head: Option<(String, OpusIdentificationHeader)>,
+    /// The channel count the first packet's TOC coded, for a stream whose
+    /// entry names none. Read once: libopus codes a stereo stream's packets
+    /// mono at low rates, so the flag of any later packet is no count.
+    channels_the_first_packets_toc_coded: Option<u32>,
 }
 
 impl EncodedPacketToAudioBlockDecoder {
-    /// Decode one arriving packet of a stream in `stream_format`, or hand
+    /// Decode one arriving message — a media frame carrying one Opus packet —
+    /// in the stream format the upstream port's catalog entry names, or hand
     /// back `None` when the doctrine says to discard it or when the whole
     /// packet was encoder priming.
-    pub fn decode_one_arriving_packet(
+    pub fn decode_one_arriving_message(
         &mut self,
+        message: &MessageReadFromInputPort,
+        upstream_catalog_entry: Option<&CatalogEntry>,
+    ) -> Result<Option<AudioBlock>> {
+        let media_frame =
+            read_hang_legacy_container_media_frame(&message.payload_bytes).map_err(|refusal| {
+                Error::Runtime(format!("{OPUS_DECODER_PROCESSOR_NAME}: {refusal}"))
+            })?;
+        let stream_format = self.stream_format_for_the_packet(
+            upstream_catalog_entry,
+            media_frame.codec_payload_bytes,
+        )?;
+        self.decode_one_packet_in_stream_format(
+            message,
+            media_frame.codec_payload_bytes,
+            stream_format,
+        )
+    }
+
+    /// The stream format a packet decodes in: the upstream port's `OpusHead`
+    /// when its catalog entry carries one; otherwise the entry's channel count,
+    /// or with no entry the count the first packet's TOC coded, with nothing to
+    /// trim. An entry that is no Opus entry, and an `OpusHead` that does not
+    /// read, are refused by name rather than passed over.
+    fn stream_format_for_the_packet(
+        &mut self,
+        upstream_catalog_entry: Option<&CatalogEntry>,
         opus_packet_bytes: &[u8],
-        packet_timestamp_ns: i64,
-        group_boundary: MessageGroupBoundary,
-        lost_since_last_read: u64,
+    ) -> Result<OpusIdentificationHeader> {
+        let refused = |refusal: &dyn std::fmt::Display| {
+            Error::Runtime(format!(
+                "{OPUS_DECODER_PROCESSOR_NAME}: the upstream port's catalog entry describes no \
+                 Opus stream — {refusal}"
+            ))
+        };
+        let upstream_audio_entry = upstream_catalog_entry
+            .map(AudioEntry::try_from)
+            .transpose()
+            .map_err(|refusal| refused(&refusal))?;
+        if let Some(upstream_audio_entry) = &upstream_audio_entry
+            && upstream_audio_entry.codec != OPUS_CATALOG_CODEC_STRING
+        {
+            return Err(refused(&format!(
+                "it names codec `{}`, not `{OPUS_CATALOG_CODEC_STRING}`",
+                upstream_audio_entry.codec
+            )));
+        }
+        let Some(upstream_audio_entry) = upstream_audio_entry else {
+            let channels = match self.channels_the_first_packets_toc_coded {
+                Some(channels) => channels,
+                None => {
+                    let channels = channels_coded_by_the_opus_packet_toc(opus_packet_bytes)
+                        .ok_or_else(|| {
+                            Error::Runtime(format!(
+                                "{OPUS_DECODER_PROCESSOR_NAME}: an empty packet has no TOC byte \
+                                 to read a channel count from"
+                            ))
+                        })?;
+                    *self.channels_the_first_packets_toc_coded.insert(channels)
+                }
+            };
+            return Ok(OpusIdentificationHeader {
+                channels,
+                pre_skip: 0,
+            });
+        };
+        let Some(hex_encoded_opus_head) = upstream_audio_entry.description else {
+            return Ok(OpusIdentificationHeader {
+                channels: upstream_audio_entry.number_of_channels,
+                pre_skip: 0,
+            });
+        };
+        if let Some((cached_opus_head, stream_format)) =
+            &self.stream_format_from_the_upstream_opus_head
+            && *cached_opus_head == hex_encoded_opus_head
+        {
+            return Ok(*stream_format);
+        }
+        let stream_format = OpusIdentificationHeader::parse_hex_encoded(&hex_encoded_opus_head)
+            .map_err(|refusal| refused(&refusal))?;
+        self.stream_format_from_the_upstream_opus_head =
+            Some((hex_encoded_opus_head, stream_format));
+        Ok(stream_format)
+    }
+
+    fn decode_one_packet_in_stream_format(
+        &mut self,
+        message: &MessageReadFromInputPort,
+        opus_packet_bytes: &[u8],
         stream_format: OpusIdentificationHeader,
     ) -> Result<Option<AudioBlock>> {
+        let lost_since_last_read = message.lost_since_last_read;
+        let packet_timestamp_ns = message.timestamp_ns;
         let mut re_entering = match self
             .group_loss_recovery_gate
-            .admit_message(group_boundary, lost_since_last_read)
+            .admit_message(message.group_boundary, lost_since_last_read)
         {
             MessageGroupLossRecoveryDisposition::Read => false,
             MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart => {
@@ -264,40 +361,6 @@ impl EncodedPacketToAudioBlockDecoder {
     }
 }
 
-/// The stream format a packet decodes in: the upstream port's `OpusHead` when
-/// its catalog entry carries one, the channel count the packet's TOC codes
-/// with nothing to trim otherwise. An `OpusHead` that does not read is refused
-/// by name rather than passed over.
-pub fn opus_stream_format_from_the_upstream_entry_or_the_packet(
-    upstream_catalog_entry: Option<&CatalogEntry>,
-    opus_packet_bytes: &[u8],
-) -> Result<OpusIdentificationHeader> {
-    let upstream_opus_identification_header = upstream_catalog_entry
-        .filter(|catalog_entry| catalog_entry.section == CatalogSection::Audio)
-        .and_then(|catalog_entry| catalog_entry.entry.get("description"))
-        .and_then(|description| description.as_str());
-    if let Some(hex_encoded_header) = upstream_opus_identification_header {
-        return OpusIdentificationHeader::parse_hex_encoded(hex_encoded_header).map_err(
-            |refusal| {
-                Error::Runtime(format!(
-                    "{OPUS_DECODER_PROCESSOR_NAME}: the upstream port's catalog entry describes no \
-                 Opus stream — {refusal}"
-                ))
-            },
-        );
-    }
-    let channels = channels_coded_by_the_opus_packet_toc(opus_packet_bytes).ok_or_else(|| {
-        Error::Runtime(format!(
-            "{OPUS_DECODER_PROCESSOR_NAME}: an empty packet has no TOC byte to read a channel \
-             count from"
-        ))
-    })?;
-    Ok(OpusIdentificationHeader {
-        channels,
-        pre_skip: 0,
-    })
-}
-
 /// Per-channel sample offset as nanoseconds at Opus's rate, in integer
 /// rational arithmetic widened so a long run cannot overflow the multiply.
 fn timestamp_offset_ns_for(samples_emitted_since_anchor: u64) -> i64 {
@@ -367,6 +430,29 @@ mod tests {
     use crate::audio_window_to_encoded_packet_encoder::{
         AudioWindowToEncodedPacketEncoder, OpusEncoderConfig,
     };
+    use streamlib::sdk::hang_legacy_container_media_frame::write_hang_legacy_container_media_frame;
+    use streamlib::sdk::iceoryx2::MessageGroupBoundary;
+
+    /// One Opus packet as the decoder reads it off its link.
+    fn media_frame_message(
+        opus_packet_bytes: &[u8],
+        timestamp_ns: i64,
+        lost_since_last_read: u64,
+    ) -> MessageReadFromInputPort {
+        let mut payload_bytes = Vec::new();
+        write_hang_legacy_container_media_frame(
+            &mut payload_bytes,
+            timestamp_ns,
+            opus_packet_bytes,
+        )
+        .expect("a stamp inside the varint range");
+        MessageReadFromInputPort {
+            payload_bytes,
+            timestamp_ns,
+            group_boundary: MessageGroupBoundary::StartsGroup,
+            lost_since_last_read,
+        }
+    }
 
     const WINDOW_SAMPLE_COUNT: u32 = 960;
     const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
@@ -429,23 +515,28 @@ mod tests {
         decoded_interleaved: Vec<f32>,
         blocks: Vec<AudioBlock>,
         packet_stamps: Vec<i64>,
+        /// What the encoder port's `OpusHead` said, for the assertions.
         stream_format: OpusIdentificationHeader,
     }
 
-    /// The stream format a decoder downstream of `encoder` reads off the
-    /// encoder port's catalog entry, as the processor does.
-    fn stream_format_from_the_entry_of(
+    /// The catalog entry a decoder downstream of `encoder` reads off the
+    /// encoder's port, when the last window's mint owed it one.
+    fn upstream_entry_owed_by(
         encoder: &mut AudioWindowToEncodedPacketEncoder,
-        opus_packet_bytes: &[u8],
-    ) -> Option<OpusIdentificationHeader> {
-        let audio_entry = encoder.take_audio_entry_owed_to_the_port()?;
-        Some(
-            opus_stream_format_from_the_upstream_entry_or_the_packet(
-                Some(&CatalogEntry::from(audio_entry)),
-                opus_packet_bytes,
-            )
-            .expect("the encoder's entry carries a readable OpusHead"),
+    ) -> Option<CatalogEntry> {
+        encoder
+            .take_audio_entry_owed_to_the_port()
+            .map(CatalogEntry::from)
+    }
+
+    fn opus_head_of(upstream_catalog_entry: &CatalogEntry) -> OpusIdentificationHeader {
+        OpusIdentificationHeader::parse_hex_encoded(
+            &AudioEntry::try_from(upstream_catalog_entry)
+                .expect("an audio entry")
+                .description
+                .expect("an Opus entry carries its OpusHead"),
         )
+        .expect("the OpusHead reads back")
     }
 
     fn round_trip(channels: u32, windows: u32, anchor_ns: i64) -> RoundTrip {
@@ -468,27 +559,24 @@ mod tests {
                 pre_skip: 0,
             },
         };
+        let mut upstream_catalog_entry = None;
         for window_index in 0..windows {
             let window = a_window_from(&source, channels, window_index, anchor_ns);
             let opus_packet_bytes = encoder
                 .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes a packet");
-            if let Some(stream_format) =
-                stream_format_from_the_entry_of(&mut encoder, &opus_packet_bytes)
-            {
-                round_trip.stream_format = stream_format;
+            if let Some(owed_entry) = upstream_entry_owed_by(&mut encoder) {
+                round_trip.stream_format = opus_head_of(&owed_entry);
+                upstream_catalog_entry = Some(owed_entry);
             }
             round_trip
                 .packet_stamps
                 .push(window.first_sample_timestamp_ns);
             if let Some(block) = decoder
-                .decode_one_arriving_packet(
-                    &opus_packet_bytes,
-                    window.first_sample_timestamp_ns,
-                    MessageGroupBoundary::StartsGroup,
-                    0,
-                    round_trip.stream_format,
+                .decode_one_arriving_message(
+                    &media_frame_message(&opus_packet_bytes, window.first_sample_timestamp_ns, 0),
+                    upstream_catalog_entry.as_ref(),
                 )
                 .expect("decodes")
             {
@@ -614,7 +702,7 @@ mod tests {
         let mut decoder = EncodedPacketToAudioBlockDecoder::default();
         let config = OpusEncoderConfig::default();
 
-        let mut stream_format = None;
+        let mut upstream_catalog_entry = None;
         let mut published_after_the_loss = Vec::new();
         for window_index in 0..12u32 {
             let window = a_window_from(&source, channels, window_index, 0);
@@ -622,9 +710,8 @@ mod tests {
                 .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes");
-            if let Some(format) = stream_format_from_the_entry_of(&mut encoder, &opus_packet_bytes)
-            {
-                stream_format = Some(format);
+            if let Some(owed_entry) = upstream_entry_owed_by(&mut encoder) {
+                upstream_catalog_entry = Some(owed_entry);
             }
             // Four packets never reach the decoder, and the read after them
             // says so.
@@ -633,12 +720,13 @@ mod tests {
             }
             let lost_since_last_read = if window_index == 8 { 4 } else { 0 };
             let block = decoder
-                .decode_one_arriving_packet(
-                    &opus_packet_bytes,
-                    window.first_sample_timestamp_ns,
-                    MessageGroupBoundary::StartsGroup,
-                    lost_since_last_read,
-                    stream_format.unwrap(),
+                .decode_one_arriving_message(
+                    &media_frame_message(
+                        &opus_packet_bytes,
+                        window.first_sample_timestamp_ns,
+                        lost_since_last_read,
+                    ),
+                    upstream_catalog_entry.as_ref(),
                 )
                 .expect("decodes across the loss");
             if window_index >= 8 {
@@ -677,7 +765,7 @@ mod tests {
         let config = OpusEncoderConfig::default();
 
         let mut published = Vec::new();
-        let mut stream_format = None;
+        let mut upstream_catalog_entry = None;
         for (window_index, channels) in [2u32, 2, 6, 6].into_iter().enumerate() {
             let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
             let window = a_window_from(&source, channels, 0, window_index as i64 * 20_000_000);
@@ -685,17 +773,13 @@ mod tests {
                 .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes");
-            if let Some(format) = stream_format_from_the_entry_of(&mut encoder, &opus_packet_bytes)
-            {
-                stream_format = Some(format);
+            if let Some(owed_entry) = upstream_entry_owed_by(&mut encoder) {
+                upstream_catalog_entry = Some(owed_entry);
             }
             if let Some(block) = decoder
-                .decode_one_arriving_packet(
-                    &opus_packet_bytes,
-                    window.first_sample_timestamp_ns,
-                    MessageGroupBoundary::StartsGroup,
-                    0,
-                    stream_format.unwrap(),
+                .decode_one_arriving_message(
+                    &media_frame_message(&opus_packet_bytes, window.first_sample_timestamp_ns, 0),
+                    upstream_catalog_entry.as_ref(),
                 )
                 .expect("decodes across the re-mint")
             {
@@ -737,11 +821,9 @@ mod tests {
     fn a_pre_skip_past_a_whole_packet_is_refused_rather_than_silently_swallowing_the_run() {
         let opus_packet_bytes = one_stereo_packet();
         let refusal = EncodedPacketToAudioBlockDecoder::default()
-            .decode_one_arriving_packet(
+            .decode_one_packet_in_stream_format(
+                &media_frame_message(&opus_packet_bytes, 0, 0),
                 &opus_packet_bytes,
-                0,
-                MessageGroupBoundary::StartsGroup,
-                0,
                 OpusIdentificationHeader {
                     channels: 2,
                     pre_skip: u32::MAX,
@@ -760,11 +842,9 @@ mod tests {
 
         // The bound refuses only the incredible: a real lookahead still trims.
         let block = EncodedPacketToAudioBlockDecoder::default()
-            .decode_one_arriving_packet(
+            .decode_one_packet_in_stream_format(
+                &media_frame_message(&opus_packet_bytes, 0, 0),
                 &opus_packet_bytes,
-                0,
-                MessageGroupBoundary::StartsGroup,
-                0,
                 OpusIdentificationHeader {
                     channels: 2,
                     pre_skip: 312,
@@ -778,11 +858,9 @@ mod tests {
     #[test]
     fn a_stream_naming_a_channel_count_opus_cannot_place_is_refused_by_name() {
         let refusal = EncodedPacketToAudioBlockDecoder::default()
-            .decode_one_arriving_packet(
+            .decode_one_packet_in_stream_format(
+                &media_frame_message(&[0xfc, 0xff, 0xfe], 0, 0),
                 &[0xfc, 0xff, 0xfe],
-                0,
-                MessageGroupBoundary::StartsGroup,
-                0,
                 OpusIdentificationHeader {
                     channels: 12,
                     pre_skip: 312,
@@ -803,45 +881,117 @@ mod tests {
     #[test]
     fn with_no_opus_head_upstream_the_toc_names_the_channels_and_nothing_is_trimmed() {
         let opus_packet_bytes = one_stereo_packet();
-        let stream_format =
-            opus_stream_format_from_the_upstream_entry_or_the_packet(None, &opus_packet_bytes)
-                .unwrap();
+        let mut decoder = EncodedPacketToAudioBlockDecoder::default();
         assert_eq!(
-            stream_format,
+            decoder
+                .stream_format_for_the_packet(None, &opus_packet_bytes)
+                .unwrap(),
             OpusIdentificationHeader {
                 channels: 2,
                 pre_skip: 0
             }
         );
-        let block = EncodedPacketToAudioBlockDecoder::default()
-            .decode_one_arriving_packet(
-                &opus_packet_bytes,
-                0,
-                MessageGroupBoundary::StartsGroup,
-                0,
-                stream_format,
-            )
+        let block = decoder
+            .decode_one_arriving_message(&media_frame_message(&opus_packet_bytes, 0, 0), None)
             .unwrap()
             .expect("publishes a block");
         assert_eq!(block.sample_count, WINDOW_SAMPLE_COUNT);
+        assert_eq!(block.channels, 2);
     }
 
     #[test]
     fn an_upstream_description_that_is_no_opus_head_is_refused_by_name() {
-        let refusal = opus_stream_format_from_the_upstream_entry_or_the_packet(
-            Some(&CatalogEntry::from(
-                streamlib::sdk::descriptors::AudioEntry {
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .stream_format_for_the_packet(
+                Some(&CatalogEntry::from(AudioEntry {
                     codec: "opus".to_owned(),
                     sample_rate: 48_000,
                     number_of_channels: 2,
                     description: Some("00".repeat(19)),
-                },
-            )),
-            &one_stereo_packet(),
-        )
-        .expect_err("refused")
-        .to_string();
+                })),
+                &one_stereo_packet(),
+            )
+            .expect_err("refused")
+            .to_string();
         assert!(refusal.contains("OpusHead"), "{refusal}");
         assert!(refusal.contains(OPUS_DECODER_PROCESSOR_NAME), "{refusal}");
+    }
+
+    #[test]
+    fn an_upstream_entry_naming_another_codec_is_refused_by_name() {
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .stream_format_for_the_packet(
+                Some(&CatalogEntry::from(AudioEntry {
+                    codec: "mp4a.40.2".to_owned(),
+                    sample_rate: 48_000,
+                    number_of_channels: 2,
+                    description: None,
+                })),
+                &one_stereo_packet(),
+            )
+            .expect_err("refused")
+            .to_string();
+        assert!(refusal.contains("mp4a.40.2"), "{refusal}");
+    }
+
+    #[test]
+    fn a_message_that_is_no_media_frame_is_refused_by_name() {
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .decode_one_arriving_message(
+                &MessageReadFromInputPort {
+                    payload_bytes: Vec::new(),
+                    timestamp_ns: 0,
+                    group_boundary: MessageGroupBoundary::StartsGroup,
+                    lost_since_last_read: 0,
+                },
+                None,
+            )
+            .expect_err("refused")
+            .to_string();
+        assert!(refusal.contains("media frame"), "{refusal}");
+    }
+
+    #[test]
+    fn with_no_entry_upstream_the_first_packets_toc_fixes_the_channel_count() {
+        let mut decoder = EncodedPacketToAudioBlockDecoder::default();
+        let stereo_toc_packet = one_stereo_packet();
+        let mono_toc_packet = [0b1111_1000, 0xFF, 0xFE];
+        assert_eq!(
+            decoder
+                .stream_format_for_the_packet(None, &stereo_toc_packet)
+                .unwrap()
+                .channels,
+            2
+        );
+        assert_eq!(
+            decoder
+                .stream_format_for_the_packet(None, &mono_toc_packet)
+                .unwrap()
+                .channels,
+            2,
+            "a later packet coded mono does not re-mint a stereo stream's decoder"
+        );
+    }
+
+    #[test]
+    fn an_entry_carrying_no_opus_head_names_the_channel_count() {
+        let stream_format = EncodedPacketToAudioBlockDecoder::default()
+            .stream_format_for_the_packet(
+                Some(&CatalogEntry::from(AudioEntry {
+                    codec: "opus".to_owned(),
+                    sample_rate: 48_000,
+                    number_of_channels: 6,
+                    description: None,
+                })),
+                &one_stereo_packet(),
+            )
+            .unwrap();
+        assert_eq!(
+            stream_format,
+            OpusIdentificationHeader {
+                channels: 6,
+                pre_skip: 0
+            }
+        );
     }
 }

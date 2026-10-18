@@ -15,7 +15,7 @@ pub use streamlib_processor_schema::descriptors::{
 pub use streamlib_processor_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES, AudioEntry,
     AudioWindowContract, AudioWindowContractDeclaredValues, BinaryEntry, CatalogDataTrackMode,
-    CatalogEntry, CatalogSection, JsonEntry, ProcessorClassImportPath, ProcessorClassShortName,
-    ProcessorScheduling, TextEntry, VideoEntry,
+    CatalogEntry, CatalogEntryIsNotAnAudioEntry, CatalogSection, JsonEntry,
+    ProcessorClassImportPath, ProcessorClassShortName, ProcessorScheduling, TextEntry, VideoEntry,
     refuse_audio_window_beside_a_skipping_delivery_profile,
 };

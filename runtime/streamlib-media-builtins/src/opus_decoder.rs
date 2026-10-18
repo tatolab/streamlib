@@ -12,13 +12,11 @@
 //! passed over packets would break its own stream.
 
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
+use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ReactiveProcessor;
 
 use crate::encoded_packet_to_audio_block_decoder::{
     EncodedPacketToAudioBlockDecoder, OPUS_DECODER_PROCESSOR_NAME,
-    opus_stream_format_from_the_upstream_entry_or_the_packet,
 };
 
 #[streamlib::sdk::processor(
@@ -75,27 +73,13 @@ impl ReactiveProcessor for OpusDecoder::Processor {
             return Ok(());
         }
         while let Some(message) = self.inputs.read_raw("encoded_audio")? {
-            // A message this reader cannot read is refused by name at the read,
-            // never reshaped into a plausible-looking wrong answer.
-            let media_frame = read_hang_legacy_container_media_frame(&message.payload_bytes)
-                .map_err(|refusal| {
-                    Error::Runtime(format!("{OPUS_DECODER_PROCESSOR_NAME}: {refusal}"))
-                })?;
             let upstream_catalog_entry = self
                 .inputs
                 .inbound_link_catalog_entry("encoded_audio", None)?;
-            let stream_format = opus_stream_format_from_the_upstream_entry_or_the_packet(
-                upstream_catalog_entry.as_ref(),
-                media_frame.codec_payload_bytes,
-            )?;
-
-            if let Some(block) = self.decode_body.decode_one_arriving_packet(
-                media_frame.codec_payload_bytes,
-                message.timestamp_ns,
-                message.group_boundary,
-                message.lost_since_last_read,
-                stream_format,
-            )? {
+            if let Some(block) = self
+                .decode_body
+                .decode_one_arriving_message(&message, upstream_catalog_entry.as_ref())?
+            {
                 let block_timestamp_ns = block.first_sample_timestamp_ns;
                 self.outputs
                     .write_msgpack_with_timestamp("audio", &block, block_timestamp_ns)?;

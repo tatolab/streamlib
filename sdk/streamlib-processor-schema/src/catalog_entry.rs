@@ -199,6 +199,50 @@ impl From<AudioEntry> for CatalogEntry {
     }
 }
 
+/// An `audio` entry's fields as hang spells them, read back.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioEntryInHangsSpelling {
+    codec: String,
+    sample_rate: u32,
+    number_of_channels: u32,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+/// Why a catalog entry does not read as an [`AudioEntry`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CatalogEntryIsNotAnAudioEntry {
+    /// The entry belongs in another section.
+    #[error("the catalog entry is a `{section}` entry, not an `audio` one")]
+    OfAnotherSection { section: CatalogSection },
+    /// The fields are not the ones an `audio` entry carries.
+    #[error("the `audio` entry's fields do not read: {reason}")]
+    FieldsDoNotRead { reason: String },
+}
+
+impl TryFrom<&CatalogEntry> for AudioEntry {
+    type Error = CatalogEntryIsNotAnAudioEntry;
+
+    fn try_from(catalog_entry: &CatalogEntry) -> Result<Self, Self::Error> {
+        if catalog_entry.section != CatalogSection::Audio {
+            return Err(CatalogEntryIsNotAnAudioEntry::OfAnotherSection {
+                section: catalog_entry.section,
+            });
+        }
+        let in_hangs_spelling = AudioEntryInHangsSpelling::deserialize(&catalog_entry.entry)
+            .map_err(|failure| CatalogEntryIsNotAnAudioEntry::FieldsDoNotRead {
+                reason: failure.to_string(),
+            })?;
+        Ok(AudioEntry {
+            codec: in_hangs_spelling.codec,
+            sample_rate: in_hangs_spelling.sample_rate,
+            number_of_channels: in_hangs_spelling.number_of_channels,
+            description: in_hangs_spelling.description,
+        })
+    }
+}
+
 impl From<TextEntry> for CatalogEntry {
     fn from(text: TextEntry) -> Self {
         CatalogEntry {
@@ -285,6 +329,36 @@ mod tests {
             .entry,
             json!({"mode": "snapshot", "mime": "application/msgpack"})
         );
+    }
+
+    #[test]
+    fn an_audio_entry_reads_back_from_its_catalog_entry() {
+        let audio = AudioEntry {
+            codec: "opus".into(),
+            sample_rate: 48_000,
+            number_of_channels: 6,
+            description: Some("4f707573".into()),
+        };
+        assert_eq!(
+            AudioEntry::try_from(&CatalogEntry::from(audio.clone())),
+            Ok(audio)
+        );
+        assert_eq!(
+            AudioEntry::try_from(&CatalogEntry::from(BinaryEntry {
+                mode: CatalogDataTrackMode::Snapshot,
+                mime: None,
+            })),
+            Err(CatalogEntryIsNotAnAudioEntry::OfAnotherSection {
+                section: CatalogSection::Binary
+            })
+        );
+        assert!(matches!(
+            AudioEntry::try_from(&CatalogEntry {
+                section: CatalogSection::Audio,
+                entry: json!({"codec": "opus"}),
+            }),
+            Err(CatalogEntryIsNotAnAudioEntry::FieldsDoNotRead { .. })
+        ));
     }
 
     #[test]

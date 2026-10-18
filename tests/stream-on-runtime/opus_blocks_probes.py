@@ -156,6 +156,10 @@ class EncodedOpusMediaFrameProbe:
             message.payload
         )
         catalog_entry = ctx.inputs.inbound_link_catalog_entry(ENCODED_PORT)
+        if catalog_entry is None:
+            raise RuntimeError(
+                "the encoder's port carries no catalog entry beside a packet it published"
+            )
         opus_head_channels, pre_skip = opus_head_channels_and_pre_skip(
             catalog_entry["entry"]["description"]
         )

@@ -61,22 +61,28 @@ impl std::fmt::Display for MessageIsNotAHangLegacyContainerMediaFrame {
     }
 }
 
-/// Write `codec_payload_bytes` behind the varint timestamp `timestamp_ns`
-/// truncates to, as one media frame.
-pub fn hang_legacy_container_media_frame_bytes(
+/// The widest a QUIC varint is written (RFC 9000 §16).
+const QUIC_VARINT_WIDEST_ENCODING_BYTES: usize = 8;
+
+/// Replace `media_frame_bytes` with `codec_payload_bytes` behind the varint
+/// timestamp `timestamp_ns` truncates to, as one media frame. The buffer is
+/// the caller's so a producer reuses one allocation across every frame.
+pub fn write_hang_legacy_container_media_frame(
+    media_frame_bytes: &mut Vec<u8>,
     timestamp_ns: i64,
     codec_payload_bytes: &[u8],
-) -> Result<Vec<u8>, MediaFrameTimestampOutsideTheVarintRange> {
+) -> Result<(), MediaFrameTimestampOutsideTheVarintRange> {
     let timestamp_varint = u64::try_from(timestamp_ns)
         .ok()
         .and_then(|timestamp_ns| VarInt::from_u64(timestamp_ns / 1_000))
         .ok_or(MediaFrameTimestampOutsideTheVarintRange { timestamp_ns })?;
-    let mut media_frame_bytes = Vec::with_capacity(8 + codec_payload_bytes.len());
-    timestamp_varint
-        .encode_quic(&mut media_frame_bytes)
-        .map_err(|_| MediaFrameTimestampOutsideTheVarintRange { timestamp_ns })?;
+    media_frame_bytes.clear();
+    media_frame_bytes.reserve(QUIC_VARINT_WIDEST_ENCODING_BYTES + codec_payload_bytes.len());
+    // A `Vec` grows to fit, so the only refusal `encode_quic` has — the buffer
+    // running out of room — cannot happen here.
+    let _ = timestamp_varint.encode_quic(media_frame_bytes);
     media_frame_bytes.extend_from_slice(codec_payload_bytes);
-    Ok(media_frame_bytes)
+    Ok(())
 }
 
 /// Read one media frame, borrowing its codec payload from `message_bytes`.
@@ -98,6 +104,28 @@ pub fn read_hang_legacy_container_media_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hang_legacy_container_media_frame_bytes(
+        timestamp_ns: i64,
+        codec_payload_bytes: &[u8],
+    ) -> Result<Vec<u8>, MediaFrameTimestampOutsideTheVarintRange> {
+        let mut media_frame_bytes = Vec::new();
+        write_hang_legacy_container_media_frame(
+            &mut media_frame_bytes,
+            timestamp_ns,
+            codec_payload_bytes,
+        )?;
+        Ok(media_frame_bytes)
+    }
+
+    #[test]
+    fn a_reused_buffer_holds_only_the_latest_media_frame() {
+        let mut media_frame_bytes = Vec::new();
+        write_hang_legacy_container_media_frame(&mut media_frame_bytes, 1_000, b"a long payload")
+            .unwrap();
+        write_hang_legacy_container_media_frame(&mut media_frame_bytes, 2_000, b"short").unwrap();
+        assert_eq!(media_frame_bytes, [2, b's', b'h', b'o', b'r', b't']);
+    }
 
     /// The one claim this module makes is that hang reads what it writes, so
     /// the proof is hang's own decoder, not this module's reader.

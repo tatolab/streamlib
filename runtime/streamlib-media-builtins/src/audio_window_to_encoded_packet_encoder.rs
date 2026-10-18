@@ -26,6 +26,8 @@
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::descriptors::AudioEntry;
 use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::hang_legacy_container_media_frame::write_hang_legacy_container_media_frame;
+use streamlib::sdk::iceoryx2::{MessageGroupBoundary, OutputWriter};
 use streamlib::sdk::schemars::JsonSchema;
 
 use crate::audio_block::{AudioBlock, AudioSampleDtype};
@@ -187,6 +189,8 @@ pub struct AudioWindowToEncodedPacketEncoder {
     minted: Option<MintedOpusEncoder>,
     /// The entry a mint derived that the port does not carry yet.
     audio_entry_owed_to_the_port: Option<AudioEntry>,
+    /// One media frame's bytes, reused across every write.
+    media_frame_scratch: Vec<u8>,
     packets_encoded: u64,
     /// The channel count whose layout Opus cannot place, once refused.
     ///
@@ -280,8 +284,35 @@ impl AudioWindowToEncodedPacketEncoder {
         Ok(Some(opus_packet_bytes))
     }
 
-    /// The catalog entry the port does not carry yet, taken so the caller
-    /// sets it ahead of the first packet it describes.
+    /// Publish one Opus packet on `output_port` as a media frame opening its
+    /// own group, setting the catalog entry a mint owes the port first so it
+    /// lands ahead of the first packet it describes.
+    pub fn publish_to_output_port(
+        &mut self,
+        outputs: &OutputWriter,
+        output_port: &str,
+        opus_packet_bytes: &[u8],
+        timestamp_ns: i64,
+    ) -> Result<()> {
+        if let Some(audio_entry) = &self.audio_entry_owed_to_the_port {
+            outputs.set_catalog_entry(output_port, audio_entry.clone())?;
+            self.audio_entry_owed_to_the_port = None;
+        }
+        write_hang_legacy_container_media_frame(
+            &mut self.media_frame_scratch,
+            timestamp_ns,
+            opus_packet_bytes,
+        )
+        .map_err(|refusal| Error::Runtime(format!("{OPUS_ENCODER_PROCESSOR_NAME}: {refusal}")))?;
+        outputs.write_bytes_with_timestamp(
+            output_port,
+            &self.media_frame_scratch,
+            timestamp_ns,
+            MessageGroupBoundary::StartsGroup,
+        )
+    }
+
+    /// The catalog entry the port does not carry yet.
     pub fn take_audio_entry_owed_to_the_port(&mut self) -> Option<AudioEntry> {
         self.audio_entry_owed_to_the_port.take()
     }

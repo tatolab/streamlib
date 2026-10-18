@@ -13,9 +13,7 @@
 //! ambisonic rig reach the same encoder with no configuration between them.
 
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::hang_legacy_container_media_frame::hang_legacy_container_media_frame_bytes;
-use streamlib::sdk::iceoryx2::MessageGroupBoundary;
+use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ReactiveProcessor;
 
 use crate::audio_block::AudioBlock;
@@ -83,23 +81,14 @@ impl ReactiveProcessor for OpusEncoder::Processor {
         else {
             return Ok(());
         };
-        if let Some(audio_entry) = self.encode_body.take_audio_entry_owed_to_the_port() {
-            self.outputs
-                .set_catalog_entry("encoded_audio", audio_entry)?;
-        }
-        let media_frame_bytes =
-            hang_legacy_container_media_frame_bytes(window_timestamp_ns, &opus_packet_bytes)
-                .map_err(|refusal| {
-                    Error::Runtime(format!("{OPUS_ENCODER_PROCESSOR_NAME}: {refusal}"))
-                })?;
         // The timestamped write, never the implicit one: the packet names
         // the instant its first sample was captured, not the moment it was
         // published.
-        self.outputs.write_bytes_with_timestamp(
+        self.encode_body.publish_to_output_port(
+            &self.outputs,
             "encoded_audio",
-            &media_frame_bytes,
+            &opus_packet_bytes,
             window_timestamp_ns,
-            MessageGroupBoundary::StartsGroup,
         )
     }
 }

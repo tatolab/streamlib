@@ -150,6 +150,13 @@ pub struct ParameterSetsFromAnnexBAccessUnit {
 }
 
 impl ParameterSetsFromAnnexBAccessUnit {
+    /// Whether the access unit carried no parameter set at all.
+    pub fn is_empty(&self) -> bool {
+        self.video_parameter_set_nal_units.is_empty()
+            && self.sequence_parameter_set_nal_units.is_empty()
+            && self.picture_parameter_set_nal_units.is_empty()
+    }
+
     /// Whether this access unit carried the sets a decoder needs: SPS and
     /// PPS, and for H.265 a VPS as well.
     pub fn is_complete_for(&self, elementary_stream: VideoCodecElementaryStream) -> bool {
@@ -447,7 +454,7 @@ mod tests {
             &annex_b(&[&[0x41, 0x9A, 0x02]]),
             VideoCodecElementaryStream::H264,
         );
-        assert_eq!(parameter_sets, ParameterSetsFromAnnexBAccessUnit::default());
+        assert!(parameter_sets.is_empty());
         assert_eq!(
             parameter_sets
                 .codec_string_of_the_sequence_parameter_set(VideoCodecElementaryStream::H264),

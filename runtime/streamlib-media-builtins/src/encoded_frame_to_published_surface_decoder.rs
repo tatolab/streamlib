@@ -210,10 +210,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             })?;
         let annex_b_access_unit_bytes = media_frame.codec_payload_bytes;
         if message.group_boundary == MessageGroupBoundary::StartsGroup {
-            self.prepare_the_session_for_a_group_start(
-                annex_b_access_unit_bytes,
-                disposition == MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
-            )?;
+            self.prepare_the_session_for_a_group_start(annex_b_access_unit_bytes, disposition)?;
         }
 
         let session = self.decode_session.as_mut().ok_or_else(|| {
@@ -258,7 +255,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     fn prepare_the_session_for_a_group_start(
         &mut self,
         annex_b_access_unit_bytes: &[u8],
-        entering_the_stream: bool,
+        disposition: MessageGroupLossRecoveryDisposition,
     ) -> Result<()> {
         let session = self.decode_session.as_mut().ok_or_else(|| {
             Error::Runtime(format!(
@@ -270,29 +267,29 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             annex_b_access_unit_bytes,
             Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
         );
-        let producer_renegotiated = arriving_parameter_sets
-            != ParameterSetsFromAnnexBAccessUnit::default()
-            && self
-                .session_parameter_sets
-                .as_ref()
-                .is_some_and(|session_parameter_sets| {
-                    *session_parameter_sets != arriving_parameter_sets
-                });
-        if producer_renegotiated {
-            tracing::info!(
-                "{}: the producer's parameter sets changed — reconfiguring the session from \
-                 this keyframe",
-                Identity::PROCESSOR_NAME
-            );
-            session.reset_for_new_parameter_sets();
-        } else if entering_the_stream && self.session_parameter_sets.is_some() {
-            session.discard_in_flight_state_after_a_gap();
+        match session_preparation_for_a_group_start(
+            self.session_parameter_sets.as_ref(),
+            &arriving_parameter_sets,
+            disposition,
+        ) {
+            SessionPreparationForAGroupStart::FullResetForNewParameterSets => {
+                tracing::info!(
+                    "{}: the producer's parameter sets changed — reconfiguring the session \
+                     from this keyframe",
+                    Identity::PROCESSOR_NAME
+                );
+                session.reset_for_new_parameter_sets();
+            }
+            SessionPreparationForAGroupStart::ParserFlushAfterALoss => {
+                session.discard_in_flight_state_after_a_gap();
+            }
+            SessionPreparationForAGroupStart::Nothing => {}
         }
-        if arriving_parameter_sets != ParameterSetsFromAnnexBAccessUnit::default() {
+        if !arriving_parameter_sets.is_empty() {
             self.session_parameter_sets = Some(arriving_parameter_sets);
         }
 
-        if entering_the_stream {
+        if disposition == MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart {
             self.report_the_stream_re_entry_if_worth_it();
         }
         Ok(())
@@ -366,6 +363,37 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             frame,
             _pooled_pixel_buffer_held_until_written: decoded_picture.pixel_buffer,
         }
+    }
+}
+
+/// What the session owes the group start about to be fed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionPreparationForAGroupStart {
+    /// New parameter sets: the session reconfigures from this keyframe.
+    FullResetForNewParameterSets,
+    /// Re-entry after a loss with the same parameter sets: the parser drops
+    /// what the broken stream left.
+    ParserFlushAfterALoss,
+    /// An unbroken stream, or the first entry into a fresh session.
+    Nothing,
+}
+
+/// Parameter sets other than the ones the session was fed mean the producer
+/// renegotiated; a keyframe carrying none says nothing about them.
+fn session_preparation_for_a_group_start(
+    session_parameter_sets: Option<&ParameterSetsFromAnnexBAccessUnit>,
+    arriving_parameter_sets: &ParameterSetsFromAnnexBAccessUnit,
+    disposition: MessageGroupLossRecoveryDisposition,
+) -> SessionPreparationForAGroupStart {
+    let Some(session_parameter_sets) = session_parameter_sets else {
+        return SessionPreparationForAGroupStart::Nothing;
+    };
+    if !arriving_parameter_sets.is_empty() && session_parameter_sets != arriving_parameter_sets {
+        SessionPreparationForAGroupStart::FullResetForNewParameterSets
+    } else if disposition == MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart {
+        SessionPreparationForAGroupStart::ParserFlushAfterALoss
+    } else {
+        SessionPreparationForAGroupStart::Nothing
     }
 }
 
@@ -451,5 +479,78 @@ mod tests {
     fn an_all_absent_decoder_config_deserializes_to_defaults() {
         let config: HardwareVideoDecoderConfig = serde_json::from_str("{}").expect("empty config");
         assert_eq!(config, HardwareVideoDecoderConfig::default());
+    }
+
+    fn parameter_sets_with_sequence_parameter_set(
+        sequence_parameter_set: &[u8],
+    ) -> ParameterSetsFromAnnexBAccessUnit {
+        ParameterSetsFromAnnexBAccessUnit {
+            video_parameter_set_nal_units: Vec::new(),
+            sequence_parameter_set_nal_units: vec![sequence_parameter_set.to_vec()],
+            picture_parameter_set_nal_units: vec![vec![0x68, 0xEE]],
+        }
+    }
+
+    #[test]
+    fn a_keyframe_with_new_parameter_sets_resets_the_session_in_full() {
+        let fed = parameter_sets_with_sequence_parameter_set(&[0x67, 0x64, 0x00, 0x1F]);
+        let renegotiated = parameter_sets_with_sequence_parameter_set(&[0x67, 0x64, 0x00, 0x28]);
+        for disposition in [
+            MessageGroupLossRecoveryDisposition::Read,
+            MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
+        ] {
+            assert_eq!(
+                session_preparation_for_a_group_start(Some(&fed), &renegotiated, disposition),
+                SessionPreparationForAGroupStart::FullResetForNewParameterSets
+            );
+        }
+    }
+
+    /// The full reset waits the whole device idle, so a re-entry whose
+    /// keyframe carries the same parameter sets owes only the parser flush.
+    #[test]
+    fn a_re_entry_with_the_same_parameter_sets_flushes_only_the_parser() {
+        let fed = parameter_sets_with_sequence_parameter_set(&[0x67, 0x64, 0x00, 0x1F]);
+        assert_eq!(
+            session_preparation_for_a_group_start(
+                Some(&fed),
+                &fed.clone(),
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart
+            ),
+            SessionPreparationForAGroupStart::ParserFlushAfterALoss
+        );
+        assert_eq!(
+            session_preparation_for_a_group_start(
+                Some(&fed),
+                &fed.clone(),
+                MessageGroupLossRecoveryDisposition::Read
+            ),
+            SessionPreparationForAGroupStart::Nothing
+        );
+    }
+
+    #[test]
+    fn a_keyframe_carrying_no_parameter_sets_never_resets_the_session() {
+        let fed = parameter_sets_with_sequence_parameter_set(&[0x67, 0x64, 0x00, 0x1F]);
+        assert_eq!(
+            session_preparation_for_a_group_start(
+                Some(&fed),
+                &ParameterSetsFromAnnexBAccessUnit::default(),
+                MessageGroupLossRecoveryDisposition::Read
+            ),
+            SessionPreparationForAGroupStart::Nothing
+        );
+    }
+
+    #[test]
+    fn the_first_entry_into_a_fresh_session_owes_it_nothing() {
+        assert_eq!(
+            session_preparation_for_a_group_start(
+                None,
+                &parameter_sets_with_sequence_parameter_set(&[0x67, 0x64, 0x00, 0x1F]),
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart
+            ),
+            SessionPreparationForAGroupStart::Nothing
+        );
     }
 }

@@ -29,8 +29,8 @@ pub use audio_window_contract::{
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 pub use catalog_entry::{
-    AudioEntry, BinaryEntry, CatalogDataTrackMode, CatalogEntry, CatalogSection, JsonEntry,
-    TextEntry, VideoEntry,
+    AudioEntry, BinaryEntry, CatalogDataTrackMode, CatalogEntry, CatalogEntryIsNotAnAudioEntry,
+    CatalogSection, JsonEntry, TextEntry, VideoEntry,
 };
 pub use config_schema_document::ProcessorConfigJsonSchema;
 pub use error::{SchemaError, SchemaResult};

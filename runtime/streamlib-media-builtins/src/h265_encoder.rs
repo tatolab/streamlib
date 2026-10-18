@@ -77,21 +77,8 @@ impl ReactiveProcessor for H265Encoder::Processor {
         let encode_outcome =
             self.encode_body
                 .encode_one_published_surface(&self.config, &frame, &mut staged);
-        if let Some(video_entry) = self.encode_body.take_video_entry_owed_to_the_port() {
-            self.outputs
-                .set_catalog_entry("encoded_video", video_entry)?;
-        }
-        self.encode_body.publish_staged_access_units(
-            staged,
-            |media_frame_bytes, timestamp_ns, group_boundary| {
-                self.outputs.write_bytes_with_timestamp(
-                    "encoded_video",
-                    media_frame_bytes,
-                    timestamp_ns,
-                    group_boundary,
-                )
-            },
-        )?;
+        self.encode_body
+            .publish_to_output_port(&self.outputs, "encoded_video", staged)?;
         encode_outcome
     }
 }

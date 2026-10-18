@@ -784,19 +784,11 @@ pub(crate) fn parse_h265_scaling_list_data(
 pub fn parse_h265_sequence_parameter_set(reader: &mut RbspBitstreamReader) -> Option<HevcSeqParam> {
     let mut sps = HevcSeqParam::default();
 
-    sps.sps_video_parameter_set_id = reader.u(4)? as u8;
-
-    // For single-layer (nuh_layer_id == 0) streams
-    sps.sps_max_sub_layers_minus1 = reader.u(3)? as u8;
-    if sps.sps_max_sub_layers_minus1 as usize >= MAX_NUM_SUB_LAYERS {
-        tracing::warn!("Too many sub-layers: {}", sps.sps_max_sub_layers_minus1);
-        return None;
-    }
-
-    sps.flags.sps_temporal_id_nesting_flag = reader.u(1)? != 0;
-
-    // profile_tier_level(true, sps_max_sub_layers_minus1)
-    sps.profile_tier_level = parse_h265_profile_tier_level(reader, sps.sps_max_sub_layers_minus1)?;
+    let opening = parse_h265_sequence_parameter_set_opening(reader)?;
+    sps.sps_video_parameter_set_id = opening.sps_video_parameter_set_id;
+    sps.sps_max_sub_layers_minus1 = opening.sps_max_sub_layers_minus1;
+    sps.flags.sps_temporal_id_nesting_flag = opening.sps_temporal_id_nesting_flag;
+    sps.profile_tier_level = opening.profile_tier_level;
 
     sps.sps_seq_parameter_set_id = reader.ue()? as u8;
     if sps.sps_seq_parameter_set_id as usize >= MAX_NUM_SPS {
@@ -987,6 +979,34 @@ pub fn parse_h265_sequence_parameter_set(reader: &mut RbspBitstreamReader) -> Op
     Some(sps)
 }
 
+/// The fields an H.265 SPS opens with, through `profile_tier_level()`.
+struct H265SequenceParameterSetOpening {
+    sps_video_parameter_set_id: u8,
+    sps_max_sub_layers_minus1: u8,
+    sps_temporal_id_nesting_flag: bool,
+    profile_tier_level: ProfileTierLevel,
+}
+
+fn parse_h265_sequence_parameter_set_opening(
+    reader: &mut RbspBitstreamReader,
+) -> Option<H265SequenceParameterSetOpening> {
+    let sps_video_parameter_set_id = reader.u(4)? as u8;
+    // For single-layer (nuh_layer_id == 0) streams
+    let sps_max_sub_layers_minus1 = reader.u(3)? as u8;
+    if sps_max_sub_layers_minus1 as usize >= MAX_NUM_SUB_LAYERS {
+        tracing::warn!("Too many sub-layers: {}", sps_max_sub_layers_minus1);
+        return None;
+    }
+    let sps_temporal_id_nesting_flag = reader.u(1)? != 0;
+    let profile_tier_level = parse_h265_profile_tier_level(reader, sps_max_sub_layers_minus1)?;
+    Some(H265SequenceParameterSetOpening {
+        sps_video_parameter_set_id,
+        sps_max_sub_layers_minus1,
+        sps_temporal_id_nesting_flag,
+        profile_tier_level,
+    })
+}
+
 /// Read the general profile, tier and level from one SPS NAL unit, NAL header
 /// included. `None` when the unit ends inside `profile_tier_level()`.
 pub fn h265_profile_tier_level_from_sequence_parameter_set_nal_unit(
@@ -995,13 +1015,7 @@ pub fn h265_profile_tier_level_from_sequence_parameter_set_nal_unit(
     let raw_byte_sequence_payload =
         remove_emulation_prevention_bytes(sequence_parameter_set_nal_unit.get(2..)?);
     let mut reader = RbspBitstreamReader::new(&raw_byte_sequence_payload);
-    let _sps_video_parameter_set_id = reader.u(4)?;
-    let sps_max_sub_layers_minus1 = reader.u(3)? as u8;
-    if sps_max_sub_layers_minus1 as usize >= MAX_NUM_SUB_LAYERS {
-        return None;
-    }
-    let _sps_temporal_id_nesting_flag = reader.u(1)?;
-    parse_h265_profile_tier_level(&mut reader, sps_max_sub_layers_minus1)
+    parse_h265_sequence_parameter_set_opening(&mut reader).map(|opening| opening.profile_tier_level)
 }
 
 /// Parse profile_tier_level() from the bitstream.
