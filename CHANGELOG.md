@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.2](https://github.com/tatolab/streamlib/compare/v0.48.1...v0.48.2) (2026-10-18)
+
+
+### Features
+
+* **runtime:** the relay-adapter SDK, the local adapter, and moq-relay in the unit as two supervised children of tatolabd ([#2842](https://github.com/tatolab/streamlib/issues/2842)) ([fe45bdc](https://github.com/tatolab/streamlib/commit/fe45bdc38929a95a03182476fda76f4895b986cc))
+
 ## [0.48.1](https://github.com/tatolab/streamlib/compare/v0.48.0...v0.48.1) (2026-10-18)
 
 
