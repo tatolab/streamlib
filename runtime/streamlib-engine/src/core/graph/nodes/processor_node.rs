@@ -100,6 +100,16 @@ impl ProcessorNode {
         }
     }
 
+    /// Whether this node's processor runs: an instance in this process, or a
+    /// helper's wiring, and not being deleted.
+    pub(crate) fn runs_its_processor(&self) -> bool {
+        use super::super::components::{
+            OutOfProcessLinkWiringComponent, PendingDeletionComponent, ProcessorInstanceComponent,
+        };
+        (self.has::<ProcessorInstanceComponent>() || self.has::<OutOfProcessLinkWiringComponent>())
+            && !self.has::<PendingDeletionComponent>()
+    }
+
     /// The entries this node's output ports carry now.
     pub(crate) fn catalog_entries_of_output_ports(&self) -> &Arc<CatalogEntriesOfOutputPorts> {
         &self.catalog_entries_of_output_ports

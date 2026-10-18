@@ -20,7 +20,6 @@ read on a `tatolabd` that reaches no Vulkan driver.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from collections.abc import Callable
@@ -218,18 +217,17 @@ def test_a_link_between_streams_carries_a_native_source_into_python_and_a_python
     assert local_api.links_reading(relay_in_its_own_stream, stream=SOURCE_STREAM_NAME) == [], (
         "the relay's only reader is `b`'s encoder, so `a` holds no link out of it"
     )
-    tapped = json.loads(
-        assert_tatolab_succeeded(
-            run_tatolab(
-                "tap",
-                f"{SOURCE_STREAM_NAME}/{RELAY_NODE}/{RELAY_PORT}",
-                "--count",
-                str(TAPPED_BAG_COUNT),
-                working_directory=tmp_path,
-            )
-        )
+    refused_tap = run_tatolab(
+        "tap",
+        f"{SOURCE_STREAM_NAME}/{RELAY_NODE}/{RELAY_PORT}",
+        "--count",
+        str(TAPPED_BAG_COUNT),
+        working_directory=tmp_path,
     )
-    assert tapped["received"] > 0, f"a port read only from another stream is tapped: {tapped}"
+    assert refused_tap.returncode != 0 and "publisher" in refused_tap.stderr, (
+        "an exposed port is the runtime's publisher's to read, never a tap's: "
+        f"{refused_tap.returncode} {refused_tap.stderr}"
+    )
 
     encoded_counted = await_more_bags_counted(tatolabd, ENCODED_COUNTER_NODE)
     assert encoded_counted["bags_counted"] > 0, (

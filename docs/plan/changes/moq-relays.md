@@ -157,21 +157,28 @@ reads them). Consumers (`examples/camera-audio-recorder`, `camera-webrtc-publish
 
 ## ADDED: the publisher, the adapter crates, the local relay — §Networking `:3880-3984`
 
-- **The engine seam.** `RuntimeOperations` gains `subscribe_to_an_exposed_output_port(stream, node,
-  port) -> ExposedOutputPortSubscription` — the reserved slot's reader (the tap forwarder reused;
-  `RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL` → `RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL`)
-  yielding `(payload_bytes, timestamp_ns, group_boundary, lost_since_last_read)` — and `exposure_changes()
-  -> ExposureChangeReceiver`, fed from `set_output_port_exposure_level`, carrying each port's level
-  and catalog entry. Nothing else of the engine is new.
+- **The engine seam.** `RuntimeOperations` (one loaded stream's) gains
+  `subscribe_to_an_exposed_output_port(node, port) -> ExposedOutputPortSubscription` — the reserved
+  slot's reader (the tap's forwarder, shared; `RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL` →
+  `RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL`) yielding `(payload_bytes, timestamp_ns,
+  group_boundary, lost_since_last_read)` — and `Runner::exposure_changes() -> ExposureChangeReceiver`,
+  which reads every loaded stream's exposed ports, each with its level and catalog entry, again on
+  each notice on the event bus: a level set, an entry replaced, a stream compiled, a stream unloaded.
+  A port's channel exists only while something reads it, so the subscription holds the port's
+  source side open — native and helper sources alike — whether or not a link out of it exists. A
+  channel the publisher is the first to open is made `WINDOWED_PORT_SUBSCRIBER_RING_DEPTH` deep, so
+  a windowed reader a live graph change connects later fits it; the publisher's own reader takes
+  `DeliveryProfile::ORDERED_DEPTH` (owner, 2026-10-18).
 - **The publisher** is `D/exposed_port_publisher.rs`, one per `tatolabd`, holding one subscription per
   exposed port of every loaded stream and, per adapter instance whose levels include the port's,
   one `moq_net::broadcast::Producer` per stream named `<root>/<machine>/<stream>.hang`, one track
-  `<node>/<port>`, each object written with `group.write_frame(Timestamp::from(timestamp_ns),
-  payload)`, a new group at `StartsGroup`. Under backpressure (the forwarder full) it abandons the
+  `<node>/<port>` on a nanosecond timescale, each object written with
+  `group.write_frame(Timestamp::from_nanos(timestamp_ns), payload)` (a stamp before zero reads as
+  zero), a new group at `StartsGroup`. Under backpressure (the forwarder full) it abandons the
   rest of the current group and resumes at the next `StartsGroup`. The catalog is a
   `hang::catalog::Catalog` assembled from the ports' entries by section under their track names,
   re-published as `catalog.json` and `catalog.json.z` when an entry or the exposed set changes;
-  a port with no entry is a track the catalog does not list. `offers(port) -> bool` says "all".
+  a port with no entry is a track the catalog does not list. Every exposed port is forwarded; no predicate chooses which.
 - **The adapter SDK** `runtime/streamlib-relay-adapter-sdk`: `trait RelayAdapter { fn kind(); fn
   settings_schema(); fn join(&mut self, settings) -> Result<Joined>; fn levels_served(); fn
   broadcast_root(&self, machine) -> BroadcastPath; fn credential_for_dial(&self) -> …; fn events()

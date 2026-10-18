@@ -4,6 +4,7 @@
 pub(crate) mod address_chunk;
 mod end_the_process_at_once;
 mod engine_teardown_watchdog;
+mod exposed_output_port_subscription;
 mod graph_change_listener;
 mod helper_process_group_registry;
 #[cfg(test)]
@@ -22,6 +23,7 @@ pub(crate) use operations_runtime::{
     EnginesTokioRuntimeForWorkSpawnedAgainstAStream, LinksReadingAStreamToRePlan,
     mark_this_thread_as_a_processor_execution_thread, the_cut_of_a_link_reading_another_stream,
 };
+mod reserved_slot_forwarder;
 #[allow(clippy::module_inception)]
 mod runtime;
 mod runtime_crash_pinned_on_a_stream;
@@ -48,6 +50,10 @@ pub use engine_teardown_watchdog::{
 pub(crate) use engine_teardown_watchdog::{
     ArmedTeardownWatchdogOfOneStream, ENGINE_TEARDOWN_WATCHDOG_BUDGET,
     count_threads_abandoned_in_this_process,
+};
+pub use exposed_output_port_subscription::{
+    ExposedOutputPortOfALoadedStream, ExposedOutputPortSourceWiring, ExposedOutputPortSubscription,
+    ExposureChangeReceiver,
 };
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,

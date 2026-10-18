@@ -1,314 +1,136 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! First-class channel tap — a read-only subscriber attachable to any named
-//! channel via the reserved tap slot the channel data service is sized for.
+//! A read-only tap on a named channel: the channel's reserved subscriber slot,
+//! read by a [`ReservedSlotForwarder`] that hands over each bag verbatim,
+//! frame header included. Decoding is the client's concern; a raw video
+//! channel carries surface descriptors, meaningless off the machine.
 //!
-//! The tap is a read-only OBSERVABILITY primitive: it forwards each channel bag
-//! VERBATIM (`FrameHeader`-framed) as WS binary frames — no encode, containerize,
-//! or transcode, so decoding is the client's concern (wire-neutral across
-//! Rust/Python/Deno). To observe a viewable video feed, tap an ENCODED
-//! (h264/h265/jpeg) or container (CMAF/fMP4) channel; a RAW video channel carries
-//! zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels.
-//! It is not a realtime-video transport — that is the WebRTC/display processors.
-//!
-//! A channel data service is opened with `max_subscribers =
-//! MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`,
-//! so a tap is a pure subscriber-add onto the pre-sized reserved slot: it
-//! reopens the existing service publisher-free at the channel's creation depth
-//! (iceoryx2 verifies both) and creates a subscriber as deep as the channel. No
-//! new service, no publisher change, no sizing change.
-//!
-//! The reserved slot is a COUNTING reservation (iceoryx2 only enforces the
-//! total), not an identity reservation. While a port feeds fewer than
-//! `MAX_DESTINATIONS_PER_CHANNEL` destinations a second tap still finds a free
-//! slot, and taps holding slots can leave a destination connected later none.
-//!
-//! iceoryx2's `Subscriber` holds `Rc` internally and is `!Send`, so it cannot
-//! move into the caller's tokio tasks. The tap therefore owns a dedicated OS
-//! thread that holds the subscriber and forwards each raw bag's bytes over a
-//! `tokio::sync::mpsc` (Send) to the async caller.
-//!
-//! The forwarder ALWAYS drains the iceoryx2 subscriber and NEVER blocks on the
-//! downstream: it forwards with `try_send` over a BOUNDED mpsc and, when that
-//! channel is full, DROPS the newest bag (counted, [`TapSubscription::dropped_bags`])
-//! rather than parking. A forwarder parked in a blocking send would stop
-//! draining the reserved slot, so every later bag on the channel would reach no
-//! observer and detaching the tap would hang on a thread that never returns.
-//! This is deliberately unlike the UNBOUNDED event WebSocket bridge: the tap
-//! trades completeness for liveness — detach returns, and the bags after a
-//! stall still reach an observer.
-//!
-//! Detaching = dropping the [`TapSubscription`]: the mpsc receiver is closed,
-//! the forwarder thread is signalled to stop, joined, and the reserved slot is
-//! freed for the next tap.
+//! A full receiver drops the newest bag, counted on
+//! [`TapSubscription::dropped_bags`]: a tap trades completeness for liveness.
+//! Dropping the [`TapSubscription`] stops its reader and frees the slot.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::thread::JoinHandle;
-use std::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::error::{Error, Result};
-use crate::iceoryx2::{
-    ChannelIdlePollBackoff, ChannelSizing, ChannelTapSubscribeError, Iceoryx2Node,
+use super::reserved_slot_forwarder::{
+    BagReceivedOnTheReservedSlot, ReservedSlotBagForwarding, ReservedSlotForwarder,
+    ReservedSlotOfAChannelToForward, start_reserved_slot_forwarder,
 };
+use crate::core::error::Result;
+use crate::iceoryx2::{ChannelSizing, Iceoryx2Node};
 
-/// Emit a drop warning on the first drop then once per this many subsequent
-/// drops, so a persistently-slow downstream is visible without spamming a log
-/// line per dropped bag on a hot channel.
+/// A drop is warned of at the first and then once per this many, so a
+/// persistently slow client is visible without a log line per bag.
 const TAP_DROP_WARN_INTERVAL: u64 = 256;
 
-/// The two Arc handles shared between a [`TapSubscription`] and its forwarder
-/// thread: the stop flag the owner raises on detach, and the counter the
-/// forwarder bumps every time it drops a bag into a full downstream.
-#[derive(Debug, Clone)]
-struct TapForwarderSignals {
-    stop_flag: Arc<AtomicBool>,
+/// A tap's forwarding: each bag's bytes as published, and a count of the bags
+/// a full receiver dropped.
+struct TapBagForwarding {
     dropped_bags: Arc<AtomicU64>,
 }
 
+impl ReservedSlotBagForwarding for TapBagForwarding {
+    type Forwarded = Vec<u8>;
+
+    fn forwarded_from(&mut self, bag: BagReceivedOnTheReservedSlot<'_>) -> Option<Vec<u8>> {
+        Some(bag.framed_bag.to_vec())
+    }
+
+    fn dropped_into_a_full_receiver(&mut self, _dropped: Vec<u8>, channel: &str) {
+        let total = self.dropped_bags.fetch_add(1, Ordering::AcqRel) + 1;
+        if total == 1 || total.is_multiple_of(TAP_DROP_WARN_INTERVAL) {
+            tracing::warn!(
+                channel = %channel,
+                dropped_bags = total,
+                "channel tap downstream is full; dropping bags to keep the iceoryx2 subscriber \
+                 drained (a read-only tap never back-pressures the source)"
+            );
+        }
+    }
+}
+
 /// A live read-only subscription to a named channel, streaming that channel's
-/// raw bag bytes ([`FrameHeader`](streamlib_ipc_types)-framed, exactly as
-/// published) to the async caller.
-///
-/// Dropping the subscription detaches the tap: the forwarder thread stops,
-/// joins, and drops the underlying subscriber — freeing the channel's reserved
-/// tap slot so a subsequent tap can attach.
+/// raw bags as published. Dropping it detaches the tap and frees the channel's
+/// reserved slot.
 #[derive(Debug)]
 pub struct TapSubscription {
-    channel: String,
-    receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    signals: TapForwarderSignals,
-    forwarder_thread: Option<JoinHandle<()>>,
+    forwarder: ReservedSlotForwarder<Vec<u8>>,
+    dropped_bags: Arc<AtomicU64>,
 }
 
 impl TapSubscription {
     /// The channel data-service name this tap is attached to.
     pub fn channel(&self) -> &str {
-        &self.channel
+        self.forwarder.channel()
     }
 
-    /// Await the next raw bag from the channel. Returns `None` once the tap is
-    /// exhausted — the bounded sample count was reached, the channel's
-    /// forwarder thread ended, or the subscription is detaching.
+    /// Await the next raw bag from the channel, or `None` once the tap is
+    /// exhausted — its bound reached, its reader ended, or it is detaching.
     pub async fn recv(&mut self) -> Option<Vec<u8>> {
-        self.receiver.recv().await
+        self.forwarder.recv().await
     }
 
-    /// Bags this tap dropped because the async consumer fell behind and the
-    /// bounded forward channel was full. A read-only tap drops rather than
-    /// back-pressuring the source, so a non-zero count means the observer is
-    /// too slow for the channel's rate, not that the pipeline stalled.
+    /// Bags this tap dropped because its client fell behind and the bounded
+    /// forward channel was full: a slow observer, never a stalled pipeline.
     pub fn dropped_bags(&self) -> u64 {
-        self.signals.dropped_bags.load(Ordering::Acquire)
+        self.dropped_bags.load(Ordering::Acquire)
     }
 }
 
 #[cfg(feature = "test-support")]
 impl TapSubscription {
-    /// Build an in-memory tap over a preset forward receiver and dropped-bag
-    /// count, with no forwarder thread and no live iceoryx2 subscriber. Lets a
-    /// consumer of [`TapSubscription`] (the api-server tap tools) be exercised
-    /// off a synthetic bag stream. Feature-gated to `test-support`, so it is
-    /// physically excluded from a production build.
+    /// An in-memory tap over a preset forward receiver and dropped-bag count,
+    /// with no reader thread and no iceoryx2 subscriber.
     pub fn from_forward_channel(
         channel: String,
         receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
         dropped_bags: u64,
     ) -> Self {
         Self {
-            channel,
-            receiver,
-            signals: TapForwarderSignals {
-                stop_flag: Arc::new(AtomicBool::new(false)),
-                dropped_bags: Arc::new(AtomicU64::new(dropped_bags)),
-            },
-            forwarder_thread: None,
+            forwarder: ReservedSlotForwarder::from_a_preset_receiver(channel, receiver),
+            dropped_bags: Arc::new(AtomicU64::new(dropped_bags)),
         }
     }
 }
 
-impl Drop for TapSubscription {
-    fn drop(&mut self) {
-        self.signals.stop_flag.store(true, Ordering::Release);
-        // Belt-and-suspenders: the forwarder uses try_send and never parks, but
-        // closing the receiver guarantees any in-flight send resolves to Closed
-        // so join() cannot hang.
-        self.receiver.close();
-        if let Some(thread) = self.forwarder_thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-/// Attach a tap to the channel `channel` on `node`, sized to match the service
-/// the compiler opened, streaming raw bags to the returned [`TapSubscription`].
-///
-/// `count` bounds the tap to that many bags then ends; `None` streams live
-/// until the subscription is dropped. Blocks briefly until the reserved-slot
-/// subscriber is created so a [`Error::TapSlotOccupied`] second-tap rejection
-/// surfaces to the caller rather than failing silently on the thread — call it
-/// from `spawn_blocking`, not directly on an async worker.
+/// Attach a tap to the channel `channel` on `node`, sized as the compiler
+/// opened it. `count` bounds the tap to that many bags; `None` streams until
+/// the subscription is dropped. A slot already held is refused with
+/// [`Error::TapSlotOccupied`]. Blocks until subscribed: call it from
+/// `spawn_blocking`.
 pub(crate) fn start_channel_tap(
     node: Iceoryx2Node,
     channel: String,
     sizing: ChannelSizing,
     count: Option<usize>,
 ) -> Result<TapSubscription> {
-    let forward_capacity = sizing.channel_service_creation_depth;
-    let (forward_tx, receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(forward_capacity);
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
-    let signals = TapForwarderSignals {
-        stop_flag: Arc::new(AtomicBool::new(false)),
-        dropped_bags: Arc::new(AtomicU64::new(0)),
-    };
-
-    let thread_channel = channel.clone();
-    let thread_signals = signals.clone();
-    let forwarder_thread = std::thread::Builder::new()
-        .name("streamlib-channel-tap".into())
-        .spawn(
-            crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
-                run_forwarder(
-                    node,
-                    thread_channel,
-                    sizing,
-                    count,
-                    forward_tx,
-                    ready_tx,
-                    thread_signals,
-                );
-            }),
-        )
-        .map_err(|e| Error::Runtime(format!("failed to spawn channel-tap thread: {e}")))?;
-
-    // The forwarder reports its subscribe outcome once, before entering the
-    // receive loop. A dropped sender (thread panicked before reporting) reads
-    // as a Runtime error rather than a hang.
-    match ready_rx.recv() {
-        Ok(Ok(())) => Ok(TapSubscription {
+    let dropped_bags = Arc::new(AtomicU64::new(0));
+    let forwarder = start_reserved_slot_forwarder(
+        ReservedSlotOfAChannelToForward {
+            iceoryx2_node: node,
             channel,
-            receiver,
-            signals,
-            forwarder_thread: Some(forwarder_thread),
-        }),
-        Ok(Err(subscribe_error)) => {
-            let _ = forwarder_thread.join();
-            Err(subscribe_error)
-        }
-        Err(_) => {
-            let _ = forwarder_thread.join();
-            Err(Error::Runtime(format!(
-                "channel-tap thread for '{channel}' ended before reporting its subscribe outcome"
-            )))
-        }
-    }
-}
-
-/// Body of the dedicated tap thread: open the channel service publisher-free,
-/// create the reserved-slot subscriber, report the outcome, then forward raw
-/// bags until stopped, the client detaches, or the bounded count is reached.
-fn run_forwarder(
-    node: Iceoryx2Node,
-    channel: String,
-    sizing: ChannelSizing,
-    count: Option<usize>,
-    forward_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
-    ready_tx: std::sync::mpsc::Sender<Result<()>>,
-    signals: TapForwarderSignals,
-) {
-    // Reopen the existing service on the OPEN path — same max_subscribers, no
-    // publisher created ("no publisher re-open" holds). iceoryx2 verifies the
-    // sizing against the live service.
-    let service = match node.open_or_create_service(
-        &channel,
-        sizing.max_subscribers,
-        sizing.channel_service_creation_depth,
-    ) {
-        Ok(service) => service,
-        Err(open_error) => {
-            let _ = ready_tx.send(Err(open_error));
-            return;
-        }
-    };
-
-    let subscriber = match service.create_tap_subscriber(sizing.channel_service_creation_depth) {
-        Ok(subscriber) => subscriber,
-        Err(ChannelTapSubscribeError::ReservedSlotOccupied) => {
-            let _ = ready_tx.send(Err(Error::TapSlotOccupied(channel)));
-            return;
-        }
-        Err(ChannelTapSubscribeError::Transport(detail)) => {
-            let _ = ready_tx.send(Err(Error::Runtime(format!(
-                "failed to attach tap subscriber to channel '{channel}': {detail}"
-            ))));
-            return;
-        }
-    };
-    let _ = ready_tx.send(Ok(()));
-
-    let mut delivered: usize = 0;
-    let mut idle_poll_backoff = ChannelIdlePollBackoff::starting_at_the_shortest_sleep();
-    loop {
-        if signals.stop_flag.load(Ordering::Acquire) {
-            break;
-        }
-        // Enforce the bound BEFORE receiving/forwarding so `count = Some(0)` ends
-        // the stream with zero bags and a clean close. A post-forward check can
-        // only observe the bound after already delivering one bag, so count=0
-        // would leak a single frame.
-        if let Some(bound) = count {
-            if delivered >= bound {
-                break;
-            }
-        }
-        match subscriber.receive() {
-            Ok(Some(sample)) => {
-                use tokio::sync::mpsc::error::TrySendError;
-                idle_poll_backoff.reset_after_a_bag_arrived();
-                match forward_tx.try_send(sample.payload().to_vec()) {
-                    Ok(()) => {
-                        delivered += 1;
-                    }
-                    // Downstream full: DROP the newest bag so the iceoryx2
-                    // subscriber stays drained and the source is never
-                    // back-pressured by this read-only tap.
-                    Err(TrySendError::Full(_dropped_bag)) => {
-                        let total = signals.dropped_bags.fetch_add(1, Ordering::AcqRel) + 1;
-                        if total == 1 || total % TAP_DROP_WARN_INTERVAL == 0 {
-                            tracing::warn!(
-                                channel = %channel,
-                                dropped_bags = total,
-                                "channel tap downstream is full; dropping bags to keep the \
-                                 iceoryx2 subscriber drained (a read-only tap never \
-                                 back-pressures the source)"
-                            );
-                        }
-                    }
-                    // Receiver dropped/closed — the TapSubscription detached.
-                    Err(TrySendError::Closed(_)) => break,
-                }
-            }
-            Ok(None) => {
-                std::thread::sleep(idle_poll_backoff.sleep_this_empty_poll_earns(Instant::now()))
-            }
-            Err(receive_error) => {
-                tracing::warn!(
-                    channel = %channel,
-                    "channel tap subscriber.receive() failed, ending tap: {receive_error:?}"
-                );
-                break;
-            }
-        }
-    }
+            ring_depth: sizing.channel_service_creation_depth,
+            sizing,
+            items_to_forward_before_ending: count,
+        },
+        TapBagForwarding {
+            dropped_bags: Arc::clone(&dropped_bags),
+        },
+    )?;
+    Ok(TapSubscription {
+        forwarder,
+        dropped_bags,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::error::Error;
     use std::time::Duration;
 
-    use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+    use streamlib_ipc_types::RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::iceoryx2::{
@@ -354,7 +176,7 @@ mod tests {
     /// second concurrent tap is rejected with the named `TapSlotOccupied`.
     /// Detaching (drop) frees the slot so a subsequent tap attaches cleanly.
     ///
-    /// Mentally revert `RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL` to 0: the
+    /// Mentally revert `RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL` to 0: the
     /// service is sized to `destinations` only, so the FIRST tap (the
     /// destination+1'th subscriber) no longer fits and this test's initial
     /// attach fails.
@@ -362,7 +184,7 @@ mod tests {
     fn tap_observes_live_bags_then_detach_frees_the_reserved_slot() {
         // One destination occupies one slot; the reserved tap slot is the +1.
         let destinations = 1usize;
-        let max_subscribers = destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let max_subscribers = destinations + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
         let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("live");
@@ -445,7 +267,7 @@ mod tests {
     /// end also frees the reserved slot (the forwarder thread exits its loop).
     #[test]
     fn bounded_tap_delivers_exactly_n_bags_then_ends() {
-        let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let max_subscribers = RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
         let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("bounded");
         let service = open_channel(&node, &channel, max_subscribers);
@@ -498,7 +320,7 @@ mod tests {
     /// yields one frame instead of `None` and this test goes red.
     #[test]
     fn zero_count_tap_delivers_no_bags_then_closes() {
-        let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let max_subscribers = RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
         let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("zero-count");
         let service = open_channel(&node, &channel, max_subscribers);
@@ -546,7 +368,7 @@ mod tests {
     /// alive — `drop(tap)` blocks forever, tripping the recv_timeout below.
     #[test]
     fn stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly() {
-        let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let max_subscribers = RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
         let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("stalled-downstream");
         let service = open_channel(&node, &channel, max_subscribers);
@@ -608,7 +430,7 @@ mod tests {
     /// sleep against a 1 ms one, which is a flake in CI rather than a guard.
     #[test]
     fn a_bag_published_after_a_quiet_stretch_still_reaches_a_tap() {
-        let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let max_subscribers = RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
         let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("quiet-then-carrying");
         let service = open_channel(&node, &channel, max_subscribers);

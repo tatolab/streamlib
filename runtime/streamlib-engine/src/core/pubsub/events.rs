@@ -3,7 +3,9 @@
 
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::Result;
-use crate::core::graph::{InputLinkPortRef, OutputPortALinkCarriesFrom, ProcessorUniqueId};
+use crate::core::graph::{
+    InputLinkPortRef, OutputPortALinkCarriesFrom, OutputPortExposureLevel, ProcessorUniqueId,
+};
 use crate::core::runtime::LoadedStreamTag;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +23,10 @@ pub mod topics {
     pub fn loaded_stream(stream: &LoadedStreamIdentity) -> String {
         format!("stream:{stream}")
     }
+
+    /// The topic every change to the output ports this process's streams
+    /// expose, or to their catalog entries, publishes on.
+    pub const OUTPUT_PORT_EXPOSURE: &str = "output-port-exposure";
 
     /// Keyboard input events
     pub const KEYBOARD: &str = "input:keyboard";
@@ -84,6 +90,9 @@ pub enum Event {
         stream: LoadedStreamIdentity,
         event: RuntimeEvent,
     },
+    /// The exposed output ports of a stream, or their catalog entries, may
+    /// have changed; published on [`topics::OUTPUT_PORT_EXPOSURE`].
+    OutputPortExposureChanged(OutputPortExposureChange),
     /// Keyboard, mouse and window input, published on the input topics.
     KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent),
     ProcessorEvent {
@@ -104,6 +113,7 @@ impl Event {
     pub fn topic(&self) -> String {
         match self {
             Event::OfALoadedStream { stream, .. } => topics::loaded_stream(stream),
+            Event::OutputPortExposureChanged(_) => topics::OUTPUT_PORT_EXPOSURE.to_string(),
             Event::KeyboardMouseOrWindowInput(input_event) => match input_event {
                 KeyboardMouseOrWindowInputEvent::KeyboardInput { .. } => {
                     topics::KEYBOARD.to_string()
@@ -162,6 +172,9 @@ impl Event {
             Event::OfALoadedStream { stream, event } => {
                 format!("OfALoadedStream.{} ({})", debug_variant_name(event), stream)
             }
+            Event::OutputPortExposureChanged(change) => {
+                format!("OutputPortExposureChanged.{}", debug_variant_name(change))
+            }
             Event::KeyboardMouseOrWindowInput(inner) => {
                 format!("KeyboardMouseOrWindowInput.{}", debug_variant_name(inner))
             }
@@ -179,6 +192,33 @@ impl Event {
                 format!("Custom.{}", topic)
             }
         }
+    }
+}
+
+/// What may have moved the output ports a stream exposes or their catalog
+/// entries. A reader of the exposed set reads it again on any of them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum OutputPortExposureChange {
+    /// An output port of a stream was put at a level.
+    LevelSet {
+        stream_name: String,
+        node_name: String,
+        port_name: String,
+        level: OutputPortExposureLevel,
+    },
+    /// An output port's catalog entry was replaced by a different one.
+    CatalogEntryReplaced { port_name: String },
+    /// A stream's graph was compiled: its nodes may have started or left.
+    StreamCompiled { stream_name: String },
+    /// A stream left its runtime.
+    StreamUnloaded { stream_name: String },
+}
+
+impl OutputPortExposureChange {
+    /// Publish this change on [`topics::OUTPUT_PORT_EXPOSURE`].
+    pub fn publish(self) {
+        let event = Event::OutputPortExposureChanged(self);
+        PUBSUB.publish(&event.topic(), &event);
     }
 }
 

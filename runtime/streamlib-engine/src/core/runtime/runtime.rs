@@ -283,7 +283,8 @@ impl EngineResourcesSharedByEveryStream {
     /// Take `stream` out of the table, unless another stream has taken its
     /// name since, into the streams whose end is not yet recorded — under the
     /// table's lock, so a wait always finds it in one or the other — then
-    /// re-plan every link reading it.
+    /// re-plan every link reading it and say it left on
+    /// [`topics::OUTPUT_PORT_EXPOSURE`](crate::core::pubsub::topics::OUTPUT_PORT_EXPOSURE).
     pub(crate) fn remove_from_the_stream_table(&self, stream: &Arc<LoadedStreamInThisRuntime>) {
         let removed = {
             let mut streams = self.streams_loaded_in_this_runtime.lock();
@@ -307,6 +308,10 @@ impl EngineResourcesSharedByEveryStream {
                 stream.stream_name(),
                 crate::core::runtime::LinksReadingAStreamToRePlan::EveryOneStillToBeWired,
             );
+            crate::core::pubsub::OutputPortExposureChange::StreamUnloaded {
+                stream_name: stream.stream_name().to_string(),
+            }
+            .publish();
         }
     }
 
@@ -355,7 +360,7 @@ impl EngineResourcesSharedByEveryStream {
             .cloned()
     }
 
-    fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+    pub(crate) fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
         self.streams_loaded_in_this_runtime
             .lock()
             .values()
@@ -953,6 +958,15 @@ impl Runner {
     ) -> Option<Arc<LoadedStreamInThisRuntime>> {
         self.engine_resources_shared_by_every_stream
             .loaded_stream_of_the_cast_name(stream_cast)
+    }
+
+    /// The exposed output ports of every stream loaded in this runtime, read
+    /// again after each change to them, to their catalog entries, or to the
+    /// loaded streams.
+    pub fn exposure_changes(&self) -> Result<crate::core::runtime::ExposureChangeReceiver> {
+        crate::core::runtime::ExposureChangeReceiver::subscribed_on(
+            &self.engine_resources_shared_by_every_stream,
+        )
     }
 
     /// Every loaded stream, read under one lock of the stream table.

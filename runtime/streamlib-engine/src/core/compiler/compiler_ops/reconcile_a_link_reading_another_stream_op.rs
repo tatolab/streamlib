@@ -20,12 +20,11 @@ use super::open_iceoryx2_service_op::{
 };
 use crate::core::error::Error;
 use crate::core::graph::{
-    CutOffAReaderOfAnExposedOutputPort, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
+    CutOffAReaderOfAnExposedOutputPort, Graph, GraphEdgeWithComponents,
     Iceoryx2ServicesHeldOpenForLinkComponent, Link, LinkReadingAnotherStreamComponent, LinkState,
-    LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortInAnotherStreamOnThisMachine,
-    OutputPortReaderOutsideItsStream, PendingDeletionComponent, ProcessorInstanceComponent,
-    ReaderOfAnExposedOutputPort, SourceSideOfALinkReadingAnotherStream,
+    LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutputLinkPortRef,
+    OutputPortInAnotherStreamOnThisMachine, OutputPortReaderOutsideItsStream,
+    ReaderOfAnExposedOutputPort, SourceSideHeldOpenForAReaderOutsideItsStream,
     WiringOfALinkReadingAnotherStream, a_link_reading_another_stream_is_still_on_wiring_attempt,
     a_link_reading_another_stream_is_still_to_be_wired,
     why_a_link_awaits_a_source_stream_not_loaded,
@@ -343,7 +342,7 @@ struct OpenedSourceSideOnTheSourceStream {
     // Dropped unused, in declaration order: the reader comes off the source's port first, so a
     // cut not begun never begins; then the source's side is released; then the services go.
     exposure_registration: ExposedOutputPortReaderRegistration,
-    source_side: SourceSideOfALinkReadingAnotherStream,
+    source_side: SourceSideHeldOpenForAReaderOutsideItsStream,
     opened_source_side: OpenedSourceSideOfALink,
 }
 
@@ -409,11 +408,7 @@ fn open_the_source_side_on_the_source_stream(
         .traversal()
         .v(&source_processor_id)
         .first()
-        .is_some_and(|node| {
-            (node.has::<ProcessorInstanceComponent>()
-                || node.has::<OutOfProcessLinkWiringComponent>())
-                && !node.has::<PendingDeletionComponent>()
-        });
+        .is_some_and(|node| node.runs_its_processor());
     if !source_node_runs {
         return (
             SourceSideOnTheSourceStream::NotYet(format!(
@@ -452,7 +447,7 @@ fn open_the_source_side_on_the_source_stream(
             readers_to_drop,
         );
     };
-    let source_side = SourceSideOfALinkReadingAnotherStream::released_when_dropped(
+    let source_side = SourceSideHeldOpenForAReaderOutsideItsStream::released_when_dropped(
         wired_on,
         &source_port,
         link_id,
@@ -639,8 +634,8 @@ mod tests {
 
     use super::*;
     use crate::core::graph::{
-        ExposedOutputPortsComponent, InputLinkPortRef, OutputPortExposureLevel,
-        ProcessorInstanceWithItsOutOfProcessLinkWiring,
+        ExposedOutputPortsComponent, GraphNodeWithComponents, InputLinkPortRef,
+        OutputPortExposureLevel, ProcessorInstanceWithItsOutOfProcessLinkWiring,
     };
     use crate::core::processors::{ProcessorInstance, ProcessorSpec};
     use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
@@ -1981,6 +1976,7 @@ mod tests {
         let (_listener, disconnected) = listen_on(&streams.b, |event| {
             matches!(event, RuntimeEvent::RuntimeDidDisconnect { .. })
         });
+        let held_weakly_before_the_cut = Arc::weak_count(&streams.b);
         streams
             .a
             .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Internal)
@@ -1988,6 +1984,17 @@ mod tests {
         disconnected
             .recv_timeout(A_CUT_LANDS_WITHIN)
             .expect("the cut disconnects the link");
+        // The cut holds `b` weakly from its registration until its task ends,
+        // which is after it says it disconnected; that hold let go of while the
+        // next level is counted would read as a re-plan missing.
+        let deadline = std::time::Instant::now() + A_CUT_LANDS_WITHIN;
+        while Arc::weak_count(&streams.b) >= held_weakly_before_the_cut {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the cut still holds `b` after {A_CUT_LANDS_WITHIN:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(
             re_plans_on_b_spawned_by_putting_camera_out1_of_a_at(
                 &streams,

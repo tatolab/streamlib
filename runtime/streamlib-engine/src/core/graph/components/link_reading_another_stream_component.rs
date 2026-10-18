@@ -140,7 +140,7 @@ pub(crate) struct WiringOfALinkReadingAnotherStream {
     // Fields drop in declaration order: the registration goes first, so a cut
     // not yet begun never begins against a source side already released.
     _exposure_registration: ExposedOutputPortReaderRegistration,
-    _source_side: SourceSideOfALinkReadingAnotherStream,
+    _source_side: SourceSideHeldOpenForAReaderOutsideItsStream,
     source_stream_tag: LoadedStreamTag,
 }
 
@@ -149,7 +149,7 @@ impl WiringOfALinkReadingAnotherStream {
     /// `source_stream_tag`.
     pub(crate) fn new(
         exposure_registration: ExposedOutputPortReaderRegistration,
-        source_side: SourceSideOfALinkReadingAnotherStream,
+        source_side: SourceSideHeldOpenForAReaderOutsideItsStream,
         source_stream_tag: LoadedStreamTag,
     ) -> Self {
         Self {
@@ -174,14 +174,15 @@ pub(crate) enum SourceSideOfALinkWiredOn {
     AHelperProcessesLinkWiring(Arc<OutOfProcessLinkWiringEnvelope>),
 }
 
-/// The source's side of a link reading another stream, released when dropped:
-/// the link's notifier comes off the source's output port, taking the port's
-/// publisher with it when the link was its last, or a helper source is told to
-/// drop what it opened. Held through weak handles, so a source processor that
+/// The source's side of a channel held open for a reader outside the source's
+/// stream — a link reading another stream, or the runtime's publisher —
+/// released when dropped: the reader's notifier comes off the source's output
+/// port, taking the port's publisher with it when it was the last, or a helper
+/// source is told to drop what it opened. Held through weak handles, so a source processor that
 /// is gone makes the release a no-op and is never kept alive by it.
 #[derive(Debug)]
 #[must_use = "dropping it releases the source's side of the link at once"]
-pub(crate) struct SourceSideOfALinkReadingAnotherStream {
+pub(crate) struct SourceSideHeldOpenForAReaderOutsideItsStream {
     wired_on: WeakSourceSideOfALinkWiredOn,
     source_port: String,
     link_id: LinkUniqueId,
@@ -193,7 +194,7 @@ enum WeakSourceSideOfALinkWiredOn {
     AHelperProcessesLinkWiring(Weak<OutOfProcessLinkWiringEnvelope>),
 }
 
-impl SourceSideOfALinkReadingAnotherStream {
+impl SourceSideHeldOpenForAReaderOutsideItsStream {
     /// The source's side of link `link_id` out of `source_port`, wired on
     /// `wired_on`, released when dropped.
     pub(crate) fn released_when_dropped(
@@ -220,7 +221,7 @@ impl SourceSideOfALinkReadingAnotherStream {
     }
 }
 
-impl Drop for SourceSideOfALinkReadingAnotherStream {
+impl Drop for SourceSideHeldOpenForAReaderOutsideItsStream {
     fn drop(&mut self) {
         match &self.wired_on {
             WeakSourceSideOfALinkWiredOn::ANativeProcessorsOutputWriter(output_writer) => {
@@ -233,7 +234,7 @@ impl Drop for SourceSideOfALinkReadingAnotherStream {
                     link_id = %self.link_id,
                     port = %self.source_port,
                     publisher_released,
-                    "Released the source's side of a link reading another stream"
+                    "Released the source's side of a channel held open for a reader outside its stream"
                 );
             }
             WeakSourceSideOfALinkWiredOn::AHelperProcessesLinkWiring(link_wiring) => {

@@ -1461,6 +1461,7 @@ pub(crate) mod tests {
                 ))
             })
         }
+        crate::control_plane_stub_support::the_exposed_port_subscription_is_unreachable!("tool");
         crate::control_plane_stub_support::graph_mutation_ops_record_the_call!();
         fn to_json(&self) -> Result<Value> {
             Ok(json!({}))

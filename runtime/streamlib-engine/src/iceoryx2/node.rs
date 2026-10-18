@@ -312,8 +312,8 @@ impl Iceoryx2Node {
     /// The service name is the source-port channel
     /// (`{source_processor}/{source_output_port}`). The service carries exactly
     /// [`MAX_PUBLISHERS_PER_CHANNEL`] (1) publisher — the source — and
-    /// `max_subscribers` slots: the fixed destination cap plus the reserved tap
-    /// slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
+    /// `max_subscribers` slots: the fixed destination cap plus the reserved
+    /// slot ([`crate::iceoryx2::RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
     /// Every opener (the engine and every helper) must request the SAME
     /// `max_subscribers` — iceoryx2 verifies it on `open`.
     ///
@@ -657,43 +657,33 @@ impl Iceoryx2Service {
             .map_err(|e| Error::Runtime(format!("Failed to create subscriber: {:?}", e)))
     }
 
-    /// Create the channel's reserved-slot tap subscriber, discriminating the
-    /// slot-exhaustion case from every other transport failure.
-    ///
-    /// A channel data service is opened with `max_subscribers =
-    /// MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`.
-    /// Destination subscribers take their slots as links are wired, and the
-    /// reserved slot is what a tap consumes here, with a ring `tap_ring_depth`
-    /// deep.
-    /// iceoryx2 fixes `max_subscribers` at create time, so a tap arriving when
-    /// every slot is taken trips
-    /// [`iceoryx2::port::subscriber::SubscriberCreateError::ExceedsMaxSupportedSubscribers`]
-    /// — surfaced as [`ChannelTapSubscribeError::ReservedSlotOccupied`] so the op
-    /// can map it to the named [`Error::TapSlotOccupied`], distinct from a generic
-    /// subscribe failure.
-    pub fn create_tap_subscriber(
+    /// Create the channel's reserved-slot subscriber with a ring `ring_depth`
+    /// deep, telling the slot already held apart from every other transport
+    /// failure. iceoryx2 counts subscriber slots rather than naming them, so the
+    /// slot is refused only once every slot on the channel is held.
+    pub fn create_reserved_slot_subscriber(
         &self,
-        tap_ring_depth: usize,
-    ) -> std::result::Result<ChannelDataServiceSubscriber, ChannelTapSubscribeError> {
+        ring_depth: usize,
+    ) -> std::result::Result<ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError> {
         use iceoryx2::port::subscriber::SubscriberCreateError;
         self.inner
             .subscriber_builder()
-            .buffer_size(tap_ring_depth)
+            .buffer_size(ring_depth)
             .create()
             .map_err(|e| match e {
                 SubscriberCreateError::ExceedsMaxSupportedSubscribers => {
-                    ChannelTapSubscribeError::ReservedSlotOccupied
+                    ChannelReservedSlotSubscribeError::ReservedSlotOccupied
                 }
-                other => ChannelTapSubscribeError::Transport(format!("{:?}", other)),
+                other => ChannelReservedSlotSubscribeError::Transport(format!("{:?}", other)),
             })
     }
 }
 
-/// Why creating a channel's reserved-slot tap subscriber failed.
+/// Why creating a channel's reserved-slot subscriber failed.
 #[derive(Debug)]
-pub enum ChannelTapSubscribeError {
-    /// The channel's single reserved tap slot is already taken by another tap —
-    /// iceoryx2 rejected the create with `ExceedsMaxSupportedSubscribers`.
+pub enum ChannelReservedSlotSubscribeError {
+    /// Every subscriber slot on the channel is held — iceoryx2 refused the
+    /// create with `ExceedsMaxSupportedSubscribers`.
     ReservedSlotOccupied,
     /// Any other iceoryx2 subscriber-create failure, rendered for the log.
     Transport(String),
@@ -774,11 +764,11 @@ mod tests {
     fn a_channel_admits_every_destination_and_the_tap_from_their_own_nodes_and_no_more() {
         use crate::iceoryx2::DeliveryProfile;
         use streamlib_ipc_types::{
-            MAX_DESTINATIONS_PER_CHANNEL, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+            MAX_DESTINATIONS_PER_CHANNEL, RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL,
         };
 
         let max_subscribers =
-            MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+            MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
         let service_name = unique_service_name("fan_out_from_distinct_nodes");
         let open_from_a_node_of_its_own = || {
             let node = Iceoryx2Node::for_this_test_process();
@@ -888,23 +878,15 @@ mod tests {
         );
     }
 
-    /// A channel data service carries exactly ONE publisher (the source) and
-    /// `N + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL` subscribers. This is the
-    /// transport inversion (#1419): the old destination-centric service pinned
-    /// `max_subscribers = 1` and let N publishers fan in; a channel service pins
-    /// `max_publishers = 1` and lets N subscribers fan OUT one zero-copy loan,
-    /// reserving one extra slot for a phase-3.5 tap.
-    ///
-    /// Mentally-revert: raise `max_publishers` back above 1 in
-    /// [`Iceoryx2Node::open_or_create_service`] and the second `create_publisher`
-    /// stops failing; drop the reserved tap slot and the (N+1)th subscriber (the
-    /// tap) stops fitting. Both halves fail here when the contract is broken.
+    /// A channel data service carries exactly one publisher, the source, and
+    /// `N + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL` subscribers: a second
+    /// publisher is refused, and the subscriber past the reserved slot is too.
     #[test]
-    fn channel_service_single_publisher_n_plus_tap_subscribers() {
-        use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+    fn channel_service_single_publisher_n_plus_the_reserved_slot_subscribers() {
+        use streamlib_ipc_types::RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
         let destinations = 3usize;
-        let max_subscribers = destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let max_subscribers = destinations + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
         let node = Iceoryx2Node::for_this_test_process();
         let service = node
             .open_or_create_service(&unique_service_name("chan_caps"), max_subscribers, 4)
@@ -918,20 +900,18 @@ mod tests {
              MAX_PUBLISHERS_PER_CHANNEL (1)",
         );
 
-        // N destination subscribers plus the one reserved tap slot fit; the slot
+        // N destination subscribers plus the one reserved slot fit; the slot
         // after that does not.
         let mut subscribers = Vec::with_capacity(max_subscribers);
         for i in 0..max_subscribers {
-            subscribers.push(
-                service.create_subscriber(4).unwrap_or_else(|e| {
-                    panic!("subscriber {i} (destination or tap) must fit: {e:?}")
-                }),
-            );
+            subscribers.push(service.create_subscriber(4).unwrap_or_else(|e| {
+                panic!("subscriber {i} (destination or reserved) must fit: {e:?}")
+            }));
         }
         assert!(
             service.create_subscriber(4).is_err(),
             "the {}th subscriber must fail — max_subscribers was N({destinations}) + \
-             reserved tap({RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL})",
+             reserved({RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL})",
             max_subscribers + 1,
         );
     }
@@ -1449,15 +1429,15 @@ mod tests {
             ChannelEgressConfig, ChannelTrustTier, InputMailboxesInner, OutputWriterInner,
             ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         };
-        use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        use streamlib_ipc_types::RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
         let node = Iceoryx2Node::for_this_test_process();
         let data_name = unique_service_name("cycle/data");
         let notify_name = unique_service_name("cycle/notify");
         let link_id = "L-cycle-1";
-        // fan-in = 1 (one inbound link), fan-out = 1 (+ reserved tap slot).
+        // fan-in = 1 (one inbound link), fan-out = 1 (+ the reserved slot).
         let max_notifiers = 1usize;
-        let max_subscribers = 1 + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let max_subscribers = 1 + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
         let out_inner = Arc::new(OutputWriterInner::new());
         let in_inner = Arc::new(InputMailboxesInner::new());

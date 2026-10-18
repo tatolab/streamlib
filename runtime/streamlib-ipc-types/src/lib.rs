@@ -318,13 +318,13 @@ pub const MAX_PUBLISHERS_PER_CHANNEL: usize = 1;
 /// destination slots.
 ///
 /// A channel's data service is created with `max_subscribers =
-/// MAX_DESTINATIONS_PER_CHANNEL + this`. The reserved slot lets the phase-3.5
-/// `tap` op attach a broadcast consumer as a pure subscriber-add with no service
-/// re-open — iceoryx2 fixes `max_subscribers` at create time, so the headroom
-/// must exist up front. iceoryx2 sizes each publisher's shared-memory data
+/// MAX_DESTINATIONS_PER_CHANNEL + this`. The reserved slot is the one the
+/// runtime's publisher reads an exposed port through, a pure subscriber-add with
+/// no service re-open — iceoryx2 fixes `max_subscribers` at create time, so the
+/// headroom must exist up front. iceoryx2 sizes each publisher's shared-memory data
 /// segment as `max_subscribers × (subscriber_max_buffer_size + borrowed) + …`,
 /// so this is deliberately 1 (not the iceoryx2 default of 8).
-pub const RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
+pub const RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
 
 /// Destinations one channel — one source output port — may feed at once.
 ///

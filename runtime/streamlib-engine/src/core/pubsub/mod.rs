@@ -9,6 +9,6 @@ mod integration_tests;
 
 pub use bus::{PUBSUB, PubSub};
 pub use events::{
-    Event, EventListener, KeyboardMouseOrWindowInputEvent, LoadedStreamIdentity, ProcessorEvent,
-    RuntimeEvent, topics,
+    Event, EventListener, KeyboardMouseOrWindowInputEvent, LoadedStreamIdentity,
+    OutputPortExposureChange, ProcessorEvent, RuntimeEvent, topics,
 };

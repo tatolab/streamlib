@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use crate::core::graph::{
     OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
@@ -27,7 +27,46 @@ pub struct ExposedOutputPortsComponent {
 #[derive(Debug)]
 struct ExposedOutputPortOfThisNode {
     level: OutputPortExposureLevel,
+    level_now: LevelOfAnExposedOutputPortNow,
     readers_from_outside_the_stream: Vec<ReaderOfAnExposedOutputPort>,
+}
+
+impl Drop for ExposedOutputPortOfThisNode {
+    fn drop(&mut self) {
+        self.level_now.store(OutputPortExposureLevel::Internal);
+    }
+}
+
+/// The level one exposure of an output port is at, read without the graph's
+/// lock: set as the level is, and internal for good once the port is no longer
+/// exposed or its node has left its stream. A port exposed again has a new one.
+#[derive(Debug, Clone)]
+pub struct LevelOfAnExposedOutputPortNow(Arc<AtomicU8>);
+
+impl LevelOfAnExposedOutputPortNow {
+    fn at(level: OutputPortExposureLevel) -> Self {
+        let level_now = Self(Arc::new(AtomicU8::new(0)));
+        level_now.store(level);
+        level_now
+    }
+
+    fn store(&self, level: OutputPortExposureLevel) {
+        let encoded = match level {
+            OutputPortExposureLevel::Internal => 0,
+            OutputPortExposureLevel::Private => 1,
+            OutputPortExposureLevel::Public => 2,
+        };
+        self.0.store(encoded, Ordering::Release);
+    }
+
+    /// The level now.
+    pub fn read(&self) -> OutputPortExposureLevel {
+        match self.0.load(Ordering::Acquire) {
+            1 => OutputPortExposureLevel::Private,
+            2 => OutputPortExposureLevel::Public,
+            _ => OutputPortExposureLevel::Internal,
+        }
+    }
 }
 
 /// What cuts one reader off the port it reads, told why. It runs at most once,
@@ -151,6 +190,14 @@ impl ExposedOutputPortsComponent {
             .map_or(OutputPortExposureLevel::Internal, |exposed| exposed.level)
     }
 
+    /// The level `port_name`'s exposure is at, read without the graph's lock,
+    /// or `None` while the port is internal.
+    pub fn level_now_of(&self, port_name: &str) -> Option<LevelOfAnExposedOutputPortNow> {
+        self.exposed_ports_by_port_name
+            .get(port_name)
+            .map(|exposed| exposed.level_now.clone())
+    }
+
     /// Every exposed port of this node with its level, by port name.
     pub fn exposed_ports_and_their_levels(
         &self,
@@ -173,7 +220,7 @@ impl ExposedOutputPortsComponent {
             return self
                 .exposed_ports_by_port_name
                 .remove(port_name)
-                .map(|exposed| exposed.readers_from_outside_the_stream)
+                .map(|mut exposed| std::mem::take(&mut exposed.readers_from_outside_the_stream))
                 .unwrap_or_default();
         }
         let exposed = self
@@ -181,9 +228,11 @@ impl ExposedOutputPortsComponent {
             .entry(port_name.to_string())
             .or_insert_with(|| ExposedOutputPortOfThisNode {
                 level,
+                level_now: LevelOfAnExposedOutputPortNow::at(level),
                 readers_from_outside_the_stream: Vec::new(),
             });
         exposed.level = level;
+        exposed.level_now.store(level);
         let (staying, leaving) = std::mem::take(&mut exposed.readers_from_outside_the_stream)
             .into_iter()
             .partition(|reader| {
@@ -230,7 +279,7 @@ impl ExposedOutputPortsComponent {
     pub(crate) fn into_every_reader(self) -> Vec<ReaderOfAnExposedOutputPort> {
         self.exposed_ports_by_port_name
             .into_values()
-            .flat_map(|exposed| exposed.readers_from_outside_the_stream)
+            .flat_map(|mut exposed| std::mem::take(&mut exposed.readers_from_outside_the_stream))
             .collect()
     }
 

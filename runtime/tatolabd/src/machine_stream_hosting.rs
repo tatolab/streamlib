@@ -25,6 +25,7 @@ use streamlib::sdk::runtime::{
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
+use crate::exposed_port_publisher::start_the_exposed_port_publisher;
 use crate::local_relay_children::join_the_local_relay;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
 
@@ -67,6 +68,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     streamlib_media_builtins::register_media_builtin_processor_types();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    crate::numbered_message_writer_test_node::register_the_numbered_message_writer_test_node();
     if let Err(kept_streams_refusal) = engine
         .keep_streams_in_the_state_directory(&tatolab_state_directory.kept_streams_directory())
     {
@@ -80,10 +83,18 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
     let mut local_relay = None;
+    let mut exposed_port_publisher = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
             local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
             local_relay = join_the_local_relay(&engine);
+            exposed_port_publisher = start_the_exposed_port_publisher(
+                &engine,
+                local_relay
+                    .as_ref()
+                    .map(|local_relay| local_relay.relays_the_publisher_dials(&engine))
+                    .unwrap_or_default(),
+            );
             log_the_kept_streams_reloaded_at_the_start(
                 &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
             );
@@ -93,6 +104,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             // First, so no call reaches a stream as it ends, and every stream a
             // connection attached unloads with its connection.
             drop(local_api_served_for_the_engine.take());
+            drop(exposed_port_publisher.take());
             // Inside the run: a load the local API began gives itself up only
             // on reading the machine's shutdown, which the run's end clears.
             if !engine.wait_until_this_reference_alone_holds_the_engine(

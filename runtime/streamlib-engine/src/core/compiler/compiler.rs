@@ -209,6 +209,10 @@ impl Compiler {
                     this_stream.stream_name(),
                     which,
                 );
+            crate::core::pubsub::OutputPortExposureChange::StreamCompiled {
+                stream_name: this_stream.stream_name().to_string(),
+            }
+            .publish();
         }
         compiled
     }
