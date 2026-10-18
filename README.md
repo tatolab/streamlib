@@ -107,10 +107,11 @@ cargo xtask build-runtime --release              # omit --release for a debug bu
 export PATH="$PWD/target/tatolab-runtime/bin:$PATH"
 ```
 
-That lays out `target/tatolab-runtime/` as an install prefix: `bin/tatolabd`, `bin/tatolab`, and
-`lib/tatolab/lend/`, the runtime's own Python half (`tatolab.runtime`) that each Python node's
-interpreter borrows. Keep `bin/tatolabd` beside `lib/`: `tatolabd` finds `lib/tatolab/lend/`
-relative to its own executable.
+That lays out `target/tatolab-runtime/` as an install prefix: `bin/tatolabd`, `bin/tatolab`,
+`bin/moq-relay` — the machine's local relay, which `tatolabd` runs as two children, one on
+loopback port 4443 and one on every interface at 4445 — and `lib/tatolab/lend/`, the runtime's own
+Python half (`tatolab.runtime`) that each Python node's interpreter borrows. Keep `bin/tatolabd`
+beside `lib/` and `bin/moq-relay`: `tatolabd` finds both relative to its own executable.
 
 The build needs a Rust toolchain and [uv](https://docs.astral.sh/uv/) on `PATH` (it runs the
 pinned maturin through `uvx`), plus a native toolchain. On Debian or Ubuntu that is:
@@ -331,9 +332,8 @@ tatolab enable-virtual-camera [--print]
   is recorded and wins over what the stream function exposes, across restarts.
 - **`graph`** prints every loaded stream's nodes, ports, links and exposed ports as JSON, with each
   node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
-  one stream's graph alone, in the shape a load takes. The machine's name is its tailnet name, read
-  from the local Tailscale's status when `tatolabd` starts, or its hostname when it has no tailnet,
-  less a trailing mDNS `.local`, cast to lowercase URL-safe.
+  one stream's graph alone, in the shape a load takes. The machine's name is its hostname, less a
+  trailing mDNS `.local`, cast to lowercase URL-safe.
 - **`tap`** samples the raw bags one output port carries. The channel is the port's address,
   `<stream>/<node>/<port>` as `graph` names them — `<node>/<port>` with `--stream`, or
   `<machine>/<stream>/<node>/<port>` naming this machine. The sample is bounded and never
