@@ -7,7 +7,7 @@
 //! interpreter.
 //!
 //! Written against the SDK's handle-shaped primitives only — pixel-buffer
-//! pool, texture cache, present target — never private engine guts.
+//! pool, texture cache — never private engine guts.
 
 pub mod audio_block;
 pub(crate) mod audio_samples_awaiting_playback_ring;
@@ -35,6 +35,7 @@ pub mod opus_identification_header;
 pub mod opus_stream_layout;
 pub(crate) mod processor_thread_join;
 pub mod published_surface_to_encoded_frame_encoder;
+pub mod relay_track_source;
 pub mod speaker_sink;
 pub mod test_pattern_source;
 pub mod video_frame;
@@ -55,6 +56,7 @@ pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
 pub use opus_decoder::OpusDecoder;
 pub use opus_encoder::OpusEncoder;
 pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
+pub use relay_track_source::{RelayTrackSource, RelayTrackSourceConfig};
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;
@@ -86,6 +88,7 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<h264_decoder::H264Decoder::Processor>();
     PROCESSOR_REGISTRY.register::<h265_encoder::H265Encoder::Processor>();
     PROCESSOR_REGISTRY.register::<h265_decoder::H265Decoder::Processor>();
+    PROCESSOR_REGISTRY.register::<relay_track_source::RelayTrackSource::Processor>();
 
     for (class_name, floors_it_runs_on) in BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY {
         let built_in_node_type = ProcessorClassImportPath::of_built_in_node(class_name);

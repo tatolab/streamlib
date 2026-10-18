@@ -38,6 +38,8 @@ from ._built_in_nodes import OpusDecoder as OpusDecoder
 from ._built_in_nodes import OpusDecoderConfig as OpusDecoderConfig
 from ._built_in_nodes import OpusEncoder as OpusEncoder
 from ._built_in_nodes import OpusEncoderConfig as OpusEncoderConfig
+from ._built_in_nodes import RelayTrackSource as RelayTrackSource
+from ._built_in_nodes import RelayTrackSourceConfig as RelayTrackSourceConfig
 from ._built_in_nodes import SpeakerSink as SpeakerSink
 from ._built_in_nodes import SpeakerSinkConfig as SpeakerSinkConfig
 from ._built_in_nodes import TestPatternSource as TestPatternSource
@@ -177,6 +179,8 @@ __all__ = [
     "OpusEncoderConfig",
     "PixelAccessToOneClaimedSurface",
     "RayTracingKernel",
+    "RelayTrackSource",
+    "RelayTrackSourceConfig",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "SpeakerSink",

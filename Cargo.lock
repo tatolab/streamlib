@@ -5880,7 +5880,11 @@ dependencies = [
 name = "streamlib-media-builtins"
 version = "0.51.0"
 dependencies = [
+ "hang",
  "libc",
+ "moq-json",
+ "moq-net",
+ "moq-tokio",
  "opus",
  "rmp-serde",
  "rmpv",
@@ -5890,7 +5894,9 @@ dependencies = [
  "sha2 0.10.9",
  "streamlib",
  "tempfile",
+ "tokio",
  "tracing",
+ "url",
  "v4l",
 ]
 

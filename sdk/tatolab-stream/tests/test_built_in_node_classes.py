@@ -27,7 +27,7 @@ GENERATED_BUILT_IN_NODE_CLASSES = [
 
 
 def test_the_generated_module_holds_every_built_in():
-    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 11
+    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 12
 
 
 @pytest.mark.parametrize(
