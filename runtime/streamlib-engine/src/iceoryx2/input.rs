@@ -459,7 +459,7 @@ impl InputMailboxesInner {
 
     /// Reach the upstream catalog entries of the node this processor was
     /// created for.
-    pub fn reach_upstream_catalog_entries_by_inbound_link(
+    pub(crate) fn reach_upstream_catalog_entries_by_inbound_link(
         &self,
         upstream_catalog_entries_by_inbound_link: Arc<UpstreamCatalogEntriesByInboundLink>,
     ) {
@@ -476,18 +476,21 @@ impl InputMailboxesInner {
     }
 
     /// The current catalog entry of the output port feeding `port` over
-    /// `inbound_link`, or over its one link when `None`. Mailboxes created for
-    /// no node have no links, so they answer `None`.
+    /// `inbound_link`, or over its one link when `None`.
     pub fn inbound_link_catalog_entry(
         &self,
         port: &str,
         inbound_link: Option<&InboundLinkName>,
     ) -> Result<Option<CatalogEntry>> {
-        match self.upstream_catalog_entries_by_inbound_link.get() {
-            Some(upstream_catalog_entries) => upstream_catalog_entries
-                .catalog_entry_of_inbound_link(port, inbound_link.map(InboundLinkName::as_str)),
-            None => Ok(None),
-        }
+        self.upstream_catalog_entries_by_inbound_link
+            .get()
+            .ok_or_else(|| {
+                Error::Link(format!(
+                    "input port '{port}' has no node whose inbound links it could read — the \
+                     processor was not created for a node"
+                ))
+            })?
+            .catalog_entry_of_inbound_link(port, inbound_link.map(InboundLinkName::as_str))
     }
 
     /// Check if a port has already been configured.
@@ -1498,7 +1501,10 @@ impl InputMailboxes {
     ) -> Result<Option<CatalogEntry>> {
         match self.host_inner() {
             Some(inner) => inner.inbound_link_catalog_entry(port, inbound_link),
-            None => Ok(None),
+            None => Err(Error::Link(format!(
+                "InputMailboxes not wired (port='{port}'): host has not yet installed iceoryx2 \
+                 resources on this processor instance"
+            ))),
         }
     }
 

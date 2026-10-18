@@ -167,7 +167,7 @@ impl ProcessorInstance {
 
     /// Reach `node`'s catalog entries from this processor's writer and
     /// mailboxes — the cells `graph` renders and its links read.
-    pub fn reach_the_catalog_entries_of(&self, node: &ProcessorNode) {
+    pub(crate) fn reach_the_catalog_entries_of(&self, node: &ProcessorNode) {
         if let Some(output_inner) = self.iceoryx2_output_writer_inner() {
             output_inner.reach_catalog_entries_of_output_ports(Arc::clone(
                 node.catalog_entries_of_output_ports(),

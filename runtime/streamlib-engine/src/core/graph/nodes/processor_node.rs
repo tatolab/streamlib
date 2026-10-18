@@ -101,12 +101,12 @@ impl ProcessorNode {
     }
 
     /// The entries this node's output ports carry now.
-    pub fn catalog_entries_of_output_ports(&self) -> &Arc<CatalogEntriesOfOutputPorts> {
+    pub(crate) fn catalog_entries_of_output_ports(&self) -> &Arc<CatalogEntriesOfOutputPorts> {
         &self.catalog_entries_of_output_ports
     }
 
     /// The upstream entries this node's inbound links reach.
-    pub fn upstream_catalog_entries_by_inbound_link(
+    pub(crate) fn upstream_catalog_entries_by_inbound_link(
         &self,
     ) -> &Arc<UpstreamCatalogEntriesByInboundLink> {
         &self.upstream_catalog_entries_by_inbound_link

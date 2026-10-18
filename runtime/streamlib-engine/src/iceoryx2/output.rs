@@ -213,7 +213,7 @@ impl OutputWriterInner {
 
     /// Reach the catalog entries of the node this processor was created for —
     /// the ones `graph` renders and downstream readers read.
-    pub fn reach_catalog_entries_of_output_ports(
+    pub(crate) fn reach_catalog_entries_of_output_ports(
         &self,
         catalog_entries_of_output_ports: Arc<CatalogEntriesOfOutputPorts>,
     ) {

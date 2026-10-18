@@ -2240,13 +2240,6 @@ mod tests {
         instance
             .install_iceoryx2_resources()
             .expect("the mock accepts its iceoryx2 resources");
-        instance.reach_the_catalog_entries_of(
-            graph
-                .traversal()
-                .v(proc_id)
-                .first()
-                .expect("the mock's node is in the graph"),
-        );
         let output_inner = instance.iceoryx2_output_writer_inner();
         let input_inner = instance.iceoryx2_input_mailboxes_inner();
         let instance = attach_processor_instance(graph, proc_id, instance);
@@ -3050,29 +3043,48 @@ mod tests {
         );
     }
 
+    /// The processor a stream's spawn creates for node `proc_id`, through the
+    /// node types the stream resolves.
+    fn the_processor_a_spawn_creates_for(graph: &mut Graph, proc_id: &str) -> ProcessorInstance {
+        graph
+            .node_types_this_stream_resolves()
+            .create(
+                graph
+                    .traversal()
+                    .v(proc_id)
+                    .first()
+                    .expect("the node is in the graph"),
+            )
+            .expect("the node's type creates its processor")
+    }
+
     /// A native reader reads the catalog entry its upstream output port carries
     /// now off the inbound link the compiler wired, and `graph` renders that
     /// entry under the upstream's port; disconnecting the link leaves the
-    /// reader nothing to read.
+    /// reader nothing to read. Both processors are created the way a stream's
+    /// spawn creates them, so the writer and the mailboxes reach their nodes'
+    /// entries only if that path hands them over.
     #[test]
     fn a_native_reader_reads_its_upstreams_current_catalog_entry_off_the_wired_link() {
         use crate::core::descriptors::{CatalogEntry, VideoEntry};
-        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
 
         let node = Iceoryx2Node::for_this_test_process();
         let mut graph = Graph::new();
         let source_id = add_mock_output_only(&mut graph);
-        let (_, source_output, _) =
-            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let source = the_processor_a_spawn_creates_for(&mut graph, &source_id);
         let source_output = crate::iceoryx2::OutputWriter::from_inner_arc(
-            source_output.expect("an output-only mock holds an output writer"),
+            source
+                .iceoryx2_output_writer_inner()
+                .expect("an output-only mock holds an output writer"),
         );
+        attach_processor_instance(&mut graph, &source_id, source);
         let dest_id = add_mock_input_only(&mut graph);
-        let (_, _, dest_input) =
-            attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
+        let dest = the_processor_a_spawn_creates_for(&mut graph, &dest_id);
         let dest_input = crate::iceoryx2::InputMailboxes::from_inner_arc(
-            dest_input.expect("an input-only mock holds input mailboxes"),
+            dest.iceoryx2_input_mailboxes_inner()
+                .expect("an input-only mock holds input mailboxes"),
         );
+        attach_processor_instance(&mut graph, &dest_id, dest);
 
         let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
         open_iceoryx2_service(&mut graph, &link_id, &node).expect("the link wires");
