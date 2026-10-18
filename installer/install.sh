@@ -108,7 +108,8 @@ release_version_to_install() {
 unpack_the_release() {
 	release_version="$1"
 	release_directory="$TATOLAB_INSTALL_DIRECTORY/$release_version"
-	if [ -x "$release_directory/bin/tatolabd" ] && [ -x "$release_directory/bin/tatolab" ]; then
+	if [ -x "$release_directory/bin/tatolabd" ] && [ -x "$release_directory/bin/tatolab" ] &&
+		[ -x "$release_directory/bin/moq-relay" ]; then
 		say "Tatolab $release_version is already unpacked in $release_directory"
 		return
 	fi
