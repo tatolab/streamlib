@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use iceoryx2::identifiers::UniquePublisherId;
 
-use crate::core::error::Error;
+use crate::core::error::{Error, Result};
 use crate::iceoryx2::{
     ChannelIdlePollBackoff, ChannelReservedSlotSubscribeError, ChannelSizing, Iceoryx2Node,
 };
@@ -50,13 +50,13 @@ pub(crate) trait ReservedSlotBagForwarding: Send + 'static {
     fn dropped_into_a_full_receiver(&mut self, dropped: Self::Forwarded, channel: &str);
 }
 
-/// Why a reserved-slot forwarder did not start.
-#[derive(Debug)]
-pub(crate) enum ReservedSlotForwarderStartRefusal {
-    /// Every subscriber slot on the channel is held.
-    TheReservedSlotIsHeld,
-    /// Anything else, already in the engine's words.
-    Refused(Error),
+/// The reserved slot of one channel, as the compiler opened the channel, and
+/// how many items to forward from it before ending, or `None` for no bound.
+pub(crate) struct ReservedSlotOfAChannelToForward {
+    pub(crate) node: Iceoryx2Node,
+    pub(crate) channel: String,
+    pub(crate) sizing: ChannelSizing,
+    pub(crate) count: Option<usize>,
 }
 
 /// A running reader of one channel's reserved slot, handing what it forwards
@@ -110,51 +110,41 @@ impl<Forwarded> Drop for ReservedSlotForwarder<Forwarded> {
     }
 }
 
-/// Start reading the reserved slot of `channel` on `node`, sized as the
-/// compiler opened it, forwarding through `forwarding` until dropped, or until
-/// `count` items were forwarded when it is `Some`.
+/// Start reading `slot`, forwarding through `forwarding` until dropped or the
+/// slot's bound is reached. A slot already held is refused with
+/// [`Error::TapSlotOccupied`].
 ///
-/// Blocks until the slot's subscriber exists, so a slot already held is
-/// refused to the caller rather than on the thread: call it from
-/// `spawn_blocking`, never directly on an async worker.
+/// Blocks until the slot's subscriber exists, so a refusal reaches the caller
+/// rather than the thread: call it from `spawn_blocking`, never directly on an
+/// async worker.
 pub(crate) fn start_reserved_slot_forwarder<Forwarding: ReservedSlotBagForwarding>(
-    node: Iceoryx2Node,
-    channel: String,
-    sizing: ChannelSizing,
-    count: Option<usize>,
+    slot: ReservedSlotOfAChannelToForward,
     forwarding: Forwarding,
-) -> std::result::Result<
-    ReservedSlotForwarder<Forwarding::Forwarded>,
-    ReservedSlotForwarderStartRefusal,
-> {
-    let (forward_tx, receiver) =
-        tokio::sync::mpsc::channel::<Forwarding::Forwarded>(sizing.channel_service_creation_depth);
-    let (ready_tx, ready_rx) =
-        std::sync::mpsc::channel::<std::result::Result<(), ReservedSlotForwarderStartRefusal>>();
+) -> Result<ReservedSlotForwarder<Forwarding::Forwarded>> {
+    let (forward_tx, receiver) = tokio::sync::mpsc::channel::<Forwarding::Forwarded>(
+        slot.sizing.channel_service_creation_depth,
+    );
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
     let stop_flag = Arc::new(AtomicBool::new(false));
+    let channel = slot.channel.clone();
 
-    let thread_channel = channel.clone();
-    let thread_stop_flag = Arc::clone(&stop_flag);
+    let reader = ReaderOfAReservedSlot {
+        slot,
+        forwarding,
+        forward_tx,
+        stop_flag: Arc::clone(&stop_flag),
+    };
     let forwarder_thread = std::thread::Builder::new()
         .name("streamlib-reserved-slot".into())
         .spawn(
             crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
-                run_the_forwarder(
-                    node,
-                    thread_channel,
-                    sizing,
-                    count,
-                    forwarding,
-                    forward_tx,
-                    ready_tx,
-                    thread_stop_flag,
-                );
+                reader.run(ready_tx)
             }),
         )
         .map_err(|spawn_failure| {
-            ReservedSlotForwarderStartRefusal::Refused(Error::Runtime(format!(
+            Error::Runtime(format!(
                 "failed to spawn the reserved-slot reader of '{channel}': {spawn_failure}"
-            )))
+            ))
         })?;
 
     match ready_rx.recv() {
@@ -170,102 +160,106 @@ pub(crate) fn start_reserved_slot_forwarder<Forwarding: ReservedSlotBagForwardin
         }
         Err(_) => {
             let _ = forwarder_thread.join();
-            Err(ReservedSlotForwarderStartRefusal::Refused(Error::Runtime(
-                format!(
-                    "the reserved-slot reader of '{channel}' ended before saying whether it \
-                     subscribed"
-                ),
+            Err(Error::Runtime(format!(
+                "the reserved-slot reader of '{channel}' ended before saying whether it \
+                 subscribed"
             )))
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_the_forwarder<Forwarding: ReservedSlotBagForwarding>(
-    node: Iceoryx2Node,
-    channel: String,
-    sizing: ChannelSizing,
-    count: Option<usize>,
-    mut forwarding: Forwarding,
+/// What the reserved slot's thread holds.
+struct ReaderOfAReservedSlot<Forwarding: ReservedSlotBagForwarding> {
+    slot: ReservedSlotOfAChannelToForward,
+    forwarding: Forwarding,
     forward_tx: tokio::sync::mpsc::Sender<Forwarding::Forwarded>,
-    ready_tx: std::sync::mpsc::Sender<std::result::Result<(), ReservedSlotForwarderStartRefusal>>,
     stop_flag: Arc<AtomicBool>,
-) {
-    // The service is reopened with the sizing it was created with and no
-    // publisher; iceoryx2 verifies the sizing against the live service.
-    let service = match node.open_or_create_service(
-        &channel,
-        sizing.max_subscribers,
-        sizing.channel_service_creation_depth,
-    ) {
-        Ok(service) => service,
-        Err(open_refusal) => {
-            let _ = ready_tx.send(Err(ReservedSlotForwarderStartRefusal::Refused(
-                open_refusal,
-            )));
-            return;
-        }
-    };
-    let subscriber =
-        match service.create_reserved_slot_subscriber(sizing.channel_service_creation_depth) {
-            Ok(subscriber) => subscriber,
-            Err(ChannelReservedSlotSubscribeError::ReservedSlotOccupied) => {
-                let _ = ready_tx.send(Err(
-                    ReservedSlotForwarderStartRefusal::TheReservedSlotIsHeld,
-                ));
-                return;
-            }
-            Err(ChannelReservedSlotSubscribeError::Transport(detail)) => {
-                let _ = ready_tx.send(Err(ReservedSlotForwarderStartRefusal::Refused(
-                    Error::Runtime(format!(
-                        "failed to subscribe to the reserved slot of channel '{channel}': {detail}"
-                    )),
-                )));
+}
+
+impl<Forwarding: ReservedSlotBagForwarding> ReaderOfAReservedSlot<Forwarding> {
+    fn run(self, ready_tx: std::sync::mpsc::Sender<Result<()>>) {
+        let Self {
+            slot:
+                ReservedSlotOfAChannelToForward {
+                    node,
+                    channel,
+                    sizing,
+                    count,
+                },
+            mut forwarding,
+            forward_tx,
+            stop_flag,
+        } = self;
+        // The service is reopened with the sizing it was created with and no
+        // publisher; iceoryx2 verifies the sizing against the live service.
+        let service = match node.open_or_create_service(
+            &channel,
+            sizing.max_subscribers,
+            sizing.channel_service_creation_depth,
+        ) {
+            Ok(service) => service,
+            Err(open_refusal) => {
+                let _ = ready_tx.send(Err(open_refusal));
                 return;
             }
         };
-    let _ = ready_tx.send(Ok(()));
-
-    let mut forwarded: usize = 0;
-    let mut idle_poll_backoff = ChannelIdlePollBackoff::starting_at_the_shortest_sleep();
-    loop {
-        if stop_flag.load(Ordering::Acquire) {
-            break;
-        }
-        // The bound is checked before receiving, so a bound of zero forwards
-        // nothing at all.
-        if count.is_some_and(|bound| forwarded >= bound) {
-            break;
-        }
-        match subscriber.receive() {
-            Ok(Some(sample)) => {
-                use tokio::sync::mpsc::error::TrySendError;
-                idle_poll_backoff.reset_after_a_bag_arrived();
-                let Some(item) = forwarding.forwarded_from(BagReceivedOnTheReservedSlot {
-                    publisher: sample.origin(),
-                    sequence_number: sample.user_header().sequence_number,
-                    framed_bag: sample.payload(),
-                }) else {
-                    continue;
-                };
-                match forward_tx.try_send(item) {
-                    Ok(()) => forwarded += 1,
-                    Err(TrySendError::Full(dropped)) => {
-                        forwarding.dropped_into_a_full_receiver(dropped, &channel)
-                    }
-                    Err(TrySendError::Closed(_)) => break,
+        let subscriber =
+            match service.create_reserved_slot_subscriber(sizing.channel_service_creation_depth) {
+                Ok(subscriber) => subscriber,
+                Err(ChannelReservedSlotSubscribeError::ReservedSlotOccupied) => {
+                    let _ = ready_tx.send(Err(Error::TapSlotOccupied(channel)));
+                    return;
                 }
-            }
-            Ok(None) => {
-                std::thread::sleep(idle_poll_backoff.sleep_this_empty_poll_earns(Instant::now()))
-            }
-            Err(receive_failure) => {
-                tracing::warn!(
-                    channel = %channel,
-                    "the reserved-slot subscriber failed to receive, so its reader ends: \
-                     {receive_failure:?}"
-                );
+                Err(ChannelReservedSlotSubscribeError::Transport(detail)) => {
+                    let _ = ready_tx.send(Err(Error::Runtime(format!(
+                        "failed to subscribe to the reserved slot of channel '{channel}': {detail}"
+                    ))));
+                    return;
+                }
+            };
+        let _ = ready_tx.send(Ok(()));
+
+        let mut forwarded: usize = 0;
+        let mut idle_poll_backoff = ChannelIdlePollBackoff::starting_at_the_shortest_sleep();
+        loop {
+            if stop_flag.load(Ordering::Acquire) {
                 break;
+            }
+            // The bound is checked before receiving, so a bound of zero forwards
+            // nothing at all.
+            if count.is_some_and(|bound| forwarded >= bound) {
+                break;
+            }
+            match subscriber.receive() {
+                Ok(Some(sample)) => {
+                    use tokio::sync::mpsc::error::TrySendError;
+                    idle_poll_backoff.reset_after_a_bag_arrived();
+                    let Some(item) = forwarding.forwarded_from(BagReceivedOnTheReservedSlot {
+                        publisher: sample.origin(),
+                        sequence_number: sample.user_header().sequence_number,
+                        framed_bag: sample.payload(),
+                    }) else {
+                        continue;
+                    };
+                    match forward_tx.try_send(item) {
+                        Ok(()) => forwarded += 1,
+                        Err(TrySendError::Full(dropped)) => {
+                            forwarding.dropped_into_a_full_receiver(dropped, &channel)
+                        }
+                        Err(TrySendError::Closed(_)) => break,
+                    }
+                }
+                Ok(None) => std::thread::sleep(
+                    idle_poll_backoff.sleep_this_empty_poll_earns(Instant::now()),
+                ),
+                Err(receive_failure) => {
+                    tracing::warn!(
+                        channel = %channel,
+                        "the reserved-slot subscriber failed to receive, so its reader ends: \
+                         {receive_failure:?}"
+                    );
+                    break;
+                }
             }
         }
     }

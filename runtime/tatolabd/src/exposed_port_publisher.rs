@@ -31,12 +31,6 @@ use streamlib_relay_adapter_sdk::{
 /// The suffix of a broadcast whose catalog the stack's players read.
 const BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ: &str = ".hang";
 
-/// Which exposed ports the publisher forwards: every one. What a port carries
-/// is never a reason to keep it off a relay.
-fn the_publisher_offers(_exposed_port: &ExposedOutputPortOfALoadedStream) -> bool {
-    true
-}
-
 /// One joined relay as the publisher dials it.
 pub(crate) struct RelayTheExposedPortPublisherDials {
     pub(crate) relay_id: RelayInstanceId,
@@ -122,13 +116,7 @@ async fn publish_every_exposed_port(
             return;
         };
         publisher
-            .forward_exactly(
-                &engine,
-                exposed_output_ports
-                    .into_iter()
-                    .filter(the_publisher_offers)
-                    .collect(),
-            )
+            .forward_exactly(&engine, exposed_output_ports)
             .await;
     }
 }
@@ -389,7 +377,16 @@ impl ExposedPortTrackWriter {
         for track in &mut self.tracks_at_each_relay {
             if message.group_boundary == MessageGroupBoundary::StartsGroup {
                 track.finish_the_group_being_written();
-                track.group_being_written = track.track.append_group().ok();
+                track.group_being_written = match track.track.append_group() {
+                    Ok(group) => Some(group),
+                    Err(refusal) => {
+                        tracing::debug!(
+                            relay = %track.relay_id,
+                            "a group was not opened, so its objects are not written: {refusal}"
+                        );
+                        None
+                    }
+                };
             }
             let Some(group) = &mut track.group_being_written else {
                 continue;
@@ -418,10 +415,13 @@ impl ExposedPortTrackWriter {
         });
     }
 
-    fn withdraw_every_track_but_those_at(&mut self, relays_reached: &[&RelayInstanceId]) {
+    fn withdraw_every_track_but_those_at(
+        &mut self,
+        relay_is_reached: impl Fn(&RelayInstanceId) -> bool,
+    ) {
         let (kept, withdrawn) = std::mem::take(&mut self.tracks_at_each_relay)
             .into_iter()
-            .partition(|track| relays_reached.contains(&&track.relay_id));
+            .partition(|track| relay_is_reached(&track.relay_id));
         self.tracks_at_each_relay = kept;
         for track in withdrawn {
             track.withdraw();
@@ -431,7 +431,7 @@ impl ExposedPortTrackWriter {
 
 impl Drop for ExposedPortTrackWriter {
     fn drop(&mut self) {
-        self.withdraw_every_track_but_those_at(&[]);
+        self.withdraw_every_track_but_those_at(|_| false);
     }
 }
 
@@ -450,7 +450,6 @@ fn track_info_of_an_exposed_port() -> moq_net::track::Info {
 /// One exposed port being forwarded: its subscription read on a task of its
 /// own into the writer its tracks hang off.
 struct ForwardedExposedPort {
-    level: OutputPortExposureLevel,
     catalog_entry: Option<CatalogEntry>,
     track_writer: Arc<Mutex<ExposedPortTrackWriter>>,
     reading: tokio::task::JoinHandle<()>,
@@ -513,7 +512,6 @@ impl ExposedPortPublisher {
                         self.forwarded_ports.insert(
                             address.clone(),
                             ForwardedExposedPort {
-                                level: exposed_port.level,
                                 catalog_entry: None,
                                 track_writer,
                                 reading,
@@ -545,7 +543,6 @@ impl ExposedPortPublisher {
         let Some(forwarded) = self.forwarded_ports.get_mut(address) else {
             return;
         };
-        forwarded.level = exposed_port.level;
         forwarded.catalog_entry = exposed_port.catalog_entry.clone();
         let relays_reached: Vec<&RelayDialedByThePublisher> = self
             .relays
@@ -553,12 +550,11 @@ impl ExposedPortPublisher {
             .filter(|relay| relay.serves(exposed_port.level))
             .collect();
         let mut track_writer = lock_the_writer(&forwarded.track_writer);
-        track_writer.withdraw_every_track_but_those_at(
-            &relays_reached
+        track_writer.withdraw_every_track_but_those_at(|relay_id| {
+            relays_reached
                 .iter()
-                .map(|relay| &relay.relay_id)
-                .collect::<Vec<_>>(),
-        );
+                .any(|relay| &relay.relay_id == relay_id)
+        });
         for relay in relays_reached {
             if track_writer.reaches(&relay.relay_id) {
                 continue;
@@ -820,17 +816,5 @@ mod tests {
     fn a_stamp_is_kept_in_nanoseconds_and_one_before_zero_reads_as_zero() {
         assert_eq!(the_object_timestamp_of(1_234_567).as_nanos(), 1_234_567);
         assert!(the_object_timestamp_of(-5).is_zero());
-    }
-
-    #[test]
-    fn every_exposed_port_is_offered_whatever_it_carries() {
-        let surface_records = ExposedOutputPortOfALoadedStream {
-            stream_name: "desk".to_string(),
-            node_name: "camera".to_string(),
-            port_name: "video".to_string(),
-            level: OutputPortExposureLevel::Public,
-            catalog_entry: None,
-        };
-        assert!(the_publisher_offers(&surface_records));
     }
 }

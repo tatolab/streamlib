@@ -24,9 +24,9 @@ use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent,
     InputLinkPortRef, Link, LinkReadingAnotherStreamComponent, LinkState, LinkStateComponent,
     LinkUniqueId, LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortExposureLevel,
-    ProcessorInstanceComponent, ProcessorLossCounts, ProcessorMetrics,
-    SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
+    OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
+    ProcessorLossCounts, ProcessorMetrics, SourceSideHeldOpenForAReaderOutsideItsStream,
+    SourceSideOfALinkWiredOn,
 };
 use crate::core::output_port_catalog_entries::CatalogEntriesOfOutputPorts;
 use crate::core::processors::{
@@ -396,6 +396,10 @@ pub(crate) fn open_the_source_side_of_a_link(
     })
 }
 
+/// The input port the runtime's publisher is named as when a source's side is
+/// opened for it, for the log lines that name a link's destination.
+const THE_RUNTIMES_PUBLISHER_AS_A_DESTINATION_PORT: &str = "the-runtimes-publisher";
+
 /// What the runtime's publisher holds open on an exposed output port's source
 /// while it reads the port's channel through the reserved slot: the channel's
 /// name and sizing, the source's side, and the services. Dropping it releases
@@ -423,7 +427,7 @@ pub(crate) fn open_the_source_side_for_the_runtimes_publisher(
     let destination = DestinationOfALinkAsItsWiringReadsIt {
         notify_service_name: notify_service_name_for(&the_runtimes_publisher),
         dest_proc_id: the_runtimes_publisher,
-        dest_port: "the-runtimes-publisher".to_string(),
+        dest_port: THE_RUNTIMES_PUBLISHER_AS_A_DESTINATION_PORT.to_string(),
         link_wiring_of_a_destination_out_of_process: None,
         audio_windowing: None,
         input_port_delivery: DeliveryProfile::Ordered.resolve(),
@@ -888,7 +892,10 @@ pub(crate) fn find_the_source_a_caller_named(
         .first()
         .and_then(|node| node.get::<ExposedOutputPortsComponent>())
         .is_some_and(|exposed_ports| {
-            exposed_ports.level_of(source.port_name()) != OutputPortExposureLevel::Internal
+            crate::core::graph::output_port_exposure_allows_the_reader(
+                exposed_ports.level_of(source.port_name()),
+                crate::core::graph::OutputPortReaderLocation::ElsewhereOnThisMachine,
+            )
         });
     if the_runtimes_publisher_reads_it {
         return Err(Error::TapOfAnOutputPortThePublisherReads(
@@ -4779,6 +4786,8 @@ mod tests {
     /// slot; back at internal, a port nothing reads has no channel to tap.
     #[test]
     fn an_exposed_port_is_refused_to_a_tap_naming_the_runtimes_publisher() {
+        use crate::core::graph::OutputPortExposureLevel;
+
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
         let source_node_name = graph

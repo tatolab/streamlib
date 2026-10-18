@@ -20,11 +20,10 @@ use super::open_iceoryx2_service_op::{
 };
 use crate::core::error::Error;
 use crate::core::graph::{
-    CutOffAReaderOfAnExposedOutputPort, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
+    CutOffAReaderOfAnExposedOutputPort, Graph, GraphEdgeWithComponents,
     Iceoryx2ServicesHeldOpenForLinkComponent, Link, LinkReadingAnotherStreamComponent, LinkState,
-    LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortInAnotherStreamOnThisMachine,
-    OutputPortReaderOutsideItsStream, PendingDeletionComponent, ProcessorInstanceComponent,
+    LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutputLinkPortRef,
+    OutputPortInAnotherStreamOnThisMachine, OutputPortReaderOutsideItsStream,
     ReaderOfAnExposedOutputPort, SourceSideHeldOpenForAReaderOutsideItsStream,
     WiringOfALinkReadingAnotherStream, a_link_reading_another_stream_is_still_on_wiring_attempt,
     a_link_reading_another_stream_is_still_to_be_wired,
@@ -409,11 +408,7 @@ fn open_the_source_side_on_the_source_stream(
         .traversal()
         .v(&source_processor_id)
         .first()
-        .is_some_and(|node| {
-            (node.has::<ProcessorInstanceComponent>()
-                || node.has::<OutOfProcessLinkWiringComponent>())
-                && !node.has::<PendingDeletionComponent>()
-        });
+        .is_some_and(|node| node.runs_its_processor());
     if !source_node_runs {
         return (
             SourceSideOnTheSourceStream::NotYet(format!(
@@ -639,8 +634,8 @@ mod tests {
 
     use super::*;
     use crate::core::graph::{
-        ExposedOutputPortsComponent, InputLinkPortRef, OutputPortExposureLevel,
-        ProcessorInstanceWithItsOutOfProcessLinkWiring,
+        ExposedOutputPortsComponent, GraphNodeWithComponents, InputLinkPortRef,
+        OutputPortExposureLevel, ProcessorInstanceWithItsOutOfProcessLinkWiring,
     };
     use crate::core::processors::{ProcessorInstance, ProcessorSpec};
     use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};

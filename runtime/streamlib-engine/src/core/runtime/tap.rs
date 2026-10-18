@@ -15,9 +15,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::reserved_slot_forwarder::{
     BagReceivedOnTheReservedSlot, ReservedSlotBagForwarding, ReservedSlotForwarder,
-    ReservedSlotForwarderStartRefusal, start_reserved_slot_forwarder,
+    ReservedSlotOfAChannelToForward, start_reserved_slot_forwarder,
 };
-use crate::core::error::{Error, Result};
+use crate::core::error::Result;
 use crate::iceoryx2::{ChannelSizing, Iceoryx2Node};
 
 /// A drop is warned of at the first and then once per this many, so a
@@ -107,18 +107,16 @@ pub(crate) fn start_channel_tap(
 ) -> Result<TapSubscription> {
     let dropped_bags = Arc::new(AtomicU64::new(0));
     let forwarder = start_reserved_slot_forwarder(
-        node,
-        channel.clone(),
-        sizing,
-        count,
+        ReservedSlotOfAChannelToForward {
+            node,
+            channel,
+            sizing,
+            count,
+        },
         TapBagForwarding {
             dropped_bags: Arc::clone(&dropped_bags),
         },
-    )
-    .map_err(|refusal| match refusal {
-        ReservedSlotForwarderStartRefusal::TheReservedSlotIsHeld => Error::TapSlotOccupied(channel),
-        ReservedSlotForwarderStartRefusal::Refused(refusal) => refusal,
-    })?;
+    )?;
     Ok(TapSubscription {
         forwarder,
         dropped_bags,
@@ -128,6 +126,7 @@ pub(crate) fn start_channel_tap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::error::Error;
     use std::time::Duration;
 
     use streamlib_ipc_types::RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL;

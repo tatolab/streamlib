@@ -1054,7 +1054,6 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                     self.stream_name(),
                     &channel,
                 )?;
-
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
                     graph,
                     iceoryx2_node,

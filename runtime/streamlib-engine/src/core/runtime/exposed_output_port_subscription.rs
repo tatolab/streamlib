@@ -11,9 +11,12 @@ use iceoryx2::identifiers::UniquePublisherId;
 use parking_lot::Mutex;
 
 use super::LoadedStreamInThisRuntime;
+use super::loaded_stream_output_port_exposure::{
+    refuse_a_reader_the_port_does_not_allow, the_output_port_named_on_this_graph,
+};
 use super::reserved_slot_forwarder::{
     BagReceivedOnTheReservedSlot, ReservedSlotBagForwarding, ReservedSlotForwarder,
-    ReservedSlotForwarderStartRefusal, start_reserved_slot_forwarder,
+    ReservedSlotOfAChannelToForward, start_reserved_slot_forwarder,
 };
 use super::runtime::EngineResourcesSharedByEveryStream;
 use crate::core::compiler::compiler_ops::{
@@ -22,14 +25,11 @@ use crate::core::compiler::compiler_ops::{
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    ExposedOutputPortsComponent, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
-    OutputLinkPortRef, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
-    PendingDeletionComponent, ProcessorInstanceComponent,
+    ExposedOutputPortsComponent, GraphNodeWithComponents, OutputLinkPortRef,
+    OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
 };
 use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
-use crate::iceoryx2::{
-    BagsAGapInTheNumberingSaysWereLost, FRAME_HEADER_SIZE, FrameHeader, MessageReadFromInputPort,
-};
+use crate::iceoryx2::{BagsAGapInTheNumberingSaysWereLost, FrameHeader, MessageReadFromInputPort};
 
 /// One output port a loaded stream exposes, as it stands now.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,7 +87,7 @@ impl ExposureChangeReceiver {
 
     /// The exposed output ports of every loaded stream: at once on the first
     /// call, then once something changed since the previous one. `None` once
-    /// the engine is gone.
+    /// the engine is gone, or once a read of them failed, which is logged.
     pub async fn next_exposed_output_ports(
         &mut self,
     ) -> Option<Vec<ExposedOutputPortOfALoadedStream>> {
@@ -95,7 +95,7 @@ impl ExposureChangeReceiver {
         let engine = self.engine.clone();
         // A stream's graph lock is held across a compile, which may take a
         // processor's whole setup, so the read waits off the async workers.
-        tokio::task::spawn_blocking(move || {
+        let read = tokio::task::spawn_blocking(move || {
             let engine = engine.upgrade()?;
             Some(
                 engine
@@ -105,9 +105,17 @@ impl ExposureChangeReceiver {
                     .collect(),
             )
         })
-        .await
-        .ok()
-        .flatten()
+        .await;
+        match read {
+            Ok(exposed_output_ports) => exposed_output_ports,
+            Err(read_failure) => {
+                tracing::error!(
+                    "the exposed output ports could not be read, so no change to them is read \
+                     again: {read_failure}"
+                );
+                None
+            }
+        }
     }
 }
 
@@ -126,7 +134,6 @@ impl LoadedStreamInThisRuntime {
                     Some(
                         exposed_ports
                             .exposed_ports_and_their_levels()
-                            .filter(|(_, level)| *level != OutputPortExposureLevel::Internal)
                             .map(|(port_name, level)| ExposedOutputPortOfALoadedStream {
                                 stream_name: self.stream_name().to_string(),
                                 node_name: node.display_name.clone(),
@@ -157,24 +164,20 @@ impl LoadedStreamInThisRuntime {
             .clone();
         let (node_display_name, port_cast, source_side) =
             self.compiler.scope(|graph, _tx| -> Result<_> {
-                super::loaded_stream_output_port_exposure::refuse_a_reader_the_port_does_not_allow(
+                refuse_a_reader_the_port_does_not_allow(
                     graph,
                     self.stream_name(),
                     node_name,
                     port_name,
                     OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
                 )?;
-                let (node, port_cast) =
-                    super::loaded_stream_output_port_exposure::the_output_port_named_on_this_graph(
-                        graph,
-                        self.stream_name(),
-                        node_name,
-                        port_name,
-                    )?;
-                let node_runs = (node.has::<ProcessorInstanceComponent>()
-                    || node.has::<OutOfProcessLinkWiringComponent>())
-                    && !node.has::<PendingDeletionComponent>();
-                if !node_runs {
+                let (node, port_cast) = the_output_port_named_on_this_graph(
+                    graph,
+                    self.stream_name(),
+                    node_name,
+                    port_name,
+                )?;
+                if !node.runs_its_processor() {
                     return Err(Error::Link(format!(
                         "node `{}` of the stream `{}` is not running, so its port `{port_cast}` \
                          publishes nothing yet",
@@ -196,18 +199,14 @@ impl LoadedStreamInThisRuntime {
         let forwarder = tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
                 start_reserved_slot_forwarder(
-                    iceoryx2_node,
-                    channel.clone(),
-                    sizing,
-                    None,
+                    ReservedSlotOfAChannelToForward {
+                        node: iceoryx2_node,
+                        channel,
+                        sizing,
+                        count: None,
+                    },
                     ExposedOutputPortMessageForwarding::<UniquePublisherId>::default(),
                 )
-                .map_err(|refusal| match refusal {
-                    ReservedSlotForwarderStartRefusal::TheReservedSlotIsHeld => {
-                        Error::TapSlotOccupied(channel)
-                    }
-                    ReservedSlotForwarderStartRefusal::Refused(refusal) => refusal,
-                })
             }),
         )
         .await
@@ -300,10 +299,7 @@ impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnb
         self.lost_ahead_of_the_next_message_forwarded += self
             .bags_the_ring_overwrote
             .how_many_were_lost_before(run, sequence_number);
-        let payload = (framed_bag.len() >= FRAME_HEADER_SIZE)
-            .then(|| FrameHeader::read_payload_from_slice(framed_bag))
-            .flatten();
-        let Some(payload) = payload else {
+        let Some(payload) = FrameHeader::read_payload_from_slice(framed_bag) else {
             self.lost_ahead_of_the_next_message_forwarded += 1;
             return None;
         };
@@ -357,7 +353,7 @@ mod tests {
         MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
         ensure_test_mocks_registered,
     };
-    use crate::iceoryx2::{MessageGroupBoundary, OutputWriterInner};
+    use crate::iceoryx2::{FRAME_HEADER_SIZE, MessageGroupBoundary, OutputWriterInner};
 
     /// How long a message or a change has to arrive.
     const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
