@@ -315,19 +315,17 @@ mod tests {
         assert!(refusal.contains("the stream part `..`"), "{refusal}");
     }
 
-    /// An address naming this machine — by its name or its full tailnet name,
-    /// any spelling that casts to either — or no machine at all names a port
-    /// here; one naming another machine is refused naming both machines.
+    /// An address naming this machine — by any spelling that casts to its
+    /// name — or no machine at all names a port here; one naming another
+    /// machine is refused naming both machines.
     #[test]
     fn an_address_naming_another_machine_is_refused_naming_both_machines() {
-        let this_machine = MachineName::from_a_tailnet_dns_name("desk.tail2950db.ts.net.")
-            .expect("a tailnet name names a machine");
+        let this_machine = MachineName::from_a_hostname("desk").expect("`desk` names a machine");
         for here in [
             "camera/video",
             "main/camera/video",
             "desk/main/camera/video",
             "Desk/main/camera/video",
-            "desk.tail2950db.ts.net/main/camera/video",
         ] {
             PortAddress::parse(here)
                 .unwrap()

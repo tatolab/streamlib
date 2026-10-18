@@ -17,7 +17,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 
 Reading rule since the 2026-10-16 align (`[moq-relays]`, which amends the 2026-10-04
 `[moq-on-the-tailnet]` pivot): the `tap` and `exchange` verbs, every window, `remote_output`
-and the cross-stream link, the Tailscale read, and the msgpack encoding inside `write` and
+and the cross-stream link, and the msgpack encoding inside `write` and
 `read` go at the sharing step. An entry describing one is a fact about the shipped tree until
 the change that removes it ships and folds it out — never direction, and nothing new is built
 on it. Off a stream, the direction is §Networking's `[moq-relays]` entries. "Bag" in an older
@@ -3554,11 +3554,8 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_on_one_machine_both_construct_and_name_it_alike -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_machine_is_refused_naming_that_machine -->
-  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::no_tailscale_names_the_machine_by_its_hostname -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_status_that_names_no_tailnet_machine_leaves_the_hostname_saying_why -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
-  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams graph_answers_the_machine_by_its_hostname_cast_and_no_streams -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket the_retired_verbs_and_flags_are_usage_errors -->
 - **DECIDED** — A link's ends are both on this machine, in one stream. As built, a link end
@@ -3645,16 +3642,13 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_refuses_a_fixture_address_naming_no_port_where_it_is_written -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_the_builders_address_refusals_are_the_compiles_refusal -->
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
-  that relay's credential assigns. As built, the engine reads the local Tailscale's status for
-  its own name and the tailnet's machines, falling back to the hostname. [runtime-hosting —
-  SHIPPED #2715; amended by moq-relays: the Tailscale read is deleted — the machine is its
-  hostname cast on every machine, and a relay adapter's root prefixes the broadcast there]
+  that relay's credential assigns. As built, the engine names the machine by its hostname cast
+  and reads nothing of Tailscale. [runtime-hosting — SHIPPED #2715; amended by moq-relays: a
+  relay adapter's root prefixes the broadcast there]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
-  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::no_tailscale_names_the_machine_by_its_hostname -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_status_that_names_no_tailnet_machine_leaves_the_hostname_saying_why -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_names_the_machine_cast -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
-  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams graph_answers_the_machine_by_its_hostname_cast_and_no_streams -->
   <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_naming_another_machine_is_refused_by_name -->
 - **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:

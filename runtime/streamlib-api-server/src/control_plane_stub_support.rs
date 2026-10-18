@@ -144,7 +144,7 @@ pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
 pub(crate) const STUB_MACHINE_NAME: &str = "stub-machine";
 
 /// The machine the stub runtime answers `this_machines_name` with, named
-/// [`STUB_MACHINE_NAME`] off a tailnet.
+/// [`STUB_MACHINE_NAME`].
 pub(crate) fn the_stub_machine() -> &'static ::streamlib::sdk::runtime::MachineName {
     static STUB_MACHINE: ::std::sync::OnceLock<::streamlib::sdk::runtime::MachineName> =
         ::std::sync::OnceLock::new();

@@ -18,14 +18,17 @@ use super::processor_interpreter_spawn_host::{
     PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
     SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE, StreamInterpreterExitAwaited,
-    detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
-    give_the_child_no_descriptor_beyond_stdio, processor_interpreter_bootstrap_command,
-    spawn_host_for_processor_node, spawn_standard_error_reader_keeping_its_tail,
-    spawn_standard_output_reader_keeping_its_head, standard_error_tail_as_a_refusal_quotes_it,
-    standard_output_head_as_a_refusal_quotes_it, wait_for_a_stream_interpreter_to_exit,
+    processor_interpreter_bootstrap_command, spawn_host_for_processor_node,
+    spawn_standard_error_reader_keeping_its_tail, spawn_standard_output_reader_keeping_its_head,
+    standard_error_tail_as_a_refusal_quotes_it, standard_output_head_as_a_refusal_quotes_it,
+    wait_for_a_stream_interpreter_to_exit,
 };
 use super::python_processor_declaration::PythonProcessorDeclaration;
 use super::subprocess_bridge::ESCALATE_FD_ENV;
+use crate::core::child_process_spawn_preparation::{
+    detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
+    give_the_child_no_descriptor_beyond_stdio,
+};
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::processors::{DynGeneratedProcessor, NodeTypesOneStreamResolves};

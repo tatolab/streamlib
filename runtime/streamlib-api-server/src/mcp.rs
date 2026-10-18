@@ -380,7 +380,7 @@ struct TapToolArguments {
     )]
     stream: Option<String>,
     #[schemars(
-        description = "The output port's address, right-anchored: `<stream>/<node>/<port>`; `<node>/<port>` in the stream `stream` names; or `<machine>/<stream>/<node>/<port>` naming this machine by the `machine` in `graph` or its full tailnet name — an address naming another machine is refused until the sharing step. A port is tappable once a link carries from it."
+        description = "The output port's address, right-anchored: `<stream>/<node>/<port>`; `<node>/<port>` in the stream `stream` names; or `<machine>/<stream>/<node>/<port>` naming this machine by the `machine` in `graph` — an address naming another machine is refused until the sharing step. A port is tappable once a link carries from it."
     )]
     channel: String,
     #[schemars(

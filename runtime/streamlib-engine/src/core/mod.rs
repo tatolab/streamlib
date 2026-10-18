@@ -25,6 +25,7 @@ pub(crate) mod test_support;
 // re-exports.
 pub mod annex_b_access_unit;
 pub mod annex_b_start_code_finder;
+pub mod child_process_spawn_preparation;
 pub mod color;
 pub mod context;
 pub mod descriptors;

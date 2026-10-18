@@ -17,11 +17,13 @@ use super::processor_interpreter_describe::PROCESSOR_INTERPRETER_DESCRIBE_BOUND;
 use super::processor_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
 use super::processor_interpreter_spawn_host::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, StreamInterpreterExitAwaited,
-    detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
-    give_the_child_no_descriptor_beyond_stdio, spawn_standard_error_reader_keeping_its_tail,
-    spawn_standard_output_reader_keeping_its_head, standard_error_tail_as_a_refusal_quotes_it,
-    standard_output_head_as_a_refusal_quotes_it,
+    spawn_standard_error_reader_keeping_its_tail, spawn_standard_output_reader_keeping_its_head,
+    standard_error_tail_as_a_refusal_quotes_it, standard_output_head_as_a_refusal_quotes_it,
     stream_interpreter_command_in_its_project_directory, wait_for_a_stream_interpreter_to_exit,
+};
+use crate::core::child_process_spawn_preparation::{
+    detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
+    give_the_child_no_descriptor_beyond_stdio,
 };
 use crate::core::error::{Error, Result};
 use crate::core::runtime::StreamEnvironment;
