@@ -68,6 +68,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     streamlib_media_builtins::register_media_builtin_processor_types();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    crate::numbered_message_writer_test_node::register_the_numbered_message_writer_test_node();
     if let Err(kept_streams_refusal) = engine
         .keep_streams_in_the_state_directory(&tatolab_state_directory.kept_streams_directory())
     {

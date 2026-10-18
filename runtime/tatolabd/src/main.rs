@@ -12,6 +12,8 @@ mod crash_on_demand_test_node;
 mod exposed_port_publisher;
 mod local_relay_children;
 mod machine_stream_hosting;
+#[cfg(feature = "machine-directories-under-a-test-root")]
+mod numbered_message_writer_test_node;
 mod refusal_on_standard_error;
 mod runtime_unit_lend;
 mod tatolabd_command_line;

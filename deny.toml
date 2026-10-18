@@ -47,6 +47,14 @@ allow = [
     "BSD-3-Clause",
     "BSL-1.0",
     "BUSL-1.1",
+    # `notify`, reached through `moq-tokio`'s file watch, which its QUIC
+    # backend turns on. CC0-1.0 is a public-domain dedication with a
+    # permissive fallback licence; it asks nothing of a redistributor.
+    "CC0-1.0",
+    # Mozilla's CA bundle as data (`webpki-roots`, `webpki-root-certs`),
+    # reached through `moq-tokio`. A permissive data licence whose one
+    # condition on sharing is carrying its text, which the notices do.
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     # `option-ext`, reached through `dirs` in the Linux closure. MPL-2.0 is
