@@ -39,8 +39,8 @@ the broken VMA config, isolated unit tests do NOT reproduce the failure.
 The bug needs production-level GPU work happening concurrently and live
 compositor DMA-BUF imports — not just a swapchain in idle state.
 
-Don't waste time trying to reproduce in pure unit tests. Validate the fix
-end-to-end via @docs/learnings/camera-display-e2e-validation.md.
+Don't waste time trying to reproduce in pure unit tests. Validate a fix
+end-to-end on a machine with a live compositor importing DMA-BUFs.
 
 ## Fix
 
@@ -78,5 +78,3 @@ end-to-end via @docs/learnings/camera-display-e2e-validation.md.
 - Bug fix: `cab6a00` `fix(vulkan): VMA pool isolation for DMA-BUF allocations`
 - Refactor: `6816f54` `refactor(display): decouple frames-in-flight from swapchain image count`
 - Engine pre-warm: issue #624, `fix(rhi): pre-warm export VMA pools at HostVulkanDevice construction`
-- Fix validation behind a live swapchain — clean VMA config, export pools:
-  `runtime/streamlib-engine/src/vulkan/rhi/vulkan_swapchain_dma_buf_allocation_fix_validation_test.rs`

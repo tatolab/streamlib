@@ -80,22 +80,6 @@ def a_held_tensor_is_never_rewritten(stream_builder: StreamBuilder) -> None:
 
 
 @stream
-def a_tensor_acquired_after_a_window_opens_round_trips(stream_builder: StreamBuilder) -> None:
-    """The DEVICE_LOCAL OPAQUE_FD allocation after a swapchain exists — the
-    order NVIDIA once answered with a fake out-of-memory."""
-    _wire_the_publishing_source_into(
-        stream_builder,
-        {
-            "tensor_name": "model_input",
-            "frames_to_publish": POOL_ROTATION_DEPTH,
-            "open_a_window_before_acquiring": True,
-        },
-        PublishedTensorReadingSink,
-        {"tensor_name": "model_input"},
-    )
-
-
-@stream
 def a_kernel_binds_a_tensor_by_surface_id(stream_builder: StreamBuilder) -> None:
     """One processor interpreter, no link: the probe acquires its tensors and reports from
     `setup`."""
@@ -111,9 +95,6 @@ STREAM_BY_SCENARIO = {
         a_reader_resolving_a_different_id_sees_different_values
     ),
     "a_held_tensor_is_never_rewritten": a_held_tensor_is_never_rewritten,
-    "a_tensor_acquired_after_a_window_opens_round_trips": (
-        a_tensor_acquired_after_a_window_opens_round_trips
-    ),
     "a_kernel_binds_a_tensor_by_surface_id": a_kernel_binds_a_tensor_by_surface_id,
 }
 

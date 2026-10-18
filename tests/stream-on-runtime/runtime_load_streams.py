@@ -8,7 +8,7 @@ from typing import Any
 
 from runtime_load_open_config_nodes import OpenConfigSink
 from runtime_load_served_graph_nodes import LoadedFrameSink
-from tatolab.stream import DisplayWindow, StreamBuilder, TestPatternSource, stream
+from tatolab.stream import H264Encoder, StreamBuilder, TestPatternSource, stream
 
 #: The deepest config the builder compiles: 126 containers from the graph's
 #: root, less the graph, its `nodes` list and the node enclosing the config.
@@ -32,10 +32,10 @@ def open_config_sink_with_the_deepest_config_the_builder_compiles(stream_builder
 
 
 @stream
-def pattern_linked_from_a_port_it_lacks_into_a_window(stream_builder: StreamBuilder) -> None:
+def pattern_linked_from_a_port_it_lacks_into_an_encoder(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(TestPatternSource)
-    window = stream_builder.add(DisplayWindow)
-    stream_builder.connect(pattern.output("no_such_port"), window.input("video"))
+    encoder = stream_builder.add(H264Encoder)
+    stream_builder.connect(pattern.output("no_such_port"), encoder.input("video"))
 
 
 @stream

@@ -4054,7 +4054,7 @@ mod tests {
     }
 
     /// A live connect and disconnect racing a read on the same destination, the
-    /// shape of `DisplayWindow` reading on its own thread, or of a helper's
+    /// shape of a native processor reading on its own thread, or of a helper's
     /// reads detached from the GIL, while `connect` / `disconnect` re-splice it.
     ///
     /// Nothing outside the mailboxes serializes the two threads here, as

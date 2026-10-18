@@ -16,8 +16,6 @@ pub mod camera_source;
 pub(crate) mod captured_audio_block_hand_off_ring;
 pub(crate) mod consecutive_failure_report_schedule;
 pub(crate) mod cumulative_count_report_threshold;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub mod display_window;
 #[cfg(test)]
 mod emitted_log_line_test_support;
 pub mod encoded_audio_packet;
@@ -50,8 +48,6 @@ mod worker_thread_test_support;
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
 pub use camera_source::{CameraSource, CameraSourceConfig};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use display_window::{DisplayWindow, DisplayWindowConfig};
 pub use encoded_audio_packet::{
     EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
     read_encoded_audio_packet_bag,
@@ -83,10 +79,8 @@ use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
 /// Each built-in compiled in on some floors only, by its public class name,
 /// with the floors it runs on.
-const BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY: &[(&str, &str)] = &[
-    ("DisplayWindow", "Linux and macOS"),
-    ("VirtualCameraSink", "Linux"),
-];
+const BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY: &[(&str, &str)] =
+    &[("VirtualCameraSink", "Linux")];
 
 /// Register every media built-in on the process-wide registry, and record each
 /// one this floor compiles out so a graph naming it is refused naming the
@@ -99,8 +93,6 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<opus_encoder::OpusEncoder::Processor>();
     PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    PROCESSOR_REGISTRY.register::<display_window::DisplayWindow::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();
     PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();

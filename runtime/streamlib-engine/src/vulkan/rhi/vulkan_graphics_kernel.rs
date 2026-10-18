@@ -553,18 +553,6 @@ impl VulkanGraphicsKernelInner {
         self.cmd_bind_and_draw_inner(command_buffer, frame_index, DrawKind::Draw(*draw))
     }
 
-    /// Indexed variant of [`Self::cmd_bind_and_draw`] (same drain-on-draw
-    /// contract). Caller must have set an index buffer for `frame_index`
-    /// via [`Self::set_index_buffer`].
-    pub(crate) fn cmd_bind_and_draw_indexed(
-        &self,
-        command_buffer: vk::CommandBuffer,
-        frame_index: u32,
-        draw: &DrawIndexedCall,
-    ) -> Result<()> {
-        self.cmd_bind_and_draw_inner(command_buffer, frame_index, DrawKind::DrawIndexed(*draw))
-    }
-
     /// Render into one or more offscreen color attachments using slot 0 of
     /// the descriptor ring. Owns its own command buffer and fence; submits,
     /// waits, and returns. Convenience for unit tests and one-shot
@@ -1417,17 +1405,6 @@ impl VulkanGraphicsKernel {
         draw: &DrawCall,
     ) -> Result<()> {
         self.host_inner().cmd_bind_and_draw(cmd, frame_index, draw)
-    }
-
-    /// Indexed variant of [`Self::cmd_bind_and_draw`].
-    pub(crate) fn cmd_bind_and_draw_indexed(
-        &self,
-        cmd: vk::CommandBuffer,
-        frame_index: u32,
-        draw: &DrawIndexedCall,
-    ) -> Result<()> {
-        self.host_inner()
-            .cmd_bind_and_draw_indexed(cmd, frame_index, draw)
     }
 
     /// Offscreen render. See [`VulkanGraphicsKernelInner::offscreen_render`].
@@ -2299,10 +2276,10 @@ mod tests {
     }
 
     fn vert_spv() -> &'static [u8] {
-        include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.vert.spv"))
+        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.vert.spv"))
     }
     fn frag_spv() -> &'static [u8] {
-        include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.frag.spv"))
+        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.frag.spv"))
     }
 
     fn default_pipeline_state() -> GraphicsPipelineState {
@@ -2320,7 +2297,7 @@ mod tests {
         }
     }
 
-    fn display_blit_descriptor<'a>(
+    fn offscreen_blit_descriptor<'a>(
         stages: &'a [GraphicsStage<'a>],
         bindings: &'a [GraphicsBindingSpec],
         pipeline_state: &'a GraphicsPipelineState,
@@ -2371,7 +2348,7 @@ void main() {
         let pipeline_state = default_pipeline_state();
         let built = VulkanGraphicsKernel::new(
             &device,
-            &display_blit_descriptor(&stages, &bindings, &pipeline_state),
+            &offscreen_blit_descriptor(&stages, &bindings, &pipeline_state),
         );
         let support = device.subgroup_operation_support();
         if support
@@ -2398,7 +2375,7 @@ void main() {
     // ---- Multi-stage SPIR-V reflection ------------------------------------
 
     #[test]
-    fn derives_bindings_from_display_blit_stages() {
+    fn derives_bindings_from_offscreen_blit_stages() {
         let stages = [
             GraphicsStage::vertex(vert_spv()),
             GraphicsStage::fragment(frag_spv()),
@@ -2408,7 +2385,7 @@ void main() {
         assert_eq!(
             bindings.len(),
             1,
-            "display_blit declares one fragment binding"
+            "offscreen_blit declares one fragment binding"
         );
         assert_eq!(bindings[0].binding, 0);
         assert_eq!(bindings[0].kind, GraphicsBindingKind::SampledTexture);
@@ -2429,7 +2406,7 @@ void main() {
 
     #[test]
     fn rejects_one_slot_the_two_stages_spell_differently() {
-        // display_blit's vertex stage declares no binding, so the second
+        // offscreen_blit's vertex stage declares no binding, so the second
         // spelling of slot 0 has to come from a rewrite of the fragment blob.
         let respelled = rename_binding_in_spirv_module(frag_spv(), "cameraTexture", "cam");
         let bindings = [GraphicsBindingSpec::sampled_texture(
@@ -2441,7 +2418,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2470,7 +2447,7 @@ void main() {
             GraphicsStage::fragment(&moved_to_set_1),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let refusal = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2496,7 +2473,7 @@ void main() {
             GraphicsStage::fragment(&stripped),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2522,7 +2499,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2549,7 +2526,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2576,7 +2553,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2593,7 +2570,7 @@ void main() {
 
     #[test]
     fn rejects_descriptor_with_extra_binding_not_in_shader() {
-        // display_blit declares only binding 0; extra binding 1 must fail.
+        // offscreen_blit declares only binding 0; extra binding 1 must fail.
         let bindings = [
             GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::FRAGMENT),
             GraphicsBindingSpec::sampled_texture(1, GraphicsShaderStageFlags::FRAGMENT),
@@ -2603,7 +2580,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2626,7 +2603,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2651,7 +2628,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let mut descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let mut descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         descriptor.push_constants = GraphicsPushConstants {
             size: 64, // SPIR-V declares 16
             stages: GraphicsShaderStageFlags::FRAGMENT,
@@ -2681,7 +2658,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = validate_against_spirv(
             &descriptor,
             &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
@@ -2715,7 +2692,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let mut descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let mut descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         descriptor.descriptor_sets_in_flight = 0;
         let err = VulkanGraphicsKernel::new(&device, &descriptor)
             .err()
@@ -2743,7 +2720,7 @@ void main() {
         )];
         let stages = [GraphicsStage::fragment(frag_spv())]; // no vertex
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let err = VulkanGraphicsKernel::new(&device, &descriptor)
             .err()
             .expect("expected validation failure");
@@ -2767,7 +2744,7 @@ void main() {
         let bindings: [GraphicsBindingSpec; 0] = [];
         let stages = [GraphicsStage::vertex(vert_spv())]; // no fragment
         let pipeline_state = default_pipeline_state();
-        let mut descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let mut descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         descriptor.push_constants = GraphicsPushConstants::NONE;
         let err = VulkanGraphicsKernel::new(&device, &descriptor)
             .err()
@@ -2786,7 +2763,7 @@ void main() {
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
     )]
     #[test]
-    fn constructs_display_blit_kernel() {
+    fn constructs_offscreen_blit_kernel() {
         let device = match try_vulkan_device() {
             Some(d) => d,
             None => return,
@@ -2800,7 +2777,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let kernel =
             VulkanGraphicsKernel::new(&device, &descriptor).expect("kernel must construct");
         assert_eq!(kernel.bindings().len(), 1);
@@ -2850,7 +2827,7 @@ void main() {
             color: vec![TextureFormat::Bgra8Unorm],
             depth: Some(crate::core::rhi::DepthFormat::D32Sfloat),
         };
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let kernel = VulkanGraphicsKernel::new(&device, &descriptor)
             .expect("depth-stencil kernel must construct");
         assert_eq!(kernel.bindings().len(), 1);
@@ -2877,7 +2854,7 @@ void main() {
         let mut pipeline_state = default_pipeline_state();
         pipeline_state.color_blend =
             ColorBlendState::Enabled(crate::core::rhi::ColorBlendAttachment::ALPHA_OVER);
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let _ = VulkanGraphicsKernel::new(&device, &descriptor)
             .expect("alpha-blending kernel must construct");
     }
@@ -2892,7 +2869,7 @@ void main() {
             Some(d) => d,
             None => return,
         };
-        // A pipeline that *declares* vertex input buffers — the display_blit
+        // A pipeline that *declares* vertex input buffers — the offscreen_blit
         // shader doesn't read them, but Vulkan permits unused vertex input
         // declarations. We're locking the pipeline-creation path here, not
         // shader-vs-input correctness.
@@ -2926,7 +2903,7 @@ void main() {
                 },
             ],
         };
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let _ = VulkanGraphicsKernel::new(&device, &descriptor)
             .expect("vertex-input kernel must construct");
     }
@@ -2950,7 +2927,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let kernel = VulkanGraphicsKernel::new(&device, &descriptor).expect("kernel construction");
 
         // Allocate a dummy texture for the call. Doesn't matter what it is —
@@ -2995,7 +2972,7 @@ void main() {
             GraphicsStage::fragment(frag_spv()),
         ];
         let pipeline_state = default_pipeline_state();
-        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let descriptor = offscreen_blit_descriptor(&stages, &bindings, &pipeline_state);
         let kernel = VulkanGraphicsKernel::new(&device, &descriptor).expect("kernel construction");
         // Don't bind anything before drawing — must fail with a clear error,
         // not corrupt GPU state.

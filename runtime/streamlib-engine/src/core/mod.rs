@@ -29,7 +29,6 @@ pub mod child_process_lifetime;
 pub mod color;
 pub mod context;
 pub mod descriptors;
-pub mod display_info;
 pub mod error;
 pub mod execution;
 pub mod graph;
@@ -49,11 +48,6 @@ pub mod stable_short_id;
 pub mod texture;
 pub mod unix_socket_path_cleared_for_bind;
 pub mod utils;
-// Wherever winit and the Vulkan present target compile.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub mod processor_owned_window;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub mod window_event_pump;
 
 // Customer-facing modules (wildcard re-exports stay).
 pub use context::*;

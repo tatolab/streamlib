@@ -7,8 +7,8 @@
 
 Subprocess Vulkan code does **DMA-BUF / OPAQUE_FD FD import + bind + map**,
 nothing else. Every privileged primitive — allocation, modifier choice,
-compute kernel construction + dispatch, queue submit, fence management,
-swapchain — escalates via IPC to the host's `GpuContextFullAccess`.
+compute kernel construction + dispatch, queue submit, fence management —
+escalates via IPC to the host's `GpuContextFullAccess`.
 Bug-fix fan-out is exactly 1: a fix in `runtime/streamlib-engine/src/vulkan/rhi/`
 reaches every consumer (host adapter, host pipeline, subprocess via
 escalate IPC).
@@ -16,42 +16,6 @@ escalate IPC).
 This matches the model every comparable system has converged on
 (Chromium GPU process / Dawn Wire, Unreal RHI + Shader Compile
 Workers, VST3 plugin sandbox, WebGPU/wgpu-core).
-
-## Swapchain / present target — host-side, not the subprocess
-
-The swapchain is host-side. `GpuContextFullAccess::create_present_target`
-mints a Box-shaped `PresentTarget` handle from a native window
-(`raw_window_handle::HasWindowHandle + HasDisplayHandle`), and the frame
-loop (`begin_frame` / `end_frame` / `recreate` / `set_hdr_metadata`)
-runs host-side. The host's
-`render_frame` loop is split into a `begin_frame` (acquire + prime the
-frame's borrowed recorder) / `end_frame` (barrier + submit + present)
-pair; per-image render-finished-semaphore keying stays entirely host-side
-across the split. This is the Unreal RHI viewport model
-(`RHICreateViewport(handle)`): the engine/RHI owns the swapchain,
-whoever owns the OS window hands a native handle to the present target,
-the caller drives present.
-
-**This is orthogonal to the subprocess carve-out below.** A *subprocess*
-has no window and constructs a consumer-only `VkDevice`, so it never owns
-a swapchain — the "Subprocess has no swapchain" rows in the per-pattern
-table are unchanged.
-
-**Window + event-loop ownership is host-portable.** No processor owns an
-event loop. The engine owns the process's single winit event loop and
-mints windows on request; a window-owning processor registers with it,
-receives its window and that window's events, and keeps every window
-policy decision. On Linux the loop runs on its own thread (X11 and
-Wayland both permit an off-main-thread loop, each behind its own
-any-thread opt-in). On macOS the loop lives on the process's first
-thread and is driven there while `tatolabd`'s main thread waits for the
-shutdown; AppKit touches a
-view only from that thread, so the pump adds each window's `CAMetalLayer`
-as it mints the window, and the present target is minted from that layer.
-Neither changes what a window owner asks for or is handed back.
-`vkQueuePresentKHR` itself is not main-thread-bound, so
-host-owns-window + processor-presents-on-its-thread works on every
-platform.
 
 ## The carve-out
 
@@ -169,9 +133,8 @@ consumer-rhi through one of the four wired adapters.
 | --- | --- | --- |
 | VMA pool isolation, exportable allocation | Host-only | Host allocates; subprocess imports the FD |
 | EGL DRM-modifier probe (NVIDIA tile-required) | Host-only | Host chooses; subprocess imports tiled |
-| Pre-swapchain allocation order (NVIDIA cap) | Host-only | Subprocess never allocates exportable memory |
+| Exportable-allocation sentinels (NVIDIA cap) | Host-only | Subprocess never allocates exportable memory |
 | Per-queue submit mutex | Host-only | Subprocess holds no `VkQueue` |
-| Frames-in-flight=2 sizing | Host-only | Subprocess has no swapchain |
 | `VulkanComputeKernel` SPIR-V reflection + dispatch | Escalate IPC | `register_compute_kernel` + `run_compute_kernel` |
 | Graphics-pipeline draw | Escalate IPC | `register_graphics_kernel` + `run_graphics_draw` |
 | Ray-tracing AS build + trace | Escalate IPC | `register_acceleration_structure_blas` / `_tlas` + `register_ray_tracing_kernel` + `run_ray_tracing_kernel` |

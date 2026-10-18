@@ -3,11 +3,11 @@
 
 """The scaffold templates `tatolab new` embeds and writes, checked as files.
 
-The tree is the camera variant of the app, so it is a real project: it lints,
+The tree is the app `new` writes, so it is a real project: it lints,
 type-checks (pyright runs over `scaffold_template/` as its own execution
-environment) and compiles with no runtime. Rendering it — the test-pattern
-variant, the project name, the stripped licence header, the overwrite refusal —
-is the native CLI's, and tested there.
+environment) and compiles with no runtime. Rendering it — the project name, the
+stripped licence header, the overwrite refusal — is the native CLI's, and tested
+there.
 """
 
 import ast
@@ -46,12 +46,6 @@ SCAFFOLD_TEMPLATE_PYTHON_FILE_NAMES = sorted(
 )
 # The text `new` replaces in each template; a template that loses one renders wrong.
 RENDER_PLACEHOLDERS_BY_TEMPLATE_FILE = {
-    "stream.py": [
-        "A Tatolab stream: camera →",
-        "from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream",
-        '\"\"\"Camera, inverted,',
-        "stream_builder.add(CameraSource)",
-    ],
     "pyproject.toml": ['name = "tatolab-stream-project"'],
 }
 COMPILE_ENTRY_TIMEOUT_SECONDS = 60.0
@@ -141,8 +135,31 @@ def test_the_stream_declares_one_stream_named_main():
     ]
 
     assert stream_functions == ["main"]
-    assert "CameraSource" in entry_source
-    assert "DisplayWindow" in entry_source
+
+
+def stream_builder_calls_in_the_entry(method_name: str) -> "list[str]":
+    return [
+        ast.unparse(call)
+        for call in ast.walk(ast.parse(template_text("stream.py")))
+        if isinstance(call, ast.Call) and ast.unparse(call.func) == f"stream_builder.{method_name}"
+    ]
+
+
+def test_the_stream_starts_from_the_test_pattern_and_exposes_the_effect_output():
+    """The sample runs on a machine with no capture device and no display: it
+    needs no camera, and the runtime opens no windows."""
+    entry_source = template_text("stream.py")
+
+    assert stream_builder_calls_in_the_entry("add") == [
+        "stream_builder.add(TestPatternSource)",
+        "stream_builder.add(InvertingEffect)",
+        "stream_builder.add(BrightnessMeter)",
+    ]
+    assert stream_builder_calls_in_the_entry("expose") == [
+        "stream_builder.expose(effect.output('video_to_downstream'))"
+    ]
+    assert "CameraSource" not in entry_source
+    assert "DisplayWindow" not in entry_source
 
 
 @pytest.mark.parametrize(
@@ -169,8 +186,8 @@ def test_each_node_lives_outside_the_entry_file(module_path: str, class_name: st
 
 def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
     """The effect in the video path runs on the GPU, and the numpy node reads an
-    explicit CPU view off a fan-out, so the slow door never sits between the
-    camera and the window."""
+    explicit CPU view off a fan-out, so the slow door never sits on the path to
+    the effect's exposed output."""
     entry_source = template_text("stream.py")
     effect_source = template_text(EFFECT_MODULE_PATH)
     meter_source = template_text(METER_MODULE_PATH)
@@ -186,10 +203,9 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
         and ast.unparse(call.func) == "stream_builder.connect"
         and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
     )
-    assert readers_of_the_effect_output == [
-        "meter.input('video_from_upstream')",
-        "window.input('video')",
-    ], "the meter reads a fan-out of the effect's output, off the window's path"
+    assert readers_of_the_effect_output == ["meter.input('video_from_upstream')"], (
+        "the meter reads a fan-out of the effect's output, beside its exposure"
+    )
 
 
 def test_the_scaffold_pins_the_python_version_the_plan_names():
@@ -197,7 +213,7 @@ def test_the_scaffold_pins_the_python_version_the_plan_names():
 
 
 def test_the_scaffold_depends_on_tatolab_stream_and_numpy_only():
-    assert 'dependencies = ["tatolab-stream>=0.41", "numpy>=2.1"]\n' in template_text(
+    assert 'dependencies = ["tatolab-stream>=0.48", "numpy>=2.1"]\n' in template_text(
         "pyproject.toml"
     ), (
         "the pixel effect needs no GPU package of the user's own, no runtime enters, and "
@@ -234,7 +250,11 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
         "stream_graph": {
             "stream": "main",
             "nodes": [
-                {"name": "camerasource", "type": "tatolab.stream:CameraSource", "config": {}},
+                {
+                    "name": "testpatternsource",
+                    "type": "tatolab.stream:TestPatternSource",
+                    "config": {},
+                },
                 {
                     "name": "invertingeffect",
                     "type": "nodes.inverting_effect:InvertingEffect",
@@ -245,20 +265,11 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                     "type": "nodes.brightness_meter:BrightnessMeter",
                     "config": {},
                 },
-                {
-                    "name": "displaywindow",
-                    "type": "tatolab.stream:DisplayWindow",
-                    "config": {"title": "Tatolab", "scaling": "fit"},
-                },
             ],
             "links": [
                 {
-                    "source": {"node": "camerasource", "port": "video"},
+                    "source": {"node": "testpatternsource", "port": "video"},
                     "target": {"node": "invertingeffect", "port": "video_from_upstream"},
-                },
-                {
-                    "source": {"node": "invertingeffect", "port": "video_to_downstream"},
-                    "target": {"node": "displaywindow", "port": "video"},
                 },
                 {
                     "source": {"node": "invertingeffect", "port": "video_to_downstream"},

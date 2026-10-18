@@ -100,22 +100,9 @@ pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
 pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_present_target;
+mod vulkan_offscreen_compositor;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_present_target::{
-    MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentSurfaceSource, PresentTarget, VulkanPresentTarget,
-};
-// `PresentTargetInner` is needed by `core::plugin::host_services` to
-// reclaim the `Box<Mutex<VulkanPresentTarget>>` in the `drop_present_target`
-// slot body + lock it in the method slot bodies.
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_present_compositor;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_present_compositor::{PresentScalingMode, VulkanPresentCompositor};
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_swapchain_colorspace;
+pub use vulkan_offscreen_compositor::{OffscreenCompositorScalingMode, VulkanOffscreenCompositor};
 
 mod vulkan_pixel_buffer_pool;
 pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
@@ -188,6 +175,3 @@ mod dma_buf_export_test_device_fixture;
 
 #[cfg(all(test, target_os = "linux"))]
 mod video_profile_test_fixture;
-
-#[cfg(all(test, target_os = "linux"))]
-mod vulkan_swapchain_dma_buf_allocation_fix_validation_test;

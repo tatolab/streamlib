@@ -155,7 +155,7 @@ jobs:
           assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
           "
 
-          target/release/tatolab new /tmp/scaffold-check --test-pattern
+          target/release/tatolab new /tmp/scaffold-check
           test -f /tmp/scaffold-check/stream.py
           test -f /tmp/scaffold-check/nodes/inverting_effect.py
           test -f /tmp/scaffold-check/nodes/brightness_meter.py

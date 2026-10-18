@@ -308,7 +308,7 @@ fn the_macos_lock_file_a_test_build_takes(machine_root: &Path) {
         .expect("the lock file is 0666");
 }
 
-/// A stream of one test pattern and nothing that needs a display.
+/// A stream of one test pattern.
 pub fn a_native_only_stream_graph(stream_name: &str) -> serde_json::Value {
     serde_json::json!({
         "stream": stream_name,

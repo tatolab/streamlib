@@ -43,13 +43,14 @@ STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE = (
     "A stream is a module-level function decorated `@stream` that adds, links and "
     "exposes its nodes on the `StreamBuilder` it is given:\n"
     "\n"
-    "    from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream\n"
+    "    from tatolab.stream import CameraSource, H264Encoder, StreamBuilder, stream\n"
     "\n"
     "    @stream\n"
     "    def main(stream_builder: StreamBuilder) -> None:\n"
     "        source = stream_builder.add(CameraSource)\n"
-    "        window = stream_builder.add(DisplayWindow)\n"
-    '        stream_builder.connect(source.output("video"), window.input("video"))\n'
+    "        encoder = stream_builder.add(H264Encoder)\n"
+    '        stream_builder.connect(source.output("video"), encoder.input("video"))\n'
+    '        stream_builder.expose(encoder.output("encoded_video"))\n'
 )
 
 

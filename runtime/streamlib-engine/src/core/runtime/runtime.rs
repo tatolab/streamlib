@@ -998,20 +998,12 @@ impl Runner {
     /// SIGHUP) — the waits inside it walk every loaded stream to the machine's
     /// shutdown level — then clear what this run's interrupts escalated. Fails
     /// if another owner in this process already holds them.
-    ///
-    /// On macOS, once it owns them, it builds the window event pump before
-    /// `run`, which only the process's first thread can: entered there, a
-    /// window first asked for from any other thread — a load through the local
-    /// API — is minted by the pump a wait inside `run` drives, rather than
-    /// refused.
     pub fn run_owning_the_machine_shutdown_signals<R>(
         &self,
         run: impl FnOnce() -> Result<R>,
     ) -> Result<R> {
         let run_outcome = {
             let _shutdown_signals = take_shutdown_signal_ownership()?;
-            #[cfg(target_os = "macos")]
-            crate::core::window_event_pump::build_the_process_wide_window_event_pump_or_log_why_no_window_can_be_created();
             let _owned_by_this_engine = TheMachineShutdownSignalsOwnedByOneEngine::mark(
                 &self.engine_resources_shared_by_every_stream,
             );
@@ -1077,10 +1069,9 @@ impl Runner {
         Arc::strong_count(self) == 1
     }
 
-    /// Poll until `has_ended` holds — driving the window event pump where the
-    /// platform needs the first thread to, and, while this engine owns the
-    /// machine's shutdown signals, walking every loaded stream to the
-    /// machine's shutdown level on the way.
+    /// Poll until `has_ended` holds — while this engine owns the machine's
+    /// shutdown signals, walking every loaded stream to the machine's shutdown
+    /// level on the way.
     fn block_until(&self, has_ended: &dyn Fn() -> bool) {
         let observe = || {
             if self
@@ -1096,37 +1087,6 @@ impl Runner {
                 ControlFlow::Continue(())
             }
         };
-
-        // The drive lasts the whole wait, so the pump keeps answering a
-        // stream's teardown — run off this thread — until the stream ends.
-        #[cfg(target_os = "macos")]
-        {
-            use crate::core::window_event_pump::{
-                WindowEventPumpDriveOnTheFirstThreadOutcome,
-                drive_the_window_event_pump_on_the_first_thread_until,
-            };
-
-            let drive_outcome = drive_the_window_event_pump_on_the_first_thread_until(
-                crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
-                &observe,
-                || {
-                    if let Err(e) = self
-                        .shut_every_loaded_stream_down_and_wait_until_each_has_ended(
-                            "the application is terminating",
-                        )
-                    {
-                        tracing::error!(
-                            "a stream failed to stop as the application terminated: {e}"
-                        );
-                    }
-                },
-            );
-            if drive_outcome
-                == WindowEventPumpDriveOnTheFirstThreadOutcome::DrivenUntilTheObservationBroke
-            {
-                return;
-            }
-        }
 
         while observe().is_continue() {
             std::thread::sleep(
@@ -1193,11 +1153,6 @@ impl Runner {
         let first_failed_end = self.shut_every_loaded_stream_down_and_wait_until_each_has_ended(
             "the engine is shutting down",
         );
-        // The streams stopped off this thread, so the windows they handed back
-        // are released here when this is the first thread.
-        #[cfg(target_os = "macos")]
-        crate::core::window_event_pump::release_the_windows_handed_back_while_the_event_pump_was_not_driven();
-
         // The Mach service thread answers helpers' reports against the
         // timeline pairs, so it is joined before the pairs go, and both go
         // while the device that made their semaphores still exists.

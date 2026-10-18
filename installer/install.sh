@@ -26,8 +26,6 @@ TATOLAB_INSTALL_DIRECTORY="$HOME/.local/share/tatolab"
 TATOLAB_EXECUTABLE_LINK_DIRECTORY="$HOME/.local/bin"
 TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY="$HOME/.config/systemd/user"
 TATOLAB_SYSTEMD_USER_UNIT_NAME="tatolabd.service"
-TATOLAB_SYSTEMD_USER_LOGIN_UNIT_NAME="tatolabd-restart-for-a-display-at-login.service"
-TATOLAB_SYSTEMD_USER_UNIT_NAMES="$TATOLAB_SYSTEMD_USER_UNIT_NAME $TATOLAB_SYSTEMD_USER_LOGIN_UNIT_NAME"
 TATOLAB_RUNTIME_EXECUTABLE_NAMES="tatolab tatolabd"
 
 say() {
@@ -131,7 +129,7 @@ unpack_the_release() {
 	tar -xzf "$download_directory/$tarball_name" -C "$partial_release_directory"
 	for unpacked_member in bin/tatolabd bin/tatolab bin/moq-relay lib/tatolab/lend \
 		lib/tatolab/lend/tatolab/runtime/_vulkan_driver/lvp_icd.x86_64.json \
-		"lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME" "lib/systemd/user/$TATOLAB_SYSTEMD_USER_LOGIN_UNIT_NAME"; do
+		"lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME"; do
 		[ -e "$partial_release_directory/$unpacked_member" ] || {
 			rm -rf "$partial_release_directory"
 			refuse "$tarball_name carries no $unpacked_member"
@@ -149,18 +147,15 @@ point_current_at() {
 			"$TATOLAB_EXECUTABLE_LINK_DIRECTORY/$executable_name"
 	done
 	mkdir -p "$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY"
-	for unit_name in $TATOLAB_SYSTEMD_USER_UNIT_NAMES; do
-		cp "$TATOLAB_INSTALL_DIRECTORY/current/lib/systemd/user/$unit_name" \
-			"$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY/$unit_name"
-	done
+	cp "$TATOLAB_INSTALL_DIRECTORY/current/lib/systemd/user/$TATOLAB_SYSTEMD_USER_UNIT_NAME" \
+		"$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY/$TATOLAB_SYSTEMD_USER_UNIT_NAME"
 }
 
 # Each step chained, because a function called where its status is tested
 # runs with `set -e` suspended.
 start_the_service() {
-	# shellcheck disable=SC2086 # the unit names are words by construction
 	systemctl --user daemon-reload &&
-		systemctl --user enable --quiet $TATOLAB_SYSTEMD_USER_UNIT_NAMES &&
+		systemctl --user enable --quiet "$TATOLAB_SYSTEMD_USER_UNIT_NAME" &&
 		systemctl --user restart "$TATOLAB_SYSTEMD_USER_UNIT_NAME"
 }
 
@@ -237,13 +232,9 @@ install_tatolab() {
 
 uninstall_tatolab() {
 	if the_user_systemd_manager_answers; then
-		for unit_name in $TATOLAB_SYSTEMD_USER_UNIT_NAMES; do
-			systemctl --user disable --now --quiet "$unit_name" 2>/dev/null || true
-		done
+		systemctl --user disable --now --quiet "$TATOLAB_SYSTEMD_USER_UNIT_NAME" 2>/dev/null || true
 	fi
-	for unit_name in $TATOLAB_SYSTEMD_USER_UNIT_NAMES; do
-		rm -f "$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY/$unit_name"
-	done
+	rm -f "$TATOLAB_SYSTEMD_USER_UNIT_DIRECTORY/$TATOLAB_SYSTEMD_USER_UNIT_NAME"
 	if the_user_systemd_manager_answers; then
 		systemctl --user daemon-reload
 	fi

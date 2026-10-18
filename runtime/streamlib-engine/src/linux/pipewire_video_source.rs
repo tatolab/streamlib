@@ -32,8 +32,8 @@ use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
 use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFailureText};
 use crate::vulkan::rhi::{
-    HostMappingWrittenByGpu, ImageCopyRegion, PresentScalingMode, RhiCommandRecorder, VulkanAccess,
-    VulkanPresentCompositor, VulkanStage,
+    HostMappingWrittenByGpu, ImageCopyRegion, OffscreenCompositorScalingMode, RhiCommandRecorder,
+    VulkanAccess, VulkanOffscreenCompositor, VulkanStage,
 };
 
 /// How many buffers a camera node offers.
@@ -279,7 +279,7 @@ pub struct PipeWireCameraNode {
     video_source: ShimOwnedVideoSourcePointer,
     camera_name: String,
     gpu: GpuContextLimitedAccess,
-    compositor: VulkanPresentCompositor,
+    compositor: VulkanOffscreenCompositor,
     recorder: RhiCommandRecorder,
     offered: Option<OfferedCameraExtent>,
     published_frame_count: u64,
@@ -327,7 +327,7 @@ impl PipeWireCameraNode {
             gpu: gpu_full.host_inner().limited_access(),
             // This camera's own compositor and recorder: two sinks in one graph
             // must not share a descriptor ring across their threads.
-            compositor: gpu_full.create_present_compositor(CAMERA_TEXTURE_FORMAT)?,
+            compositor: gpu_full.create_offscreen_compositor(CAMERA_TEXTURE_FORMAT)?,
             recorder: gpu_full.create_command_recorder("virtual_camera_pipewire_door")?,
             offered: None,
             published_frame_count: 0,
@@ -616,7 +616,7 @@ impl PipeWireCameraNode {
             // The camera's buffers are allocated at the frame's own extent, so
             // every mode is the identity; naming one keeps a later extent race
             // from silently cropping.
-            PresentScalingMode::Fit,
+            OffscreenCompositorScalingMode::Fit,
         )?;
         // The compose leaves the source sampled-ready whatever it arrived in,
         // and the registration is the cell every other consumer of this surface

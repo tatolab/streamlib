@@ -1150,9 +1150,6 @@ pub struct GpuCapabilitiesSnapshot {
     pub supports_cross_device_dma_buf_probe: bool,
     /// Whether the GPU exposes `VK_KHR_ray_tracing_pipeline`.
     pub supports_ray_tracing_pipeline: bool,
-    /// Whether a window of this platform's window systems can get a surface;
-    /// never on the bundled software driver, which carries no window-system code.
-    pub supports_window_system_surface: bool,
 }
 
 /// A cached graphics kernel with the context's draw recorder locked: its staged
@@ -1444,7 +1441,7 @@ pub struct GpuContext {
     color_converter_cache: Arc<
         RwLock<HashMap<(PixelFormat, PixelFormat), Arc<crate::core::rhi::RhiColorConverterInner>>>,
     >,
-    /// Present compositors keyed by attachment format — the graphics twin of
+    /// Offscreen compositors keyed by attachment format — the graphics twin of
     /// `color_converter_cache`, and cached for the same reason: building one
     /// compiles two SPIR-V modules and a whole graphics pipeline, which is
     /// not per-call work.
@@ -1454,11 +1451,11 @@ pub struct GpuContext {
     /// one descriptor-ring slot and then submits, so two concurrent draws
     /// through one compositor would overwrite each other's bindings.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    present_compositor_cache: Arc<
+    offscreen_compositor_cache: Arc<
         parking_lot::Mutex<
             HashMap<
                 TextureFormat,
-                Arc<parking_lot::Mutex<crate::vulkan::rhi::VulkanPresentCompositor>>,
+                Arc<parking_lot::Mutex<crate::vulkan::rhi::VulkanOffscreenCompositor>>,
             >,
         >,
     >,
@@ -1581,7 +1578,7 @@ impl GpuContext {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
-            present_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            offscreen_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -2831,77 +2828,24 @@ impl GpuContext {
         }
     }
 
-    /// Build a swapchain-backed [`PresentTarget`](crate::vulkan::rhi::PresentTarget)
-    /// on a window's `surface_source`, at the requested initial extent +
-    /// vsync preference. `color_traits` drives the `VkColorSpaceKHR`
-    /// priority walk; `None` keeps the legacy SDR pick. The window must
-    /// outlive the returned target (the host owns the `VkSurfaceKHR`
-    /// from creation, never the window). Display processors reach this
-    /// through the SDK `create_present_target` wrapper, never
-    /// `VulkanPresentTarget::new` on a raw device.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn create_present_target(
-        &self,
-        surface_source: crate::vulkan::rhi::PresentSurfaceSource<'_>,
-        width: u32,
-        height: u32,
-        vsync: bool,
-        color_traits: Option<&crate::core::color::ColorTraits>,
-    ) -> Result<crate::vulkan::rhi::PresentTarget> {
-        let target =
-            self.create_vulkan_present_target(surface_source, width, height, vsync, color_traits)?;
-        Ok(crate::vulkan::rhi::PresentTarget::from_target(target))
-    }
-
-    /// The host-side flavor of [`Self::create_present_target`]: mints the
-    /// raw [`crate::vulkan::rhi::VulkanPresentTarget`] without the ABI-safe
-    /// wrapper. In-process consumers (via
-    /// [`GpuContextFullAccess::create_present_target`]) drive it directly.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn create_vulkan_present_target(
-        &self,
-        surface_source: crate::vulkan::rhi::PresentSurfaceSource<'_>,
-        width: u32,
-        height: u32,
-        vsync: bool,
-        color_traits: Option<&crate::core::color::ColorTraits>,
-    ) -> Result<crate::vulkan::rhi::VulkanPresentTarget> {
-        tracing::debug!(
-            rhi_op = "create_present_target",
-            width,
-            height,
-            vsync,
-            "GpuContext::create_present_target"
-        );
-        crate::vulkan::rhi::VulkanPresentTarget::new(
-            &self.device.inner,
-            surface_source,
-            width,
-            height,
-            vsync,
-            color_traits,
-        )
-    }
-
-    /// Build a [`crate::vulkan::rhi::VulkanPresentCompositor`] for
+    /// Build a [`crate::vulkan::rhi::VulkanOffscreenCompositor`] for
     /// `attachment_format`.
     ///
-    /// A caller that owns its compositor across frames — a window, whose
-    /// swapchain can flip the attachment format under it — builds one here.
-    /// A caller that just wants one draw uses
+    /// A caller that composes every frame into its own destinations builds one
+    /// here and keeps it. A caller that just wants one draw uses
     /// [`Self::compose_texture_onto_offscreen_texture`] instead, which shares
     /// a cached compositor rather than compiling a pipeline per call.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn create_present_compositor(
+    pub fn create_offscreen_compositor(
         &self,
         attachment_format: crate::core::rhi::TextureFormat,
-    ) -> Result<crate::vulkan::rhi::VulkanPresentCompositor> {
+    ) -> Result<crate::vulkan::rhi::VulkanOffscreenCompositor> {
         tracing::debug!(
-            rhi_op = "create_present_compositor",
+            rhi_op = "create_offscreen_compositor",
             ?attachment_format,
-            "GpuContext::create_present_compositor"
+            "GpuContext::create_offscreen_compositor"
         );
-        crate::vulkan::rhi::VulkanPresentCompositor::new(&self.device.inner, attachment_format)
+        crate::vulkan::rhi::VulkanOffscreenCompositor::new(&self.device.inner, attachment_format)
     }
 
     /// Draw `source` onto `destination` — scaled, aspect-managed, no window —
@@ -2917,16 +2861,16 @@ impl GpuContext {
         destination: &Texture,
         source: &Texture,
         source_current_layout: VulkanLayout,
-        scaling: crate::vulkan::rhi::PresentScalingMode,
+        scaling: crate::vulkan::rhi::OffscreenCompositorScalingMode,
     ) -> Result<()> {
         let attachment_format = destination.format();
         let compositor = {
-            let mut cache = self.present_compositor_cache.lock();
+            let mut cache = self.offscreen_compositor_cache.lock();
             match cache.get(&attachment_format) {
                 Some(cached) => Arc::clone(cached),
                 None => {
                     let built = Arc::new(parking_lot::Mutex::new(
-                        self.create_present_compositor(attachment_format)?,
+                        self.create_offscreen_compositor(attachment_format)?,
                     ));
                     cache.insert(attachment_format, Arc::clone(&built));
                     built
@@ -3208,7 +3152,6 @@ impl GpuContext {
             supports_semaphore_export: dev.supports_semaphore_export(),
             supports_cross_device_dma_buf_probe: dev.supports_cross_device_dma_buf_probe(),
             supports_ray_tracing_pipeline: dev.supports_ray_tracing_pipeline(),
-            supports_window_system_surface: dev.supports_window_system_surface(),
         }
     }
 
@@ -4951,37 +4894,15 @@ impl GpuContextFullAccess {
         self.host_inner().create_timeline_semaphore(initial_value)
     }
 
-    /// Build a swapchain-backed [`crate::vulkan::rhi::VulkanPresentTarget`]
-    /// on a window's surface source.
+    /// Build a [`crate::vulkan::rhi::VulkanOffscreenCompositor`] for
+    /// `attachment_format`. In-process (Boxed) only.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn create_present_target(
-        &self,
-        surface_source: crate::vulkan::rhi::PresentSurfaceSource<'_>,
-        width: u32,
-        height: u32,
-        vsync: bool,
-        color_traits: Option<&crate::core::color::ColorTraits>,
-    ) -> Result<crate::vulkan::rhi::VulkanPresentTarget> {
-        self.host_inner().create_vulkan_present_target(
-            surface_source,
-            width,
-            height,
-            vsync,
-            color_traits,
-        )
-    }
-
-    /// Build a [`crate::vulkan::rhi::VulkanPresentCompositor`] for
-    /// `attachment_format` (typically the present target's
-    /// [`color_format`](crate::vulkan::rhi::VulkanPresentTarget::color_format)).
-    /// In-process (Boxed) only.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn create_present_compositor(
+    pub fn create_offscreen_compositor(
         &self,
         attachment_format: crate::core::rhi::TextureFormat,
-    ) -> Result<crate::vulkan::rhi::VulkanPresentCompositor> {
+    ) -> Result<crate::vulkan::rhi::VulkanOffscreenCompositor> {
         self.host_inner()
-            .create_present_compositor(attachment_format)
+            .create_offscreen_compositor(attachment_format)
     }
 
     /// Mint a Vulkan Video encoder on the host device — the FullAccess mirror
@@ -8236,199 +8157,6 @@ mod tests {
         );
         drop(looked_up);
         live_service.stop();
-    }
-
-    /// With a swapchain live and presenting, every exportable flavour the
-    /// device offers allocates again after a stopped stream's entries of it
-    /// were all freed: the pixel buffer in whichever flavour the device gives
-    /// it, the sampled image, the OPAQUE_FD image, and — only on a device that
-    /// exports DMA-BUF — the tiled DMA-BUF image. NVIDIA refuses the first
-    /// export allocation of a flavour with none live after a swapchain; the
-    /// device's sentinels keep each above zero.
-    #[cfg(target_os = "linux")]
-    #[cfg_attr(
-        not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-    )]
-    #[test]
-    fn every_exportable_flavour_reacquires_after_its_pool_is_freed_with_a_swapchain_live() {
-        const FRAMES_PRESENTED_SO_THE_COMPOSITOR_IMPORTS_THE_SWAPCHAIN: usize = 30;
-        const FLAVOUR_TEST_EXTENT: u32 = 64;
-
-        use crate::core::test_support::rig_only_capability_skip::skip_unless_this_process_can_reach_a_display_server;
-        if skip_unless_this_process_can_reach_a_display_server() {
-            return;
-        }
-        let Ok(gpu) = GpuContext::init_for_platform() else {
-            tracing::warn!("no GPU device, so the swapchain re-acquire test skips");
-            return;
-        };
-        let window = match crate::core::window_event_pump::process_wide_window_event_pump()
-            .and_then(|pump| {
-                pump.request_window_for_owning_processor(
-                    crate::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor {
-                        window_title: "streamlib-swapchain-reacquire-test".to_string(),
-                        initial_width_in_logical_pixels: 640,
-                        initial_height_in_logical_pixels: 360,
-                    },
-                )
-            }) {
-            Ok(window) => window,
-            Err(no_window) => panic!(
-                "a display server is named, so the swapchain's window must mint: {no_window}"
-            ),
-        };
-        let (window_width, window_height) = window.physical_size_when_minted();
-        let mut present_target = gpu
-            .create_vulkan_present_target(
-                window.present_surface_source(),
-                window_width,
-                window_height,
-                true,
-                None,
-            )
-            .expect("a swapchain on the window");
-        for _ in 0..FRAMES_PRESENTED_SO_THE_COMPOSITOR_IMPORTS_THE_SWAPCHAIN {
-            present_target
-                .render_frame(|frame| {
-                    frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;
-                    frame.end_rendering()
-                })
-                .expect("a frame presents on the swapchain");
-        }
-
-        let host_device = &gpu.device().inner;
-        let device_name = host_device.name();
-        let device_exports_dma_buf = host_device.supports_dma_buf_export();
-        if device_exports_dma_buf {
-            assert!(host_device.dma_buf_buffer_pool().is_some());
-            assert!(host_device.dma_buf_image_pool().is_some());
-            assert!(host_device.dma_buf_image_pool_tiled().is_some());
-            assert!(
-                host_device
-                    .has_render_target_modifier_for_texture_format(TextureFormat::Rgba8Unorm),
-                "the device advertises no render-target modifier, so the tiled flavour is untested"
-            );
-        } else {
-            assert!(host_device.dma_buf_buffer_pool().is_none(), "{device_name}");
-            assert!(host_device.dma_buf_image_pool().is_none(), "{device_name}");
-            assert!(
-                host_device.dma_buf_image_pool_tiled().is_none(),
-                "{device_name}"
-            );
-        }
-        assert!(host_device.opaque_fd_image_pool().is_some());
-        let mut texture_flavours = vec![
-            (
-                "sampled image",
-                TexturePoolDescriptor::new(
-                    FLAVOUR_TEST_EXTENT,
-                    FLAVOUR_TEST_EXTENT,
-                    TextureFormat::Rgba8Unorm,
-                )
-                .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
-            ),
-            (
-                "OPAQUE_FD image",
-                TexturePoolDescriptor::new(
-                    FLAVOUR_TEST_EXTENT,
-                    FLAVOUR_TEST_EXTENT,
-                    TextureFormat::Rgba8Unorm,
-                )
-                .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST)
-                .with_cross_process_importability(
-                    super::super::texture_pool::TextureCrossProcessImportability::OpaqueFd,
-                ),
-            ),
-        ];
-        if device_exports_dma_buf {
-            texture_flavours.push((
-                "tiled DMA-BUF image",
-                TexturePoolDescriptor::new(
-                    FLAVOUR_TEST_EXTENT,
-                    FLAVOUR_TEST_EXTENT,
-                    TextureFormat::Rgba8Unorm,
-                )
-                .with_usage(TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING)
-                .with_cross_process_importability(
-                    super::super::texture_pool::TextureCrossProcessImportability::RenderTargetDmaBuf,
-                ),
-            ));
-        }
-
-        let stopped_stream = crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1);
-        let stopped_streams_view =
-            gpu.view_for_one_loaded_stream(stopped_stream, None, &std::env::temp_dir());
-        drop(
-            stopped_streams_view
-                .acquire_pixel_buffer(
-                    LEASE_TEST_SURFACE_WIDTH,
-                    LEASE_TEST_SURFACE_HEIGHT,
-                    PixelFormat::Rgba32,
-                )
-                .expect("a pixel buffer with the swapchain live"),
-        );
-        for (flavour, descriptor) in &texture_flavours {
-            drop(
-                stopped_streams_view
-                    .acquire_texture(descriptor)
-                    .unwrap_or_else(|refusal| {
-                        panic!("a {flavour} with the swapchain live was refused: {refusal}")
-                    }),
-            );
-        }
-        wait_for_every_gpu_submission_made_so_far(&gpu);
-
-        gpu.free_every_unheld_shared_pool_entry_the_stream_last_acquired(stopped_stream);
-        assert!(
-            shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).is_empty(),
-            "the stopped stream's pixel buffers outlived its stop"
-        );
-        for (flavour, descriptor) in &texture_flavours {
-            assert_eq!(
-                gpu.texture_pool().slot_count_of_the_shape_of(descriptor),
-                0,
-                "the stopped stream's {flavour} outlived its stop"
-            );
-        }
-
-        let (_, reacquired_pixel_buffer) = gpu
-            .acquire_pixel_buffer(
-                LEASE_TEST_SURFACE_WIDTH,
-                LEASE_TEST_SURFACE_HEIGHT,
-                PixelFormat::Rgba32,
-            )
-            .expect("a pixel buffer allocates again after its pool was freed");
-        match (
-            reacquired_pixel_buffer
-                .buffer_ref()
-                .inner
-                .export_external_handle(),
-            device_exports_dma_buf,
-        ) {
-            (Ok(crate::core::rhi::RhiExternalHandle::DmaBuf { fd, .. }), true)
-            | (Ok(crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, .. }), false) => unsafe {
-                libc::close(fd);
-            },
-            (other, _) => panic!(
-                "the re-acquired pixel buffer on {device_name} exported the wrong flavour: \
-                 {other:?}"
-            ),
-        }
-        drop(reacquired_pixel_buffer);
-        for (flavour, descriptor) in &texture_flavours {
-            gpu.acquire_texture(descriptor).unwrap_or_else(|refusal| {
-                panic!("a {flavour} did not allocate again after its pool was freed: {refusal}")
-            });
-        }
-        present_target
-            .render_frame(|frame| {
-                frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;
-                frame.end_rendering()
-            })
-            .expect("the swapchain still presents");
-        drop(present_target);
-        drop(window);
     }
 
     /// A slot handed back while a consumer still leases the node's last frame

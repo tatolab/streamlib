@@ -37,7 +37,7 @@ impl HardwareVideoCodecProcessorIdentity for H264DecoderCodecIdentity {
                   `video` publishes an ordinary `VideoFrame` on a pooled RGBA pixel-buffer \
                   surface at the conformance-windowed extent — never the coded picture — \
                   carrying the encoded frame's own timestamp and `color_info`, with `fps`, \
-                  `texture_layout` and the HDR sidecars absent, so `DisplayWindow` and a \
+                  `texture_layout` and the HDR sidecars absent, so an encoder and a \
                   `read(port, into=VideoFrame)` consume it unchanged. A decoded frame is \
                   buffer-backed, so it reaches a Python kernel through a DLPack landing copy, \
                   never by bare surface id.\n\n\

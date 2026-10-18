@@ -17,7 +17,6 @@ use crate::python_helper_process_pixel_exchange::{
 use crate::python_helper_process_pixel_exchange::{
     HelperProcessGraphicsKernelRegistration, HelperProcessRayTracingKernelRegistration,
 };
-use crate::python_processor_owned_window::PythonProcessorOwnedWindow;
 
 #[cfg(not(target_os = "linux"))]
 use super::fd_shaped_raw_handle_is_linux_only_error;
@@ -528,39 +527,6 @@ impl PythonGpuContextFullAccess {
                 rotation_depth,
             }),
         )
-    }
-
-    /// Request a window this node owns, presented by the engine.
-    ///
-    /// Constructed once in `setup()`, named frames per frame in `process()`.
-    /// The window lives in the app process on its own present loop, so it
-    /// keeps its frame rate whatever this node's pace is, and naming no
-    /// frame leaves the last one up.
-    ///
-    /// Raises when the process can get no window at all — no display server,
-    /// or a window event pump that has already failed — rather than handing
-    /// back a window that would show nothing. An author for whom the window is
-    /// optional writes the `try/except`.
-    #[pyo3(signature = (title, width = 1280, height = 720))]
-    fn create_window(
-        &self,
-        python: Python<'_>,
-        title: &str,
-        width: u32,
-        height: u32,
-    ) -> PyResult<PythonProcessorOwnedWindow> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        if let Some(exchange_client) = &self.helper_process_exchange_client {
-            let window_id =
-                exchange_client.create_processor_owned_window(python, title, width, height)?;
-            return Ok(PythonProcessorOwnedWindow::over_the_minted_window(
-                window_id,
-                title.to_string(),
-                Arc::clone(exchange_client),
-            ));
-        }
-        let _ = (python, title, width, height);
-        Err(gpu_unreachable_from_a_helper_process_error())
     }
 
     /// Build a compute kernel from GLSL source, or from pre-compiled SPIR-V.

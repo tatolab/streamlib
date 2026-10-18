@@ -635,60 +635,7 @@ impl RuntimeContext {
         );
         f()
     }
-
-    // =========================================================================
-    // Platform Setup
-    // =========================================================================
-
-    /// Ensure the platform is ready for runtime operations.
-    ///
-    /// On macOS this builds the process's one window event pump, before any
-    /// processor can ask it for a window, unless something built it first — a
-    /// run entered on the first thread does. Only that thread can build it: a
-    /// first call from anywhere else settles the pump as unavailable, and every
-    /// window request says why.
-    #[cfg(target_os = "macos")]
-    pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
-        crate::core::window_event_pump::build_the_process_wide_window_event_pump_or_log_why_no_window_can_be_created();
-        Ok(())
-    }
-
-    /// Ensure the platform is ready for runtime operations.
-    ///
-    /// On Windows, this is a no-op placeholder for future Win32 setup.
-    #[cfg(target_os = "windows")]
-    pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
-        // TODO: Future Windows-specific initialization
-        // - DirectX device validation
-        // - Win32 message loop setup
-        tracing::debug!("[ensure_platform_ready] Windows - no setup required");
-        Ok(())
-    }
-
-    /// Ensure the platform is ready for runtime operations.
-    ///
-    /// On Linux, this is a no-op placeholder for future X11/Wayland setup.
-    #[cfg(target_os = "linux")]
-    pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
-        // TODO: Future Linux-specific initialization
-        // - X11/Wayland connection setup
-        // - GPU driver validation
-        tracing::debug!("[ensure_platform_ready] Linux - no setup required");
-        Ok(())
-    }
-
-    /// Ensure the platform is ready for runtime operations.
-    ///
-    /// On unsupported platforms, this is a no-op.
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
-        tracing::debug!("[ensure_platform_ready] Unsupported platform - no setup required");
-        Ok(())
-    }
 }
-
-// Unit tests removed - these require NSApplication run loop which isn't available in test harness.
-// See examples/test-main-thread-dispatch for validation of this functionality.
 
 // =============================================================================
 // Capability-typed RuntimeContext views

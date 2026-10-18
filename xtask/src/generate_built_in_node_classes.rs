@@ -772,30 +772,30 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// `DisplayWindow` as the runtime describes it: an input port with a
+    /// A sink as the runtime describes a built-in: an input port with a
     /// delivery profile, defaults of three JSON types, and an enumeration
     /// reached through `$defs` — every shape a built-in config takes today.
-    fn display_window_descriptor() -> Value {
+    fn frame_sink_descriptor_with_every_config_shape() -> Value {
         json!({
-            "type": "tatolab.stream:DisplayWindow",
-            "description": "Shows video frames in a window with vsync",
+            "type": "tatolab.stream:FrameSink",
+            "description": "Shows video frames",
             "repository": "https://github.com/tatolab/streamlib",
             "runtime": "rust",
             "config_schema": {
-                "title": "DisplayWindowConfig",
-                "description": "Configuration for [`DisplayWindow`].",
+                "title": "FrameSinkConfig",
+                "description": "Configuration for [`FrameSink`].",
                 "type": "object",
                 "properties": {
                     "height": {
-                        "description": "Initial window height, in the desktop's logical pixels.",
+                        "description": "Initial frame height, in pixels.",
                         "default": 720, "type": "integer", "format": "uint32", "minimum": 0.0
                     },
                     "scaling": {
-                        "description": "How the frame maps onto the window.",
+                        "description": "How the frame maps onto the sink.",
                         "default": "fit",
-                        "allOf": [{"$ref": "#/$defs/DisplayScaling"}]
+                        "allOf": [{"$ref": "#/$defs/FrameSinkScaling"}]
                     },
-                    "title": {"description": "Window title.", "default": "StreamLib", "type": "string"},
+                    "title": {"description": "Sink title.", "default": "StreamLib", "type": "string"},
                     "device_id": {
                         "description": "Paired with [`Self::height`].",
                         "default": null, "type": ["string", "null"]
@@ -803,16 +803,16 @@ mod tests {
                 },
                 "additionalProperties": false,
                 "$defs": {
-                    "DisplayScaling": {
+                    "FrameSinkScaling": {
                         "oneOf": [
                             {"description": "Whole frame visible.", "type": "string", "enum": ["fit"]},
-                            {"description": "Window covered.", "type": "string", "enum": ["fill"]}
+                            {"description": "Sink covered.", "type": "string", "enum": ["fill"]}
                         ]
                     }
                 }
             },
             "inputs": [{
-                "name": "video", "description": "Video frames to show in the window",
+                "name": "video", "description": "Video frames to show",
                 "required": true, "delivery_profile": "newest"
             }],
             "outputs": [],
@@ -826,39 +826,40 @@ mod tests {
 
     #[test]
     fn one_built_in_renders_to_its_golden_class_and_config() {
-        let rendered =
-            render_built_in_node_classes_module(&[descriptor_from(display_window_descriptor())])
-                .unwrap();
+        let rendered = render_built_in_node_classes_module(&[descriptor_from(
+            frame_sink_descriptor_with_every_config_shape(),
+        )])
+        .unwrap();
         let golden = format!(
             "{GENERATED_MODULE_HEADER}{}",
             r#"
 __all__ = [
-    "DisplayWindow",
-    "DisplayWindowConfig",
+    "FrameSink",
+    "FrameSinkConfig",
 ]
 
 
-class DisplayWindowConfig(TypedDict, total=False):
-    """`DisplayWindow`'s config: the keys `stream_builder.add` takes."""
+class FrameSinkConfig(TypedDict, total=False):
+    """`FrameSink`'s config: the keys `stream_builder.add` takes."""
 
     height: int
-    """Initial window height, in the desktop's logical pixels.
+    """Initial frame height, in pixels.
 
     Default: `720`.
     """
 
     scaling: Literal["fit", "fill"]
-    """How the frame maps onto the window.
+    """How the frame maps onto the sink.
 
     Values:
         `fit`: Whole frame visible.
-        `fill`: Window covered.
+        `fill`: Sink covered.
 
     Default: `"fit"`.
     """
 
     title: str
-    """Window title.
+    """Sink title.
 
     Default: `"StreamLib"`.
     """
@@ -867,16 +868,16 @@ class DisplayWindowConfig(TypedDict, total=False):
     """Paired with `height`."""
 
 
-class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
-    """Shows video frames in a window with vsync.
+class FrameSink(BuiltInNode[FrameSinkConfig]):
+    """Shows video frames.
 
     Inputs:
-        `video` (newest): Video frames to show in the window.
+        `video` (newest): Video frames to show.
 
-    Config: `DisplayWindowConfig`.
+    Config: `FrameSinkConfig`.
     """
 
-    type: ClassVar[str] = "tatolab.stream:DisplayWindow"
+    type: ClassVar[str] = "tatolab.stream:FrameSink"
 "#
         );
         assert_eq!(rendered, golden, "rendered:\n{rendered}");
@@ -945,45 +946,45 @@ class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
 
     #[test]
     fn a_description_linking_a_rust_path_is_refused_by_name() {
-        let mut descriptor = display_window_descriptor();
+        let mut descriptor = frame_sink_descriptor_with_every_config_shape();
         descriptor["config_schema"]["properties"]["title"]["description"] =
-            json!("Absent means [`DisplayScaling::Fit`].");
+            json!("Absent means [`FrameSinkScaling::Fit`].");
         let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
             .unwrap_err()
             .to_string();
-        assert!(refusal.contains("`DisplayScaling::Fit`"), "{refusal}");
+        assert!(refusal.contains("`FrameSinkScaling::Fit`"), "{refusal}");
         assert!(refusal.contains("config key `title`"), "{refusal}");
     }
 
     #[test]
     fn a_blank_description_renders_no_docstring_for_its_key() {
-        let mut descriptor = display_window_descriptor();
+        let mut descriptor = frame_sink_descriptor_with_every_config_shape();
         descriptor["config_schema"]["properties"]["device_id"]["description"] = json!("  ");
         let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
         assert!(
-            rendered.contains("    device_id: str | None\n\n\nclass DisplayWindow("),
+            rendered.contains("    device_id: str | None\n\n\nclass FrameSink("),
             "{rendered}"
         );
     }
 
     #[test]
     fn a_json_type_the_generator_does_not_render_is_refused_by_name() {
-        let mut descriptor = display_window_descriptor();
+        let mut descriptor = frame_sink_descriptor_with_every_config_shape();
         descriptor["config_schema"]["properties"]["title"] = json!({"type": "array"});
         let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
             .unwrap_err()
             .to_string();
         assert!(refusal.contains("`array`"), "{refusal}");
         assert!(
-            refusal.contains("`DisplayWindow`'s config key `title`"),
+            refusal.contains("`FrameSink`'s config key `title`"),
             "{refusal}"
         );
     }
 
     #[test]
     fn a_type_outside_the_stream_package_is_refused() {
-        let mut descriptor = display_window_descriptor();
-        descriptor["type"] = json!("streamlib_media_builtins::DisplayWindow");
+        let mut descriptor = frame_sink_descriptor_with_every_config_shape();
+        descriptor["type"] = json!("streamlib_media_builtins::FrameSink");
         let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
             .unwrap_err()
             .to_string();

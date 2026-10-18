@@ -45,12 +45,12 @@ from runtime_load_streams import (
     config_nesting_containers_deep,
     named_pattern_into_a_named_sink,
     open_config_sink_with_the_deepest_config_the_builder_compiles,
-    pattern_linked_from_a_port_it_lacks_into_a_window,
+    pattern_linked_from_a_port_it_lacks_into_an_encoder,
 )
 from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 from tatolab.stream import (
-    DisplayWindow,
+    H264Encoder,
     TestPatternSource,
     VirtualCameraSink,
     _built_in_nodes,
@@ -85,22 +85,22 @@ NOT_THE_COMPILE_DOCUMENT = "standard output is not the compile document"
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
 
-def pattern_to_window_graph(*, stream_name: str = "pattern-to-window") -> "dict[str, Any]":
-    """A test pattern into a window, exposing the pattern's output."""
+def pattern_to_encoder_graph(*, stream_name: str = "pattern-to-encoder") -> "dict[str, Any]":
+    """A test pattern into an H.264 encoder, exposing the pattern's output."""
     return {
         "stream": stream_name,
         "nodes": [
             {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
             {
-                "name": "displaywindow",
-                "type": DisplayWindow.type,
-                "config": {"title": "load", "scaling": "fit"},
+                "name": "h264encoder",
+                "type": H264Encoder.type,
+                "config": {"keyframe_interval_seconds": 2, "fps": 30},
             },
         ],
         "links": [
             {
                 "source": {"node": "testpatternsource", "port": "video"},
-                "target": {"node": "displaywindow", "port": "video"},
+                "target": {"node": "h264encoder", "port": "video"},
             }
         ],
         "exposed": [{"node": "testpatternsource", "port": "video"}],
@@ -163,11 +163,11 @@ def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        pattern_to_window_graph(stream_name="pattern-to-window")
+        pattern_to_encoder_graph(stream_name="pattern-to-encoder")
     )
 
     assert loaded_with(run_outcome) == 2
-    assert run_outcome.loaded_stream_name == "pattern-to-window"
+    assert run_outcome.loaded_stream_name == "pattern-to-encoder"
 
 
 def test_the_deepest_config_the_builder_compiles_loads(
@@ -234,8 +234,8 @@ def test_a_lone_surrogate_escape_in_a_compiled_config_is_refused_naming_it(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        '{"stream": "surrogate", "nodes": [{"name": "displaywindow", "type": "%s", '
-        '"config": {"title": "\\udc80"}}]}' % DisplayWindow.type
+        '{"stream": "surrogate", "nodes": [{"name": "openconfigsink", "type": "%s", '
+        '"config": {"title": "\\udc80"}}]}' % OPEN_CONFIG_SINK_TYPE
     )
 
     refusal = refused_naming(run_outcome)
@@ -268,7 +268,7 @@ def test_a_python_node_type_the_process_never_imported_loads_by_describing_it(
             "nodes": [
                 {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
                 {"name": "loadedframerelay", "type": DESCRIBED_NODE_TYPE, "config": {}},
-                {"name": "displaywindow", "type": DisplayWindow.type, "config": {}},
+                {"name": "h264encoder", "type": H264Encoder.type, "config": {}},
             ],
             "links": [
                 {
@@ -277,7 +277,7 @@ def test_a_python_node_type_the_process_never_imported_loads_by_describing_it(
                 },
                 {
                     "source": {"node": "loadedframerelay", "port": "video_to_downstream"},
-                    "target": {"node": "displaywindow", "port": "video"},
+                    "target": {"node": "h264encoder", "port": "video"},
                 },
             ],
             "exposed": [{"node": "loadedframerelay", "port": "video_to_downstream"}],
@@ -292,7 +292,7 @@ def test_the_stream_name_a_graph_carries_is_cast(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        pattern_to_window_graph(stream_name="Front Camera")
+        pattern_to_encoder_graph(stream_name="Front Camera")
     )
 
     assert loaded_with(run_outcome) == 2
@@ -343,7 +343,7 @@ def test_a_graph_naming_no_stream_is_refused(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     """A runtime's streams are told apart by name, so a graph has to carry one."""
-    graph = pattern_to_window_graph()
+    graph = pattern_to_encoder_graph()
     del graph["stream"]
 
     refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
@@ -355,7 +355,7 @@ def test_a_stream_name_casting_to_nothing_is_refused_naming_it(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     refusal = refused_naming(
-        run_stream_on_tatolabd_with_no_vulkan_driver(pattern_to_window_graph(stream_name=".."))
+        run_stream_on_tatolabd_with_no_vulkan_driver(pattern_to_encoder_graph(stream_name=".."))
     )
 
     assert "`..`" in refusal
@@ -367,8 +367,8 @@ def test_a_compile_document_nested_far_past_the_maximum_is_refused_rather_than_c
 ):
     nested_far_past_the_maximum = "[" * 100_000 + "]" * 100_000
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        '{"stream": "nested", "nodes": [{"name": "displaywindow", "type": "%s", '
-        '"config": {"nested": %s}}]}' % (DisplayWindow.type, nested_far_past_the_maximum)
+        '{"stream": "nested", "nodes": [{"name": "openconfigsink", "type": "%s", '
+        '"config": {"nested": %s}}]}' % (OPEN_CONFIG_SINK_TYPE, nested_far_past_the_maximum)
     )
 
     refusal = refused_naming(run_outcome)
@@ -455,7 +455,7 @@ def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     refusal = refused_naming(
-        run_stream_on_tatolabd_with_no_vulkan_driver(pattern_linked_from_a_port_it_lacks_into_a_window)
+        run_stream_on_tatolabd_with_no_vulkan_driver(pattern_linked_from_a_port_it_lacks_into_an_encoder)
     )
 
     assert "`no_such_port`" in refusal
@@ -467,7 +467,7 @@ def test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the
 ):
     """An end naming a machine names its stream too, so one naming a machine
     alone is refused rather than read as a local end with its machine dropped."""
-    graph = pattern_to_window_graph()
+    graph = pattern_to_encoder_graph()
     graph["links"][0][end]["machine"] = "studio-display"
 
     refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
@@ -482,7 +482,7 @@ def test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machin
 ):
     """Nothing links two machines until the sharing step, so an end on
     another machine is refused by that machine's name."""
-    graph = pattern_to_window_graph()
+    graph = pattern_to_encoder_graph()
     graph["links"][0][end].update({"machine": "studio-display", "stream": graph["stream"]})
 
     refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))

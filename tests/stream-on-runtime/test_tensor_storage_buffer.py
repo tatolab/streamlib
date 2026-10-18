@@ -10,7 +10,6 @@ The export is `kDLCUDA` on Linux and `kDLMetal` on macOS, where MLX reads the
 same tensor too; a rig whose torch sees no such device skips.
 """
 
-import os
 import sys
 from collections.abc import Callable
 
@@ -183,23 +182,6 @@ def test_a_tensor_a_consumer_holds_is_never_rewritten(start_tatolabd_running_str
     assert all(
         slot_of(surface_id) != slot_of(published[0]) for surface_id in published[1:]
     ), f"the held tensor's slot was published from again: {published}"
-
-
-@pytest.mark.skipif(
-    not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
-    reason="needs a window server: the allocation under test follows a swapchain",
-)
-@pytest.mark.rig_only_capability(reason="a display")
-def test_a_tensor_acquired_after_a_window_opens_round_trips(start_tatolabd_running_stream):
-    """DEVICE_LOCAL OPAQUE_FD memory allocated after a swapchain exists still
-    allocates and round-trips (docs/learnings/nvidia-opaque-fd-after-swapchain.md)."""
-    reports = run_scenario(
-        start_tatolabd_running_stream,
-        "a_tensor_acquired_after_a_window_opens_round_trips",
-        POOL_ROTATION_DEPTH + 1,
-    )
-    for read in reports["PublishedTensorReadingSink"]:
-        assert read["values_equal"], read
 
 
 @pytest.mark.rig_only_capability(reason="CUDA")

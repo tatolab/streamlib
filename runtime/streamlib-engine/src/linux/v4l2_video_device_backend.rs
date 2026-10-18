@@ -1156,7 +1156,6 @@ mod tests {
             supports_semaphore_export: true,
             supports_cross_device_dma_buf_probe: true,
             supports_ray_tracing_pipeline: true,
-            supports_window_system_surface: true,
         }
     }
 

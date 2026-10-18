@@ -24,7 +24,6 @@ mod python_monotonic_timer;
 mod python_processor_context;
 mod python_processor_declaration;
 mod python_processor_link_data_access;
-mod python_processor_owned_window;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod python_surface_share_service_for_tests;
 
@@ -61,8 +60,6 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonRayTracingKernel>()?;
     module.add_class::<python_processor_context::PythonAccelerationStructureHandle>()?;
     module.add_class::<python_processor_context::PythonKernelDispatchBatch>()?;
-    module.add_class::<python_processor_owned_window::PythonProcessorOwnedWindow>()?;
-    module.add_class::<python_processor_owned_window::PythonProcessorOwnedWindowEvents>()?;
     module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;

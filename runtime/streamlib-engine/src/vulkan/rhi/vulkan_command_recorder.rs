@@ -10,22 +10,13 @@ use parking_lot::Mutex;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{DrawCall, DrawIndexedCall, Texture, VulkanLayout};
+use crate::core::rhi::{Texture, VulkanLayout};
 use crate::core::{Error, Result};
 
 use super::{
     HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanAccess, VulkanBufferLike,
-    VulkanComputeKernel, VulkanGraphicsKernel, VulkanStage,
+    VulkanComputeKernel, VulkanStage,
 };
-
-/// Stage and access scopes of one swapchain-image layout barrier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SwapchainImageBarrierScopes {
-    pub(crate) src_stage: vk::PipelineStageFlags2,
-    pub(crate) src_access: vk::AccessFlags2,
-    pub(crate) dst_stage: vk::PipelineStageFlags2,
-    pub(crate) dst_access: vk::AccessFlags2,
-}
 
 /// Image-to-buffer / buffer-to-image copy region.
 ///
@@ -105,41 +96,6 @@ enum RecorderState {
     Recording,
 }
 
-/// Tracks whether the recorder's command buffer is currently inside an
-/// open dynamic-rendering instance (a `cmd_begin_rendering` without a
-/// matching `cmd_end_rendering`).
-///
-/// [`VulkanPresentTarget::end_frame`](super::vulkan_present_target::VulkanPresentTarget::end_frame)
-/// reads this before recording the swapchain post-draw layout barrier: a
-/// `vkCmdPipelineBarrier2` recorded inside an open dynamic-rendering
-/// instance is `VUID-vkCmdPipelineBarrier2`-class undefined behavior, so a
-/// caller that drove `begin_frame` and forgot
-/// `cmd_end_dynamic_rendering` must have its pass auto-closed first. Pure
-/// state (no Vulkan handle) so the open/close balance is unit-testable
-/// without a GPU.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct RecorderDynamicRenderingBalance {
-    is_open: bool,
-}
-
-impl RecorderDynamicRenderingBalance {
-    /// Whether a dynamic-rendering pass is currently open on the recorder.
-    pub(crate) fn is_open(self) -> bool {
-        self.is_open
-    }
-
-    /// Record that `cmd_begin_dynamic_rendering` opened a pass.
-    pub(crate) fn mark_opened(&mut self) {
-        self.is_open = true;
-    }
-
-    /// Record that the pass closed (`cmd_end_dynamic_rendering`, a fresh
-    /// `begin()`, or an aborted recording).
-    pub(crate) fn mark_closed(&mut self) {
-        self.is_open = false;
-    }
-}
-
 /// Engine-owned multi-step command-buffer recorder.
 ///
 /// Owns a long-lived command pool + reset-able primary command buffer
@@ -183,15 +139,6 @@ pub struct RhiCommandRecorderInner {
     /// `vkQueueSubmit` leaves the fence unsignaled forever.
     submission_in_flight: bool,
     state: Mutex<RecorderState>,
-    /// Whether a dynamic-rendering pass is currently open on this
-    /// recorder's command buffer. Set by
-    /// [`Self::cmd_begin_dynamic_rendering`], cleared by
-    /// [`Self::cmd_end_dynamic_rendering`], [`Self::begin`], and
-    /// [`Self::abort_recording`]. Read by
-    /// [`VulkanPresentTarget::end_frame`](super::vulkan_present_target::VulkanPresentTarget::end_frame)
-    /// so a still-open pass is closed before the post-draw layout barrier
-    /// (a barrier inside an open dynamic-rendering instance is UB).
-    render_pass_balance: RecorderDynamicRenderingBalance,
 }
 
 impl RhiCommandRecorderInner {
@@ -259,7 +206,6 @@ impl RhiCommandRecorderInner {
             completion_fence,
             submission_in_flight: false,
             state: Mutex::new(RecorderState::Idle),
-            render_pass_balance: RecorderDynamicRenderingBalance::default(),
         })
     }
 
@@ -318,9 +264,6 @@ impl RhiCommandRecorderInner {
                 })?;
         }
 
-        // A fresh recording starts with no dynamic-rendering pass open —
-        // the reset command buffer above discarded any prior pass.
-        self.render_pass_balance.mark_closed();
         *state = RecorderState::Recording;
         Ok(())
     }
@@ -665,45 +608,9 @@ impl RhiCommandRecorderInner {
         kernel.record(self.command_buffer, group_x, group_y, group_z)
     }
 
-    /// Record a draw via [`VulkanGraphicsKernel::cmd_bind_and_draw`]
-    /// into the recorder's command buffer.
-    ///
-    /// Must be called inside an active render pass (e.g. between
-    /// [`PresentFrame::begin_rendering`](super::vulkan_present_target::PresentFrame::begin_rendering)
-    /// and `end_rendering`). Bindings + push constants for `frame_index`
-    /// must have been staged via the kernel's `set_*` methods before this
-    /// call; the kernel drains them on entry.
-    #[tracing::instrument(level = "trace", skip(self, kernel, draw), fields(label = %self.label, frame_index))]
-    pub fn record_draw(
-        &mut self,
-        kernel: &VulkanGraphicsKernel,
-        frame_index: u32,
-        draw: &DrawCall,
-    ) -> Result<()> {
-        self.expect_recording("record_draw")?;
-        kernel.cmd_bind_and_draw(self.command_buffer, frame_index, draw)
-    }
-
-    /// Indexed-draw variant of [`Self::record_draw`]. Caller must have
-    /// set an index buffer for `frame_index` via
-    /// [`VulkanGraphicsKernel::set_index_buffer`].
-    #[tracing::instrument(level = "trace", skip(self, kernel, draw), fields(label = %self.label, frame_index))]
-    pub fn record_draw_indexed(
-        &mut self,
-        kernel: &VulkanGraphicsKernel,
-        frame_index: u32,
-        draw: &DrawIndexedCall,
-    ) -> Result<()> {
-        self.expect_recording("record_draw_indexed")?;
-        kernel.cmd_bind_and_draw_indexed(self.command_buffer, frame_index, draw)
-    }
-
-    /// Engine-internal submit path supporting binary + timeline waits
-    /// and signals, used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
-    /// for the swapchain image-available wait → render-finished binary
-    /// signal + frame-timeline signal dance that `submit_signaling_timeline`
-    /// can't express. Mirrors [`Self::submit_inner`]'s recorder-state and
-    /// fence bookkeeping so the next [`Self::begin`] waits correctly.
+    /// Submit with the given semaphore waits and signals. Mirrors
+    /// [`Self::submit_inner`]'s recorder-state and fence bookkeeping so the
+    /// next [`Self::begin`] waits correctly.
     pub(crate) fn submit_with_semaphores(
         &mut self,
         waits: &[vk::SemaphoreSubmitInfo],
@@ -944,130 +851,13 @@ impl RhiCommandRecorderInner {
         Ok(())
     }
 
-    /// Record a layout transition on a raw `VkImage` handle.
-    /// Distinct from [`Self::record_image_barrier`] which takes a
-    /// `Texture` handle; this variant is used by
-    /// [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
-    /// for swapchain images (which are never wrapped in a `Texture`).
-    /// COLOR aspect, single mip / single layer, QUEUE_FAMILY_IGNORED
-    /// on both sides.
-    pub(crate) fn record_swapchain_image_barrier(
-        &mut self,
-        image: vk::Image,
-        old_layout: vk::ImageLayout,
-        new_layout: vk::ImageLayout,
-        scopes: SwapchainImageBarrierScopes,
-    ) -> Result<()> {
-        self.expect_recording("record_swapchain_image_barrier")?;
-        let subresource = vk::ImageSubresourceRange::builder()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .base_mip_level(0)
-            .level_count(1)
-            .base_array_layer(0)
-            .layer_count(1)
-            .build();
-        let barrier = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(scopes.src_stage)
-            .src_access_mask(scopes.src_access)
-            .dst_stage_mask(scopes.dst_stage)
-            .dst_access_mask(scopes.dst_access)
-            .old_layout(old_layout)
-            .new_layout(new_layout)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(image)
-            .subresource_range(subresource)
-            .build();
-        let barriers = [barrier];
-        let dep = vk::DependencyInfo::builder()
-            .image_memory_barriers(&barriers)
-            .build();
-        unsafe {
-            self.device.cmd_pipeline_barrier2(self.command_buffer, &dep);
-        }
-        Ok(())
-    }
-
-    /// Begin a dynamic-rendering pass against a caller-owned
-    /// `VkImageView`. CLEAR load op when `clear_color` is `Some`,
-    /// LOAD otherwise. The image must already be in
-    /// `COLOR_ATTACHMENT_OPTIMAL` (transition via
-    /// [`Self::record_swapchain_image_barrier`] beforehand). Used
-    /// by [`PresentFrame::begin_rendering`](super::vulkan_present_target::PresentFrame::begin_rendering).
-    pub(crate) fn cmd_begin_dynamic_rendering(
-        &mut self,
-        image_view: vk::ImageView,
-        extent: (u32, u32),
-        clear_color: Option<[f32; 4]>,
-    ) -> Result<()> {
-        self.expect_recording("cmd_begin_dynamic_rendering")?;
-        let load_op = if clear_color.is_some() {
-            vk::AttachmentLoadOp::CLEAR
-        } else {
-            vk::AttachmentLoadOp::LOAD
-        };
-        let clear_value = vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: clear_color.unwrap_or([0.0, 0.0, 0.0, 1.0]),
-            },
-        };
-        let color_attachment = vk::RenderingAttachmentInfo::builder()
-            .image_view(image_view)
-            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(load_op)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .clear_value(clear_value)
-            .build();
-        let color_attachments = [color_attachment];
-        let rendering_info = vk::RenderingInfo::builder()
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: vk::Extent2D {
-                    width: extent.0,
-                    height: extent.1,
-                },
-            })
-            .layer_count(1)
-            .color_attachments(&color_attachments)
-            .build();
-        unsafe {
-            self.device
-                .cmd_begin_rendering(self.command_buffer, &rendering_info);
-        }
-        self.render_pass_balance.mark_opened();
-        Ok(())
-    }
-
-    /// Close the dynamic-rendering pass opened by
-    /// [`Self::cmd_begin_dynamic_rendering`].
-    pub(crate) fn cmd_end_dynamic_rendering(&mut self) -> Result<()> {
-        self.expect_recording("cmd_end_dynamic_rendering")?;
-        unsafe {
-            self.device.cmd_end_rendering(self.command_buffer);
-        }
-        self.render_pass_balance.mark_closed();
-        Ok(())
-    }
-
-    /// Whether a dynamic-rendering pass is currently open on this
-    /// recorder's command buffer (a `cmd_begin_dynamic_rendering` without
-    /// a matching `cmd_end_dynamic_rendering`). Read by
-    /// [`VulkanPresentTarget::end_frame`](super::vulkan_present_target::VulkanPresentTarget::end_frame)
-    /// to close a forgotten pass before the post-draw layout barrier.
-    pub(crate) fn in_render_pass(&self) -> bool {
-        self.render_pass_balance.is_open()
-    }
-
     /// Abandon an in-progress recording without submitting: reset the
-    /// state machine to [`RecorderState::Idle`] and drop any open
-    /// dynamic-rendering pass so the next [`Self::begin`] starts clean.
-    /// The begun-but-unsubmitted command buffer is discarded at that
-    /// `begin()`'s `reset_command_buffer`. Used when a frame is abandoned
-    /// after `begin()` but before submit (e.g. swapchain `OUT_OF_DATE_KHR`
-    /// on acquire, or a failed per-frame record), so the recorder slot is
-    /// reusable next attempt. Harmless when nothing is recording.
+    /// state machine to [`RecorderState::Idle`] so the next [`Self::begin`]
+    /// starts clean. The begun-but-unsubmitted command buffer is discarded at
+    /// that `begin()`'s `reset_command_buffer`. Used when a failed record
+    /// abandons a recording, so the recorder is reusable next attempt.
+    /// Harmless when nothing is recording.
     pub fn abort_recording(&mut self) {
-        self.render_pass_balance.mark_closed();
         *self.state.lock() = RecorderState::Idle;
     }
 
@@ -1175,24 +965,8 @@ impl RhiCommandRecorder {
         unsafe { &mut *(self.handle as *mut RhiCommandRecorderInner) }
     }
 
-    /// Host-side render-pass balance read used by
-    /// [`VulkanPresentTarget::end_frame`](super::vulkan_present_target::VulkanPresentTarget::end_frame):
-    /// is the backing recorder inside an open dynamic-rendering instance?
-    /// The present target owns its per-frame recorders and drives them
-    /// host-side across the begin/end split, so this reads the boxed inner
-    /// directly.
-    pub(crate) fn host_in_render_pass(&self) -> bool {
-        // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`;
-        // the present target owns the recorder and drives it host-side, so
-        // no aliasing `&mut` exists during this shared read.
-        unsafe { (*(self.handle as *const RhiCommandRecorderInner)).in_render_pass() }
-    }
-
-    /// Abandon an in-progress recording used when a frame is dropped after
-    /// `begin()` but before submit (swapchain `OUT_OF_DATE_KHR` on acquire,
-    /// or a failed per-frame record). Resets the recorder to `Idle` so the
-    /// reused slot begins clean next attempt; harmless when nothing is
-    /// recording. See [`RhiCommandRecorderInner::abort_recording`].
+    /// Abandon an in-progress recording after a failed record. See
+    /// [`RhiCommandRecorderInner::abort_recording`].
     pub fn abort_recording(&mut self) {
         self.host_inner_mut().abort_recording();
     }
@@ -1425,27 +1199,6 @@ impl RhiCommandRecorder {
             .record_dispatch(kernel, group_x, group_y, group_z)
     }
 
-    /// Draw call.
-    pub fn record_draw(
-        &mut self,
-        kernel: &VulkanGraphicsKernel,
-        frame_index: u32,
-        draw: &DrawCall,
-    ) -> Result<()> {
-        self.host_inner_mut().record_draw(kernel, frame_index, draw)
-    }
-
-    /// Indexed-draw variant.
-    pub fn record_draw_indexed(
-        &mut self,
-        kernel: &VulkanGraphicsKernel,
-        frame_index: u32,
-        draw: &DrawIndexedCall,
-    ) -> Result<()> {
-        self.host_inner_mut()
-            .record_draw_indexed(kernel, frame_index, draw)
-    }
-
     /// Submit signaling a timeline semaphore.
     pub fn submit_signaling_timeline(
         &mut self,
@@ -1471,50 +1224,6 @@ impl RhiCommandRecorder {
     /// between handing the queue its work and waiting on it.
     pub fn wait_for_completion(&mut self) -> Result<()> {
         self.host_inner_mut().wait_for_completion()
-    }
-
-    /// Engine-internal submit path supporting binary + timeline waits.
-    /// **Engine-internal** — for `VulkanPresentTarget`'s render submit.
-    pub(crate) fn submit_with_semaphores(
-        &mut self,
-        waits: &[vk::SemaphoreSubmitInfo],
-        signals: &[vk::SemaphoreSubmitInfo],
-    ) -> Result<()> {
-        self.host_inner_mut().submit_with_semaphores(waits, signals)
-    }
-
-    /// Engine-internal swapchain-image layout transition.
-    /// **Engine-internal** — for `VulkanPresentTarget`'s pre/post-draw
-    /// barriers.
-    pub(crate) fn record_swapchain_image_barrier(
-        &mut self,
-        image: vk::Image,
-        old_layout: vk::ImageLayout,
-        new_layout: vk::ImageLayout,
-        scopes: SwapchainImageBarrierScopes,
-    ) -> Result<()> {
-        self.host_inner_mut()
-            .record_swapchain_image_barrier(image, old_layout, new_layout, scopes)
-    }
-
-    /// Engine-internal dynamic-rendering begin.
-    /// **Engine-internal** — for
-    /// [`PresentFrame::begin_rendering`](super::vulkan_present_target::PresentFrame::begin_rendering).
-    pub(crate) fn cmd_begin_dynamic_rendering(
-        &mut self,
-        image_view: vk::ImageView,
-        extent: (u32, u32),
-        clear_color: Option<[f32; 4]>,
-    ) -> Result<()> {
-        self.host_inner_mut()
-            .cmd_begin_dynamic_rendering(image_view, extent, clear_color)
-    }
-
-    /// Engine-internal dynamic-rendering end.
-    /// **Engine-internal** — for
-    /// [`PresentFrame::end_rendering`](super::vulkan_present_target::PresentFrame::end_rendering).
-    pub(crate) fn cmd_end_dynamic_rendering(&mut self) -> Result<()> {
-        self.host_inner_mut().cmd_end_dynamic_rendering()
     }
 
     // -------------------------------------------------------------------------
@@ -1573,38 +1282,6 @@ mod tests {
                 None
             }
         }
-    }
-
-    // ----- Vulkan-free: dynamic-rendering balance producer (#1258) -----
-    //
-    // The recorder tracks whether its command buffer is inside an open
-    // dynamic-rendering instance so `VulkanPresentTarget::end_frame` can
-    // close a forgotten pass before the post-draw layout barrier (a
-    // `vkCmdPipelineBarrier2` inside an open pass is UB). The device-side
-    // `cmd_begin/cmd_end_dynamic_rendering` methods record these exact
-    // transitions on `RecorderDynamicRenderingBalance`; testing the pure
-    // state type locks the producer half of that seam without a GPU.
-    // Mentally reverting `mark_opened()` in `cmd_begin_dynamic_rendering`
-    // (leaving the flag clear) makes `end_frame` skip its guard — the
-    // consumer half is locked by
-    // `vulkan_present_target::tests::end_frame_closes_open_dynamic_rendering_before_present_barrier`.
-    #[test]
-    fn dynamic_rendering_balance_tracks_open_then_close() {
-        let mut balance = RecorderDynamicRenderingBalance::default();
-        assert!(
-            !balance.is_open(),
-            "a fresh recorder has no dynamic-rendering pass open"
-        );
-        balance.mark_opened(); // cmd_begin_dynamic_rendering records this
-        assert!(
-            balance.is_open(),
-            "after cmd_begin_dynamic_rendering the recorder-inner flag is set"
-        );
-        balance.mark_closed(); // cmd_end_dynamic_rendering / begin / abort record this
-        assert!(
-            !balance.is_open(),
-            "after cmd_end_dynamic_rendering the recorder-inner flag clears"
-        );
     }
 
     fn make_storage_buffer(device: &Arc<HostVulkanDevice>, element_count: u32) -> PixelBuffer {

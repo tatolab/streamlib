@@ -22,10 +22,7 @@ pub use matrix::{
     RgbToYuvDecomposition, YuvToRgbDecomposition, rgb_to_yuv_matrix, yuv_to_rgb_matrix,
 };
 pub use resolve::resolve_color_defaults;
-pub use resolved::{
-    ColorSpaceKind, ColorTraits, HdrStaticMetadata, MatrixId, PrimariesId, RangeId,
-    ResolvedColorInfo,
-};
+pub use resolved::{ColorSpaceKind, MatrixId, PrimariesId, RangeId, ResolvedColorInfo};
 pub use tone::{bt2390_eetf_per_channel, bt2446a_inverse_per_channel};
 pub use transfer::{
     TransferId, bt709_to_linear, from_linear, hlg_to_linear, linear_to_bt709, linear_to_hlg,

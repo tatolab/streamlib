@@ -246,12 +246,6 @@ contract).
   in-process `Arc`, not that the GPU has finished reading the slot: a
   reuse no longer implies the device went idle, so ordering against an
   earlier read rests on the writer's own barrier.
-- **Render-target rings for the display swapchain.** Display
-  manages its own per-image render-finished semaphores keyed by
-  `image_index` from `acquire_next_image_khr`
-  (`docs/learnings/vulkan-frames-in-flight.md`); the swapchain
-  ring isn't a `TextureRing`, it's part of the swapchain
-  abstraction.
 - **Adapter-side per-port intermediates.** The blending
   compositor's `normalize_layer` cache is keyed by input port
   (a `HashMap<port, Texture>`) and reallocates on dim change,

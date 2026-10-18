@@ -12,7 +12,7 @@
 
 use super::ResolvedColorInfo;
 use super::resolve::resolve_color_defaults;
-use super::resolved::{ColorSpaceKind, ColorTraits, MatrixId, PrimariesId, RangeId};
+use super::resolved::{ColorSpaceKind, MatrixId, PrimariesId, RangeId};
 use super::transfer::TransferId;
 
 /// An H.273 color description: the four enumerants an H.264 / H.265 SPS VUI
@@ -96,14 +96,6 @@ impl H273ColorVui {
             self.full_range.map(range_id_from_h273_full_range_flag),
             kind,
         )
-    }
-
-    /// The swapchain colorspace pick's input: primaries and transfer only.
-    pub fn color_traits(&self) -> ColorTraits {
-        ColorTraits {
-            primaries: self.primaries.and_then(primaries_id_from_h273_byte),
-            transfer: self.transfer.and_then(transfer_id_from_h273_byte),
-        }
     }
 }
 

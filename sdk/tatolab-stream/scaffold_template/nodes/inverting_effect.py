@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Pixels on the GPU: the effect the app wires between its source and its window.
+"""Pixels on the GPU: the effect the stream wires after its source.
 
 Importable as `nodes.inverting_effect:InvertingEffect`, which is the
 name the engine spawns this node's child interpreter with.

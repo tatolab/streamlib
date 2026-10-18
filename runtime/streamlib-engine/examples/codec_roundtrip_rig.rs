@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The engine-owned codec round-trip rig: a source → encoder → decoder →
-//! `DisplayWindow` graph, run against real hardware.
+//! The engine-owned codec round-trip rig: a source → encoder → decoder graph
+//! with the decoder's port exposed, run against real hardware.
 //!
 //! Two source arms. `--source fixture` replays the checked-in PSNR
 //! reference PNGs, each held for a run of frames long enough to cross a GOP
@@ -17,18 +17,17 @@
 //! the same run twice.
 //!
 //! Neither arm gates the conformance crop: the scorer crops each decode to
-//! its reference extent first, and the window's origin is (0, 0), so a
-//! decoder publishing the padded extent scores identically. That contract
-//! belongs to `h265_decoder_completes_the_round_trip`.
+//! its reference extent first, so a decoder publishing the padded extent
+//! scores identically. That contract belongs to
+//! `h265_decoder_completes_the_round_trip`.
 //!
-//! Rig-only to run: it needs Vulkan Video encode and decode queues, a
-//! display server, and for the camera arm a `/dev/video*` device. CI
-//! compiles it, which is what keeps it from rotting between rig runs.
+//! Rig-only to run: it needs Vulkan Video encode and decode queues, and for
+//! the camera arm a `/dev/video*` device. CI compiles it, which is what keeps
+//! it from rotting between rig runs.
 //!
-//! Scoring is not this binary's job: it serves its engine's local API and stays up,
-//! so `tatolab tap` and the surface-id `exchange` read the decoded
-//! channel's exact pixels out of process — no window in the observation path,
-//! and the graph unchanged by being watched.
+//! Scoring is not this binary's job: it serves its engine's local API and
+//! stays up, and the decoded port is exposed so a reader outside the process
+//! scores its exact pixels — the graph unchanged by being watched.
 //!
 //! A scorer joins the two taps on the **frame-header timestamp**, not on
 //! `sequence_index`. The ordering pair is an encoded-frame field and a
@@ -68,6 +67,7 @@ mod linux_rig {
     };
     use streamlib::sdk::descriptors::ProcessorClassImportPath;
     use streamlib::sdk::error::{Error, Result};
+    use streamlib::sdk::graph::OutputPortExposureLevel;
     use streamlib::sdk::media_clock::MediaClock;
     use streamlib::sdk::processors::ContinuousProcessor;
     use streamlib::sdk::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
@@ -76,7 +76,7 @@ mod linux_rig {
         ColorInfo, Primaries, Range, Transfer, VideoFrame,
     };
     use streamlib_media_builtins::{
-        CameraSource, DisplayWindow, H264Decoder, H264Encoder, H265Decoder, H265Encoder,
+        CameraSource, H264Decoder, H264Encoder, H265Decoder, H265Encoder,
         register_media_builtin_processor_types,
     };
 
@@ -87,9 +87,9 @@ mod linux_rig {
     /// The attribute takes a literal, so the two are kept in step here and
     /// nowhere else.
     ///
-    /// 10 fps rather than camera cadence because a faster source lets the
-    /// display's `newest` input skip frames right at a reference boundary,
-    /// which is where a scorer's pairing is most fragile.
+    /// 10 fps rather than camera cadence because a faster source lets a
+    /// `newest` reader skip frames right at a reference boundary, which is
+    /// where a scorer's pairing is most fragile.
     const FIXTURE_PUBLISH_FPS: u32 = 10;
 
     /// Seconds between the encoder's IDRs, stated by the rig rather than
@@ -520,12 +520,6 @@ mod linux_rig {
             serde_json::json!({}),
             Some("decoder"),
         )?;
-        let display = app.add(
-            DisplayWindow::Processor::processor_class_import_path(),
-            serde_json::json!({ "title": "streamlib codec round-trip rig" }),
-            Some("display"),
-        )?;
-
         // Hosted, not optional: an unobservable rig can only be watched, and
         // the codec proof is scored by tapping the decoded channel and
         // exchanging its surface ids for exact pixels.
@@ -534,12 +528,16 @@ mod linux_rig {
 
         app.connect((&source, "video"), (&encoder, "video"))?;
         app.connect((&encoder, "encoded_video"), (&decoder, "encoded_video"))?;
-        app.connect((&decoder, "video"), (&display, "video"))?;
+        app.stream().set_output_port_exposure_level(
+            decoder.display_name(),
+            "video",
+            OutputPortExposureLevel::Private,
+        )?;
 
         tracing::info!(
             source_arm = ?arguments.source_arm,
             codec_arm = ?arguments.codec_arm,
-            "codec_roundtrip_rig: {} -> encoder -> decoder -> display",
+            "codec_roundtrip_rig: {} -> encoder -> decoder, the decoded port exposed",
             source.display_name(),
         );
         let run_outcome = app.run();

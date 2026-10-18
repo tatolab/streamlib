@@ -61,8 +61,8 @@ crashes.
 
 In a plugin/processor engine this is easy to hit by accident: each processor's
 `setup()` runs on its own thread concurrently, and GPU resource **`Drop`
-impls** (compute/graphics/RT kernels, acceleration structures, codec sessions,
-present targets) routinely call `device_wait_idle()` to drain the GPU before
+impls** (compute/graphics/RT kernels, acceleration structures, codec sessions)
+routinely call `device_wait_idle()` to drain the GPU before
 destroying handles. One processor's teardown wait races another processor's
 submit.
 

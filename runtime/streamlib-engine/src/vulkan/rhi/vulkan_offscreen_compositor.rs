@@ -1,14 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Present-composition primitive: draws a source texture onto a presentation
-//! attachment with aspect-managed scaling and black bars.
-//!
-//! Absorbs the draw step display consumers previously assembled by hand
-//! (blit kernel + descriptor staging + barrier + fullscreen-triangle draw)
-//! into one call per frame. Colorspace selection and HDR metadata stay with
-//! [`VulkanPresentTarget`](super::VulkanPresentTarget) — the compositor's
-//! kernel is (re)built against whatever attachment format that pick yields.
+//! Offscreen composition primitive: draws a source texture onto a destination
+//! texture with aspect-managed scaling and black bars, in one call per frame.
 
 use std::sync::Arc;
 
@@ -16,8 +10,7 @@ use crate::core::rhi::{
     AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, DrawCall,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage, MultisampleState,
-    PrimitiveTopology, RasterizationState, ScissorRect, Texture, TextureFormat, VertexInputState,
-    Viewport, VulkanLayout,
+    PrimitiveTopology, RasterizationState, Texture, TextureFormat, VertexInputState, VulkanLayout,
 };
 use crate::core::{Error, Result};
 
@@ -25,11 +18,10 @@ use super::vulkan_command_recorder::RhiCommandRecorder;
 use super::vulkan_device::HostVulkanDevice;
 use super::vulkan_graphics_kernel::{OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel};
 use super::vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
-use super::vulkan_present_target::{MAX_FRAMES_IN_FLIGHT, PresentFrame};
 
 /// How a source rectangle maps onto a destination of a different aspect ratio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PresentScalingMode {
+pub enum OffscreenCompositorScalingMode {
     /// Preserve aspect; the whole source is visible, black bars fill the rest.
     Fit,
     /// Preserve aspect; the destination is covered, source overflow is cropped.
@@ -38,8 +30,8 @@ pub enum PresentScalingMode {
     Stretch,
 }
 
-impl PresentScalingMode {
-    /// Per-axis UV scale for the display-blit fragment shader's
+impl OffscreenCompositorScalingMode {
+    /// Per-axis UV scale for the offscreen-blit fragment shader's
     /// `(uv - 0.5) / scale + 0.5` sampling (out-of-range samples render black).
     pub fn uv_scale_for_source_in_destination(
         self,
@@ -49,15 +41,15 @@ impl PresentScalingMode {
         let source_aspect = source_extent.0 as f32 / source_extent.1 as f32;
         let destination_aspect = destination_extent.0 as f32 / destination_extent.1 as f32;
         match self {
-            PresentScalingMode::Stretch => (1.0, 1.0),
-            PresentScalingMode::Fit => {
+            OffscreenCompositorScalingMode::Stretch => (1.0, 1.0),
+            OffscreenCompositorScalingMode::Fit => {
                 if source_aspect > destination_aspect {
                     (1.0, destination_aspect / source_aspect)
                 } else {
                     (source_aspect / destination_aspect, 1.0)
                 }
             }
-            PresentScalingMode::Fill => {
+            OffscreenCompositorScalingMode::Fill => {
                 if source_aspect > destination_aspect {
                     (source_aspect / destination_aspect, 1.0)
                 } else {
@@ -68,60 +60,61 @@ impl PresentScalingMode {
     }
 }
 
-/// Owns the display-blit graphics kernel for one attachment format and
-/// records "draw this texture onto that attachment" as a single call.
-pub struct VulkanPresentCompositor {
+/// Owns the offscreen-blit graphics kernel for one attachment format and
+/// records "draw this texture onto that destination" as a single call.
+pub struct VulkanOffscreenCompositor {
     vulkan_device: Arc<HostVulkanDevice>,
     kernel: VulkanGraphicsKernel,
     attachment_format: TextureFormat,
 }
 
-const DISPLAY_BLIT_VERT_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.vert.spv"));
-const DISPLAY_BLIT_FRAG_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.frag.spv"));
+const OFFSCREEN_BLIT_VERT_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.vert.spv"));
+const OFFSCREEN_BLIT_FRAG_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.frag.spv"));
 
-/// Push-constant block of `display_blit.frag`: `vec2 scale` + `vec2 offset`.
+/// Descriptor-set slots the compositor's kernel rotates through: one in flight
+/// on the GPU while the next is staged (`docs/learnings/vulkan-frames-in-flight.md`).
+const OFFSCREEN_COMPOSITOR_DESCRIPTOR_SETS_IN_FLIGHT: u32 = 2;
+
+/// Push-constant block of `offscreen_blit.frag`: `vec2 scale` + `vec2 offset`.
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct DisplayBlitPushConstants {
+struct OffscreenBlitPushConstants {
     scale: [f32; 2],
     offset: [f32; 2],
 }
 
-/// The vertex-buffer-free fullscreen triangle `display_blit.vert` expects.
-fn fullscreen_triangle_draw_call(
-    viewport: Option<Viewport>,
-    scissor: Option<ScissorRect>,
-) -> DrawCall {
+/// The vertex-buffer-free fullscreen triangle `offscreen_blit.vert` expects.
+fn fullscreen_triangle_draw_call() -> DrawCall {
     DrawCall {
         vertex_count: 3,
         instance_count: 1,
         first_vertex: 0,
         first_instance: 0,
-        viewport,
-        scissor,
+        viewport: None,
+        scissor: None,
     }
 }
 
-fn build_display_blit_kernel(
+fn build_offscreen_blit_kernel(
     vulkan_device: &Arc<HostVulkanDevice>,
     attachment_format: TextureFormat,
 ) -> Result<VulkanGraphicsKernel> {
     let stages = [
-        GraphicsStage::vertex(DISPLAY_BLIT_VERT_SPV),
-        GraphicsStage::fragment(DISPLAY_BLIT_FRAG_SPV),
+        GraphicsStage::vertex(OFFSCREEN_BLIT_VERT_SPV),
+        GraphicsStage::fragment(OFFSCREEN_BLIT_FRAG_SPV),
     ];
     let bindings = [GraphicsBindingSpec::sampled_texture(
         0,
         GraphicsShaderStageFlags::FRAGMENT,
     )];
     let descriptor = GraphicsKernelDescriptor {
-        label: "present-compositor-display-blit",
+        label: "offscreen-compositor-blit",
         stages: &stages,
         bindings: &bindings,
         push_constants: GraphicsPushConstants {
-            size: std::mem::size_of::<DisplayBlitPushConstants>() as u32,
+            size: std::mem::size_of::<OffscreenBlitPushConstants>() as u32,
             stages: GraphicsShaderStageFlags::FRAGMENT,
         },
         pipeline_state: GraphicsPipelineState {
@@ -136,41 +129,28 @@ fn build_display_blit_kernel(
             attachment_formats: AttachmentFormats::color_only(attachment_format),
             dynamic_state: GraphicsDynamicState::ViewportScissor,
         },
-        descriptor_sets_in_flight: MAX_FRAMES_IN_FLIGHT as u32,
+        descriptor_sets_in_flight: OFFSCREEN_COMPOSITOR_DESCRIPTOR_SETS_IN_FLIGHT,
     };
     VulkanGraphicsKernel::new(vulkan_device, &descriptor)
 }
 
-impl VulkanPresentCompositor {
-    /// Build the compositor's kernel against `attachment_format` (the
-    /// present target's [`color_format`](super::VulkanPresentTarget::color_format),
-    /// or an offscreen target's format).
+impl VulkanOffscreenCompositor {
+    /// Build the compositor's kernel against `attachment_format`, the format of
+    /// every destination it draws onto.
     pub fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         attachment_format: TextureFormat,
     ) -> Result<Self> {
         Ok(Self {
             vulkan_device: Arc::clone(vulkan_device),
-            kernel: build_display_blit_kernel(vulkan_device, attachment_format)?,
+            kernel: build_offscreen_blit_kernel(vulkan_device, attachment_format)?,
             attachment_format,
         })
     }
 
-    /// The attachment format the current kernel was built against.
+    /// The attachment format the kernel was built against.
     pub fn attachment_format(&self) -> TextureFormat {
         self.attachment_format
-    }
-
-    /// Rebuild the kernel if `attachment_format` differs from the current one
-    /// (a swapchain recreate can flip SDR BGRA8 → HDR10 A2B10G10R10). Returns
-    /// whether a rebuild happened.
-    pub fn ensure_attachment_format(&mut self, attachment_format: TextureFormat) -> Result<bool> {
-        if attachment_format == self.attachment_format {
-            return Ok(false);
-        }
-        self.kernel = build_display_blit_kernel(&self.vulkan_device, attachment_format)?;
-        self.attachment_format = attachment_format;
-        Ok(true)
     }
 
     fn reject_attachment_format_mismatch(
@@ -182,20 +162,20 @@ impl VulkanPresentCompositor {
             return Ok(());
         }
         Err(Error::GpuError(format!(
-            "VulkanPresentCompositor: kernel was built for {:?} but {destination_description} \
-             is {actual:?} — call ensure_attachment_format first",
+            "VulkanOffscreenCompositor: kernel was built for {:?} but {destination_description} \
+             is {actual:?} — compose onto it with a compositor built for its format",
             self.attachment_format
         )))
     }
 
-    /// Stage the descriptor-ring slot both arms share: bind `source` at
-    /// binding 0 and stage the scaling push constants.
+    /// Stage the descriptor-ring slot: bind `source` at binding 0 and stage the
+    /// scaling push constants.
     fn stage_source_and_scaling(
         &self,
         frame_index: u32,
         source: &Texture,
         destination_extent: (u32, u32),
-        scaling: PresentScalingMode,
+        scaling: OffscreenCompositorScalingMode,
     ) -> Result<()> {
         self.kernel.set_sampled_texture(frame_index, 0, source)?;
         let (scale_x, scale_y) = scaling.uv_scale_for_source_in_destination(
@@ -204,79 +184,22 @@ impl VulkanPresentCompositor {
         );
         self.kernel.set_push_constants_value(
             frame_index,
-            &DisplayBlitPushConstants {
+            &OffscreenBlitPushConstants {
                 scale: [scale_x, scale_y],
                 offset: [0.0, 0.0],
             },
         )
     }
 
-    /// Record the composition of a registered source texture onto an
-    /// acquired swapchain frame.
-    ///
-    /// Owns the source's layout bookkeeping: when the registration says the
-    /// texture is not in `SHADER_READ_ONLY_OPTIMAL`, the transition is
-    /// recorded and the registration updated at record time — the present
-    /// target submits everything recorded even when a later step fails (its
-    /// forward-progress contract), so recorded means executed. Opens and
-    /// closes its own dynamic-rendering pass (clearing to black) on both the
-    /// success and the error path; call it once per frame with no pass
-    /// active.
-    pub fn compose_to_present_frame(
-        &self,
-        frame: &mut PresentFrame<'_>,
-        source_registration: &crate::core::context::TextureRegistration,
-        scaling: PresentScalingMode,
-    ) -> Result<()> {
-        self.reject_attachment_format_mismatch(
-            frame.color_format,
-            "the acquired frame's attachment",
-        )?;
-        let frame_index = frame.frame_index;
-        let destination_extent = frame.extent;
-        let source = source_registration.texture();
-        let source_current_layout = source_registration.current_layout();
-
-        self.stage_source_and_scaling(frame_index, source, destination_extent, scaling)?;
-        if source_current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
-            frame.recorder.record_image_barrier(
-                source,
-                source_current_layout,
-                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-                VulkanStage::ALL_COMMANDS,
-                VulkanStage::FRAGMENT_SHADER,
-                VulkanAccess::MEMORY_WRITE,
-                VulkanAccess::SHADER_SAMPLED_READ,
-            )?;
-            source_registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
-        }
-
-        frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;
-        let draw = fullscreen_triangle_draw_call(
-            Some(Viewport::full(destination_extent.0, destination_extent.1)),
-            Some(ScissorRect::full(
-                destination_extent.0,
-                destination_extent.1,
-            )),
-        );
-        // The pass must close even when the draw fails: an unbalanced
-        // dynamic-rendering pass poisons every later use of this frame.
-        let draw_result = frame.recorder.record_draw(&self.kernel, frame_index, &draw);
-        frame.end_rendering()?;
-        draw_result
-    }
-
-    /// Compose `source` into `destination` without a window: the offscreen
-    /// arm of the same draw, used by headless callers and the composition
-    /// correctness tests. Submits and waits; `destination` is left in
-    /// `COLOR_ATTACHMENT_OPTIMAL`, `source` in `SHADER_READ_ONLY_OPTIMAL`.
+    /// Compose `source` into `destination`. Submits and waits; `destination` is
+    /// left in `COLOR_ATTACHMENT_OPTIMAL`, `source` in `SHADER_READ_ONLY_OPTIMAL`.
     pub fn compose_to_offscreen_texture(
         &self,
         frame_index: u32,
         destination: &Texture,
         source: &Texture,
         source_current_layout: VulkanLayout,
-        scaling: PresentScalingMode,
+        scaling: OffscreenCompositorScalingMode,
     ) -> Result<()> {
         self.reject_attachment_format_mismatch(destination.format(), "the offscreen destination")?;
         // Sampling and rendering the same image is a feedback loop, undefined
@@ -289,7 +212,7 @@ impl VulkanPresentCompositor {
             let destination_image = destination.vulkan_inner().image();
             if source_image.is_some() && source_image == destination_image {
                 return Err(Error::Configuration(
-                    "VulkanPresentCompositor: source and destination are the same VkImage — \
+                    "VulkanOffscreenCompositor: source and destination are the same VkImage — \
                      composing a texture onto itself is a feedback loop; render into a \
                      separate destination"
                         .into(),
@@ -299,7 +222,7 @@ impl VulkanPresentCompositor {
         if source_current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
             let mut recorder = RhiCommandRecorder::new(
                 &self.vulkan_device,
-                "present-compositor-offscreen-source-barrier",
+                "offscreen-compositor-source-barrier",
             )?;
             recorder.begin()?;
             recorder.record_image_barrier(
@@ -323,7 +246,7 @@ impl VulkanPresentCompositor {
                 clear_color: Some([0.0, 0.0, 0.0, 1.0]),
             }],
             destination_extent,
-            OffscreenDraw::Draw(fullscreen_triangle_draw_call(None, None)),
+            OffscreenDraw::Draw(fullscreen_triangle_draw_call()),
         )
     }
 }
@@ -341,15 +264,16 @@ mod tests {
     #[test]
     fn stretch_ignores_aspect() {
         assert_eq!(
-            PresentScalingMode::Stretch.uv_scale_for_source_in_destination(SRC_16_9, DST_4_3),
+            OffscreenCompositorScalingMode::Stretch
+                .uv_scale_for_source_in_destination(SRC_16_9, DST_4_3),
             (1.0, 1.0)
         );
     }
 
     #[test]
     fn fit_letterboxes_wide_source_in_narrow_destination() {
-        let (sx, sy) =
-            PresentScalingMode::Fit.uv_scale_for_source_in_destination(SRC_16_9, DST_4_3);
+        let (sx, sy) = OffscreenCompositorScalingMode::Fit
+            .uv_scale_for_source_in_destination(SRC_16_9, DST_4_3);
         assert_eq!(sx, 1.0, "full width is used");
         let expected = (4.0 / 3.0) / (16.0 / 9.0);
         assert!((sy - expected).abs() < 1e-6, "got {sy}, want {expected}");
@@ -358,24 +282,24 @@ mod tests {
 
     #[test]
     fn fit_pillarboxes_narrow_source_in_wide_destination() {
-        let (sx, sy) =
-            PresentScalingMode::Fit.uv_scale_for_source_in_destination(DST_4_3, SRC_16_9);
+        let (sx, sy) = OffscreenCompositorScalingMode::Fit
+            .uv_scale_for_source_in_destination(DST_4_3, SRC_16_9);
         assert_eq!(sy, 1.0, "full height is used");
         assert!(sx < 1.0, "horizontal shrink → black bars left and right");
     }
 
     #[test]
     fn fill_crops_wide_source_in_narrow_destination() {
-        let (sx, sy) =
-            PresentScalingMode::Fill.uv_scale_for_source_in_destination(SRC_16_9, DST_4_3);
+        let (sx, sy) = OffscreenCompositorScalingMode::Fill
+            .uv_scale_for_source_in_destination(SRC_16_9, DST_4_3);
         assert_eq!(sy, 1.0);
         assert!(sx > 1.0, "horizontal magnify → left/right edges cropped");
     }
 
     #[test]
     fn fill_crops_narrow_source_in_wide_destination() {
-        let (sx, sy) =
-            PresentScalingMode::Fill.uv_scale_for_source_in_destination(DST_4_3, SRC_16_9);
+        let (sx, sy) = OffscreenCompositorScalingMode::Fill
+            .uv_scale_for_source_in_destination(DST_4_3, SRC_16_9);
         assert_eq!(sx, 1.0);
         assert!(sy > 1.0, "vertical magnify → top/bottom edges cropped");
     }
@@ -383,9 +307,9 @@ mod tests {
     #[test]
     fn matched_aspect_is_identity_in_every_mode() {
         for mode in [
-            PresentScalingMode::Fit,
-            PresentScalingMode::Fill,
-            PresentScalingMode::Stretch,
+            OffscreenCompositorScalingMode::Fit,
+            OffscreenCompositorScalingMode::Fill,
+            OffscreenCompositorScalingMode::Stretch,
         ] {
             assert_eq!(
                 mode.uv_scale_for_source_in_destination((1920, 1080), (1280, 720)),
@@ -395,11 +319,11 @@ mod tests {
         }
     }
 
-    /// `DisplayBlitPushConstants` is the wire contract with
-    /// `display_blit.frag`'s 16-byte push-constant block.
+    /// `OffscreenBlitPushConstants` is the wire contract with
+    /// `offscreen_blit.frag`'s 16-byte push-constant block.
     #[test]
-    fn display_blit_push_constants_match_the_shader_block() {
-        assert_eq!(std::mem::size_of::<DisplayBlitPushConstants>(), 16);
+    fn offscreen_blit_push_constants_match_the_shader_block() {
+        assert_eq!(std::mem::size_of::<OffscreenBlitPushConstants>(), 16);
     }
 
     // ---- GPU tests -----------------------------------------------------------
@@ -423,31 +347,9 @@ mod tests {
         let Some(device) = try_vulkan_device() else {
             return;
         };
-        let compositor = VulkanPresentCompositor::new(&device, TextureFormat::Bgra8Unorm)
+        let compositor = VulkanOffscreenCompositor::new(&device, TextureFormat::Bgra8Unorm)
             .expect("compositor must construct");
         assert_eq!(compositor.attachment_format(), TextureFormat::Bgra8Unorm);
-    }
-
-    #[test]
-    fn ensure_attachment_format_rebuilds_only_on_change() {
-        let Some(device) = try_vulkan_device() else {
-            return;
-        };
-        let mut compositor =
-            VulkanPresentCompositor::new(&device, TextureFormat::Bgra8Unorm).expect("compositor");
-        assert!(
-            !compositor
-                .ensure_attachment_format(TextureFormat::Bgra8Unorm)
-                .expect("same format"),
-            "same format must not rebuild"
-        );
-        assert!(
-            compositor
-                .ensure_attachment_format(TextureFormat::Rgba8Unorm)
-                .expect("new format"),
-            "format flip must rebuild"
-        );
-        assert_eq!(compositor.attachment_format(), TextureFormat::Rgba8Unorm);
     }
 
     #[test]
@@ -456,7 +358,7 @@ mod tests {
             return;
         };
         let compositor =
-            VulkanPresentCompositor::new(&device, TextureFormat::Bgra8Unorm).expect("compositor");
+            VulkanOffscreenCompositor::new(&device, TextureFormat::Bgra8Unorm).expect("compositor");
         let texture = make_solid_texture(&device, 64, 64, TextureFormat::Bgra8Unorm, [0; 4]);
         let err = compositor
             .compose_to_offscreen_texture(
@@ -464,7 +366,7 @@ mod tests {
                 &texture,
                 &texture,
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-                PresentScalingMode::Stretch,
+                OffscreenCompositorScalingMode::Stretch,
             )
             .expect_err("same VkImage as source and destination must be rejected");
         assert!(
@@ -479,7 +381,7 @@ mod tests {
             return;
         };
         let compositor =
-            VulkanPresentCompositor::new(&device, TextureFormat::Bgra8Unorm).expect("compositor");
+            VulkanOffscreenCompositor::new(&device, TextureFormat::Bgra8Unorm).expect("compositor");
         let destination = make_solid_texture(&device, 64, 64, TextureFormat::Rgba8Unorm, [0; 4]);
         let source = make_solid_texture(&device, 64, 64, TextureFormat::Bgra8Unorm, [255; 4]);
         let err = compositor
@@ -488,11 +390,11 @@ mod tests {
                 &destination,
                 &source,
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-                PresentScalingMode::Stretch,
+                OffscreenCompositorScalingMode::Stretch,
             )
             .expect_err("format mismatch must be rejected");
         assert!(
-            format!("{err}").contains("ensure_attachment_format"),
+            format!("{err}").contains("built for its format"),
             "error names the fix: {err}"
         );
     }
@@ -515,7 +417,7 @@ mod tests {
                 | TextureUsages::COPY_DST
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::RENDER_ATTACHMENT,
-            label: Some("present-compositor-test-texture"),
+            label: Some("offscreen-compositor-test-texture"),
         };
         let host_texture = HostVulkanTexture::new(device, &descriptor).expect("texture");
         let texture = <Texture as HostTextureExt>::from_vulkan(host_texture);
@@ -531,7 +433,7 @@ mod tests {
         }
 
         let mut recorder =
-            RhiCommandRecorder::new(device, "present-compositor-test-upload").expect("recorder");
+            RhiCommandRecorder::new(device, "offscreen-compositor-test-upload").expect("recorder");
         recorder.begin().expect("begin");
         recorder
             .record_image_barrier(
@@ -576,7 +478,7 @@ mod tests {
         source_extent: (u32, u32),
         source_color: [u8; 4],
         destination_prefill_color: [u8; 4],
-        scaling: PresentScalingMode,
+        scaling: OffscreenCompositorScalingMode,
     ) -> Vec<u8> {
         let source = make_solid_texture(
             device,
@@ -593,7 +495,7 @@ mod tests {
             destination_prefill_color,
         );
         let compositor =
-            VulkanPresentCompositor::new(device, TextureFormat::Bgra8Unorm).expect("compositor");
+            VulkanOffscreenCompositor::new(device, TextureFormat::Bgra8Unorm).expect("compositor");
         compositor
             .compose_to_offscreen_texture(
                 0,
@@ -607,7 +509,7 @@ mod tests {
         let readback = VulkanTextureReadback::new(
             device,
             &crate::core::rhi::TextureReadbackDescriptor {
-                label: "present-compositor-test-readback",
+                label: "offscreen-compositor-test-readback",
                 format: destination.format(),
                 width: destination.width(),
                 height: destination.height(),
@@ -655,7 +557,7 @@ mod tests {
             (128, 64),
             BGRA_WHITE,
             BGRA_RED,
-            PresentScalingMode::Fit,
+            OffscreenCompositorScalingMode::Fit,
         );
         // Bars: y ∈ [0, 16) and [48, 64). Content: y ∈ (16, 48).
         assert_eq!(pixel_at(&bytes, 64, 32, 4), BGRA_BLACK, "top bar is black");
@@ -685,7 +587,7 @@ mod tests {
             (128, 64),
             BGRA_RED,
             BGRA_BLACK,
-            PresentScalingMode::Fill,
+            OffscreenCompositorScalingMode::Fill,
         );
         for (x, y) in [(0, 0), (63, 0), (0, 63), (63, 63), (32, 32)] {
             assert_eq!(
@@ -710,7 +612,7 @@ mod tests {
             (128, 32),
             BGRA_GREEN,
             BGRA_BLACK,
-            PresentScalingMode::Stretch,
+            OffscreenCompositorScalingMode::Stretch,
         );
         for (x, y) in [(0, 0), (63, 63), (32, 32)] {
             assert_eq!(

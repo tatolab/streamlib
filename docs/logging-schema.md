@@ -32,8 +32,7 @@ stream that emitted it:
   stderr readers and bridge threads (which receive the helper's `{op:"log"}`
   records), its describe readers, its shutdown thread, and the threads and
   device callbacks the engine and its built-ins start on the stream's behalf
-  (render, capture and playback threads, a processor-owned window's present
-  loop, audio clocks, camera and audio device queues, a channel tap's
+  (render, capture and playback threads, audio clocks, camera and audio device queues, a channel tap's
   forwarder) — carries the stream's route from the start. A thread a Rust
   processor starts itself carries the route when its closure is wrapped in
   `streamlib::sdk::logging::carrying_this_threads_loaded_stream_log_route`;

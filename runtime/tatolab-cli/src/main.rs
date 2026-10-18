@@ -101,16 +101,12 @@ enum TatolabVerb {
     /// Scaffold a new stream project.
     #[command(
         long_about = "Write stream.py, nodes/, pyproject.toml, .python-version and .gitignore into \
-                      DIRECTORY — one @stream wiring a working camera → effect → window pipeline, \
-                      with a meter on a fan-out."
+                      DIRECTORY — one @stream wiring the test pattern through a GPU effect it \
+                      exposes, with a meter on a fan-out."
     )]
     New {
         /// Directory to scaffold the project into.
         directory: PathBuf,
-        /// Wire the built-in test pattern instead of the camera, so the stream runs on a machine
-        /// with no capture device.
-        #[arg(long)]
-        test_pattern: bool,
     },
     /// Load this project's stream into the runtime and follow its records.
     #[command(
@@ -267,20 +263,8 @@ fn caller_working_directory() -> Result<PathBuf, TatolabCommandFailure> {
 fn main() -> ExitCode {
     let command_line = TatolabCommandLine::parse();
     let command_outcome = match command_line.verb {
-        TatolabVerb::New {
-            directory,
-            test_pattern,
-        } => {
-            let scaffolded_stream_source = if test_pattern {
-                scaffold_new_stream_project::ScaffoldedStreamSource::TestPattern
-            } else {
-                scaffold_new_stream_project::ScaffoldedStreamSource::Camera
-            };
-            scaffold_new_stream_project::scaffold_new_stream_project(
-                &directory,
-                scaffolded_stream_source,
-            )
-            .map(|()| 0)
+        TatolabVerb::New { directory } => {
+            scaffold_new_stream_project::scaffold_new_stream_project(&directory).map(|()| 0)
         }
         TatolabVerb::Run {
             stream_load_arguments,

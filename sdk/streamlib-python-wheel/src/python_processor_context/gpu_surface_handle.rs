@@ -274,20 +274,6 @@ impl PythonGpuSurfaceHandle {
         Ok(())
     }
 
-    /// The id and pixel extent a window's `show()` names this surface by.
-    ///
-    /// Refuses a handle carrying no id for the same reason the getter does:
-    /// nothing outside this process can resolve one, a present loop least of
-    /// all.
-    pub(crate) fn surface_id_and_extent_a_window_can_name(&self) -> PyResult<(String, u32, u32)> {
-        let pixel_geometry = self.pixel_geometry()?;
-        Ok((
-            self.surface_id()?,
-            pixel_geometry.width,
-            pixel_geometry.height,
-        ))
-    }
-
     /// Width, height and format, or the refusal a tensor surface gives every
     /// pixel-shaped door.
     fn pixel_geometry(&self) -> PyResult<PixelSurfaceGeometry> {

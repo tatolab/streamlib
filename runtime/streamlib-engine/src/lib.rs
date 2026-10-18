@@ -288,7 +288,6 @@ pub mod platform {
 pub mod sdk {
     pub use crate::core::context;
     pub use crate::core::descriptors;
-    pub use crate::core::display_info;
     pub use crate::core::error;
     pub use crate::core::execution;
     pub use crate::core::graph;

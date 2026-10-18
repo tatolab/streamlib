@@ -22,7 +22,7 @@ A stream is an ordinary Python project. You write nodes as Python classes and co
 function decorated `@stream`:
 
 ```python
-from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream
+from tatolab.stream import CameraSource, StreamBuilder, stream
 
 from nodes.inverting_effect import InvertingEffect
 
@@ -31,9 +31,7 @@ from nodes.inverting_effect import InvertingEffect
 def main(stream_builder: StreamBuilder) -> None:
     camera = stream_builder.add(CameraSource)
     effect = stream_builder.add(InvertingEffect)
-    window = stream_builder.add(DisplayWindow, config={"title": "Tatolab"})
     stream_builder.connect(camera.output("video"), effect.input("video_from_upstream"))
-    stream_builder.connect(effect.output("video_to_downstream"), window.input("video"))
     stream_builder.expose(effect.output("video_to_downstream"))
 ```
 
@@ -41,7 +39,7 @@ def main(stream_builder: StreamBuilder) -> None:
 blocks another. An exposed output gets an address other streams, agents and browsers can read.
 
 This package holds the authoring API (`@stream`, `@node`, `StreamBuilder`), typed classes for
-every built-in node (camera, display, microphone, speaker, H.264, H.265 and Opus codecs, and
+every built-in node (camera, test pattern, microphone, speaker, H.264, H.265 and Opus codecs, and
 more), and the protocols your nodes are handed at run time. It installs and imports without the runtime,
 with complete type hints, so your editor, type checker and unit tests work on any machine.
 

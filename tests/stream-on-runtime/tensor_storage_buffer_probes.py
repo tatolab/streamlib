@@ -92,7 +92,6 @@ class TensorStorageBufferPublishingSourceConfig:
     tensor_name: str = "model_input"
     frames_to_publish: int = POOL_ROTATION_DEPTH
     minimum_interval_between_publishes_ns: int = 0
-    open_a_window_before_acquiring: bool = False
 
 
 @node(execution="continuous", interval_ms=10)
@@ -110,14 +109,7 @@ class TensorStorageBufferPublishingSource:
         self._last_publish_ns: "int | None" = None
         self._surface_ids_published_so_far: "list[str]" = []
         self._producer_observations: "list[dict]" = []
-        self._window = None
         self._stopped = False
-
-    def setup(self, ctx) -> None:
-        if self._config.open_a_window_before_acquiring:
-            self._window = ctx.gpu_full_access.create_window(
-                "tensor-storage-buffer-after-a-swapchain", 64, 64
-            )
 
     def process(self, ctx) -> None:
         import torch

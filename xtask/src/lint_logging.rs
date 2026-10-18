@@ -1297,7 +1297,6 @@ mod tests {
 
     #[test]
     fn rust_cfg_all_test_and_linux_skips_file() {
-        // Mirrors src/vulkan/rhi/vulkan_swapchain_dma_buf_allocation_fix_validation_test.rs.
         let v = scan_rust_source(
             "#![cfg(all(test, target_os = \"linux\"))]\npub fn f() { println!(\"x\"); }\n",
         );

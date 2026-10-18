@@ -452,8 +452,6 @@ impl LoadedStreamInThisRuntime {
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&this_streams_runtime_context));
 
-        this_streams_runtime_context.ensure_platform_ready()?;
-
         self.compiler.scope(|graph, _tx| {
             graph.set_state(GraphState::Running);
         });
@@ -545,9 +543,6 @@ impl LoadedStreamInThisRuntime {
             if let Err(removal_failure) = &processor_removal_outcome {
                 tracing::error!("[stop] Removing the processors failed: {removal_failure}");
             }
-
-            #[cfg(target_os = "macos")]
-            crate::core::window_event_pump::release_the_windows_handed_back_while_the_event_pump_was_not_driven();
 
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on("the audio clock");

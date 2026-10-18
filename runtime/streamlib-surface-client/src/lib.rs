@@ -9,8 +9,8 @@
 //! tiny — `libc` + `serde_json`, plus `mach2` and the objc2 Foundation and Metal
 //! bindings on macOS — so the polyglot
 //! cdylibs (the wheel's helper-process surface client) can depend on it
-//! without dragging the runtime's transitive closure (vulkanalia, tokio,
-//! winit, …) into their dep graphs. The runtime-internal service consumes
+//! without dragging the runtime's transitive closure (vulkanalia, tokio, …)
+//! into their dep graphs. The runtime-internal service consumes
 //! the same helpers on both sides of each wire, so each format has exactly
 //! one source.
 //!

@@ -5,13 +5,12 @@
 # Fixture-driven encode/decode PSNR harness (issues #305, #2085).
 #
 # Drives the engine-owned `codec_roundtrip_rig` — fixture source -> encoder ->
-# decoder -> DisplayWindow, with the control plane hosted — and scores the
-# decoded frames with `cargo xtask psnr score`.
+# decoder, the decoded port exposed, with the control plane hosted — and scores
+# the decoded frames with `cargo xtask psnr score`.
 #
-# Scoring rides observation, not display side effects. The rig is tapped for
-# bags on the decoded channel and each sampled surface id is exchanged for that
-# frame's exact pixels over the control plane's bytes route; the graph is
-# unchanged by being watched, and no window is in the measurement path.
+# The rig is tapped for bags on the decoded channel and each sampled surface id
+# is exchanged for that frame's exact pixels over the control plane's bytes
+# route; the graph is unchanged by being watched.
 #
 # One rig run per reference, and that is the pairing contract. A decoded bag
 # carries nothing to pair on — `sequence_index` is an encoded-frame field, and
@@ -244,7 +243,6 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
 
     echo "[psnr] --- $stem ---"
     refuse_while_a_runtime_answers_at_the_local_api_socket || exit 1
-    DISPLAY="${DISPLAY:-:0}" \
     RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         timeout --kill-after=5 "$RUN_SECONDS" "$RIG_BINARY" \
             --source fixture \

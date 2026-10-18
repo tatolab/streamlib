@@ -54,8 +54,6 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod processor_owned_window;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod storage_buffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod surface_copy;

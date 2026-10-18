@@ -8,20 +8,20 @@ stream's output port by address — `stream_builder.remote_output("a/pattern/vid
 in its function, or MCP `connect` with `from_stream`. Each test runs its two
 streams attached on one `tatolabd`, the source loaded as `a` and the reader as
 `b`, and reads every outcome off the runtime: the link's state and reason in
-`b`'s `graph`, the bags a Python counter reports, the frames a native window
-counts at its stop, and a `tatolab tap` on a port only another stream reads.
+`b`'s `graph`, the bags a Python counter reports — one of them counting what a
+native encoder made of a Python relay's frames — and a `tatolab tap` on a port
+only another stream reads.
 
 A started stream needs a GPU context, so the tests that run streams are
-`requires_gpu`, and the one ending in a native window is rig-only, since a
-window refuses on the software device; a refusal the load or the compile makes
-is read on a `tatolabd` that reaches no Vulkan driver.
+`requires_gpu`, and the one reaching a native encoder is rig-only, since the
+software device has no Vulkan Video; a refusal the load or the compile makes is
+read on a `tatolabd` that reaches no Vulkan driver.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -47,8 +47,9 @@ from links_between_streams_streams import (
     SECOND_PATTERN_COUNTER_NODE,
     SECOND_PATTERN_NODE,
     SOURCE_STREAM_NAME,
-    WINDOW_NODE,
-    WINDOW_PORT,
+    ENCODED_COUNTER_NODE,
+    ENCODER_NODE,
+    ENCODER_PORT,
     a_pattern_and_a_python_relay_each_exposed_private,
     a_pattern_exposed_private,
     a_pattern_left_internal,
@@ -60,7 +61,7 @@ from links_between_streams_streams import (
     b_reading_a_pattern_on_another_machine,
     b_reading_both_patterns_into_two_python_counters,
     b_reading_the_pattern_into_a_python_counter,
-    b_reading_the_pattern_into_a_python_counter_and_the_relay_into_a_window,
+    b_reading_the_pattern_into_a_python_counter_and_the_relay_into_a_native_encoder,
 )
 from local_api_client import LocalApiClient
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE
@@ -104,7 +105,6 @@ INTERNAL_PATTERN_AWAITING_REASON = (
     f"{INTERNAL_PATTERN_REFUSAL}; the link wires when the port is exposed private or public"
 )
 
-DISPLAY_WINDOW_FRAME_COUNT = re.compile(r"DisplayWindow: stopped \((\d+) frames\)")
 TAPPED_BAG_COUNT = 2
 
 
@@ -174,8 +174,8 @@ def refused_naming(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> str:
 
 
 @pytest.mark.requires_gpu
-@pytest.mark.rig_only_capability(reason="a display")
-def test_a_link_between_streams_carries_a_native_source_into_python_and_a_python_source_into_a_native_window(
+@pytest.mark.rig_only_capability(reason="Vulkan Video")
+def test_a_link_between_streams_carries_a_native_source_into_python_and_a_python_source_into_a_native_encoder(
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     tmp_path: Path,
@@ -187,7 +187,7 @@ def test_a_link_between_streams_carries_a_native_source_into_python_and_a_python
     )
     reader_run = run_attached_and_await_its_load(
         tatolabd,
-        b_reading_the_pattern_into_a_python_counter_and_the_relay_into_a_window,
+        b_reading_the_pattern_into_a_python_counter_and_the_relay_into_a_native_encoder,
         READER_STREAM_NAME,
     )
 
@@ -209,14 +209,14 @@ def test_a_link_between_streams_carries_a_native_source_into_python_and_a_python
     ), native_into_python
     assert (python_into_native["state"], python_into_native["target"]) == (
         "wired",
-        {"node": WINDOW_NODE, "port": WINDOW_PORT},
+        {"node": ENCODER_NODE, "port": ENCODER_PORT},
     ), python_into_native
     counted = await_more_bags_counted(tatolabd, PATTERN_COUNTER_NODE, more_reports=3)
     assert counted["bags_counted"] >= 20, counted
 
     relay_in_its_own_stream = {"node": RELAY_NODE, "port": RELAY_PORT}
     assert local_api.links_reading(relay_in_its_own_stream, stream=SOURCE_STREAM_NAME) == [], (
-        "the relay's only reader is `b`'s window, so `a` holds no link out of it"
+        "the relay's only reader is `b`'s encoder, so `a` holds no link out of it"
     )
     tapped = json.loads(
         assert_tatolab_succeeded(
@@ -231,14 +231,13 @@ def test_a_link_between_streams_carries_a_native_source_into_python_and_a_python
     )
     assert tapped["received"] > 0, f"a port read only from another stream is tapped: {tapped}"
 
+    encoded_counted = await_more_bags_counted(tatolabd, ENCODED_COUNTER_NODE)
+    assert encoded_counted["bags_counted"] > 0, (
+        f"`b`'s native encoder encoded none of the frames `a`'s Python relay wrote: {encoded_counted}"
+    )
+
     reader_run.interrupt()
     assert reader_run.await_exit(timeout=TATOLABD_EXIT_TIMEOUT_SECONDS) == 0, reader_run.recent_stderr()
-    frames_shown = DISPLAY_WINDOW_FRAME_COUNT.search(
-        tatolabd.await_stderr_containing("DisplayWindow: stopped")
-    )
-    assert frames_shown is not None and int(frames_shown.group(1)) > 0, (
-        f"`b`'s window showed none of the frames `a`'s Python relay wrote:\n{tatolabd.recent_stderr()}"
-    )
     stop_tatolabd_cleanly(tatolabd)
 
 

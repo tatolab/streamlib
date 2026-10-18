@@ -319,10 +319,6 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // into the engine; it sits above `vulkan/rhi/` and migrates toward
     // engine-RHI-only Vulkan access as the RHI grows codec primitives.
     //
-    // The display built-in (`streamlib-media-builtins/src/display_window.rs`)
-    // presents through `ProcessorOwnedWindow` and the RHI, never raw
-    // vulkanalia. No allowlist entry needed.
-    //
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
     AllowEntry {
@@ -450,7 +446,7 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
         path: "runtime/streamlib-engine/",
         kind: AllowKind::PathPrefix,
-        rationale: "host crate: src/vulkan/ owns the RHI; processors/display.rs and processors/camera.rs are documented exceptions",
+        rationale: "host crate: src/vulkan/ owns the RHI; processors/camera.rs is a documented exception",
     },
     AllowEntry {
         path: "runtime/streamlib-consumer-rhi/",

@@ -7,23 +7,14 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// Run `source` as a module body and hand back the class it bound to
-/// `class_name`.
+/// Run `source` as a module body in a namespace the caller has already
+/// populated and hand back the class it bound to `class_name` — for a class
+/// whose body reaches for a name the wheel exports at module level, which a
+/// test cannot `import tatolab.stream` to get.
 ///
 /// Running Python is the point: `__module__` and `__qualname__` are what
 /// CPython actually assigns, so a test asserting on them is not asserting on
 /// its own setup.
-pub(crate) fn class_from_source<'py>(
-    python: Python<'py>,
-    source: &str,
-    class_name: &str,
-) -> Bound<'py, PyAny> {
-    class_from_source_in_namespace(python, source, class_name, &PyDict::new(python))
-}
-
-/// The same, in a namespace the caller has already populated — for a class
-/// whose body reaches for a name the wheel exports at module level, which a
-/// test cannot `import tatolab.stream` to get.
 pub(crate) fn class_from_source_in_namespace<'py>(
     python: Python<'py>,
     source: &str,

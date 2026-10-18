@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The Python arm of the codec round trip: camera -> encoder -> decoder -> window.
+"""The Python arm of the codec round trip: camera -> encoder -> decoder, its port exposed.
 
 The twin of the camera arm of `codec_roundtrip_rig.rs` under the engine's
 `examples/`, authored through `tatolab.stream`'s built-in classes instead of
@@ -38,7 +38,7 @@ ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 
 @stream
-def camera_through_the_codec_into_a_window(stream_builder: StreamBuilder) -> None:
+def camera_through_the_codec_exposing_the_decoded_port(stream_builder: StreamBuilder) -> None:
     codec = os.environ.get("STREAMLIB_FIXTURE_VIDEO_CODEC") or "h264"
     if codec not in _ENCODER_AND_DECODER_MARKERS_BY_CODEC:
         raise ValueError(
@@ -59,12 +59,7 @@ def camera_through_the_codec_into_a_window(stream_builder: StreamBuilder) -> Non
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
     )
     decoder = stream_builder.add(decoder_marker, name="decoder")
-    display = stream_builder.add(
-        tatolab.stream.DisplayWindow,
-        name="display",
-        config={"title": "streamlib codec round-trip node"},
-    )
 
     stream_builder.connect(camera.output("video"), encoder.input("video"))
     stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-    stream_builder.connect(decoder.output("video"), display.input("video"))
+    stream_builder.expose(decoder.output("video"))

@@ -25,7 +25,6 @@ use streamlib::sdk::runtime::{
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
-use crate::display_server_environment_from_the_user_manager::DisplayServerEnvironmentAtTheRuntimesStart;
 use crate::local_relay_children::join_the_local_relay;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
 
@@ -40,15 +39,11 @@ const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10)
 /// cleanly, and return the status `tatolabd` exits with. A start refused
 /// before it counts `how_the_previous_run_ended` drops the record, which puts
 /// that crash back for the next start.
-///
-/// Called on the process's first thread: on macOS the engine drives the window
-/// event pump on it while it waits.
 pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     tatolab_state_directory: &TatolabStateDirectory,
     processor_interpreter_lend_directory: PathBuf,
     mut runtime_run_in_progress_record: RuntimeRunInProgressRecord,
     how_the_previous_run_ended: &HowThePreviousRuntimeRunEnded,
-    display_server_environment_at_the_runtimes_start: &DisplayServerEnvironmentAtTheRuntimesStart,
 ) -> ExitCode {
     let engine = match Runner::new_with_construction_options(RunnerConstructionOptions {
         pretty_log_mirror_stream: PrettyLogMirrorStandardStream::StandardError,
@@ -61,10 +56,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             ));
         }
     };
-    display_server_environment_at_the_runtimes_start.log_where_the_display_server_came_from();
     log_the_open_descriptor_soft_limit_raise(&raise_the_open_descriptor_soft_limit_to_its_ceiling());
-    display_server_environment_at_the_runtimes_start
-        .mark_in_the_runtime_directory_whether_the_runtime_started_with_no_display_server();
     if let Err(lend_directory_refusal) =
         engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory)
     {

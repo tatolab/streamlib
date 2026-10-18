@@ -560,7 +560,7 @@ impl AttachmentFormats {
 /// pipeline at creation.
 ///
 /// `ViewportScissor` (the canonical render-loop choice) lets the same
-/// pipeline serve every swapchain extent; `None` bakes a default 1x1
+/// pipeline serve every destination extent; `None` bakes a default 1x1
 /// viewport into the pipeline, which is only correct for offscreen
 /// fixed-size rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -759,19 +759,19 @@ mod tests {
 
     // Reflection is host-side work on bytes the build already produced, so
     // every test here runs without a Vulkan device.
-    fn display_blit_vertex_spirv() -> &'static [u8] {
-        include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.vert.spv"))
+    fn offscreen_blit_vertex_spirv() -> &'static [u8] {
+        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.vert.spv"))
     }
 
-    fn display_blit_fragment_spirv() -> &'static [u8] {
-        include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.frag.spv"))
+    fn offscreen_blit_fragment_spirv() -> &'static [u8] {
+        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.frag.spv"))
     }
 
     #[test]
     fn reflection_keeps_the_shaders_own_name_for_every_binding() {
         let stages = [
-            GraphicsStage::vertex(display_blit_vertex_spirv()),
-            GraphicsStage::fragment(display_blit_fragment_spirv()),
+            GraphicsStage::vertex(offscreen_blit_vertex_spirv()),
+            GraphicsStage::fragment(offscreen_blit_fragment_spirv()),
         ];
         let (bindings, _) = derive_bindings_from_spirv_multistage(&stages).expect("derive");
         let named: Vec<(u32, &str)> = bindings
@@ -788,9 +788,9 @@ mod tests {
 
     #[test]
     fn a_name_stripped_stage_is_refused_at_derive() {
-        let stripped = strip_every_debug_name_from_spirv_module(display_blit_fragment_spirv());
+        let stripped = strip_every_debug_name_from_spirv_module(offscreen_blit_fragment_spirv());
         let stages = [
-            GraphicsStage::vertex(display_blit_vertex_spirv()),
+            GraphicsStage::vertex(offscreen_blit_vertex_spirv()),
             GraphicsStage::fragment(&stripped),
         ];
         let refusal = derive_bindings_from_spirv_multistage(&stages)
@@ -804,13 +804,13 @@ mod tests {
 
     #[test]
     fn one_slot_spelled_two_ways_is_refused_at_derive() {
-        // display_blit's vertex stage declares no binding, so the second
+        // offscreen_blit's vertex stage declares no binding, so the second
         // spelling of slot 0 has to come from a rewrite of the fragment blob.
         let respelled =
-            rename_binding_in_spirv_module(display_blit_fragment_spirv(), "cameraTexture", "cam");
+            rename_binding_in_spirv_module(offscreen_blit_fragment_spirv(), "cameraTexture", "cam");
         let stages = [
             GraphicsStage::vertex(&respelled),
-            GraphicsStage::fragment(display_blit_fragment_spirv()),
+            GraphicsStage::fragment(offscreen_blit_fragment_spirv()),
         ];
         let refusal = derive_bindings_from_spirv_multistage(&stages)
             .expect_err("one slot cannot carry two names");
@@ -826,10 +826,10 @@ mod tests {
     #[test]
     fn one_name_on_two_slots_is_refused_at_derive() {
         let moved =
-            move_binding_to_another_slot_in_spirv_module(display_blit_fragment_spirv(), 0, 1);
+            move_binding_to_another_slot_in_spirv_module(offscreen_blit_fragment_spirv(), 0, 1);
         let stages = [
             GraphicsStage::vertex(&moved),
-            GraphicsStage::fragment(display_blit_fragment_spirv()),
+            GraphicsStage::fragment(offscreen_blit_fragment_spirv()),
         ];
         let refusal = derive_bindings_from_spirv_multistage(&stages)
             .expect_err("one name cannot identify two slots");
@@ -844,12 +844,12 @@ mod tests {
     #[test]
     fn a_stage_whose_only_set_is_not_set_0_is_refused_at_derive() {
         let moved_to_set_1 = move_binding_to_another_descriptor_set_in_spirv_module(
-            display_blit_fragment_spirv(),
+            offscreen_blit_fragment_spirv(),
             0,
             1,
         );
         let stages = [
-            GraphicsStage::vertex(display_blit_vertex_spirv()),
+            GraphicsStage::vertex(offscreen_blit_vertex_spirv()),
             GraphicsStage::fragment(&moved_to_set_1),
         ];
         let message = match derive_bindings_from_spirv_multistage(&stages) {

@@ -548,7 +548,6 @@ def test_a_record_goes_out_under_the_lock_that_numbered_it(stand_in_parent):
         ("acquire_pixel_buffer", "release_handle", "handle_id"),
         ("acquire_storage_buffer", "release_handle", "handle_id"),
         ("register_acceleration_structure_blas", "release_handle", "handle_id"),
-        ("create_processor_owned_window", "close_processor_owned_window", "window_id"),
     ],
 )
 def test_what_an_answer_the_helper_stopped_waiting_on_created_is_released(
