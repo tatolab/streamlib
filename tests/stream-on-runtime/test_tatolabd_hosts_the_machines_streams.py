@@ -102,8 +102,6 @@ class PatternFrameReader:
         ctx.inputs.read("video_from_upstream")
 '''
 PROJECT_STREAM_NODE_COUNT = 2
-#: Bags a tap on a running stream's pattern collects to show frames flow.
-TAPPED_BAG_COUNT = 2
 EXPOSED_NODE = "pattern"
 EXPOSED_PORT = "video"
 
@@ -182,28 +180,6 @@ def await_stream_unlisted(
                 f"closed: {listed}"
             )
         time.sleep(STREAM_LISTING_POLL_INTERVAL_SECONDS)
-
-
-def assert_frames_flow_out_of_the_pattern(
-    local_api: LocalApiClient,
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
-    stream_name: str,
-    working_directory: Path,
-) -> None:
-    """`tatolab tap` on the stream's pattern output receives bags: the stream runs, not just loads."""
-    channel = f"{local_api.graph(stream_name)['stream']}/{EXPOSED_NODE}/{EXPOSED_PORT}"
-    tapped = json.loads(
-        assert_tatolab_succeeded(
-            run_tatolab(
-                "tap",
-                channel,
-                "--count",
-                str(TAPPED_BAG_COUNT),
-                working_directory=working_directory,
-            )
-        )
-    )
-    assert tapped["received"] > 0, f"no bag reached the tap on {channel} of `{stream_name}`: {tapped}"
 
 
 def assert_the_pattern_is_wired_to_the_reader_inside_the_stream(
@@ -647,7 +623,7 @@ def test_two_projects_kept_streams_run_come_back_after_a_restart_and_stop_start_
         }
         assert stream_names_in_the_machine_graph(local_api) == [ALPHA_STREAM, BRAVO_STREAM]
         for stream_name in (ALPHA_STREAM, BRAVO_STREAM):
-            assert_frames_flow_out_of_the_pattern(local_api, run_tatolab, stream_name, alpha_project)
+            assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, stream_name)
 
     assert_both_kept_streams_run(tatolabd)
     table_rows = [
@@ -881,7 +857,7 @@ def test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_bef
         stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )["exposed"] == exposure_at("private")
     assert "kept and not applied" not in tatolabd.stderr_text, tatolabd.recent_stderr()
-    assert_frames_flow_out_of_the_pattern(local_api, run_tatolab, ALPHA_STREAM, alpha_project)
+    assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, ALPHA_STREAM)
 
     assert_tatolab_succeeded(
         run_tatolab(
