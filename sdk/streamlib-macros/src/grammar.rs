@@ -20,7 +20,8 @@
 //! ```
 //!
 //! A port declares a name, a description, and — on an input — a delivery
-//! profile, plus an optional `audio_window` contract on an audio input. It
+//! profile, plus an optional `audio_window` contract on an audio input and an
+//! optional `catalog` entry on an output. It
 //! carries no type: type information belongs to the authoring language and
 //! never reaches the engine.
 //!
@@ -29,15 +30,18 @@
 //! declaration flagged `built_in_node`, by its class in `tatolab.stream`.
 
 use streamlib_processor_schema::{
-    AudioWindowContract, AudioWindowContractDeclaredValues, DELIVERY_PROFILE_DECLARATION_VALUES,
-    ProcessorPortSchema, ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution,
-    RuntimeConfig, RuntimeOptions, ThreadPriority, cast_exposed_name_to_url_safe,
-    refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
+    AudioWindowContract, AudioWindowContractDeclaredValues, CatalogEntry,
+    DELIVERY_PROFILE_DECLARATION_VALUES, ProcessorPortSchema, ProcessorScheduling, ProcessorSchema,
+    ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions, ThreadPriority,
+    cast_exposed_name_to_url_safe, refuse_audio_window_beside_a_skipping_delivery_profile,
+    render_declaration_values,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
 use syn::{Ident, LitInt, LitStr, Path, Token, parenthesized};
 use unicode_normalization::UnicodeNormalization;
+
+use crate::catalog_entry_grammar::parse_catalog_entry;
 
 /// Which side of a link a port sits on. `delivery_profile` is a consumer-side
 /// setting only valid on an `input(...)`; the grammar rejects it on an
@@ -91,6 +95,9 @@ pub struct ParsedPort {
     /// `None` everywhere else — this is opt-in, and a port without one is
     /// unchanged in every respect.
     pub audio_window: Option<AudioWindowContract>,
+    /// The `catalog` entry an output port declares, read from its literals.
+    /// `None` on every input and on an output that declares none.
+    pub catalog_entry: Option<CatalogEntry>,
 }
 
 /// The fully-parsed `#[processor(...)]` attribute.
@@ -128,6 +135,7 @@ impl ParsedProcessorAttr {
             description: p.description.clone(),
             delivery_profile: p.delivery_profile.clone(),
             audio_window: p.audio_window.clone(),
+            catalog_entry: p.catalog_entry.clone(),
         };
 
         ProcessorSchema {
@@ -347,7 +355,7 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
 /// Parse an `input(...)` / `output(...)` port body.
 ///
 /// `<name-string>[, delivery_profile = "...", description = "...",
-/// audio_window(...) | audio_window = match_device]`.
+/// audio_window(...) | audio_window = match_device, catalog = <Section>Entry { … }]`.
 ///
 /// `delivery_profile` is a consumer-side setting: **required** on every
 /// `input(...)`, and rejected with a spanned error on an `output(...)` rather
@@ -387,6 +395,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     let mut description = None;
     let mut delivery_profile = None;
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
+    let mut catalog_entry: Option<CatalogEntry> = None;
 
     while !content.is_empty() {
         content.parse::<Token![,]>()?;
@@ -420,6 +429,17 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
 
         content.parse::<Token![=]>()?;
         match key.to_string().as_str() {
+            "catalog" => {
+                reject_catalog_on_input(direction, &name, key_span)?;
+                if catalog_entry.is_some() {
+                    return Err(syn::Error::new(
+                        key_span,
+                        format!("output port `{name}` declares `catalog` more than once"),
+                    ));
+                }
+                let entry_expression: syn::Expr = content.parse()?;
+                catalog_entry = Some(parse_catalog_entry(&entry_expression, &name)?);
+            }
             "description" => {
                 let lit: LitStr = content.parse()?;
                 description = Some(lit.value());
@@ -434,7 +454,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
                     key.span(),
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
-                         `description`, or `audio_window`"
+                         `description`, `audio_window`, or `catalog`"
                     ),
                 ));
             }
@@ -466,6 +486,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         description,
         delivery_profile,
         audio_window: audio_window.map(|(_, contract)| contract),
+        catalog_entry,
     })
 }
 
@@ -620,6 +641,26 @@ fn reject_audio_window_on_output(
                 "`audio_window` is a consumer-side setting and is not valid on \
                  `output(\"{port_name}\", ...)` — a producer publishes what it has, and \
                  only a consuming input port states the window it needs"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Reject `catalog` on an `input(...)` with a spanned error — an entry
+/// describes what a producer writes. A no-op on an `output(...)`.
+fn reject_catalog_on_input(
+    direction: PortDirection,
+    port_name: &str,
+    span: proc_macro2::Span,
+) -> syn::Result<()> {
+    if direction == PortDirection::Input {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "`catalog` describes what a producer writes and is not valid on \
+                 `input(\"{port_name}\", ...)` — a reader reads its upstream's entry off the \
+                 inbound link"
             ),
         ));
     }
@@ -1367,6 +1408,109 @@ mod tests {
             msg.contains("consumer-side") && msg.contains("audio_out"),
             "the refusal must name the port and say whose setting it is; got {msg}"
         );
+    }
+
+    #[test]
+    fn an_outputs_catalog_entry_reaches_the_schema_in_hangs_field_names() {
+        let parsed = parse_ok(quote! {
+            execution = manual,
+            output(
+                "video",
+                catalog = VideoEntry { codec: "avc1.64001f", coded_width: 1280, coded_height: Some(720) }
+            ),
+            output(
+                "frames",
+                catalog = BinaryEntry { mode: CatalogDataTrackMode::Snapshot, mime: "application/msgpack" }
+            ),
+            output("bare"),
+        });
+        let schema = parsed.to_processor_schema();
+
+        assert_eq!(
+            schema.outputs[0].catalog_entry,
+            Some(CatalogEntry {
+                section: streamlib_processor_schema::CatalogSection::Video,
+                entry: serde_json::json!({"codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720}),
+            })
+        );
+        assert_eq!(
+            schema.outputs[1]
+                .catalog_entry
+                .as_ref()
+                .map(|entry| &entry.entry),
+            Some(&serde_json::json!({"mode": "snapshot", "mime": "application/msgpack"}))
+        );
+        assert_eq!(schema.outputs[2].catalog_entry, None);
+    }
+
+    #[test]
+    fn a_catalog_entry_on_an_input_is_refused_naming_the_port() {
+        let msg = parse_err(quote! {
+            execution = reactive,
+            input("video_in", delivery_profile = "newest", catalog = BinaryEntry { mode: Snapshot }),
+        });
+
+        assert!(
+            msg.contains("not valid on") && msg.contains("video_in"),
+            "the refusal must name the port and say whose declaration it is; got {msg}"
+        );
+    }
+
+    #[test]
+    fn a_catalog_entry_missing_a_field_hang_requires_is_refused_naming_the_field() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("frames", catalog = BinaryEntry { mime: "application/msgpack" }),
+        });
+
+        assert!(
+            msg.contains("frames") && msg.contains("`mode`"),
+            "the refusal must name the port and the missing field; got {msg}"
+        );
+    }
+
+    #[test]
+    fn a_catalog_entry_naming_a_field_its_type_lacks_is_refused_listing_the_fields_it_has() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("audio", catalog = AudioEntry { codec: "opus", sample_rate: 48000, number_of_channels: 2, bitrate: 64000 }),
+        });
+
+        assert!(
+            msg.contains("no field `bitrate`") && msg.contains("`sample_rate`"),
+            "the refusal must name the stray field and the ones the type takes; got {msg}"
+        );
+    }
+
+    #[test]
+    fn a_catalog_entry_of_an_unknown_type_or_a_non_literal_field_is_refused() {
+        let unknown_type = parse_err(quote! {
+            execution = manual,
+            output("video", catalog = MediaEntry { codec: "avc1.64001f" }),
+        });
+        assert!(
+            unknown_type.contains("`VideoEntry`") && unknown_type.contains("MediaEntry"),
+            "an unknown entry type is refused listing the five; got {unknown_type}"
+        );
+
+        let computed_field = parse_err(quote! {
+            execution = manual,
+            output("video", catalog = VideoEntry { codec: codec_string() }),
+        });
+        assert!(
+            computed_field.contains("literal"),
+            "a computed field is refused as not a literal; got {computed_field}"
+        );
+    }
+
+    #[test]
+    fn a_second_catalog_entry_on_one_port_is_refused() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("text", catalog = TextEntry { format: "vtt" }, catalog = TextEntry { format: "ttml" }),
+        });
+
+        assert!(msg.contains("more than once"), "got {msg}");
     }
 
     #[test]

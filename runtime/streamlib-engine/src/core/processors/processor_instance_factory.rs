@@ -12,6 +12,7 @@ use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode, is_in_exposed_name_cast_form};
+use crate::core::output_port_catalog_entries::refuse_a_catalog_entry_hang_does_not_read;
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
 
 /// A created processor instance for runtime use.
@@ -161,6 +162,21 @@ impl ProcessorInstance {
                 .clone()
                 .map(crate::iceoryx2::InputMailboxes::from_inner_arc);
             self.0.set_iceoryx2_resources(ow, im)
+        }
+    }
+
+    /// Reach `node`'s catalog entries from this processor's writer and
+    /// mailboxes — the cells `graph` renders and its links read.
+    pub fn reach_the_catalog_entries_of(&self, node: &ProcessorNode) {
+        if let Some(output_inner) = self.iceoryx2_output_writer_inner() {
+            output_inner.reach_catalog_entries_of_output_ports(Arc::clone(
+                node.catalog_entries_of_output_ports(),
+            ));
+        }
+        if let Some(input_inner) = self.iceoryx2_input_mailboxes_inner() {
+            input_inner.reach_upstream_catalog_entries_by_inbound_link(Arc::clone(
+                node.upstream_catalog_entries_by_inbound_link(),
+            ));
         }
     }
 
@@ -318,6 +334,7 @@ impl ProcessorInstanceFactory {
         registration: HostCompiledRustTypeRegistration,
     ) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+        refuse_catalog_entries_hang_does_not_read(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -363,6 +380,7 @@ impl ProcessorInstanceFactory {
     /// wire, and `create()` refuses the type.
     pub fn register_descriptor_only(&self, descriptor: ProcessorDescriptor) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+        refuse_catalog_entries_hang_does_not_read(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -522,6 +540,7 @@ impl ProcessorInstanceFactory {
 
         let mut instance = ProcessorInstance::new((registration.constructor)(node)?);
         instance.install_iceoryx2_resources()?;
+        instance.reach_the_catalog_entries_of(node);
         Ok(instance)
     }
 
@@ -639,6 +658,36 @@ pub(crate) fn refuse_port_names_not_cast_or_declared_twice(
         }
     }
     Ok(())
+}
+
+/// Refuse a descriptor carrying a catalog entry on an input port, or one on
+/// an output port that hang's catalog types do not read.
+pub(crate) fn refuse_catalog_entries_hang_does_not_read(
+    descriptor: &ProcessorDescriptor,
+) -> Result<()> {
+    if let Some(input_port) = descriptor
+        .inputs
+        .iter()
+        .find(|input_port| input_port.catalog_entry.is_some())
+    {
+        return Err(Error::Link(format!(
+            "processor `{}` declares a catalog entry on input port `{}` — an entry describes \
+             what a producer writes, so only an output port carries one",
+            descriptor.processor_class_import_path, input_port.name
+        )));
+    }
+    descriptor
+        .outputs
+        .iter()
+        .filter_map(|output_port| {
+            output_port
+                .catalog_entry
+                .as_ref()
+                .map(|catalog_entry| (output_port, catalog_entry))
+        })
+        .try_for_each(|(output_port, catalog_entry)| {
+            refuse_a_catalog_entry_hang_does_not_read(&output_port.name, catalog_entry)
+        })
 }
 
 #[cfg(test)]
@@ -835,6 +884,7 @@ mod tests {
             required: true,
             delivery_profile: None,
             audio_window: None,
+            catalog_entry: None,
         }
     }
 
@@ -868,6 +918,38 @@ mod tests {
         assert!(factory.port_info(&path).is_none());
         assert!(node_types_one_stream_resolves.descriptor(&path).is_none());
         assert!(node_types_one_stream_resolves.port_info(&path).is_none());
+    }
+
+    #[test]
+    fn a_descriptor_whose_output_carries_a_catalog_entry_hang_does_not_read_is_refused() {
+        let unread_entry = crate::core::descriptors::CatalogEntry {
+            section: crate::core::descriptors::CatalogSection::Binary,
+            entry: serde_json::json!({"mime": "application/msgpack"}),
+        };
+        assert_refused_by_either_registration(
+            descriptor_for("my_app.sources:FrameSource")
+                .with_output(port_named("frames").with_catalog_entry(unread_entry)),
+            |refusal| {
+                matches!(
+                    refusal,
+                    Error::CatalogEntryRefused { port_name, refusal, .. }
+                        if port_name == "frames" && refusal.contains("mode")
+                )
+            },
+        );
+    }
+
+    #[test]
+    fn a_descriptor_whose_output_carries_an_entry_hang_reads_registers() {
+        let factory = ProcessorInstanceFactory::new();
+        factory
+            .register_descriptor_only(descriptor_for("my_app.sources:FrameSource").with_output(
+                port_named("frames").with_catalog_entry(crate::core::descriptors::BinaryEntry {
+                    mode: crate::core::descriptors::CatalogDataTrackMode::Snapshot,
+                    mime: Some("application/msgpack".to_string()),
+                }),
+            ))
+            .expect("an entry hang reads registers");
     }
 
     #[test]

@@ -109,6 +109,10 @@ pub struct PortInfoOutput {
     /// port without one renders exactly what it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
+    /// Catalog entry this output port carries now, in hang's layout. Absent
+    /// from the rendering on a port that carries none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
 }
 
 /// The kind of port - determines how data flows.
@@ -370,6 +374,10 @@ pub struct PortDescriptorOutput {
     /// rendering on a port that declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
+    /// Catalog entry declared by this output port, in hang's layout. Absent
+    /// from the rendering on a port that declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
 }
 
 /// Code examples for a processor in different languages.
@@ -403,7 +411,8 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
 
 impl ProcessorNodePortsOutput {
     /// This node's ports, with any `match_device` contract its own device
-    /// stream has settled rendered as the five values it settled to.
+    /// stream has settled rendered as the five values it settled to, and each
+    /// output port's catalog entry as it carries it now.
     ///
     /// A port declaring the sentinel renders it until its processor's `setup()`
     /// opens a device, and the resolved values from then on: machine-dependent
@@ -430,7 +439,12 @@ impl ProcessorNodePortsOutput {
                 .ports
                 .outputs
                 .iter()
-                .map(PortInfoOutput::from)
+                .map(|port| PortInfoOutput {
+                    catalog_entry: node
+                        .catalog_entries_of_output_ports()
+                        .current_entry_of(&port.name),
+                    ..PortInfoOutput::from(port)
+                })
                 .collect(),
         }
     }
@@ -469,6 +483,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             port_kind: PortKindOutput::from(port.port_kind),
             delivery_profile: port.delivery_profile.clone(),
             audio_window: port.audio_window.clone(),
+            catalog_entry: port.catalog_entry.clone(),
         }
     }
 }
@@ -643,6 +658,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             required: port.required,
             delivery_profile: port.delivery_profile.clone(),
             audio_window: port.audio_window.clone(),
+            catalog_entry: port.catalog_entry.clone(),
         }
     }
 }
@@ -927,6 +943,7 @@ mod port_rendering_tests {
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("newest".to_string()),
             audio_window: None,
+            catalog_entry: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -935,6 +952,108 @@ mod port_rendering_tests {
         assert_eq!(json["port_kind"], "data");
         assert_eq!(json["delivery_profile"], "newest");
         assert_renders_exactly(&json, &PORT_INFO_KEYS);
+    }
+
+    fn msgpack_snapshot_catalog_entry() -> crate::core::descriptors::CatalogEntry {
+        crate::core::descriptors::BinaryEntry {
+            mode: crate::core::descriptors::CatalogDataTrackMode::Snapshot,
+            mime: Some("application/msgpack".to_string()),
+        }
+        .into()
+    }
+
+    fn a_node_whose_output_declares(
+        catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
+    ) -> crate::core::graph::ProcessorNode {
+        crate::core::graph::ProcessorNode::new(
+            streamlib_processor_schema::ProcessorClassImportPath::new("tests.CameraSource")
+                .expect("a legal import path"),
+            "CameraSource",
+            None,
+            Vec::new(),
+            vec![crate::core::graph::PortInfo {
+                name: "video".to_string(),
+                description: "Frames".to_string(),
+                port_kind: crate::core::graph::PortKind::Data,
+                delivery_profile: None,
+                audio_window: None,
+                catalog_entry,
+            }],
+        )
+    }
+
+    #[test]
+    fn an_output_port_renders_the_catalog_entry_it_declared_beside_the_four() {
+        let rendered = serde_json::to_value(ProcessorNodeOutput::from(
+            &a_node_whose_output_declares(Some(msgpack_snapshot_catalog_entry())),
+        ))
+        .unwrap();
+        let output = &rendered["ports"]["outputs"][0];
+
+        assert_eq!(
+            output["catalog_entry"],
+            serde_json::json!({
+                "section": "binary",
+                "entry": {"mode": "snapshot", "mime": "application/msgpack"},
+            })
+        );
+        assert_renders_exactly(
+            output,
+            &[
+                "name",
+                "description",
+                "port_kind",
+                "delivery_profile",
+                "catalog_entry",
+            ],
+        );
+    }
+
+    #[test]
+    fn an_output_port_renders_the_entry_it_carries_now_rather_than_the_declared_one() {
+        let node = a_node_whose_output_declares(None);
+        let undeclared = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
+        assert_renders_exactly(&undeclared["ports"]["outputs"][0], &PORT_INFO_KEYS);
+
+        node.catalog_entries_of_output_ports()
+            .replace_entry_of(
+                "video",
+                crate::core::descriptors::VideoEntry {
+                    codec: "avc1.64001f".to_string(),
+                    coded_width: Some(1280),
+                    coded_height: Some(720),
+                    description: None,
+                }
+                .into(),
+            )
+            .expect("hang reads the entry");
+        let replaced = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
+        assert_eq!(
+            replaced["ports"]["outputs"][0]["catalog_entry"],
+            serde_json::json!({
+                "section": "video",
+                "entry": {"codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720},
+            })
+        );
+    }
+
+    #[test]
+    fn a_port_descriptor_renders_the_catalog_entry_it_declared() {
+        let declared = crate::core::PortDescriptor::new("video", "Frames", true)
+            .with_catalog_entry(msgpack_snapshot_catalog_entry());
+        let json = serde_json::to_value(PortDescriptorOutput::from(&declared)).unwrap();
+
+        assert_eq!(json["catalog_entry"]["section"], "binary");
+        assert_renders_exactly(
+            &json,
+            &[
+                "name",
+                "description",
+                "required",
+                "delivery_profile",
+                "catalog_entry",
+            ],
+        );
     }
 
     /// The type layer is gone, not omitted-when-empty: no spelling of a port
@@ -947,6 +1066,7 @@ mod port_rendering_tests {
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: None,
             audio_window: None,
+            catalog_entry: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
         assert_carries_no_type_key(&json);
@@ -985,6 +1105,7 @@ mod port_rendering_tests {
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("ordered".to_string()),
             audio_window: Some(declared_window_contract()),
+            catalog_entry: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1022,6 +1143,7 @@ mod port_rendering_tests {
                     hop: 960,
                 },
             )),
+            catalog_entry: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1047,6 +1169,7 @@ mod port_rendering_tests {
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("ordered".to_string()),
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
+            catalog_entry: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1074,6 +1197,7 @@ mod port_rendering_tests {
                 port_kind: crate::core::graph::PortKind::Data,
                 delivery_profile: Some("ordered".to_string()),
                 audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
+                catalog_entry: None,
             }],
             Vec::new(),
         );

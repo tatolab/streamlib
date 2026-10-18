@@ -394,6 +394,11 @@ pub struct ProcessorPortSchema {
     /// publishes what it has, and only a consumer states what it needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::AudioWindowContract>,
+    /// Catalog entry declared by this output port in hang's layout, or `None`.
+    /// Documentation a reader follows — nothing compares it — and always
+    /// `None` on an input port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_entry: Option<crate::CatalogEntry>,
 }
 
 /// Config definition within a processor schema.

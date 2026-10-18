@@ -27,6 +27,7 @@ use crate::core::graph::{
     OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
     ProcessorLossCounts, ProcessorMetrics, SourceSideOfALinkWiredOn,
 };
+use crate::core::output_port_catalog_entries::CatalogEntriesOfOutputPorts;
 use crate::core::processors::{
     OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
 };
@@ -169,6 +170,8 @@ pub(crate) struct OpenedSourceSideOfALink {
     destination_notify_service: Iceoryx2NotifyService,
     wire_reply_awaited_from_the_source: Option<Arc<OutOfProcessLinkWireReply>>,
     wired_on: Option<SourceSideOfALinkWiredOn>,
+    source_output_port: String,
+    catalog_entries_of_the_sources_output_ports: Arc<CatalogEntriesOfOutputPorts>,
 }
 
 /// How a link stands once both its sides are opened.
@@ -259,6 +262,14 @@ pub(crate) fn open_the_source_side_of_a_link(
     let channel_service_name = channel_service_name(source)?;
     let link_wiring_of_a_source_out_of_process =
         out_of_process_link_wiring_of(source_graph, &source_proc_id);
+    let catalog_entries_of_the_sources_output_ports = source_graph
+        .traversal()
+        .v(&source_proc_id)
+        .first()
+        .map(|source_node| Arc::clone(source_node.catalog_entries_of_output_ports()))
+        .ok_or_else(|| {
+            Error::ProcessorNotFound(format!("source processor '{source_proc_id}' not found"))
+        })?;
     let destination_windows_its_reads = destination.audio_windowing.is_some();
     if destination_windows_its_reads {
         refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
@@ -379,6 +390,8 @@ pub(crate) fn open_the_source_side_of_a_link(
         destination_notify_service,
         wire_reply_awaited_from_the_source,
         wired_on,
+        source_output_port: source_port.to_string(),
+        catalog_entries_of_the_sources_output_ports,
     })
 }
 
@@ -392,6 +405,25 @@ pub(crate) fn open_the_destination_side_of_a_link(
     opened_source_side: &OpenedSourceSideOfALink,
     destination: DestinationOfALinkAsItsWiringReadsIt,
 ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
+    let dest_node = dest_graph
+        .traversal()
+        .v(&destination.dest_proc_id)
+        .first()
+        .ok_or_else(|| {
+            Error::ProcessorNotFound(format!(
+                "destination processor '{}' not found",
+                destination.dest_proc_id
+            ))
+        })?;
+    dest_node
+        .upstream_catalog_entries_by_inbound_link()
+        .record_inbound_link(
+            &destination.dest_port,
+            link_id.as_str(),
+            InboundLinkName::from(opened_source_side.channel_service_name.as_str()),
+            &opened_source_side.source_output_port,
+            Arc::clone(&opened_source_side.catalog_entries_of_the_sources_output_ports),
+        );
     if let Some(dest_link_wiring) = &destination.link_wiring_of_a_destination_out_of_process {
         return wire_subprocess_dest(
             dest_graph,
@@ -540,6 +572,11 @@ pub(crate) fn release_the_destination_side_of_a_link(
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) {
+    if let Some(dest_node) = graph.traversal().v(dest_proc_id).first() {
+        dest_node
+            .upstream_catalog_entries_by_inbound_link()
+            .forget_inbound_link(link_id.as_str());
+    }
     if let Some(dest_link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) {
         dest_link_wiring.unwire_a_link_reporting_a_far_side_that_kept_its_port(
             crate::core::PortDirection::Input,

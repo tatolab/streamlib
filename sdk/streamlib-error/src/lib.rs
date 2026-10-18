@@ -202,6 +202,19 @@ pub enum Error {
         port_name: String,
     },
 
+    /// An output port's catalog entry the players' own catalog types do not read.
+    #[error(
+        "output port `{port_name}` carries a {section} catalog entry hang does not read: {refusal}"
+    )]
+    CatalogEntryRefused {
+        /// The output port the entry describes.
+        port_name: String,
+        /// The section the entry names.
+        section: streamlib_processor_schema::CatalogSection,
+        /// hang's own refusal, naming the field.
+        refusal: String,
+    },
+
     /// A node named in a stream has no output port of the name given.
     #[error(
         "node `{node}` in stream `{stream}` has no output port `{port}`. Its output ports are: \

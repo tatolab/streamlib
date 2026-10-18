@@ -596,6 +596,7 @@ fn generate_descriptor_from_schema(
                     required: true,
                     delivery_profile: #delivery_profile_tokens,
                     audio_window: #audio_window_tokens,
+                    catalog_entry: ::std::option::Option::None,
                 })
             }
         })
@@ -609,6 +610,7 @@ fn generate_descriptor_from_schema(
         .map(|p| {
             let port_name = &p.name;
             let port_desc = p.description.as_deref().unwrap_or("");
+            let catalog_entry_tokens = catalog_entry_tokens(p.catalog_entry.as_ref());
             quote! {
                 .with_output(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
@@ -616,6 +618,7 @@ fn generate_descriptor_from_schema(
                     required: true,
                     delivery_profile: ::std::option::Option::None,
                     audio_window: #no_audio_window_tokens,
+                    catalog_entry: #catalog_entry_tokens,
                 })
             }
         })
@@ -775,6 +778,75 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
         #set_resources_impl
         #outputs_inner_impl
         #inputs_inner_impl
+    }
+}
+
+/// Emit the `catalog` entry an output port declared, rebuilding its fields in
+/// the generated descriptor.
+fn catalog_entry_tokens(
+    catalog_entry: Option<&streamlib_processor_schema::CatalogEntry>,
+) -> TokenStream {
+    use streamlib_processor_schema::CatalogSection;
+
+    let Some(catalog_entry) = catalog_entry else {
+        return quote! { ::std::option::Option::None };
+    };
+    let section_tokens = match catalog_entry.section {
+        CatalogSection::Video => quote! { Video },
+        CatalogSection::Audio => quote! { Audio },
+        CatalogSection::Text => quote! { Text },
+        CatalogSection::Json => quote! { Json },
+        CatalogSection::Binary => quote! { Binary },
+    };
+    let entry_tokens = json_value_tokens(&catalog_entry.entry);
+    quote! {
+        ::std::option::Option::Some(__streamlib_sdk::descriptors::CatalogEntry {
+            section: __streamlib_sdk::descriptors::CatalogSection::#section_tokens,
+            entry: #entry_tokens,
+        })
+    }
+}
+
+/// Emit an expression that rebuilds `value` as a `serde_json::Value`.
+fn json_value_tokens(value: &serde_json::Value) -> TokenStream {
+    use serde_json::Value;
+
+    match value {
+        Value::Null => quote! { __streamlib_sdk::serde_json::Value::Null },
+        Value::Bool(flag) => quote! { __streamlib_sdk::serde_json::Value::Bool(#flag) },
+        Value::Number(number) => {
+            if let Some(unsigned) = number.as_u64() {
+                quote! { __streamlib_sdk::serde_json::Value::from(#unsigned) }
+            } else if let Some(signed) = number.as_i64() {
+                quote! { __streamlib_sdk::serde_json::Value::from(#signed) }
+            } else {
+                let float = number.as_f64().unwrap_or_default();
+                quote! { __streamlib_sdk::serde_json::Value::from(#float) }
+            }
+        }
+        Value::String(text) => quote! { __streamlib_sdk::serde_json::Value::from(#text) },
+        Value::Array(items) => {
+            let item_tokens = items.iter().map(json_value_tokens);
+            quote! {
+                __streamlib_sdk::serde_json::Value::Array(::std::vec![#(#item_tokens),*])
+            }
+        }
+        Value::Object(fields) => {
+            let field_tokens = fields.iter().map(|(field_name, field_value)| {
+                let field_value_tokens = json_value_tokens(field_value);
+                quote! { (::std::string::String::from(#field_name), #field_value_tokens) }
+            });
+            quote! {
+                __streamlib_sdk::serde_json::Value::Object(
+                    [#(#field_tokens),*]
+                        .into_iter()
+                        .collect::<__streamlib_sdk::serde_json::Map<
+                            ::std::string::String,
+                            __streamlib_sdk::serde_json::Value,
+                        >>(),
+                )
+            }
+        }
     }
 }
 
@@ -1039,6 +1111,7 @@ mod processor_struct_emit_tests {
             description: None,
             delivery_profile: None,
             audio_window: None,
+            catalog_entry: None,
         };
         ProcessorSchema {
             inputs: vec![port("video_in")],
@@ -1564,6 +1637,7 @@ mod processor_struct_emit_tests {
             description: None,
             delivery_profile: None,
             audio_window: None,
+            catalog_entry: None,
         };
         let rendered =
             generate_port_marker_module(PortDirection::Output, &[declared_output_port]).to_string();

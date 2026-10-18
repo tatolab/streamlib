@@ -37,9 +37,11 @@ use super::{
     ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader,
     MessageGroupBoundary,
 };
+use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::media_clock::MediaClock;
+use crate::core::output_port_catalog_entries::CatalogEntriesOfOutputPorts;
 
 /// Map the engine's [`ChannelTrustTier`] onto the engine-free
 /// [`ChannelTrustTierLabel`] the [`Error::PayloadExceedsChannelCeiling`] variant
@@ -186,6 +188,9 @@ pub struct OutputWriterInner {
     /// has no channel yet is a drop; a write to any other name is a refusal.
     declared_output_ports: Mutex<HashSet<String>>,
     refused_bag_counts: Arc<RefusedBagCountsByOutputPort>,
+    /// The node's output-port catalog entries, reached once the processor is
+    /// created for its node.
+    catalog_entries_of_output_ports: std::sync::OnceLock<Arc<CatalogEntriesOfOutputPorts>>,
 }
 
 // SAFETY: `Publisher` and `Notifier` are not `Send`, so the `Mutex` alone does
@@ -202,7 +207,33 @@ impl OutputWriterInner {
             channels: Mutex::new(HashMap::new()),
             declared_output_ports: Mutex::new(HashSet::new()),
             refused_bag_counts: Arc::new(RefusedBagCountsByOutputPort::default()),
+            catalog_entries_of_output_ports: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Reach the catalog entries of the node this processor was created for —
+    /// the ones `graph` renders and downstream readers read.
+    pub fn reach_catalog_entries_of_output_ports(
+        &self,
+        catalog_entries_of_output_ports: Arc<CatalogEntriesOfOutputPorts>,
+    ) {
+        let _ = self
+            .catalog_entries_of_output_ports
+            .set(catalog_entries_of_output_ports);
+    }
+
+    /// Replace `output_port`'s catalog entry, refusing an entry hang does not
+    /// read.
+    pub fn set_catalog_entry(&self, output_port: &str, catalog_entry: CatalogEntry) -> Result<()> {
+        self.catalog_entries_of_output_ports
+            .get()
+            .ok_or_else(|| {
+                Error::Link(format!(
+                    "output port '{output_port}' has no node to carry its catalog entry — the \
+                     processor was not created for a node"
+                ))
+            })?
+            .replace_entry_of(output_port, catalog_entry)
     }
 
     /// Name the output ports the processor declared, so a write to one that
@@ -611,6 +642,23 @@ impl OutputWriter {
             (Some(inner), Ok(port)) => inner.has_port(&port),
             _ => false,
         }
+    }
+
+    /// Replace `port`'s catalog entry — what `graph` renders under the port
+    /// and a downstream reader reads off its inbound link. Refused when hang's
+    /// catalog types do not read it.
+    pub fn set_catalog_entry(
+        &self,
+        port: &str,
+        catalog_entry: impl Into<CatalogEntry>,
+    ) -> Result<()> {
+        let Some(inner) = self.host_inner() else {
+            return Err(Error::Link(format!(
+                "OutputWriter not wired (port='{port}'): host has not yet installed iceoryx2 \
+                 resources on this processor instance"
+            )));
+        };
+        inner.set_catalog_entry(port, catalog_entry.into())
     }
 }
 

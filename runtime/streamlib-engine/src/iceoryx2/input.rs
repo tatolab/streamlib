@@ -44,8 +44,10 @@ use super::loss_counters::{
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
 use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader, MessageGroupBoundary};
+use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
+use crate::core::output_port_catalog_entries::UpstreamCatalogEntriesByInboundLink;
 
 /// One windowed port's stage, shared out of the `ports` map so the resample,
 /// mixdown and framing work runs with that mutex released.
@@ -433,6 +435,10 @@ pub struct InputMailboxesInner {
     dropped_bag_counts: Arc<DroppedBagCountsByInboundLink>,
     discarded_sample_counts: Arc<DiscardedSampleCountsByInboundLink>,
     device_matched_audio_window_contracts: Arc<DeviceMatchedAudioWindowContractsByInputPort>,
+    /// The upstream catalog entries the node's inbound links reach, reached
+    /// once the processor is created for its node.
+    upstream_catalog_entries_by_inbound_link:
+        std::sync::OnceLock<Arc<UpstreamCatalogEntriesByInboundLink>>,
 }
 
 impl InputMailboxesInner {
@@ -447,6 +453,32 @@ impl InputMailboxesInner {
             device_matched_audio_window_contracts: Arc::new(
                 DeviceMatchedAudioWindowContractsByInputPort::default(),
             ),
+            upstream_catalog_entries_by_inbound_link: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Reach the upstream catalog entries of the node this processor was
+    /// created for.
+    pub fn reach_upstream_catalog_entries_by_inbound_link(
+        &self,
+        upstream_catalog_entries_by_inbound_link: Arc<UpstreamCatalogEntriesByInboundLink>,
+    ) {
+        let _ = self
+            .upstream_catalog_entries_by_inbound_link
+            .set(upstream_catalog_entries_by_inbound_link);
+    }
+
+    /// The current catalog entry of the output port feeding `port` over
+    /// `inbound_link`, or over its one link when `None`.
+    pub fn inbound_link_catalog_entry(
+        &self,
+        port: &str,
+        inbound_link: Option<&InboundLinkName>,
+    ) -> Result<Option<CatalogEntry>> {
+        match self.upstream_catalog_entries_by_inbound_link.get() {
+            Some(upstream_catalog_entries) => upstream_catalog_entries
+                .catalog_entry_of_inbound_link(port, inbound_link.map(InboundLinkName::as_str)),
+            None => Ok(None),
         }
     }
 
@@ -1443,6 +1475,22 @@ impl InputMailboxes {
         match (self.host_inner(), cast_exposed_name_to_url_safe(port)) {
             (Some(inner), Ok(port)) => inner.inbound_link_names(&port),
             _ => Vec::new(),
+        }
+    }
+
+    /// The current catalog entry of the output port feeding `port`, or `None`
+    /// when nothing feeds it or that port carries none.
+    ///
+    /// A port fed by more than one link names the one to read with
+    /// `inbound_link`; left `None`, such a port is refused naming its links.
+    pub fn inbound_link_catalog_entry(
+        &self,
+        port: &str,
+        inbound_link: Option<&InboundLinkName>,
+    ) -> Result<Option<CatalogEntry>> {
+        match self.host_inner() {
+            Some(inner) => inner.inbound_link_catalog_entry(port, inbound_link),
+            None => Ok(None),
         }
     }
 

@@ -98,6 +98,10 @@ crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
 iceoryx2 = "0.10.0"  # Zero-copy IPC pub/sub for cross-process communication
 iceoryx2-log = "0.10.0"  # Bridge iceoryx2's internal log records into streamlib tracing
 rmp-serde = "1.3"  # MessagePack serialization for frame payloads
+# The MoQ players' catalog types — the one parse an output port's catalog
+# entry passes at declaration and at update. Pinned exact: the entry is the
+# players' layout, so the version is the contract.
+hang = "=0.21.16"
 serde_bytes.workspace = true  # `samples` rides the wire as msgpack `bin`, not an array
 rubato.workspace = true  # Resampler behind the audio window contract's read-side stage
 signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus
