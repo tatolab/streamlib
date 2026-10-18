@@ -5,7 +5,9 @@
 //! public port's track at both listeners and a private port's at loopback
 //! alone, each object the bytes the node wrote with groups where it opened
 //! them; the broadcast's catalog is hang's and lists the port carrying an
-//! entry; lowering a port's level ends its subscribers. A stream's start
+//! entry; an internal port is at no relay; lowering a port's level ends its
+//! subscribers; and a `RelayTrackSource` in another stream reads a private
+//! port through loopback, its groups and spacing kept. A stream's start
 //! creates the GPU context: `cargo test -p tatolabd --features
 //! hardware-tests,machine-directories-under-a-test-root`, after
 //! `cargo xtask stage-local-relay`.
@@ -28,6 +30,8 @@ use streamlib_relay_adapter_local::LocalRelayListener;
 use streamlib_relay_adapter_sdk::url::Url;
 
 const STREAM: &str = "desk";
+/// A stream reading `STREAM`'s ports through the local relay.
+const READER_STREAM: &str = "reader";
 const WRITER_NODE_TYPE: &str =
     "tatolabd::numbered_message_writer_test_node::NumberedMessageWriterTestNode";
 /// Exposed public, and carrying a catalog entry.
@@ -35,6 +39,7 @@ const PUBLIC_PORT: &str = "numbers";
 /// Exposed private, and carrying none.
 const PRIVATE_PORT: &str = "more_numbers";
 const MESSAGES_PER_GROUP: u64 = 3;
+const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: u128 = 10_000_000;
 
 const THE_STREAM_STARTS_WITHIN: Duration = Duration::from_secs(60);
 /// How long a session, a broadcast, a track or an object has to arrive.
@@ -58,33 +63,62 @@ struct TatolabdPublishingTheStream {
     runtime: SpawnedTatolabd,
     machine_root: TatolabTestMachineRoot,
     ports: LocalRelayPortsOfATest,
-    broadcast_path: String,
+    machine: String,
     async_runtime: tokio::runtime::Runtime,
     _runtime_unit: TemporaryRuntimeUnit,
 }
 
 impl TatolabdPublishingTheStream {
     fn start() -> Self {
+        Self::start_with_the_streams(&[(
+            STREAM,
+            a_stream_writing_numbered_messages_on_a_public_and_a_private_port(),
+        )])
+    }
+
+    /// The stream, and beside it [`READER_STREAM`] holding one writer it
+    /// exposes nothing of, since a stream holding no node does not load.
+    fn start_beside_a_reader_stream() -> Self {
+        Self::start_with_the_streams(&[
+            (
+                STREAM,
+                a_stream_writing_numbered_messages_on_a_public_and_a_private_port(),
+            ),
+            (
+                READER_STREAM,
+                serde_json::json!({
+                    "stream": READER_STREAM,
+                    "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
+                }),
+            ),
+        ])
+    }
+
+    fn start_with_the_streams(streams: &[(&str, serde_json::Value)]) -> Self {
         let runtime_unit = TemporaryRuntimeUnit::with_its_lend_and_the_local_relay();
         let machine_root = TatolabTestMachineRoot::new();
         let ports = LocalRelayPortsOfATest::free_now();
-        machine_root
-            .kept_stream_records()
-            .write(&a_kept_stream_record(
-                STREAM,
-                a_stream_writing_numbered_messages_on_a_public_and_a_private_port(),
-                &machine_root.project_directory(),
-                &an_executable_standing_in_for_the_interpreter(),
-                false,
-            ))
-            .unwrap();
+        for (stream_name, graph) in streams {
+            machine_root
+                .kept_stream_records()
+                .write(&a_kept_stream_record(
+                    stream_name,
+                    graph.clone(),
+                    &machine_root.project_directory(),
+                    &an_executable_standing_in_for_the_interpreter(),
+                    false,
+                ))
+                .unwrap();
+        }
         let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
         ports.given_to(&mut tatolabd_command);
         let mut runtime = SpawnedTatolabd::spawn(tatolabd_command);
-        runtime.wait_until_standard_error_carries(
-            &format!("[start] The stream `{STREAM}` started"),
-            THE_STREAM_STARTS_WITHIN,
-        );
+        for (stream_name, _) in streams {
+            runtime.wait_until_standard_error_carries(
+                &format!("[start] The stream `{stream_name}` started"),
+                THE_STREAM_STARTS_WITHIN,
+            );
+        }
         let graph =
             the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
         let machine = graph["machine"]
@@ -95,7 +129,7 @@ impl TatolabdPublishingTheStream {
             runtime,
             machine_root,
             ports,
-            broadcast_path: format!("{machine}/{STREAM}.hang"),
+            machine,
             async_runtime: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
@@ -117,8 +151,17 @@ impl TatolabdPublishingTheStream {
 
     /// The stream's broadcast as an anonymous client of `listener` reads it.
     fn the_broadcast_at(&self, listener: LocalRelayListener) -> BroadcastReadAtAListener {
+        self.the_broadcast_of_the_stream_at(STREAM, listener)
+    }
+
+    /// `stream_name`'s broadcast as an anonymous client of `listener` reads it.
+    fn the_broadcast_of_the_stream_at(
+        &self,
+        stream_name: &str,
+        listener: LocalRelayListener,
+    ) -> BroadcastReadAtAListener {
         let dial_url = self.dial_url_of(listener);
-        let broadcast_path = self.broadcast_path.clone();
+        let broadcast_path = format!("{}/{stream_name}.hang", self.machine);
         self.async_runtime.block_on(async move {
             let subscribed = moq_tokio::origin::spawn();
             let session = moq_tokio::connect::Config::default()
@@ -165,6 +208,30 @@ impl TatolabdPublishingTheStream {
                 "stream": STREAM,
                 "type": WRITER_NODE_TYPE,
                 "name": node,
+            }),
+        );
+    }
+
+    /// Add to [`READER_STREAM`] a `RelayTrackSource` named `node` reading
+    /// `port` of the writer in [`STREAM`] through the loopback listener, and
+    /// expose its output private.
+    fn add_a_relay_track_source_reading(&self, node: &str, port: &str) {
+        self.call(
+            "add_node",
+            serde_json::json!({
+                "stream": READER_STREAM,
+                "type": "tatolab.stream:RelayTrackSource",
+                "name": node,
+                "config": {
+                    "relay_url": self.dial_url_of(LocalRelayListener::Loopback).as_str(),
+                    "track_address": format!("{}/{STREAM}/writer/{port}", self.machine),
+                },
+            }),
+        );
+        self.call(
+            "expose_port",
+            serde_json::json!({
+                "stream": READER_STREAM, "node": node, "port": "track", "level": "private",
             }),
         );
     }
@@ -221,6 +288,25 @@ impl BroadcastReadAtAListener {
         None
     }
 
+    /// `track_name` subscribed once it carries a group, asking again until
+    /// [`MOQ_BUDGET`] runs out.
+    async fn the_track_once_it_is_served(&self, track_name: &str) -> moq_net::track::Ordered {
+        let deadline = tokio::time::Instant::now() + MOQ_BUDGET;
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(mut ordered) = self.subscribe_to(track_name).await
+                && let Ok(Ok(Some(_))) =
+                    tokio::time::timeout(Duration::from_secs(2), ordered.next_group()).await
+            {
+                return ordered;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!(
+            "{:?}: `{track_name}` is not served within {MOQ_BUDGET:?}",
+            self.listener
+        )
+    }
+
     async fn subscribe_to(
         &self,
         track_name: &str,
@@ -272,17 +358,21 @@ fn the_number_in(object: &ObjectRead) -> u64 {
 }
 
 /// Every object is the bytes the node wrote, stamped from its envelope, in
-/// the groups the node opened: each group starts at a multiple of three and
-/// holds the messages after it until the next. A reader that falls behind may
-/// be handed a later group in place of an earlier one, as live delivery does,
-/// but never part of a group.
+/// the groups the node opened.
 fn assert_the_objects_are_the_messages_as_written(objects: &[ObjectRead]) {
     for object in objects {
         assert_eq!(
             object.timestamp_ns,
-            u128::from(the_number_in(object)) * 1_000_000
+            u128::from(the_number_in(object)) * NANOSECONDS_BETWEEN_MESSAGE_STAMPS
         );
     }
+    assert_the_objects_are_grouped_as_the_node_wrote_them(objects);
+}
+
+/// Each group starts at a multiple of three and holds the messages after it
+/// until the next. A reader that falls behind may be handed a later group in
+/// place of an earlier one, as live delivery does, but never part of a group.
+fn assert_the_objects_are_grouped_as_the_node_wrote_them(objects: &[ObjectRead]) {
     let mut groups: Vec<(u64, Vec<u64>)> = Vec::new();
     for object in objects {
         match groups.last_mut() {
@@ -498,6 +588,111 @@ fn a_node_added_exposed_removed_and_added_again_live_is_published_withdrawn_and_
                 .is_some(),
             "a node added again under a removed one's name is not published"
         );
+    });
+    publishing.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+#[test]
+fn an_internal_port_is_at_no_relay_and_lowering_a_port_to_internal_ends_its_loopback_subscribers() {
+    let mut publishing = TatolabdPublishingTheStream::start();
+    let at_loopback = publishing.the_broadcast_at(LocalRelayListener::Loopback);
+    let private_track = format!("writer/{PRIVATE_PORT}");
+    let internal_track = format!("unexposed/{PUBLIC_PORT}");
+
+    let mut on_loopback = publishing
+        .async_runtime
+        .block_on(at_loopback.the_track_once_it_is_served(&private_track));
+    publishing.add_a_writer_named("unexposed");
+    publishing.async_runtime.block_on(async {
+        let internal_port_at_loopback = tokio::time::timeout(NEVER_SERVED_GRACE, async {
+            let mut ordered = at_loopback.subscribe_to(&internal_track).await?;
+            ordered.next_group().await
+        })
+        .await;
+        assert!(
+            !matches!(internal_port_at_loopback, Ok(Ok(Some(_)))),
+            "the loopback listener served an internal port"
+        );
+    });
+
+    publishing.put_the_port_at(PRIVATE_PORT, "internal");
+    publishing.async_runtime.block_on(async {
+        let ended = tokio::time::timeout(MOQ_BUDGET, async {
+            loop {
+                match on_loopback.next_group().await {
+                    Ok(Some(_)) => continue,
+                    _ => return,
+                }
+            }
+        })
+        .await;
+        assert!(
+            ended.is_ok(),
+            "a port lowered to internal still reaches a subscriber at loopback"
+        );
+    });
+    publishing.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// Stream B reads stream A's private port the one way a stream reads another's:
+/// a `RelayTrackSource` subscribed at the loopback listener. What it writes is
+/// read back off B's own broadcast — the objects A wrote, in A's groups, A's
+/// spacing kept by the re-based stamps — and the source carries the catalog
+/// entry of the track it reads.
+#[test]
+fn a_relay_track_source_in_another_stream_reads_a_private_port_through_loopback_keeping_its_groups_and_spacing()
+ {
+    let mut publishing = TatolabdPublishingTheStream::start_beside_a_reader_stream();
+    publishing.add_a_relay_track_source_reading("private-numbers", PRIVATE_PORT);
+    publishing.add_a_relay_track_source_reading("public-numbers", PUBLIC_PORT);
+    let reader_at_loopback =
+        publishing.the_broadcast_of_the_stream_at(READER_STREAM, LocalRelayListener::Loopback);
+
+    publishing.async_runtime.block_on(async {
+        let read_track = "private-numbers/track";
+        assert!(
+            reader_at_loopback
+                .the_first_group_of_once_it_is_served(read_track)
+                .await
+                .is_some(),
+            "the reader stream's source never wrote the private port it reads"
+        );
+        let objects = reader_at_loopback.the_next_objects_of(read_track, 12).await;
+        assert_the_objects_are_grouped_as_the_node_wrote_them(&objects);
+        for pair in objects.windows(2) {
+            let messages_between = the_number_in(&pair[1]) - the_number_in(&pair[0]);
+            assert_eq!(
+                pair[1].timestamp_ns - pair[0].timestamp_ns,
+                u128::from(messages_between) * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,
+                "the source keeps the track's spacing whatever the arrival: {objects:?}"
+            );
+        }
+
+        let catalog_track = reader_at_loopback
+            .broadcast
+            .track(hang::Catalog::DEFAULT_NAME)
+            .unwrap();
+        let mut catalog_consumer =
+            hang::catalog::Consumer::<()>::new(catalog_track.subscribe(None).await.unwrap());
+        let catalog = loop {
+            let catalog = tokio::time::timeout(MOQ_BUDGET, catalog_consumer.next())
+                .await
+                .expect("the reader stream's catalog lists the source reading the public port")
+                .expect("hang reads the catalog")
+                .expect("the catalog track is live");
+            if !catalog.binary.tracks.is_empty() {
+                break catalog;
+            }
+        };
+        assert_eq!(
+            catalog.binary.tracks.keys().collect::<Vec<_>>(),
+            [&"public-numbers/track".to_string()],
+            "the source carries the entry of the track it reads, and a track with none carries none"
+        );
+        let carried_entry =
+            serde_json::to_value(&catalog.binary.tracks["public-numbers/track"]).unwrap();
+        assert_eq!(carried_entry["mode"], "stream");
+        assert_eq!(carried_entry["mime"], "text/plain");
     });
     publishing.runtime.interrupt_and_expect_a_clean_exit();
 }

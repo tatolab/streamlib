@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! A node that writes numbered messages, for the tests of the publisher: the
-//! `n`th message is the bytes `message <n>`, stamped `n` milliseconds, and
-//! opens a group when `n` is a multiple of three. It writes each one on both
+//! `n`th message is the bytes `message <n>`, stamped `10 n` milliseconds — the
+//! interval it writes at — and opens a group when `n` is a multiple of three. It writes each one on both
 //! of its ports, `numbers` declaring a catalog entry and `more_numbers` none.
 //! Compiled into a test build alone.
 
@@ -14,6 +14,9 @@ use streamlib::sdk::processors::{ContinuousProcessor, PROCESSOR_REGISTRY};
 
 /// Every how many messages one opens a group.
 pub const MESSAGES_PER_GROUP: u64 = 3;
+
+/// The stamp of the message after one, the interval the node writes at.
+pub const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
 
 #[streamlib::sdk::processor(
     execution = continuous(interval_ms = 10),
@@ -40,7 +43,7 @@ impl ContinuousProcessor for NumberedMessageWriterTestNode::Processor {
             self.outputs.write_bytes_with_timestamp(
                 port,
                 format!("message {message_number}").as_bytes(),
-                message_number as i64 * 1_000_000,
+                message_number as i64 * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,
                 group_boundary,
             )?;
         }
