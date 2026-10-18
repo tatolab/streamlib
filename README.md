@@ -29,7 +29,7 @@ Wire cameras, models and your own code into a stream. Expose an output, and apps
 - **Frames stay on the GPU.** Capture lands in device memory and reaches torch through DLPack with no
   CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
   `frame.cpu()`.
-- **Native built-ins for the parts with deadlines**: camera, window, test pattern, microphone,
+- **Native built-ins for the parts with deadlines**: camera, test pattern, microphone,
   speaker, H.264 / H.265 / Opus codecs, and a virtual camera on Linux — native code inside the
   runtime, configured from Python.
 - **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
@@ -55,8 +55,8 @@ Tatolab turns anything into a live stream: cameras, models and your own code, wi
 Python and shared with people and agents. Today a stream runs on one machine, and you and your
 agents work on it there.
 
-- **Live video and audio with a model in the loop** — a camera into torch on the GPU, the result in a
-  window or on a virtual camera that other applications can pick.
+- **Live video and audio with a model in the loop** — a camera into torch on the GPU, the result on
+  a virtual camera that other applications can pick.
 - **Agents that watch and change a running stream** — over MCP, on the machine itself, or from
   another machine over ssh.
 - **Tailscale users, first.** Reaching a stream on another machine of your tailnet is
@@ -136,14 +136,11 @@ tatolabd                    # in a terminal of its own: this machine's runtime
 ```
 
 ```bash
-tatolab new my-stream       # camera → GPU effect → window, plus a CPU meter, wired and working
+tatolab new my-stream       # test pattern → GPU effect, plus a CPU meter, wired and working
 cd my-stream
 uv sync                     # the stream's venv: tatolab-stream and numpy
-tatolab dev                 # your camera, live and inverted, in a window
+tatolab dev                 # the test pattern, live and inverted on the GPU, its brightness logged
 ```
-
-No camera on this machine? `tatolab new my-stream --test-pattern` wires the built-in test pattern
-instead.
 
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
 starts one. `dev` asks it to load the project in the working directory: the runtime compiles
@@ -160,7 +157,7 @@ it runs on after the command returns, and the runtime loads it again each time i
 `stream.py` is wiring and nothing else:
 
 ```python
-from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream
+from tatolab.stream import StreamBuilder, TestPatternSource, stream
 
 from nodes.brightness_meter import BrightnessMeter
 from nodes.inverting_effect import InvertingEffect
@@ -168,37 +165,37 @@ from nodes.inverting_effect import InvertingEffect
 
 @stream
 def main(stream_builder: StreamBuilder) -> None:
-    """Camera, inverted, in a window; brightness logged once a second."""
-    source = stream_builder.add(CameraSource)
+    """The test pattern, inverted and exposed; brightness logged once a second."""
+    source = stream_builder.add(TestPatternSource)
     effect = stream_builder.add(InvertingEffect)
     meter = stream_builder.add(BrightnessMeter)
-    window = stream_builder.add(
-        DisplayWindow, config={"title": "Tatolab", "scaling": "fit"}
-    )
     stream_builder.connect(source.output("video"), effect.input("video_from_upstream"))
-    stream_builder.connect(effect.output("video_to_downstream"), window.input("video"))
     stream_builder.connect(
         effect.output("video_to_downstream"), meter.input("video_from_upstream")
     )
     stream_builder.expose(effect.output("video_to_downstream"))
 ```
 
-One output, two readers: the window shows the frame, the meter measures it. `add` names each node
-after its class, lowercased (`invertingeffect`), unless you pass `name=`. A built-in's `config` is
-a `TypedDict` — `CameraSourceConfig`, `DisplayWindowConfig` — so a type checker catches a
-misspelled key. `expose` makes an output private, readable by other streams and code on this
+One output, two kinds of reader: the meter measures each frame, and the exposure lets code outside
+the stream read it. `add` names each node after its class, lowercased (`invertingeffect`), unless
+you pass `name=`. Swap `TestPatternSource` for `CameraSource` to run your camera through the same
+effect. A built-in's `config` is a `TypedDict` — `CameraSourceConfig`, `TestPatternSourceConfig` —
+so a type checker catches a misspelled key. `expose` makes an output private, readable by other streams and code on this
 machine; `expose(output, Exposure.PUBLIC)`, with `Exposure` imported from `tatolab.stream`, makes
 it public, readable off the machine too.
 
 Another stream on this machine reads that output by its address, `<stream>/<node>/<port>`:
 
 ```python
+from tatolab.stream import H264Encoder, StreamBuilder, stream
+
+
 @stream
 def recorder(stream_builder: StreamBuilder) -> None:
-    window = stream_builder.add(DisplayWindow)
+    encoder = stream_builder.add(H264Encoder)
     stream_builder.connect(
         stream_builder.remote_output("main/invertingeffect/video_to_downstream"),
-        window.input("video"),
+        encoder.input("video"),
     )
 ```
 
@@ -284,7 +281,7 @@ project directory, and `--name NAME` loads the stream under a name other than it
 ## The `tatolab` CLI
 
 ```text
-tatolab new DIRECTORY [--test-pattern]
+tatolab new DIRECTORY
 tatolab run [TARGET] [-f FILE] [--dir DIR] [--name NAME] [-d | --detach]
 tatolab dev [TARGET] [-f FILE] [--dir DIR] [--name NAME]
 
@@ -488,7 +485,7 @@ WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nod
 No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
 an ordinary `pyproject.toml`.
 
-**It costs you** a small set of built-ins. Camera, window, test pattern, microphone, speaker, the
+**It costs you** a small set of built-ins. Camera, test pattern, microphone, speaker, the
 H.264 / H.265 / Opus codec pairs and the virtual camera ship inside the runtime because their
 per-frame paths have deadlines a separate process cannot meet, need primitives only the
 runtime has, or present a device to other applications; everything else is a package or a node you
@@ -569,8 +566,8 @@ running, not when you wire the graph.
 <br>
 
 Every GPU operation in the runtime goes through Vulkan. CUDA appears only at the edge, as the tensor
-a frame hands to torch. On Linux, `libcuda`, the Vulkan loader and the window system are opened at
-run time, never linked, so one build runs on any system that has them; the runtime also carries its
+a frame hands to torch. On Linux, `libcuda` and the Vulkan loader are opened at run time, never
+linked, so one build runs on any system that has them; the runtime also carries its
 own Vulkan loader and Mesa's lavapipe, a CPU Vulkan driver, for a machine with no GPU driver. On
 macOS the runtime carries its own Vulkan loader and MoltenVK and links only the system. It also carries its own GLSL compiler,
 so writing a pixel effect or a kernel needs no shader toolchain.
@@ -591,7 +588,6 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 | Built-in | |
 |---|---|
 | `CameraSource` | V4L2 on Linux (zero-copy DMA-BUF when the device exports it), AVFoundation on macOS (zero-copy IOSurface import). |
-| `DisplayWindow` | A vsync'd window; add as many as the stream needs. |
 | `TestPatternSource` | Color bars, for a machine with no camera. |
 | `MicrophoneSource`, `SpeakerSink` | The machine's audio backend, as timestamped sample blocks. |
 | `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` | Hardware codecs: Vulkan Video on Linux, VideoToolbox on macOS. |
@@ -599,7 +595,7 @@ runtime, configured from Python, and their per-frame paths never enter an interp
 | `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
 
 From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a
-model-input tensor kernel, node-owned windows, and the monotonic clock every node shares.
+model-input tensor kernel, and the monotonic clock every node shares.
 
 **Platforms.** Two floors, the same API on both:
 
@@ -640,8 +636,8 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
   (Linux) — install your GPU vendor's Vulkan driver (the proprietary NVIDIA driver, or
   `mesa-vulkan-drivers` for AMD and Intel) and the loader (`libvulkan1`), then check that
   `vulkaninfo` runs.
-- **No camera, or the wrong one** — `tatolab new … --test-pattern` wires `TestPatternSource`
-  instead. `CameraSource` takes the first capture device unless its `device_id` config names one (a
+- **No camera, or the wrong one** — the stream `tatolab new` writes starts from
+  `TestPatternSource` and needs none. `CameraSource` takes the first capture device unless its `device_id` config names one (a
   V4L2 path such as `/dev/video2` on Linux, a camera's unique ID on macOS); a named device that
   cannot be opened is refused by name.
 - **No picture on macOS** — the first run asks for camera access without waiting: the stream starts,

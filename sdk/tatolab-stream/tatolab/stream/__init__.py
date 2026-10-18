@@ -7,7 +7,7 @@ A stream is a `@stream` function that adds, links and exposes nodes on a
 `StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
 declares its execution and ports with `@node` / `@node.input` / `@node.output` and
 receives a capability-typed context in every lifecycle hook. The contexts, link
-endpoints, GPU classes, windows and timer a node is handed while it runs are
+endpoints, GPU classes and timer a node is handed while it runs are
 `typing.Protocol`s the runtime implements; the clock and the timer's start are
 functions that reach the runtime when called, and raise `RuntimeError` naming
 themselves where no runtime is lent. A message's payload is bytes;
@@ -24,8 +24,6 @@ from . import log as log
 from . import msgpack as msgpack
 from ._built_in_nodes import CameraSource as CameraSource
 from ._built_in_nodes import CameraSourceConfig as CameraSourceConfig
-from ._built_in_nodes import DisplayWindow as DisplayWindow
-from ._built_in_nodes import DisplayWindowConfig as DisplayWindowConfig
 from ._built_in_nodes import H264Decoder as H264Decoder
 from ._built_in_nodes import H264DecoderConfig as H264DecoderConfig
 from ._built_in_nodes import H264Encoder as H264Encoder
@@ -78,10 +76,6 @@ from ._node_context_protocols import (
 from ._message import Message as Message
 from ._node_declaration import AudioWindowContract as AudioWindowContract
 from ._node_declaration import node as node
-from ._node_owned_window_protocols import NodeOwnedWindow as NodeOwnedWindow
-from ._node_owned_window_protocols import (
-    NodeOwnedWindowEvents as NodeOwnedWindowEvents,
-)
 from ._stream_graph_builder import Exposure as Exposure
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
@@ -138,8 +132,6 @@ __all__ = [
     "ColorInfo",
     "ComputeKernel",
     "ContentLight",
-    "DisplayWindow",
-    "DisplayWindowConfig",
     "EncodedAudioPacket",
     "EncodedVideoFrame",
     "Exposure",
@@ -181,8 +173,6 @@ __all__ = [
     "NodeOutputPortReference",
     "NodeOutputPortReferenceByAddress",
     "NodeOutputTextureRing",
-    "NodeOwnedWindow",
-    "NodeOwnedWindowEvents",
     "NodeReference",
     "OpaqueFdAllocationExport",
     "OpusDecoder",

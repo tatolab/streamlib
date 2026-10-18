@@ -36,17 +36,17 @@ MINIMAL_STREAM_SOURCE = (
 APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION = "def setup(runtime):\n    pass\n"
 
 FRONT_STREAM_SOURCE = (
-    "from tatolab.stream import DisplayWindow, StreamBuilder, TestPatternSource, stream\n"
+    "from tatolab.stream import H264Encoder, StreamBuilder, TestPatternSource, stream\n"
     "\n"
     "\n"
     "@stream\n"
     "def front(stream_builder: StreamBuilder) -> None:\n"
-    '    """Front camera, in a window.\n'
+    '    """Front pattern, encoded to H.264.\n'
     "\n"
     '    The second paragraph is not listed."""\n'
     "    source = stream_builder.add(TestPatternSource)\n"
-    "    window = stream_builder.add(DisplayWindow)\n"
-    '    stream_builder.connect(source.output("video"), window.input("video"))\n'
+    "    encoder = stream_builder.add(H264Encoder)\n"
+    '    stream_builder.connect(source.output("video"), encoder.input("video"))\n'
 )
 TWO_STREAM_SOURCE = FRONT_STREAM_SOURCE + (
     "\n"
@@ -60,12 +60,12 @@ FRONT_STREAM_GRAPH = {
     "stream": "front",
     "nodes": [
         {"name": "testpatternsource", "type": "tatolab.stream:TestPatternSource", "config": {}},
-        {"name": "displaywindow", "type": "tatolab.stream:DisplayWindow", "config": {}},
+        {"name": "h264encoder", "type": "tatolab.stream:H264Encoder", "config": {}},
     ],
     "links": [
         {
             "source": {"node": "testpatternsource", "port": "video"},
-            "target": {"node": "displaywindow", "port": "video"},
+            "target": {"node": "h264encoder", "port": "video"},
         }
     ],
     "exposed": [],
@@ -643,7 +643,7 @@ def test_several_streams_are_refused_listing_each_with_its_description(anchor_di
     message = refusal_of(run_compile_entry(anchor_directory, "--dir", str(anchor_directory)))
 
     assert "defines 2 @stream functions" in message
-    assert "    front — Front camera, in a window.\n" in message
+    assert "    front — Front pattern, encoded to H.264.\n" in message
     assert "The second paragraph" not in message, "only the description's first line is listed"
     assert "    back\n" in message
     assert f"`tatolab run --dir {anchor_directory} stream.py:<function>`" in message
@@ -725,7 +725,7 @@ def test_a_named_function_the_file_lacks_is_refused_listing_its_streams(anchor_d
     message = refusal_of(run_compile_entry(anchor_directory, "stream.py:side"))
 
     assert "defines no @stream function named `side`" in message
-    assert "    front — Front camera, in a window.\n" in message
+    assert "    front — Front pattern, encoded to H.264.\n" in message
     assert "    back" in message
 
 

@@ -275,7 +275,6 @@ echo "[vivid-color] Running the round trip against $VIVID_DEVICE..."
 # runtime's environment, which the stream's compile and its processor
 # interpreters inherit; naming the camera keeps a rig carrying both a virtual
 # and a real one from handing it the first-enumerated node.
-export DISPLAY="${DISPLAY:-:0}"
 export RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}"
 if [ "$PIPELINE" = "python" ]; then
     if ! STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \

@@ -1173,9 +1173,9 @@ fn publish_loss_counts_on_processor_node(
             discarded_sample_counts_by_inbound_link: input_inner
                 .map(|input_inner| input_inner.discarded_sample_counts_by_inbound_link())
                 .unwrap_or_default(),
-            refused_bag_counts_by_output_port: processor
+            bag_counts_by_output_port: processor
                 .iceoryx2_output_writer_inner()
-                .map(|output_inner| output_inner.refused_bag_counts_by_output_port())
+                .map(|output_inner| output_inner.bag_counts_by_output_port())
                 .unwrap_or_default(),
         }),
     );
@@ -1700,7 +1700,8 @@ mod tests {
             Some(serde_json::json!({
                 "frames_dropped": 0,
                 "dropped_bags_by_link": { "L-helper-placed": 0 },
-                "refused_bags_by_output_port": {}
+                "refused_bags_by_output_port": {},
+                "written_bags_by_output_port": {}
             })),
             "a wired link renders zero before its helper's board exists"
         );
@@ -1725,7 +1726,8 @@ mod tests {
             Some(serde_json::json!({
                 "frames_dropped": 5,
                 "dropped_bags_by_link": { "L-helper-placed": 5 },
-                "refused_bags_by_output_port": {}
+                "refused_bags_by_output_port": {},
+                "written_bags_by_output_port": {}
             })),
         );
 
@@ -1740,16 +1742,18 @@ mod tests {
             .expect("the output entry carries its channel's generation");
         let (source_board_writer, _source_helper_node) =
             board_of_a_helper_stub_spawn(&source_instance, &source_id, &["out1"]);
-        source_board_writer
+        let out1_mirror = source_board_writer
             .claim_output_port_entry("out1", output_port_wiring_generation)
-            .expect("the source's board carries its declared port")
-            .mirror_refused_bags(2);
+            .expect("the source's board carries its declared port");
+        out1_mirror.mirror_refused_bags(2);
+        out1_mirror.mirror_written_bags(61);
         assert_eq!(
             rendered_metrics_in(&mut graph, &source_id),
             Some(serde_json::json!({
                 "frames_dropped": 0,
                 "dropped_bags_by_link": {},
-                "refused_bags_by_output_port": { "out1": 2 }
+                "refused_bags_by_output_port": { "out1": 2 },
+                "written_bags_by_output_port": { "out1": 61 }
             })),
         );
     }
@@ -2793,7 +2797,8 @@ mod tests {
             Some(serde_json::json!({
                 "frames_dropped": 0,
                 "dropped_bags_by_link": {},
-                "refused_bags_by_output_port": { "out1": 0 }
+                "refused_bags_by_output_port": { "out1": 0 },
+                "written_bags_by_output_port": { "out1": 0 }
             })),
             "a wired output port that has refused nothing renders a zero"
         );
@@ -2812,6 +2817,11 @@ mod tests {
         assert_eq!(
             link.rendered_metrics_of(&source_id).unwrap()["refused_bags_by_output_port"],
             serde_json::json!({ "out1": 1 }),
+        );
+        assert_eq!(
+            link.rendered_metrics_of(&source_id).unwrap()["written_bags_by_output_port"],
+            serde_json::json!({ "out1": 1 }),
+            "the refused bag is not counted as written; the one sent is"
         );
         assert_eq!(
             link.rendered_metrics_of(&dest_id).unwrap()["dropped_bags_by_link"],

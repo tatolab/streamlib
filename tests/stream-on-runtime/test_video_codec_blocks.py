@@ -24,7 +24,10 @@ from collections.abc import Callable
 
 import pytest
 
-from block_wiring_streams import h264_round_trip_into_a_window, h265_round_trip_into_a_window
+from block_wiring_streams import (
+    h264_round_trip_exposing_the_decoded_port,
+    h265_round_trip_exposing_the_decoded_port,
+)
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from tatolab.stream import (
     H264Decoder,
@@ -76,7 +79,7 @@ ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS = {
 
 CODEC_ROUND_TRIPS = {
     "h264": {
-        "stream": h264_round_trip_into_a_window,
+        "stream": h264_round_trip_exposing_the_decoded_port,
         "probed_stream": an_h264_round_trip_with_probes,
         "marker_classes": (H264Encoder, H264Decoder),
         "rendered_types": {
@@ -85,7 +88,7 @@ CODEC_ROUND_TRIPS = {
         },
     },
     "h265": {
-        "stream": h265_round_trip_into_a_window,
+        "stream": h265_round_trip_exposing_the_decoded_port,
         "probed_stream": an_h265_round_trip_with_probes,
         "marker_classes": (H265Encoder, H265Decoder),
         "rendered_types": {
@@ -117,12 +120,13 @@ def test_node_name_defaults_to_the_type_name(
 def test_the_round_trip_wires_without_an_adapter(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]", codec
 ):
-    """Pattern into encoder, encoder into decoder, decoder into window — the
-    port names compose as published, which is what makes four `stream_builder.add`
-    calls and three `stream_builder.connect` calls the whole of a codec round trip.
-    The builder checks no port name, so the proof is the engine's load."""
+    """Pattern into encoder, encoder into decoder, the decoded port exposed — the
+    port names compose as published, which is what makes three `stream_builder.add`
+    calls, two `stream_builder.connect` calls and one `stream_builder.expose` the
+    whole of a codec round trip. The builder checks no port name, so the proof is
+    the engine's load."""
     outcome = run_stream_on_tatolabd_with_no_vulkan_driver(CODEC_ROUND_TRIPS[codec]["stream"])
-    assert outcome.loaded and outcome.loaded_node_count == 4, outcome.tatolab_run_stderr_text
+    assert outcome.loaded and outcome.loaded_node_count == 3, outcome.tatolab_run_stderr_text
 
 
 # ---- the round trip in a real graph (GPU) ----------------------------------

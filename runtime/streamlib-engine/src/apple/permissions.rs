@@ -346,11 +346,6 @@ pub fn request_camera_permission() -> Result<bool> {
     request_capture_device_permission(PrivacyGatedCaptureDevice::Camera)
 }
 
-pub fn request_display_permission() -> Result<bool> {
-    tracing::info!("Display permission granted (no system prompt required on macOS)");
-    Ok(true)
-}
-
 /// Make sure microphone access has been requested, returning at once. `true`
 /// when the microphone is allowed or the user is being asked; `false`, with the
 /// reason logged, when it is refused.

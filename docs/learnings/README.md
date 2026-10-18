@@ -76,9 +76,6 @@ Avoid the two failure modes:
   `kCVReturnInvalidArgument` (-6661) from `CVPixelBufferCreateWithIOSurface` on any `'RGBA'`
   IOSurface; CoreMedia and VideoToolbox report only the conformance-cropped extent, never the
   coded one; a compression session with reordering off accepts repeated or backwards stamps
-- [@docs/learnings/camera-display-e2e-validation.md](camera-display-e2e-validation.md) —
-  Validate camera→display end-to-end via virtual camera + window capture; gate on
-  contracts, never on engine tracing prose
 - [@docs/learnings/vulkanalia-empty-slice-cast.md](vulkanalia-empty-slice-cast.md) —
   Cryptic `Cast` trait error when passing `&[]` to vulkanalia Vulkan methods
 - [@docs/learnings/pubsub-lazy-init-silent-noop.md](pubsub-lazy-init-silent-noop.md) —

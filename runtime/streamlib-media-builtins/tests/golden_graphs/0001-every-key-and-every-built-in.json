@@ -19,25 +19,6 @@
       }
     },
     {
-      "id": "golden02",
-      "name": "displaywindow",
-      "type": "tatolab.stream:DisplayWindow",
-      "config": {
-        "title": "Golden graph",
-        "width": 640,
-        "height": 360,
-        "scaling": "fit"
-      },
-      "config_checksum": 0,
-      "ports": {
-        "inputs": [],
-        "outputs": []
-      },
-      "components": {
-        "state": "Running"
-      }
-    },
-    {
       "id": "golden03",
       "name": "camerasource",
       "type": "tatolab.stream:CameraSource",
@@ -220,7 +201,7 @@
         "port": "video"
       },
       "target": {
-        "node": "displaywindow",
+        "node": "h265encoder",
         "port": "video"
       },
       "capacity": 16,

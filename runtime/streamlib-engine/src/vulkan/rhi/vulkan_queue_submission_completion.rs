@@ -374,6 +374,7 @@ mod tests {
             .expect("recorder");
         recorder.begin().expect("begin");
         recorder
+            .host_inner_mut()
             .submit_with_semaphores(&gate_wait, &callers_own_signal)
             .expect("gated submit");
         let snapshot_of_gated_submission = device.snapshot_of_queue_submissions_made_so_far();

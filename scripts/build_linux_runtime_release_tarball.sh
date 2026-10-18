@@ -93,8 +93,7 @@ cargo xtask build-runtime --release
 
 runtime_unit_root="$PWD/target/tatolab-runtime"
 mkdir -p "$runtime_unit_root/lib/systemd/user"
-cp installer/tatolabd.service installer/tatolabd-restart-for-a-display-at-login.service \
-	"$runtime_unit_root/lib/systemd/user/"
+cp installer/tatolabd.service "$runtime_unit_root/lib/systemd/user/"
 
 uv build --wheel --out-dir /tmp/tatolab-stream-dist sdk/tatolab-stream
 uv venv --python 3.12 /tmp/runtime-unit-gate-venv

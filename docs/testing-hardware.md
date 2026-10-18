@@ -153,8 +153,8 @@ system-exclusive resource. Concretely, today:
 - Anything calling `HostVulkanDevice::new()` directly or through a
   helper like `try_vulkan_device()`, `setup_device()`,
   `create_test_device()`.
-- Tests in `vulkan/rhi/` that exercise GPU memory, swapchains,
-  pipelines, sync primitives.
+- Tests in `vulkan/rhi/` that exercise GPU memory, pipelines, sync
+  primitives.
 - Audio device probes: anything opening a stream through the audio
   device seam against a real backend, which needs an audio device rather
   than a GPU — a reachable session for the PipeWire arm, `/dev/snd` and an
@@ -167,8 +167,8 @@ system-exclusive resource. Concretely, today:
   Settings › Privacy & Security › Screen & System Audio Recording › System
   Audio Recording Only); without it the tap returns digital zeros and the test
   fails naming the setting.
-- Future: V4L2 camera capture, display swapchains, anything that holds a
-  kernel-level exclusive lock.
+- Future: V4L2 camera capture, anything that holds a kernel-level
+  exclusive lock.
 
 Pure-logic tests in the same file (e.g. cache-path string formatting,
 SPIR-V reflection validators that operate on byte arrays without ever
@@ -247,18 +247,6 @@ not `cargo`. A CoreAudio capture test checks access before it measures:
 4. Don't reach for `#[serial]` from the `serial_test` crate; the
    `--test-threads=1` invocation in tier 2 already serializes
    everything.
-
-### A window test on Apple
-
-On Apple only the process's first thread can drive the window event pump, and
-libtest never runs a test there. A window test is therefore its own
-`harness = false` binary whose `main` drives the pump, declared with
-`required-features = ["hardware-tests"]` so it is built only in tier 2, and with
-an empty `main` off Apple. Two exist today:
-`streamlib-engine`'s `processor_owned_window_on_the_first_thread` and
-`streamlib-media-builtins`' `two_display_windows_on_the_macos_window_server`.
-The second asserts against the window server, so it refuses to run while the
-login session's screen is locked.
 
 ## CI
 

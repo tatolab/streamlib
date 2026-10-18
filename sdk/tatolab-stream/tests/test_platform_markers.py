@@ -37,8 +37,6 @@ LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
     "v4l2loopback and udev are Linux",
     "the boot session is a Linux kernel file",
     "only Linux resolves the runtime directory from XDG_RUNTIME_DIR",
-    "DISPLAY and WAYLAND_DISPLAY are how Linux names a window server",
-    "the close gesture is an X11 client message",
     "only Linux owns SIGHUP",
     "only Linux hands SIGINT back when a run ends",
 }
@@ -48,7 +46,6 @@ RIG_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
     "DMA-BUF modifiers",
     "CUDA",
     "a camera",
-    "a display",
     "an audio device",
 }
 

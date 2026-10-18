@@ -98,7 +98,7 @@ fn help_lists_exactly_the_served_verbs() {
 }
 
 #[test]
-fn new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header() {
+fn new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header() {
     let scratch_directory = tempfile::tempdir().unwrap();
     let new_output = run_tatolab(scratch_directory.path(), &["new", "My Probe App"]);
     assert!(
@@ -126,18 +126,19 @@ fn new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header() {
 
     let stream_py = fs::read_to_string(project_directory.join("stream.py")).unwrap();
     assert!(
-        stream_py.contains(
-            "from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream"
-        )
+        stream_py.contains("from tatolab.stream import StreamBuilder, TestPatternSource, stream"),
+        "{stream_py}"
     );
-    assert!(stream_py.contains("stream_builder.add(CameraSource)"));
-    assert!(!stream_py.contains("TestPatternSource"));
+    assert!(stream_py.contains("stream_builder.add(TestPatternSource)"));
+    for absent_name in ["CameraSource", "DisplayWindow"] {
+        assert!(!stream_py.contains(absent_name), "{stream_py}");
+    }
     assert_eq!(
         stream_py,
         scaffold_template_text("stream.py")
             .strip_prefix(SCAFFOLD_TEMPLATE_LICENSE_HEADER)
             .unwrap(),
-        "the camera variant is the template itself"
+        "the sample stream is the template itself"
     );
 
     for node_module in [
@@ -156,7 +157,7 @@ fn new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header() {
     let pyproject_toml = fs::read_to_string(project_directory.join("pyproject.toml")).unwrap();
     assert!(pyproject_toml.contains("name = \"my-probe-app\""));
     assert!(
-        pyproject_toml.contains("dependencies = [\"tatolab-stream>=0.41\", \"numpy>=2.1\"]"),
+        pyproject_toml.contains("dependencies = [\"tatolab-stream>=0.48\", \"numpy>=2.1\"]"),
         "the written project floors tatolab-stream above PyPI's 0.0.0 placeholder: {pyproject_toml}"
     );
     assert_eq!(
@@ -183,38 +184,6 @@ fn new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header() {
     assert!(next_steps.contains("    cd My Probe App\n"), "{next_steps}");
     assert!(next_steps.contains("    uv sync\n"), "{next_steps}");
     assert!(next_steps.contains("    tatolab dev\n"), "{next_steps}");
-}
-
-#[test]
-fn new_with_test_pattern_wires_the_test_pattern_and_names_no_camera() {
-    let scratch_directory = tempfile::tempdir().unwrap();
-    let new_output = run_tatolab(
-        scratch_directory.path(),
-        &["new", "pattern-app", "--test-pattern"],
-    );
-    assert!(new_output.status.success());
-    let project_directory = scratch_directory.path().join("pattern-app");
-    assert_eq!(
-        every_file_under(&project_directory),
-        expected_scaffolded_file_paths()
-    );
-
-    let stream_py = fs::read_to_string(project_directory.join("stream.py")).unwrap();
-    assert!(!stream_py.contains("SPDX-License-Identifier"));
-    assert!(
-        stream_py.contains(
-            "from tatolab.stream import DisplayWindow, StreamBuilder, TestPatternSource, stream"
-        ),
-        "{stream_py}"
-    );
-    assert!(stream_py.contains("stream_builder.add(TestPatternSource)"));
-    assert!(stream_py.contains("A Tatolab stream: test pattern →"));
-    assert!(stream_py.contains("\"\"\"Test pattern, inverted,"));
-    assert!(!stream_py.contains("CameraSource"));
-    assert!(!stream_py.to_lowercase().contains("camera"), "{stream_py}");
-
-    let pyproject_toml = fs::read_to_string(project_directory.join("pyproject.toml")).unwrap();
-    assert!(pyproject_toml.contains("name = \"pattern-app\""));
 }
 
 #[test]

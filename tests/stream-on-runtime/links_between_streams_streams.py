@@ -8,7 +8,7 @@ Each is loaded under the short name its test gives with `--name`: the source
 stream as `a`, the reading stream as `b`, so a reader names a port `a/<node>/<port>`.
 """
 
-from tatolab.stream import DisplayWindow, StreamBuilder, TestPatternSource, stream
+from tatolab.stream import H264Encoder, StreamBuilder, TestPatternSource, stream
 
 from links_between_streams_probes import CountsEachBagItReads, RelaysEachFrameDownstream
 
@@ -22,15 +22,16 @@ SECOND_PATTERN_NODE = "secondpattern"
 RELAY_NODE = "relay"
 PATTERN_COUNTER_NODE = "patterncounter"
 SECOND_PATTERN_COUNTER_NODE = "secondpatterncounter"
-WINDOW_NODE = "window"
+ENCODER_NODE = "encoder"
+ENCODED_COUNTER_NODE = "encodedcounter"
 
 PATTERN_PORT = "video"
 RELAY_PORT = "video_to_downstream"
 COUNTER_PORT = "bags_from_upstream"
-WINDOW_PORT = "video"
+ENCODER_PORT = "video"
+ENCODED_PORT = "encoded_video"
 
 PATTERN_CONFIG = {"width": 320, "height": 180}
-WINDOW_CONFIG = {"width": 160, "height": 90, "title": "links between streams"}
 
 #: A machine no test machine is named.
 ANOTHER_MACHINE = "elsewhere"
@@ -60,20 +61,23 @@ def a_pattern_and_a_python_relay_each_exposed_private(stream_builder: StreamBuil
 
 
 @stream
-def b_reading_the_pattern_into_a_python_counter_and_the_relay_into_a_window(
+def b_reading_the_pattern_into_a_python_counter_and_the_relay_into_a_native_encoder(
     stream_builder: StreamBuilder,
 ) -> None:
-    """`a`'s native pattern into a Python counter, and `a`'s Python relay into a native window."""
+    """`a`'s native pattern into a Python counter, and `a`'s Python relay into a native
+    encoder whose output a second Python counter reads."""
     counter = _add_a_counter(stream_builder)
-    window = stream_builder.add(DisplayWindow, name=WINDOW_NODE, config=WINDOW_CONFIG)
+    encoder = stream_builder.add(H264Encoder, name=ENCODER_NODE)
+    encoded_counter = _add_a_counter(stream_builder, name=ENCODED_COUNTER_NODE)
     stream_builder.connect(
         stream_builder.remote_output(f"{SOURCE_STREAM_NAME}/{PATTERN_NODE}/{PATTERN_PORT}"),
         counter.input(COUNTER_PORT),
     )
     stream_builder.connect(
         stream_builder.remote_output(f"{SOURCE_STREAM_NAME}/{RELAY_NODE}/{RELAY_PORT}"),
-        window.input(WINDOW_PORT),
+        encoder.input(ENCODER_PORT),
     )
+    stream_builder.connect(encoder.output(ENCODED_PORT), encoded_counter.input(COUNTER_PORT))
 
 
 @stream
@@ -154,5 +158,5 @@ def b_linking_into_another_streams_input(stream_builder: StreamBuilder) -> None:
     pattern = _add_a_pattern(stream_builder)
     stream_builder.connect(
         pattern.output(PATTERN_PORT),
-        stream_builder.remote_output(f"{SOURCE_STREAM_NAME}/{WINDOW_NODE}/{WINDOW_PORT}"),  # type: ignore[arg-type]
+        stream_builder.remote_output(f"{SOURCE_STREAM_NAME}/{ENCODER_NODE}/{ENCODER_PORT}"),  # type: ignore[arg-type]
     )

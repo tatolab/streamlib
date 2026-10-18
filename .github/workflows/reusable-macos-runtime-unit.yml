@@ -148,16 +148,16 @@ jobs:
         run: |
           /tmp/wheel-check/bin/python -m pytest -v tests/test_third_party_notices.py
 
-      # The MVP sentence on a clean machine, minus the camera no runner has:
-      # `tatolab new`'s test-pattern variant through the Python effect into a
-      # window, run attached on the machine's `tatolabd` on the Vulkan driver
-      # the lend carries. The project's venv holds what a user's `uv sync`
+      # The MVP sentence on a clean machine: `tatolab new`'s sample stream —
+      # the test pattern through the Python effect — run attached on the
+      # machine's `tatolabd` on the Vulkan driver the lend carries. The project's venv holds what a user's `uv sync`
       # gives it — `tatolab-stream`, from the wheel built above because no
       # index carries this version yet, and the numpy the scaffold declares —
       # and no runtime. The machine lock is the root-owned file Tatolab.app
       # creates at first launch; a runner has no app, so this step creates it.
-      # `tatolabd` mirrors every record a stream emits on its standard error,
-      # so the evidence is read from its log.
+      # The frame count is read off the stream's `graph` while it runs; the
+      # rest of the evidence from `tatolabd`'s log, which mirrors every record
+      # a stream emits.
       - name: The scaffolded stream runs on the driver the lend carries
         run: |
           tatolabd_executable="$GITHUB_WORKSPACE/target/tatolab-runtime/bin/tatolabd"
@@ -187,7 +187,7 @@ jobs:
             sleep 1
           done
 
-          "$tatolab_executable" new /tmp/scaffold-check --test-pattern
+          "$tatolab_executable" new /tmp/scaffold-check
           python3 -m venv /tmp/scaffold-check/.venv
           /tmp/scaffold-check/.venv/bin/pip install 'msgpack>=1.0'
           /tmp/scaffold-check/.venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
@@ -230,6 +230,7 @@ jobs:
           "$tatolab_executable" run > /tmp/scaffold-run.log 2>&1 &
           tatolab_pid=$!
           sleep 20
+          "$tatolab_executable" graph --stream main > /tmp/scaffold-graph.json || true
           interrupt_and_expect_a_clean_exit "tatolab run" "$tatolab_pid" /tmp/scaffold-run.log
           interrupt_and_expect_a_clean_exit tatolabd "$tatolabd_pid" /tmp/tatolabd.log
           trap - EXIT
@@ -248,14 +249,28 @@ jobs:
             echo "::error::the scaffolded effect raised on a live frame"
             exit 1
           fi
-          frames_shown="$(sed -n 's/.*DisplayWindow: stopped (\([0-9]*\) frames).*/\1/p' /tmp/tatolabd.log | tail -1)"
-          # Far enough to prove the graph runs end to end, not a frame-rate bar:
-          # the runner's GPU is a paravirtual device.
-          if [ -z "$frames_shown" ] || [ "$frames_shown" -lt 60 ]; then
-            echo "::error::the window showed ${frames_shown:-no} frames in 20s"
+          echo "::group::graph --stream main"
+          cat /tmp/scaffold-graph.json
+          echo "::endgroup::"
+          # The stream loaded, and its source wrote frames into the graph. Far
+          # enough to prove the graph runs end to end, not a frame-rate bar: the
+          # runner's GPU is a paravirtual device.
+          frames_written="$(python3 -c '
+          import json
+          try:
+              graph = json.load(open("/tmp/scaffold-graph.json"))
+          except ValueError:
+              raise SystemExit(0)
+          for node in graph.get("nodes", []):
+              if node.get("name") == "testpatternsource":
+                  metrics = node.get("components", {}).get("metrics", {})
+                  print(metrics.get("written_bags_by_output_port", {}).get("video", ""))
+          ')"
+          if [ -z "$frames_written" ] || [ "$frames_written" -lt 60 ]; then
+            echo "::error::TestPatternSource.video wrote ${frames_written:-no} frames in 20s, by the stream's graph"
             exit 1
           fi
-          echo "the window showed $frames_shown frames"
+          echo "TestPatternSource.video wrote $frames_written frames"
 
       - name: Keep the wheel for a clean-machine run
         uses: actions/upload-artifact@v6

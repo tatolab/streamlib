@@ -8,8 +8,7 @@
 //! `streamlib::vulkan::rhi::HostVulkanDevice`. Where the host device
 //! owns the privileged state — VMA allocator + DMA-BUF export pools,
 //! DRM modifier probe, transfer / encode / decode / compute queues,
-//! the per-queue submit-mutex matrix, swapchain extensions — the
-//! consumer device holds only what the carve-out in
+//! the per-queue submit-mutex matrix — the consumer device holds only what the carve-out in
 //! `docs/architecture/subprocess-rhi-parity.md` permits:
 //!
 //! - DMA-BUF FD import (`vkAllocateMemory` with `VkImportMemoryFdInfoKHR`).

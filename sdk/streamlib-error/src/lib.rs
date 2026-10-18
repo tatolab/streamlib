@@ -45,9 +45,6 @@ pub enum Error {
     #[error("the engine could not give the stream its GPU context: {0}")]
     EngineResourceRefusedAtAStreamsStart(String),
 
-    #[error("No display surface available: {0}")]
-    DisplaySurfaceUnavailable(String),
-
     #[error("Shader compilation failed: {0}")]
     ShaderCompilation(String),
 

@@ -23,7 +23,7 @@ use iceoryx2::service::port_factory::blackboard::PortFactory as BlackboardPortFa
 use parking_lot::Mutex;
 use streamlib_ipc_types::{
     HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot,
-    MAX_INBOUND_LINKS_PER_DESTINATION, OutputPortRefusedBagCountBoardEntry,
+    MAX_INBOUND_LINKS_PER_DESTINATION, OutputPortBagCountBoardEntry,
 };
 
 use crate::core::error::{Error, Result};
@@ -83,11 +83,7 @@ struct HelperProcessLossCountBoardReadHandles {
     >,
     output_ports: Vec<(
         String,
-        EntryHandle<
-            ipc::Service,
-            HelperProcessLossCountBoardKey,
-            OutputPortRefusedBagCountBoardEntry,
-        >,
+        EntryHandle<ipc::Service, HelperProcessLossCountBoardKey, OutputPortBagCountBoardEntry>,
     )>,
     _reader: Reader<ipc::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
@@ -168,10 +164,7 @@ impl HelperProcessLossCountBoard {
     }
 
     /// What the helper last wrote on `output_port`'s entry.
-    pub fn output_port_entry(
-        &self,
-        output_port: &str,
-    ) -> Option<OutputPortRefusedBagCountBoardEntry> {
+    pub fn output_port_entry(&self, output_port: &str) -> Option<OutputPortBagCountBoardEntry> {
         self.board_read_handles
             .output_ports
             .iter()
@@ -200,22 +193,16 @@ struct InboundLinkLossCountBoardSlotBeingWritten {
 }
 
 /// One output port's entry, and what was last written on it.
-struct OutputPortRefusedBagCountBoardEntryBeingWritten {
-    entry: EntryHandleMut<
-        ipc::Service,
-        HelperProcessLossCountBoardKey,
-        OutputPortRefusedBagCountBoardEntry,
-    >,
-    last_written: OutputPortRefusedBagCountBoardEntry,
+struct OutputPortBagCountBoardEntryBeingWritten {
+    entry:
+        EntryHandleMut<ipc::Service, HelperProcessLossCountBoardKey, OutputPortBagCountBoardEntry>,
+    last_written: OutputPortBagCountBoardEntry,
 }
 
 /// The writer and its entry handles, dropped together.
 struct HelperProcessLossCountBoardWriteHandles {
     inbound_link_slots: Vec<Mutex<InboundLinkLossCountBoardSlotBeingWritten>>,
-    output_ports: Vec<(
-        String,
-        Mutex<OutputPortRefusedBagCountBoardEntryBeingWritten>,
-    )>,
+    output_ports: Vec<(String, Mutex<OutputPortBagCountBoardEntryBeingWritten>)>,
     _writer: Writer<ipc::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
@@ -267,9 +254,9 @@ impl HelperProcessLossCountBoardWriter {
                 writer.entry(&key).map(|entry| {
                     (
                         output_port.clone(),
-                        Mutex::new(OutputPortRefusedBagCountBoardEntryBeingWritten {
+                        Mutex::new(OutputPortBagCountBoardEntryBeingWritten {
                             entry,
-                            last_written: OutputPortRefusedBagCountBoardEntry::default(),
+                            last_written: OutputPortBagCountBoardEntry::default(),
                         }),
                     )
                 })
@@ -325,9 +312,9 @@ impl HelperProcessLossCountBoardWriter {
     }
 
     /// Claim `output_port`'s entry for the channel `wiring_generation` names,
-    /// writing a zero count under it, and hand back the mirror its refused-bag
-    /// counter writes through — or `None` for a port this board carries no
-    /// entry for.
+    /// writing zero counts under it, and hand back the mirror its refused-bag
+    /// and written-bag counters write through — or `None` for a port this board
+    /// carries no entry for.
     ///
     /// Every mirror an earlier channel of the port handed out writes nothing
     /// from here on.
@@ -335,7 +322,7 @@ impl HelperProcessLossCountBoardWriter {
         self: &Arc<Self>,
         output_port: &str,
         wiring_generation: u64,
-    ) -> Option<OutputPortRefusedBagCountBoardMirror> {
+    ) -> Option<OutputPortBagCountBoardMirror> {
         let (output_port_index, (_, entry_being_written)) = self
             .board_write_handles
             .output_ports
@@ -343,14 +330,15 @@ impl HelperProcessLossCountBoardWriter {
             .enumerate()
             .find(|(_, (declared, _))| declared == output_port)?;
         let mut entry_being_written = entry_being_written.lock();
-        entry_being_written.last_written = OutputPortRefusedBagCountBoardEntry {
+        entry_being_written.last_written = OutputPortBagCountBoardEntry {
             wiring_generation,
             refused_bags: 0,
+            written_bags: 0,
         };
         entry_being_written
             .entry
             .update_with_copy(entry_being_written.last_written);
-        Some(OutputPortRefusedBagCountBoardMirror {
+        Some(OutputPortBagCountBoardMirror {
             board: Arc::clone(self),
             output_port_index,
             wiring_generation,
@@ -400,28 +388,43 @@ impl InboundLinkLossCountBoardSlotMirror {
     }
 }
 
-/// Where one channel of an output port writes its refused-bag count: the
-/// port's entry, under the channel's generation.
-pub struct OutputPortRefusedBagCountBoardMirror {
+/// Where one channel of an output port writes its refused-bag and written-bag
+/// counts: the port's entry, under the channel's generation.
+#[derive(Clone)]
+pub struct OutputPortBagCountBoardMirror {
     board: Arc<HelperProcessLossCountBoardWriter>,
     output_port_index: usize,
     wiring_generation: u64,
 }
 
-impl OutputPortRefusedBagCountBoardMirror {
+impl OutputPortBagCountBoardMirror {
     /// Write `refused_bags` as the port's refused-bag total, kept at its
     /// largest for the reason an inbound slot's totals are.
     pub(crate) fn mirror_refused_bags(&self, refused_bags: u64) {
+        self.write_on_the_entry_while_it_is_this_channels(|last_written| {
+            last_written.refused_bags = last_written.refused_bags.max(refused_bags);
+        });
+    }
+
+    /// Write `written_bags` as the port's written-bag total, kept at its
+    /// largest for the same reason.
+    pub(crate) fn mirror_written_bags(&self, written_bags: u64) {
+        self.write_on_the_entry_while_it_is_this_channels(|last_written| {
+            last_written.written_bags = last_written.written_bags.max(written_bags);
+        });
+    }
+
+    fn write_on_the_entry_while_it_is_this_channels(
+        &self,
+        update: impl FnOnce(&mut OutputPortBagCountBoardEntry),
+    ) {
         let (_, entry_being_written) =
             &self.board.board_write_handles.output_ports[self.output_port_index];
         let mut entry_being_written = entry_being_written.lock();
         if entry_being_written.last_written.wiring_generation != self.wiring_generation {
             return;
         }
-        entry_being_written.last_written.refused_bags = entry_being_written
-            .last_written
-            .refused_bags
-            .max(refused_bags);
+        update(&mut entry_being_written.last_written);
         entry_being_written
             .entry
             .update_with_copy(entry_being_written.last_written);
@@ -542,6 +545,9 @@ pub struct ProcessorLossCountSnapshot {
     pub discarded_samples_by_inbound_link: BTreeMap<String, u64>,
     /// Bags refused at the ceiling per output port with a channel.
     pub refused_bags_by_output_port: BTreeMap<String, u64>,
+    /// Bags sent per output port with a channel — what the losses downstream
+    /// are counted against.
+    pub written_bags_by_output_port: BTreeMap<String, u64>,
 }
 
 impl HelperPlacedProcessorLossCounts {
@@ -641,13 +647,16 @@ impl HelperPlacedProcessorLossCounts {
             }
         }
         for (output_port, port) in &wiring.output_ports_with_outbound_links {
-            let refused_bags = board
+            let this_channels_entry = board
                 .and_then(|board| board.output_port_entry(output_port))
                 .filter(|written| written.wiring_generation == port.wiring_generation)
-                .map_or(0, |written| written.refused_bags);
+                .unwrap_or_default();
             snapshot
                 .refused_bags_by_output_port
-                .insert(output_port.clone(), refused_bags);
+                .insert(output_port.clone(), this_channels_entry.refused_bags);
+            snapshot
+                .written_bags_by_output_port
+                .insert(output_port.clone(), this_channels_entry.written_bags);
         }
         snapshot
     }
@@ -737,16 +746,18 @@ mod tests {
             "a total that arrives late never lowers the count"
         );
 
-        writer
-            .claim_output_port_entry("video", 8)
-            .unwrap()
-            .mirror_refused_bags(2);
+        let video_mirror = writer.claim_output_port_entry("video", 8).unwrap();
+        video_mirror.mirror_refused_bags(2);
+        video_mirror.mirror_written_bags(60);
+        video_mirror.mirror_written_bags(59);
         assert_eq!(
             board.output_port_entry("video"),
-            Some(OutputPortRefusedBagCountBoardEntry {
+            Some(OutputPortBagCountBoardEntry {
                 wiring_generation: 8,
                 refused_bags: 2,
-            })
+                written_bags: 60,
+            }),
+            "a written total that arrives late never lowers the count either"
         );
         assert_eq!(board.output_port_entry("audio"), None);
         assert!(writer.claim_output_port_entry("audio", 9).is_none());
@@ -872,15 +883,21 @@ mod tests {
         let counts = HelperPlacedProcessorLossCounts::default();
         counts.hold_the_board_of_this_spawn(board).unwrap();
         let refused_bags_of_video = || counts.loss_count_snapshot().refused_bags_by_output_port;
+        let written_bags_of_video = || counts.loss_count_snapshot().written_bags_by_output_port;
 
         let first_channel = counts.note_outbound_link("video", "L-first-out");
-        writer
+        let first_channels_mirror = writer
             .claim_output_port_entry("video", first_channel)
-            .unwrap()
-            .mirror_refused_bags(3);
+            .unwrap();
+        first_channels_mirror.mirror_refused_bags(3);
+        first_channels_mirror.mirror_written_bags(90);
         assert_eq!(
             refused_bags_of_video(),
             BTreeMap::from([("video".to_string(), 3)])
+        );
+        assert_eq!(
+            written_bags_of_video(),
+            BTreeMap::from([("video".to_string(), 90)])
         );
 
         counts.forget_link("L-first-out");
@@ -889,6 +906,11 @@ mod tests {
             refused_bags_of_video(),
             BTreeMap::from([("video".to_string(), 0)]),
             "the earlier channel's total is not the reopened channel's"
+        );
+        assert_eq!(
+            written_bags_of_video(),
+            BTreeMap::from([("video".to_string(), 0)]),
+            "the earlier channel's written total is not the reopened channel's"
         );
         writer
             .claim_output_port_entry("video", second_channel)

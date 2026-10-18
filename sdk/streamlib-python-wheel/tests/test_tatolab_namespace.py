@@ -24,18 +24,12 @@ import tatolab.runtime._engine as engine
 import tatolab.stream
 from tatolab.stream._runtime_lend import runtime_backed_protocol_registry
 
-ENGINE_CLASS_NAMES_THE_RENAME_RETIRED = (
-    "ProcessorOwnedWindow",
-    "ProcessorOwnedWindowEvents",
-    "ProcessorLinkDataAccess",
-)
+ENGINE_CLASS_NAMES_THE_RENAME_RETIRED = ("ProcessorLinkDataAccess",)
 CLASS_NAMES_THE_RENAME_RETIRED = (
     *ENGINE_CLASS_NAMES_THE_RENAME_RETIRED,
     "ProcessorOutputTextureRing",
 )
 ENGINE_CLASS_NAMES_IN_THEIR_PLACE = (
-    "NodeOwnedWindow",
-    "NodeOwnedWindowEvents",
     "NodeLinkDataAccess",
 )
 GPU_CONTEXT_METHOD_NAMES_THE_RENAME_RETIRED = (
@@ -129,6 +123,17 @@ def test_the_engine_publishes_none_of_the_processor_names_the_rename_retired():
     assert "processor_id" not in inspect.signature(
         engine.open_runtime_context_full_access_for_helper_process
     ).parameters
+
+
+def test_the_runtime_offers_a_node_no_window():
+    for module_holding_public_names in (tatolab.stream, tatolab.runtime, engine):
+        window_names = [name for name in dir(module_holding_public_names) if "OwnedWindow" in name]
+        assert window_names == [], (module_holding_public_names.__name__, window_names)
+    for gpu_context_class in (
+        _native_engine_class("GpuContextLimitedAccess"),
+        _native_engine_class("GpuContextFullAccess"),
+    ):
+        assert not hasattr(gpu_context_class, "create_window"), gpu_context_class
 
 
 def test_the_engine_publishes_the_node_names_in_their_place():

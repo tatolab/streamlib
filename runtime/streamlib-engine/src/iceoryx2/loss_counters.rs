@@ -4,7 +4,8 @@
 //! What a processor's ports lost, counted where `graph` reads them: bags per
 //! inbound link at a destination, samples a windowed port's flush discarded per
 //! inbound link, and bags per output port refused at a producer's channel
-//! ceiling.
+//! ceiling — beside the bags each output port sent, which those losses are
+//! counted against.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -87,7 +88,7 @@ impl<Count> Default for CumulativeCountsByName<Count> {
     }
 }
 
-impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
+impl<Count: Default> CumulativeCountsByName<Count> {
     fn count_for(&self, name: &str) -> Arc<Count> {
         Arc::clone(self.per_name.lock().entry(name.to_string()).or_default())
     }
@@ -96,12 +97,18 @@ impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
         self.per_name.lock().remove(name);
     }
 
-    fn snapshot_by_name(&self) -> BTreeMap<String, u64> {
+    fn snapshot_by_name_of(&self, total_of: impl Fn(&Count) -> u64) -> BTreeMap<String, u64> {
         self.per_name
             .lock()
             .iter()
-            .map(|(name, count)| (name.clone(), count.total()))
+            .map(|(name, count)| (name.clone(), total_of(count)))
             .collect()
+    }
+}
+
+impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
+    fn snapshot_by_name(&self) -> BTreeMap<String, u64> {
+        self.snapshot_by_name_of(Count::total)
     }
 
     fn total(&self) -> u64 {
@@ -322,47 +329,67 @@ impl DiscardedSampleCountsByInboundLink {
     }
 }
 
-/// One output port's cumulative count of bags refused at its channel's payload
-/// ceiling. Cloning shares the count.
+/// One output port's two cumulative counts: bags refused at its channel's
+/// payload ceiling, and bags sent on its channel.
+#[derive(Default)]
+struct OutputPortRefusedAndWrittenBagCounts {
+    refused_bags: CumulativeCount,
+    written_bags: CumulativeCount,
+}
+
+/// One output port's bag counters. Cloning shares the counts.
 #[derive(Clone, Default)]
-pub struct OutputPortRefusedBagCounter(Arc<CumulativeCount>);
+pub struct OutputPortBagCounters(Arc<OutputPortRefusedAndWrittenBagCounts>);
 
-impl OutputPortRefusedBagCounter {
-    /// Record one bag this port refused, and return the port's total after it.
+impl OutputPortBagCounters {
+    /// Record one bag this port refused, and return the port's refused total
+    /// after it.
     pub fn record_one_refused_bag(&self) -> u64 {
-        self.0.add(1)
+        self.0.refused_bags.add(1)
     }
 
-    /// How many bags this port has refused since its channel was opened.
-    pub fn refused_bag_count(&self) -> u64 {
-        self.0.total()
+    /// Record one bag this port sent.
+    pub fn record_one_written_bag(&self) {
+        self.0.written_bags.add(1);
     }
 
-    /// Write this count's every new total through `mirror`, or hand it back
-    /// where the count is already mirrored.
+    /// Write every new total of both counts through its mirror, or refuse
+    /// where the counts are already mirrored.
     pub(crate) fn mirror_every_new_total_into(
         &self,
-        mirror: LossCountMirror,
-    ) -> Result<(), LossCountMirror> {
-        self.0.mirror_every_new_total_into(mirror)
+        refused_bags_mirror: LossCountMirror,
+        written_bags_mirror: LossCountMirror,
+    ) -> Result<(), OutputPortBagCountsAlreadyMirrored> {
+        self.0
+            .refused_bags
+            .mirror_every_new_total_into(refused_bags_mirror)
+            .map_err(|_| OutputPortBagCountsAlreadyMirrored)?;
+        self.0
+            .written_bags
+            .mirror_every_new_total_into(written_bags_mirror)
+            .map_err(|_| OutputPortBagCountsAlreadyMirrored)
     }
 }
 
-/// Every output port's refused-bag counter for one producing processor.
+/// A second mirror refused on an output port's counts, which already have one.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct OutputPortBagCountsAlreadyMirrored;
+
+/// Every output port's bag counters for one producing processor.
 ///
 /// A refusal happens before the bag belongs to any link, so it is counted on the
-/// port that refused it. A port gets its counter when its channel publisher is
-/// installed and loses it when the publisher is released with the port's last
-/// link, the same life a link's count has.
+/// port that refused it, as a sent bag is. A port gets its counters when its
+/// channel publisher is installed and loses them when the publisher is released
+/// with the port's last link, the same life a link's count has.
 #[derive(Default)]
-pub struct RefusedBagCountsByOutputPort {
-    per_output_port: CumulativeCountsByName,
+pub struct BagCountsByOutputPort {
+    per_output_port: CumulativeCountsByName<OutputPortRefusedAndWrittenBagCounts>,
 }
 
-impl RefusedBagCountsByOutputPort {
-    /// The counter for `output_port`, minting a zeroed one on first ask.
-    pub fn counter_for_output_port(&self, output_port: &str) -> OutputPortRefusedBagCounter {
-        OutputPortRefusedBagCounter(self.per_output_port.count_for(output_port))
+impl BagCountsByOutputPort {
+    /// The counters for `output_port`, minting zeroed ones on first ask.
+    pub fn counters_for_output_port(&self, output_port: &str) -> OutputPortBagCounters {
+        OutputPortBagCounters(self.per_output_port.count_for(output_port))
     }
 
     /// Forget a port whose channel publisher was released.
@@ -370,10 +397,18 @@ impl RefusedBagCountsByOutputPort {
         self.per_output_port.forget(output_port);
     }
 
-    /// Every output port with a channel, and its count as it stands right now,
-    /// ordered by port name.
+    /// Every output port with a channel, and its refused total as it stands
+    /// right now, ordered by port name.
     pub fn refused_bag_count_snapshot_by_output_port(&self) -> BTreeMap<String, u64> {
-        self.per_output_port.snapshot_by_name()
+        self.per_output_port
+            .snapshot_by_name_of(|count| count.refused_bags.total())
+    }
+
+    /// Every output port with a channel, and its sent total as it stands right
+    /// now, ordered by port name.
+    pub fn written_bag_count_snapshot_by_output_port(&self) -> BTreeMap<String, u64> {
+        self.per_output_port
+            .snapshot_by_name_of(|count| count.written_bags.total())
     }
 }
 
@@ -455,14 +490,19 @@ mod tests {
     }
 
     #[test]
-    fn a_released_output_ports_refusals_leave_with_it_and_a_reopened_port_starts_from_zero() {
-        let counts = RefusedBagCountsByOutputPort::default();
-        let first_channel = counts.counter_for_output_port("video");
+    fn a_released_output_ports_counts_leave_with_it_and_a_reopened_port_starts_from_zero() {
+        let counts = BagCountsByOutputPort::default();
+        let first_channel = counts.counters_for_output_port("video");
         assert_eq!(first_channel.record_one_refused_bag(), 1);
         assert_eq!(first_channel.record_one_refused_bag(), 2);
+        first_channel.record_one_written_bag();
         assert_eq!(
             counts.refused_bag_count_snapshot_by_output_port(),
             BTreeMap::from([("video".to_string(), 2)])
+        );
+        assert_eq!(
+            counts.written_bag_count_snapshot_by_output_port(),
+            BTreeMap::from([("video".to_string(), 1)])
         );
 
         counts.forget_output_port("video");
@@ -472,13 +512,31 @@ mod tests {
                 .is_empty()
         );
 
-        let reopened_channel = counts.counter_for_output_port("video");
-        assert_eq!(reopened_channel.refused_bag_count(), 0);
+        let _reopened_channel = counts.counters_for_output_port("video");
         first_channel.record_one_refused_bag();
+        first_channel.record_one_written_bag();
         assert_eq!(
             counts.refused_bag_count_snapshot_by_output_port(),
             BTreeMap::from([("video".to_string(), 0)]),
             "a refusal on the released channel's handle must reach no reader"
+        );
+        assert_eq!(
+            counts.written_bag_count_snapshot_by_output_port(),
+            BTreeMap::from([("video".to_string(), 0)]),
+            "a send on the released channel's handle must reach no reader"
+        );
+    }
+
+    #[test]
+    fn a_ports_counters_install_their_mirrors_once() {
+        let counters = BagCountsByOutputPort::default().counters_for_output_port("video");
+        assert_eq!(
+            counters.mirror_every_new_total_into(Box::new(|_| {}), Box::new(|_| {})),
+            Ok(())
+        );
+        assert_eq!(
+            counters.mirror_every_new_total_into(Box::new(|_| {}), Box::new(|_| {})),
+            Err(OutputPortBagCountsAlreadyMirrored)
         );
     }
 }

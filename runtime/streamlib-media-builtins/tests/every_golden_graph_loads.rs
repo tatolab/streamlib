@@ -22,15 +22,15 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
         "0001-every-key-and-every-built-in.json",
-        "386a928afb8551c2254eb4fc735c6b5acd2460119fcf2715797399226fa881dc",
+        "bbf52c5c6cf8108ef1c901978abe070b34e1d12764462ccb1df79cda23052cc1",
     ),
     (
         "0002-every-key-with-exposure-levels.json",
-        "714587c2741474b96ec6414ec44dd433ca97261a5efdc9c56be5ae0c1c528113",
+        "2dd8a602a81595b922fc772116491b7d812a12ba7e7707708aa2b95a2d1a6020",
     ),
     (
         "0003-every-key-with-a-link-from-another-stream.json",
-        "10ba4a3fde1f0ebd37585cb07a933b4d1976fc89b2b831de28f07882725a3381",
+        "17cef4c1b095094a562647f15f20f3529d32955d85732159eb596bd6fc8ee725",
     ),
 ];
 

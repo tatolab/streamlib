@@ -12,7 +12,7 @@ use crate::core::error::{DeviceMemoryHeapBudgetSource, DeviceMemoryHeapLocality}
 use crate::core::{Error, Result};
 
 /// The room a frame allocation's own request must leave under its heap's
-/// budget, for the swapchain, codecs and other processes.
+/// budget, for codecs and other processes.
 pub(crate) const HEADROOM_BYTES_A_FRAME_REQUEST_MUST_LEAVE_UNDER_THE_DEVICE_MEMORY_BUDGET: u64 =
     64 * 1024 * 1024;
 

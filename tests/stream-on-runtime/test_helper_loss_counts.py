@@ -164,6 +164,7 @@ APP_PROCESS_METRICS_KEYS = {
     "frames_dropped",
     "dropped_bags_by_link",
     "refused_bags_by_output_port",
+    "written_bags_by_output_port",
 }
 
 
@@ -328,6 +329,9 @@ def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_o
 
     assert set(metrics) == APP_PROCESS_METRICS_KEYS, metrics
     assert metrics["refused_bags_by_output_port"]["bags"] == 0
+    assert metrics["written_bags_by_output_port"]["bags"] > 0, (
+        "the bags the helper sent render on the port that sent them"
+    )
     assert metrics["dropped_bags_by_link"] == {}, "the source has no inbound link"
     graph = loss_counting_stream.graph()
     assert loss_counting_stream.metrics_of("oversized-sink")["dropped_bags_by_link"] == {

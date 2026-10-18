@@ -80,10 +80,7 @@ pub use crate::vulkan::rhi::{HostMappingTier, HostMappingWrittenByGpu};
 pub use crate::vulkan::rhi::PixelBufferUploadFinalTextureLayout;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use crate::vulkan::rhi::{
-    MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentScalingMode, VulkanPresentCompositor,
-    VulkanPresentTarget,
-};
+pub use crate::vulkan::rhi::{OffscreenCompositorScalingMode, VulkanOffscreenCompositor};
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 

@@ -111,8 +111,6 @@ def test_every_runtime_backed_name_the_ticket_lists_is_held_by_tatolab_stream():
         "MonotonicTimer",
         "OpaqueFdAllocationExport",
         "IOSurfaceMachPortExport",
-        "NodeOwnedWindow",
-        "NodeOwnedWindowEvents",
         "monotonic_now_ns",
         "gpu_limited_access_of_the_typed_read_in_progress",
     } <= held_by_tatolab_stream

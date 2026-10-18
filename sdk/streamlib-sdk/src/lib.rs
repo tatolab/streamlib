@@ -80,7 +80,6 @@ pub mod sdk {
     pub use streamlib_engine::core::color;
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;
-    pub use streamlib_engine::core::display_info;
     pub use streamlib_engine::core::error;
     pub use streamlib_engine::core::execution;
     pub use streamlib_engine::core::graph;
@@ -95,11 +94,7 @@ pub mod sdk {
     pub use streamlib_engine::core::runtime;
     pub use streamlib_engine::core::unix_socket_path_cleared_for_bind;
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub use streamlib_engine::core::processor_owned_window;
     pub use streamlib_engine::core::texture;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub use streamlib_engine::core::window_event_pump;
 
     // ---- App authoring sugar ----
 
@@ -159,9 +154,7 @@ pub mod sdk {
     // ---- Permission helpers ----
 
     pub mod permissions {
-        pub use streamlib_engine::{
-            request_audio_permission, request_camera_permission, request_display_permission,
-        };
+        pub use streamlib_engine::{request_audio_permission, request_camera_permission};
     }
 
     // ---- Platform info ----

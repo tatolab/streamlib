@@ -27,8 +27,7 @@ use super::{
 };
 use crate::core::error::{Error, Result};
 use streamlib_ipc_types::{
-    HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot,
-    OutputPortRefusedBagCountBoardEntry,
+    HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry,
 };
 use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
 
@@ -443,7 +442,7 @@ impl Iceoryx2Node {
                 creator = creator.add_with_default::<InboundLinkLossCountBoardSlot>(key);
             }
             for key in output_port_keys(output_port_names.len()) {
-                creator = creator.add_with_default::<OutputPortRefusedBagCountBoardEntry>(key);
+                creator = creator.add_with_default::<OutputPortBagCountBoardEntry>(key);
             }
             creator.create().map_err(|refusal| {
                 Error::Runtime(format!(

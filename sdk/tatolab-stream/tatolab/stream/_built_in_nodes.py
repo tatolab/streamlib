@@ -16,8 +16,6 @@ from ._built_in_node import BuiltInNode
 __all__ = [
     "CameraSource",
     "CameraSourceConfig",
-    "DisplayWindow",
-    "DisplayWindowConfig",
     "H264Decoder",
     "H264DecoderConfig",
     "H264Encoder",
@@ -83,61 +81,6 @@ class CameraSource(BuiltInNode[CameraSourceConfig]):
     type: ClassVar[str] = "tatolab.stream:CameraSource"
 
 
-class DisplayWindowConfig(TypedDict, total=False):
-    """`DisplayWindow`'s config: the keys `stream_builder.add` takes."""
-
-    height: int
-    """Initial window height, in the desktop's logical pixels, so it is the same size on
-    a 1x and a 2x display.
-
-    Default: `720`.
-    """
-
-    scaling: Literal["fit", "fill", "stretch"]
-    """How the frame maps onto the window.
-
-    Values:
-        `fit`: Whole frame visible, black bars fill the rest.
-        `fill`: Window covered, frame overflow cropped.
-        `stretch`: Frame stretched to the window exactly.
-
-    Default: `"fit"`.
-    """
-
-    title: str
-    """Window title.
-
-    Default: `"StreamLib"`.
-    """
-
-    width: int
-    """Initial window width, in the desktop's logical pixels, so it is the same size on
-    a 1x and a 2x display.
-
-    Default: `1280`.
-    """
-
-
-class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
-    """Shows video frames in a window with vsync.
-
-    `video` takes any published `VideoFrame`. Add as many as the graph needs: each
-    instance registers its own window with the engine's shared event pump and renders on
-    its own thread. On a device whose driver carries no window-system support — the
-    runtime's bundled software driver — setup refuses by name and the node never reaches
-    Running; the stream is viewed by its URL or by a node that reads its frames. An
-    instance that cannot get a window otherwise drains its input without showing
-    anything, so upstream still sees a live consumer.
-
-    Inputs:
-        `video` (newest): Video frames to show in the window.
-
-    Config: `DisplayWindowConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:DisplayWindow"
-
-
 class H264DecoderConfig(TypedDict, total=False):
     """`H264Decoder`'s config: the keys `stream_builder.add` takes."""
 
@@ -161,8 +104,8 @@ class H264Decoder(BuiltInNode[H264DecoderConfig]):
     an ordinary `VideoFrame` on a pooled RGBA pixel-buffer surface at the
     conformance-windowed extent — never the coded picture — carrying the encoded frame's
     own timestamp and `color_info`, with `fps`, `texture_layout` and the HDR sidecars
-    absent, so `DisplayWindow` and a `read(port, into=VideoFrame)` consume it unchanged.
-    A decoded frame is buffer-backed, so it reaches a Python kernel through a DLPack
+    absent, so an encoder and a `read(port, into=VideoFrame)` consume it unchanged. A
+    decoded frame is buffer-backed, so it reaches a Python kernel through a DLPack
     landing copy, never by bare surface id.
 
     The decode session is minted at `setup()`. On a device with no hardware decoder for
@@ -263,8 +206,8 @@ class H265Decoder(BuiltInNode[H265DecoderConfig]):
     an ordinary `VideoFrame` on a pooled RGBA pixel-buffer surface at the
     conformance-windowed extent — never the coded picture — carrying the encoded frame's
     own timestamp and `color_info`, with `fps`, `texture_layout` and the HDR sidecars
-    absent, so `DisplayWindow` and a `read(port, into=VideoFrame)` consume it unchanged.
-    A decoded frame is buffer-backed, so it reaches a Python kernel through a DLPack
+    absent, so an encoder and a `read(port, into=VideoFrame)` consume it unchanged. A
+    decoded frame is buffer-backed, so it reaches a Python kernel through a DLPack
     landing copy, never by bare surface id.
 
     The decode session is minted at `setup()`. On a device with no hardware decoder for

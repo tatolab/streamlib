@@ -39,8 +39,8 @@
 //! What does NOT live here: anything that calls `vkAllocateMemory`
 //! without an `VkImportMemoryFdInfoKHR`, anything that builds a
 //! `VkPipeline`, anything that owns a `VkQueue` typed for the host's
-//! transfer / encode / decode / compute roles, anything tied to the
-//! swapchain. Those stay in `streamlib::vulkan::rhi` and are reachable
+//! transfer / encode / decode / compute roles. Those stay in
+//! `streamlib::vulkan::rhi` and are reachable
 //! only behind the host-side `GpuContextFullAccess` capability.
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]

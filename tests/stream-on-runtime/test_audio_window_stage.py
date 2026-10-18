@@ -363,6 +363,7 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
         "dropped_bags_by_link",
         "discarded_samples_by_link",
         "refused_bags_by_output_port",
+        "written_bags_by_output_port",
     }, metrics
     assert list(metrics["discarded_samples_by_link"]) == [link_id]
     assert metrics["discarded_samples_by_link"][link_id] % 300 == 0, (

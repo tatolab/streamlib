@@ -377,9 +377,8 @@ by design — so an in-process consumer reading the same surface
 every frame would pay a fresh import + QFOT acquire on every
 render.
 
-For hot-path in-process consumers (e.g. the display's
-`ProcessorOwnedWindow`, the `BlendingCompositor`, video
-encoders), populate Path 1 by **dual-registering** in the setup
+For hot-path in-process consumers (e.g. the `BlendingCompositor`,
+video encoders), populate Path 1 by **dual-registering** in the setup
 hook:
 
 ```rust

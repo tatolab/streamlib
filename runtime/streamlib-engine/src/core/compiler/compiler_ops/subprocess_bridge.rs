@@ -143,14 +143,7 @@ impl EscalateTransport {
     }
 }
 
-/// The lifecycle command whose hook may mint a processor-owned window. A
-/// window is a setup-phase resource request; `docs/plan/ARCHITECTURE.md`
-/// §Media I/O has it "requested in `setup()` … never minted
-/// mid-`process()`".
-///
-/// Named here because the escalate dispatch reads it and the spawn host sends
-/// it: a bare literal on each side would let a rename refuse every window
-/// silently.
+/// The lifecycle command that runs a helper's `setup()`.
 pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
 /// A shutdown command the parent sends a helper, paired with the reply tag the
@@ -432,25 +425,14 @@ impl SubprocessBridge {
         })
     }
 
-    /// Write a length-prefixed JSON lifecycle command to the subprocess.
-    ///
-    /// Link wiring never comes through here — see
-    /// [`SubprocessBridgeLinkDelivery`] — because every command sent here is
-    /// noted as the last lifecycle command the subprocess was sent.
+    /// Write a length-prefixed JSON lifecycle command to the subprocess. Link
+    /// wiring goes through [`SubprocessBridgeLinkDelivery`] instead.
     pub fn send(&self, msg: &serde_json::Value) -> Result<()> {
         if self.parent_side.the_subprocess_was_given_up_on() {
             return Err(Error::Runtime(format!(
                 "[{}] bridge marked dead, cannot send",
                 self.parent_side.processor_id
             )));
-        }
-        // The engine's only reading of which hook the child is inside.
-        // Setup-phase-only escalate ops (minting a processor-owned window)
-        // refuse on it, dispatched from the escalate worker while the hook
-        // that is allowed to ask is still running.
-        if let Some(lifecycle_command) = msg.get("cmd").and_then(|c| c.as_str()) {
-            self.registry
-                .note_lifecycle_command_sent_to_the_helper_process(lifecycle_command);
         }
         self.parent_side
             .write_frame_or_give_up_on_the_subprocess(msg)
@@ -506,10 +488,6 @@ impl SubprocessBridge {
 
 /// How links wired after a subprocess's setup command reach it: `wire_link`
 /// and `unwire_link` frames written straight onto its bridge's socket.
-///
-/// Never through [`SubprocessBridge::send`]: a link can be handed over while
-/// the subprocess is still inside `setup()`, and noting `wire_link` as its last
-/// lifecycle command would refuse the window that hook may mint.
 pub struct SubprocessBridgeLinkDelivery {
     processor_display_name: String,
     parent_side: Arc<ParentSideOfOneSubprocessBridgeSharedByItsThreads>,
@@ -595,25 +573,6 @@ impl Drop for SubprocessBridge {
         // through; closing that too would mean joining the worker, which this
         // path deliberately never blocks on.
         self.parent_side.shut_the_socket_down();
-        // Windows first: each present thread resolves surface ids against the
-        // same capability the handle release below evicts from, and dropping
-        // one closes its window and joins its thread. A helper that never
-        // called `close_processor_owned_window` — or crashed — releases its
-        // windows here, which is what makes teardown the backstop the plan
-        // says it is.
-        for (window_id, present_loop) in self.registry.drain_processor_owned_windows() {
-            tracing::debug!(
-                "[{}] closing processor-owned window '{}' at teardown",
-                self.parent_side.processor_id,
-                window_id
-            );
-            // Closed explicitly rather than by dropping the `Arc`: a request
-            // still in flight on the escalate worker can hold the last
-            // reference, and teardown must close the window rather than hand
-            // that decision to whoever lets go last. The close is bounded and
-            // detaches, so this path still never blocks indefinitely.
-            present_loop.close_the_window_and_join_its_present_thread();
-        }
         // Run the release path's kind-specific cleanup for everything the
         // helper never released — a crashed child must not strand cache
         // entries in a GpuContext that outlives every respawn, nor
@@ -1628,48 +1587,6 @@ mod tests {
                 "the helper's death refuses no link: {warnings:?}"
             );
         }
-    }
-
-    /// A link handed over while the helper is still inside `setup()` leaves the
-    /// engine reading it as in setup, so the window that hook may mint is not
-    /// refused. GPU-gated: a bridge needs a GPU capability to construct.
-    ///
-    /// Fail-without-fix: hand links over through `SubprocessBridge::send` and
-    /// `wire_link` becomes the last lifecycle command the helper was sent.
-    #[test]
-    fn a_link_handed_over_during_setup_leaves_the_helper_read_as_in_setup() {
-        const TEST: &str = "a_link_handed_over_during_setup_leaves_the_helper_read_as_in_setup";
-        let Some(sandbox) = gpu_sandbox_or_skip(TEST) else {
-            return;
-        };
-        let (parent_end, subprocess_end) = UnixStream::pair().expect("socketpair");
-        let bridge = SubprocessBridge::new(
-            parent_end,
-            sandbox,
-            "p-setup-phase-test".into(),
-            CatalogEntriesAHelperPlacedProcessorReaches::default(),
-        )
-        .expect("bridge construction");
-
-        bridge
-            .send(&serde_json::json!({"cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS}))
-            .expect("the setup command goes out");
-        bridge
-            .link_delivery_to_this_subprocess("SetupPhaseTestProcessor")
-            .hand_over_a_link_wired_after_setup(
-                PortDirection::Input,
-                &serde_json::json!({"link_id": "L-during-setup", "name": "in1"}),
-                OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
-            )
-            .expect("the link is handed over");
-
-        assert!(
-            bridge
-                .registry()
-                .the_last_lifecycle_command_sent_to_the_helper_process_was_setup(),
-            "a link handed over is not a lifecycle command"
-        );
-        drop(subprocess_end);
     }
 
     fn escalate_request_awaiting_an_answer(op: &str, request_id: &str) -> serde_json::Value {

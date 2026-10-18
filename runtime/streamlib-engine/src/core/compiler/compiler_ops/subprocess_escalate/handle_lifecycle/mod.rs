@@ -16,10 +16,8 @@ pub(crate) use processor_output_pools_of_one_helper::{
     ReleasedProcessorOutputPoolSlot,
 };
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use crate::core::compiler::compiler_ops::subprocess_bridge::SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestReleaseHandle;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
@@ -29,7 +27,6 @@ use crate::core::context::{
     GpuContextFullAccess, GpuContextLimitedAccess, OneOffAcquisitionShape,
     OneOffAcquisitionsHeldForOneNode, PooledTextureHandle,
 };
-use crate::core::processor_owned_window::WindowPresentLoopForOwningProcessor;
 use crate::core::rhi::PixelBuffer;
 
 /// Resource kept alive on behalf of a subprocess by
@@ -139,34 +136,12 @@ impl RegisteredHandle {
 ///
 /// It counts the node's one-offs per shape, refusing the next by name once
 /// 16 of a shape are held.
-///
-/// It is the one per-subprocess state the escalate dispatch has, so the
-/// windows that subprocess owns and the lifecycle hook it is currently inside
-/// live here too — both are per-helper, and both are released or forgotten at
-/// the same teardown.
 #[derive(Default)]
 pub(crate) struct EscalateHandleRegistry {
     /// Taken by a reservation's drop and by teardown, so it recovers rather
     /// than panics when poisoned, and is never held across an allocation.
     one_off_acquisitions_held_for_the_helper:
         Mutex<OneOffAcquisitionsHeldForOneNode<RegisteredHandle>>,
-    /// The windows this subprocess owns, each driving its own present
-    /// thread. Not a [`RegisteredHandle`]: releasing one stops and waits for
-    /// a thread rather than evicting a texture-cache entry, and a window id
-    /// must never reach the surface-share release path.
-    ///
-    /// Held by `Arc` so every op works on a window with this map's lock
-    /// already released: closing one waits on a thread the window server can
-    /// hold for as long as it likes, and `SubprocessBridge`'s teardown — a
-    /// path that deliberately never blocks — takes this same lock.
-    processor_owned_windows: Mutex<HashMap<String, Arc<WindowPresentLoopForOwningProcessor>>>,
-    /// The lifecycle command the parent last sent this helper — the engine's
-    /// only reading of which hook the child is inside.
-    ///
-    /// Setup-phase-only ops refuse on it. The helper's own typestate (which
-    /// Python object carries the method) is the child's guard and never the
-    /// engine's: both Python capability tiers collapse onto this one wire.
-    last_lifecycle_command_sent_to_the_helper_process: Mutex<Option<String>>,
     /// The processor output pools this helper's rings publish from. Their
     /// slots are never registry entries of their own: a frame's id names a
     /// generation, and the slot outlives it.
@@ -276,75 +251,6 @@ impl EscalateHandleRegistry {
             self.locked_one_off_acquisitions_held_for_the_helper()
                 .held_acquisition(handle_id),
         )
-    }
-
-    /// Record the lifecycle command the parent is about to send the helper,
-    /// so setup-phase-only escalate ops can refuse everything else by name.
-    pub(crate) fn note_lifecycle_command_sent_to_the_helper_process(&self, command: &str) {
-        *self
-            .last_lifecycle_command_sent_to_the_helper_process
-            .lock()
-            .expect("poisoned") = Some(command.to_string());
-    }
-
-    /// Whether the last thing the parent told this helper to do was `setup`.
-    ///
-    /// Named for what it reads rather than for the conclusion drawn from it:
-    /// nothing clears the field when a hook returns, so this still answers
-    /// true between setup completing and `run` being sent. That is the whole
-    /// engine-side reading of the child's phase, and it fails closed —
-    /// `false` before the parent has sent anything at all.
-    pub(crate) fn the_last_lifecycle_command_sent_to_the_helper_process_was_setup(&self) -> bool {
-        self.last_lifecycle_command_sent_to_the_helper_process
-            .lock()
-            .expect("poisoned")
-            .as_deref()
-            == Some(SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS)
-    }
-
-    /// The window map, recovered rather than panicked on when poisoned.
-    ///
-    /// The drain below runs from `SubprocessBridge`'s `Drop`, where a second
-    /// panic would abort the process instead of tearing one helper down.
-    fn locked_processor_owned_windows(
-        &self,
-    ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<WindowPresentLoopForOwningProcessor>>> {
-        self.processor_owned_windows
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    pub(crate) fn insert_processor_owned_window(
-        &self,
-        window_id: String,
-        present_loop: WindowPresentLoopForOwningProcessor,
-    ) {
-        let mut windows = self.locked_processor_owned_windows();
-        windows.insert(window_id, Arc::new(present_loop));
-    }
-
-    /// One window this subprocess owns, or `None` when the id names none.
-    ///
-    /// Hands the window out rather than running a closure under the map's
-    /// lock, so no op holds it while waiting on a present thread or reaching
-    /// the surface store.
-    pub(crate) fn processor_owned_window(
-        &self,
-        window_id: &str,
-    ) -> Option<Arc<WindowPresentLoopForOwningProcessor>> {
-        self.locked_processor_owned_windows()
-            .get(window_id)
-            .cloned()
-    }
-
-    /// Take every window this subprocess still owns, so a teardown path
-    /// closes them all — the release an owner that never called
-    /// `close_processor_owned_window` still gets.
-    pub(crate) fn drain_processor_owned_windows(
-        &self,
-    ) -> Vec<(String, Arc<WindowPresentLoopForOwningProcessor>)> {
-        let mut windows = self.locked_processor_owned_windows();
-        windows.drain().collect()
     }
 }
 

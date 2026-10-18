@@ -31,8 +31,8 @@ use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::helper_process_loss_count_board::OutputPortRefusedBagCountBoardMirror;
-use super::loss_counters::{OutputPortRefusedBagCounter, RefusedBagCountsByOutputPort};
+use super::helper_process_loss_count_board::OutputPortBagCountBoardMirror;
+use super::loss_counters::{BagCountsByOutputPort, OutputPortBagCounters};
 use super::{
     ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader,
     MessageGroupBoundary,
@@ -132,15 +132,15 @@ struct ChannelEgress {
     /// here rather than at each refusal, so the number the decision refuses on
     /// and the number it reports cannot drift. A frame past it is refused with
     /// [`Error::PayloadExceedsChannelCeiling`], counted on
-    /// [`Self::refused_bag_counter`], and the stream continues.
+    /// [`Self::bag_counters`], and the stream continues.
     largest_admitted_frame_bytes: usize,
     /// Best-effort tracking of the publisher's current data-segment capacity so
     /// a PowerOfTwo growth event is observable. Sample bytes, never frame bytes:
     /// primed to the hint's own sample size, and bumped (to `next_power_of_two`)
     /// the first time a loan's sample exceeds it.
     current_slot_capacity_bytes: usize,
-    /// This port's share of the writer's refused-bag counts.
-    refused_bag_counter: OutputPortRefusedBagCounter,
+    /// This port's share of the writer's refused-bag and written-bag counts.
+    bag_counters: OutputPortBagCounters,
 }
 
 /// One outbound `connect()` link from a source output port, and the notifier
@@ -187,7 +187,7 @@ pub struct OutputWriterInner {
     /// The output ports the processor declared. A write to one of these that
     /// has no channel yet is a drop; a write to any other name is a refusal.
     declared_output_ports: Mutex<HashSet<String>>,
-    refused_bag_counts: Arc<RefusedBagCountsByOutputPort>,
+    bag_counts: Arc<BagCountsByOutputPort>,
     /// The node's output-port catalog entries, reached once the processor is
     /// created for its node.
     catalog_entries_of_output_ports: std::sync::OnceLock<Arc<CatalogEntriesOfOutputPorts>>,
@@ -206,7 +206,7 @@ impl OutputWriterInner {
         Self {
             channels: Mutex::new(HashMap::new()),
             declared_output_ports: Mutex::new(HashSet::new()),
-            refused_bag_counts: Arc::new(RefusedBagCountsByOutputPort::default()),
+            bag_counts: Arc::new(BagCountsByOutputPort::default()),
             catalog_entries_of_output_ports: std::sync::OnceLock::new(),
         }
     }
@@ -291,50 +291,56 @@ impl OutputWriterInner {
                     streamlib_ipc_types::iceoryx2_sample_bytes_for_a_channel_frame(
                         expected_payload_bytes + FRAME_HEADER_SIZE,
                     ),
-                refused_bag_counter: self.refused_bag_counts.counter_for_output_port(output_port),
+                bag_counters: self.bag_counts.counters_for_output_port(output_port),
             },
         );
     }
 
-    /// Write every new total of `output_port`'s refused-bag count onto
-    /// `entry`, as the count moves.
+    /// Write every new total of `output_port`'s refused-bag and written-bag
+    /// counts onto its board entry, as the counts move.
     ///
-    /// How a helper process's refusals reach its parent. Refused for a port
-    /// with no channel publisher, and for one whose channel already mirrors.
-    pub fn mirror_an_output_ports_refused_bag_count_into(
+    /// How a helper process's counts reach its parent. Refused for a port with
+    /// no channel publisher, and for one whose channel already mirrors.
+    pub fn mirror_an_output_ports_bag_counts_into(
         &self,
         output_port: &str,
-        refused_bag_board_entry_mirror: OutputPortRefusedBagCountBoardMirror,
+        bag_count_board_entry_mirror: OutputPortBagCountBoardMirror,
     ) -> Result<()> {
-        let refused_bag_counter = self
+        let bag_counters = self
             .channels
             .lock()
             .get(output_port)
-            .map(|egress| egress.refused_bag_counter.clone())
+            .map(|egress| egress.bag_counters.clone())
             .ok_or_else(|| {
                 Error::Link(format!(
-                    "output port '{output_port}' has no channel publisher, so there is no \
-                     refused-bag count of it to mirror"
+                    "output port '{output_port}' has no channel publisher, so there are no bag \
+                     counts of it to mirror"
                 ))
             })?;
-        refused_bag_counter
-            .mirror_every_new_total_into(Box::new(move |refused_bags| {
-                refused_bag_board_entry_mirror.mirror_refused_bags(refused_bags)
-            }))
+        let refused_bag_board_entry_mirror = bag_count_board_entry_mirror.clone();
+        bag_counters
+            .mirror_every_new_total_into(
+                Box::new(move |refused_bags| {
+                    refused_bag_board_entry_mirror.mirror_refused_bags(refused_bags)
+                }),
+                Box::new(move |written_bags| {
+                    bag_count_board_entry_mirror.mirror_written_bags(written_bags)
+                }),
+            )
             .map_err(|_| {
                 Error::Link(format!(
-                    "output port '{output_port}' already mirrors its refused-bag count onto a \
-                     board entry"
+                    "output port '{output_port}' already mirrors its bag counts onto a board entry"
                 ))
             })
     }
 
-    /// This processor's per-output-port refused-bag counts, shared with the
-    /// graph node's [`ProcessorMetrics`] so `graph` reads them live.
+    /// This processor's per-output-port refused-bag and written-bag counts,
+    /// shared with the graph node's [`ProcessorMetrics`] so `graph` reads them
+    /// live.
     ///
     /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
-    pub fn refused_bag_counts_by_output_port(&self) -> Arc<RefusedBagCountsByOutputPort> {
-        Arc::clone(&self.refused_bag_counts)
+    pub fn bag_counts_by_output_port(&self) -> Arc<BagCountsByOutputPort> {
+        Arc::clone(&self.bag_counts)
     }
 
     /// Record one outbound `connect()` link from this output port, with the
@@ -372,8 +378,8 @@ impl OutputWriterInner {
     /// whole [`ChannelEgress`] (publisher + data service) is released so this
     /// writer holds nothing against the channel once no link uses it, and a
     /// reconnect never exceeds the notify service's create-time `max_notifiers`
-    /// cap (`ExceedsMaxSupportedNotifiers`). The port's refused-bag count goes
-    /// with it.
+    /// cap (`ExceedsMaxSupportedNotifiers`). The port's refused-bag and
+    /// written-bag counts go with it.
     ///
     /// Returns `true` when that last link went away and the publisher was removed.
     pub fn remove_channel_link(&self, output_port: &str, link_id: &str) -> bool {
@@ -384,7 +390,7 @@ impl OutputWriterInner {
         egress.links.retain(|link| link.link_id != link_id);
         if egress.links.is_empty() {
             channels.remove(output_port);
-            self.refused_bag_counts.forget_output_port(output_port);
+            self.bag_counts.forget_output_port(output_port);
             true
         } else {
             false
@@ -425,7 +431,7 @@ impl OutputWriterInner {
             total_len,
             egress.chunk_ceiling_bytes,
             &mut egress.current_slot_capacity_bytes,
-            || egress.refused_bag_counter.record_one_refused_bag(),
+            || egress.bag_counters.record_one_refused_bag(),
         );
         streamlib_ipc_types::emit_channel_egress_admission_tracing(
             None,
@@ -477,6 +483,7 @@ impl OutputWriterInner {
         egress.next_sequence_number =
             sequence_number_following_a_send(egress.next_sequence_number, &send_outcome);
         send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
+        egress.bag_counters.record_one_written_bag();
 
         // Wake every downstream listener fd. notify() may transiently fail
         // (e.g. a listener not yet created) — log and continue rather than
@@ -722,8 +729,14 @@ mod tests {
     /// The refused-bag count `graph` would render for `output_port`.
     fn refused_bag_count_of(inner: &OutputWriterInner, output_port: &str) -> u64 {
         inner
-            .refused_bag_counts_by_output_port()
+            .bag_counts_by_output_port()
             .refused_bag_count_snapshot_by_output_port()[output_port]
+    }
+
+    fn written_bag_count_of(inner: &OutputWriterInner, output_port: &str) -> u64 {
+        inner
+            .bag_counts_by_output_port()
+            .written_bag_count_snapshot_by_output_port()[output_port]
     }
 
     /// A writer whose one output port `out` publishes onto `pubsub` under a
@@ -1238,22 +1251,26 @@ mod tests {
         );
     }
 
-    /// A helper's refusals reach its board as they are counted, and a port
-    /// whose channel was released and opened again mirrors from zero through
-    /// its new claim alone.
+    /// A helper's refusals and sends reach its board as they are counted, and a
+    /// port whose channel was released and opened again mirrors from zero
+    /// through its new claim alone.
     ///
-    /// Fail-without-fix: mirror nothing at `write_bytes_with_timestamp`, and the entry still
-    /// reads zero after two refusals.
+    /// Fail-without-fix: mirror nothing at `write_bytes_with_timestamp`, and the
+    /// entry still reads zero after two refusals and a send.
     #[test]
-    fn a_refusal_on_a_mirrored_output_port_reaches_its_board_entry_as_it_is_counted() {
+    fn refusals_and_sends_on_a_mirrored_output_port_reach_its_board_entry_as_they_are_counted() {
         let (board, board_writer, _helper_node) =
             crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[
                 "out",
             ]);
-        let refused_bags_on_the_board = || {
-            board
-                .output_port_entry("out")
-                .map(|written| (written.wiring_generation, written.refused_bags))
+        let bags_on_the_board = || {
+            board.output_port_entry("out").map(|entry| {
+                (
+                    entry.wiring_generation,
+                    entry.refused_bags,
+                    entry.written_bags,
+                )
+            })
         };
         let pubsub = open_channel_data_service("mirrored-refusal", 2);
         let inner = OutputWriterInner::new();
@@ -1276,13 +1293,13 @@ mod tests {
                 )),
             );
             inner
-                .mirror_an_output_ports_refused_bag_count_into(
+                .mirror_an_output_ports_bag_counts_into(
                     "out",
                     board_writer
                         .claim_output_port_entry("out", wiring_generation)
                         .expect("the board carries the declared port"),
                 )
-                .expect("a port with a channel mirrors its refusals");
+                .expect("a port with a channel mirrors its counts");
         };
         let over_the_ceiling = vec![0u8; 2048];
 
@@ -1303,13 +1320,16 @@ mod tests {
                 MessageGroupBoundary::StartsGroup,
             )
             .unwrap_err();
-        assert_eq!(refused_bags_on_the_board(), Some((1, 2)));
+        inner
+            .write_bytes_with_timestamp("out", b"sent", 2, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+        assert_eq!(bags_on_the_board(), Some((1, 2, 1)));
 
         assert!(inner.remove_channel_link("out", "L-out"));
         install_the_channel(2);
         assert_eq!(
-            refused_bags_on_the_board(),
-            Some((2, 0)),
+            bags_on_the_board(),
+            Some((2, 0, 0)),
             "a port's reopened channel counts from zero, as its native count does"
         );
         inner
@@ -1320,16 +1340,16 @@ mod tests {
                 MessageGroupBoundary::StartsGroup,
             )
             .unwrap_err();
-        assert_eq!(refused_bags_on_the_board(), Some((2, 1)));
+        assert_eq!(bags_on_the_board(), Some((2, 1, 0)));
 
         assert!(
             inner
-                .mirror_an_output_ports_refused_bag_count_into(
+                .mirror_an_output_ports_bag_counts_into(
                     "never-opened",
                     board_writer.claim_output_port_entry("out", 3).unwrap(),
                 )
                 .is_err(),
-            "a port with no channel has no refused-bag count to mirror"
+            "a port with no channel has no bag counts to mirror"
         );
     }
 
@@ -1368,6 +1388,11 @@ mod tests {
         }
         assert_eq!(sequence_numbers, vec![0, 1]);
         assert_eq!(refused_bag_count_of(&inner, "out"), 1);
+        assert_eq!(
+            written_bag_count_of(&inner, "out"),
+            2,
+            "a refused write is never counted as written"
+        );
     }
 
     /// A send consumes its number once it may have reached a subscriber, and
@@ -1423,7 +1448,7 @@ mod tests {
             "L-only",
             crate::iceoryx2::a_notifier_nothing_listens_on(&unique_suffix("refusals-leave/notify")),
         );
-        let refused_bag_counts = inner.refused_bag_counts_by_output_port();
+        let bag_counts = inner.bag_counts_by_output_port();
         inner
             .write_bytes_with_timestamp("out", &[0u8; 128], 0, MessageGroupBoundary::StartsGroup)
             .unwrap_err();
@@ -1432,7 +1457,7 @@ mod tests {
         assert!(inner.remove_channel_link("out", "L-only"));
 
         assert!(
-            refused_bag_counts
+            bag_counts
                 .refused_bag_count_snapshot_by_output_port()
                 .is_empty()
         );

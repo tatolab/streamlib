@@ -199,13 +199,13 @@ fn compile_shaders() {
             "compute",
         ),
         (
-            "src/vulkan/rhi/shaders/display_blit.vert",
-            "display_blit.vert.spv",
+            "src/vulkan/rhi/shaders/offscreen_blit.vert",
+            "offscreen_blit.vert.spv",
             "vertex",
         ),
         (
-            "src/vulkan/rhi/shaders/display_blit.frag",
-            "display_blit.frag.spv",
+            "src/vulkan/rhi/shaders/offscreen_blit.frag",
+            "offscreen_blit.frag.spv",
             "fragment",
         ),
         // Vulkan Video codec layer (`vulkan/video/`) — RGB↔NV12

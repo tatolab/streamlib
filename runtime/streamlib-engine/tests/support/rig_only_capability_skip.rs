@@ -20,18 +20,16 @@ pub enum RigOnlyCapability {
     DmaBufModifiers,
     Cuda,
     Camera,
-    Display,
     AudioDevice,
 }
 
 impl RigOnlyCapability {
     /// Every capability, in the order the closed list states them.
-    pub const EVERY_RIG_ONLY_CAPABILITY: [RigOnlyCapability; 6] = [
+    pub const EVERY_RIG_ONLY_CAPABILITY: [RigOnlyCapability; 5] = [
         RigOnlyCapability::VulkanVideo,
         RigOnlyCapability::DmaBufModifiers,
         RigOnlyCapability::Cuda,
         RigOnlyCapability::Camera,
-        RigOnlyCapability::Display,
         RigOnlyCapability::AudioDevice,
     ];
 
@@ -42,7 +40,6 @@ impl RigOnlyCapability {
             RigOnlyCapability::DmaBufModifiers => "DMA-BUF modifiers",
             RigOnlyCapability::Cuda => "CUDA",
             RigOnlyCapability::Camera => "a camera",
-            RigOnlyCapability::Display => "a display",
             RigOnlyCapability::AudioDevice => "an audio device",
         }
     }
@@ -63,16 +60,6 @@ pub fn skip_unless_this_machine_has(
         skip_because_this_machine_lacks(capability);
     }
     !this_machine_has_it
-}
-
-/// Prints the skip line naming a display and returns `true` when this process
-/// can reach no display server, so the caller returns.
-#[must_use = "the caller returns when this is true"]
-pub fn skip_unless_this_process_can_reach_a_display_server() -> bool {
-    skip_unless_this_machine_has(
-        RigOnlyCapability::Display,
-        this_process_can_reach_a_display_server(),
-    )
 }
 
 /// Prints the skip line naming `capability`, for a caller that has already
@@ -107,13 +94,4 @@ fn print_the_skip_line(capability: RigOnlyCapability, refusal: Option<&dyn std::
             capability.closed_list_reason(),
         ),
     }
-}
-
-/// Whether this process can reach a display server: the window server on
-/// macOS, one named in the environment as winit finds it elsewhere.
-fn this_process_can_reach_a_display_server() -> bool {
-    cfg!(target_os = "macos")
-        || ["DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET"]
-            .iter()
-            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }

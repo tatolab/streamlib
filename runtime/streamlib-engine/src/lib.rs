@@ -224,9 +224,7 @@ pub mod video {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use apple::permissions::{
-    request_audio_permission, request_camera_permission, request_display_permission,
-};
+pub use apple::permissions::{request_audio_permission, request_camera_permission};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub mod permissions {
@@ -238,11 +236,6 @@ pub mod permissions {
         Ok(true)
     }
 
-    pub fn request_display_permission() -> Result<bool> {
-        tracing::info!("Display permission granted (no system prompt on this platform)");
-        Ok(true)
-    }
-
     pub fn request_audio_permission() -> Result<bool> {
         tracing::info!("Audio permission granted (no system prompt on this platform)");
         Ok(true)
@@ -250,9 +243,7 @@ pub mod permissions {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-pub use permissions::{
-    request_audio_permission, request_camera_permission, request_display_permission,
-};
+pub use permissions::{request_audio_permission, request_camera_permission};
 
 pub use core::Runner;
 
@@ -288,7 +279,6 @@ pub mod platform {
 pub mod sdk {
     pub use crate::core::context;
     pub use crate::core::descriptors;
-    pub use crate::core::display_info;
     pub use crate::core::error;
     pub use crate::core::execution;
     pub use crate::core::graph;
@@ -321,9 +311,7 @@ pub mod sdk {
     pub use streamlib_macros::processor;
 
     pub mod permissions {
-        pub use crate::{
-            request_audio_permission, request_camera_permission, request_display_permission,
-        };
+        pub use crate::{request_audio_permission, request_camera_permission};
     }
 
     pub use crate::platform;

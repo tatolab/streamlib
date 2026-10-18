@@ -11,12 +11,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
+from typing import Any, Literal, Protocol, TypeVar
 
 from ._runtime_lend import runtime_backed_protocol
-
-if TYPE_CHECKING:
-    from ._node_owned_window_protocols import NodeOwnedWindow
 
 _EscalateResult = TypeVar("_EscalateResult")
 
@@ -189,26 +186,6 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
     Each method is its own escalate round trip to the parent, which runs the
     privileged work against the engine and answers with a handle.
     """
-
-    def create_window(
-        self, title: str, width: int = 1280, height: int = 720
-    ) -> NodeOwnedWindow:
-        """Request a window this node owns, presented by the engine.
-
-        `width` and `height` are the window's initial size in the desktop's
-        logical pixels, so it is the same size on a 1x and a 2x display.
-
-        Constructed once in `setup()`, named frames per frame in `process()`.
-        The window lives in the app process on its own present loop, so it
-        keeps its frame rate whatever this node's pace is, and naming no
-        frame leaves the last one up.
-
-        Raises when the process can get no window at all — no display server,
-        or a window event pump that has already failed — rather than handing
-        back a window that would show nothing. An author for whom the window
-        is optional writes the `try/except`.
-        """
-        ...
 
     def create_compute_kernel(
         self,

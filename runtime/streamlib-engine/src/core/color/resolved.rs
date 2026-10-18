@@ -72,38 +72,6 @@ pub struct ResolvedColorInfo {
     pub range: RangeId,
 }
 
-/// Engine-internal trait pair consumed by swapchain colorspace
-/// negotiation. Holds only the axes [`super::pick_swapchain_format`]
-/// actually inspects — primaries (Bt2020 vs other) and transfer
-/// (`Pq` / `Hlg` vs other). H.273 → traits translation in
-/// [`super::H273ColorVui::color_traits`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct ColorTraits {
-    pub primaries: Option<PrimariesId>,
-    pub transfer: Option<TransferId>,
-}
-
-/// Engine-internal HDR static metadata, pre-translated to the f32
-/// fields `vkSetHdrMetadataEXT` expects. Constructed via
-/// [`super::translate::hdr_metadata_from_schema`] from the wire-format
-/// `MasteringDisplay` + `ContentLight` integers; consumed by
-/// [`super::build_hdr_metadata`].
-///
-/// Chromaticities are CIE 1931 xy in the `[0, 1]` float domain.
-/// Luminances are cd/m² (nits). Content-light fields are integer
-/// cd/m² promoted to f32.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HdrStaticMetadata {
-    pub display_primary_red: [f32; 2],
-    pub display_primary_green: [f32; 2],
-    pub display_primary_blue: [f32; 2],
-    pub white_point: [f32; 2],
-    pub min_luminance_cd_m2: f32,
-    pub max_luminance_cd_m2: f32,
-    pub max_content_light_level: f32,
-    pub max_frame_average_light_level: f32,
-}
-
 /// Disambiguator for the resolver's per-axis defaults. RGB-encoded
 /// sources default transfer→`Srgb` and range→`Full`; YCbCr-encoded
 /// sources default transfer→`Bt709` and range→`Limited`. The dataset

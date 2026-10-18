@@ -93,7 +93,7 @@ until "$tatolab_executable" streams >/dev/null 2>&1; do
 	sleep 1
 done
 
-"$tatolab_executable" new /tmp/stream-on-the-software-device --test-pattern
+"$tatolab_executable" new /tmp/stream-on-the-software-device
 python3 -m venv /tmp/stream-on-the-software-device/.venv
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source 'numpy>=2.1'
 

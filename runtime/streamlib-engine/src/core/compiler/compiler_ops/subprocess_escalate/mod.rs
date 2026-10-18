@@ -30,7 +30,6 @@ mod hex_encoded_wire_bytes;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
 mod port_catalog_entry;
-mod processor_owned_window;
 mod ray_tracing;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod surface_bound_kernel_binding;
@@ -40,9 +39,6 @@ mod tests;
 
 use self::handle_lifecycle::EscalateHandleRegistry;
 pub(crate) use self::port_catalog_entry::CatalogEntriesAHelperPlacedProcessorReaches;
-use super::subprocess_escalate_wire_types::escalate_request::{
-    EscalateRequestCloseProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
-};
 use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
@@ -90,10 +86,6 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RunRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::SetOutputPortCatalogEntry(p) => Some(&p.request_id),
-        EscalateRequest::CreateProcessorOwnedWindow(p) => Some(&p.request_id),
-        EscalateRequest::ShowSurfaceOnProcessorOwnedWindow(p) => Some(&p.request_id),
-        EscalateRequest::DrainProcessorOwnedWindowEvents(p) => Some(&p.request_id),
-        EscalateRequest::CloseProcessorOwnedWindow(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
@@ -188,32 +180,6 @@ pub(crate) fn handle_escalate_op(
         ),
         EscalateRequest::ReleaseHandle(req) => Some(handle_lifecycle::handle_release_handle(
             sandbox, registry, rid, req,
-        )),
-        EscalateRequest::CreateProcessorOwnedWindow(req) => Some(
-            processor_owned_window::handle_create_processor_owned_window(
-                sandbox, registry, rid, req,
-            ),
-        ),
-        EscalateRequest::ShowSurfaceOnProcessorOwnedWindow(req) => Some(
-            processor_owned_window::handle_show_surface_on_processor_owned_window(
-                sandbox, registry, rid, req,
-            ),
-        ),
-        EscalateRequest::DrainProcessorOwnedWindowEvents(
-            EscalateRequestDrainProcessorOwnedWindowEvents {
-                request_id: _,
-                window_id,
-            },
-        ) => Some(
-            processor_owned_window::handle_drain_processor_owned_window_events(
-                registry, rid, window_id,
-            ),
-        ),
-        EscalateRequest::CloseProcessorOwnedWindow(EscalateRequestCloseProcessorOwnedWindow {
-            request_id: _,
-            window_id,
-        }) => Some(processor_owned_window::handle_close_processor_owned_window(
-            registry, rid, window_id,
         )),
         EscalateRequest::Log(log_op) => {
             push_polyglot_record(helper_log_record::log_record_from_wire(log_op));

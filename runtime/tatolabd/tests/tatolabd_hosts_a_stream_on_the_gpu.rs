@@ -3,9 +3,8 @@
 
 //! `tatolabd` hosting a started native-only stream on the GPU: a kept stream
 //! re-loaded and started at the runtime's start, the engine's signal ladder
-//! over it, a kept stream that keeps crashing the runtime failed while every
-//! other comes back, and, on macOS, a stream started through the local API
-//! opening its window. Rig-only:
+//! over it, and a kept stream that keeps crashing the runtime failed while
+//! every other comes back. Rig-only:
 //! `cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root`.
 
 #![cfg(all(
@@ -275,73 +274,4 @@ fn a_clean_restart_between_two_crashes_resets_the_count() {
         "the clean stop reset the count, so only the crash after it was counted"
     );
     assert!(!after_the_clean_restart.is_failed());
-}
-
-/// A stream of one test pattern shown in a window.
-#[cfg(target_os = "macos")]
-fn a_stream_graph_showing_a_test_pattern_in_a_window(stream_name: &str) -> serde_json::Value {
-    serde_json::json!({
-        "stream": stream_name,
-        "nodes": [
-            {
-                "name": "testpattern",
-                "type": "tatolab.stream:TestPatternSource",
-                "config": {"width": 320, "height": 240},
-            },
-            {
-                "name": "display",
-                "type": "tatolab.stream:DisplayWindow",
-                "config": {"title": "tatolabd window started through the local API"},
-            },
-        ],
-        "links": [{
-            "source": {"node": "testpattern", "port": "video"},
-            "target": {"node": "display", "port": "video"},
-        }],
-    })
-}
-
-/// On macOS a window is minted only on the process's first thread, and a
-/// stream started through the local API asks from another: the runtime built
-/// the window event pump there at its start, so the window still opens.
-#[cfg(target_os = "macos")]
-#[test]
-fn a_stream_started_through_the_local_api_opens_its_window() {
-    let _one_at_a_time = ONE_STREAM_ON_THE_GPU_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
-    let machine_root = TatolabTestMachineRoot::new();
-    machine_root
-        .kept_stream_records()
-        .write(&a_kept_stream_record(
-            "display",
-            a_stream_graph_showing_a_test_pattern_in_a_window("display"),
-            &machine_root.project_directory(),
-            &an_executable_standing_in_for_the_interpreter(),
-            true,
-        ))
-        .unwrap();
-    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
-        machine_root.tatolabd_command(&runtime_unit.tatolabd),
-    );
-
-    let started = call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "start_stream",
-        serde_json::json!({"stream": "display"}),
-    )
-    .json();
-    runtime.wait_until_standard_error_carries(
-        "window event pump: window registered",
-        THE_KEPT_STREAM_STARTS_WITHIN,
-    );
-    runtime.interrupt_and_expect_a_clean_exit();
-
-    assert_eq!(started["stream"], "display", "{started}");
-    assert!(
-        !runtime.standard_error().contains("running degraded"),
-        "{}",
-        runtime.standard_error()
-    );
 }

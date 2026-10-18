@@ -152,13 +152,6 @@ impl StreamlibRuntimeDirectory {
     pub fn relays_directory(&self) -> PathBuf {
         self.path.join("relays")
     }
-
-    /// The file present while the machine's runtime runs having started with no display server.
-    /// Named by path in `installer/tatolabd-restart-for-a-display-at-login.service`, which
-    /// restarts the runtime when a desktop session brings one.
-    pub fn runtime_started_with_no_display_server_marker_path(&self) -> PathBuf {
-        self.path.join("tatolabd-started-with-no-display-server")
-    }
 }
 
 /// The real uid of this process.

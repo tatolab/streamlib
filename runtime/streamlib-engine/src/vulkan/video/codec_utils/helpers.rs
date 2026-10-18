@@ -12,8 +12,6 @@ use std::os::unix::io::RawFd;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-use vulkanalia::vk::KhrSurfaceExtensionInstanceCommands;
-use vulkanalia::vk::KhrSwapchainExtensionDeviceCommands;
 
 // ---------------------------------------------------------------------------
 // Geometry helpers
@@ -344,38 +342,6 @@ pub unsafe fn get_physical_device_queue_family_properties2(
 
         infos
     }
-}
-
-/// Get surface formats.
-///
-/// Port of inline `vk::get(vkIf, phy, surface, formats)`.
-pub unsafe fn get_physical_device_surface_formats(
-    instance: &vulkanalia::Instance,
-    physical_device: vk::PhysicalDevice,
-    surface: vk::SurfaceKHR,
-) -> Result<Vec<vk::SurfaceFormatKHR>, vk::ErrorCode> {
-    unsafe { instance.get_physical_device_surface_formats_khr(physical_device, surface) }
-}
-
-/// Get present modes.
-///
-/// Port of inline `vk::get(vkIf, phy, surface, modes)`.
-pub unsafe fn get_physical_device_surface_present_modes(
-    instance: &vulkanalia::Instance,
-    physical_device: vk::PhysicalDevice,
-    surface: vk::SurfaceKHR,
-) -> Result<Vec<vk::PresentModeKHR>, vk::ErrorCode> {
-    unsafe { instance.get_physical_device_surface_present_modes_khr(physical_device, surface) }
-}
-
-/// Get swapchain images.
-///
-/// Port of inline `vk::get(vkIf, dev, swapchain, images)`.
-pub unsafe fn get_swapchain_images(
-    device: &vulkanalia::Device,
-    swapchain: vk::SwapchainKHR,
-) -> Result<Vec<vk::Image>, vk::ErrorCode> {
-    unsafe { device.get_swapchain_images_khr(swapchain) }
 }
 
 // ---------------------------------------------------------------------------

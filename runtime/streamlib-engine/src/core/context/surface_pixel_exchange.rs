@@ -45,7 +45,7 @@ use crate::core::rhi::{
     pixel_format_color_kind,
 };
 use crate::host_rhi::{VulkanAccess, VulkanStage};
-use crate::vulkan::rhi::{ImageCopyRegion, PresentScalingMode};
+use crate::vulkan::rhi::{ImageCopyRegion, OffscreenCompositorScalingMode};
 
 /// The one image format the exchange hands back. Every backing is
 /// normalized to it in the RHI, so a caller never has to know what the
@@ -431,7 +431,7 @@ impl GpuContext {
             &image_texture,
             texture_to_sample_from,
             layout_that_texture_is_currently_in,
-            PresentScalingMode::Fit,
+            OffscreenCompositorScalingMode::Fit,
         )?;
         Ok(ExchangeImageTextureReadyForReadback {
             texture: image_texture,

@@ -779,21 +779,23 @@ pub struct InboundLinkLossCountBoardSlot {
     pub discarded_samples: u64,
 }
 
-/// One output port's count of bags refused at its channel ceiling, as a helper
-/// process last wrote it, beside the wiring generation the parent assigned the
-/// port's channel.
+/// One output port's counts of bags refused at its channel ceiling and bags
+/// written onto its channel, as a helper process last wrote them, beside the
+/// wiring generation the parent assigned the port's channel.
 ///
 /// Read as the port's only while the generation matches, so a reopened
-/// channel never shows the total of the one before it.
+/// channel never shows the totals of the one before it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
-#[type_name("OutputPortRefusedBagCountBoardEntry")]
+#[type_name("OutputPortBagCountBoardEntry")]
 #[repr(C)]
-pub struct OutputPortRefusedBagCountBoardEntry {
+pub struct OutputPortBagCountBoardEntry {
     /// The generation of the channel these counts belong to; zero before any
     /// write.
     pub wiring_generation: u64,
     /// Bags refused since the port's channel was opened.
     pub refused_bags: u64,
+    /// Bags sent on the port's channel since it was opened.
+    pub written_bags: u64,
 }
 
 #[cfg(test)]
@@ -1020,28 +1022,26 @@ mod tests {
     }
 
     #[test]
-    fn an_output_ports_refused_bag_entry_is_two_u64s_at_their_documented_offsets_under_its_pinned_name()
+    fn an_output_ports_bag_count_entry_is_three_u64s_at_their_documented_offsets_under_its_pinned_name()
      {
+        assert_eq!(std::mem::size_of::<OutputPortBagCountBoardEntry>(), 24);
+        assert_eq!(std::mem::align_of::<OutputPortBagCountBoardEntry>(), 8);
         assert_eq!(
-            std::mem::size_of::<OutputPortRefusedBagCountBoardEntry>(),
-            16
-        );
-        assert_eq!(
-            std::mem::align_of::<OutputPortRefusedBagCountBoardEntry>(),
-            8
-        );
-        assert_eq!(
-            std::mem::offset_of!(OutputPortRefusedBagCountBoardEntry, wiring_generation),
+            std::mem::offset_of!(OutputPortBagCountBoardEntry, wiring_generation),
             0
         );
         assert_eq!(
-            std::mem::offset_of!(OutputPortRefusedBagCountBoardEntry, refused_bags),
+            std::mem::offset_of!(OutputPortBagCountBoardEntry, refused_bags),
             8
         );
         assert_eq!(
+            std::mem::offset_of!(OutputPortBagCountBoardEntry, written_bags),
+            16
+        );
+        assert_eq!(
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
-            unsafe { <OutputPortRefusedBagCountBoardEntry as ZeroCopySend>::type_name() },
-            "OutputPortRefusedBagCountBoardEntry"
+            unsafe { <OutputPortBagCountBoardEntry as ZeroCopySend>::type_name() },
+            "OutputPortBagCountBoardEntry"
         );
     }
 

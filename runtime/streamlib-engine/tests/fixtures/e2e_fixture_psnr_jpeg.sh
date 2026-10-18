@@ -183,7 +183,6 @@ for i in "${!REF_PNGS[@]}"; do
     mkdir -p "$ref_png_dir"
 
     log_file="$LOG_DIR/${idx}_${name}.log"
-    DISPLAY="${DISPLAY:-:0}" \
     RUST_LOG=warn,streamlib=info \
     timeout --kill-after=3 "$RUN_SECS" "$BINARY" \
         "$jpeg_path" "$WIDTH" "$HEIGHT" "$FPS" "$FIXTURE_REPS" \

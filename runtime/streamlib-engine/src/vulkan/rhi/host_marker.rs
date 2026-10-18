@@ -18,8 +18,7 @@
 use streamlib_consumer_rhi::{DevicePrivilege, private as consumer_rhi_private};
 
 /// Privilege marker for host-side Vulkan resources — full RHI access
-/// (allocation, queue submit, modifier choice, kernel construction,
-/// swapchain).
+/// (allocation, queue submit, modifier choice, kernel construction).
 pub struct HostMarker;
 
 // Seal the [`DevicePrivilege`] hierarchy across the two crates: the

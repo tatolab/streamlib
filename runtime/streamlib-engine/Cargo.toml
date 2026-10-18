@@ -154,8 +154,6 @@ objc2-core-audio-types = { workspace = true, features = ["std", "CoreAudioBaseTy
 objc2-audio-toolbox = { workspace = true, features = ["std", "AUComponent", "AudioComponent", "AudioConverter", "AudioOutputUnit", "AudioUnitProperties", "objc2-core-audio-types"] }
 # The VideoToolbox arm of the video codec seam.
 objc2-video-toolbox = { workspace = true, features = ["std", "VTSession", "VTCompressionSession", "VTCompressionProperties", "VTDecompressionSession", "VTDecompressionProperties", "VTErrors", "VTVideoEncoderList", "objc2-core-media", "objc2-core-video"] }
-objc2-app-kit.workspace = true
-objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true
 objc2-core-graphics.workspace = true
 libc.workspace = true
@@ -175,8 +173,6 @@ vulkanalia = { workspace = true }
 vulkanalia-vma = { workspace = true }
 rspirv-reflect = { workspace = true }
 shaderc = { workspace = true }
-winit = "0.30"  # Window creation and event loop for display processor
-raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 # Consumer-side carve-out — defines the trait machinery
 # (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
 # Consumer* RHI types, and the format/error primitives shared with the
@@ -253,23 +249,6 @@ path = "examples/codec_roundtrip_rig.rs"
 name = "log_emit_1000"
 path = "tests/bin/log_emit_1000.rs"
 
-# A processor-owned window presented while the process's first thread drives
-# the window event pump. `harness = false` because AppKit lets only the first
-# thread drive the loop and libtest never runs a test there; display tier, so it
-# builds only under `hardware-tests`. Its `main` is empty off Apple.
-[[test]]
-name = "processor_owned_window_on_the_first_thread"
-path = "tests/processor_owned_window_on_the_first_thread.rs"
-harness = false
-required-features = ["hardware-tests"]
-# A run entered on the first thread builds the window event pump there, so a
-# window first asked for from another thread is minted. Same tier and
-# `harness = false` reason as above; its `main` is empty off Apple.
-[[test]]
-name = "window_event_pump_built_when_the_run_starts"
-path = "tests/window_event_pump_built_when_the_run_starts.rs"
-harness = false
-required-features = ["hardware-tests"]
 # The VideoToolbox codec arm round-trips the PSNR references on Apple's
 # hardware encoder and decoder. Rig tier — a virtual machine exposes neither —
 # so it builds only under `hardware-tests`. Empty off Apple.

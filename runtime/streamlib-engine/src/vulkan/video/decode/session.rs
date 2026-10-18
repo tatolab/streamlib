@@ -22,12 +22,9 @@ impl SimpleDecoder {
     /// Eagerly allocate the GPU resources used during decode.
     ///
     /// Creates the NV12→RGBA compute converter now (when `rgba_output` is
-    /// enabled) instead of on the first `feed()` call. The exportable VMA
-    /// blocks the converter's DEVICE_LOCAL image rides through are
-    /// pre-warmed at `HostVulkanDevice::new()`
-    /// (see docs/learnings/nvidia-dma-buf-after-swapchain.md), so eager
-    /// allocation here is purely for first-frame latency, not for dodging
-    /// the post-swapchain export cap.
+    /// enabled) instead of on the first `feed()` call, for first-frame
+    /// latency; the exportable VMA blocks the converter's DEVICE_LOCAL image
+    /// rides through are pre-warmed at `HostVulkanDevice::new()`.
     ///
     /// Requires [`pre_initialize_session`](Self::pre_initialize_session) to
     /// have been called first (so `max_width`/`max_height` are known).
@@ -61,12 +58,12 @@ impl SimpleDecoder {
     }
 
     // ------------------------------------------------------------------
-    // Session pre-initialization (eager, before swapchain)
+    // Session pre-initialization (eager, at setup)
     // ------------------------------------------------------------------
 
     /// Pre-create the Vulkan Video session and DPB using max dimensions from
-    /// config. Called during setup() to ensure the session exists BEFORE the
-    /// display swapchain — NVIDIA limits video session creation after swapchain.
+    /// config. Called during setup() so the session exists before the first
+    /// frame arrives.
     ///
     /// Session parameters (SPS/PPS) are created later when the first SPS arrives.
     pub fn pre_initialize_session(&mut self) -> Result<(), VideoError> {
