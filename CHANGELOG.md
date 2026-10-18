@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.1](https://github.com/tatolab/streamlib/compare/v0.48.0...v0.48.1) (2026-10-18)
+
+
+### Features
+
+* **engine:** an output port declares its catalog entry in hang's layout — stored on the port, rendered in graph and the registry, updatable while running, readable off an inbound link ([#2840](https://github.com/tatolab/streamlib/issues/2840)) ([1d5e470](https://github.com/tatolab/streamlib/commit/1d5e4706d9a0ac0683bbc64b3772499d8fa51885))
+
 ## [0.48.0](https://github.com/tatolab/streamlib/compare/v0.47.1...v0.48.0) (2026-10-18)
 
 
