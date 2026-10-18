@@ -4,7 +4,8 @@
 //! What a processor's ports lost, counted where `graph` reads them: bags per
 //! inbound link at a destination, samples a windowed port's flush discarded per
 //! inbound link, and bags per output port refused at a producer's channel
-//! ceiling.
+//! ceiling — beside the bags each output port sent, which those losses are
+//! counted against.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -373,6 +374,58 @@ impl RefusedBagCountsByOutputPort {
     /// Every output port with a channel, and its count as it stands right now,
     /// ordered by port name.
     pub fn refused_bag_count_snapshot_by_output_port(&self) -> BTreeMap<String, u64> {
+        self.per_output_port.snapshot_by_name()
+    }
+}
+
+/// One output port's cumulative count of bags sent on its channel. Cloning
+/// shares the count.
+#[derive(Clone, Default)]
+pub struct OutputPortWrittenBagCounter(Arc<CumulativeCount>);
+
+impl OutputPortWrittenBagCounter {
+    /// Record one bag this port sent, and return the port's total after it.
+    pub fn record_one_written_bag(&self) -> u64 {
+        self.0.add(1)
+    }
+
+    /// How many bags this port has sent since its channel was opened.
+    pub fn written_bag_count(&self) -> u64 {
+        self.0.total()
+    }
+
+    /// Write this count's every new total through `mirror`, or hand it back
+    /// where the count is already mirrored.
+    pub(crate) fn mirror_every_new_total_into(
+        &self,
+        mirror: LossCountMirror,
+    ) -> Result<(), LossCountMirror> {
+        self.0.mirror_every_new_total_into(mirror)
+    }
+}
+
+/// Every output port's written-bag counter for one producing processor, with
+/// the life a port's refused-bag counter has: minted with its channel
+/// publisher, forgotten with its last link.
+#[derive(Default)]
+pub struct WrittenBagCountsByOutputPort {
+    per_output_port: CumulativeCountsByName,
+}
+
+impl WrittenBagCountsByOutputPort {
+    /// The counter for `output_port`, minting a zeroed one on first ask.
+    pub fn counter_for_output_port(&self, output_port: &str) -> OutputPortWrittenBagCounter {
+        OutputPortWrittenBagCounter(self.per_output_port.count_for(output_port))
+    }
+
+    /// Forget a port whose channel publisher was released.
+    pub fn forget_output_port(&self, output_port: &str) {
+        self.per_output_port.forget(output_port);
+    }
+
+    /// Every output port with a channel, and its count as it stands right now,
+    /// ordered by port name.
+    pub fn written_bag_count_snapshot_by_output_port(&self) -> BTreeMap<String, u64> {
         self.per_output_port.snapshot_by_name()
     }
 }

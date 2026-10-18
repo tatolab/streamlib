@@ -460,7 +460,7 @@ impl PythonProcessorLinkDataAccess {
                             chunk_ceiling_bytes: max_payload_bytes_per_channel,
                         },
                     );
-                    if let Some(refused_bag_board_entry_mirror) =
+                    if let Some(bag_count_board_entry_mirror) =
                         board_writer_and_output_port_wiring_generation.and_then(
                             |(board_writer, output_port_wiring_generation)| {
                                 board_writer.claim_output_port_entry(
@@ -470,9 +470,9 @@ impl PythonProcessorLinkDataAccess {
                             },
                         )
                     {
-                        output_writer.mirror_an_output_ports_refused_bag_count_into(
+                        output_writer.mirror_an_output_ports_bag_counts_into(
                             port_name,
-                            refused_bag_board_entry_mirror,
+                            bag_count_board_entry_mirror,
                         )?;
                     }
                 }
@@ -1190,11 +1190,25 @@ mod tests {
                     true,
                 )
                 .expect("a refusal at the ceiling is never raised");
+            destination
+                .write_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    PyBytes::new(python, &[0u8; 16]).as_any(),
+                    None,
+                    true,
+                )
+                .expect("a message under the ceiling is sent");
             assert_eq!(
                 parent_board
                     .output_port_entry("frames_to_downstream")
-                    .map(|written| (written.wiring_generation, written.refused_bags)),
-                Some((31, 1))
+                    .map(|entry| (
+                        entry.wiring_generation,
+                        entry.refused_bags,
+                        entry.written_bags
+                    )),
+                Some((31, 1, 1)),
+                "the refused message is counted as refused, the sent one as written"
             );
 
             let second_channel = format!("{channel}_second");

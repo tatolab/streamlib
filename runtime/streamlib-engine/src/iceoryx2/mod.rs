@@ -55,8 +55,7 @@ pub(crate) use helper_process_loss_count_board::a_loss_count_board_and_its_helpe
 pub use helper_process_loss_count_board::{
     HelperPlacedProcessorLossCounts, HelperProcessLossCountBoard,
     HelperProcessLossCountBoardWriter, InboundLinkLossCountBoardSlotAndWiringGeneration,
-    InboundLinkLossCountBoardSlotMirror, OutputPortRefusedBagCountBoardMirror,
-    ProcessorLossCountSnapshot,
+    InboundLinkLossCountBoardSlotMirror, OutputPortBagCountBoardMirror, ProcessorLossCountSnapshot,
 };
 #[cfg(test)]
 pub(crate) use iceoryx2_domain_for_this_test_process::a_notifier_nothing_listens_on;
@@ -67,7 +66,8 @@ pub use iceoryx2_domain_for_this_test_process::{
 };
 pub use input::{InputMailboxes, InputMailboxesInner, MessageReadFromInputPort};
 pub use loss_counters::{
-    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort,
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
+    RefusedBagCountsByOutputPort, WrittenBagCountsByOutputPort,
 };
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
