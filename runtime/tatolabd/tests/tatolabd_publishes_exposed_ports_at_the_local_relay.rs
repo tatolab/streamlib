@@ -26,8 +26,9 @@ use std::time::Duration;
 
 use common::{
     LocalRelayPortsOfATest, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
-    a_kept_stream_record, an_executable_standing_in_for_the_interpreter,
-    call_a_tool_over_the_local_api, the_local_apis_answer_to_get,
+    a_kept_stream_record, a_port_free_for_udp_and_tcp_on,
+    an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
+    the_local_apis_answer_to_get, the_staged_local_relay_executable,
 };
 use streamlib_relay_adapter_local::LocalRelayListener;
 use streamlib_relay_adapter_sdk::url::Url;
@@ -929,4 +930,221 @@ fn a_relay_track_source_in_a_second_runtime_reads_the_first_runtimes_public_port
     });
     second_runtime.runtime.interrupt_and_expect_a_clean_exit();
     first_runtime.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// A `moq-relay` no runtime runs, admitting anyone to publish and subscribe:
+/// a relay a third party publishes at.
+struct ThirdPartyRelay {
+    relay: std::process::Child,
+    dial_url: Url,
+    _configuration_directory: tempfile::TempDir,
+}
+
+impl ThirdPartyRelay {
+    fn start() -> Self {
+        let port = a_port_free_for_udp_and_tcp_on("127.0.0.1");
+        let configuration_directory = tempfile::tempdir().unwrap();
+        let configuration_path = configuration_directory.path().join("relay.toml");
+        std::fs::write(
+            &configuration_path,
+            format!(
+                "[listen]\nbind = \"127.0.0.1:{port}\"\n\
+                 [listen.tls]\ngenerate = [\"localhost\"]\n\
+                 [web.http]\nlisten = \"127.0.0.1:{port}\"\n\
+                 [auth]\npublic = [\"**\"]\n"
+            ),
+        )
+        .unwrap();
+        let relay = std::process::Command::new(the_staged_local_relay_executable())
+            .arg(&configuration_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        Self {
+            relay,
+            dial_url: format!("http://127.0.0.1:{port}/").parse().unwrap(),
+            _configuration_directory: configuration_directory,
+        }
+    }
+}
+
+impl Drop for ThirdPartyRelay {
+    fn drop(&mut self) {
+        let _ = self.relay.kill();
+        let _ = self.relay.wait();
+    }
+}
+
+/// The spacing of the third party's frames, in microseconds.
+const THIRD_PARTY_FRAME_SPACING_MICROSECONDS: u64 = 33_333;
+
+/// Every how many frames the third party opens a group.
+const THIRD_PARTY_FRAMES_PER_GROUP: u64 = 5;
+
+/// The payload of the third party's `frame_number`th frame.
+fn the_third_partys_payload(frame_number: u64) -> Vec<u8> {
+    format!("access unit {frame_number}").into_bytes()
+}
+
+/// Publish at `relay` the broadcast `third/party.hang` as the stack's own
+/// writer does — hang's catalog listing one legacy-container video rendition,
+/// `camera/video`, and each frame written by `hang::container::Frame` — until
+/// the returned task is aborted.
+async fn publish_a_third_party_hang_broadcast_at(
+    relay: &ThirdPartyRelay,
+) -> (tokio::task::JoinHandle<()>, moq_tokio::Connection) {
+    let published_origin = moq_tokio::origin::spawn();
+    let session = moq_tokio::connect::Config::default()
+        .init(moq_tokio::quic::Config::default())
+        .unwrap()
+        .with_publisher(&published_origin)
+        .connect(relay.dial_url.clone());
+    let broadcast = published_origin
+        .create_broadcast("third/party.hang")
+        .unwrap();
+    let mut catalog = moq_json::snapshot::Producer::new(
+        broadcast
+            .create_track(
+                hang::Catalog::DEFAULT_NAME,
+                hang::Catalog::default_track_info(),
+            )
+            .unwrap(),
+        moq_json::snapshot::Config::default(),
+    );
+    catalog
+        .update(&serde_json::json!({
+            "video": {"renditions": {"camera/video": {
+                "codec": "avc1.42001f",
+                "codedWidth": 320,
+                "codedHeight": 240,
+                "container": {"kind": "legacy"},
+            }}},
+        }))
+        .unwrap();
+    let video_track = broadcast
+        .create_track("camera/video", hang::container::track_info(0))
+        .unwrap();
+    broadcast.announce(Default::default()).unwrap();
+    let writing = tokio::spawn(async move {
+        let _catalog = catalog;
+        let _broadcast = broadcast;
+        let mut group = None;
+        for frame_number in 0..u64::MAX {
+            if frame_number % THIRD_PARTY_FRAMES_PER_GROUP == 0 {
+                if let Some(finished) = group.take() {
+                    let _ = moq_net::group::Producer::finish(&finished);
+                }
+                group = Some(video_track.append_group().unwrap());
+            }
+            let frame = hang::container::Frame {
+                timestamp: moq_net::Timestamp::from_micros(
+                    frame_number * THIRD_PARTY_FRAME_SPACING_MICROSECONDS,
+                )
+                .unwrap(),
+                payload: the_third_partys_payload(frame_number).into(),
+            };
+            frame.write_to(group.as_mut().unwrap()).unwrap();
+            tokio::time::sleep(Duration::from_micros(
+                THIRD_PARTY_FRAME_SPACING_MICROSECONDS,
+            ))
+            .await;
+        }
+    });
+    (writing, session)
+}
+
+/// A track no runtime published plays through the node: a third party's hang
+/// broadcast at a relay of its own reaches the graph as its frames, in its
+/// groups, with its spacing, under its own catalog entry.
+#[test]
+fn a_relay_track_source_reads_a_hang_track_a_third_party_published() {
+    let third_party_relay = ThirdPartyRelay::start();
+    let mut reading = TatolabdPublishingTheStream::start_with_the_streams(&[(
+        READER_STREAM,
+        serde_json::json!({
+            "stream": READER_STREAM,
+            "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
+        }),
+    )]);
+    let (third_party_writing, _third_party_session) = reading
+        .async_runtime
+        .block_on(publish_a_third_party_hang_broadcast_at(&third_party_relay));
+    reading.add_a_relay_track_source_at(
+        &third_party_relay.dial_url,
+        "fromthirdparty",
+        "third/party/camera/video",
+    );
+    reading.expose_in_the_reader_stream("fromthirdparty", "track");
+    let at_loopback =
+        reading.the_broadcast_of_the_stream_at(READER_STREAM, LocalRelayListener::Loopback);
+
+    reading.async_runtime.block_on(async {
+        at_loopback
+            .the_track_once_it_is_served("fromthirdparty/track")
+            .await;
+        let objects = at_loopback
+            .the_next_objects_of("fromthirdparty/track", 12)
+            .await;
+        let frames: Vec<(u64, u128)> = objects
+            .iter()
+            .map(|object| {
+                let media_frame =
+                    hang::container::Frame::decode(bytes::Bytes::from(object.payload.clone()))
+                        .expect("the node writes the third party's frames as received");
+                let frame_number = std::str::from_utf8(&media_frame.payload)
+                    .ok()
+                    .and_then(|text| text.strip_prefix("access unit "))
+                    .and_then(|number| number.parse().ok())
+                    .expect("a frame the third party wrote");
+                assert_eq!(
+                    media_frame.timestamp.as_micros(),
+                    u128::from(frame_number * THIRD_PARTY_FRAME_SPACING_MICROSECONDS)
+                );
+                (frame_number, object.timestamp_ns)
+            })
+            .collect();
+        for (pair, objects_pair) in frames.windows(2).zip(objects.windows(2)) {
+            let (earlier, later) = (pair[0], pair[1]);
+            assert_eq!(
+                later.1 - earlier.1,
+                u128::from((later.0 - earlier.0) * THIRD_PARTY_FRAME_SPACING_MICROSECONDS) * 1_000,
+                "the node keeps the third party's spacing: {frames:?}"
+            );
+            if objects_pair[1].group_sequence != objects_pair[0].group_sequence {
+                assert_eq!(later.0 % THIRD_PARTY_FRAMES_PER_GROUP, 0, "{frames:?}");
+            } else {
+                assert_eq!(later.0, earlier.0 + 1, "{frames:?}");
+            }
+        }
+
+        let catalog_track = at_loopback
+            .broadcast
+            .track(hang::Catalog::DEFAULT_NAME)
+            .unwrap();
+        let mut catalog_consumer =
+            hang::catalog::Consumer::<()>::new(catalog_track.subscribe(None).await.unwrap());
+        let catalog = loop {
+            let catalog = tokio::time::timeout(MOQ_BUDGET, catalog_consumer.next())
+                .await
+                .expect("the reading stream's catalog lists the third party's entry")
+                .expect("hang reads the catalog")
+                .expect("the catalog track is live");
+            if catalog
+                .video
+                .renditions
+                .contains_key("fromthirdparty/track")
+            {
+                break catalog;
+            }
+        };
+        let video_entry = &catalog.video.renditions["fromthirdparty/track"];
+        assert_eq!(video_entry.codec.to_string(), "avc1.42001f");
+        assert_eq!(
+            (video_entry.coded_width, video_entry.coded_height),
+            (Some(320), Some(240))
+        );
+    });
+    third_party_writing.abort();
+    reading.runtime.interrupt_and_expect_a_clean_exit();
 }
