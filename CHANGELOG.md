@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.50.0](https://github.com/tatolab/streamlib/compare/v0.49.0...v0.50.0) (2026-10-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **codec:** the encoders write the stack's media frame — the keyframe in the group flag, the codec string from the SPS, loss handled by lost_since_last_read ([#2850](https://github.com/tatolab/streamlib/issues/2850))
+
+### Features
+
+* **codec:** the encoders write the stack's media frame — the keyframe in the group flag, the codec string from the SPS, loss handled by lost_since_last_read ([#2850](https://github.com/tatolab/streamlib/issues/2850)) ([6324e67](https://github.com/tatolab/streamlib/commit/6324e673a6a5967cb892849ac8a638b113a412bb))
+
 ## [0.49.0](https://github.com/tatolab/streamlib/compare/v0.48.3...v0.49.0) (2026-10-18)
 
 
