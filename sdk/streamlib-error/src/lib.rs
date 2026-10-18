@@ -202,13 +202,16 @@ pub enum Error {
         port_name: String,
     },
 
+    /// A descriptor declaring a catalog entry on an input port.
     #[error(
         "processor `{processor_class_import_path}` declares a catalog entry on input port \
          `{port_name}` — an entry describes what a producer writes, so only an output port \
          carries one"
     )]
     DescriptorCatalogEntryOnInputPort {
+        /// The processor whose descriptor declares it.
         processor_class_import_path: ProcessorClassImportPath,
+        /// The input port that carries it.
         port_name: String,
     },
 
