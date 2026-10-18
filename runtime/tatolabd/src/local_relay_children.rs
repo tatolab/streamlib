@@ -14,17 +14,34 @@ use streamlib_relay_adapter_local::{
     LocalRelayAdapter, LocalRelayListener, LocalRelaySharedByBothInstances,
     local_relay_executable_beside, mint_the_runtimes_relay_publish_token,
 };
-use streamlib_relay_adapter_sdk::RelayAdapter;
+use streamlib_relay_adapter_sdk::{JoinedRelay, RelayAdapter};
+
+use crate::exposed_port_publisher::RelayTheExposedPortPublisherDials;
 
 /// The local relay's instances while `tatolabd` runs; dropping this stops
 /// every child and its admission, then says so.
 pub(crate) struct LocalRelayChildrenOfThisRuntime {
-    joined_instances: Vec<LocalRelayAdapter>,
+    joined_instances: Vec<(LocalRelayAdapter, JoinedRelay)>,
+}
+
+impl LocalRelayChildrenOfThisRuntime {
+    /// How the publisher dials each joined instance.
+    pub(crate) fn relays_the_publisher_dials(
+        &self,
+        engine: &Runner,
+    ) -> Vec<RelayTheExposedPortPublisherDials> {
+        self.joined_instances
+            .iter()
+            .map(|(instance, joined)| {
+                RelayTheExposedPortPublisherDials::of_a_joined_relay(instance, joined, engine)
+            })
+            .collect()
+    }
 }
 
 impl Drop for LocalRelayChildrenOfThisRuntime {
     fn drop(&mut self) {
-        for instance in &mut self.joined_instances {
+        for (instance, _) in &mut self.joined_instances {
             instance.leave();
         }
         tracing::info!("the local relay has stopped");
@@ -79,7 +96,7 @@ pub(crate) fn join_the_local_relay(engine: &Runner) -> Option<LocalRelayChildren
                         .collect::<Vec<_>>()
                         .join(" and ")
                 );
-                joined_instances.push(instance);
+                joined_instances.push((instance, joined));
             }
             Err(refusal) => tracing::error!("{refusal}"),
         }

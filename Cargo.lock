@@ -6164,8 +6164,13 @@ dependencies = [
 name = "tatolabd"
 version = "0.50.0"
 dependencies = [
+ "bytes",
  "clap",
+ "hang",
  "libc",
+ "moq-json",
+ "moq-net",
+ "moq-tokio",
  "rmcp",
  "serde",
  "serde_json",
