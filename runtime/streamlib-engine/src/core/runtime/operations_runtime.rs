@@ -1058,7 +1058,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                     graph,
                     iceoryx2_node,
                     &source,
-                    crate::core::compiler::compiler_ops::WindowedDestinationOutsideTheSourcesGraph::Absent,
+                    crate::core::compiler::compiler_ops::RoomForAWindowedReaderTheSourcesGraphCannotSee::NotNeeded,
                 )?;
                 let channel_service_name =
                     crate::core::compiler::compiler_ops::channel_service_name(&source)?;

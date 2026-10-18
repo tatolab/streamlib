@@ -28,7 +28,7 @@ use crate::core::graph::{
     ExposedOutputPortsComponent, GraphNodeWithComponents, OutputLinkPortRef,
     OutputPortExposureLevel, OutputPortReaderOutsideItsStream, ProcessorUniqueId,
 };
-use crate::core::processors::OutOfProcessLinkWireOutcome;
+use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
 use crate::iceoryx2::{BagsAGapInTheNumberingSaysWereLost, FrameHeader, MessageReadFromInputPort};
 
@@ -226,11 +226,11 @@ fn subscribe_holding_the_source_side_open(
         })?;
     let forwarder = start_reserved_slot_forwarder(
         ReservedSlotOfAChannelToForward {
-            node: iceoryx2_node,
+            iceoryx2_node,
             channel: source_side.channel_service_name.clone(),
             sizing: source_side.channel_sizing,
             ring_depth: crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
-            count: None,
+            items_to_forward_before_ending: None,
         },
         ExposedOutputPortMessageForwarding::<UniquePublisherId>::default(),
     )?;
@@ -286,18 +286,11 @@ impl ExposedOutputPortSubscription {
     /// Whether the port's source has opened its end of the channel; a helper
     /// source answers after the subscription returns.
     pub fn source_wiring(&self) -> ExposedOutputPortSourceWiring {
-        let Some(wire_reply) = &self.source_side.wire_reply_awaited_from_the_source else {
-            return ExposedOutputPortSourceWiring::Wired;
-        };
-        match wire_reply.the_far_sides_answer() {
-            None => ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer,
-            Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide) => {
-                ExposedOutputPortSourceWiring::Wired
-            }
-            Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { reason }) => {
-                ExposedOutputPortSourceWiring::RefusedByItsHelper { reason }
-            }
-        }
+        the_source_wiring_its_answer_says(
+            self.source_side
+                .wire_reply_awaited_from_the_source
+                .as_deref(),
+        )
     }
 
     /// The stream the port belongs to.
@@ -313,6 +306,25 @@ impl ExposedOutputPortSubscription {
     /// The port's cast name.
     pub fn port_name(&self) -> &str {
         &self.port_name
+    }
+}
+
+/// What a source's answer about opening its end of the channel says, `None`
+/// for a source with nothing to answer.
+fn the_source_wiring_its_answer_says(
+    wire_reply: Option<&OutOfProcessLinkWireReply>,
+) -> ExposedOutputPortSourceWiring {
+    let Some(wire_reply) = wire_reply else {
+        return ExposedOutputPortSourceWiring::Wired;
+    };
+    match wire_reply.the_far_sides_answer() {
+        None => ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer,
+        Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide) => {
+            ExposedOutputPortSourceWiring::Wired
+        }
+        Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { reason }) => {
+            ExposedOutputPortSourceWiring::RefusedByItsHelper { reason }
+        }
     }
 }
 
@@ -766,6 +778,34 @@ mod tests {
                 .lost_since_last_read,
             4,
             "the dropped message and the losses it carried"
+        );
+    }
+
+    #[test]
+    fn the_source_wiring_says_what_a_helper_answered_or_that_none_is_owed() {
+        assert_eq!(
+            the_source_wiring_its_answer_says(None),
+            ExposedOutputPortSourceWiring::Wired
+        );
+        let owed = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        assert_eq!(
+            the_source_wiring_its_answer_says(Some(&owed)),
+            ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer
+        );
+        owed.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(
+            the_source_wiring_its_answer_says(Some(&owed)),
+            ExposedOutputPortSourceWiring::Wired
+        );
+        let refused = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        refused.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+            reason: "no such service".to_string(),
+        });
+        assert_eq!(
+            the_source_wiring_its_answer_says(Some(&refused)),
+            ExposedOutputPortSourceWiring::RefusedByItsHelper {
+                reason: "no such service".to_string()
+            }
         );
     }
 }

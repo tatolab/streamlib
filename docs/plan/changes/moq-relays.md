@@ -157,12 +157,18 @@ reads them). Consumers (`examples/camera-audio-recorder`, `camera-webrtc-publish
 
 ## ADDED: the publisher, the adapter crates, the local relay — §Networking `:3880-3984`
 
-- **The engine seam.** `RuntimeOperations` gains `subscribe_to_an_exposed_output_port(stream, node,
-  port) -> ExposedOutputPortSubscription` — the reserved slot's reader (the tap forwarder reused;
-  `RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL` → `RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL`)
-  yielding `(payload_bytes, timestamp_ns, group_boundary, lost_since_last_read)` — and `exposure_changes()
-  -> ExposureChangeReceiver`, fed from `set_output_port_exposure_level`, carrying each port's level
-  and catalog entry. Nothing else of the engine is new.
+- **The engine seam.** `RuntimeOperations` (one loaded stream's) gains
+  `subscribe_to_an_exposed_output_port(node, port) -> ExposedOutputPortSubscription` — the reserved
+  slot's reader (the tap's forwarder, shared; `RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL` →
+  `RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL`) yielding `(payload_bytes, timestamp_ns,
+  group_boundary, lost_since_last_read)` — and `Runner::exposure_changes() -> ExposureChangeReceiver`,
+  which reads every loaded stream's exposed ports, each with its level and catalog entry, again on
+  each notice on the event bus: a level set, an entry replaced, a stream compiled, a stream unloaded.
+  A port's channel exists only while something reads it, so the subscription holds the port's
+  source side open — native and helper sources alike — whether or not a link out of it exists. A
+  channel the publisher is the first to open is made `WINDOWED_PORT_SUBSCRIBER_RING_DEPTH` deep, so
+  a windowed reader a live graph change connects later fits it; the publisher's own reader takes
+  `DeliveryProfile::ORDERED_DEPTH` (owner, 2026-10-18).
 - **The publisher** is `D/exposed_port_publisher.rs`, one per `tatolabd`, holding one subscription per
   exposed port of every loaded stream and, per adapter instance whose levels include the port's,
   one `moq_net::broadcast::Producer` per stream named `<root>/<machine>/<stream>.hang`, one track

@@ -54,11 +54,11 @@ pub(crate) trait ReservedSlotBagForwarding: Send + 'static {
 /// ring its subscriber takes, no deeper than the channel; and how many items
 /// to forward from it before ending, or `None` for no bound.
 pub(crate) struct ReservedSlotOfAChannelToForward {
-    pub(crate) node: Iceoryx2Node,
+    pub(crate) iceoryx2_node: Iceoryx2Node,
     pub(crate) channel: String,
     pub(crate) sizing: ChannelSizing,
     pub(crate) ring_depth: usize,
-    pub(crate) count: Option<usize>,
+    pub(crate) items_to_forward_before_ending: Option<usize>,
 }
 
 /// A running reader of one channel's reserved slot, handing what it forwards
@@ -184,11 +184,11 @@ impl<Forwarding: ReservedSlotBagForwarding> ReaderOfAReservedSlot<Forwarding> {
         let Self {
             slot:
                 ReservedSlotOfAChannelToForward {
-                    node,
+                    iceoryx2_node,
                     channel,
                     sizing,
                     ring_depth,
-                    count,
+                    items_to_forward_before_ending,
                 },
             mut forwarding,
             forward_tx,
@@ -196,7 +196,7 @@ impl<Forwarding: ReservedSlotBagForwarding> ReaderOfAReservedSlot<Forwarding> {
         } = self;
         // The service is reopened with the sizing it was created with and no
         // publisher; iceoryx2 verifies the sizing against the live service.
-        let service = match node.open_or_create_service(
+        let service = match iceoryx2_node.open_or_create_service(
             &channel,
             sizing.max_subscribers,
             sizing.channel_service_creation_depth,
@@ -232,7 +232,7 @@ impl<Forwarding: ReservedSlotBagForwarding> ReaderOfAReservedSlot<Forwarding> {
             }
             // The bound is checked before receiving, so a bound of zero forwards
             // nothing at all.
-            if count.is_some_and(|bound| forwarded >= bound) {
+            if items_to_forward_before_ending.is_some_and(|bound| forwarded >= bound) {
                 break;
             }
             match subscriber.receive() {

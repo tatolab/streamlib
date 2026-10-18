@@ -1984,11 +1984,11 @@ mod tests {
         disconnected
             .recv_timeout(A_CUT_LANDS_WITHIN)
             .expect("the cut disconnects the link");
-        // The cut's task says it disconnected before it lets go of `b`, and a
-        // hold let go of while the next level is counted would read as a re-plan
-        // missing.
+        // The cut holds `b` weakly from its registration until its task ends,
+        // which is after it says it disconnected; that hold let go of while the
+        // next level is counted would read as a re-plan missing.
         let deadline = std::time::Instant::now() + A_CUT_LANDS_WITHIN;
-        while Arc::weak_count(&streams.b) > held_weakly_before_the_cut {
+        while Arc::weak_count(&streams.b) >= held_weakly_before_the_cut {
             assert!(
                 std::time::Instant::now() < deadline,
                 "the cut still holds `b` after {A_CUT_LANDS_WITHIN:?}"

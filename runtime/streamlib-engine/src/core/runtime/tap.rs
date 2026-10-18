@@ -108,11 +108,11 @@ pub(crate) fn start_channel_tap(
     let dropped_bags = Arc::new(AtomicU64::new(0));
     let forwarder = start_reserved_slot_forwarder(
         ReservedSlotOfAChannelToForward {
-            node,
+            iceoryx2_node: node,
             channel,
             ring_depth: sizing.channel_service_creation_depth,
             sizing,
-            count,
+            items_to_forward_before_ending: count,
         },
         TapBagForwarding {
             dropped_bags: Arc::clone(&dropped_bags),

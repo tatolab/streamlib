@@ -317,22 +317,22 @@ pub(crate) fn open_the_source_side_of_a_link(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_chunk_ceiling_bytes(trust_tier);
-    let windowed_destination_outside_the_sources_graph = if (destination_windows_its_reads
+    let room_for_a_windowed_reader_the_sources_graph_cannot_see = if (destination_windows_its_reads
         && !source_graph
             .traversal()
             .v(&destination.dest_proc_id)
             .exists())
         || destination.makes_room_for_a_windowed_reader_joining_later
     {
-        WindowedDestinationOutsideTheSourcesGraph::Present
+        RoomForAWindowedReaderTheSourcesGraphCannotSee::Made
     } else {
-        WindowedDestinationOutsideTheSourcesGraph::Absent
+        RoomForAWindowedReaderTheSourcesGraphCannotSee::NotNeeded
     };
     let channel_sizing = resolve_channel_sizing(
         source_graph,
         iceoryx2_node,
         source,
-        windowed_destination_outside_the_sources_graph,
+        room_for_a_windowed_reader_the_sources_graph_cannot_see,
     )?;
 
     let channel_data_service = iceoryx2_node.open_or_create_service(
@@ -754,13 +754,14 @@ fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef) -> Result<
     Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL)
 }
 
-/// Whether a destination being wired from a source, held in a graph other
-/// than the source's, windows its reads — a reader the source's graph cannot
-/// see when it sizes the channel.
+/// Whether a channel created now makes room for a windowed reader the
+/// source's graph cannot see when it sizes the channel: one being wired from
+/// another graph, or one a live graph change may connect after the runtime's
+/// publisher opened the channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WindowedDestinationOutsideTheSourcesGraph {
-    Present,
-    Absent,
+pub(crate) enum RoomForAWindowedReaderTheSourcesGraphCannotSee {
+    Made,
+    NotNeeded,
 }
 
 /// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
@@ -770,7 +771,7 @@ pub(crate) fn resolve_channel_sizing(
     graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
-    windowed_destination_outside_the_sources_graph: WindowedDestinationOutsideTheSourcesGraph,
+    room_for_a_windowed_reader_the_sources_graph_cannot_see: RoomForAWindowedReaderTheSourcesGraphCannotSee,
 ) -> Result<ChannelSizing> {
     Ok(ChannelSizing {
         max_subscribers: channel_max_subscribers(graph, source)?,
@@ -778,7 +779,7 @@ pub(crate) fn resolve_channel_sizing(
             graph,
             iceoryx2_node,
             source,
-            windowed_destination_outside_the_sources_graph,
+            room_for_a_windowed_reader_the_sources_graph_cannot_see,
         )?,
     })
 }
@@ -797,15 +798,15 @@ fn channel_service_creation_depth(
     graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
-    windowed_destination_outside_the_sources_graph: WindowedDestinationOutsideTheSourcesGraph,
+    room_for_a_windowed_reader_the_sources_graph_cannot_see: RoomForAWindowedReaderTheSourcesGraphCannotSee,
 ) -> Result<usize> {
     if let Some(live_creation_depth) =
         creation_depth_of_the_live_channel(graph, iceoryx2_node, source)?
     {
         return Ok(live_creation_depth);
     }
-    if windowed_destination_outside_the_sources_graph
-        == WindowedDestinationOutsideTheSourcesGraph::Present
+    if room_for_a_windowed_reader_the_sources_graph_cannot_see
+        == RoomForAWindowedReaderTheSourcesGraphCannotSee::Made
     {
         return Ok(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH);
     }
@@ -4814,7 +4815,7 @@ mod tests {
             &graph,
             &Iceoryx2Node::for_this_test_process(),
             &OutputLinkPortRef::new(src_uid.clone(), "out1"),
-            WindowedDestinationOutsideTheSourcesGraph::Absent,
+            RoomForAWindowedReaderTheSourcesGraphCannotSee::NotNeeded,
         )
         .expect("sizing resolves for a wired channel");
         assert_eq!(

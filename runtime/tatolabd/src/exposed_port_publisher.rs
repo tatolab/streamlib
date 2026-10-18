@@ -658,26 +658,34 @@ async fn read_into(
     mut subscription: ExposedOutputPortSubscription,
     track_writer: Arc<Mutex<ExposedPortTrackWriter>>,
 ) {
-    loop {
-        match subscription.source_wiring() {
-            ExposedOutputPortSourceWiring::Wired => break,
-            ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer => {
-                tokio::time::sleep(HOW_OFTEN_A_HELPERS_ANSWER_IS_ASKED_FOR).await
-            }
-            ExposedOutputPortSourceWiring::RefusedByItsHelper { reason } => {
-                tracing::warn!(
-                    "the exposed port `{}/{}/{}` is not published: its helper could not open \
-                     its port: {reason}",
-                    subscription.stream_name(),
-                    subscription.node_name(),
-                    subscription.port_name()
-                );
-                return;
-            }
-        }
+    if let Err(reason) = the_source_opened_its_end(|| subscription.source_wiring()).await {
+        tracing::warn!(
+            "the exposed port `{}/{}/{}` is not published: its helper could not open its \
+             port: {reason}",
+            subscription.stream_name(),
+            subscription.node_name(),
+            subscription.port_name()
+        );
+        return;
     }
     while let Some(message) = subscription.next_message().await {
         lock_the_writer(&track_writer).write_message(message);
+    }
+}
+
+/// Wait until `source_wiring` says the source opened its end of the channel,
+/// or hand back why its helper refused.
+async fn the_source_opened_its_end(
+    source_wiring: impl Fn() -> ExposedOutputPortSourceWiring,
+) -> Result<(), String> {
+    loop {
+        match source_wiring() {
+            ExposedOutputPortSourceWiring::Wired => return Ok(()),
+            ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer => {
+                tokio::time::sleep(HOW_OFTEN_A_HELPERS_ANSWER_IS_ASKED_FOR).await
+            }
+            ExposedOutputPortSourceWiring::RefusedByItsHelper { reason } => return Err(reason),
+        }
     }
 }
 
@@ -849,5 +857,58 @@ mod tests {
     fn a_stamp_is_kept_in_nanoseconds_and_one_before_zero_reads_as_zero() {
         assert_eq!(the_object_timestamp_of(1_234_567).as_nanos(), 1_234_567);
         assert!(the_object_timestamp_of(-5).is_zero());
+    }
+
+    /// A read waits while a helper owes its answer, starts once it opened its
+    /// port, and ends on its refusal with the helper's reason.
+    #[test]
+    fn a_read_waits_for_its_helpers_answer_and_ends_on_a_refusal() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (answer_at_last, expected) in [
+            (ExposedOutputPortSourceWiring::Wired, Ok(())),
+            (
+                ExposedOutputPortSourceWiring::RefusedByItsHelper {
+                    reason: "no such service".to_string(),
+                },
+                Err("no such service".to_string()),
+            ),
+        ] {
+            let asked = std::sync::atomic::AtomicUsize::new(0);
+            let outcome = async_runtime.block_on(the_source_opened_its_end(|| {
+                if asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 2 {
+                    ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer
+                } else {
+                    answer_at_last.clone()
+                }
+            }));
+            assert_eq!(outcome, expected);
+            assert_eq!(
+                asked.into_inner(),
+                3,
+                "it asked again while the answer was owed"
+            );
+        }
+    }
+
+    /// A node removed and added again under its name is another port to the
+    /// publisher, so the forwarding of the one it replaced is dropped even when
+    /// both changes reach it in one read of the exposed set.
+    #[test]
+    fn a_node_added_again_under_its_name_is_another_port() {
+        let exposed_at = |node_id: ProcessorUniqueId| ExposedOutputPortOfALoadedStream {
+            stream_name: "desk".to_string(),
+            node_name: "camera".to_string(),
+            node_id,
+            port_name: "video".to_string(),
+            level: OutputPortExposureLevel::Public,
+            catalog_entry: None,
+        };
+        let replaced = ExposedOutputPortAddress::of(&exposed_at(ProcessorUniqueId::new()));
+        let added_again = ExposedOutputPortAddress::of(&exposed_at(ProcessorUniqueId::new()));
+        assert_ne!(replaced, added_again);
+        assert_eq!(replaced.track_name(), added_again.track_name());
     }
 }

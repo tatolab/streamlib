@@ -19,7 +19,7 @@ pub(crate) use apply_processor_config_update_op::{
     ProcessorConfigUpdateOutcome, apply_processor_config_update,
 };
 pub(crate) use open_iceoryx2_service_op::{
-    SourceSideHeldOpenForTheRuntimesPublisher, WindowedDestinationOutsideTheSourcesGraph,
+    RoomForAWindowedReaderTheSourcesGraphCannotSee, SourceSideHeldOpenForTheRuntimesPublisher,
     channel_service_name, find_the_source_a_caller_named,
     open_the_source_side_for_the_runtimes_publisher, resolve_channel_sizing,
 };
