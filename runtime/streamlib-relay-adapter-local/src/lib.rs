@@ -35,7 +35,8 @@ pub use local_relay_admission::{
 };
 pub use local_relay_certificate::{
     LOCAL_RELAY_CERTIFICATE_REGENERATION_AGE, LOCAL_RELAY_CERTIFICATE_VALIDITY,
-    LocalRelayCertificateFiles, LocalRelayCertificateRefusal, ProvisionedLocalRelayCertificate,
+    LocalRelayCertificateAndKeyFile, LocalRelayCertificateRefusal,
+    ProvisionedLocalRelayCertificate,
 };
 pub use local_relay_child_configuration::LocalRelayChildConfiguration;
 pub use local_relay_child_supervision::{LocalRelayChildLaunch, LocalRelayChildSupervisor};
@@ -193,10 +194,11 @@ impl LocalRelayAdapter {
                 ))
             })?;
 
-        let certificate_files = LocalRelayCertificateFiles::in_the_directory(&instance_directory);
+        let certificate_and_key_file =
+            LocalRelayCertificateAndKeyFile::in_the_directory(&instance_directory);
         let certificate_rotation = LocalRelayCertificateRotation::start(
             self.relay_id.clone(),
-            certificate_files.clone(),
+            certificate_and_key_file.clone(),
             self.subject_alt_names(),
         )
         .map_err(|failure| self.join_refused(failure))?;
@@ -214,8 +216,7 @@ impl LocalRelayAdapter {
         let configuration_path = instance_directory.join("relay.toml");
         let configuration = LocalRelayChildConfiguration {
             bind_address: self.listener.bind_address(port),
-            certificate_path: certificate_files.certificate_path,
-            private_key_path: certificate_files.private_key_path,
+            certificate_and_key_path: certificate_and_key_file.certificate_and_key_path,
             admission_socket_path,
         };
         let rendered_configuration = configuration
@@ -236,6 +237,7 @@ impl LocalRelayAdapter {
                 relay_executable: self.shared.relay_executable.clone(),
                 configuration_path,
                 pidfile_path: instance_directory.join("moq-relay.pid"),
+                address_accepting_once_up: self.listener.address_dialed_on_this_machine(port),
             },
             self.connection_state.clone(),
         )
@@ -260,7 +262,7 @@ impl LocalRelayAdapter {
 }
 
 impl RelayAdapter for LocalRelayAdapter {
-    fn kind(&self) -> RelayAdapterKind {
+    fn kind() -> RelayAdapterKind {
         LOCAL_RELAY_ADAPTER_KIND
     }
 
@@ -268,7 +270,7 @@ impl RelayAdapter for LocalRelayAdapter {
         &self.relay_id
     }
 
-    fn settings_schema(&self) -> serde_json::Value {
+    fn settings_schema() -> serde_json::Value {
         LocalRelayInstanceSettings::processor_config_schema_document()
     }
 
@@ -331,11 +333,11 @@ struct LocalRelayCertificateRotation {
 impl LocalRelayCertificateRotation {
     fn start(
         relay_id: RelayInstanceId,
-        certificate_files: LocalRelayCertificateFiles,
+        certificate_and_key_file: LocalRelayCertificateAndKeyFile,
         subject_alt_names: Vec<String>,
     ) -> Result<Self, LocalRelayCertificateRotationRefusal> {
         let served = Arc::new(Mutex::new(
-            certificate_files.write_a_fresh_certificate_issued_now(&subject_alt_names)?,
+            certificate_and_key_file.write_a_fresh_certificate_issued_now(&subject_alt_names)?,
         ));
         let (stop_rotating, stop_requested) = mpsc::channel::<()>();
         let rotation_thread = std::thread::Builder::new()
@@ -348,7 +350,7 @@ impl LocalRelayCertificateRotation {
                     {
                         replace_the_certificate_once_due(
                             &relay_id,
-                            &certificate_files,
+                            &certificate_and_key_file,
                             &subject_alt_names,
                             &served,
                         );
@@ -381,7 +383,7 @@ enum LocalRelayCertificateRotationRefusal {
 
 fn replace_the_certificate_once_due(
     relay_id: &RelayInstanceId,
-    certificate_files: &LocalRelayCertificateFiles,
+    certificate_and_key_file: &LocalRelayCertificateAndKeyFile,
     subject_alt_names: &[String],
     served: &Mutex<ProvisionedLocalRelayCertificate>,
 ) {
@@ -389,7 +391,7 @@ fn replace_the_certificate_once_due(
     if !served.is_due_for_regeneration_now() {
         return;
     }
-    match certificate_files.write_a_fresh_certificate_issued_now(subject_alt_names) {
+    match certificate_and_key_file.write_a_fresh_certificate_issued_now(subject_alt_names) {
         Ok(fresh) => {
             tracing::info!(
                 relay = %relay_id,

@@ -3866,7 +3866,7 @@ entry reads as **message** (the glossary).
   it deletes the windows (§Media I/O), `Mp4Sink`, `remote_output` and the cross-stream link,
   the Tailscale read, `tap` and `exchange`, in the same change, inventorying every site; the
   CPU encoder arm (§Product) is deferred past it. Until
-  it ships the tree holds no MoQ and nothing links one machine to another. Owner, 2026-10-04
+  it ships nothing links one machine to another. Owner, 2026-10-04
   and 2026-10-16. [moq-relays; zenoh-and-moq-wheel-removal — SHIPPED #2633, #2643, #2645,
   #2649]
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data

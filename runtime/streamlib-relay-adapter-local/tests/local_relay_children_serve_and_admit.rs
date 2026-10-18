@@ -14,10 +14,11 @@ mod common;
 use std::time::Duration;
 
 use common::{
-    HTTP_ANSWER_BUDGET, JoinedLocalRelayUnderTest, a_moq_client, http_get_body, the_port_is_free,
-    wait_until, wait_until_the_served_fingerprint_is,
+    HTTP_ANSWER_BUDGET, JoinedLocalRelayUnderTest, a_moq_client, http_get_body, http_get_body_at,
+    the_port_is_free, this_hosts_address_off_loopback, wait_until,
+    wait_until_the_served_fingerprint_is,
 };
-use streamlib_relay_adapter_local::{LocalRelayCertificateFiles, LocalRelayListener};
+use streamlib_relay_adapter_local::{LocalRelayCertificateAndKeyFile, LocalRelayListener};
 use streamlib_relay_adapter_sdk::RelayAdapter;
 use streamlib_relay_adapter_sdk::secrecy::ExposeSecret;
 use streamlib_relay_adapter_sdk::url::Url;
@@ -162,7 +163,7 @@ fn new_certificate_files_are_served_with_no_restart() {
     let running_child = relay.adapter.running_child_process_id().unwrap();
 
     let replaced =
-        LocalRelayCertificateFiles::in_the_directory(&relay.adapter.instance_directory())
+        LocalRelayCertificateAndKeyFile::in_the_directory(&relay.adapter.instance_directory())
             .write_a_fresh_certificate_issued_now(&["localhost".to_string()])
             .unwrap();
     wait_until_the_served_fingerprint_is(relay.port, &replaced.sha256_fingerprint_hex);
@@ -198,4 +199,41 @@ fn leaving_ends_the_child_and_frees_its_port() {
         assert!(!instance_directory.join("moq-relay.pid").exists());
         assert!(!instance_directory.join("admission.sock").exists());
     }
+}
+
+#[test]
+fn off_loopback_the_every_interface_child_answers_and_the_loopback_child_is_unreachable() {
+    let loopback = JoinedLocalRelayUnderTest::join(LocalRelayListener::Loopback);
+    let every_interface = JoinedLocalRelayUnderTest::join(LocalRelayListener::EveryInterface);
+    wait_until_the_served_fingerprint_is(
+        loopback.port,
+        &loopback
+            .adapter
+            .served_certificate_sha256_fingerprint_hex()
+            .unwrap(),
+    );
+    let every_interface_fingerprint = every_interface
+        .adapter
+        .served_certificate_sha256_fingerprint_hex()
+        .unwrap();
+    wait_until_the_served_fingerprint_is(every_interface.port, &every_interface_fingerprint);
+    let off_loopback = this_hosts_address_off_loopback();
+
+    assert_eq!(
+        http_get_body_at(
+            std::net::SocketAddr::new(off_loopback, every_interface.port),
+            "/certificate.sha256"
+        )
+        .as_deref(),
+        Some(every_interface_fingerprint.as_str()),
+        "the every-interface child answers at {off_loopback}"
+    );
+    assert!(
+        std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::new(off_loopback, loopback.port),
+            Duration::from_secs(2)
+        )
+        .is_err(),
+        "the loopback child is reachable at {off_loopback}"
+    );
 }

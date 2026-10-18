@@ -179,6 +179,28 @@ fn killing_tatolabd_leaves_no_child_and_no_bound_port_behind() {
 }
 
 #[test]
+fn a_test_runtime_naming_no_relay_ports_runs_no_local_relay_and_binds_neither_default_port() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend_and_the_local_relay();
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
+        machine_root.tatolabd_command(&runtime_unit.tatolabd),
+    );
+
+    assert!(
+        !machine_root
+            .local_relay_instance_directory(LOOPBACK_RELAY_ID)
+            .exists()
+    );
+    runtime.interrupt_and_expect_a_clean_exit();
+    let standard_error = runtime.standard_error();
+    assert!(
+        standard_error.contains("no local relay runs")
+            && standard_error.contains("never binds the machine's own"),
+        "{standard_error}"
+    );
+}
+
+#[test]
 fn a_unit_without_the_relay_runs_with_no_local_relay_saying_why() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();

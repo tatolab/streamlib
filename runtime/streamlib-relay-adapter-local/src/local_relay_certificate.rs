@@ -36,13 +36,13 @@ const OWNER_ONLY_FILE_MODE: u32 = 0o600;
 /// child's watcher only ever sees a whole file.
 const NEXT_FILE_SUFFIX: &str = "next";
 
-/// Where one child's certificate and key live.
+/// The one file a child's certificate and its key live in, so a rotation is
+/// one rename and the child's watcher never pairs a new key with an old
+/// certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalRelayCertificateFiles {
-    /// The certificate, PEM.
-    pub certificate_path: PathBuf,
-    /// Its private key, PKCS#8 PEM.
-    pub private_key_path: PathBuf,
+pub struct LocalRelayCertificateAndKeyFile {
+    /// The certificate, then its PKCS#8 private key, both PEM.
+    pub certificate_and_key_path: PathBuf,
 }
 
 /// A certificate written to its files.
@@ -67,17 +67,16 @@ pub enum LocalRelayCertificateRefusal {
     },
 }
 
-impl LocalRelayCertificateFiles {
-    /// The certificate and key files inside `directory`.
+impl LocalRelayCertificateAndKeyFile {
+    /// The certificate-and-key file inside `directory`.
     pub fn in_the_directory(directory: &Path) -> Self {
         Self {
-            certificate_path: directory.join("certificate.pem"),
-            private_key_path: directory.join("private-key.pem"),
+            certificate_and_key_path: directory.join("certificate-and-key.pem"),
         }
     }
 
     /// Issue a fresh ECDSA P-256 certificate for `subject_alt_names` now and
-    /// replace both files with it, the key first.
+    /// replace the file with it and its key.
     pub fn write_a_fresh_certificate_issued_now(
         &self,
         subject_alt_names: &[String],
@@ -86,7 +85,7 @@ impl LocalRelayCertificateFiles {
     }
 
     /// Issue a fresh ECDSA P-256 certificate for `subject_alt_names` at
-    /// `issued_at` and replace both files with it, the key first.
+    /// `issued_at` and replace the file with it and its key.
     fn write_a_fresh_certificate(
         &self,
         subject_alt_names: &[String],
@@ -102,11 +101,12 @@ impl LocalRelayCertificateFiles {
             time::OffsetDateTime::from(not_before + LOCAL_RELAY_CERTIFICATE_VALIDITY);
         let certificate = parameters.self_signed(&private_key)?;
 
+        let certificate_and_key_pem =
+            format!("{}{}", certificate.pem(), private_key.serialize_pem());
         replace_the_file_whole(
-            &self.private_key_path,
-            private_key.serialize_pem().as_bytes(),
+            &self.certificate_and_key_path,
+            certificate_and_key_pem.as_bytes(),
         )?;
-        replace_the_file_whole(&self.certificate_path, certificate.pem().as_bytes())?;
         Ok(ProvisionedLocalRelayCertificate {
             issued_at,
             sha256_fingerprint_hex: sha256_hex(certificate.der()),
@@ -162,27 +162,27 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_certificate_and_its_key_are_written_owner_only_and_fingerprinted() {
+    fn the_certificate_and_its_key_are_written_to_one_owner_only_file_and_fingerprinted() {
         let directory = tempfile::tempdir().unwrap();
-        let files = LocalRelayCertificateFiles::in_the_directory(directory.path());
-        let provisioned = files
+        let file = LocalRelayCertificateAndKeyFile::in_the_directory(directory.path());
+        let provisioned = file
             .write_a_fresh_certificate(&subject_alt_names(), SystemTime::now())
             .unwrap();
 
-        let certificate_pem = std::fs::read_to_string(&files.certificate_path).unwrap();
-        assert!(certificate_pem.starts_with("-----BEGIN CERTIFICATE-----"));
-        let private_key_pem = std::fs::read_to_string(&files.private_key_path).unwrap();
-        assert!(private_key_pem.starts_with("-----BEGIN PRIVATE KEY-----"));
-        for path in [&files.certificate_path, &files.private_key_path] {
-            assert_eq!(
-                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                OWNER_ONLY_FILE_MODE,
-                "{}",
-                path.display()
-            );
-        }
+        let certificate_and_key_pem =
+            std::fs::read_to_string(&file.certificate_and_key_path).unwrap();
+        assert!(certificate_and_key_pem.starts_with("-----BEGIN CERTIFICATE-----"));
+        assert!(certificate_and_key_pem.contains("-----BEGIN PRIVATE KEY-----"));
+        assert_eq!(
+            std::fs::metadata(&file.certificate_and_key_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            OWNER_ONLY_FILE_MODE
+        );
 
-        let der = pem_body_as_der(&certificate_pem);
+        let der = pem_body_as_der(&certificate_and_key_pem);
         assert_eq!(provisioned.sha256_fingerprint_hex, sha256_hex(&der));
         assert_eq!(provisioned.sha256_fingerprint_hex.len(), 64);
     }
@@ -190,11 +190,11 @@ mod tests {
     #[test]
     fn the_certificate_is_ecdsa_p256_and_valid_for_fourteen_days() {
         let directory = tempfile::tempdir().unwrap();
-        let files = LocalRelayCertificateFiles::in_the_directory(directory.path());
-        files
-            .write_a_fresh_certificate(&subject_alt_names(), SystemTime::now())
+        let file = LocalRelayCertificateAndKeyFile::in_the_directory(directory.path());
+        file.write_a_fresh_certificate(&subject_alt_names(), SystemTime::now())
             .unwrap();
-        let der = pem_body_as_der(&std::fs::read_to_string(&files.certificate_path).unwrap());
+        let der =
+            pem_body_as_der(&std::fs::read_to_string(&file.certificate_and_key_path).unwrap());
 
         const ECDSA_WITH_SHA256_OID_DER: &[u8] =
             &[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
@@ -214,20 +214,20 @@ mod tests {
     }
 
     #[test]
-    fn writing_again_replaces_both_files_with_a_new_fingerprint() {
+    fn writing_again_replaces_the_file_with_a_new_fingerprint() {
         let directory = tempfile::tempdir().unwrap();
-        let files = LocalRelayCertificateFiles::in_the_directory(directory.path());
-        let first = files
+        let file = LocalRelayCertificateAndKeyFile::in_the_directory(directory.path());
+        let first = file
             .write_a_fresh_certificate(&subject_alt_names(), SystemTime::now())
             .unwrap();
-        let second = files
+        let second = file
             .write_a_fresh_certificate(&subject_alt_names(), SystemTime::now())
             .unwrap();
         assert_ne!(first.sha256_fingerprint_hex, second.sha256_fingerprint_hex);
         assert_eq!(
             std::fs::read_dir(directory.path()).unwrap().count(),
-            2,
-            "no `.next` file is left beside the two"
+            1,
+            "no `.next` file is left beside it"
         );
     }
 
@@ -256,7 +256,8 @@ mod tests {
     fn pem_body_as_der(pem: &str) -> Vec<u8> {
         let body: String = pem
             .lines()
-            .filter(|line| !line.starts_with("-----"))
+            .skip(1)
+            .take_while(|line| !line.starts_with("-----"))
             .collect();
         decode_base64(&body)
     }

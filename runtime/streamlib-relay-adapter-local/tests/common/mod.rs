@@ -122,12 +122,19 @@ pub fn a_moq_client() -> moq_tokio::Client {
 /// The body of `GET <path>` on loopback `port`, or `None` when nothing
 /// answers it with a 200.
 pub fn http_get_body(port: u16, path: &str) -> Option<String> {
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    http_get_body_at(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port), path)
+}
+
+/// The body of `GET <path>` at `address`, or `None` when nothing answers it
+/// with a 200.
+pub fn http_get_body_at(address: SocketAddr, path: &str) -> Option<String> {
+    let port = address.port();
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {}:{port}\r\nConnection: close\r\n\r\n",
+        address.ip()
     )
     .ok()?;
     let mut answer = String::new();
@@ -160,4 +167,22 @@ pub fn wait_until_the_served_fingerprint_is(port: u16, fingerprint: &str) {
         served,
         "port {port} served {last_served:?} rather than {fingerprint} within {HTTP_ANSWER_BUDGET:?}"
     );
+}
+
+/// This host's address on the route off the machine — chosen by the kernel
+/// for a UDP socket aimed at a documentation address, sending nothing.
+pub fn this_hosts_address_off_loopback() -> IpAddr {
+    let socket = UdpSocket::bind("0.0.0.0:0").expect("a UDP socket binds");
+    socket
+        .connect("192.0.2.1:9")
+        .expect("the host has a route off loopback to read its own address from");
+    let address = socket
+        .local_addr()
+        .expect("a connected socket has an address")
+        .ip();
+    assert!(
+        !address.is_loopback() && !address.is_unspecified(),
+        "the host reports {address} as its address off loopback"
+    );
+    address
 }

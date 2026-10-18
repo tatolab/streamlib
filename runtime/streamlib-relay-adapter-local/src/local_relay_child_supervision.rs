@@ -15,6 +15,7 @@
 //! have been handed to another process.
 
 use std::io::{BufRead, BufReader, Read};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,6 +52,9 @@ const LEFT_BEHIND_CHILD_DISAPPEARANCE_BUDGET: Duration = Duration::from_secs(5);
 /// How often a disappearance or an exit is looked for.
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+/// How long one probe of whether the child accepts waits for its answer.
+const CHILD_ACCEPT_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
+
 /// How often the supervisor looks for its running child's exit.
 const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -70,6 +74,9 @@ pub struct LocalRelayChildLaunch {
     pub configuration_path: PathBuf,
     /// Where the running child's process id is written.
     pub pidfile_path: PathBuf,
+    /// The address the child accepts TCP on once it is up — its HTTP
+    /// listener — before which it is not reported joined.
+    pub address_accepting_once_up: SocketAddr,
 }
 
 /// The thread keeping one child running, and the means to stop it.
@@ -192,13 +199,19 @@ fn keep_the_child_running(
                     *running = Some(child.id());
                     drop(running);
                     write_the_pidfile(&launch.pidfile_path, child.id());
-                    connection_state.send_replace(RelayConnectionState::Joined);
                     tracing::info!(
                         relay = %launch.relay_id,
                         "the local relay child {} is running from {}",
                         child.id(),
                         launch.configuration_path.display()
                     );
+                    if wait_until_the_child_accepts_or_exits(
+                        child.id(),
+                        launch.address_accepting_once_up,
+                        stopping,
+                    ) {
+                        connection_state.send_replace(RelayConnectionState::Joined);
+                    }
                     let started = Instant::now();
                     let exit = reap_the_child_once_it_exits(child, running_child_process_id);
                     if stopping.load(Ordering::SeqCst) {
@@ -254,6 +267,26 @@ fn start_the_child(launch: &LocalRelayChildLaunch) -> std::io::Result<Child> {
         forward_the_childs_log_lines(launch.relay_id.clone(), standard_error);
     }
     Ok(child)
+}
+
+/// Wait until the child accepts a TCP connection at `address`, saying so, or
+/// until it exits or the supervisor is stopping, saying not.
+fn wait_until_the_child_accepts_or_exits(
+    process_id: u32,
+    address: SocketAddr,
+    stopping: &AtomicBool,
+) -> bool {
+    loop {
+        if TcpStream::connect_timeout(&address, CHILD_ACCEPT_PROBE_TIMEOUT).is_ok() {
+            return true;
+        }
+        if stopping.load(Ordering::SeqCst)
+            || a_child_process_has_exited_without_being_reaped(process_id)
+        {
+            return false;
+        }
+        std::thread::sleep(PROCESS_POLL_INTERVAL);
+    }
 }
 
 /// Wait for `child` to exit without reaping it, then clear the running slot
@@ -400,6 +433,7 @@ fn signal_the_process(process_id: u32, signal: libc::c_int) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
     use std::os::unix::fs::PermissionsExt;
 
     /// A copy of `sleep` under a name of its own, so a test can tell the
@@ -416,13 +450,23 @@ mod tests {
         stand_in.canonicalize().unwrap()
     }
 
-    fn launch_in(directory: &Path, relay_executable: PathBuf) -> LocalRelayChildLaunch {
+    /// A launch whose stand-in child is reported up once `accepting` accepts.
+    fn launch_in(
+        directory: &Path,
+        relay_executable: PathBuf,
+        accepting: &TcpListener,
+    ) -> LocalRelayChildLaunch {
         LocalRelayChildLaunch {
             relay_id: RelayInstanceId("local-loopback".to_string()),
             relay_executable,
             configuration_path: PathBuf::from("600"),
             pidfile_path: directory.join("moq-relay.pid"),
+            address_accepting_once_up: accepting.local_addr().unwrap(),
         }
+    }
+
+    fn a_listener_standing_in_for_the_childs() -> TcpListener {
+        TcpListener::bind("127.0.0.1:0").unwrap()
     }
 
     fn wait_until(budget: Duration, mut condition: impl FnMut() -> bool) -> bool {
@@ -439,9 +483,11 @@ mod tests {
     #[test]
     fn the_child_runs_under_its_pidfile_and_stopping_ends_it_and_removes_the_pidfile() {
         let directory = tempfile::tempdir().unwrap();
+        let accepting = a_listener_standing_in_for_the_childs();
         let launch = launch_in(
             directory.path(),
             a_stand_in_relay_executable(directory.path()),
+            &accepting,
         );
         let (connection_state, connection_state_receiver) =
             tokio::sync::watch::channel(RelayConnectionState::Joining);
@@ -458,10 +504,9 @@ mod tests {
                 .trim(),
             process_id.to_string()
         );
-        assert_eq!(
-            *connection_state_receiver.borrow(),
-            RelayConnectionState::Joined
-        );
+        assert!(wait_until(Duration::from_secs(10), || {
+            *connection_state_receiver.borrow() == RelayConnectionState::Joined
+        }));
 
         supervisor.stop();
         assert!(!the_process_exists(process_id) || the_process_is_a_zombie(process_id));
@@ -473,11 +518,40 @@ mod tests {
     }
 
     #[test]
+    fn a_child_that_accepts_nothing_is_never_reported_joined() {
+        let directory = tempfile::tempdir().unwrap();
+        let unbound_address = {
+            let probe = a_listener_standing_in_for_the_childs();
+            probe.local_addr().unwrap()
+        };
+        let mut launch = launch_in(
+            directory.path(),
+            a_stand_in_relay_executable(directory.path()),
+            &a_listener_standing_in_for_the_childs(),
+        );
+        launch.address_accepting_once_up = unbound_address;
+        let (connection_state, connection_state_receiver) =
+            tokio::sync::watch::channel(RelayConnectionState::Joining);
+        let mut supervisor = LocalRelayChildSupervisor::start(launch, connection_state).unwrap();
+        assert!(wait_until(Duration::from_secs(10), || supervisor
+            .running_child_process_id()
+            .is_some()));
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            *connection_state_receiver.borrow(),
+            RelayConnectionState::Joining
+        );
+        supervisor.stop();
+    }
+
+    #[test]
     fn a_child_that_exits_is_started_again_after_a_backoff() {
         let directory = tempfile::tempdir().unwrap();
+        let accepting = a_listener_standing_in_for_the_childs();
         let launch = launch_in(
             directory.path(),
             a_stand_in_relay_executable(directory.path()),
+            &accepting,
         );
         let (connection_state, mut connection_state_receiver) =
             tokio::sync::watch::channel(RelayConnectionState::Joining);
@@ -506,7 +580,8 @@ mod tests {
     fn a_child_a_previous_run_left_behind_is_ended_before_a_new_one_starts() {
         let directory = tempfile::tempdir().unwrap();
         let relay_executable = a_stand_in_relay_executable(directory.path());
-        let launch = launch_in(directory.path(), relay_executable.clone());
+        let accepting = a_listener_standing_in_for_the_childs();
+        let launch = launch_in(directory.path(), relay_executable.clone(), &accepting);
         let mut left_behind = Command::new(&relay_executable).arg("600").spawn().unwrap();
         let left_behind_process_id = left_behind.id();
         std::fs::write(&launch.pidfile_path, format!("{left_behind_process_id}\n")).unwrap();
@@ -530,7 +605,8 @@ mod tests {
     fn a_pidfile_naming_a_process_running_another_program_ends_nothing() {
         let directory = tempfile::tempdir().unwrap();
         let relay_executable = a_stand_in_relay_executable(directory.path());
-        let launch = launch_in(directory.path(), relay_executable.clone());
+        let accepting = a_listener_standing_in_for_the_childs();
+        let launch = launch_in(directory.path(), relay_executable.clone(), &accepting);
         let mut another_program = Command::new("sleep").arg("600").spawn().unwrap();
         std::fs::write(&launch.pidfile_path, format!("{}\n", another_program.id())).unwrap();
 

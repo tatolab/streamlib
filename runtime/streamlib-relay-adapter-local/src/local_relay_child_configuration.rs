@@ -21,10 +21,9 @@ const CHILD_DRAIN_TIMEOUT: &str = "1s";
 pub struct LocalRelayChildConfiguration {
     /// Where QUIC and HTTP alike bind.
     pub bind_address: SocketAddr,
-    /// The certificate chain the child serves, PEM.
-    pub certificate_path: PathBuf,
-    /// The certificate's private key, PEM.
-    pub private_key_path: PathBuf,
+    /// The certificate the child serves and its private key, in one PEM file
+    /// both `listen.tls.cert` and `listen.tls.key` name.
+    pub certificate_and_key_path: PathBuf,
     /// The unix socket `tatolabd` answers the child's admission requests on.
     pub admission_socket_path: PathBuf,
 }
@@ -71,8 +70,8 @@ impl LocalRelayChildConfiguration {
             listen: RelayListenTable {
                 bind: self.bind_address.to_string(),
                 tls: RelayListenTlsTable {
-                    cert: path_text(&self.certificate_path),
-                    key: path_text(&self.private_key_path),
+                    cert: path_text(&self.certificate_and_key_path),
+                    key: path_text(&self.certificate_and_key_path),
                 },
             },
             web: RelayWebTable {
@@ -121,8 +120,9 @@ mod tests {
     fn the_child_listens_serves_its_web_routes_and_asks_admission_where_it_is_told() {
         let configuration = LocalRelayChildConfiguration {
             bind_address: "127.0.0.1:4443".parse().unwrap(),
-            certificate_path: PathBuf::from("/run/r/local-loopback/certificate.pem"),
-            private_key_path: PathBuf::from("/run/r/local-loopback/private-key.pem"),
+            certificate_and_key_path: PathBuf::from(
+                "/run/r/local-loopback/certificate-and-key.pem",
+            ),
             admission_socket_path: PathBuf::from("/run/r/local-loopback/admission.sock"),
         };
         let rendered: toml::Value = configuration.rendered_as_toml().unwrap().parse().unwrap();
@@ -133,8 +133,8 @@ mod tests {
                 [listen]
                 bind = "127.0.0.1:4443"
                 [listen.tls]
-                cert = "/run/r/local-loopback/certificate.pem"
-                key = "/run/r/local-loopback/private-key.pem"
+                cert = "/run/r/local-loopback/certificate-and-key.pem"
+                key = "/run/r/local-loopback/certificate-and-key.pem"
                 [web.http]
                 listen = "127.0.0.1:4443"
                 [auth]
@@ -148,8 +148,7 @@ mod tests {
     fn an_every_interface_child_binds_the_wildcard_for_quic_and_http_alike() {
         let configuration = LocalRelayChildConfiguration {
             bind_address: "[::]:4445".parse().unwrap(),
-            certificate_path: PathBuf::from("/c.pem"),
-            private_key_path: PathBuf::from("/k.pem"),
+            certificate_and_key_path: PathBuf::from("/c.pem"),
             admission_socket_path: PathBuf::from("/a.sock"),
         };
         let rendered: toml::Value = configuration.rendered_as_toml().unwrap().parse().unwrap();

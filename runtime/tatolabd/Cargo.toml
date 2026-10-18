@@ -40,8 +40,6 @@ streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contra
 streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
 streamlib-relay-adapter-local = { path = "../streamlib-relay-adapter-local" }
 serde_json = { workspace = true }
-# Where the local relay's admission sockets are answered.
-tokio = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
 tracing = { workspace = true }
 # The crash-on-demand test node, in a test build alone.
@@ -49,6 +47,7 @@ libc = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+tokio = { version = "1.48.0", features = ["rt"] }
 tempfile = { workspace = true }
 libc = { workspace = true }
 # The tests call the runtime's stream tools over its local API with rmcp's own client.

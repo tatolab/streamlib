@@ -169,14 +169,19 @@ pub fn relay_instance_settings_from_json<S: RelayInstanceSettings>(
 
 /// One relay instance, joined and left by `tatolabd`.
 pub trait RelayAdapter: Send {
-    /// The adapter this instance is joined through.
-    fn kind(&self) -> RelayAdapterKind;
+    /// The adapter this instance is joined through, known with no instance.
+    fn kind() -> RelayAdapterKind
+    where
+        Self: Sized;
 
     /// This instance's id.
     fn relay_id(&self) -> &RelayInstanceId;
 
-    /// The JSON Schema of the settings [`join`](Self::join) reads.
-    fn settings_schema(&self) -> serde_json::Value;
+    /// The JSON Schema of the settings [`join`](Self::join) reads, known with
+    /// no instance.
+    fn settings_schema() -> serde_json::Value
+    where
+        Self: Sized;
 
     /// Join the relay with `settings`, returning where it is dialed.
     fn join(&mut self, settings: serde_json::Value) -> Result<JoinedRelay, RelayAdapterRefusal>;

@@ -448,6 +448,13 @@ jobs:
           path: target/linux_bundled_vulkan_driver_cache
           key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
 
+      - name: Cache the local relay build
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache@v5
+        with:
+          path: target/local-relay
+          key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
+
       # Both forms, in debug: as users run it, and with the machine directories
       # under a test root, which the integration suite requires. The second
       # replaces the first in place, so each is packed before the next build.
@@ -794,6 +801,13 @@ jobs:
             . -> target
             packages/streamlib-webrtc -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Cache the local relay build
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache@v5
+        with:
+          path: target/local-relay
+          key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
 
       # Both forms, in debug: as users run it, and with the machine directories
       # under a test root, which the integration suite requires. The second
