@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.3](https://github.com/tatolab/streamlib/compare/v0.48.2...v0.48.3) (2026-10-18)
+
+
+### Bug Fixes
+
+* **ci:** a bundled Vulkan driver cache entry counts only with its three files in it ([#2846](https://github.com/tatolab/streamlib/issues/2846)) ([6cee51e](https://github.com/tatolab/streamlib/commit/6cee51e3e59716cdb145493a69287561eeb6b893))
+
 ## [0.48.2](https://github.com/tatolab/streamlib/compare/v0.48.1...v0.48.2) (2026-10-18)
 
 
