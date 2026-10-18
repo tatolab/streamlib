@@ -179,7 +179,7 @@ fn killing_tatolabd_leaves_no_child_and_no_bound_port_behind() {
 }
 
 #[test]
-fn a_test_runtime_naming_no_relay_ports_runs_no_local_relay_and_binds_neither_default_port() {
+fn a_test_runtime_naming_no_relay_ports_runs_no_local_relay_saying_why() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend_and_the_local_relay();
     let machine_root = TatolabTestMachineRoot::new();
     let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(

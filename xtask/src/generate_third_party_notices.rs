@@ -1467,10 +1467,9 @@ mod tests {
         );
     }
 
-    /// The preamble moved out of `about.hbs` and into this file. It is the one
-    /// part of a generated notices file a human wrote, so a stray edit here
-    /// would rewrite the opening of a legal notice on the next regeneration
-    /// with nothing to catch it.
+    /// The preamble is the one part of a generated notices file a human
+    /// wrote, so a stray edit to it would rewrite the opening of a legal
+    /// notice on the next regeneration with nothing to catch it.
     #[test]
     fn the_committed_engine_notices_open_with_the_preamble_this_file_renders() {
         let committed =
