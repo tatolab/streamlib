@@ -323,6 +323,20 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--check",
             ],
         ),
+        // The relay the local adapter's and `tatolabd`'s tests start.
+        (
+            "the local relay staged",
+            "cargo",
+            &[
+                "run",
+                "--locked",
+                "-q",
+                "-p",
+                "xtask",
+                "--",
+                "stage-local-relay",
+            ],
+        ),
         // The selection is `.config/nextest.toml`'s `ci` profile, which `ci.yml`
         // runs over the same build: one list, read by both.
         (
@@ -358,6 +372,10 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "tatolab-cli",
                 "-p",
                 "streamlib-python-wheel",
+                "-p",
+                "streamlib-relay-adapter-sdk",
+                "-p",
+                "streamlib-relay-adapter-local",
                 "--features",
                 "streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests",
                 "--lib",

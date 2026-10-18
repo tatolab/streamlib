@@ -26,6 +26,8 @@ default-filter = """
   | package(streamlib)
   | package(streamlib-runtime-client-contract)
   | package(tatolab-cli)
+  | package(streamlib-relay-adapter-sdk)
+  | package(streamlib-relay-adapter-local)
   | (kind(lib) & (
         package(streamlib-macros)
       | package(streamlib-processor-schema)

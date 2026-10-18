@@ -259,6 +259,17 @@ jobs:
           echo "VK_ADD_DRIVER_FILES=$bundled_vulkan_driver_directory/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$bundled_vulkan_driver_directory" >> "$GITHUB_ENV"
 
+      - name: Cache the local relay build
+        uses: actions/cache@v5
+        with:
+          path: target/local-relay
+          key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
+
+      # `moq-relay` from its pinned crate, for the tests that start a local
+      # relay; a restored install root builds nothing.
+      - name: Stage the local relay
+        run: cargo xtask stage-local-relay
+
       # The compile-fail test builds the engine a second time, in trybuild's
       # own target directory; it runs on `main` and in the merge queue.
       - name: Unit, integration and hardware tests
@@ -271,6 +282,7 @@ jobs:
           -p streamlib-runtime-client-contract -p streamlib-engine
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p tatolab-cli
           -p streamlib-python-wheel
+          -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
           --lib --bins --tests --example codec_roundtrip_rig
 
@@ -595,6 +607,19 @@ jobs:
       - name: cargo check (workspace, all targets)
         run: cargo check --locked --workspace --all-targets
 
+      - name: Cache the local relay build
+        if: github.event_name != 'pull_request'
+        uses: actions/cache@v5
+        with:
+          path: target/local-relay
+          key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
+
+      # `moq-relay` from its pinned crate, for the tests that start a local
+      # relay; a restored install root builds nothing.
+      - name: Stage the local relay
+        if: github.event_name != 'pull_request'
+        run: cargo xtask stage-local-relay
+
       - name: Run unit tests
         if: github.event_name != 'pull_request'
         run: |
@@ -616,6 +641,7 @@ jobs:
             cargo test --locked -p streamlib-api-server --lib \
             --features machine-directories-under-a-test-root
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
+          cargo test --locked -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
           # The runtime directory is fixed under /tmp on macOS, so the CLI's
           # tests need the feature to isolate each test's machine.
           cargo test --locked -p tatolab-cli \
