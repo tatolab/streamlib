@@ -84,6 +84,7 @@ pub mod sdk {
     pub use streamlib_engine::core::execution;
     pub use streamlib_engine::core::graph;
     pub use streamlib_engine::core::graph_snapshot;
+    pub use streamlib_engine::core::hang_legacy_container_media_frame;
     pub use streamlib_engine::core::helper_process_transport;
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
@@ -95,6 +96,14 @@ pub mod sdk {
     pub use streamlib_engine::core::unix_socket_path_cleared_for_bind;
 
     pub use streamlib_engine::core::texture;
+
+    /// Annex-B access units, the parameter sets they carry, and the codec
+    /// strings those sets spell.
+    pub mod video_bitstream {
+        pub use streamlib_engine::core::annex_b_access_unit::{
+            ParameterSetsFromAnnexBAccessUnit, parameter_sets_of_annex_b_access_unit,
+        };
+    }
 
     // ---- App authoring sugar ----
 

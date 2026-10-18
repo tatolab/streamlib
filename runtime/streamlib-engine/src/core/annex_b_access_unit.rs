@@ -15,6 +15,8 @@
 
 use crate::core::annex_b_start_code_finder::StartCodeFinder;
 use crate::core::context::VideoCodecElementaryStream;
+use crate::core::h264_sequence_parameter_set::H264ProfileAndLevelFromSequenceParameterSet;
+use crate::core::h265_sequence_parameter_set::h265_profile_tier_level_from_sequence_parameter_set_nal_unit;
 
 /// H.264 `nal_unit_type` for a sequence parameter set (ITU-T H.264 §7.4.1).
 const H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 7;
@@ -242,28 +244,7 @@ pub fn length_prefix_annex_b_access_unit(
             continue;
         };
         if elementary_stream.is_parameter_set(nal_unit_type) {
-            if nal_unit.len() <= elementary_stream.nal_unit_header_bytes() {
-                // A parameter set that is only a header configures nothing.
-                // Dropping it here leaves the pile incomplete, so the track is
-                // refused by name rather than described by a malformed record.
-                continue;
-            }
-            let pile = match (elementary_stream, nal_unit_type) {
-                (VideoCodecElementaryStream::H264, H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET)
-                | (VideoCodecElementaryStream::H265, H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET) => {
-                    &mut parameter_sets.sequence_parameter_set_nal_units
-                }
-                (VideoCodecElementaryStream::H264, H264_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET)
-                | (VideoCodecElementaryStream::H265, H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET) => {
-                    &mut parameter_sets.picture_parameter_set_nal_units
-                }
-                _ => &mut parameter_sets.video_parameter_set_nal_units,
-            };
-            // A set repeated inside one access unit is the same set; the
-            // encoder prepends the whole run at every sync point.
-            if !pile.iter().any(|already| already == nal_unit) {
-                pile.push(nal_unit.to_vec());
-            }
+            parameter_sets.file_parameter_set_nal_unit(elementary_stream, nal_unit_type, nal_unit);
             continue;
         }
         length_prefixed_sample_bytes.extend_from_slice(&(nal_unit.len() as u32).to_be_bytes());
@@ -273,6 +254,79 @@ pub fn length_prefix_annex_b_access_unit(
     LengthPrefixedSampleFromAnnexBAccessUnit {
         length_prefixed_sample_bytes,
         parameter_sets,
+    }
+}
+
+/// The parameter sets one Annex-B access unit carries, leaving the access unit
+/// itself untouched. Empty for an access unit that opens no group.
+pub fn parameter_sets_of_annex_b_access_unit(
+    annex_b_access_unit_bytes: &[u8],
+    elementary_stream: VideoCodecElementaryStream,
+) -> ParameterSetsFromAnnexBAccessUnit {
+    let mut parameter_sets = ParameterSetsFromAnnexBAccessUnit::default();
+    for nal_unit in split_annex_b_access_unit_into_nal_units(annex_b_access_unit_bytes) {
+        if let Some(nal_unit_type) = elementary_stream.nal_unit_type(nal_unit)
+            && elementary_stream.is_parameter_set(nal_unit_type)
+        {
+            parameter_sets.file_parameter_set_nal_unit(elementary_stream, nal_unit_type, nal_unit);
+        }
+    }
+    parameter_sets
+}
+
+impl ParameterSetsFromAnnexBAccessUnit {
+    fn file_parameter_set_nal_unit(
+        &mut self,
+        elementary_stream: VideoCodecElementaryStream,
+        nal_unit_type: u8,
+        nal_unit: &[u8],
+    ) {
+        if nal_unit.len() <= elementary_stream.nal_unit_header_bytes() {
+            // A parameter set that is only a header configures nothing.
+            // Dropping it here leaves the pile incomplete, so the track is
+            // refused by name rather than described by a malformed record.
+            return;
+        }
+        let pile = match (elementary_stream, nal_unit_type) {
+            (VideoCodecElementaryStream::H264, H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET)
+            | (VideoCodecElementaryStream::H265, H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET) => {
+                &mut self.sequence_parameter_set_nal_units
+            }
+            (VideoCodecElementaryStream::H264, H264_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET)
+            | (VideoCodecElementaryStream::H265, H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET) => {
+                &mut self.picture_parameter_set_nal_units
+            }
+            _ => &mut self.video_parameter_set_nal_units,
+        };
+        // A set repeated inside one access unit is the same set; the encoder
+        // prepends the whole run at every sync point.
+        if !pile.iter().any(|already| already == nal_unit) {
+            pile.push(nal_unit.to_vec());
+        }
+    }
+
+    /// The WebCodecs / RFC 6381 codec string the first SPS here spells —
+    /// `avc1.PPCCLL` or `hvc1.…` — or `None` when no SPS is here or it ends
+    /// before its profile and level.
+    pub fn codec_string_of_the_sequence_parameter_set(
+        &self,
+        elementary_stream: VideoCodecElementaryStream,
+    ) -> Option<String> {
+        let sequence_parameter_set_nal_unit = self.sequence_parameter_set_nal_units.first()?;
+        match elementary_stream {
+            VideoCodecElementaryStream::H264 => {
+                H264ProfileAndLevelFromSequenceParameterSet::parse_from_sequence_parameter_set_nal_unit(
+                    sequence_parameter_set_nal_unit,
+                )
+                .map(|profile_and_level| profile_and_level.avc1_codec_string())
+            }
+            VideoCodecElementaryStream::H265 => {
+                h265_profile_tier_level_from_sequence_parameter_set_nal_unit(
+                    sequence_parameter_set_nal_unit,
+                )
+                .map(|profile_tier_level| profile_tier_level.hvc1_codec_string())
+            }
+        }
     }
 }
 
@@ -359,6 +413,46 @@ mod tests {
             bytes.extend_from_slice(nal_unit);
         }
         bytes
+    }
+
+    #[test]
+    fn a_keyframe_access_unit_hands_back_its_parameter_sets_and_its_codec_string() {
+        let sequence_parameter_set: &[u8] = &[0x67, 0x64, 0x00, 0x28, 0xAC];
+        let picture_parameter_set: &[u8] = &[0x68, 0xEE, 0x3C, 0x80];
+        let access_unit = annex_b(&[
+            sequence_parameter_set,
+            picture_parameter_set,
+            &[0x65, 0x88, 0x84],
+        ]);
+        let parameter_sets =
+            parameter_sets_of_annex_b_access_unit(&access_unit, VideoCodecElementaryStream::H264);
+        assert_eq!(
+            parameter_sets.sequence_parameter_set_nal_units,
+            vec![sequence_parameter_set.to_vec()]
+        );
+        assert_eq!(
+            parameter_sets.picture_parameter_set_nal_units,
+            vec![picture_parameter_set.to_vec()]
+        );
+        assert_eq!(
+            parameter_sets
+                .codec_string_of_the_sequence_parameter_set(VideoCodecElementaryStream::H264),
+            Some("avc1.640028".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_access_unit_carrying_no_sps_has_no_codec_string() {
+        let parameter_sets = parameter_sets_of_annex_b_access_unit(
+            &annex_b(&[&[0x41, 0x9A, 0x02]]),
+            VideoCodecElementaryStream::H264,
+        );
+        assert_eq!(parameter_sets, ParameterSetsFromAnnexBAccessUnit::default());
+        assert_eq!(
+            parameter_sets
+                .codec_string_of_the_sequence_parameter_set(VideoCodecElementaryStream::H264),
+            None
+        );
     }
 
     #[test]

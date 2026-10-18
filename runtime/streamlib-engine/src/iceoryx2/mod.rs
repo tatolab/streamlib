@@ -18,6 +18,7 @@ pub(crate) mod iceoryx2_domain_for_this_test_process;
 mod input;
 mod loss_counters;
 mod mailbox;
+mod message_group_loss_recovery_gate;
 mod node;
 mod output;
 mod payload;
@@ -70,6 +71,9 @@ pub use loss_counters::{
 };
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
+};
+pub use message_group_loss_recovery_gate::{
+    MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate,
 };
 pub use payload::MessageGroupBoundary;
 

@@ -239,6 +239,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                     width: frame.width,
                     height: frame.height,
                     timestamp_ns: frame.timestamp_ns,
+                    force_sync_point: false,
                 }) {
                 Ok(packets) => packets,
                 Err(encode_failure) => {

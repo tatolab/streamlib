@@ -1,0 +1,151 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Entering a grouped stream and surviving its losses: a reader whose messages
+//! only decode from the start of a group — an encoded video link, where a
+//! group opens at a keyframe — admits nothing until a group starts, and after a
+//! message reports a loss discards to the next group start.
+//!
+//! The message reporting the loss counts when it starts a group itself: the
+//! loss sits before it, and a group start decodes on its own.
+
+use crate::iceoryx2::MessageGroupBoundary;
+
+/// What a reader does with one arriving message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageGroupLossRecoveryDisposition {
+    /// Mid-group in a group this reader entered: read it.
+    Read,
+    /// A group start this reader enters at, first or after a loss: drop the
+    /// state the broken group left, then read it.
+    EnterAtThisGroupStart,
+    /// Before a group start: the message depends on one this reader never saw.
+    DiscardUntilTheNextGroupStart,
+}
+
+/// Admits a grouped stream's messages from a group start, and back to one
+/// after every loss.
+#[derive(Debug, Default)]
+pub struct MessageGroupLossRecoveryGate {
+    inside_an_entered_group: bool,
+    messages_lost_on_the_link: u64,
+    messages_discarded_awaiting_a_group_start: u64,
+    group_starts_entered_at: u64,
+}
+
+impl MessageGroupLossRecoveryGate {
+    /// Decide one message from its group flag and the loss its read reported.
+    pub fn admit_message(
+        &mut self,
+        group_boundary: MessageGroupBoundary,
+        lost_since_last_read: u64,
+    ) -> MessageGroupLossRecoveryDisposition {
+        if lost_since_last_read > 0 {
+            self.messages_lost_on_the_link += lost_since_last_read;
+            self.inside_an_entered_group = false;
+        }
+        match (self.inside_an_entered_group, group_boundary) {
+            (_, MessageGroupBoundary::StartsGroup) => {
+                self.inside_an_entered_group = true;
+                self.group_starts_entered_at += 1;
+                MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart
+            }
+            (true, MessageGroupBoundary::ContinuesGroup) => {
+                MessageGroupLossRecoveryDisposition::Read
+            }
+            (false, MessageGroupBoundary::ContinuesGroup) => {
+                self.messages_discarded_awaiting_a_group_start += 1;
+                MessageGroupLossRecoveryDisposition::DiscardUntilTheNextGroupStart
+            }
+        }
+    }
+
+    /// Messages the link reported lost, summed over every read.
+    pub fn messages_lost_on_the_link(&self) -> u64 {
+        self.messages_lost_on_the_link
+    }
+
+    /// Messages that arrived but were discarded waiting for a group start.
+    pub fn messages_discarded_awaiting_a_group_start(&self) -> u64 {
+        self.messages_discarded_awaiting_a_group_start
+    }
+
+    /// Group starts admitted, the first entry included.
+    pub fn group_starts_entered_at(&self) -> u64 {
+        self.group_starts_entered_at
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use MessageGroupBoundary::{ContinuesGroup, StartsGroup};
+    use MessageGroupLossRecoveryDisposition::{
+        DiscardUntilTheNextGroupStart, EnterAtThisGroupStart, Read,
+    };
+
+    #[test]
+    fn a_reader_attaching_mid_group_discards_until_the_first_group_start() {
+        let mut gate = MessageGroupLossRecoveryGate::default();
+        assert_eq!(
+            gate.admit_message(ContinuesGroup, 0),
+            DiscardUntilTheNextGroupStart
+        );
+        assert_eq!(
+            gate.admit_message(ContinuesGroup, 0),
+            DiscardUntilTheNextGroupStart
+        );
+        assert_eq!(gate.admit_message(StartsGroup, 0), EnterAtThisGroupStart);
+        assert_eq!(gate.admit_message(ContinuesGroup, 0), Read);
+        assert_eq!(gate.messages_discarded_awaiting_a_group_start(), 2);
+        assert_eq!(gate.group_starts_entered_at(), 1);
+    }
+
+    #[test]
+    fn a_loss_mid_group_discards_the_rest_of_it_and_re_enters_at_the_next_start() {
+        let mut gate = MessageGroupLossRecoveryGate::default();
+        assert_eq!(gate.admit_message(StartsGroup, 0), EnterAtThisGroupStart);
+        assert_eq!(gate.admit_message(ContinuesGroup, 0), Read);
+        assert_eq!(
+            gate.admit_message(ContinuesGroup, 3),
+            DiscardUntilTheNextGroupStart
+        );
+        assert_eq!(
+            gate.admit_message(ContinuesGroup, 0),
+            DiscardUntilTheNextGroupStart
+        );
+        assert_eq!(gate.admit_message(StartsGroup, 0), EnterAtThisGroupStart);
+        assert_eq!(gate.admit_message(ContinuesGroup, 0), Read);
+        assert_eq!(gate.messages_lost_on_the_link(), 3);
+        assert_eq!(gate.messages_discarded_awaiting_a_group_start(), 2);
+        assert_eq!(gate.group_starts_entered_at(), 2);
+    }
+
+    /// The loss sits before the group start reporting it, so that start is
+    /// entered at rather than discarded with a whole group for nothing.
+    #[test]
+    fn a_loss_reported_on_a_group_start_re_enters_at_that_very_message() {
+        let mut gate = MessageGroupLossRecoveryGate::default();
+        assert_eq!(gate.admit_message(StartsGroup, 0), EnterAtThisGroupStart);
+        assert_eq!(gate.admit_message(ContinuesGroup, 0), Read);
+        assert_eq!(gate.admit_message(StartsGroup, 5), EnterAtThisGroupStart);
+        assert_eq!(gate.admit_message(ContinuesGroup, 0), Read);
+        assert_eq!(gate.messages_lost_on_the_link(), 5);
+        assert_eq!(gate.messages_discarded_awaiting_a_group_start(), 0);
+    }
+
+    /// An audio link starts a group on every message, so a loss costs nothing
+    /// but the lost messages themselves.
+    #[test]
+    fn a_stream_of_group_starts_loses_only_what_the_link_lost() {
+        let mut gate = MessageGroupLossRecoveryGate::default();
+        for lost_since_last_read in [0, 0, 2, 0] {
+            assert_eq!(
+                gate.admit_message(StartsGroup, lost_since_last_read),
+                EnterAtThisGroupStart
+            );
+        }
+        assert_eq!(gate.messages_lost_on_the_link(), 2);
+        assert_eq!(gate.messages_discarded_awaiting_a_group_start(), 0);
+    }
+}
