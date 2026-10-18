@@ -56,6 +56,19 @@ impl TemporaryRuntimeUnit {
         runtime_unit
     }
 
+    /// The unit [`Self::with_its_lend`] makes, with the staged `moq-relay`
+    /// in `bin/` beside `tatolabd`.
+    pub fn with_its_lend_and_the_local_relay() -> Self {
+        let runtime_unit = Self::with_its_lend();
+        let local_relay = runtime_unit.tatolabd.with_file_name("moq-relay");
+        let staged_local_relay = the_staged_local_relay_executable();
+        if std::fs::hard_link(&staged_local_relay, &local_relay).is_err() {
+            std::fs::copy(&staged_local_relay, &local_relay)
+                .expect("the local relay is copied into bin/");
+        }
+        runtime_unit
+    }
+
     /// The directory holding `bin/` and the lend.
     pub fn runtime_unit_root(&self) -> &Path {
         self.runtime_unit_root.path()
@@ -84,6 +97,97 @@ impl TemporaryRuntimeUnit {
             tatolabd,
         }
     }
+}
+
+/// The variable naming a `moq-relay` other than the staged one.
+pub const LOCAL_RELAY_EXECUTABLE_ENVIRONMENT_VARIABLE: &str = "TATOLAB_TEST_LOCAL_RELAY_EXECUTABLE";
+
+/// The `moq-relay` a test unit carries: the variable's, else the one
+/// `cargo xtask stage-local-relay` built.
+pub fn the_staged_local_relay_executable() -> PathBuf {
+    let relay_executable = std::env::var_os(LOCAL_RELAY_EXECUTABLE_ENVIRONMENT_VARIABLE)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/local-relay/bin/moq-relay")
+        });
+    assert!(
+        relay_executable.is_file(),
+        "no moq-relay at {}: run `cargo xtask stage-local-relay`, or name one in \
+         {LOCAL_RELAY_EXECUTABLE_ENVIRONMENT_VARIABLE}",
+        relay_executable.display()
+    );
+    relay_executable
+}
+
+/// The two ports a test's local relay binds, free when chosen, so test
+/// runtimes side by side never share one.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalRelayPortsOfATest {
+    pub loopback: u16,
+    pub every_interface: u16,
+}
+
+impl LocalRelayPortsOfATest {
+    pub fn free_now() -> Self {
+        Self {
+            loopback: a_port_free_for_udp_and_tcp_on("127.0.0.1"),
+            every_interface: a_port_free_for_udp_and_tcp_on("[::]"),
+        }
+    }
+
+    /// `tatolabd_command` told to bind these ports.
+    pub fn given_to(self, tatolabd_command: &mut Command) {
+        use streamlib_runtime_client_contract::machine_directories_test_root::{
+            TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT_ENVIRONMENT_VARIABLE,
+            TEST_LOCAL_RELAY_LOOPBACK_PORT_ENVIRONMENT_VARIABLE,
+        };
+        tatolabd_command
+            .env(
+                TEST_LOCAL_RELAY_LOOPBACK_PORT_ENVIRONMENT_VARIABLE,
+                self.loopback.to_string(),
+            )
+            .env(
+                TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT_ENVIRONMENT_VARIABLE,
+                self.every_interface.to_string(),
+            );
+    }
+}
+
+/// A port both UDP and TCP bind on `host` now.
+pub fn a_port_free_for_udp_and_tcp_on(host: &str) -> u16 {
+    for _ in 0..50 {
+        let probe = std::net::TcpListener::bind(format!("{host}:0")).expect("an ephemeral port");
+        let port = probe.local_addr().expect("a bound port").port();
+        drop(probe);
+        if the_port_is_free_for_udp_and_tcp_on(host, port) {
+            return port;
+        }
+    }
+    panic!("no port free for both UDP and TCP on {host}");
+}
+
+/// Whether both UDP and TCP bind `port` on `host`.
+pub fn the_port_is_free_for_udp_and_tcp_on(host: &str, port: u16) -> bool {
+    std::net::TcpListener::bind(format!("{host}:{port}")).is_ok()
+        && std::net::UdpSocket::bind(format!("{host}:{port}")).is_ok()
+}
+
+/// The body of `GET <path>` on loopback `port`, or `None` when nothing answers
+/// it with a 200.
+pub fn http_get_body_on_loopback(port: u16, path: &str) -> Option<String> {
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).ok()?;
+    let (head, body) = answer.split_once("\r\n\r\n")?;
+    head.starts_with("HTTP/1.1 200")
+        .then(|| body.trim().to_string())
 }
 
 /// The machine a test's `tatolabd` runs on: `TATOLAB_TEST_MACHINE_ROOT`, under
@@ -118,6 +222,11 @@ impl TatolabTestMachineRoot {
     /// The runtime directory a test build resolves: `<root>/run/`.
     pub fn runtime_directory(&self) -> PathBuf {
         self.path().join("run")
+    }
+
+    /// `<run>/relays/<relay_id>/`, one local relay instance's own directory.
+    pub fn local_relay_instance_directory(&self, relay_id: &str) -> PathBuf {
+        self.runtime_directory().join("relays").join(relay_id)
     }
 
     /// The local API's fixed socket in the runtime directory.

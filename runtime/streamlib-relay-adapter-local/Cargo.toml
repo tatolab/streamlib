@@ -33,6 +33,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# A MoQ client of the stack the relay is, to dial the children as any reader does.
+moq-tokio = { version = "=0.19.28" }
 
 [lints]
 workspace = true
