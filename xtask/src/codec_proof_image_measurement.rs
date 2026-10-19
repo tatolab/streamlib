@@ -1024,8 +1024,7 @@ mod tests {
         }
 
         // Saturated primaries already sit at the ends of the coded range, so
-        // re-expanding them clips straight back to where they were. This is why
-        // the bar-colour rig refuses `range-swap` and the gradients carry it.
+        // re-expanding them clips straight back to where they were.
         let saturated_red = solid_color_image(16, 16, [255, 0, 0]);
         assert_eq!(
             saturated_red.clone().with_injected_color_regression(

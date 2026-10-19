@@ -12,4 +12,4 @@ packages/streamlib-webrtc/THIRD-PARTY-NOTICES.md -text
 runtime/streamlib-media-builtins/tests/golden_graphs/*.json -text
 
 # Raw RGBA pixels the test pattern bakes into the binary, read byte for byte.
-runtime/streamlib-media-builtins/src/test_pattern_assets/*.rgba -text
+runtime/streamlib-media-builtins/src/test_pattern_assets/*.rgba binary

@@ -4929,7 +4929,7 @@ impl GpuContextFullAccess {
 
     /// An empty output pool the native node `processor_id_of_the_owning_node`
     /// publishes its per-frame pixel buffers from. See
-    /// [`ProcessorOutputPixelBufferPoolOfOneNativeNode`].
+    /// [`super::ProcessorOutputPixelBufferPoolOfOneNativeNode`].
     pub fn create_processor_output_pixel_buffer_pool_for_a_native_node(
         &self,
         processor_id_of_the_owning_node: &str,

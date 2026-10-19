@@ -20,8 +20,10 @@
 # is each bar's own colour wherever the potato crosses it, so which frames the
 # read caught does not move the measurement.
 #
-# Range mis-interpretation is intentionally NOT covered here — a saturated
-# primary already sits at the end of the coded range and clips straight back.
+# Range mis-interpretation is not part of this lock. Today the encoder writes
+# TV-range samples under a full-range VUI, so the bars decode inside the range
+# and a range swap would move them; once that is corrected, saturated bars sit
+# at the ends of the coded range and a swap clips straight back to them.
 #
 # Frames are read the way any user reads a port: `tatolab-read-track` reads the
 # sender's encoded track at the local relay's loopback listener, the rig's
@@ -114,9 +116,8 @@ if [ ! -f "$BASELINE_TSV" ] && [ "$BASELINE_CAPTURE" != "1" ]; then
 fi
 
 if [ "$INJECT_BUG" = "range-swap" ]; then
-    echo "[test-pattern-color] ERROR: INJECT_BUG=range-swap is not supported by this rig" >&2
-    echo "[test-pattern-color] saturated bars sit at the end of the coded range and clip" >&2
-    echo "[test-pattern-color] straight back" >&2
+    echo "[test-pattern-color] ERROR: INJECT_BUG=range-swap is not part of this rig's lock" >&2
+    echo "[test-pattern-color] (the header says why)" >&2
     exit 1
 fi
 

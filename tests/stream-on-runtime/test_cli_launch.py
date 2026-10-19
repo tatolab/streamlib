@@ -115,6 +115,11 @@ MINIMUM_METER_REPORTS = 5
 MAXIMUM_METER_REPORTS = 2 * int(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
 SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
 SCAFFOLDED_EFFECT_NODE_NAME = "invertingeffect"
+SCAFFOLDED_ENCODER_NODE_NAME = "h264encoder"
+SCAFFOLDED_ENCODER_OUTPUT_PORT = "encoded_video"
+# What the scaffold's encoder logs on a device with no H.264 encoder, the
+# software device among them: a named refusal, while the stream stays loaded.
+SCAFFOLDED_ENCODER_REFUSAL = "H264Encoder: failed to mint the encoder session"
 SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 
 # How long an attached stream's source has to write its first bag on `video`.
@@ -542,16 +547,23 @@ def the_first_streams_output(tatolabd: TatolabdUnderTest) -> str:
     return tatolabd.stderr_text.split(the_first_streams_stop, 1)[0] + the_first_streams_stop
 
 
-def frames_the_scaffolded_effect_wrote(tatolabd: TatolabdUnderTest) -> int:
-    """The bags the running scaffold's effect has written on its output, read off `graph`."""
-    [effect_node] = [
+def bags_a_scaffolded_node_wrote(
+    tatolabd: TatolabdUnderTest, node_name: str, output_port: str
+) -> int:
+    """The bags a running scaffold's node has written on one output, read off `graph`."""
+    [graph_node] = [
         graph_node
         for graph_node in tatolabd.local_api_client().graph(stream=STREAM_NAME)["nodes"]
-        if graph_node["name"] == SCAFFOLDED_EFFECT_NODE_NAME
+        if graph_node["name"] == node_name
     ]
-    return effect_node["components"]["metrics"]["written_bags_by_output_port"][
-        SCAFFOLDED_EFFECT_OUTPUT_PORT
-    ]
+    return graph_node["components"]["metrics"]["written_bags_by_output_port"].get(output_port, 0)
+
+
+def frames_the_scaffolded_effect_wrote(tatolabd: TatolabdUnderTest) -> int:
+    """The bags the running scaffold's effect has written on its output, read off `graph`."""
+    return bags_a_scaffolded_node_wrote(
+        tatolabd, SCAFFOLDED_EFFECT_NODE_NAME, SCAFFOLDED_EFFECT_OUTPUT_PORT
+    )
 
 
 def test_the_scaffolded_app_reaches_a_running_graph(
@@ -583,23 +595,35 @@ def test_the_scaffolded_app_reaches_a_running_graph(
         f"the runtime must render the stream it was loaded as; graph was {live_graph}"
     )
     assert live_graph["exposed"] == [
-        {"node": "invertingeffect", "port": "video_to_downstream", "level": "private"}
+        {
+            "node": SCAFFOLDED_ENCODER_NODE_NAME,
+            "port": SCAFFOLDED_ENCODER_OUTPUT_PORT,
+            "level": "public",
+        }
     ], f"the runtime must render the exposure the stream declared; graph was {live_graph}"
     assert {graph_node["name"] for graph_node in live_graph["nodes"]} == {
         "testpatternsource",
         SCAFFOLDED_EFFECT_NODE_NAME,
         "brightnessmeter",
+        SCAFFOLDED_ENCODER_NODE_NAME,
     }
 
     # Long enough for the source to have driven many frames through the effect.
     time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
     frames_written = frames_the_scaffolded_effect_wrote(tatolabd)
+    access_units_encoded = bags_a_scaffolded_node_wrote(
+        tatolabd, SCAFFOLDED_ENCODER_NODE_NAME, SCAFFOLDED_ENCODER_OUTPUT_PORT
+    )
     dev.interrupt()
     assert dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, dev.recent_stderr()
 
     stream_output = the_first_streams_output(tatolabd)
     assert_the_effect_carried_live_video(
         tatolabd, stream_output, frames_written, "the app `tatolab new` writes"
+    )
+    assert access_units_encoded > 0 or SCAFFOLDED_ENCODER_REFUSAL in stream_output, (
+        f"the scaffolded encoder neither encoded an access unit nor refused by name; standard "
+        f"error ended:\n{tatolabd.recent_stderr()}"
     )
     meter_reports = len(SCAFFOLDED_METER_REPORT.findall(stream_output))
     assert meter_reports >= MINIMUM_METER_REPORTS, (
@@ -671,8 +695,13 @@ def assert_the_effect_carried_live_video(
     what editing the write-combined mapping in place through a strided view
     produced.
     """
-    assert "process() failed" not in output, (
-        f"{what_ran}: the effect raised on a live frame; standard error ended:\n"
+    process_failures_but_the_encoders_refusal = [
+        line
+        for line in output.splitlines()
+        if "process() failed" in line and SCAFFOLDED_ENCODER_REFUSAL not in line
+    ]
+    assert not process_failures_but_the_encoders_refusal, (
+        f"{what_ran}: a node failed a live frame; standard error ended:\n"
         f"{tatolabd.recent_stderr()}"
     )
     assert frames_written >= MINIMUM_FRAMES_FOR_LIVE_VIDEO, (

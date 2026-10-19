@@ -74,7 +74,7 @@ struct TestPatternRendering {
     /// The index the next published frame renders; advances only on a
     /// published frame, so frame N's picture never depends on a dropped one.
     next_frame_index: u64,
-    dropped_frames: ConsecutiveFailureReportSchedule,
+    dropped_frame_report_schedule: ConsecutiveFailureReportSchedule,
 }
 
 impl ContinuousProcessor for TestPatternSource::Processor {
@@ -94,7 +94,7 @@ impl ContinuousProcessor for TestPatternSource::Processor {
                 self.config.height,
             )?,
             next_frame_index: 0,
-            dropped_frames: ConsecutiveFailureReportSchedule::reporting_every(
+            dropped_frame_report_schedule: ConsecutiveFailureReportSchedule::reporting_every(
                 DROPPED_FRAMES_BETWEEN_REPORTS,
             ),
         });
@@ -115,22 +115,23 @@ impl ContinuousProcessor for TestPatternSource::Processor {
         let Some(rendering) = self.rendering.as_mut() else {
             return Ok(());
         };
-        let published_frame_id = match rendering
+        let (published_frame_id, _pooled_pixel_buffer_held_until_written) = match rendering
             .frame_renderer
             .render_frame(rendering.next_frame_index)?
         {
             TestPatternFrameRenderOutcome::Rendered {
                 published_pixel_buffer_frame_id,
-                ..
-            } => published_pixel_buffer_frame_id,
+                pooled_pixel_buffer,
+            } => (published_pixel_buffer_frame_id, pooled_pixel_buffer),
             TestPatternFrameRenderOutcome::DroppedByTheOutputPool { refusal } => {
                 if rendering
-                    .dropped_frames
+                    .dropped_frame_report_schedule
                     .note_failure_and_say_whether_to_report()
                 {
                     tracing::warn!(
-                        consecutive_dropped_frames =
-                            rendering.dropped_frames.consecutive_failures(),
+                        consecutive_dropped_frame_report_schedule = rendering
+                            .dropped_frame_report_schedule
+                            .consecutive_failures(),
                         frame_index = rendering.next_frame_index,
                         "TestPatternSource: dropped a frame: {refusal}"
                     );
@@ -138,7 +139,7 @@ impl ContinuousProcessor for TestPatternSource::Processor {
                 return Ok(());
             }
         };
-        rendering.dropped_frames.note_success();
+        rendering.dropped_frame_report_schedule.note_success();
         rendering.next_frame_index += 1;
 
         let frame = VideoFrame {

@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(any(target_os = "linux", target_os = "macos"))]
-
 //! The test pattern's kernel, run on whatever device the machine has —
 //! lavapipe in CI: every frame is exactly the bars, the potato and the caption
 //! panel where frame N puts them, and two renderers render frame N to the same
@@ -13,15 +11,15 @@
 use std::sync::{Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::test_pattern_frame_renderer::{
+    BakedRgbaOverlay, OverlayTopLeftInTheFrame, POTATO_SPRITE, SAMPLE_STREAM_CAPTION_PANEL,
+    TestPatternFrameRenderOutcome, TestPatternFrameRenderer, caption_panel_top_left,
+    potato_sprite_top_left_at_frame,
+};
 use streamlib::sdk::App;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{ContinuousProcessor, PROCESSOR_REGISTRY};
-use streamlib_media_builtins::TestPatternFrameRenderer;
-use streamlib_media_builtins::test_pattern_frame_renderer::{
-    BakedRgbaOverlay, OverlayTopLeftInTheFrame, POTATO_SPRITE, SAMPLE_STREAM_CAPTION_PANEL,
-    TestPatternFrameRenderOutcome, caption_panel_top_left, potato_sprite_top_left_at_frame,
-};
 
 const FRAME_WIDTH: u32 = 640;
 const FRAME_HEIGHT: u32 = 360;

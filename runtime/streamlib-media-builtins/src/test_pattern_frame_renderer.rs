@@ -17,13 +17,13 @@ use streamlib::sdk::rhi::{
 };
 
 /// A picture baked into the binary as tightly packed RGBA rows.
-pub struct BakedRgbaOverlay {
+pub(crate) struct BakedRgbaOverlay {
     /// Width in pixels.
-    pub width: u32,
+    pub(crate) width: u32,
     /// Height in pixels.
-    pub height: u32,
+    pub(crate) height: u32,
     /// `width × height` RGBA pixels, row by row.
-    pub rgba: &'static [u8],
+    pub(crate) rgba: &'static [u8],
 }
 
 impl BakedRgbaOverlay {
@@ -33,7 +33,7 @@ impl BakedRgbaOverlay {
 }
 
 /// The potato, drawn over the bars wherever its frame index puts it.
-pub const POTATO_SPRITE: BakedRgbaOverlay = BakedRgbaOverlay {
+pub(crate) const POTATO_SPRITE: BakedRgbaOverlay = BakedRgbaOverlay {
     width: 160,
     height: 160,
     rgba: include_bytes!("test_pattern_assets/potato_sprite_160x160.rgba"),
@@ -41,7 +41,7 @@ pub const POTATO_SPRITE: BakedRgbaOverlay = BakedRgbaOverlay {
 
 /// "Tatolab stream setup successfully" over "sample stream", right-aligned,
 /// set in Press Start 2P white on an opaque dark panel.
-pub const SAMPLE_STREAM_CAPTION_PANEL: BakedRgbaOverlay = BakedRgbaOverlay {
+pub(crate) const SAMPLE_STREAM_CAPTION_PANEL: BakedRgbaOverlay = BakedRgbaOverlay {
     width: 548,
     height: 62,
     rgba: include_bytes!("test_pattern_assets/sample_stream_captions_548x62.rgba"),
@@ -93,11 +93,11 @@ const _: () = assert!(TEST_PATTERN_FRAME_PUSH_CONSTANT_SIZE == 40);
 /// Where an overlay's top-left pixel lands in the frame; negative where the
 /// frame is smaller than the overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OverlayTopLeftInTheFrame {
+pub(crate) struct OverlayTopLeftInTheFrame {
     /// Columns from the frame's left edge.
-    pub left: i32,
+    pub(crate) left: i32,
     /// Rows from the frame's top edge.
-    pub top: i32,
+    pub(crate) top: i32,
 }
 
 /// A pixel offset as the shader's signed coordinate, saturating past `i32`.
@@ -123,7 +123,7 @@ fn bounced_position_along(distance: u64, travel: u32) -> i32 {
 
 /// Where the potato sits in frame `frame_index`: it leaves the top-left corner
 /// at frame zero and bounces off every edge it reaches.
-pub fn potato_sprite_top_left_at_frame(
+pub(crate) fn potato_sprite_top_left_at_frame(
     frame_index: u64,
     frame_width: u32,
     frame_height: u32,
@@ -136,7 +136,10 @@ pub fn potato_sprite_top_left_at_frame(
 }
 
 /// Where the caption panel sits: the bottom-right corner, inset by its margin.
-pub fn caption_panel_top_left(frame_width: u32, frame_height: u32) -> OverlayTopLeftInTheFrame {
+pub(crate) fn caption_panel_top_left(
+    frame_width: u32,
+    frame_height: u32,
+) -> OverlayTopLeftInTheFrame {
     let inset_from_the_far_edge = |frame_side: u32, panel_side: u32| {
         saturated_to_a_signed_pixel_offset(
             i64::from(frame_side) - i64::from(panel_side) - CAPTION_PANEL_MARGIN_PIXELS,
@@ -182,7 +185,7 @@ fn upload_overlay_into_a_storage_buffer(
 }
 
 /// What one [`TestPatternFrameRenderer::render_frame`] produced.
-pub enum TestPatternFrameRenderOutcome {
+pub(crate) enum TestPatternFrameRenderOutcome {
     /// The frame, host-readable in the next pixel buffer of the node's output
     /// pool.
     Rendered {
@@ -201,7 +204,7 @@ pub enum TestPatternFrameRenderOutcome {
 
 /// Renders the test pattern's frames of one extent into a native node's own
 /// output pool.
-pub struct TestPatternFrameRenderer {
+pub(crate) struct TestPatternFrameRenderer {
     frame_width: u32,
     frame_height: u32,
     kernel: VulkanComputeKernel,
@@ -214,7 +217,7 @@ pub struct TestPatternFrameRenderer {
 impl TestPatternFrameRenderer {
     /// A renderer of `frame_width` × `frame_height` frames, published from the
     /// output pool of the node `processor_id_of_the_owning_node`.
-    pub fn create(
+    pub(crate) fn create(
         full_access: &GpuContextFullAccess,
         processor_id_of_the_owning_node: &str,
         frame_width: u32,
@@ -257,7 +260,10 @@ impl TestPatternFrameRenderer {
     ///
     /// An `Err` is the GPU failing to render; the pool's own refusal is
     /// [`TestPatternFrameRenderOutcome::DroppedByTheOutputPool`].
-    pub fn render_frame(&mut self, frame_index: u64) -> Result<TestPatternFrameRenderOutcome> {
+    pub(crate) fn render_frame(
+        &mut self,
+        frame_index: u64,
+    ) -> Result<TestPatternFrameRenderOutcome> {
         let (published_pixel_buffer_frame_id, pooled_pixel_buffer) = match self
             .processor_output_pixel_buffer_pool
             .acquire_the_next_output_pixel_buffer(

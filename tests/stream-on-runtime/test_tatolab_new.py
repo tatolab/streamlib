@@ -11,6 +11,7 @@ Python file lints and is formatted, and the stream compiles in a venv holding
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -20,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from runtime_unit_under_test import REPOSITORY_ROOT
-from tatolab.stream import TestPatternSource
+from tatolab.stream import H264Encoder, TestPatternSource
 
 # ruff is pointed at the template tree for each rendered file, so it reads the
 # `[tool.ruff]` the stream package checks the templates under.
@@ -148,23 +149,36 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
         TestPatternSource.type,
         "nodes.inverting_effect:InvertingEffect",
         "nodes.brightness_meter:BrightnessMeter",
+        H264Encoder.type,
     ]
     assert stream_graph["exposed"] == [
-        {"node": "invertingeffect", "port": "video_to_downstream", "level": "private"}
+        {"node": "h264encoder", "port": "encoded_video", "level": "public"}
     ]
 
 
-def test_the_sample_stream_names_no_camera_and_no_window(
+def test_the_sample_stream_runs_no_camera_and_names_no_window(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
 ):
-    """The sample stream runs on a machine with no capture device and no display,
-    so nothing `new` writes mentions either."""
+    """The sample stream runs on a machine with no capture device and no display:
+    nothing `new` writes mentions a window, and the camera appears only in the
+    comment naming the one-line swap to it, never in code."""
     app_directory = scaffold_with_tatolab_new(make_tatolab_project, run_tatolab)
 
     for path_in_project, contents in files_written_into(app_directory).items():
-        for absent_word in ("camera", "window"):
-            assert absent_word not in contents.lower(), (
-                f"the scaffolded {path_in_project} names a {absent_word}:\n{contents}"
+        assert "window" not in contents.lower(), (
+            f"the scaffolded {path_in_project} names a window:\n{contents}"
+        )
+        if path_in_project.endswith(".py"):
+            names_in_the_code = {
+                node.id for node in ast.walk(ast.parse(contents)) if isinstance(node, ast.Name)
+            }
+            assert "CameraSource" not in names_in_the_code, (
+                f"the scaffolded {path_in_project} runs a camera:\n{contents}"
             )
-    assert "stream_builder.add(TestPatternSource)" in (app_directory / "stream.py").read_text()
+    stream_py = (app_directory / "stream.py").read_text()
+    assert "stream_builder.add(TestPatternSource)" in stream_py
+    assert any(
+        line.strip().startswith("#") and "stream_builder.add(CameraSource)" in line
+        for line in stream_py.splitlines()
+    ), stream_py

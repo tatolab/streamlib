@@ -37,7 +37,9 @@ pub(crate) mod processor_thread_join;
 pub mod published_surface_to_encoded_frame_encoder;
 pub mod relay_track_source;
 pub mod speaker_sink;
-pub mod test_pattern_frame_renderer;
+pub(crate) mod test_pattern_frame_renderer;
+#[cfg(test)]
+mod test_pattern_frames_render_from_their_index_alone_on_the_device;
 pub mod test_pattern_source;
 pub mod video_frame;
 #[cfg(target_os = "linux")]
@@ -59,7 +61,6 @@ pub use opus_encoder::OpusEncoder;
 pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use relay_track_source::{RelayTrackSource, RelayTrackSourceConfig};
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
-pub use test_pattern_frame_renderer::TestPatternFrameRenderer;
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;
 #[cfg(target_os = "linux")]
