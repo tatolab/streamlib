@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.52.0](https://github.com/tatolab/streamlib/compare/v0.51.0...v0.52.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **builtins:** a graph holding a link from another stream no longer loads; its reader reads that port through a RelayTrackSource.
+
+### Features
+
+* **builtins:** RelayTrackSource reads a track at a relay into a graph, stamped from the track's own time re-based to this machine's clock; remote_output and the cross-stream iceoryx2 link are deleted ([#2855](https://github.com/tatolab/streamlib/issues/2855)) ([9894a13](https://github.com/tatolab/streamlib/commit/9894a134fe67a42676fd0b4775fb7e0427423fb6))
+
 ## [0.51.0](https://github.com/tatolab/streamlib/compare/v0.50.0...v0.51.0) (2026-10-18)
 
 
