@@ -295,7 +295,8 @@ offscreen names; the present target and `create_present_target` go. The eight ex
 the pooled `Rgba32` frame per tick — SMPTE bars, the potato sprite bouncing corner to corner,
 "Tatolab stream setup successfully" and "sample stream" bottom-right — glyph atlas and sprite
 baked as `include_bytes!` RGBA; the owner supplies the sprite at implement time unless an issue
-comment already does. `scaffold_template/stream.py` becomes `TestPatternSource → InvertingEffect
+comment already does. `scaffold_template/stream.py` becomes `TestPatternSource → HalftoneLensEffect
+(a drifting lens that turns what it covers into dots, replacing `InvertingEffect`; owner, 2026-10-19)
 → H264Encoder → expose(encoder.output("encoded_video"), Exposure.PUBLIC)` with the `BrightnessMeter`
 fan-out; `--test-pattern` and `ScaffoldedStreamSource` go; the floor becomes the release that
 ships this. The macOS gate and `reusable-distributions.yml:158` run `tatolab new` and `tatolab run`

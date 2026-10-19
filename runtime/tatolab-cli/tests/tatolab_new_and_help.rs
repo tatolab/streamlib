@@ -51,7 +51,7 @@ fn expected_scaffolded_file_paths() -> BTreeSet<String> {
     [
         "stream.py",
         "nodes/__init__.py",
-        "nodes/inverting_effect.py",
+        "nodes/halftone_lens_effect.py",
         "nodes/brightness_meter.py",
         "pyproject.toml",
         ".python-version",
@@ -141,7 +141,7 @@ fn new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header() {
 
     for node_module in [
         "nodes/__init__.py",
-        "nodes/inverting_effect.py",
+        "nodes/halftone_lens_effect.py",
         "nodes/brightness_meter.py",
     ] {
         assert_eq!(

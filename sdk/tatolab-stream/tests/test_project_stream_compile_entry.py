@@ -951,7 +951,7 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(tm
     """
     app_directory = tmp_path.resolve() / "demo"
     shutil.copytree(SCAFFOLD_TEMPLATE_DIRECTORY, app_directory)
-    (app_directory / "nodes" / "inverting_effect.py").write_text(
+    (app_directory / "nodes" / "halftone_lens_effect.py").write_text(
         "def process(self ctx:\n    this does not parse\n"
     )
 
@@ -961,7 +961,7 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(tm
     assert "SyntaxError" in finished.stderr, (
         f"the user's own error must be the headline; stderr was:\n{finished.stderr}"
     )
-    assert "inverting_effect.py" in finished.stderr, (
+    assert "halftone_lens_effect.py" in finished.stderr, (
         f"the traceback must name the module the user edited; stderr was:\n{finished.stderr}"
     )
 

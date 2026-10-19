@@ -15,8 +15,8 @@ const STREAM_PY_TEMPLATE: &str =
     include_str!("../../../sdk/tatolab-stream/scaffold_template/stream.py");
 const NODES_INIT_PY_TEMPLATE: &str =
     include_str!("../../../sdk/tatolab-stream/scaffold_template/nodes/__init__.py");
-const INVERTING_EFFECT_PY_TEMPLATE: &str =
-    include_str!("../../../sdk/tatolab-stream/scaffold_template/nodes/inverting_effect.py");
+const HALFTONE_LENS_EFFECT_PY_TEMPLATE: &str =
+    include_str!("../../../sdk/tatolab-stream/scaffold_template/nodes/halftone_lens_effect.py");
 const BRIGHTNESS_METER_PY_TEMPLATE: &str =
     include_str!("../../../sdk/tatolab-stream/scaffold_template/nodes/brightness_meter.py");
 const PYPROJECT_TOML_TEMPLATE: &str =
@@ -64,8 +64,8 @@ pub(crate) fn render_scaffold_template_files(
             rendered_contents: without_license_header(NODES_INIT_PY_TEMPLATE).to_owned(),
         },
         ScaffoldedProjectFile {
-            path_in_project: "nodes/inverting_effect.py",
-            rendered_contents: without_license_header(INVERTING_EFFECT_PY_TEMPLATE).to_owned(),
+            path_in_project: "nodes/halftone_lens_effect.py",
+            rendered_contents: without_license_header(HALFTONE_LENS_EFFECT_PY_TEMPLATE).to_owned(),
         },
         ScaffoldedProjectFile {
             path_in_project: "nodes/brightness_meter.py",
@@ -195,7 +195,7 @@ mod tests {
     const EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES: [&str; 4] = [
         STREAM_PY_TEMPLATE,
         NODES_INIT_PY_TEMPLATE,
-        INVERTING_EFFECT_PY_TEMPLATE,
+        HALFTONE_LENS_EFFECT_PY_TEMPLATE,
         BRIGHTNESS_METER_PY_TEMPLATE,
     ];
 

@@ -32,7 +32,7 @@ RUFF_TIMEOUT_SECONDS = 60.0
 SCAFFOLDED_FILE_PATHS = {
     "stream.py",
     "nodes/__init__.py",
-    "nodes/inverting_effect.py",
+    "nodes/halftone_lens_effect.py",
     "nodes/brightness_meter.py",
     "pyproject.toml",
     ".python-version",
@@ -147,7 +147,7 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
     assert stream_graph["stream"] == "main"
     assert [node["type"] for node in stream_graph["nodes"]] == [
         TestPatternSource.type,
-        "nodes.inverting_effect:InvertingEffect",
+        "nodes.halftone_lens_effect:HalftoneLensEffect",
         "nodes.brightness_meter:BrightnessMeter",
         H264Encoder.type,
     ]

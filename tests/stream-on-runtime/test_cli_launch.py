@@ -113,8 +113,8 @@ SCAFFOLDED_METER_REPORT = re.compile(r"brightness\b.*\bmean=")
 # (~360 in the window), and neither is a claim about wake latency.
 MINIMUM_METER_REPORTS = 5
 MAXIMUM_METER_REPORTS = 2 * int(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
-SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
-SCAFFOLDED_EFFECT_NODE_NAME = "invertingeffect"
+SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/halftone_lens_effect.py"
+SCAFFOLDED_EFFECT_NODE_NAME = "halftonelenseffect"
 SCAFFOLDED_ENCODER_NODE_NAME = "h264encoder"
 SCAFFOLDED_ENCODER_OUTPUT_PORT = "encoded_video"
 # What the scaffold's encoder logs on a device with no H.264 encoder, the

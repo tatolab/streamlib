@@ -131,7 +131,8 @@ entry reads as **message** (the glossary).
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
   stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; amended by
   moq-relays: the scaffold is the sample stream and only that — `TestPatternSource` (the
-  branded animation, §Media I/O) → `InvertingEffect` → `H264Encoder` → `expose(…, PUBLIC)`,
+  branded animation, §Media I/O) → `HalftoneLensEffect` (a drifting lens that turns what it
+  covers into dots; owner, 2026-10-19) → `H264Encoder` → `expose(…, PUBLIC)`,
   the `BrightnessMeter` on a fan-out of the effect's output; `tatolab new` takes no `--camera`
   and no `--test-pattern`, and no template holds a camera — camera projects live in the docs'
   sample projects and, later, an examples folder the app installs; the in-repo camera

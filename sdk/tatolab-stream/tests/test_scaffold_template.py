@@ -28,7 +28,7 @@ SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[1] / "scaffold_te
 SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
     "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n"
 )
-EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
+EFFECT_MODULE_PATH = "nodes/halftone_lens_effect.py"
 METER_MODULE_PATH = "nodes/brightness_meter.py"
 # Stored without their dot so no packaging walk skips them as hidden or reads the
 # template's `.gitignore` as its own ignore rules; `new` writes them dotted.
@@ -152,7 +152,7 @@ def test_the_stream_encodes_the_test_pattern_through_the_effect_and_exposes_it_p
 
     assert stream_builder_calls_in_the_entry("add") == [
         "stream_builder.add(TestPatternSource)",
-        "stream_builder.add(InvertingEffect)",
+        "stream_builder.add(HalftoneLensEffect)",
         "stream_builder.add(BrightnessMeter)",
         "stream_builder.add(H264Encoder)",
     ]
@@ -187,7 +187,7 @@ def test_the_camera_is_named_only_as_the_one_line_swap_in_a_comment():
 
 @pytest.mark.parametrize(
     ("module_path", "class_name"),
-    [(EFFECT_MODULE_PATH, "InvertingEffect"), (METER_MODULE_PATH, "BrightnessMeter")],
+    [(EFFECT_MODULE_PATH, "HalftoneLensEffect"), (METER_MODULE_PATH, "BrightnessMeter")],
 )
 def test_each_node_lives_outside_the_entry_file(module_path: str, class_name: str):
     """A node class in the entry file identifies as `__main__:<Type>`, which is a
@@ -280,8 +280,8 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                     "config": {},
                 },
                 {
-                    "name": "invertingeffect",
-                    "type": "nodes.inverting_effect:InvertingEffect",
+                    "name": "halftonelenseffect",
+                    "type": "nodes.halftone_lens_effect:HalftoneLensEffect",
                     "config": {},
                 },
                 {
@@ -298,14 +298,14 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
             "links": [
                 {
                     "source": {"node": "testpatternsource", "port": "video"},
-                    "target": {"node": "invertingeffect", "port": "video_from_upstream"},
+                    "target": {"node": "halftonelenseffect", "port": "video_from_upstream"},
                 },
                 {
-                    "source": {"node": "invertingeffect", "port": "video_to_downstream"},
+                    "source": {"node": "halftonelenseffect", "port": "video_to_downstream"},
                     "target": {"node": "brightnessmeter", "port": "video_from_upstream"},
                 },
                 {
-                    "source": {"node": "invertingeffect", "port": "video_to_downstream"},
+                    "source": {"node": "halftonelenseffect", "port": "video_to_downstream"},
                     "target": {"node": "h264encoder", "port": "video"},
                 },
             ],
