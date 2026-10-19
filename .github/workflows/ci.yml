@@ -995,24 +995,17 @@ jobs:
           fi
           echo "TestPatternSource.video wrote $frames_written frames"
           # The encoder either encodes, or — on a runner with no encoder — refuses
-          # naming itself while the stream stays loaded.
-          access_units_written="$(python3 -c '
-          import json
-          try:
-              graph = json.load(open("/tmp/scaffold-graph.json"))
-          except ValueError:
-              raise SystemExit(0)
-          for node in graph.get("nodes", []):
-              if node.get("name") == "h264encoder":
-                  metrics = node.get("components", {}).get("metrics", {})
-                  print(metrics.get("written_bags_by_output_port", {}).get("encoded_video", ""))
-          ')"
-          if [ -n "$access_units_written" ] && [ "$access_units_written" -gt 0 ]; then
-            echo "H264Encoder.encoded_video wrote $access_units_written access units"
+          # naming itself while the stream stays loaded. Its own count, logged at
+          # teardown: `graph` counts a port's writes only once something reads
+          # it, and nothing subscribes to the track here.
+          frames_encoded="$(grep -o 'H264Encoder: teardown .*frames_encoded=[0-9]*' /tmp/tatolabd.log \
+            | grep -o 'frames_encoded=[0-9]*' | cut -d= -f2 | sort -n | tail -1)"
+          if [ -n "$frames_encoded" ] && [ "$frames_encoded" -gt 0 ]; then
+            echo "H264Encoder encoded $frames_encoded frames"
           elif grep -q 'H264Encoder: failed to mint the encoder session' /tmp/tatolabd.log; then
             echo "H264Encoder refused by name on a runner with no encoder; the stream stayed loaded"
           else
-            echo "::error::H264Encoder neither wrote an access unit nor refused by name"
+            echo "::error::H264Encoder neither encoded a frame nor refused by name"
             exit 1
           fi
 

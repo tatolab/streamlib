@@ -120,6 +120,11 @@ SCAFFOLDED_ENCODER_OUTPUT_PORT = "encoded_video"
 # What the scaffold's encoder logs on a device with no H.264 encoder, the
 # software device among them: a named refusal, while the stream stays loaded.
 SCAFFOLDED_ENCODER_REFUSAL = "H264Encoder: failed to mint the encoder session"
+# The encoder's own count, logged at teardown. `graph` counts a port's writes
+# only once something reads it, and nothing subscribes to the track here.
+SCAFFOLDED_ENCODER_FRAMES_ENCODED_AT_TEARDOWN = re.compile(
+    r"H264Encoder: teardown .*frames_encoded=(\d+)"
+)
 SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 
 # How long an attached stream's source has to write its first bag on `video`.
@@ -547,23 +552,16 @@ def the_first_streams_output(tatolabd: TatolabdUnderTest) -> str:
     return tatolabd.stderr_text.split(the_first_streams_stop, 1)[0] + the_first_streams_stop
 
 
-def bags_a_scaffolded_node_wrote(
-    tatolabd: TatolabdUnderTest, node_name: str, output_port: str
-) -> int:
-    """The bags a running scaffold's node has written on one output, read off `graph`."""
-    [graph_node] = [
-        graph_node
-        for graph_node in tatolabd.local_api_client().graph(stream=STREAM_NAME)["nodes"]
-        if graph_node["name"] == node_name
-    ]
-    return graph_node["components"]["metrics"]["written_bags_by_output_port"].get(output_port, 0)
-
-
 def frames_the_scaffolded_effect_wrote(tatolabd: TatolabdUnderTest) -> int:
     """The bags the running scaffold's effect has written on its output, read off `graph`."""
-    return bags_a_scaffolded_node_wrote(
-        tatolabd, SCAFFOLDED_EFFECT_NODE_NAME, SCAFFOLDED_EFFECT_OUTPUT_PORT
-    )
+    [effect_node] = [
+        graph_node
+        for graph_node in tatolabd.local_api_client().graph(stream=STREAM_NAME)["nodes"]
+        if graph_node["name"] == SCAFFOLDED_EFFECT_NODE_NAME
+    ]
+    return effect_node["components"]["metrics"]["written_bags_by_output_port"][
+        SCAFFOLDED_EFFECT_OUTPUT_PORT
+    ]
 
 
 def test_the_scaffolded_app_reaches_a_running_graph(
@@ -611,9 +609,6 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     # Long enough for the source to have driven many frames through the effect.
     time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
     frames_written = frames_the_scaffolded_effect_wrote(tatolabd)
-    access_units_encoded = bags_a_scaffolded_node_wrote(
-        tatolabd, SCAFFOLDED_ENCODER_NODE_NAME, SCAFFOLDED_ENCODER_OUTPUT_PORT
-    )
     dev.interrupt()
     assert dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, dev.recent_stderr()
 
@@ -621,7 +616,11 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     assert_the_effect_carried_live_video(
         tatolabd, stream_output, frames_written, "the app `tatolab new` writes"
     )
-    assert access_units_encoded > 0 or SCAFFOLDED_ENCODER_REFUSAL in stream_output, (
+    frames_encoded = [
+        int(count)
+        for count in SCAFFOLDED_ENCODER_FRAMES_ENCODED_AT_TEARDOWN.findall(stream_output)
+    ]
+    assert any(frames_encoded) or SCAFFOLDED_ENCODER_REFUSAL in stream_output, (
         f"the scaffolded encoder neither encoded an access unit nor refused by name; standard "
         f"error ended:\n{tatolabd.recent_stderr()}"
     )
