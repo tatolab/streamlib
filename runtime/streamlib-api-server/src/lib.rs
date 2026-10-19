@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+mod axum_router_served_until_stopped;
 #[cfg(test)]
 mod control_plane_stub_support;
 mod handlers;
@@ -23,7 +24,6 @@ pub use local_api_served_for_an_engine::{
 };
 pub use loopback_http_listener::{
     LOOPBACK_HTTP_LISTENER_DEFAULT_PORT, LoopbackHttpListenerServedForAnEngine,
-    LoopbackHttpListingOfOneExposedOutputPort, LoopbackHttpListingOfOneStream,
-    LoopbackHttpListingOfTheMachinesStreams, serve_the_loopback_http_listener,
+    serve_the_loopback_http_listener,
 };
 pub use mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH;

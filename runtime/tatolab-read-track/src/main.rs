@@ -22,11 +22,18 @@ use clap::Parser;
 
 use relay_track_object_dump::{
     RelayTrackObjectDumpDirectory, RelayTrackObjectPayloadForm, RelayTrackObjectRead,
+    payload_form_of_the_track_with_the_entry, the_catalog_entry_of_the_track_named,
 };
 
-/// How long the broadcast's first catalog is waited for before the track is
-/// read as sent.
-const THE_FIRST_CATALOG_IS_AWAITED_FOR: Duration = Duration::from_secs(5);
+/// How long the broadcast's catalog is read for a snapshot listing the track
+/// before the track is written as sent: a port's entry may join the catalog
+/// only once its first message is written.
+const THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR: Duration = Duration::from_secs(5);
+
+/// How old a group may grow behind a newer one before the read gives it up.
+/// The stack's default gives up at once, which suits a player; a dump wants
+/// every group a reordering delivered late, up to what the publisher keeps.
+const A_GROUP_DELIVERED_LATE_IS_WAITED_FOR: Duration = Duration::from_secs(5);
 
 /// How long closing the session waits for the relay to hear it.
 const THE_RELAY_IS_TOLD_THE_SESSION_CLOSED_WITHIN: Duration = Duration::from_secs(2);
@@ -94,6 +101,7 @@ async fn read_the_track(arguments: &ReadTrackArguments) -> Result<u64> {
         .connect(relay_url);
     let announced_broadcasts = subscribed_origin.consume();
     let wait_at_most = Duration::from_secs(arguments.wait_at_most_seconds);
+    let objects_written = std::cell::Cell::new(0);
 
     let read = tokio::time::timeout(wait_at_most, async {
         let broadcast = tokio::select! {
@@ -104,18 +112,23 @@ async fn read_the_track(arguments: &ReadTrackArguments) -> Result<u64> {
                 broadcast.with_context(|| format!("the broadcast `{}` was refused", arguments.broadcast))?
             }
         };
-        read_the_tracks_objects(&broadcast, arguments).await
+        read_the_tracks_objects(&broadcast, arguments, &objects_written).await
     })
     .await;
 
-    let _ = tokio::time::timeout(
+    if tokio::time::timeout(
         THE_RELAY_IS_TOLD_THE_SESSION_CLOSED_WITHIN,
         moq_client.close(),
     )
-    .await;
+    .await
+    .is_err()
+    {
+        eprintln!("tatolab-read-track: the relay did not hear the session close");
+    }
     read.map_err(|_elapsed| {
         anyhow!(
-            "{} objects of `{}` in `{}` did not arrive within {wait_at_most:?}",
+            "{} of {} objects of `{}` in `{}` arrived within {wait_at_most:?}",
+            objects_written.get(),
             arguments.object_count,
             arguments.track,
             arguments.broadcast
@@ -124,29 +137,37 @@ async fn read_the_track(arguments: &ReadTrackArguments) -> Result<u64> {
 }
 
 /// Subscribe to the track and the broadcast's catalog, and write the track's
-/// objects until `arguments.object_count` are written.
+/// objects until `arguments.object_count` are written, counting them into
+/// `objects_written`.
 async fn read_the_tracks_objects(
     broadcast: &moq_net::broadcast::Consumer,
     arguments: &ReadTrackArguments,
+    objects_written: &std::cell::Cell<u64>,
 ) -> Result<u64> {
     let mut groups_of_the_track = broadcast
         .track(&arguments.track)?
-        .subscribe(None)
+        .subscribe(
+            moq_net::track::Subscription::default()
+                .with_max_age(A_GROUP_DELIVERED_LATE_IS_WAITED_FOR),
+        )
         .await
         .with_context(|| format!("the track `{}` was refused", arguments.track))?
         .ordered();
-    let catalog_json = the_broadcasts_catalog(broadcast).await;
-    let payload_form = catalog_json
-        .as_ref()
-        .and_then(|catalog_json| serde_json::from_value::<hang::Catalog>(catalog_json.clone()).ok())
-        .map(|catalog| {
-            RelayTrackObjectPayloadForm::of_the_track_in_the_catalog(&catalog, &arguments.track)
-        })
-        .unwrap_or(RelayTrackObjectPayloadForm::AsSent);
+    let (payload_form, catalog_entry) =
+        match the_tracks_catalog_entry(broadcast, &arguments.track).await {
+            Ok(catalog_entry) => (
+                payload_form_of_the_track_with_the_entry(&catalog_entry),
+                Some(catalog_entry),
+            ),
+            Err(why_not) => {
+                eprintln!("tatolab-read-track: {why_not}; its objects are written as sent");
+                (RelayTrackObjectPayloadForm::AsSent, None)
+            }
+        };
     let mut dump =
         RelayTrackObjectDumpDirectory::create(&arguments.output_directory, payload_form)?;
-    if let Some(catalog_json) = &catalog_json {
-        dump.write_the_catalog(catalog_json)?;
+    if let Some(catalog_entry) = &catalog_entry {
+        dump.write_the_catalog_entry(catalog_entry)?;
     }
 
     while dump.objects_written() < arguments.object_count {
@@ -177,31 +198,47 @@ async fn read_the_tracks_objects(
             dump.write_the_object(RelayTrackObjectRead {
                 group_sequence,
                 starts_group: std::mem::take(&mut starts_group),
-                transport_timestamp_ns: object.timestamp.as_nanos(),
+                transport_timestamp_ns: (!object.timestamp.is_zero())
+                    .then(|| object.timestamp.as_nanos()),
                 payload_as_sent: &object.payload,
             })?;
+            objects_written.set(dump.objects_written());
         }
     }
     Ok(dump.objects_written())
 }
 
-/// The broadcast's catalog as it stands, or `None` when it serves none within
-/// [`THE_FIRST_CATALOG_IS_AWAITED_FOR`].
-async fn the_broadcasts_catalog(
+/// The track's entry in the broadcast's catalog, read from the first snapshot
+/// that lists it within [`THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR`], or why
+/// none did.
+async fn the_tracks_catalog_entry(
     broadcast: &moq_net::broadcast::Consumer,
-) -> Option<serde_json::Value> {
+    track_name: &str,
+) -> Result<serde_json::Value> {
     let catalog_track = broadcast
-        .track(hang::Catalog::DEFAULT_NAME)
-        .ok()?
+        .track(hang::Catalog::DEFAULT_NAME)?
         .subscribe(None)
         .await
-        .ok()?;
+        .context("the broadcast serves no catalog")?;
     let mut catalog = moq_json::snapshot::Consumer::<serde_json::Value>::new(
         catalog_track,
         moq_json::snapshot::consumer::Config::default(),
     );
-    tokio::time::timeout(THE_FIRST_CATALOG_IS_AWAITED_FOR, catalog.next())
-        .await
-        .ok()?
-        .ok()?
+    tokio::time::timeout(THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR, async {
+        loop {
+            let Some(snapshot) = catalog.next().await.context("the catalog does not read")? else {
+                return Err(anyhow!("the catalog ended without listing `{track_name}`"));
+            };
+            if let Some(catalog_entry) = the_catalog_entry_of_the_track_named(&snapshot, track_name)
+            {
+                return Ok(catalog_entry);
+            }
+        }
+    })
+    .await
+    .map_err(|_elapsed| {
+        anyhow!(
+            "the catalog did not list `{track_name}` within {THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR:?}"
+        )
+    })?
 }

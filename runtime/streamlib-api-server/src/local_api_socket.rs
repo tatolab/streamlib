@@ -14,6 +14,8 @@ use streamlib::sdk::unix_socket_path_cleared_for_bind::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::axum_router_served_until_stopped::AxumRouterServedUntilStopped;
+
 /// Owner read-write only: the socket's file mode is what keeps every other user out.
 pub const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
 
@@ -124,16 +126,14 @@ impl LocalApiSocketBoundAndNotYetServed {
             tokio::net::UnixListener::from_std(local_api_listener).map_err(adopt_failure)?
         };
         let local_api_stopping_token = CancellationToken::new();
-        let (router_dropped_sender, router_dropped_receiver) = std::sync::mpsc::channel::<()>();
-        tokio_handle.spawn(serve_local_api_until_stopped(
-            local_api_listener,
-            build_control_plane_router(local_api_stopping_token.clone()),
-            local_api_stopping_token.clone(),
-            router_dropped_sender,
-        ));
         Ok(RunningLocalApiSocketServer {
-            local_api_stopping_token,
-            router_dropped_receiver,
+            served: AxumRouterServedUntilStopped::serve(
+                local_api_listener,
+                build_control_plane_router(local_api_stopping_token.clone()),
+                local_api_stopping_token,
+                "the local API socket",
+                tokio_handle,
+            ),
             _local_api_socket_file: local_api_socket_file,
         })
     }
@@ -144,50 +144,17 @@ impl LocalApiSocketBoundAndNotYetServed {
 #[must_use = "dropping this stops the local API server"]
 #[derive(Debug)]
 pub(crate) struct RunningLocalApiSocketServer {
-    local_api_stopping_token: CancellationToken,
-    /// Disconnected once the serving task has dropped the router and all it
-    /// holds; never sent on.
-    router_dropped_receiver: std::sync::mpsc::Receiver<()>,
+    served: AxumRouterServedUntilStopped,
+    // Dropped after `served`, so the socket file goes once serving has stopped.
     _local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
 }
 
 impl RunningLocalApiSocketServer {
-    /// Stop serving and block for up to `budget` until the router — and all it
-    /// holds — has been dropped, answering whether it was. Never call it from
-    /// inside the tokio runtime serving the socket: that would block the very
-    /// worker the serving task ends on.
-    pub(crate) fn stop_serving_and_wait_until_the_router_is_dropped(
-        self,
-        budget: std::time::Duration,
-    ) -> bool {
-        self.local_api_stopping_token.cancel();
-        matches!(
-            self.router_dropped_receiver.recv_timeout(budget),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
-        )
+    /// Stop serving and let go of the router; see
+    /// [`AxumRouterServedUntilStopped::stop_serving_and_let_go_of_the_router`].
+    pub(crate) fn stop_serving_and_let_go_of_the_router(self) {
+        self.served.stop_serving_and_let_go_of_the_router();
     }
-}
-
-impl Drop for RunningLocalApiSocketServer {
-    fn drop(&mut self) {
-        // The socket file goes after this, as its field drops.
-        self.local_api_stopping_token.cancel();
-    }
-}
-
-async fn serve_local_api_until_stopped(
-    local_api_listener: tokio::net::UnixListener,
-    control_plane_router: axum::Router,
-    local_api_stopping_token: CancellationToken,
-    router_dropped_sender: std::sync::mpsc::Sender<()>,
-) {
-    let served = axum::serve(local_api_listener, control_plane_router)
-        .with_graceful_shutdown(local_api_stopping_token.cancelled_owned())
-        .await;
-    if let Err(error) = served {
-        tracing::error!(%error, "the local API socket stopped serving");
-    }
-    drop(router_dropped_sender);
 }
 
 /// Remove the local API's socket file. Already gone is not a failure.

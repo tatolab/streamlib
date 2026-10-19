@@ -7,13 +7,13 @@
 //! its directory in the runtime unit. It serves no media and binds nothing but
 //! `127.0.0.1`; what a port carries is read as a track at a relay.
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -21,10 +21,15 @@ use serde::Serialize;
 use streamlib::sdk::descriptors::CatalogEntry;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::graph::OutputPortExposureLevel;
-use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+use streamlib::sdk::runtime::{
+    ExposedOutputPortOfALoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
+};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt as _;
 use tower_http::services::{ServeDir, ServeFile};
+
+use crate::axum_router_served_until_stopped::AxumRouterServedUntilStopped;
+use crate::handlers::error_response;
 
 /// The port the loopback HTTP listener binds when nothing names another.
 pub const LOOPBACK_HTTP_LISTENER_DEFAULT_PORT: u16 = 4446;
@@ -35,42 +40,48 @@ const WATCH_PAGE_ROUTE_PREFIX: &str = "/watch";
 /// The file every `/watch` path naming no file of the page answers with.
 const WATCH_PAGE_ENTRY_FILE_NAME: &str = "index.html";
 
-/// How long letting go of the listener waits for its router — which holds the
-/// engine — to be dropped, so the engine is never dropped last on one of its
-/// own tokio workers.
-const LOOPBACK_HTTP_ROUTER_DROP_BUDGET: Duration = Duration::from_secs(5);
-
 /// `GET /`: the machine and every loaded stream with the output ports it
 /// exposes.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct LoopbackHttpListingOfTheMachinesStreams {
+struct LoopbackHttpListingOfTheMachinesStreams {
     /// This machine's name, the first part of every address.
-    pub machine: String,
+    machine: String,
     /// Every loaded stream, in the order the runtime lists them.
-    pub streams: Vec<LoopbackHttpListingOfOneStream>,
+    streams: Vec<LoopbackHttpListingOfOneStream>,
 }
 
 /// One loaded stream in the listing.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct LoopbackHttpListingOfOneStream {
+struct LoopbackHttpListingOfOneStream {
     /// The stream's cast name.
-    pub name: String,
+    name: String,
     /// The output ports it exposes, private or public; an internal port is not
     /// exposed and is not listed.
-    pub exposed_output_ports: Vec<LoopbackHttpListingOfOneExposedOutputPort>,
+    exposed_output_ports: Vec<LoopbackHttpListingOfOneExposedOutputPort>,
 }
 
 /// One exposed output port in the listing.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct LoopbackHttpListingOfOneExposedOutputPort {
+struct LoopbackHttpListingOfOneExposedOutputPort {
     /// The node's name.
-    pub node: String,
+    node: String,
     /// The port's cast name.
-    pub port: String,
+    port: String,
     /// Private or public.
-    pub level: OutputPortExposureLevel,
+    level: OutputPortExposureLevel,
     /// The port's catalog entry, `null` when it carries none.
-    pub catalog_entry: Option<CatalogEntry>,
+    catalog_entry: Option<CatalogEntry>,
+}
+
+impl From<ExposedOutputPortOfALoadedStream> for LoopbackHttpListingOfOneExposedOutputPort {
+    fn from(exposed_output_port: ExposedOutputPortOfALoadedStream) -> Self {
+        Self {
+            node: exposed_output_port.node_name,
+            port: exposed_output_port.port_name,
+            level: exposed_output_port.level,
+            catalog_entry: exposed_output_port.catalog_entry,
+        }
+    }
 }
 
 /// What the listener's routes read.
@@ -78,14 +89,18 @@ pub struct LoopbackHttpListingOfOneExposedOutputPort {
 struct LoopbackHttpListenerState {
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     watch_page_directory: PathBuf,
+    watch_page_files: ServeDir<ServeFile>,
 }
 
 /// The listener's router over `operations_on_the_loaded_streams`, serving the
 /// preview page out of `watch_page_directory`.
-pub(crate) fn build_loopback_http_router(
+fn build_loopback_http_router(
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     watch_page_directory: PathBuf,
 ) -> axum::Router {
+    let watch_page_files = ServeDir::new(&watch_page_directory).fallback(ServeFile::new(
+        watch_page_directory.join(WATCH_PAGE_ENTRY_FILE_NAME),
+    ));
     axum::Router::new()
         .route("/", get(the_listing_of_the_machines_streams))
         .route(WATCH_PAGE_ROUTE_PREFIX, get(a_file_of_the_watch_page))
@@ -96,6 +111,7 @@ pub(crate) fn build_loopback_http_router(
         .with_state(LoopbackHttpListenerState {
             operations_on_the_loaded_streams,
             watch_page_directory,
+            watch_page_files,
         })
 }
 
@@ -111,13 +127,10 @@ async fn the_listing_of_the_machines_streams(
     .await;
     match listed {
         Ok(listing) => Json(listing).into_response(),
-        Err(read_failure) => (
+        Err(read_failure) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("the machine's streams could not be read: {read_failure}")
-            })),
-        )
-            .into_response(),
+            &format_args!("the machine's streams could not be read: {read_failure}"),
+        ),
     }
 }
 
@@ -126,38 +139,33 @@ async fn the_listing_of_the_machines_streams(
 fn the_listing_of_the_machines_streams_now(
     operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
 ) -> LoopbackHttpListingOfTheMachinesStreams {
-    let mut exposed_output_ports =
-        operations_on_the_loaded_streams.exposed_output_ports_of_every_loaded_stream();
-    let streams = operations_on_the_loaded_streams
-        .names_of_the_loaded_streams()
-        .into_iter()
-        .map(|stream_name| {
-            let (of_this_stream, of_another_stream) = exposed_output_ports
-                .drain(..)
-                .partition(|exposed_output_port| exposed_output_port.stream_name == stream_name);
-            exposed_output_ports = of_another_stream;
-            LoopbackHttpListingOfOneStream {
-                name: stream_name,
-                exposed_output_ports: of_this_stream
-                    .into_iter()
-                    .map(
-                        |exposed_output_port| LoopbackHttpListingOfOneExposedOutputPort {
-                            node: exposed_output_port.node_name,
-                            port: exposed_output_port.port_name,
-                            level: exposed_output_port.level,
-                            catalog_entry: exposed_output_port.catalog_entry,
-                        },
-                    )
-                    .collect(),
-            }
-        })
-        .collect();
+    let mut exposed_output_ports_by_stream: HashMap<
+        String,
+        Vec<LoopbackHttpListingOfOneExposedOutputPort>,
+    > = HashMap::new();
+    for exposed_output_port in
+        operations_on_the_loaded_streams.exposed_output_ports_of_every_loaded_stream()
+    {
+        exposed_output_ports_by_stream
+            .entry(exposed_output_port.stream_name.clone())
+            .or_default()
+            .push(exposed_output_port.into());
+    }
     LoopbackHttpListingOfTheMachinesStreams {
         machine: operations_on_the_loaded_streams
             .this_machines_name()
             .name()
             .to_string(),
-        streams,
+        streams: operations_on_the_loaded_streams
+            .names_of_the_loaded_streams()
+            .into_iter()
+            .map(|stream_name| LoopbackHttpListingOfOneStream {
+                exposed_output_ports: exposed_output_ports_by_stream
+                    .remove(&stream_name)
+                    .unwrap_or_default(),
+                name: stream_name,
+            })
+            .collect(),
     }
 }
 
@@ -165,7 +173,7 @@ fn the_listing_of_the_machines_streams_now(
 /// page's entry file, which reads the address out of the path itself.
 async fn a_file_of_the_watch_page(
     State(state): State<LoopbackHttpListenerState>,
-    request_uri: Uri,
+    mut request: Request,
 ) -> Response {
     if !state.watch_page_directory.is_dir() {
         return (
@@ -177,7 +185,8 @@ async fn a_file_of_the_watch_page(
         )
             .into_response();
     }
-    let path_below_the_watch_route = request_uri
+    let path_below_the_watch_route = request
+        .uri()
         .path()
         .strip_prefix(WATCH_PAGE_ROUTE_PREFIX)
         .filter(|path_below| !path_below.is_empty())
@@ -185,15 +194,8 @@ async fn a_file_of_the_watch_page(
     let Ok(uri_below_the_watch_route) = path_below_the_watch_route.parse::<Uri>() else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let watch_page_files = ServeDir::new(&state.watch_page_directory).fallback(ServeFile::new(
-        state.watch_page_directory.join(WATCH_PAGE_ENTRY_FILE_NAME),
-    ));
-    let mut request_below_the_watch_route = axum::extract::Request::new(axum::body::Body::empty());
-    *request_below_the_watch_route.uri_mut() = uri_below_the_watch_route;
-    match watch_page_files
-        .oneshot(request_below_the_watch_route)
-        .await
-    {
+    *request.uri_mut() = uri_below_the_watch_route;
+    match state.watch_page_files.oneshot(request).await {
         Ok(served) => served.into_response(),
         Err(infallible) => match infallible {},
     }
@@ -205,10 +207,7 @@ async fn a_file_of_the_watch_page(
 #[derive(Debug)]
 pub struct LoopbackHttpListenerServedForAnEngine {
     bound_address: SocketAddr,
-    loopback_http_stopping_token: CancellationToken,
-    /// Disconnected once the serving task has dropped the router and all it
-    /// holds; never sent on.
-    router_dropped_receiver: std::sync::mpsc::Receiver<()>,
+    served: Option<AxumRouterServedUntilStopped>,
 }
 
 impl LoopbackHttpListenerServedForAnEngine {
@@ -220,22 +219,8 @@ impl LoopbackHttpListenerServedForAnEngine {
 
 impl Drop for LoopbackHttpListenerServedForAnEngine {
     fn drop(&mut self) {
-        self.loopback_http_stopping_token.cancel();
-        // Inside a tokio runtime the serving task may need this very worker to
-        // end, so the wait is only for a host letting go from its own thread.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            return;
-        }
-        if !matches!(
-            self.router_dropped_receiver
-                .recv_timeout(LOOPBACK_HTTP_ROUTER_DROP_BUDGET),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
-        ) {
-            tracing::warn!(
-                "the loopback HTTP listener's router was still held \
-                 {LOOPBACK_HTTP_ROUTER_DROP_BUDGET:?} after it stopped serving; a connection \
-                 outlived the shutdown"
-            );
+        if let Some(served) = self.served.take() {
+            served.stop_serving_and_let_go_of_the_router();
         }
     }
 }
@@ -264,35 +249,18 @@ pub fn serve_the_loopback_http_listener(
         let _entered_tokio_runtime = tokio_handle.enter();
         tokio::net::TcpListener::from_std(bound_listener).map_err(refused)?
     };
-    let loopback_http_stopping_token = CancellationToken::new();
-    let (router_dropped_sender, router_dropped_receiver) = std::sync::mpsc::channel::<()>();
-    tokio_handle.spawn(serve_the_loopback_http_listener_until_stopped(
+    let served = AxumRouterServedUntilStopped::serve(
         loopback_http_listener,
         build_loopback_http_router(operations_on_the_loaded_streams, watch_page_directory),
-        loopback_http_stopping_token.clone(),
-        router_dropped_sender,
-    ));
+        CancellationToken::new(),
+        "the loopback HTTP listener",
+        tokio_handle,
+    );
     tracing::info!("Loopback HTTP listening on http://{bound_address}/");
     Ok(LoopbackHttpListenerServedForAnEngine {
         bound_address,
-        loopback_http_stopping_token,
-        router_dropped_receiver,
+        served: Some(served),
     })
-}
-
-async fn serve_the_loopback_http_listener_until_stopped(
-    loopback_http_listener: tokio::net::TcpListener,
-    loopback_http_router: axum::Router,
-    loopback_http_stopping_token: CancellationToken,
-    router_dropped_sender: std::sync::mpsc::Sender<()>,
-) {
-    let served = axum::serve(loopback_http_listener, loopback_http_router)
-        .with_graceful_shutdown(loopback_http_stopping_token.cancelled_owned())
-        .await;
-    if let Err(error) = served {
-        tracing::error!(%error, "the loopback HTTP listener stopped serving");
-    }
-    drop(router_dropped_sender);
 }
 
 #[cfg(test)]

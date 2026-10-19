@@ -18,7 +18,7 @@ use super::loaded_stream::{
 };
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
-use super::{RuntimeShutdownEscalation, StreamEnvironment};
+use super::{ExposedOutputPortOfALoadedStream, RuntimeShutdownEscalation, StreamEnvironment};
 use crate::core::context::GpuContext;
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
@@ -331,7 +331,7 @@ impl EngineResourcesSharedByEveryStream {
     /// and catalog entry. Blocks while a stream compiles.
     pub(crate) fn exposed_output_ports_of_every_loaded_stream(
         &self,
-    ) -> Vec<crate::core::runtime::ExposedOutputPortOfALoadedStream> {
+    ) -> Vec<ExposedOutputPortOfALoadedStream> {
         self.every_loaded_stream()
             .iter()
             .flat_map(|stream| stream.exposed_output_ports())
@@ -949,7 +949,7 @@ impl Runner {
     /// and catalog entry. Blocks while a stream compiles.
     pub fn exposed_output_ports_of_every_loaded_stream(
         &self,
-    ) -> Vec<crate::core::runtime::ExposedOutputPortOfALoadedStream> {
+    ) -> Vec<ExposedOutputPortOfALoadedStream> {
         self.engine_resources_shared_by_every_stream
             .exposed_output_ports_of_every_loaded_stream()
     }

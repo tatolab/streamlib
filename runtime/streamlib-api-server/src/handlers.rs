@@ -236,7 +236,7 @@ pub(crate) fn machine_wide_registry_response(
 }
 
 /// `status` with `error` as an [`ErrorResponse`] body.
-fn error_response(status: StatusCode, error: &impl std::fmt::Display) -> Response {
+pub(crate) fn error_response(status: StatusCode, error: &impl std::fmt::Display) -> Response {
     (
         status,
         Json(ErrorResponse {
@@ -556,7 +556,7 @@ pub(crate) mod router_surface_tests {
             .unwrap();
         let spec = json_body_of(request).await;
 
-        for (path, stream_is_required) in [("/api/graph", false), ("/api/registry", false)] {
+        for path in ["/api/graph", "/api/registry"] {
             let parameters = spec["paths"][path]["get"]["parameters"]
                 .as_array()
                 .unwrap_or_else(|| panic!("{path} must document its parameters: {spec}"));
@@ -568,9 +568,9 @@ pub(crate) mod router_surface_tests {
                 stream_parameter["in"], "query",
                 "{path}: {stream_parameter}"
             );
-            assert_eq!(
-                stream_parameter["required"] == serde_json::json!(true),
-                stream_is_required,
+            assert_ne!(
+                stream_parameter["required"],
+                serde_json::json!(true),
                 "{path}: {stream_parameter}"
             );
         }

@@ -24,7 +24,6 @@ pub(crate) mod surface_backing_resolution;
 pub(crate) mod surface_check_out_lease_registry;
 #[cfg(target_os = "linux")]
 pub(crate) mod surface_export_staging;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod surface_share_wire_verbs;
 pub(crate) mod surface_store;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The runtime's loopback HTTP, served beside its local API on
-//! `127.0.0.1:4446`, its preview page read from beside the lend.
+//! The runtime's loopback HTTP, served beside its local API on `127.0.0.1` at
+//! [`streamlib_api_server::LOOPBACK_HTTP_LISTENER_DEFAULT_PORT`], its preview
+//! page read from beside the lend.
 
 use std::path::Path;
 use std::sync::Arc;

@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
-use hyper::client::conn::http1::SendRequest;
 use hyper::header::{CONNECTION, UPGRADE};
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -37,13 +36,9 @@ pub(crate) enum LocalApiTransportFailure {
 /// Why a request over the local API socket got no answer.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LocalApiHttpRequestFailure {
-    /// The request named a target that is not a valid origin-form URI.
-    #[error("`{request_target}` is not a request target the local API can be sent: {uri_failure}")]
-    RequestTargetIsNotAUri {
-        request_target: String,
-        #[source]
-        uri_failure: hyper::http::Error,
-    },
+    /// The upgrade request could not be built.
+    #[error("the `/mcp/stdio` upgrade request could not be built: {0}")]
+    UpgradeRequestNotBuilt(#[source] hyper::http::Error),
     /// Nothing answered HTTP on the socket, or the answer did not come in time.
     #[error(
         "no control plane reachable at {} ({transport_failure})",
@@ -76,39 +71,27 @@ fn local_api_unreachable(
     }
 }
 
-/// A request to `origin_form_request_target` with `Host` filled.
-fn local_api_request_builder(
-    method: Method,
-    origin_form_request_target: &str,
-) -> hyper::http::request::Builder {
+/// The one `GET /mcp/stdio` with `Connection: Upgrade` and `Upgrade: mcp-stdio`, `Host` filled.
+fn the_mcp_stdio_upgrade_request()
+-> Result<Request<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
     Request::builder()
-        .method(method)
-        .uri(origin_form_request_target)
+        .method(Method::GET)
+        .uri(MCP_STDIO_UPGRADE_REQUEST_TARGET)
         .header(hyper::header::HOST, LOCAL_API_HOST_HEADER_VALUE)
-}
-
-/// `request_builder`, built for `origin_form_request_target`, finished with no body; a target
-/// that is not a URI is refused before anything is sent.
-fn local_api_request_without_a_body(
-    request_builder: hyper::http::request::Builder,
-    origin_form_request_target: &str,
-) -> Result<Request<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
-    request_builder
+        .header(CONNECTION, "Upgrade")
+        .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN)
         .body(LocalApiHttpRequestBody::new(Bytes::new()))
-        .map_err(
-            |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
-                request_target: origin_form_request_target.to_owned(),
-                uri_failure,
-            },
-        )
+        .map_err(LocalApiHttpRequestFailure::UpgradeRequestNotBuilt)
 }
 
-/// Connect to the local API socket and hand the connection to hyper as HTTP/1.1, served with
-/// upgrades enabled so a `101` answer can be taken over with `hyper::upgrade::on`. Must run inside
-/// a tokio runtime, which drives the connection.
-async fn open_local_api_http1_connection(
+/// Connect to the local API socket, hand the connection to hyper as HTTP/1.1 served with
+/// upgrades enabled so a `101` answer can be taken over with `hyper::upgrade::on`, and send
+/// `request` on it, answering the response head with its body still streaming. Must run inside a
+/// tokio runtime, which drives the connection.
+async fn send_request_over_the_local_api_socket(
     local_api_socket_path: &Path,
-) -> Result<SendRequest<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
+    request: Request<LocalApiHttpRequestBody>,
+) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
     let local_api_stream = tokio::net::UnixStream::connect(local_api_socket_path)
         .await
         .map_err(|connect_failure| {
@@ -117,7 +100,7 @@ async fn open_local_api_http1_connection(
                 LocalApiTransportFailure::SocketConnectFailed(connect_failure),
             )
         })?;
-    let (request_sender, local_api_connection) =
+    let (mut request_sender, local_api_connection) =
         hyper::client::conn::http1::handshake(TokioIo::new(local_api_stream))
             .await
             .map_err(|handshake_failure| {
@@ -129,16 +112,6 @@ async fn open_local_api_http1_connection(
     // Served until the runtime or the sender closes it, or until a `101` hands the stream to its
     // upgrade.
     tokio::spawn(local_api_connection.with_upgrades());
-    Ok(request_sender)
-}
-
-/// Send `request` on the connection `request_sender` holds, answering the response head with its
-/// body still streaming.
-async fn send_request_on_the_local_api_connection(
-    local_api_socket_path: &Path,
-    request_sender: &mut SendRequest<LocalApiHttpRequestBody>,
-    request: Request<LocalApiHttpRequestBody>,
-) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
     request_sender
         .send_request(request)
         .await
@@ -155,18 +128,6 @@ async fn send_request_on_the_local_api_connection(
                 )
             }
         })
-}
-
-/// Open one HTTP/1.1 connection to the local API socket and send `request` on it, answering the
-/// response head with its body still streaming. Must run inside a tokio runtime, which drives the
-/// connection.
-async fn send_request_over_the_local_api_socket(
-    local_api_socket_path: &Path,
-    request: Request<LocalApiHttpRequestBody>,
-) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
-    let mut request_sender = open_local_api_http1_connection(local_api_socket_path).await?;
-    send_request_on_the_local_api_connection(local_api_socket_path, &mut request_sender, request)
-        .await
 }
 
 /// A runtime's MCP stream once its `101` is in: the local API socket itself, and the bytes the
@@ -227,14 +188,11 @@ fn response_status_line<ResponseBody>(response: &Response<ResponseBody>) -> Stri
 pub(crate) async fn upgrade_local_api_connection_to_mcp_stdio(
     local_api_socket_path: &Path,
 ) -> Result<UpgradedLocalApiMcpStdioStream, LocalApiMcpStdioUpgradeFailure> {
-    let upgrade_request = local_api_request_without_a_body(
-        local_api_request_builder(Method::GET, MCP_STDIO_UPGRADE_REQUEST_TARGET)
-            .header(CONNECTION, "Upgrade")
-            .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN),
-        MCP_STDIO_UPGRADE_REQUEST_TARGET,
-    )?;
-    let mut upgrade_response =
-        send_request_over_the_local_api_socket(local_api_socket_path, upgrade_request).await?;
+    let mut upgrade_response = send_request_over_the_local_api_socket(
+        local_api_socket_path,
+        the_mcp_stdio_upgrade_request()?,
+    )
+    .await?;
     if upgrade_response.status() != StatusCode::SWITCHING_PROTOCOLS {
         return Err(LocalApiMcpStdioUpgradeFailure::Refused {
             answered_status_line: response_status_line(&upgrade_response),
