@@ -51,6 +51,7 @@ use crate::stage_local_relay::{
     LOCAL_RELAY_CRATE_FEATURES, LOCAL_RELAY_CRATE_NAME, LOCAL_RELAY_EXECUTABLE_FILE_NAME,
     PINNED_LOCAL_RELAY_CRATE_VERSION, stage_the_local_relay,
 };
+use crate::watch_page_third_party_notices::render_the_watch_pages_closure;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -80,7 +81,7 @@ a superset of what any one artifact links — the wheel ships this file entire
 rather than a per-artifact subset, because over-attribution costs a longer file
 and under-attribution is a term unmet. The local relay the runtime unit carries,
 `moq-relay`, is no workspace member, so its own closure follows in a section of
-its own.
+its own, and so does the preview page's, whose packages are npm's.
 
 **Generated — do not edit.** Regenerate with `cargo xtask
 generate-third-party-notices`; the licence policy that decides what may appear
@@ -618,6 +619,8 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
         NoticesGenerationTarget::EngineWorkspace => {
             notices.push('\n');
             notices.push_str(&render_the_local_relays_closure(workspace_root)?);
+            notices.push('\n');
+            notices.push_str(&render_the_watch_pages_closure(workspace_root)?);
             let source_trees = NoticeSourceTrees {
                 registry_crate_roots: locate_registry_crate_roots(workspace_root)?,
                 workspace_root: workspace_root.to_path_buf(),

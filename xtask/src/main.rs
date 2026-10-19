@@ -31,6 +31,7 @@ pub mod psnr;
 pub mod source_call_site_scan;
 pub mod stage_local_relay;
 pub mod stage_watch_page;
+pub mod watch_page_third_party_notices;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
 /// folder-backed `processors/`. `lint_logging` walks these by name rather

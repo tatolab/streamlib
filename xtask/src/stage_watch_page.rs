@@ -173,38 +173,62 @@ fn copy_into(file: &Path, directory: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The suffix of the polyfill's WebAssembly loader, the first file libav.js
+/// fetches from beside the bundle.
+const OPUS_DECODER_POLYFILL_WASM_LOADER_SUFFIX: &str =
+    OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE[0];
+
 /// The one file per suffix in [`OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE`]
 /// in the polyfill's `dist_directory`.
 fn opus_decoder_polyfill_files_loaded_beside_the_bundle(
     dist_directory: &Path,
 ) -> Result<Vec<PathBuf>> {
-    let mut dist_file_names = Vec::new();
+    OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE
+        .iter()
+        .map(|suffix| the_one_opus_decoder_polyfill_file_ending_in(dist_directory, suffix))
+        .collect()
+}
+
+/// The one file in the polyfill's `dist_directory` whose name ends `suffix`.
+fn the_one_opus_decoder_polyfill_file_ending_in(
+    dist_directory: &Path,
+    suffix: &str,
+) -> Result<PathBuf> {
+    let mut matching = Vec::new();
     for entry in std::fs::read_dir(dist_directory).with_context(|| {
         format!(
             "reading the Opus decoder polyfill at {}",
             dist_directory.display()
         )
     })? {
-        let entry = entry.with_context(|| format!("reading {}", dist_directory.display()))?;
-        dist_file_names.push(entry.file_name().to_string_lossy().into_owned());
+        let file_name = entry
+            .with_context(|| format!("reading {}", dist_directory.display()))?
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        if file_name.ends_with(suffix) {
+            matching.push(file_name);
+        }
     }
-    OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE
-        .iter()
-        .map(|suffix| {
-            let matching: Vec<&String> = dist_file_names
-                .iter()
-                .filter(|file_name| file_name.ends_with(suffix))
-                .collect();
-            match matching.as_slice() {
-                [one] => Ok(dist_directory.join(one)),
-                _ => bail!(
-                    "the Opus decoder polyfill at {} holds {} files ending `{suffix}`, not one: {matching:?}",
-                    dist_directory.display(),
-                    matching.len()
-                ),
-            }
-        })
-        .collect()
+    match matching.as_slice() {
+        [one] => Ok(dist_directory.join(one)),
+        _ => bail!(
+            "the Opus decoder polyfill at {} holds {} files ending `{suffix}`, not one: {matching:?}",
+            dist_directory.display(),
+            matching.len()
+        ),
+    }
+}
+
+/// The polyfill's WebAssembly loader in the installed `project_directory`,
+/// the file whose leading comment block is libav.js's own licence notice.
+pub fn opus_decoder_polyfill_wasm_loader_in_the_project(
+    project_directory: &Path,
+) -> Result<PathBuf> {
+    the_one_opus_decoder_polyfill_file_ending_in(
+        &project_directory.join(OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT),
+        OPUS_DECODER_POLYFILL_WASM_LOADER_SUFFIX,
+    )
 }
 
 /// Refuse a staged page whose entry file does not load the bundle from where
