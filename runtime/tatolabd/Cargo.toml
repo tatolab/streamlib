@@ -31,11 +31,11 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.52.0" }
-streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.52.0" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.53.0" }
+streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.53.0" }
 streamlib-api-server = { path = "../streamlib-api-server" }
 # The machine runtime lock and the state directory the runtime takes at start.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.52.0" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.53.0" }
 # The machine's local relay, and the interface every relay adapter implements.
 streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
 streamlib-relay-adapter-local = { path = "../streamlib-relay-adapter-local" }
