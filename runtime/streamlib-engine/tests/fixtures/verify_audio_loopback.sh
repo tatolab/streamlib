@@ -91,6 +91,8 @@ fi
 
 require_the_runtime_unit
 require_the_fixture_venv
+# Built before the stream runs, so the build takes none of the signal's window.
+require_tatolab_read_track
 
 # Spelled in full rather than `mktemp -t`, which BSD reads as a prefix to
 # suffix under $TMPDIR — so the directory is where the skill looks on both.

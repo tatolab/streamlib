@@ -7,7 +7,9 @@ The sender encodes the camera and exposes the encoder's port; the receiver
 reads that port's track at the machine's local relay and decodes it. Nothing
 reads either from inside the runtime: `e2e_fixture_psnr_vivid.sh` reads the
 sender's encoded track with `tatolab-read-track`, decodes it with ffmpeg and
-scores the pictures, and reads the receiver's decoded-frame count off `graph`.
+scores the pictures, and reads the receiver's decoded-frame count off `graph`,
+which counts a port's writes once something reads it — the receiver exposes
+its decoded port for that.
 
 `e2e_fixture_psnr_vivid.sh` loads each with `tatolab run` into a `tatolabd` it
 starts with the streams' settings in its environment, which the compile
@@ -94,3 +96,5 @@ def the_senders_encoded_track_through_the_decoder(stream_builder: StreamBuilder)
     decoder = stream_builder.add(decoder_marker, name="decoder")
 
     stream_builder.connect(relay_track.output("track"), decoder.input("encoded_video"))
+    # Exposed so the decoded port has a reader, and `graph` counts what it writes.
+    stream_builder.expose(decoder.output("video"))

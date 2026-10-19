@@ -3,9 +3,10 @@
 # Captured with: BASELINE_CAPTURE=1 e2e_fixture_psnr_vivid.sh <out> <codec>
 # Codec: h265
 # Vivid test_pattern: 7
-# Measured from exact decoded pixels over the control plane's exchange route. The pre-#2085 baseline sampled the display's composited output, whose swapchain colour handling pulled green and blue up; do not compare the two.
+# Measured from the sender's encoded track read at the local relay with tatolab-read-track and decoded by ffmpeg to RGB PNGs. Earlier baselines were measured over the deleted exchange route from the engine decoder's pixels; do not compare the two.
+# Red reads about 0.89 because the encoder converts RGB with BT.709 while its VUI names the frame's own SMPTE 170M matrix, which ffmpeg honours; correcting either moves this baseline.
 # Default verification tolerance is ±0.05 absolute on the [0,1] scale.
 channel	mean
-r	0.9792
-g	0.0029
-b	0.0067
+r	0.8904
+g	0.0028
+b	0.0106

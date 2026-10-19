@@ -3502,18 +3502,15 @@ entry reads as **message** (the glossary).
   (`core/runtime/address_chunk.rs`, one shared fixture of cases the engine and the
   pure-Python builder both cast from). It carries no processor id; whatever owns the port
   resolves the node's name when asked. The machine is named as the machine-name entry below
-  states and read by `graph`'s top-level `machine`; a stream's name is cast at load. `tap`'s
-  channel is an address on this machine and one naming another machine is refused naming it.
+  states and read by `graph`'s top-level `machine`; a stream's name is cast at load.
   `runtime_id` stays per-run — logs, iceoryx2 names, the surface-sharing service — and is
   never an address.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
-  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715; amended by
-  moq-relays: `tap` goes at the sharing step]
+  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_on_one_machine_both_construct_and_name_it_alike -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_machine_is_refused_naming_that_machine -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams graph_answers_the_machine_by_its_hostname_cast_and_no_streams -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
