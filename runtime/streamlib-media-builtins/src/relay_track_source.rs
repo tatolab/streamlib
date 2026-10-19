@@ -93,11 +93,12 @@ impl Default for RelayTrackSourceConfig {
                   The relay's object carries the writer's stamp, on the writer's clock. Every \
                   stamp in a graph is this machine's, so `track` is stamped with the object's \
                   own timestamp — the hang container's for a media track, the object's \
-                  otherwise — plus one offset taken at the first object, as the stack's own \
-                  player takes it: lowered for an object that would run more than 100 ms ahead \
-                  of its arrival, such as the group in progress a joining reader is handed in \
-                  one burst, and taken again when the track steps back or falls a second \
-                  behind, so the track's own spacing survives jittered arrival. An object \
+                  otherwise — plus one offset taken at the first object and lowered for an \
+                  object that would run more than 100 ms ahead of its arrival, as the stack's \
+                  own player lowers its reference past its buffer, such as the group in progress \
+                  a joining reader is handed in one burst; it is taken again when the track \
+                  steps back or falls a second behind, so the track's own spacing survives \
+                  jittered arrival. An object \
                   carrying no timestamp is stamped at arrival.\n\n\
                   A relay that refuses, or a track not yet published or withdrawn, is retried \
                   with backoff and never ends the stream.",
@@ -615,12 +616,13 @@ impl WhereATrackCarriesItsTimestamp {
 /// the offset is taken again.
 const A_REBASED_STAMP_FALLS_BEHIND_ARRIVAL_BY_AT_MOST: Duration = Duration::from_secs(1);
 
-/// How far a re-based stamp may run ahead of the object's arrival — the
-/// jitter allowance of the stack's own player, whose reference moves down to
-/// any frame that would lead by more. An object arriving earlier than the
-/// offset allows lowers it so the object leads by exactly this much: the group
-/// a joining reader is handed in one burst is written at its arrival, and a
-/// track that leaps ahead never carries its stamps into this machine's future.
+/// How far a re-based stamp may run ahead of the object's arrival. The stack's
+/// own player lowers its reference for any frame that would lead by more than
+/// its `buffer`, to lead by exactly that; the node does the same with the
+/// allowance at 100 ms where the player's `buffer` defaults to zero, so arrival
+/// jitter under it never shortens a step. The group a joining reader is handed
+/// in one burst is written at its arrival, and a track that leaps ahead never
+/// carries its stamps into this machine's future.
 const A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST: Duration = Duration::from_millis(100);
 
 /// How far a track's timestamp may step back — a reordered frame — before the

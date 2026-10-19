@@ -438,11 +438,23 @@ impl BroadcastReadAtAListener {
                     }),
                     Ok(None) => break,
                     // A reader that falls behind may lose a group mid-way, as
-                    // live delivery does; what it read of it is never kept.
-                    Err(_) => {
+                    // live delivery does — superseded, evicted, or its stream
+                    // cancelled by the relay — and what it read of it is never
+                    // kept.
+                    Err(
+                        moq_net::Error::Old
+                        | moq_net::Error::Evicted
+                        | moq_net::Error::Cancel
+                        | moq_net::Error::Stream(
+                            moq_net::StreamError::Old
+                            | moq_net::StreamError::Evicted
+                            | moq_net::StreamError::Cancel,
+                        ),
+                    ) => {
                         objects.truncate(objects_before_the_group);
                         break;
                     }
+                    Err(refusal) => panic!("the group is live: {refusal}"),
                 }
                 if objects.len() == count {
                     break;
