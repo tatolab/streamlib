@@ -993,18 +993,15 @@ mod tests {
     }
 
     #[test]
-    fn a_config_naming_track_address_is_refused_as_an_unknown_key() {
+    fn a_config_naming_a_key_the_node_does_not_take_is_refused_naming_it() {
         let refusal = config_read_from(json!({
-            "track_address": "desk/camera-rig/encoder/encoded_video",
             "broadcast": "desk/camera-rig.hang",
             "track": "encoder/encoded_video",
+            "catalog": "catalog.json",
         }))
-        .expect_err("`track_address` is no key of the config")
+        .expect_err("`catalog` is no key of the config")
         .to_string();
-        assert!(
-            refusal.contains("unknown field `track_address`"),
-            "{refusal}"
-        );
+        assert!(refusal.contains("unknown field `catalog`"), "{refusal}");
     }
 
     #[test]

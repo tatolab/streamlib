@@ -3803,7 +3803,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_reads_a_hang_track_a_third_party_published -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_broadcast_and_a_track_are_read_exactly_as_written_at_the_local_relay_by_default -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_config_naming_track_address_is_refused_as_an_unknown_key -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_config_naming_a_key_the_node_does_not_take_is_refused_naming_it -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_config_missing_the_broadcast_or_the_track_is_refused_naming_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_track_is_withdrawn_keeps_its_stream_running_and_reads_it_again -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_relay_is_not_up_yet_reads_the_track_once_it_is -->
