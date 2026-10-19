@@ -422,13 +422,11 @@ def test_every_verb_that_reaches_the_runtime_fails_at_once_naming_the_socket_and
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
-    tmp_path: Path,
 ):
     """No verb ever starts a runtime: each fails at the socket, naming it and
     how to start the runtime, and leaves the machine lock free for `tatolabd`."""
     project_directory = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
     local_api_socket_path = private_machine_directories.machine_directories.local_api_socket_path
-    exchange_output_directory = tmp_path / "exchanged"
     every_verb_reaching_the_runtime = (
         ("run",),
         ("run", "-d"),
@@ -443,17 +441,8 @@ def test_every_verb_that_reaches_the_runtime_fails_at_once_naming_the_socket_and
         ("expose", ALPHA_STREAM, EXPOSED_NODE, EXPOSED_PORT, "--remove"),
         ("graph",),
         ("graph", "--stream", ALPHA_STREAM),
-        ("tap", f"{ALPHA_STREAM}/{EXPOSED_NODE}/{EXPOSED_PORT}"),
         ("logs", "--stream", ALPHA_STREAM),
         ("logs", "--stream", ALPHA_STREAM, "-f"),
-        ("exchange", "1#1", "--out", str(exchange_output_directory)),
-        (
-            "exchange",
-            "--channel",
-            f"{ALPHA_STREAM}/{EXPOSED_NODE}/{EXPOSED_PORT}",
-            "--out",
-            str(exchange_output_directory),
-        ),
         ("mcp",),
     )
 

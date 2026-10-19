@@ -66,14 +66,7 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 rmcp = { version = "3.5.1", features = ["server", "macros", "transport-streamable-http-server", "transport-async-rw"] }
 tokio-util = "0.7"
 
-# The MCP `exchange` tool's image content block: base64 for the inline PNG.
-base64 = "0.22"
-
 [dev-dependencies]
-# Enables the engine's `test-support` in-memory `TapSubscription` constructor
-# for the MCP/REST tap-tool tests. A dev-dep feature: active for tests, absent
-# from the production `cargo build` dependency graph.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.53.0", features = ["test-support"] }
 # The MCP wire tests drive the real router over its socket with rmcp's own client.
 rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-unix-socket"] }
 tempfile = "3"

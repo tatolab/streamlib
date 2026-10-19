@@ -688,33 +688,6 @@ mod capability_view_tests {
 }
 
 #[cfg(test)]
-mod host_runtime_ops_wiring_tests {
-    //! Lock-in for the #1426 wiring fix: a host-resident processor's
-    //! `ctx.runtime()` must reach the REAL Runner-backed ops, not the
-    //! byte-shaped [`RuntimeOpsShim`]. The shim has no transport for a
-    //! streaming op, so `RuntimeOpsShim::tap_async` returns
-    //! [`Error::NotSupported`] — if `ctx.runtime()` handed the api-server
-    //! that shim, every host-side tap would be dead on arrival.
-    //!
-    //! The existing router tests inject a mock `RuntimeOperations` and so
-    //! never exercise the `host_callbacks().is_none()` branch this fix adds;
-    //! this test drives the branch through the SAME host-shaped
-    //! `RuntimeContextFullAccess::new(&base, grant)` that lifecycle dispatch mints.
-    //!
-    //! Channel resolution (`find_the_source_a_caller_named` over the live graph)
-    //! runs BEFORE any iceoryx2 subscribe, so an unwired channel surfaces
-    //! [`Error::TapChannelNotFound`] with no IPC work. Mentally revert the
-    //! `host_callbacks().is_none()` branch in `runtime()` and the shim
-    //! answers [`Error::NotSupported`] instead — this test goes red, which
-    //! is the regression lock.
-    //!
-    //! GPU-gated because a `RuntimeContext` embeds a `GpuContext` by value;
-    //! the assertion itself needs no GPU work, only the context shell.
-
-    use crate::core::context::GpuContext;
-}
-
-#[cfg(test)]
 mod one_off_acquisition_counting_tests {
     use std::sync::Arc;
 

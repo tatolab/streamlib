@@ -202,8 +202,7 @@ fn remove_local_api_socket_file(local_api_socket_path: &Path) -> std::io::Result
 mod tests {
     use super::*;
     use crate::control_plane_stub_support::{
-        LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        STUB_EXCHANGED_IMAGE_BYTES, response_head_over_the_socket,
+        LocalApiServedOnAFreshSocket, response_head_over_the_socket,
         serve_the_control_plane_router_at,
     };
     use crate::handlers::router_surface_tests::a_control_plane_router_stub_runtime;
@@ -304,20 +303,10 @@ mod tests {
         let health = assert_the_local_api_socket_answers_health(local_api_socket_path).await;
         assert_eq!(health.body, b"ok");
 
-        let exchanged_image = http_exchange_over_unix_socket(
-            local_api_socket_path,
-            &format!(
-                "GET /api/surfaces/{STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED}/image HTTP/1.1"
-            ),
-            b"",
-        )
-        .await;
-        assert!(
-            exchanged_image.status_line.contains(" 200 "),
-            "{}",
-            exchanged_image.status_line
-        );
-        assert_eq!(exchanged_image.body, STUB_EXCHANGED_IMAGE_BYTES);
+        let graph =
+            http_exchange_over_unix_socket(local_api_socket_path, "GET /api/graph HTTP/1.1", b"")
+                .await;
+        assert!(graph.status_line.contains(" 200 "), "{}", graph.status_line);
     }
 
     #[tokio::test]

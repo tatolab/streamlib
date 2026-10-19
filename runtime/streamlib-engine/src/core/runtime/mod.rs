@@ -27,8 +27,6 @@ mod runtime_unique_id;
 mod status;
 mod stream_actions_of_this_runtime;
 mod stream_environment;
-mod surface_image_exchange;
-mod tap;
 
 pub use crate::core::compiler::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
@@ -108,5 +106,3 @@ pub use stream_actions_of_this_runtime::{
     StreamStopOutcome,
 };
 pub use stream_environment::StreamEnvironment;
-pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;
-pub use tap::TapSubscription;

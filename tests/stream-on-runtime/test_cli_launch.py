@@ -35,13 +35,9 @@ from typing import Any
 
 import pytest
 
-from conftest import AttachedTatolabRun, PrivateMachineDirectories, TatolabdUnderTest
+from conftest import AttachedTatolabRun, TatolabdUnderTest
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
-from runtime_unit_under_test import (
-    STREAM_ON_RUNTIME_SUITE_DIRECTORY,
-    SUITE_VENV_INTERPRETER,
-    RuntimeUnitUnderTest,
-)
+from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 from tatolab.stream import TestPatternSource
 from test_processor_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
@@ -121,12 +117,8 @@ SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
 SCAFFOLDED_EFFECT_NODE_NAME = "invertingeffect"
 SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 
-# A `tap` collects its sample server-side, so a verb can legitimately take a moment.
-OBSERVATION_VERB_TIMEOUT_SECONDS = 60.0
-# The id form races the pool: a frame tapped at 30fps can be recycled before
-# its exchange lands, which is a `410` the caller answers by tapping again.
-SURFACE_ID_EXCHANGE_ATTEMPTS = 10
-PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# How long an attached stream's source has to write its first bag on `video`.
+FIRST_BAG_WRITTEN_TIMEOUT_SECONDS = 30.0
 
 #: The one stream every project here compiles to.
 STREAM_NAME = "main"
@@ -142,46 +134,6 @@ DEV_NO_STREAM_IS_LOADED = "tatolab dev: no stream is loaded — fix it and save 
 DEV_KEPT_THE_RUNNING_STREAM = (
     f"tatolab dev: {STREAM_NAME} keeps running the last save that loaded — fix it and save again"
 )
-
-# The `surface_id` field of one bag `tatolab tap` forwarded, given its hex.
-# Run with the lend on `PYTHONPATH`: a tapped bag is the channel's
-# transport-framed msgpack, and the engine's own decoder is what reads it.
-SURFACE_ID_OF_A_TAPPED_BAG_SOURCE = """\
-import json, sys
-from tatolab.runtime._engine import decode_tapped_channel_bag_frame_to_python_object
-
-bag = decode_tapped_channel_bag_frame_to_python_object(bytes.fromhex(sys.argv[1]))
-surface_id = bag.get("surface_id") if isinstance(bag, dict) else None
-print(json.dumps(surface_id if isinstance(surface_id, str) else None))
-"""
-
-
-def run_python_with_the_lend(
-    runtime_unit: RuntimeUnitUnderTest,
-    environment: "dict[str, str]",
-    python_source: str,
-    *script_arguments: str,
-) -> Any:
-    """Run `python_source` in the suite venv's interpreter with the lend leading
-    `PYTHONPATH`, and return the JSON it printed."""
-    existing_python_path = environment.get("PYTHONPATH")
-    finished = subprocess.run(
-        [str(SUITE_VENV_INTERPRETER), "-c", python_source, *script_arguments],
-        capture_output=True,
-        text=True,
-        timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-        check=False,
-        env={
-            **environment,
-            "PYTHONPATH": os.pathsep.join(
-                [str(runtime_unit.lend_directory)]
-                + ([existing_python_path] if existing_python_path else [])
-            ),
-        },
-    )
-    assert finished.returncode == 0, finished.stdout + finished.stderr
-    return json.loads(finished.stdout)
-
 
 def assert_only_its_owner_can_open(local_api_socket_path: Path) -> None:
     status = os.stat(local_api_socket_path)
@@ -436,17 +388,13 @@ def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
 
 
 def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api_socket(
-    tmp_path: Path,
-    runtime_unit: RuntimeUnitUnderTest,
-    private_machine_directories: PrivateMachineDirectories,
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     run_tatolab_observation_verb: "Callable[..., subprocess.CompletedProcess[str]]",
 ):
-    """`tatolab streams`, `graph`, `tap`, `logs` and both forms of `exchange`,
-    driven the way a user drives them: a separate process, naming the stream.
-    The source is wired to a reader, since a channel is tappable only once a
-    connect has wired its output."""
+    """`tatolab streams`, `graph` and `logs`, driven the way a user drives them:
+    a separate process, naming the stream. `graph` counts the bags the source
+    writes once a connect has wired its output."""
     app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
     tatolabd = start_tatolabd()
     attached = attach_the_projects_stream(tatolabd, app_directory)
@@ -456,73 +404,24 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
     assert listed.splitlines()[0].split() == ["NAME", "STATE", "NODES", "PROJECT"], listed
     assert re.search(rf"^{STREAM_NAME}\s+attached\s+2\s+", listed, re.MULTILINE), listed
 
-    graph = json.loads(succeeded(run_tatolab_observation_verb("graph", "--stream", STREAM_NAME)))
-    source_name = next(
-        graph_node["name"]
-        for graph_node in graph["nodes"]
-        if graph_node["name"].startswith("testpatternsource")
-    )
-    channel = f"{graph['stream']}/{source_name}/video"
-
-    tapped = json.loads(
-        succeeded(
-            run_tatolab_observation_verb(
-                "tap", channel, "--count", "2",
-                timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-            )
+    bags_the_source_wrote = 0
+    deadline = time.monotonic() + FIRST_BAG_WRITTEN_TIMEOUT_SECONDS
+    while bags_the_source_wrote == 0 and time.monotonic() < deadline:
+        graph = json.loads(
+            succeeded(run_tatolab_observation_verb("graph", "--stream", STREAM_NAME))
         )
-    )  # fmt: skip
-    assert tapped["received"] > 0, f"no bags reached the tap over the socket: {tapped}"
+        [source_node] = [
+            graph_node
+            for graph_node in graph["nodes"]
+            if graph_node["name"].startswith("testpatternsource")
+        ]
+        bags_the_source_wrote = source_node["components"]["metrics"][
+            "written_bags_by_output_port"
+        ].get("video", 0)
+        time.sleep(0.1)
+    assert bags_the_source_wrote > 0, f"the source wrote nothing on `video`: {source_node}"
 
     succeeded(run_tatolab_observation_verb("logs", "--stream", STREAM_NAME))
-
-    channel_form_directory = tmp_path / "channel-form"
-    channel_form_written = succeeded(
-        run_tatolab_observation_verb(
-            "exchange", "--channel", channel, "--count", "1",
-            "--out", str(channel_form_directory),
-            timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-        )
-    ).split()  # fmt: skip
-    assert len(channel_form_written) == 1, channel_form_written
-    assert Path(channel_form_written[0]).read_bytes().startswith(PNG_SIGNATURE)
-
-    id_form_directory = tmp_path / "id-form"
-    id_form_attempts: "list[str]" = []
-    for _ in range(SURFACE_ID_EXCHANGE_ATTEMPTS):
-        tapped_for_a_surface_id = json.loads(
-            succeeded(
-                run_tatolab_observation_verb(
-                    "tap", f"{graph['machine']}/{channel}", "--count", "1",
-                    timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-                )
-            )
-        )  # fmt: skip
-        assert tapped_for_a_surface_id["bags"], f"no bag reached the tap: {tapped_for_a_surface_id}"
-        assert tapped_for_a_surface_id["bags"][0]["hex_truncated"] is False, (
-            "the tapped bag is past the tap's preview cap, so its hex cannot be decoded: "
-            f"{tapped_for_a_surface_id['bags'][0]['byte_len']} bytes"
-        )
-        published_surface_id = run_python_with_the_lend(
-            runtime_unit,
-            private_machine_directories.environment,
-            SURFACE_ID_OF_A_TAPPED_BAG_SOURCE,
-            tapped_for_a_surface_id["bags"][0]["hex_preview"],
-        )
-        assert published_surface_id is not None, f"{channel} published no surface id"
-        exchanged = run_tatolab_observation_verb(
-            "exchange", published_surface_id, "--out", str(id_form_directory),
-            timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-        )  # fmt: skip
-        if exchanged.returncode == 0:
-            assert Path(exchanged.stdout.strip()).read_bytes().startswith(PNG_SIGNATURE)
-            break
-        id_form_attempts.append(exchanged.stderr.strip())
-    else:
-        raise AssertionError(
-            f"the id form never exchanged a frame in {SURFACE_ID_EXCHANGE_ATTEMPTS} "
-            f"attempts: {id_form_attempts}"
-        )
 
     attached.interrupt()
     assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0

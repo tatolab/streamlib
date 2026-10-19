@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! One runtime's local API, reached over one current-thread tokio runtime: the MCP client and the
-//! HTTP/1.1 connection a verb drives it through, each opened on first use and kept for the run.
+//! One runtime's local API, reached over one current-thread tokio runtime: the MCP client a verb
+//! drives it through, opened on first use and kept for the run.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,9 +10,6 @@ use std::time::Duration;
 
 use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::{LocalApiMcpToolClient, LocalApiMcpToolClientFailure};
-use crate::local_api_unix_socket_http_client::{
-    LocalApiHttpConnection, LocalApiHttpRequestFailure, LocalApiHttpResponse,
-};
 
 /// The tokio runtime that drives a local API connection would not start.
 #[derive(Debug, thiserror::Error)]
@@ -48,7 +45,6 @@ pub(crate) struct LocalApiConnection {
     local_api_socket_path: PathBuf,
     request_timeout: Duration,
     connected_mcp_client: Option<LocalApiMcpToolClient>,
-    local_api_http_connection: LocalApiHttpConnection,
 }
 
 impl LocalApiConnection {
@@ -63,9 +59,6 @@ impl LocalApiConnection {
             local_api_socket_path: local_api_socket_path.to_path_buf(),
             request_timeout,
             connected_mcp_client: None,
-            local_api_http_connection: LocalApiHttpConnection::to_local_api_socket(
-                local_api_socket_path,
-            ),
         })
     }
 
@@ -99,18 +92,6 @@ impl LocalApiConnection {
                 tool_arguments,
                 call_timeout,
             ))
-    }
-
-    /// `GET origin_form_request_target` over the kept HTTP/1.1 connection, answering the status,
-    /// headers and whole body, whatever the status.
-    pub(crate) fn get_whole_response(
-        &mut self,
-        origin_form_request_target: &str,
-    ) -> Result<LocalApiHttpResponse, LocalApiHttpRequestFailure> {
-        self.local_api_tokio_runtime.block_on(
-            self.local_api_http_connection
-                .get_whole_response(origin_form_request_target, self.request_timeout),
-        )
     }
 }
 

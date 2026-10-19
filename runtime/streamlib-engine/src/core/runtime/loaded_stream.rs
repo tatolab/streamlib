@@ -387,6 +387,7 @@ impl LoadedStreamInThisRuntime {
 
     /// The runtime context made at this stream's start, `None` before it and
     /// after its stop.
+    #[cfg(test)]
     pub(crate) fn runtime_context_while_started(&self) -> Option<Arc<RuntimeContext>> {
         self.runtime_context.lock().clone()
     }

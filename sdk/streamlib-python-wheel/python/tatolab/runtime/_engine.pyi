@@ -28,7 +28,6 @@ from tatolab.stream import _node_context_protocols as _stream_protocols
 
 __all__ = [
     "capture_this_helper_processes_engine_log_records",
-    "decode_tapped_channel_bag_frame_to_python_object",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
     "limited_access_view_of_runtime_context_for_helper_process",
@@ -67,18 +66,6 @@ def note_pause_state_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, paused: bool
 ) -> None:
     """Record on a helper's context the pause state its parent just announced."""
-
-def decode_tapped_channel_bag_frame_to_python_object(
-    framed_bag_bytes: bytes,
-) -> Any:
-    """Decode one raw bag a `tap` forwarded — transport-framed msgpack — into
-    ordinary Python data.
-
-    The bytes a tap hands back are the channel's wire bytes verbatim, header
-    included; this reads exactly the payload the header declares. Refuses a bag
-    shorter than its own declared length rather than returning the prefix that
-    did arrive, and one whose containers nest more than 128 deep.
-    """
 
 def engine_build_id_compiled_into_this_extension() -> str:
     """The build id of the engine compiled into this extension:

@@ -570,56 +570,6 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         Box::pin(async move { LoadedStreamInThisRuntime::to_json(self) })
     }
 
-    #[tracing::instrument(name = "stream.tap", skip(self), fields(channel = %channel, count = ?count))]
-    fn tap_async(
-        &self,
-        channel: String,
-        count: Option<usize>,
-    ) -> BoxFuture<'_, Result<crate::core::runtime::TapSubscription>> {
-        // Resolve the address the caller named to the source that publishes to
-        // it, and that source's iceoryx2 sizing, from the live graph BEFORE
-        // spawning: the same derivation the compiler op used to open the
-        // service, so the tap's publisher-free reopen requests identical,
-        // iceoryx2-verified parameters.
-        let iceoryx2_node = &self.engine_resources_shared_by_every_stream().iceoryx2_node;
-        let resolved = self.compiler.scope(
-            |graph, _tx| -> Result<(String, crate::iceoryx2::ChannelSizing)> {
-                let source = crate::core::compiler::compiler_ops::find_the_source_a_caller_named(
-                    graph,
-                    &self.engine_resources_shared_by_every_stream().machine_name,
-                    self.stream_name(),
-                    &channel,
-                )?;
-                let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
-                    graph,
-                    iceoryx2_node,
-                    &source,
-                    crate::core::compiler::compiler_ops::RoomForAWindowedReaderTheSourcesGraphCannotSee::NotNeeded,
-                )?;
-                let channel_service_name =
-                    crate::core::compiler::compiler_ops::channel_service_name(&source)?;
-                Ok((channel_service_name, sizing))
-            },
-        );
-
-        let node = iceoryx2_node.clone();
-        self.in_this_streams_log_route(async move {
-            let (channel, sizing) = resolved?;
-            // The reserved-slot subscriber is `!Send` and lives on a dedicated
-            // OS thread; `start_channel_tap` blocks briefly for its subscribe
-            // outcome, so it runs on a blocking pool, off the async worker.
-            tokio::task::spawn_blocking(carrying_this_threads_loaded_stream_log_route(move || {
-                crate::core::runtime::tap::start_channel_tap(node, channel, sizing, count)
-            }))
-            .await
-            .map_err(|join_error| {
-                Error::Runtime(format!(
-                    "channel-tap start task failed to join: {join_error}"
-                ))
-            })?
-        })
-    }
-
     fn subscribe_to_an_exposed_output_port(
         &self,
         node_name: String,

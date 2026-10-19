@@ -20,13 +20,12 @@ use crate::core::ProcessorUniqueId;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    DeviceMatchedAudioWindowContractsComponent, ExposedOutputPortsComponent, Graph,
-    GraphEdgeWithComponents, GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent,
-    InputLinkPortRef, Link, LinkState, LinkStateComponent, LinkUniqueId,
-    LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
-    ProcessorLossCounts, ProcessorMetrics, SourceSideHeldOpenForAReaderOutsideItsStream,
-    SourceSideOfALinkWiredOn,
+    DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
+    GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef, Link,
+    LinkState, LinkStateComponent, LinkUniqueId, LossCountsOfPortsInThisProcess,
+    OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent, OutputLinkPortRef,
+    ProcessorInstanceComponent, ProcessorLossCounts, ProcessorMetrics,
+    SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
 };
 use crate::core::output_port_catalog_entries::CatalogEntriesOfOutputPorts;
 use crate::core::processors::{
@@ -638,7 +637,7 @@ pub(crate) fn release_the_destination_side_of_a_link(
 /// channel identity). One source, one channel, one publisher, N subscribers. A
 /// grammar-illegal port name surfaces as a named [`Error::Configuration`] here
 /// rather than an opaque iceoryx2 `Invalid service name` deep in the FFI.
-pub(crate) fn channel_service_name(source: &OutputLinkPortRef) -> Result<String> {
+fn channel_service_name(source: &OutputLinkPortRef) -> Result<String> {
     let processor_id = source.processor_id();
     let port_name = source.port_name();
     crate::iceoryx2::source_channel_name(processor_id.as_str(), port_name)
@@ -702,15 +701,14 @@ fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef) -> Result<
 /// source's graph cannot see when it sizes the channel: one a live graph
 /// change may connect after the runtime's publisher opened the channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RoomForAWindowedReaderTheSourcesGraphCannotSee {
+enum RoomForAWindowedReaderTheSourcesGraphCannotSee {
     Made,
     NotNeeded,
 }
 
 /// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
-/// source_port)` — the single derivation both the service-open compiler op and
-/// the `tap` op share, refusing a source port past the destination cap.
-pub(crate) fn resolve_channel_sizing(
+/// source_port)`, refusing a source port past the destination cap.
+fn resolve_channel_sizing(
     graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
@@ -775,7 +773,7 @@ fn channel_service_creation_depth(
 /// created at, or `None` while no channel exists.
 ///
 /// Read off the service a link out of that port holds open, and otherwise off
-/// whatever still holds the service with no link behind it — a tap, or a helper
+/// whatever still holds the service with no link behind it — the runtime's publisher, or a helper
 /// that has not yet released its port.
 fn creation_depth_of_the_live_channel(
     graph: &Graph,
@@ -804,64 +802,6 @@ fn subscriber_ring_depth_of_input_port(
     match audio_windowing {
         Some(_) => WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
         None => dest_input_port_delivery.depth,
-    }
-}
-
-/// Resolve the address a caller names a port by — `[<machine>/][<stream>/]<node>/<port>`
-/// — to the port in the stream `this_stream` on `this_machine` that a link
-/// carries from.
-///
-/// An address that does not parse is refused as [`Error::InvalidPortAddress`];
-/// one naming another machine as [`Error::PortAddressNamesAnotherMachine`];
-/// one naming another stream as [`Error::InvalidPortAddress`] naming both, since
-/// a stream taps its own ports. An exposed port is the runtime's publisher's to
-/// read through the channel's one reserved slot, and is refused as
-/// [`Error::TapOfAnOutputPortThePublisherReads`]. A channel's iceoryx2 data
-/// service only exists once a link has wired its source, so an address no link
-/// of this stream reads is untappable and answers [`Error::TapChannelNotFound`].
-pub(crate) fn find_the_source_a_caller_named(
-    graph: &Graph,
-    this_machine: &crate::core::runtime::MachineName,
-    this_stream: &str,
-    port_address: &str,
-) -> Result<OutputLinkPortRef> {
-    let not_found = || Error::TapChannelNotFound(port_address.to_string());
-    let address = crate::core::graph::PortAddress::parse(port_address)?;
-    address.refuse_when_it_names_another_machine(this_machine)?;
-    if let Some(stream) = address.the_stream_it_names_other_than(this_stream) {
-        return Err(Error::InvalidPortAddress(format!(
-            "`{port_address}` names a port in the stream `{stream}`, and this tap reads the \
-             stream `{this_stream}`; tap `{stream}` to read its ports"
-        )));
-    }
-    let processor_id = graph
-        .traversal()
-        .v_with_node_name(address.node_name())
-        .first()
-        .ok_or_else(not_found)?
-        .id
-        .clone();
-    let source = OutputLinkPortRef::new(processor_id, address.port_name());
-    let the_runtimes_publisher_reads_it = graph
-        .traversal()
-        .v(source.processor_id())
-        .first()
-        .and_then(|node| node.get::<ExposedOutputPortsComponent>())
-        .is_some_and(|exposed_ports| {
-            crate::core::graph::output_port_exposure_allows_the_reader(
-                exposed_ports.level_of(source.port_name()),
-                crate::core::graph::OutputPortReaderLocation::ElsewhereOnThisMachine,
-            )
-        });
-    if the_runtimes_publisher_reads_it {
-        return Err(Error::TapOfAnOutputPortThePublisherReads(
-            port_address.to_string(),
-        ));
-    }
-    if channel_destination_count(graph, &source) > 0 {
-        Ok(source)
-    } else {
-        Err(not_found())
     }
 }
 
@@ -2290,7 +2230,8 @@ mod tests {
         (instance, output_inner, input_inner)
     }
 
-    /// Sizing for a test channel with room for one destination and the tap.
+    /// Sizing for a test channel with room for one destination and the
+    /// publisher's reserved slot.
     fn sizing_of_a_two_subscriber_test_channel() -> ChannelSizing {
         ChannelSizing {
             max_subscribers: 2,
@@ -4356,33 +4297,30 @@ mod tests {
         );
     }
 
-    /// A channel no link holds any more can still be alive in a tap, or in a
-    /// helper yet to release its port, at the depth it was created at. A
-    /// windowed consumer connected onto it is refused by name there too.
-    ///
-    /// Fail-without-fix: read the depth off the graph's links alone and the op
-    /// asks iceoryx2 for a 64-deep channel, which refuses with an error naming
-    /// neither the port nor the fix.
+    /// A channel no link holds any more can still be alive in the runtime's
+    /// publisher, or in a helper yet to release its port, at the depth it was
+    /// created at. A windowed consumer connected onto it is refused by name
+    /// there too, rather than by iceoryx2's refusal of a 64-deep reopen.
     #[test]
-    fn a_windowed_consumer_onto_a_shallower_channel_only_a_tap_still_holds_is_refused_naming_both_depths()
+    fn a_windowed_consumer_onto_a_shallower_channel_only_the_publisher_still_holds_is_refused_naming_both_depths()
      {
         let node = Iceoryx2Node::for_this_test_process();
         let mut graph = Graph::new();
         let (source_id, plain_link) = add_a_source_linked_to_a_plain_consumer(&mut graph);
         open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
-        let _held_open_the_way_a_tap_holds_it = node
+        let _held_open_the_way_the_publisher_holds_it = node
             .open_or_create_service(
                 &channel_service_name(&OutputLinkPortRef::new(source_id.as_str(), "out1"))
                     .expect("the mock's output port derives a channel name"),
                 MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL,
                 DeliveryProfile::ORDERED_DEPTH,
             )
-            .expect("a tap joins the running channel");
+            .expect("the publisher joins the running channel");
         close_iceoryx2_service(&mut graph, &plain_link).expect("the plain consumer disconnects");
         let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
 
         let refusal = open_iceoryx2_service(&mut graph, &windowed.link_id, &node)
-            .expect_err("the channel the tap holds is still 16 deep")
+            .expect_err("the channel the publisher holds is still 16 deep")
             .to_string();
 
         assert_the_refusal_names_the_port_the_link_both_depths_and_the_fix(
@@ -4603,8 +4541,8 @@ mod tests {
         assert_eq!(name, "pabc123/video_out");
     }
 
-    /// Every channel is created for the fixed destination cap plus the tap
-    /// slot, whatever it feeds today: iceoryx2 pins `max_subscribers` at
+    /// Every channel is created for the fixed destination cap plus the
+    /// publisher's slot, whatever it feeds today: iceoryx2 pins `max_subscribers` at
     /// create time, so a link connected to a running source has to fit a slot
     /// that already existed. Mentally revert to sizing from the current
     /// fan-out and the first late connect onto a wired port fails to reopen
@@ -4630,7 +4568,7 @@ mod tests {
             channel_max_subscribers(&graph, &OutputLinkPortRef::new(src_uid.clone(), "out1"))
                 .expect("three destinations fit the cap"),
             MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL,
-            "the channel is sized for the cap plus the tap's slot, not for the three \
+            "the channel is sized for the cap plus the publisher's slot, not for the three \
              destinations it feeds today",
         );
 
@@ -4646,10 +4584,9 @@ mod tests {
         );
     }
 
-    /// The tap op reconstructs the exact `max_subscribers` the compiler op
-    /// opened the service with via the shared [`resolve_channel_sizing`].
-    /// iceoryx2 verifies `max_subscribers` on the tap's publisher-free reopen,
-    /// so a drift here would make every tap fail to open.
+    /// [`resolve_channel_sizing`] reconstructs the exact `max_subscribers` the
+    /// channel was created with: iceoryx2 verifies `max_subscribers` on every
+    /// reopen, so a drift here would make every reopen fail.
     #[test]
     fn resolve_channel_sizing_recovers_service_open_max_subscribers() {
         let mut graph = Graph::new();
@@ -4674,175 +4611,7 @@ mod tests {
             sizing.max_subscribers,
             channel_max_subscribers(&graph, &OutputLinkPortRef::new(src_uid.clone(), "out1"))
                 .expect("two destinations fit the cap"),
-            "resolve_channel_sizing must agree with channel_max_subscribers — the \
-             single derivation both the service-open op and the tap op share",
-        );
-    }
-
-    fn the_machine_these_tests_run_on() -> crate::core::runtime::MachineName {
-        crate::core::runtime::MachineName::from_a_hostname("desk").expect("`desk` names a machine")
-    }
-
-    /// A port in this stream is named by its address with or without this
-    /// stream and this machine in front, and resolves to the exact source a
-    /// link carries from; its iceoryx2 channel name, an address naming no
-    /// node, and a port no link carries from all answer `TapChannelNotFound`.
-    #[test]
-    fn a_port_in_this_stream_is_named_by_its_address_and_not_by_its_channel() {
-        let mut graph = Graph::new();
-        let src_id = add_mock_output_only(&mut graph);
-        let dest_id = add_mock_input_only(&mut graph);
-        graph.traversal_mut().add_e(
-            OutputLinkPortRef::new(&src_id, "out1"),
-            InputLinkPortRef::new(&dest_id, "in1"),
-        );
-        let source_node_name = graph
-            .traversal()
-            .v(src_id.as_str())
-            .first()
-            .expect("the source node is in the graph")
-            .display_name
-            .clone();
-        let this_machine = the_machine_these_tests_run_on();
-
-        for address in [
-            format!("{source_node_name}/out1"),
-            format!("main/{source_node_name}/out1"),
-            format!("desk/main/{source_node_name}/out1"),
-        ] {
-            let resolved = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
-                .unwrap_or_else(|refusal| panic!("{address}: {refusal}"));
-            assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
-            assert_eq!(resolved.port_name(), "out1");
-        }
-
-        let its_channel = crate::iceoryx2::source_channel_name(&src_id, "out1")
-            .expect("source port derives a channel name");
-        for unresolvable in [
-            its_channel.as_str().to_string(),
-            "main/nosuchnode/out1".to_string(),
-            format!("main/{source_node_name}/out2"),
-        ] {
-            assert!(
-                matches!(
-                    find_the_source_a_caller_named(&graph, &this_machine, "main", &unresolvable),
-                    Err(Error::TapChannelNotFound(_))
-                ),
-                "{unresolvable:?} must not resolve to any source port",
-            );
-        }
-    }
-
-    /// A tap reads a port on this machine, so an address naming another
-    /// machine is refused naming it rather than reported as a channel nobody
-    /// publishes.
-    #[test]
-    fn a_tap_naming_another_machine_is_refused_naming_that_machine() {
-        let refused = find_the_source_a_caller_named(
-            &Graph::new(),
-            &the_machine_these_tests_run_on(),
-            "main",
-            "rig/main/camera-source/video",
-        )
-        .expect_err("a channel on another machine is nothing this machine taps");
-
-        assert!(
-            matches!(refused, Error::PortAddressNamesAnotherMachine { ref machine, .. } if machine == "rig"),
-            "refused as an address naming another machine, got {refused:?}"
-        );
-        assert!(refused.to_string().contains("`rig`"), "{refused}");
-    }
-
-    /// A stream taps its own ports, so an address naming another stream is
-    /// refused naming both streams, and one that does not parse is refused as
-    /// an address.
-    #[test]
-    fn a_tap_naming_another_stream_or_no_address_is_refused_by_name() {
-        let refused = find_the_source_a_caller_named(
-            &Graph::new(),
-            &the_machine_these_tests_run_on(),
-            "main",
-            "studio/camera-source/video",
-        )
-        .expect_err("a port in another stream is not this stream's to tap");
-        assert!(
-            matches!(refused, Error::InvalidPortAddress(_)),
-            "{refused:?}"
-        );
-        let refused = refused.to_string();
-        assert!(
-            refused.contains("`studio`") && refused.contains("`main`"),
-            "{refused}"
-        );
-
-        let refused = find_the_source_a_caller_named(
-            &Graph::new(),
-            &the_machine_these_tests_run_on(),
-            "main",
-            "video",
-        )
-        .expect_err("one part is no address");
-        assert!(
-            matches!(refused, Error::InvalidPortAddress(_)),
-            "{refused:?}"
-        );
-    }
-
-    /// A port exposed private or public is refused to a tap, naming the
-    /// runtime's publisher, which reads it through the channel's one reserved
-    /// slot; back at internal, a port nothing reads has no channel to tap.
-    #[test]
-    fn an_exposed_port_is_refused_to_a_tap_naming_the_runtimes_publisher() {
-        use crate::core::graph::OutputPortExposureLevel;
-
-        let mut graph = Graph::new();
-        let src_id = add_mock_output_only(&mut graph);
-        let source_node_name = graph
-            .traversal()
-            .v(src_id.as_str())
-            .first()
-            .expect("the source node is in the graph")
-            .display_name
-            .clone();
-        let address = format!("main/{source_node_name}/out1");
-        let this_machine = the_machine_these_tests_run_on();
-        let put_out1_at = |graph: &mut Graph, level| {
-            let source = graph
-                .traversal_mut()
-                .v(src_id.as_str())
-                .first_mut()
-                .expect("the source is in its graph");
-            if !source.has::<ExposedOutputPortsComponent>() {
-                source
-                    .insert_component_without_rendering_it(ExposedOutputPortsComponent::default());
-            }
-            let _ = source
-                .get_mut::<ExposedOutputPortsComponent>()
-                .unwrap()
-                .set_level("out1", level);
-        };
-
-        for level in [
-            OutputPortExposureLevel::Private,
-            OutputPortExposureLevel::Public,
-        ] {
-            put_out1_at(&mut graph, level);
-            let refusal = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
-                .expect_err("an exposed port is the publisher's to read");
-            assert!(
-                matches!(refusal, Error::TapOfAnOutputPortThePublisherReads(_)),
-                "{level}: {refusal:?}"
-            );
-            assert!(refusal.to_string().contains("publisher"), "{refusal}");
-        }
-
-        put_out1_at(&mut graph, OutputPortExposureLevel::Internal);
-        assert!(
-            matches!(
-                find_the_source_a_caller_named(&graph, &this_machine, "main", &address),
-                Err(Error::TapChannelNotFound(_))
-            ),
-            "an internal port nothing reads has no channel to tap"
+            "resolve_channel_sizing must agree with channel_max_subscribers",
         );
     }
 

@@ -5,18 +5,16 @@
 
 use axum::{
     Json, Router,
-    extract::Path,
     extract::Query,
     extract::State,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
-    http::header::CONTENT_TYPE,
     response::{IntoResponse, Response},
     routing::get,
 };
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use streamlib::sdk::descriptors::ProcessorDescriptor;
@@ -36,8 +34,6 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     MCP_STDIO_UPGRADE_REQUEST_TARGET, MCP_STREAMABLE_HTTP_ROUTE_PATH,
-    RECYCLED_FRAME_HTTP_STATUS_CODE, SURFACE_PIXEL_HEIGHT_HEADER_NAME,
-    SURFACE_PIXEL_WIDTH_HEADER_NAME,
 };
 
 use crate::state::{ApiDoc, AppState, ErrorResponse, OptionalStreamSelectionQuery};
@@ -52,7 +48,6 @@ fn control_plane_rest_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(health))
         .routes(routes!(get_graph))
         .routes(routes!(get_registry))
-        .routes(routes!(exchange_published_surface_id_for_png_image))
 }
 
 /// The OpenAPI document for the REST surface, built from the same route
@@ -108,7 +103,6 @@ pub(crate) fn build_router(
     let router = router
         .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
-        .route("/ws/tap/{channel}", get(tap_websocket_handler))
         .route_service(MCP_STREAMABLE_HTTP_ROUTE_PATH, local_api_mcp_service)
         .route(
             MCP_STDIO_UPGRADE_REQUEST_TARGET,
@@ -287,108 +281,6 @@ pub(crate) async fn get_graph(
     }
 }
 
-/// [`SURFACE_PIXEL_WIDTH_HEADER_NAME`], parsed once rather than per response:
-/// `HeaderName::from_static` panics on a malformed name, and once at first use
-/// beats once per 200.
-static SURFACE_PIXEL_WIDTH_HEADER: std::sync::LazyLock<axum::http::HeaderName> =
-    std::sync::LazyLock::new(|| {
-        axum::http::HeaderName::from_static(SURFACE_PIXEL_WIDTH_HEADER_NAME)
-    });
-
-/// Height counterpart of [`SURFACE_PIXEL_WIDTH_HEADER`].
-static SURFACE_PIXEL_HEIGHT_HEADER: std::sync::LazyLock<axum::http::HeaderName> =
-    std::sync::LazyLock::new(|| {
-        axum::http::HeaderName::from_static(SURFACE_PIXEL_HEIGHT_HEADER_NAME)
-    });
-
-/// Query parameters for the surface exchange.
-#[derive(Deserialize)]
-pub(crate) struct SurfaceImageExchangeQuery {
-    /// Bound the returned image's long edge to this many pixels, aspect
-    /// preserved and never upscaled; absent returns the frame at its exact
-    /// source resolution.
-    downscale_long_edge_pixel_cap: Option<u32>,
-}
-
-/// `GET /api/surfaces/{surface_id}/image` — exchange a published surface id
-/// for that frame's pixels as a PNG.
-///
-/// The exact frame, losslessly, with no window in the graph and no display
-/// server in the path. A pooled frame id carries a `#<generation>` suffix,
-/// so a client percent-encodes it (`slot%237`). The claim on the frame is
-/// taken and released inside the operation; this handler only carries
-/// bytes.
-#[utoipa::path(
-    get,
-    path = "/api/surfaces/{surface_id}/image",
-    tag = "surfaces",
-    params(
-        ("surface_id" = String, Path, description = "A surface id a bag published; percent-encode the `#` of a `<slot>#<generation>` frame id"),
-        ("downscale_long_edge_pixel_cap" = Option<u32>, Query, description = "Bound the image's long edge to this many pixels, aspect preserved and never upscaled; absent returns the exact source resolution")
-    ),
-    responses(
-        (status = 200, description = "The frame as a lossless RGBA8 PNG. `x-streamlib-surface-pixel-width` / `-height` report the surface's own extent, which differs from the image's when a downscale cap applied.", content_type = "image/png"),
-        (status = 404, description = "No surface of that id resolves on this node", body = ErrorResponse),
-        (status = 410, description = "The id named a frame whose pool slot has since been recycled; tap a newer bag and exchange that", body = ErrorResponse),
-        (status = 501, description = "The surface resolves, but its pixel format has no conversion arm in the RHI yet", body = ErrorResponse),
-        (status = 500, description = "The frame could not be copied off the GPU", body = ErrorResponse)
-    )
-)]
-pub(crate) async fn exchange_published_surface_id_for_png_image(
-    State(state): State<AppState>,
-    Path(surface_id): Path<String>,
-    Query(query): Query<SurfaceImageExchangeQuery>,
-) -> Response {
-    match state
-        .operations_on_the_loaded_streams
-        .exchange_published_surface_id_for_png_image_bytes_async(
-            surface_id,
-            query.downscale_long_edge_pixel_cap,
-        )
-        .await
-    {
-        Ok(exchanged) => (
-            StatusCode::OK,
-            [
-                (CONTENT_TYPE, "image/png".to_string()),
-                (
-                    SURFACE_PIXEL_WIDTH_HEADER.clone(),
-                    exchanged.source_surface_pixel_width.to_string(),
-                ),
-                (
-                    SURFACE_PIXEL_HEIGHT_HEADER.clone(),
-                    exchanged.source_surface_pixel_height.to_string(),
-                ),
-            ],
-            exchanged.png_image_bytes,
-        )
-            .into_response(),
-        Err(failure) => surface_exchange_failure_response(&failure),
-    }
-}
-
-/// [`RECYCLED_FRAME_HTTP_STATUS_CODE`] as the status a refused exchange answers.
-const RECYCLED_FRAME_HTTP_STATUS: StatusCode =
-    match StatusCode::from_u16(RECYCLED_FRAME_HTTP_STATUS_CODE) {
-        Ok(recycled_frame_http_status) => recycled_frame_http_status,
-        Err(_) => panic!("the recycled-frame status code is outside HTTP's status range"),
-    };
-
-/// Status for a refused exchange.
-///
-/// A recycled frame is its own answer: the id was well-formed and the
-/// frame is gone, so the caller taps a newer bag rather than concluding the
-/// surface never existed.
-fn surface_exchange_failure_response(failure: &Error) -> Response {
-    let status = match failure {
-        Error::SurfaceFrameRecycled { .. } => RECYCLED_FRAME_HTTP_STATUS,
-        Error::NotFound(_) => StatusCode::NOT_FOUND,
-        Error::NotSupported(_) => StatusCode::NOT_IMPLEMENTED,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    error_response(status, failure)
-}
-
 #[utoipa::path(
     get,
     path = "/api/registry",
@@ -512,163 +404,6 @@ impl EventListener for WebSocketEventForwarder {
     }
 }
 
-// ============================================================================
-// Channel Tap WebSocket (read-only channel observer)
-// ============================================================================
-
-/// Query parameters for the tap WebSocket: the stream the channel is in, when
-/// the channel names none, and an optional bounded sample count.
-#[derive(Deserialize)]
-pub(crate) struct TapQuery {
-    /// The loaded stream the channel is in, when the channel names none.
-    stream: Option<String>,
-    /// Stream exactly `count` bags then close; absent streams live until the
-    /// client disconnects.
-    count: Option<usize>,
-}
-
-/// `GET /ws/tap/{channel}` — attach a read-only tap to `channel` and stream its
-/// raw bags as binary WebSocket frames.
-///
-/// Bag bytes are forwarded verbatim (the `FrameHeader`-framed wire form);
-/// decoding is the client's concern, which keeps the tap wire-neutral across
-/// Rust / Python / Deno publishers. Dropping the connection detaches the tap
-/// and frees the channel's reserved slot.
-#[utoipa::path(
-    get,
-    path = "/ws/tap/{channel}",
-    tag = "events",
-    params(
-        ("channel" = String, Path, description = "The output port's address, `[<machine>/][<stream>/]<node>/<port>` right-anchored — leading parts omitted meaning here — percent-encoded as one path segment"),
-        ("stream" = Option<String>, Query, description = "The loaded stream the channel is in, when the channel names none; one that differs from the channel's is refused"),
-        ("count" = Option<usize>, Query, description = "Stream exactly this many bags then close; absent streams live until the client disconnects")
-    ),
-    responses(
-        (status = 400, description = "The channel is no address, names another machine, names a stream other than `stream`, or names no stream and `stream` is absent; the error says which", body = ErrorResponse),
-        (status = 404, description = "The named stream is not loaded; the error names the loaded streams", body = ErrorResponse),
-        (status = 101, description = "WebSocket upgraded. Read-only observability tap: each channel bag is forwarded verbatim (FrameHeader-framed) as a binary WS frame with no encode, containerize, or transcode — decoding is the client's concern. To observe a viewable video feed, tap an encoded (h264/h265/jpeg) or container (CMAF/fMP4) channel; a raw video channel carries zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels, and this is not a realtime-video transport (use the WebRTC/display processors).")
-    )
-)]
-pub(crate) async fn tap_websocket_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-    Path(channel): Path<String>,
-    Query(query): Query<TapQuery>,
-) -> Response {
-    let stream_operations = match state
-        .operations_on_the_loaded_streams
-        .runtime_operations_of_the_stream_a_tap_channel_names(&channel, query.stream.as_deref())
-    {
-        Ok(stream_operations) => stream_operations,
-        Err(refusal) => return stream_resolution_refusal_response(&refusal),
-    };
-    ws.on_upgrade(move |socket| {
-        handle_tap_websocket(socket, stream_operations, channel, query.count)
-    })
-}
-
-async fn handle_tap_websocket(
-    socket: WebSocket,
-    stream_operations: Arc<dyn RuntimeOperations>,
-    channel: String,
-    count: Option<usize>,
-) {
-    let (mut sender, mut receiver) = socket.split();
-
-    // Attach the tap; a resolution / slot-occupied failure closes the socket
-    // with the typed reason rather than silently hanging.
-    let mut subscription = match stream_operations.tap_async(channel.clone(), count).await {
-        Ok(subscription) => subscription,
-        Err(e) => {
-            tracing::info!(channel = %channel, "tap attach rejected: {e}");
-            let (close_code, close_reason) = tap_error_close_frame(&e);
-            let _ = sender
-                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                    code: close_code,
-                    reason: close_reason.into(),
-                })))
-                .await;
-            return;
-        }
-    };
-
-    tracing::info!(channel = %channel, "tap client attached");
-
-    // Own the subscription in this scope: forward bags until the tap ends
-    // (bounded count reached / channel gone) or the client disconnects.
-    loop {
-        tokio::select! {
-            maybe_bag = subscription.recv() => match maybe_bag {
-                Some(bytes) => {
-                    if sender.send(Message::Binary(bytes.into())).await.is_err() {
-                        break;
-                    }
-                }
-                None => {
-                    let _ = sender.send(Message::Close(None)).await;
-                    break;
-                }
-            },
-            maybe_msg = receiver.next() => match maybe_msg {
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                _ => {}
-            },
-        }
-    }
-
-    // Detach off the async worker: `TapSubscription::drop` joins the forwarder
-    // OS thread, and a synchronous join must never run on a tokio runtime
-    // worker. The join is bounded (the forwarder never parks), but blocking a
-    // shared executor thread on it is still wrong.
-    if let Err(join_error) = tokio::task::spawn_blocking(move || drop(subscription)).await {
-        tracing::warn!(channel = %channel, "tap detach task failed to join: {join_error}");
-    }
-
-    tracing::info!(channel = %channel, "tap client detached");
-}
-
-/// Longest tap close reason RFC 6455 permits: a control frame caps its payload
-/// at 125 bytes and the 2-byte close code consumes the first two, leaving 123
-/// for the UTF-8 reason. tungstenite refuses to write an over-length close
-/// frame, so an untruncated tap error string (`NotSupported` runs ~180 bytes)
-/// would drop the client into an abnormal close with no reason at all.
-const MAX_WS_CLOSE_REASON_BYTES: usize = 123;
-
-/// Map a typed tap error to a WebSocket close code + a short, RFC-6455-legal
-/// reason (≤ [`MAX_WS_CLOSE_REASON_BYTES`], truncated on a UTF-8 char
-/// boundary). The full error is logged server-side at the call site; this
-/// surface is the machine-readable failure the client (and the #1429 MCP tool)
-/// reads off the close frame. App codes live in the 4000–4999 private range.
-fn tap_error_close_frame(error: &Error) -> (u16, String) {
-    let (code, reason) = match error {
-        Error::TapChannelNotFound(channel) => (4404, format!("tap channel not found: {channel}")),
-        Error::TapSlotOccupied(channel) => (4409, format!("tap slot already occupied: {channel}")),
-        refusal @ Error::TapOfAnOutputPortThePublisherReads(_) => (4409, refusal.to_string()),
-        other => (
-            axum::extract::ws::close_code::ERROR,
-            format!("tap attach failed: {other}"),
-        ),
-    };
-    (
-        code,
-        truncate_on_char_boundary(reason, MAX_WS_CLOSE_REASON_BYTES),
-    )
-}
-
-/// Truncate `text` to at most `max_bytes`, cutting on a UTF-8 char boundary so
-/// the result stays valid UTF-8.
-fn truncate_on_char_boundary(mut text: String, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text;
-    }
-    let mut boundary = max_bytes;
-    while boundary > 0 && !text.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    text.truncate(boundary);
-    text
-}
-
 #[cfg(test)]
 pub(crate) mod router_surface_tests {
     //! What [`build_router`] exposes.
@@ -682,10 +417,6 @@ pub(crate) mod router_surface_tests {
     //! stub.
 
     use super::*;
-    use crate::control_plane_stub_support::{
-        STUB_EXCHANGED_FRAME_SURFACE_ID, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        STUB_EXCHANGED_IMAGE_BYTES, STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
-    };
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
     use streamlib::sdk::descriptors::{
@@ -693,7 +424,6 @@ pub(crate) mod router_surface_tests {
     };
     use streamlib::sdk::processors::PROCESSOR_REGISTRY;
     use streamlib::sdk::runtime::BoxFuture;
-    use streamlib_runtime_client_contract::local_api_wire_contract::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE;
     use tower::ServiceExt;
 
     /// Stub runtime backing the router tests: it answers the observation ops.
@@ -703,9 +433,7 @@ pub(crate) mod router_surface_tests {
     /// reach one, so a route that regrows here fails loudly instead of quietly
     /// succeeding against a permissive stub.
     #[derive(Clone, Default)]
-    struct ControlPlaneRouterStubRuntime {
-        exchange: StubSurfaceExchange,
-    }
+    struct ControlPlaneRouterStubRuntime;
 
     impl RuntimeOperations for ControlPlaneRouterStubRuntime {
         fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
@@ -714,14 +442,6 @@ pub(crate) mod router_surface_tests {
         fn to_json(&self) -> Result<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
-        fn tap_async(
-            &self,
-            channel: String,
-            _count: Option<usize>,
-        ) -> BoxFuture<'_, Result<streamlib::sdk::runtime::TapSubscription>> {
-            Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
-        }
-
         crate::control_plane_stub_support::the_exposed_port_subscription_is_unreachable!("route");
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
     }
@@ -749,12 +469,12 @@ pub(crate) mod router_surface_tests {
     /// A default stub runtime, for tests that build the router themselves.
     pub(crate) fn a_control_plane_router_stub_runtime()
     -> Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime> {
-        Arc::new(ControlPlaneRouterStubRuntime::default())
+        Arc::new(ControlPlaneRouterStubRuntime)
     }
 
     /// The real router over a default stub runtime.
     pub(crate) fn control_plane_router_over_a_stub_runtime() -> Router {
-        control_plane_router_over(ControlPlaneRouterStubRuntime::default())
+        control_plane_router_over(ControlPlaneRouterStubRuntime)
     }
 
     async fn status_of(request: Request<Body>) -> StatusCode {
@@ -825,12 +545,10 @@ pub(crate) mod router_surface_tests {
         }
     }
 
-    /// A generated client names a stream through the `stream` query parameter:
-    /// optional where its absence reads every loaded stream, and on the tap,
-    /// whose channel's address can name its stream.
+    /// A generated client names a stream through the `stream` query parameter,
+    /// optional where its absence reads every loaded stream.
     #[tokio::test]
-    async fn the_openapi_spec_declares_the_stream_query_optional_on_reads_of_every_stream_and_on_the_tap()
-     {
+    async fn the_openapi_spec_declares_the_stream_query_optional_on_reads_of_every_stream() {
         let request = Request::builder()
             .method("GET")
             .uri("/api/openapi.json")
@@ -838,11 +556,7 @@ pub(crate) mod router_surface_tests {
             .unwrap();
         let spec = json_body_of(request).await;
 
-        for (path, stream_is_required) in [
-            ("/api/graph", false),
-            ("/api/registry", false),
-            ("/ws/tap/{channel}", false),
-        ] {
+        for (path, stream_is_required) in [("/api/graph", false), ("/api/registry", false)] {
             let parameters = spec["paths"][path]["get"]["parameters"]
                 .as_array()
                 .unwrap_or_else(|| panic!("{path} must document its parameters: {spec}"));
@@ -1043,132 +757,17 @@ pub(crate) mod router_surface_tests {
         }
     }
 
-    /// A tap naming a stream the runtime does not load is refused before the
-    /// upgrade, rather than upgraded and closed.
-    #[tokio::test]
-    async fn a_tap_naming_a_stream_not_loaded_is_refused_before_the_upgrade() {
-        let served = crate::control_plane_stub_support::LocalApiServedOnAFreshSocket::over(
-            a_control_plane_router_stub_runtime(),
-        );
-        let mut connection = tokio::net::UnixStream::connect(&served.local_api_socket_path)
-            .await
-            .unwrap();
-        let head = crate::control_plane_stub_support::response_head_over_the_socket(
-            &mut connection,
-            "GET /ws/tap/node%2Fport?stream=elsewhere HTTP/1.1\r\n\
-             Host: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
-             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
-        )
-        .await;
-
-        assert!(head.starts_with("HTTP/1.1 404 "), "{head}");
-    }
-
-    /// The refusal a tap meets before the upgrade: the head, and the error its
-    /// JSON body carries.
-    async fn tap_refused_before_the_upgrade(path_and_query: &str) -> (String, String) {
-        let served = crate::control_plane_stub_support::LocalApiServedOnAFreshSocket::over(
-            a_control_plane_router_stub_runtime(),
-        );
-        let mut connection = tokio::net::UnixStream::connect(&served.local_api_socket_path)
-            .await
-            .unwrap();
-        let head = crate::control_plane_stub_support::response_head_over_the_socket(
-            &mut connection,
-            &format!(
-                "GET {path_and_query} HTTP/1.1\r\n\
-                 Host: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
-                 Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
-            ),
-        )
-        .await;
-        let body_length: usize = head
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length")
-                    .then(|| value.trim().parse().ok())?
-            })
-            .expect("the refusal states its length");
-        let mut body = vec![0u8; body_length];
-        tokio::io::AsyncReadExt::read_exact(&mut connection, &mut body)
-            .await
-            .unwrap();
-        let refusal: serde_json::Value =
-            serde_json::from_slice(&body).expect("the refusal is an error response");
-        (
-            head,
-            refusal["error"].as_str().unwrap_or_default().to_string(),
-        )
-    }
-
-    /// A tap's channel is an address: one naming no stream with no `stream`
-    /// beside it, one naming a stream other than `stream`, and one naming
-    /// another machine are each refused before the upgrade, by name.
-    #[tokio::test]
-    async fn a_tap_whose_channel_names_no_stream_here_is_refused_before_the_upgrade_by_name() {
-        let stub_stream = crate::control_plane_stub_support::STUB_STREAM_NAME;
-        for (path_and_query, named) in [
-            (
-                "/ws/tap/node%2Fport".to_string(),
-                "names no stream".to_string(),
-            ),
-            (
-                format!("/ws/tap/{stub_stream}%2Fnode%2Fport?stream=elsewhere"),
-                format!("`{stub_stream}`"),
-            ),
-            (
-                format!("/ws/tap/rig%2F{stub_stream}%2Fnode%2Fport"),
-                "`rig`".to_string(),
-            ),
-        ] {
-            let (head, refusal) = tap_refused_before_the_upgrade(&path_and_query).await;
-            assert!(
-                head.starts_with("HTTP/1.1 400 "),
-                "{path_and_query}: {head}"
-            );
-            assert!(
-                refusal.contains(&named),
-                "{path_and_query}: {named} not in {refusal}"
-            );
-        }
-    }
-
-    /// A channel naming a stream the runtime does not load is refused as one
-    /// not loaded, whether the stream is in the channel or beside it.
-    #[tokio::test]
-    async fn a_tap_whose_channel_names_a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
-        for path_and_query in [
-            "/ws/tap/elsewhere%2Fnode%2Fport",
-            "/ws/tap/stub-machine%2Felsewhere%2Fnode%2Fport",
-        ] {
-            let (head, refusal) = tap_refused_before_the_upgrade(path_and_query).await;
-            assert!(
-                head.starts_with("HTTP/1.1 404 "),
-                "{path_and_query}: {head}"
-            );
-            assert!(
-                refusal.contains(crate::control_plane_stub_support::STUB_STREAM_NAME),
-                "{path_and_query}: {refusal}"
-            );
-        }
-    }
-
     /// File permission on the local API socket is the whole gate, so a request
     /// carrying no credential reaches every route rather than a 401 or 403.
     /// `/mcp` is reached the same way by every MCP wire test's client.
     #[tokio::test]
     async fn no_route_asks_for_a_credential() {
         let requests_carrying_no_credential = [
-            (
-                "GET",
-                exchange_uri(STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED),
-                "",
-            ),
+            ("GET", "/api/graph".to_string(), ""),
             (
                 "GET",
                 format!(
-                    "/ws/tap/some-node%2Fsome-port?stream={}",
+                    "/api/registry?stream={}",
                     crate::control_plane_stub_support::STUB_STREAM_NAME
                 ),
                 "",
@@ -1225,9 +824,7 @@ pub(crate) mod router_surface_tests {
             [
                 ("/api/graph", "get"),
                 ("/api/registry", "get"),
-                ("/api/surfaces/{surface_id}/image", "get"),
                 ("/health", "get"),
-                ("/ws/tap/{channel}", "get"),
             ]
             .map(|(path, method)| (path.to_owned(), method.to_owned()))
         );
@@ -1252,11 +849,7 @@ pub(crate) mod router_surface_tests {
             .map(|path| {
                 format!(
                     "{}?stream={}",
-                    path.replace(
-                        "{surface_id}",
-                        STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
-                    )
-                    .replace("{channel}", "some-channel"),
+                    path,
                     crate::control_plane_stub_support::STUB_STREAM_NAME
                 )
             });
@@ -1305,146 +898,6 @@ pub(crate) mod router_surface_tests {
                 );
             }
         }
-    }
-
-    // ------------------------------------------------------------------
-    // Surface exchange: a published surface id in, image bytes out
-    // ------------------------------------------------------------------
-
-    fn exchange_request(uri: &str) -> Request<Body> {
-        Request::builder()
-            .method("GET")
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap()
-    }
-
-    fn exchange_uri(surface_id: &str) -> String {
-        format!("/api/surfaces/{surface_id}/image")
-    }
-
-    /// The route's whole job: hand the operation the decoded surface id, and
-    /// carry its bytes back verbatim under `image/png`, with the surface's
-    /// own extent stated alongside.
-    #[tokio::test]
-    async fn the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image() {
-        let runtime = ControlPlaneRouterStubRuntime::default();
-        let recorded = runtime.exchange.recorded_calls.clone();
-        let response = control_plane_router_over(runtime)
-            .oneshot(exchange_request(&exchange_uri(
-                STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-            )))
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(CONTENT_TYPE).unwrap(),
-            "image/png",
-            "the body is an image, not a JSON envelope carrying one"
-        );
-        let (source_pixel_width, source_pixel_height) = STUB_SOURCE_SURFACE_EXTENT;
-        assert_eq!(
-            response
-                .headers()
-                .get(&*SURFACE_PIXEL_WIDTH_HEADER)
-                .and_then(|value| value.to_str().ok()),
-            Some(source_pixel_width.to_string().as_str()),
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get(&*SURFACE_PIXEL_HEIGHT_HEADER)
-                .and_then(|value| value.to_str().ok()),
-            Some(source_pixel_height.to_string().as_str()),
-        );
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(
-            body.as_ref(),
-            STUB_EXCHANGED_IMAGE_BYTES,
-            "the route re-encodes nothing"
-        );
-        assert_eq!(
-            *recorded.lock(),
-            vec![(STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(), None)],
-            "the operation must be handed the decoded frame id and no cap"
-        );
-    }
-
-    /// The cap is the MCP spelling's dial, but it reaches the operation
-    /// through the same argument whichever front end spends it.
-    #[tokio::test]
-    async fn the_downscale_cap_reaches_the_operation_from_the_query_string() {
-        let runtime = ControlPlaneRouterStubRuntime::default();
-        let recorded = runtime.exchange.recorded_calls.clone();
-        let status = control_plane_router_over(runtime)
-            .oneshot(exchange_request(&format!(
-                "{}?downscale_long_edge_pixel_cap=1568",
-                exchange_uri(STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED)
-            )))
-            .await
-            .unwrap()
-            .status();
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            *recorded.lock(),
-            vec![(STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(), Some(1568))]
-        );
-    }
-
-    /// A recycled frame is `410 Gone`, not `404`: the id was well-formed and
-    /// the frame existed, so the caller taps a newer bag and exchanges that
-    /// rather than concluding the surface never existed. Never `200` with
-    /// the slot's newer pixels.
-    #[tokio::test]
-    async fn a_recycled_frame_id_is_gone_and_the_body_names_the_recycling() {
-        let runtime = ControlPlaneRouterStubRuntime {
-            exchange: StubSurfaceExchange::refusing_as_recycled(STUB_EXCHANGED_FRAME_SURFACE_ID),
-        };
-        let response = control_plane_router_over(runtime)
-            .oneshot(exchange_request(&exchange_uri(
-                STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-            )))
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::GONE);
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let reported = body["error"].as_str().unwrap_or_default();
-        assert!(
-            reported.contains(STUB_EXCHANGED_FRAME_SURFACE_ID),
-            "the refusal must name the id asked for: {reported}"
-        );
-    }
-
-    /// The exchange is part of the documented surface, so a generated client
-    /// can reach it without hand-written paths.
-    #[test]
-    fn the_openapi_spec_documents_the_exchange_route_as_an_image_response() {
-        let spec = control_plane_openapi_spec();
-        let path = spec
-            .paths
-            .paths
-            .get(SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE)
-            .expect("the exchange route is in the spec, at the path the MCP tool names");
-        let operation = path.get.as_ref().expect("it is a GET");
-        let ok = operation
-            .responses
-            .responses
-            .get("200")
-            .expect("it documents a 200");
-        let rendered = serde_json::to_string(ok).expect("the 200 response serializes");
-        assert!(
-            rendered.contains("image/png"),
-            "the 200 must be documented as binary PNG: {rendered}"
-        );
     }
 }
 

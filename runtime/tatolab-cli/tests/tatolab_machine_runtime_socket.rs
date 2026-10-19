@@ -3,8 +3,8 @@
 
 //! Every verb that reaches the machine's runtime does so through one socket at a fixed path, and
 //! with nothing answering there refuses at once, naming it and how to start a runtime: no verb
-//! starts one. The registry's verb and flags are gone, and asking for them is a usage error. The
-//! holder line is the in-crate tests'.
+//! starts one. The registry's verb and flags, `tap` and `exchange` are gone, and asking for them
+//! is a usage error. The holder line is the in-crate tests'.
 
 mod common;
 
@@ -19,16 +19,16 @@ fn the_retired_verbs_and_flags_are_usage_errors() {
             "unexpected argument '--node'",
         ),
         (
-            &["tap", "rig/cam/video", "--stream", "cam", "--node", "rig"][..],
-            "unexpected argument '--node'",
+            &["tap", "rig/cam/video", "--stream", "cam"][..],
+            "unrecognized subcommand 'tap'",
         ),
         (
             &["logs", "--node", "rig"][..],
             "unexpected argument '--node'",
         ),
         (
-            &["exchange", "s#1", "--out", "frames", "--node", "rig"][..],
-            "unexpected argument '--node'",
+            &["exchange", "s#1", "--out", "frames"][..],
+            "unrecognized subcommand 'exchange'",
         ),
         (
             &["mcp", "--node", "rig"][..],
@@ -80,8 +80,6 @@ mod against_an_isolated_machine {
     fn with_no_runtime_every_verb_fails_at_once_naming_the_socket_and_how_to_start_one() {
         let isolated_machine_directories = IsolatedMachineDirectories::new();
         let scratch_directory = tempfile::tempdir().unwrap();
-        let output_directory = scratch_directory.path().join("frames");
-        let output_directory = output_directory.to_str().unwrap();
         let project_directory = scratch_directory.path().to_str().unwrap();
         let expected_refusal_line = format!(
             "error: no runtime is running on this machine: nothing answers at {}. Start one by \
@@ -102,19 +100,8 @@ mod against_an_isolated_machine {
             &["expose", "camera", "effect", "video"][..],
             &["graph"][..],
             &["graph", "--stream", "camera"][..],
-            &["tap", "rig/effect/video", "--stream", "camera"][..],
             &["logs", "--stream", "camera"][..],
             &["logs", "--stream", "camera", "-f"][..],
-            &["exchange", "s#1", "--out", output_directory][..],
-            &[
-                "exchange",
-                "--channel",
-                "rig/effect/video",
-                "--stream",
-                "camera",
-                "--out",
-                output_directory,
-            ][..],
             &["mcp"][..],
         ] {
             let refused = isolated_machine_directories.run_tatolab(verb_arguments);
@@ -141,13 +128,5 @@ mod against_an_isolated_machine {
                 );
             }
         }
-        assert!(
-            !output_directory_was_written(output_directory),
-            "a refused exchange writes nothing"
-        );
-    }
-
-    fn output_directory_was_written(output_directory: &str) -> bool {
-        std::path::Path::new(output_directory).exists()
     }
 }

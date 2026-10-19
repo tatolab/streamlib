@@ -668,44 +668,6 @@ impl std::fmt::Display for FramePayloadRefusal {
 
 impl std::error::Error for FramePayloadRefusal {}
 
-/// A [`FramePayloadRefusal`] of bytes a tap forwarded, worded as every tap client reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TappedFramePayloadRefusal {
-    /// Why the tapped bytes hold no payload.
-    pub frame_payload_refusal: FramePayloadRefusal,
-}
-
-impl From<FramePayloadRefusal> for TappedFramePayloadRefusal {
-    fn from(frame_payload_refusal: FramePayloadRefusal) -> Self {
-        Self {
-            frame_payload_refusal,
-        }
-    }
-}
-
-impl std::fmt::Display for TappedFramePayloadRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.frame_payload_refusal {
-            FramePayloadRefusal::ShorterThanTheFrameHeader { frame_byte_len } => write!(
-                f,
-                "a tapped bag carries an {FRAME_HEADER_SIZE}-byte frame header; got \
-                 {frame_byte_len} bytes, which cannot hold one"
-            ),
-            FramePayloadRefusal::PayloadTruncated {
-                stamped_payload_byte_len,
-                followed_payload_byte_len,
-            } => write!(
-                f,
-                "the tapped bag's header declares a {stamped_payload_byte_len}-byte payload but \
-                 only {followed_payload_byte_len} bytes followed it — the sample arrived \
-                 truncated, and decoding it would invent a bag the channel never carried"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for TappedFramePayloadRefusal {}
-
 /// The iceoryx2 user header every channel data sample carries: the bag's place
 /// in its publisher's sends, so a subscriber can count the bags its ring
 /// overwrote from the numbers a jump skips.
@@ -1169,10 +1131,6 @@ mod tests {
             refusal.to_string(),
             "8 bytes cannot hold an 80-byte frame header"
         );
-        assert_eq!(
-            TappedFramePayloadRefusal::from(refusal).to_string(),
-            "a tapped bag carries an 80-byte frame header; got 8 bytes, which cannot hold one"
-        );
     }
 
     /// Decoding the prefix of a cut-short frame would hand back a bag missing
@@ -1194,12 +1152,6 @@ mod tests {
         assert_eq!(
             refusal.to_string(),
             "the frame header declares a 32-byte payload but only 27 bytes followed it"
-        );
-        assert_eq!(
-            TappedFramePayloadRefusal::from(refusal).to_string(),
-            "the tapped bag's header declares a 32-byte payload but only 27 bytes followed it — \
-             the sample arrived truncated, and decoding it would invent a bag the channel never \
-             carried"
         );
     }
 

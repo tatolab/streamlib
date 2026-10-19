@@ -35,17 +35,15 @@ pub(crate) struct ErrorResponse {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(crate::handlers::tap_websocket_handler),
     info(
         title = "StreamLib Runtime API",
         version = "0.1.0",
-        description = "Observation API for the machine's runtime: the graph of each stream it loads, the node types each can add, its channels, and its event stream. `/api/graph` and `/api/registry` take an optional `stream` query parameter naming one loaded stream, and read every loaded stream without it; a tap names the stream its channel is in. A stream's graph is defined by its code, so this API does not mutate it.",
+        description = "Observation API for the machine's runtime: the graph of each stream it loads, the node types each can add, and its event stream. `/api/graph` and `/api/registry` take an optional `stream` query parameter naming one loaded stream, and read every loaded stream without it. A stream's graph is defined by its code, so this API does not mutate it.",
         license(name = "BUSL-1.1")
     ),
     tags(
         (name = "graph", description = "Graph inspection"),
         (name = "registry", description = "Processor and schema registry"),
-        (name = "surfaces", description = "Published-surface pixel exchange"),
         (name = "events", description = "Real-time event streaming via WebSocket")
     )
 )]

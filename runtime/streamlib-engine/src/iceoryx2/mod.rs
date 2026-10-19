@@ -93,7 +93,7 @@ pub use payload::{
     FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader, FramePayloadRefusal,
     MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
     RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
-    TappedFramePayloadRefusal, UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
+    UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;

@@ -251,43 +251,6 @@ async fn graph_without_a_stream_renders_both_and_a_one_stream_tool_naming_none_i
     );
 }
 
-/// A tap reads the stream its channel's address names, with no `stream`
-/// beside it; an address naming a stream not loaded, or a stream other than
-/// the one beside it, is refused naming the streams.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_tap_reads_the_stream_its_channel_names() {
-    let loaded = AnEngineLoadingTwoStreams::load();
-    let tap_refusal = |arguments: Value| {
-        let operations = loaded.operations_on_the_loaded_streams();
-        async move { tool_error_text(&tool_call_result(operations, "tap", arguments).await) }
-    };
-
-    let in_the_second = tap_refusal(json!({ "channel": "second/idle-in-second/video" })).await;
-    assert!(
-        in_the_second.contains("no tappable channel"),
-        "the second stream was reached and has no link out of that port: {in_the_second}"
-    );
-    let machine = loaded.engine.machine_name().name().to_string();
-    let with_this_machine =
-        tap_refusal(json!({ "channel": format!("{machine}/second/idle-in-second/video") })).await;
-    assert!(
-        with_this_machine.contains("no tappable channel"),
-        "{with_this_machine}"
-    );
-
-    let not_loaded = tap_refusal(json!({ "channel": "third/idle/video" })).await;
-    assert!(
-        not_loaded.contains("`third`") && not_loaded.contains("first, second"),
-        "{not_loaded}"
-    );
-    let two_streams =
-        tap_refusal(json!({ "channel": "first/idle-in-first/video", "stream": "second" })).await;
-    assert!(
-        two_streams.contains("`first`") && two_streams.contains("`second`"),
-        "{two_streams}"
-    );
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
     let loaded = AnEngineLoadingTwoStreams::load();

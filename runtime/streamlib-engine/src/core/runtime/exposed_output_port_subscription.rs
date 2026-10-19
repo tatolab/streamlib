@@ -566,9 +566,6 @@ mod tests {
     /// An exposed port no link reads still publishes once subscribed to, each
     /// message as written with its stamp and group flag; dropping the
     /// subscription lets the port's channel go.
-    ///
-    /// Fail-without-fix: subscribe through the tap's resolver and an unlinked
-    /// port has no channel, so the write is dropped and nothing arrives.
     #[test]
     fn a_subscription_reads_what_an_unlinked_exposed_port_writes_as_written() {
         use MessageGroupBoundary::{ContinuesGroup, StartsGroup};

@@ -28,8 +28,7 @@ use crate::local_api_unix_socket_http_client::{
 /// address.
 const LOCAL_API_MCP_URI_AUTHORITY: &str = "localhost";
 
-/// Bounds an observation verb's tool call, and every one-shot verb's connect: `tap` and `logs`
-/// fill a bounded sample runtime-side and can take a moment to.
+/// Bounds an observation verb's tool call, and every one-shot verb's connect.
 pub(crate) const OBSERVATION_VERB_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What an MCP request to a runtime's local API came back with instead of a result.
@@ -569,8 +568,8 @@ mod tests {
 
         let tool_result_text = call_one_local_api_tool(
             &stub_local_api_server.local_api_socket_path,
-            "tap",
-            json_object(json!({"channel": "cam/video", "count": 4})),
+            "graph",
+            json_object(json!({"stream": "camera"})),
             OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap();
@@ -579,8 +578,8 @@ mod tests {
         assert_eq!(
             stub_local_api_server.recorded_tool_calls(),
             [RecordedToolCall {
-                tool_name: "tap".to_owned(),
-                tool_arguments: json!({"channel": "cam/video", "count": 4}),
+                tool_name: "graph".to_owned(),
+                tool_arguments: json!({"stream": "camera"}),
                 tool_call_transport: StubToolCallTransport::StreamableHttpPost,
             }]
         );
@@ -618,13 +617,13 @@ mod tests {
     #[test]
     fn a_tool_level_error_is_raised_not_returned_as_a_result() {
         let stub_local_api_server = StubLocalApiServer::serve_answering_every_tool_call_with(
-            StubToolAnswer::tool_failure("no such channel"),
+            StubToolAnswer::tool_failure("no stream named `nope` is loaded"),
         );
 
         let tool_failure = call_one_local_api_tool(
             &stub_local_api_server.local_api_socket_path,
-            "tap",
-            json_object(json!({"channel": "nope"})),
+            "graph",
+            json_object(json!({"stream": "nope"})),
             OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap_err();
@@ -632,7 +631,7 @@ mod tests {
         assert_eq!(
             tool_failure,
             LocalApiMcpToolClientFailure::tool_call_failed(
-                "tap failed: no such channel".to_owned()
+                "graph failed: no stream named `nope` is loaded".to_owned()
             )
         );
     }
