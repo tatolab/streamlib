@@ -965,8 +965,11 @@ jobs:
             echo "::error::tatolabd did not open the Vulkan loader the lend carries"
             exit 1
           fi
-          if grep -q 'process() failed' /tmp/tatolabd.log; then
-            echo "::error::the scaffolded effect raised on a live frame"
+          # The encoder's named refusal on a runner with no encoder is expected;
+          # any other node failing a live frame is not.
+          if grep 'process() failed' /tmp/tatolabd.log \
+              | grep -qv 'H264Encoder: failed to mint the encoder session'; then
+            echo "::error::a scaffolded node failed a live frame"
             exit 1
           fi
           echo "::group::graph --stream main"
@@ -991,6 +994,27 @@ jobs:
             exit 1
           fi
           echo "TestPatternSource.video wrote $frames_written frames"
+          # The encoder either encodes, or — on a runner with no encoder — refuses
+          # naming itself while the stream stays loaded.
+          access_units_written="$(python3 -c '
+          import json
+          try:
+              graph = json.load(open("/tmp/scaffold-graph.json"))
+          except ValueError:
+              raise SystemExit(0)
+          for node in graph.get("nodes", []):
+              if node.get("name") == "h264encoder":
+                  metrics = node.get("components", {}).get("metrics", {})
+                  print(metrics.get("written_bags_by_output_port", {}).get("encoded_video", ""))
+          ')"
+          if [ -n "$access_units_written" ] && [ "$access_units_written" -gt 0 ]; then
+            echo "H264Encoder.encoded_video wrote $access_units_written access units"
+          elif grep -q 'H264Encoder: failed to mint the encoder session' /tmp/tatolabd.log; then
+            echo "H264Encoder refused by name on a runner with no encoder; the stream stayed loaded"
+          else
+            echo "::error::H264Encoder neither wrote an access unit nor refused by name"
+            exit 1
+          fi
 
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine.

@@ -95,8 +95,8 @@ enum TatolabVerb {
     /// Scaffold a new stream project.
     #[command(
         long_about = "Write stream.py, nodes/, pyproject.toml, .python-version and .gitignore into \
-                      DIRECTORY — one @stream wiring the test pattern through a GPU effect it \
-                      exposes, with a meter on a fan-out."
+                      DIRECTORY — one @stream wiring the sample animation through a GPU effect \
+                      into an H.264 encoder it exposes publicly, with a meter on a fan-out."
     )]
     New {
         /// Directory to scaffold the project into.

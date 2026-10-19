@@ -282,17 +282,21 @@ mod tests {
     }
 
     #[test]
-    fn the_sample_stream_starts_from_the_test_pattern_and_opens_no_window() {
+    fn the_sample_stream_encodes_the_test_pattern_publicly_and_opens_no_window() {
         let rendered_stream_py = &render_scaffold_template_files("probe-app")[0].rendered_contents;
-        assert!(
-            rendered_stream_py.contains("stream_builder.add(TestPatternSource)"),
-            "{rendered_stream_py}"
-        );
-        for absent_name in ["CameraSource", "DisplayWindow"] {
+        for present in [
+            "stream_builder.add(TestPatternSource)",
+            "stream_builder.add(H264Encoder)",
+            "stream_builder.expose(encoder.output(\"encoded_video\"), Exposure.PUBLIC)",
+        ] {
             assert!(
-                !rendered_stream_py.contains(absent_name),
-                "the sample stream names {absent_name}:\n{rendered_stream_py}"
+                rendered_stream_py.contains(present),
+                "the sample stream lacks {present}:\n{rendered_stream_py}"
             );
         }
+        assert!(
+            !rendered_stream_py.contains("DisplayWindow"),
+            "{rendered_stream_py}"
+        );
     }
 }
