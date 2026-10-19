@@ -3,9 +3,8 @@
 
 //! Built-in relay track source: one track at a MoQ relay, read into a graph.
 //!
-//! The node is one MoQ client among any. It subscribes to the track
-//! `<node>/<port>` of the broadcast `<machine>/<stream>.hang` and writes each
-//! object's payload to its one output as received, the first object of each
+//! The node is one MoQ client among any. It subscribes to a broadcast's track,
+//! each named as its publisher wrote it, and writes each object's payload to its one output as received, the first object of each
 //! group starting a group. Every stamp in a graph is this machine's, so an
 //! object is stamped from the track's own timestamp re-based onto this
 //! machine's clock by one offset, never by its arrival.
@@ -29,9 +28,6 @@ use streamlib::sdk::serde_json::Value;
 use crate::processor_thread_join::join_within_grace_or_detach;
 
 const TRACK_OUTPUT_PORT: &str = "track";
-
-/// The suffix of a broadcast whose catalog the stack's players read.
-const BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ: &str = ".hang";
 
 /// How long after a failed session the relay is first dialed again.
 const A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER: Duration = Duration::from_millis(250);
@@ -64,33 +60,26 @@ pub struct RelayTrackSourceConfig {
     /// loopback, which serves every private and public port of the machine.
     #[serde(default = "default_relay_url")]
     pub relay_url: String,
-    /// The track to read, `<machine>/<stream>/<node>/<port>`: the exposed port
-    /// `<node>/<port>` of the stream `<stream>` on the machine `<machine>`,
-    /// read as written — the broadcast `<machine>/<stream>.hang`, the track
-    /// `<node>/<port>`. Give this, or `broadcast` with `track`.
-    #[serde(default)]
-    pub track_address: Option<String>,
-    /// The broadcast to read, as its publisher named it at the relay — any MoQ
-    /// publisher's, whatever its layout. Given with `track`, in place of
-    /// `track_address`.
-    #[serde(default)]
-    pub broadcast: Option<String>,
-    /// The track of `broadcast` to read, as its publisher named it.
-    #[serde(default)]
-    pub track: Option<String>,
+    /// The broadcast's path at the relay, exactly as its publisher wrote it. A
+    /// stream's is `<machine>/<stream>.hang`.
+    pub broadcast: String,
+    /// The track of `broadcast` to read, exactly as its publisher named it. An
+    /// exposed port's is `<node>/<port>`.
+    pub track: String,
 }
 
 fn default_relay_url() -> String {
     "http://127.0.0.1:4443".to_string()
 }
 
+/// A node given no config names no track, and is refused at setup naming
+/// `broadcast`.
 impl Default for RelayTrackSourceConfig {
     fn default() -> Self {
         Self {
             relay_url: default_relay_url(),
-            track_address: None,
-            broadcast: None,
-            track: None,
+            broadcast: String::new(),
+            track: String::new(),
         }
     }
 }
@@ -100,10 +89,9 @@ impl Default for RelayTrackSourceConfig {
     description = "Reads one track at a MoQ relay into the graph — how a stream reads another \
                   stream's exposed port, on this machine through the local relay's loopback \
                   listener or on another machine through any relay that serves it, and how it \
-                  reads a track any other MoQ publisher wrote. The track is named by \
-                  `track_address`, `<machine>/<stream>/<node>/<port>` — the broadcast \
-                  `<machine>/<stream>.hang`, the track `<node>/<port>` — or by `broadcast` with \
-                  `track` for any other layout, each read exactly as its publisher wrote it.\n\n\
+                  reads a track any other MoQ publisher wrote. The track is named by `broadcast` \
+                  and `track`, each exactly as its publisher wrote it: a stream's exposed port \
+                  is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang`.\n\n\
                   `track` carries each object's payload bytes as the relay delivered them, the \
                   first object of each group starting a group, and its catalog entry is the \
                   track's own from the broadcast's catalog. What a payload means is the \
@@ -183,7 +171,7 @@ struct RelayTrackLocation {
 
 impl RelayTrackLocation {
     /// Locate the track `config` names, refusing by name a relay URL that does
-    /// not parse and a track address that is not `<machine>/<stream>/<node>/<port>`.
+    /// not parse and a broadcast or track left empty.
     fn of(config: &RelayTrackSourceConfig) -> Result<Self> {
         // A relay's credential may ride its URL, so a refusal never echoes it.
         let relay_url = config.relay_url.parse::<url::Url>().map_err(|unparsed| {
@@ -191,54 +179,18 @@ impl RelayTrackLocation {
                 "RelayTrackSource: `relay_url` is not a URL ({unparsed})"
             ))
         })?;
-        let (broadcast_path, track_name) = match (
-            config.track_address.as_deref(),
-            config.broadcast.as_deref(),
-            config.track.as_deref(),
-        ) {
-            (Some(track_address), None, None) => {
-                the_broadcast_and_track_a_track_address_names(track_address)?
+        for (key, name_as_written) in [("broadcast", &config.broadcast), ("track", &config.track)] {
+            if name_as_written.is_empty() {
+                return Err(Error::Configuration(format!(
+                    "RelayTrackSource: `{key}` is empty or not given; name it as its publisher wrote it"
+                )));
             }
-            (None, Some(broadcast), Some(track)) if !broadcast.is_empty() && !track.is_empty() => {
-                (broadcast.to_string(), track.to_string())
-            }
-            _ => {
-                return Err(Error::Configuration(
-                    "RelayTrackSource: name the track to read either by `track_address` \
-                     (`<machine>/<stream>/<node>/<port>`) or by `broadcast` with `track`, each \
-                     as its publisher wrote it, and not both"
-                        .into(),
-                ));
-            }
-        };
+        }
         Ok(Self {
             relay_url,
-            broadcast_path,
-            track_name,
+            broadcast_path: config.broadcast.clone(),
+            track_name: config.track.clone(),
         })
-    }
-}
-
-/// The broadcast `<machine>/<stream>.hang` and the track `<node>/<port>` a
-/// track address names, each part as written: the names this runtime publishes
-/// under are cast already, and another publisher's are its own.
-fn the_broadcast_and_track_a_track_address_names(track_address: &str) -> Result<(String, String)> {
-    match track_address.split('/').collect::<Vec<_>>().as_slice() {
-        [machine, stream, node, port]
-            if [machine, stream, node, port]
-                .iter()
-                .all(|part| !part.is_empty()) =>
-        {
-            Ok((
-                format!("{machine}/{stream}{BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ}"),
-                format!("{node}/{port}"),
-            ))
-        }
-        _ => Err(Error::Configuration(format!(
-            "RelayTrackSource: `track_address` `{track_address}` is not \
-             `<machine>/<stream>/<node>/<port>`, four parts none of them empty; a track another \
-             publisher laid out otherwise is named by `broadcast` with `track`"
-        ))),
     }
 }
 
@@ -1014,80 +966,74 @@ mod tests {
         );
     }
 
-    fn config_naming(track_address: &str) -> RelayTrackSourceConfig {
-        RelayTrackSourceConfig {
-            track_address: Some(track_address.to_string()),
-            ..RelayTrackSourceConfig::default()
+    fn config_read_from(config: serde_json::Value) -> serde_json::Result<RelayTrackSourceConfig> {
+        serde_json::from_value(config)
+    }
+
+    fn config_naming(broadcast: &str, track: &str) -> RelayTrackSourceConfig {
+        config_read_from(json!({"broadcast": broadcast, "track": track}))
+            .expect("a broadcast with a track is a config")
+    }
+
+    #[test]
+    fn a_broadcast_and_a_track_are_read_exactly_as_written_at_the_local_relay_by_default() {
+        for (broadcast, track) in [
+            ("desk/camera-rig.hang", "encoder/encoded_video"),
+            ("Desk/Main Room.hang", "Front Camera/video"),
+            ("live/Rooms/42/east wing", "video0"),
+            ("bbb", "audio/data/opus"),
+        ] {
+            let location = RelayTrackLocation::of(&config_naming(broadcast, track))
+                .expect("a broadcast with a track locates a track");
+            assert_eq!(location.relay_url.as_str(), "http://127.0.0.1:4443/");
+            assert_eq!(location.broadcast_path, broadcast);
+            assert_eq!(location.track_name, track);
         }
     }
 
     #[test]
-    fn a_track_address_locates_the_broadcast_and_the_track_as_written() {
-        let location = RelayTrackLocation::of(&config_naming("Desk/Main Room/Front Camera/video"))
-            .expect("a four-part address locates a track");
-        assert_eq!(location.relay_url.as_str(), "http://127.0.0.1:4443/");
-        assert_eq!(location.broadcast_path, "Desk/Main Room.hang");
-        assert_eq!(location.track_name, "Front Camera/video");
+    fn a_config_naming_track_address_is_refused_as_an_unknown_key() {
+        let refusal = config_read_from(json!({
+            "track_address": "desk/camera-rig/encoder/encoded_video",
+            "broadcast": "desk/camera-rig.hang",
+            "track": "encoder/encoded_video",
+        }))
+        .expect_err("`track_address` is no key of the config")
+        .to_string();
+        assert!(
+            refusal.contains("unknown field `track_address`"),
+            "{refusal}"
+        );
     }
 
     #[test]
-    fn a_track_address_not_of_four_parts_none_empty_is_refused_naming_the_shape() {
-        for address in [
-            "main/camera/video",
-            "camera/video",
-            "desk//camera/video",
-            "a/b/c/d/e",
+    fn a_config_missing_the_broadcast_or_the_track_is_refused_naming_it() {
+        for (config, missing_key) in [
+            (json!({"track": "encoder/encoded_video"}), "broadcast"),
+            (json!({"broadcast": "desk/camera-rig.hang"}), "track"),
         ] {
-            let refusal = RelayTrackLocation::of(&config_naming(address))
-                .expect_err("an address not of four parts locates no track")
+            let refusal = config_read_from(config)
+                .expect_err("both keys are required")
                 .to_string();
             assert!(
-                refusal.contains("`<machine>/<stream>/<node>/<port>`")
-                    && refusal.contains(address)
-                    && refusal.contains("`broadcast` with `track`"),
+                refusal.contains(&format!("missing field `{missing_key}`")),
                 "{refusal}"
             );
         }
     }
 
     #[test]
-    fn a_broadcast_and_a_track_any_publisher_laid_out_are_read_as_written() {
-        let location = RelayTrackLocation::of(&RelayTrackSourceConfig {
-            broadcast: Some("live/Rooms/42".into()),
-            track: Some("video0".into()),
-            ..RelayTrackSourceConfig::default()
-        })
-        .expect("a broadcast with a track locates a track");
-        assert_eq!(location.broadcast_path, "live/Rooms/42");
-        assert_eq!(location.track_name, "video0");
-    }
-
-    #[test]
-    fn a_track_named_neither_way_or_both_ways_or_half_of_one_is_refused_naming_both_ways() {
-        for config in [
-            RelayTrackSourceConfig::default(),
-            RelayTrackSourceConfig {
-                track_address: Some("desk/main/camera/video".into()),
-                broadcast: Some("desk/main.hang".into()),
-                track: Some("camera/video".into()),
-                ..RelayTrackSourceConfig::default()
-            },
-            RelayTrackSourceConfig {
-                broadcast: Some("desk/main.hang".into()),
-                ..RelayTrackSourceConfig::default()
-            },
-            RelayTrackSourceConfig {
-                broadcast: Some(String::new()),
-                track: Some("video0".into()),
-                ..RelayTrackSourceConfig::default()
-            },
+    fn an_empty_broadcast_or_track_or_no_config_at_all_is_refused_naming_it() {
+        for (config, empty_key) in [
+            (config_naming("", "video0"), "broadcast"),
+            (config_naming("live/42", ""), "track"),
+            (RelayTrackSourceConfig::default(), "broadcast"),
         ] {
             let refusal = RelayTrackLocation::of(&config)
-                .expect_err("no one way names the track")
+                .expect_err("an empty name locates no track")
                 .to_string();
             assert!(
-                refusal.contains("either by `track_address`")
-                    && refusal.contains("`broadcast` with `track`"),
+                refusal.contains(&format!("`{empty_key}` is empty")),
                 "{refusal}"
             );
         }
@@ -1097,7 +1043,7 @@ mod tests {
     fn a_relay_url_that_does_not_parse_is_refused_without_echoing_it() {
         let refusal = RelayTrackLocation::of(&RelayTrackSourceConfig {
             relay_url: "not a url?jwt=secret".into(),
-            ..config_naming("desk/main/camera/video")
+            ..config_naming("desk/main.hang", "camera/video")
         })
         .expect_err("a relay URL that does not parse")
         .to_string();
@@ -1110,7 +1056,7 @@ mod tests {
         let location = RelayTrackLocation::of(&RelayTrackSourceConfig {
             relay_url: "https://user:password@relay.example:4443/token-in-the-path?jwt=secret"
                 .into(),
-            ..config_naming("desk/main/camera/video")
+            ..config_naming("desk/main.hang", "camera/video")
         })
         .expect("the track is located");
         let shown = location.to_string();
@@ -1129,13 +1075,15 @@ mod tests {
             config_schema["properties"]["relay_url"]["default"],
             "http://127.0.0.1:4443"
         );
-        assert!(config_schema.get("required").is_none());
-        for one_way_to_name_the_track in ["track_address", "broadcast", "track"] {
-            assert!(
-                config_schema["properties"][one_way_to_name_the_track].is_object(),
-                "{one_way_to_name_the_track}"
-            );
-        }
+        assert_eq!(config_schema["required"], json!(["broadcast", "track"]));
+        assert_eq!(
+            config_schema["properties"]
+                .as_object()
+                .expect("the config's properties")
+                .keys()
+                .collect::<Vec<_>>(),
+            ["broadcast", "relay_url", "track"]
+        );
         assert_eq!(
             descriptor
                 .outputs

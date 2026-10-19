@@ -29,8 +29,8 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
         "2dd8a602a81595b922fc772116491b7d812a12ba7e7707708aa2b95a2d1a6020",
     ),
     (
-        "0004-every-key-with-a-relay-track-source.json",
-        "563102a5262454f6616800f6a59ef61fa28ed358ca652ebaae52a1b236f1e706",
+        "0005-every-key-with-a-relay-track-source-by-broadcast-and-track.json",
+        "039aa23c351db3716ea6a69dd1c1530d241c1d01560e7732f9d7af2d6c8c7b49",
     ),
 ];
 

@@ -3505,8 +3505,7 @@ entry reads as **message** (the glossary).
   states and read by `graph`'s top-level `machine`; a stream's name is cast at load. `tap`'s
   channel is an address on this machine and one naming another machine is refused naming it.
   `runtime_id` stays per-run — logs, iceoryx2 names, the surface-sharing service — and is
-  never an address. `RelayTrackSource`'s `track_address` is one, read as written (the relay
-  source node, §Networking).
+  never an address.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
   package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715; amended by
   moq-relays: `tap` goes at the sharing step]
@@ -3596,7 +3595,6 @@ entry reads as **message** (the glossary).
   Owner, 2026-10-02. [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2658;
   runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_track_address_locates_the_broadcast_and_the_track_as_written -->
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
   that relay's credential assigns. As built, the engine names the machine by its hostname cast
   and reads nothing of Tailscale. [runtime-hosting — SHIPPED #2715; amended by moq-relays: a
@@ -3779,24 +3777,34 @@ entry reads as **message** (the glossary).
   Rejected: one trait inside `tatolabd` with no crate per adapter — adding a relay would mean
   editing the daemon (owner, 2026-10-17).
 - **DECIDED** — Reading a track is a source node. The relay source node, a built-in, takes a
-  relay address and a track's address, subscribes, and writes each object's payload bytes to
+  relay, a broadcast and a track, subscribes, and writes each object's payload bytes to
   its one output as received, stamped from the track's own timestamp re-based onto this
   machine's clock (the stamps entry above); the track's catalog entry is readable off the
   node. What follows it — a decoder, a numpy node, nothing — is
   the builder's. It is how a stream on this machine reads another stream's private port, how
   a stream on another machine reads a public one, and the only way a graph reads a relay.
   Nothing in the runtime is built for runtime-to-runtime: the node is one MoQ client among
-  any. Owner, 2026-10-16. The node names its track by `track_address`,
-  `<machine>/<stream>/<node>/<port>` — the broadcast `<machine>/<stream>.hang`, the track
-  `<node>/<port>` — or by `broadcast` with `track` for any other publisher's layout, each read
-  exactly as written: the runtime casts every name it gives, and a name another publisher's
-  relay accepts is read as that publisher wrote it. Owner, 2026-10-18. [moq-relays]
+  any. Owner, 2026-10-16. Its config is MoQ's own vocabulary and nothing else: `relay_url`,
+  `broadcast` and `track`, both names required and each read exactly as written — a stream's
+  exposed port `desk/camera-rig/encoder/encoded_video` is the broadcast `desk/camera-rig.hang`,
+  the track `encoder/encoded_video`, as the preview page and any MoQ client show it. The
+  runtime casts every name it gives, and a name another publisher's relay accepts is read as
+  that publisher wrote it, `.hang` (moq-dev's catalog-format suffix, a convention our
+  publisher follows) or not. Tatolab's `<machine>/<stream>/<node>/<port>` address is not one
+  of the node's names. Owner, 2026-10-18. [moq-relays]
+  Rejected: naming the track by a Tatolab address, `track_address`, beside `broadcast` and
+  `track` — two ways to name one thing, one of them a term invented where MoQ has one (owner,
+  2026-10-18).
+  Rejected: casting a name the node reads — casting is for names the runtime gives (owner,
+  2026-10-18).
   Rejected: the engine subscribing inside the link machinery so `remote_output("desk/…")`
   wires through a relay — a MoQ reader in the engine, a second link kind, and a stamp-marking
   question with no answer (owner, 2026-10-16).
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_reads_a_hang_track_a_third_party_published -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_broadcast_and_a_track_any_publisher_laid_out_are_read_as_written -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_broadcast_and_a_track_are_read_exactly_as_written_at_the_local_relay_by_default -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_config_naming_track_address_is_refused_as_an_unknown_key -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_config_missing_the_broadcast_or_the_track_is_refused_naming_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_track_is_withdrawn_keeps_its_stream_running_and_reads_it_again -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_relay_is_not_up_yet_reads_the_track_once_it_is -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
