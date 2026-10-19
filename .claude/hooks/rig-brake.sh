@@ -11,7 +11,7 @@
 #   {
 #     "mode": "warn",                              warn | ask | off — the default for every rule
 #     "rules": { "e2e_fixture": "off" },           one rule's outcome
-#     "allow": [ "*e2e_fixture_psnr_vivid.sh*" ],  globs on the whole command text: stay silent
+#     "allow": [ "*e2e_fixture_psnr_test_pattern.sh*" ],  globs on the whole command text: stay silent
 #     "ask":   [ "ffmpeg * -f v4l2 /dev/video*" ], globs on the whole command text: prompt
 #     "preferences": "text appended to the note the model reads"
 #   }
