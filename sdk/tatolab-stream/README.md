@@ -24,13 +24,13 @@ function decorated `@stream`:
 ```python
 from tatolab.stream import CameraSource, StreamBuilder, stream
 
-from nodes.inverting_effect import InvertingEffect
+from nodes.halftone_lens_effect import HalftoneLensEffect
 
 
 @stream
 def main(stream_builder: StreamBuilder) -> None:
     camera = stream_builder.add(CameraSource)
-    effect = stream_builder.add(InvertingEffect)
+    effect = stream_builder.add(HalftoneLensEffect)
     stream_builder.connect(camera.output("video"), effect.input("video_from_upstream"))
     stream_builder.expose(effect.output("video_to_downstream"))
 ```

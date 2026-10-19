@@ -51,7 +51,7 @@ fn expected_scaffolded_file_paths() -> BTreeSet<String> {
     [
         "stream.py",
         "nodes/__init__.py",
-        "nodes/inverting_effect.py",
+        "nodes/halftone_lens_effect.py",
         "nodes/brightness_meter.py",
         "pyproject.toml",
         ".python-version",
@@ -123,14 +123,14 @@ fn new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header() {
     }
 
     let stream_py = fs::read_to_string(project_directory.join("stream.py")).unwrap();
+    assert!(stream_py.contains("stream_builder.add(TestPatternSource)"));
+    assert!(stream_py.contains("stream_builder.add(H264Encoder)"));
     assert!(
-        stream_py.contains("from tatolab.stream import StreamBuilder, TestPatternSource, stream"),
+        stream_py
+            .contains("stream_builder.expose(encoder.output(\"encoded_video\"), Exposure.PUBLIC)"),
         "{stream_py}"
     );
-    assert!(stream_py.contains("stream_builder.add(TestPatternSource)"));
-    for absent_name in ["CameraSource", "DisplayWindow"] {
-        assert!(!stream_py.contains(absent_name), "{stream_py}");
-    }
+    assert!(!stream_py.contains("DisplayWindow"), "{stream_py}");
     assert_eq!(
         stream_py,
         scaffold_template_text("stream.py")
@@ -141,7 +141,7 @@ fn new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header() {
 
     for node_module in [
         "nodes/__init__.py",
-        "nodes/inverting_effect.py",
+        "nodes/halftone_lens_effect.py",
         "nodes/brightness_meter.py",
     ] {
         assert_eq!(
@@ -155,7 +155,7 @@ fn new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header() {
     let pyproject_toml = fs::read_to_string(project_directory.join("pyproject.toml")).unwrap();
     assert!(pyproject_toml.contains("name = \"my-probe-app\""));
     assert!(
-        pyproject_toml.contains("dependencies = [\"tatolab-stream>=0.48\", \"numpy>=2.1\"]"),
+        pyproject_toml.contains("dependencies = [\"tatolab-stream>=0.54.2\", \"numpy>=2.1\"]"),
         "the written project floors tatolab-stream above PyPI's 0.0.0 placeholder: {pyproject_toml}"
     );
     assert_eq!(

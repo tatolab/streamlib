@@ -1,0 +1,112 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+// One test-pattern frame: SMPTE bars, the potato sprite over them, the caption
+// panel over both. Integer arithmetic only, so every device renders the same
+// bytes for the same push constants.
+//
+// Every pixel is one `uint` in the bytes' own order, R G B A — R in the low byte.
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) writeonly buffer TestPatternFramePixels {
+    uint test_pattern_frame_pixels[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer PotatoSpritePixels {
+    uint potato_sprite_pixels[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer CaptionPanelPixels {
+    uint caption_panel_pixels[];
+};
+
+layout(push_constant) uniform TestPatternFramePushConstants {
+    uint frame_width;
+    uint frame_height;
+    int potato_sprite_left;
+    int potato_sprite_top;
+    uint potato_sprite_width;
+    uint potato_sprite_height;
+    int caption_panel_left;
+    int caption_panel_top;
+    uint caption_panel_width;
+    uint caption_panel_height;
+} placement;
+
+const uint SMPTE_BAR_COUNT = 8u;
+const uint SMPTE_BAR_COLORS_RGBA[SMPTE_BAR_COUNT] = uint[](
+    0xFFFFFFFFu, // white
+    0xFF00FFFFu, // yellow
+    0xFFFFFF00u, // cyan
+    0xFF00FF00u, // green
+    0xFFFF00FFu, // magenta
+    0xFF0000FFu, // red
+    0xFFFF0000u, // blue
+    0xFF000000u  // black
+);
+
+uint channel(uint rgba, uint channel_index) {
+    return (rgba >> (8u * channel_index)) & 0xFFu;
+}
+
+// `above` composited over an opaque `below`, rounded to the nearest byte.
+uint composite_over_opaque(uint above, uint below) {
+    uint above_alpha = channel(above, 3u);
+    if (above_alpha == 0u) {
+        return below;
+    }
+    if (above_alpha == 255u) {
+        return above;
+    }
+    uint composited = 0xFF000000u;
+    for (uint channel_index = 0u; channel_index < 3u; ++channel_index) {
+        uint blended = (channel(above, channel_index) * above_alpha
+            + channel(below, channel_index) * (255u - above_alpha) + 127u) / 255u;
+        composited |= blended << (8u * channel_index);
+    }
+    return composited;
+}
+
+// The overlay pixel covering frame pixel `at`, or a transparent one where the
+// overlay placed at `top_left` does not cover it.
+uint overlay_pixel_at(ivec2 at, ivec2 top_left, uvec2 overlay_extent, bool from_potato_sprite) {
+    ivec2 within_overlay = at - top_left;
+    if (any(lessThan(within_overlay, ivec2(0)))
+        || any(greaterThanEqual(uvec2(within_overlay), overlay_extent))) {
+        return 0u;
+    }
+    uint overlay_index = uint(within_overlay.y) * overlay_extent.x + uint(within_overlay.x);
+    return from_potato_sprite
+        ? potato_sprite_pixels[overlay_index]
+        : caption_panel_pixels[overlay_index];
+}
+
+void main() {
+    uvec2 at = gl_GlobalInvocationID.xy;
+    if (at.x >= placement.frame_width || at.y >= placement.frame_height) {
+        return;
+    }
+
+    uint bar = min((at.x * SMPTE_BAR_COUNT) / placement.frame_width, SMPTE_BAR_COUNT - 1u);
+    uint pixel = SMPTE_BAR_COLORS_RGBA[bar];
+
+    pixel = composite_over_opaque(
+        overlay_pixel_at(
+            ivec2(at),
+            ivec2(placement.potato_sprite_left, placement.potato_sprite_top),
+            uvec2(placement.potato_sprite_width, placement.potato_sprite_height),
+            true),
+        pixel);
+    pixel = composite_over_opaque(
+        overlay_pixel_at(
+            ivec2(at),
+            ivec2(placement.caption_panel_left, placement.caption_panel_top),
+            uvec2(placement.caption_panel_width, placement.caption_panel_height),
+            false),
+        pixel);
+
+    test_pattern_frame_pixels[at.y * placement.frame_width + at.x] = pixel;
+}

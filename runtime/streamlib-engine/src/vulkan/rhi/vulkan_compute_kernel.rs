@@ -82,6 +82,44 @@ struct PendingState {
     push_constants: Vec<u8>,
 }
 
+/// A layout a sampled image may be read in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SampledImageReadLayout {
+    /// `SHADER_READ_ONLY_OPTIMAL`, which resolved published surfaces are left in.
+    ShaderReadOnlyOptimal,
+    /// `GENERAL`, which a compute kernel's output is left in.
+    General,
+}
+
+impl SampledImageReadLayout {
+    /// The Vulkan layout written into the sampled-image descriptor.
+    pub fn as_vk(self) -> vk::ImageLayout {
+        match self {
+            Self::ShaderReadOnlyOptimal => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            Self::General => vk::ImageLayout::GENERAL,
+        }
+    }
+}
+
+impl TryFrom<crate::core::rhi::VulkanLayout> for SampledImageReadLayout {
+    type Error = Error;
+
+    fn try_from(layout: crate::core::rhi::VulkanLayout) -> Result<Self> {
+        use crate::core::rhi::VulkanLayout;
+        match layout {
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL => Ok(Self::ShaderReadOnlyOptimal),
+            VulkanLayout::GENERAL => Ok(Self::General),
+            other => Err(Error::GpuError(format!(
+                "a sampled image is read in SHADER_READ_ONLY_OPTIMAL ({}) or GENERAL ({}), not \
+                 layout {}",
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0,
+                VulkanLayout::GENERAL.0,
+                other.0
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum BindingResource {
     Buffer {
@@ -101,6 +139,7 @@ enum BindingResource {
     /// `texture2D` / `texelFetch` style.
     SampledImageOnly {
         view: vk::ImageView,
+        layout: SampledImageReadLayout,
     },
     StorageImage {
         view: vk::ImageView,
@@ -490,15 +529,19 @@ impl VulkanComputeKernelInner {
     /// build per-plane reinterpreted-format views by hand against a
     /// multi-planar image — those views can't be expressed through the
     /// higher-level [`Self::set_sampled_texture`] / [`Self::set_storage_image`]
-    /// setters that take engine `Texture` handles. The view must be in
-    /// `SHADER_READ_ONLY_OPTIMAL` at dispatch time; caller is responsible
-    /// for the layout transition.
-    pub(crate) fn set_sampled_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
+    /// setters that take engine `Texture` handles. `layout` is the layout the
+    /// view is in at dispatch time, written into the descriptor.
+    pub(crate) fn set_sampled_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+        layout: SampledImageReadLayout,
+    ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledImage)?;
         self.pending
             .lock()
             .bindings
-            .insert(binding, BindingResource::SampledImageOnly { view });
+            .insert(binding, BindingResource::SampledImageOnly { view, layout });
         Ok(())
     }
 
@@ -885,12 +928,15 @@ impl VulkanComputeKernelInner {
                         image_idx: Some(idx),
                     });
                 }
-                (ComputeBindingKind::SampledImage, BindingResource::SampledImageOnly { view }) => {
+                (
+                    ComputeBindingKind::SampledImage,
+                    BindingResource::SampledImageOnly { view, layout },
+                ) => {
                     let idx = image_infos.len();
                     image_infos.push(
                         vk::DescriptorImageInfo::builder()
                             .image_view(*view)
-                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_layout(layout.as_vk())
                             .build(),
                     );
                     slots.push(Slot {
@@ -1147,8 +1193,14 @@ impl VulkanComputeKernel {
     ///
     /// Crate-private surface; engine-internal callers only
     /// (e.g. `RgbToNv12Converter::convert`).
-    pub(crate) fn set_sampled_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
-        self.host_inner().set_sampled_image_view(binding, view)
+    pub(crate) fn set_sampled_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+        layout: SampledImageReadLayout,
+    ) -> Result<()> {
+        self.host_inner()
+            .set_sampled_image_view(binding, view, layout)
     }
 
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledTexture`]
@@ -2450,6 +2502,27 @@ void main() {
     const SAMPLED_IMAGE_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/test_sampled_image.spv"));
 
+    #[test]
+    fn a_sampled_image_is_read_in_shader_read_only_optimal_or_general_and_nothing_else() {
+        use crate::core::rhi::VulkanLayout;
+        assert_eq!(
+            SampledImageReadLayout::try_from(VulkanLayout::SHADER_READ_ONLY_OPTIMAL).unwrap(),
+            SampledImageReadLayout::ShaderReadOnlyOptimal
+        );
+        assert_eq!(
+            SampledImageReadLayout::try_from(VulkanLayout::GENERAL).unwrap(),
+            SampledImageReadLayout::General
+        );
+        let refusal = SampledImageReadLayout::try_from(VulkanLayout::TRANSFER_DST_OPTIMAL)
+            .expect_err("a sampled image is never read in TRANSFER_DST_OPTIMAL");
+        assert!(
+            refusal
+                .to_string()
+                .contains("SHADER_READ_ONLY_OPTIMAL (5) or GENERAL (1)"),
+            "{refusal}"
+        );
+    }
+
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -2630,7 +2703,7 @@ void main() {
         // descriptor-layout + descriptor write + bind + dispatch run
         // end-to-end without validation errors.
         kernel
-            .set_sampled_image_view(0, in_view)
+            .set_sampled_image_view(0, in_view, SampledImageReadLayout::ShaderReadOnlyOptimal)
             .expect("set_sampled_image_view");
         kernel
             .set_storage_image_view(1, out_view)

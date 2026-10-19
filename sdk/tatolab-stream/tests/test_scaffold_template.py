@@ -28,7 +28,7 @@ SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[1] / "scaffold_te
 SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
     "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n"
 )
-EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
+EFFECT_MODULE_PATH = "nodes/halftone_lens_effect.py"
 METER_MODULE_PATH = "nodes/brightness_meter.py"
 # Stored without their dot so no packaging walk skips them as hidden or reads the
 # template's `.gitignore` as its own ignore rules; `new` writes them dotted.
@@ -145,26 +145,49 @@ def stream_builder_calls_in_the_entry(method_name: str) -> "list[str]":
     ]
 
 
-def test_the_stream_starts_from_the_test_pattern_and_exposes_the_effect_output():
+def test_the_stream_encodes_the_test_pattern_through_the_effect_and_exposes_it_publicly():
     """The sample runs on a machine with no capture device and no display: it
-    needs no camera, and the runtime opens no windows."""
+    needs no camera, the runtime opens no windows, and a browser plays it."""
     entry_source = template_text("stream.py")
 
     assert stream_builder_calls_in_the_entry("add") == [
         "stream_builder.add(TestPatternSource)",
-        "stream_builder.add(InvertingEffect)",
+        "stream_builder.add(HalftoneLensEffect)",
         "stream_builder.add(BrightnessMeter)",
+        "stream_builder.add(H264Encoder)",
+    ]
+    assert stream_builder_calls_in_the_entry("connect") == [
+        "stream_builder.connect(source.output('video'), effect.input('video_from_upstream'))",
+        "stream_builder.connect(effect.output('video_to_downstream'), "
+        "meter.input('video_from_upstream'))",
+        "stream_builder.connect(effect.output('video_to_downstream'), encoder.input('video'))",
     ]
     assert stream_builder_calls_in_the_entry("expose") == [
-        "stream_builder.expose(effect.output('video_to_downstream'))"
+        "stream_builder.expose(encoder.output('encoded_video'), Exposure.PUBLIC)"
     ]
-    assert "CameraSource" not in entry_source
     assert "DisplayWindow" not in entry_source
+
+
+def test_the_camera_is_named_only_as_the_one_line_swap_in_a_comment():
+    """No camera runs in the sample, by default or behind a flag; the comment
+    tells the reader which line points it at theirs."""
+    entry_source = template_text("stream.py")
+    names_in_the_code = {
+        node.id for node in ast.walk(ast.parse(entry_source)) if isinstance(node, ast.Name)
+    }
+    comment_lines = [
+        line.strip() for line in entry_source.splitlines() if line.strip().startswith("#")
+    ]
+
+    assert "CameraSource" not in names_in_the_code
+    assert any("stream_builder.add(CameraSource)" in line for line in comment_lines), (
+        entry_source
+    )
 
 
 @pytest.mark.parametrize(
     ("module_path", "class_name"),
-    [(EFFECT_MODULE_PATH, "InvertingEffect"), (METER_MODULE_PATH, "BrightnessMeter")],
+    [(EFFECT_MODULE_PATH, "HalftoneLensEffect"), (METER_MODULE_PATH, "BrightnessMeter")],
 )
 def test_each_node_lives_outside_the_entry_file(module_path: str, class_name: str):
     """A node class in the entry file identifies as `__main__:<Type>`, which is a
@@ -187,7 +210,7 @@ def test_each_node_lives_outside_the_entry_file(module_path: str, class_name: st
 def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
     """The effect in the video path runs on the GPU, and the numpy node reads an
     explicit CPU view off a fan-out, so the slow door never sits on the path to
-    the effect's exposed output."""
+    the encoder."""
     entry_source = template_text("stream.py")
     effect_source = template_text(EFFECT_MODULE_PATH)
     meter_source = template_text(METER_MODULE_PATH)
@@ -203,9 +226,10 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
         and ast.unparse(call.func) == "stream_builder.connect"
         and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
     )
-    assert readers_of_the_effect_output == ["meter.input('video_from_upstream')"], (
-        "the meter reads a fan-out of the effect's output, beside its exposure"
-    )
+    assert readers_of_the_effect_output == [
+        "encoder.input('video')",
+        "meter.input('video_from_upstream')",
+    ], "the meter reads a fan-out of the effect's output, beside the encoder"
 
 
 def test_the_scaffold_pins_the_python_version_the_plan_names():
@@ -213,7 +237,7 @@ def test_the_scaffold_pins_the_python_version_the_plan_names():
 
 
 def test_the_scaffold_depends_on_tatolab_stream_and_numpy_only():
-    assert 'dependencies = ["tatolab-stream>=0.48", "numpy>=2.1"]\n' in template_text(
+    assert 'dependencies = ["tatolab-stream>=0.54.2", "numpy>=2.1"]\n' in template_text(
         "pyproject.toml"
     ), (
         "the pixel effect needs no GPU package of the user's own, no runtime enters, and "
@@ -256,8 +280,8 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                     "config": {},
                 },
                 {
-                    "name": "invertingeffect",
-                    "type": "nodes.inverting_effect:InvertingEffect",
+                    "name": "halftonelenseffect",
+                    "type": "nodes.halftone_lens_effect:HalftoneLensEffect",
                     "config": {},
                 },
                 {
@@ -265,20 +289,27 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                     "type": "nodes.brightness_meter:BrightnessMeter",
                     "config": {},
                 },
+                {
+                    "name": "h264encoder",
+                    "type": "tatolab.stream:H264Encoder",
+                    "config": {},
+                },
             ],
             "links": [
                 {
                     "source": {"node": "testpatternsource", "port": "video"},
-                    "target": {"node": "invertingeffect", "port": "video_from_upstream"},
+                    "target": {"node": "halftonelenseffect", "port": "video_from_upstream"},
                 },
                 {
-                    "source": {"node": "invertingeffect", "port": "video_to_downstream"},
+                    "source": {"node": "halftonelenseffect", "port": "video_to_downstream"},
                     "target": {"node": "brightnessmeter", "port": "video_from_upstream"},
                 },
+                {
+                    "source": {"node": "halftonelenseffect", "port": "video_to_downstream"},
+                    "target": {"node": "h264encoder", "port": "video"},
+                },
             ],
-            "exposed": [
-                {"node": "invertingeffect", "port": "video_to_downstream", "level": "private"}
-            ],
+            "exposed": [{"node": "h264encoder", "port": "encoded_video", "level": "public"}],
         },
         "project_directory": str(app_directory),
     }

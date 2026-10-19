@@ -386,6 +386,7 @@ impl SimpleEncoder {
     pub fn encode_image(
         &mut self,
         rgba_image_view: vk::ImageView,
+        rgba_image_layout: crate::vulkan::rhi::SampledImageReadLayout,
         source_width: u32,
         source_height: u32,
         timestamp_ns: Option<i64>,
@@ -398,7 +399,13 @@ impl SimpleEncoder {
             )));
         }
         unsafe {
-            self.encode_image_internal(rgba_image_view, source_width, source_height, timestamp_ns)
+            self.encode_image_internal(
+                rgba_image_view,
+                rgba_image_layout,
+                source_width,
+                source_height,
+                timestamp_ns,
+            )
         }
     }
 
@@ -406,10 +413,10 @@ impl SimpleEncoder {
     /// the handle-shaped submit for callers outside the RHI, which hold no
     /// raw `vk::ImageView`.
     ///
-    /// `source_layout` is the layout the caller's texture is currently in;
-    /// anything but `SHADER_READ_ONLY_OPTIMAL` (the layout resolved
-    /// published surfaces are left in, and the one the RGB→NV12 converter
-    /// samples from) is refused naming both layouts. The source extent is
+    /// `source_layout` is the layout the caller's texture is currently in,
+    /// and the one the RGB→NV12 converter samples it in; a layout a sampled
+    /// image cannot be read in is refused naming the ones it can. The source
+    /// extent is
     /// read off the texture itself and bound by the same picture-area rule
     /// as [`encode_image`](Self::encode_image).
     ///
@@ -422,14 +429,8 @@ impl SimpleEncoder {
     ) -> Result<Vec<EncodePacket>, VideoError> {
         use crate::host_rhi::HostTextureExt;
 
-        if source_layout != crate::core::rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
-            return Err(VideoError::BitstreamError(format!(
-                "encode_source_texture: source layout {} unsupported — the RGB→NV12 \
-                 converter samples the source in SHADER_READ_ONLY_OPTIMAL ({})",
-                source_layout.0,
-                crate::core::rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
-            )));
-        }
+        let rgba_image_layout = crate::vulkan::rhi::SampledImageReadLayout::try_from(source_layout)
+            .map_err(|refusal| VideoError::Engine(format!("encode_source_texture: {refusal}")))?;
         let rgba_image_view = source.vulkan_inner().image_view().map_err(|e| {
             VideoError::Engine(format!(
                 "encode_source_texture: resolve the source texture's image view: {e}"
@@ -437,6 +438,7 @@ impl SimpleEncoder {
         })?;
         self.encode_image(
             rgba_image_view,
+            rgba_image_layout,
             source.width(),
             source.height(),
             timestamp_ns,

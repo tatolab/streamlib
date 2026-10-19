@@ -31,7 +31,7 @@ pub(super) const NATIVE_NODE_OUTPUT_PIXEL_BUFFER_POOL_ROTATION_DEPTH: usize = 4;
 /// borrowed from the runtime's shared pixel-buffer pool, handed back to it
 /// when the node's frame shape changes, and freed or handed back when this
 /// drops.
-pub(crate) struct ProcessorOutputPixelBufferPoolOfOneNativeNode {
+pub struct ProcessorOutputPixelBufferPoolOfOneNativeNode {
     processor_id_of_the_owning_node: String,
     /// The stream the node runs in, which every slot it borrows is attributed
     /// to; `None` for a node the engine's own context serves.
@@ -67,7 +67,7 @@ impl ProcessorOutputPixelBufferPoolOfOneNativeNode {
     /// minted id; refused by name once the pool's capacity of this node's
     /// frames is held, or past the device's memory budget. Never waits. Frees
     /// at most one shared slot due to be freed.
-    pub(crate) fn acquire_the_next_output_pixel_buffer(
+    pub fn acquire_the_next_output_pixel_buffer(
         &mut self,
         width: u32,
         height: u32,

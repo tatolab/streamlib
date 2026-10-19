@@ -3,20 +3,19 @@
 
 """The codec round trip as a deployment builds it: two streams on one machine.
 
-The sender encodes the camera and exposes the encoder's port; the receiver
-reads that port's track at the machine's local relay and decodes it. Nothing
-reads either from inside the runtime: `e2e_fixture_psnr_vivid.sh` reads the
+The sender encodes the test pattern and exposes the encoder's port; the
+receiver reads that port's track at the machine's local relay and decodes it.
+Nothing reads either from inside the runtime: `e2e_fixture_psnr_test_pattern.sh` reads the
 sender's encoded track with `tatolab-read-track`, decodes it with ffmpeg and
 scores the pictures, and reads the receiver's decoded-frame count off `graph`,
 which counts a port's writes once something reads it — the receiver exposes
 its decoded port for that.
 
-`e2e_fixture_psnr_vivid.sh` loads each with `tatolab run` into a `tatolabd` it
-starts with the streams' settings in its environment, which the compile
-inherits: `STREAMLIB_FIXTURE_VIDEO_CODEC` picks the codec (`h264` by default)
-and `STREAMLIB_CAMERA_DEVICE` the V4L2 node, else the first the engine finds.
-The sender is loaded as `codec_roundtrip_sender`, the name the receiver's
-broadcast is built from.
+`e2e_fixture_psnr_test_pattern.sh` loads each with `tatolab run` into a
+`tatolabd` it starts with the streams' settings in its environment, which the
+compile inherits: `STREAMLIB_FIXTURE_VIDEO_CODEC` picks the codec (`h264` by
+default). The sender is loaded as `codec_roundtrip_sender`, the name the
+receiver's broadcast is built from.
 """
 
 import json
@@ -62,14 +61,13 @@ def _this_machines_name() -> str:
 
 
 @stream
-def camera_through_the_encoder_exposing_its_encoded_port(stream_builder: StreamBuilder) -> None:
+def test_pattern_through_the_encoder_exposing_its_encoded_port(
+    stream_builder: StreamBuilder,
+) -> None:
     encoder_marker, _ = _codec_markers()
-    camera_device = os.environ.get("STREAMLIB_CAMERA_DEVICE")
 
-    camera = stream_builder.add(
-        tatolab.stream.CameraSource,
-        name="camera",
-        config={"device_id": camera_device} if camera_device else {},
+    test_pattern = stream_builder.add(
+        tatolab.stream.TestPatternSource, name="test_pattern"
     )
     encoder = stream_builder.add(
         encoder_marker,
@@ -77,7 +75,7 @@ def camera_through_the_encoder_exposing_its_encoded_port(stream_builder: StreamB
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
     )
 
-    stream_builder.connect(camera.output("video"), encoder.input("video"))
+    stream_builder.connect(test_pattern.output("video"), encoder.input("video"))
     stream_builder.expose(encoder.output("encoded_video"))
 
 

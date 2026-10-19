@@ -161,37 +161,48 @@ it runs on after the command returns, and the runtime loads it again each time i
 `stream.py` is wiring and nothing else:
 
 ```python
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+from tatolab.stream import (
+    Exposure,
+    H264Encoder,
+    StreamBuilder,
+    TestPatternSource,
+    stream,
+)
 
 from nodes.brightness_meter import BrightnessMeter
-from nodes.inverting_effect import InvertingEffect
+from nodes.halftone_lens_effect import HalftoneLensEffect
 
 
 @stream
 def main(stream_builder: StreamBuilder) -> None:
-    """The test pattern, inverted and exposed; brightness logged once a second."""
+    """The sample animation through the lens, encoded and shared; brightness logged each second."""
+    # Point it at your camera: `stream_builder.add(CameraSource)`, imported
+    # from `tatolab.stream`, publishes on the same `video` port.
     source = stream_builder.add(TestPatternSource)
-    effect = stream_builder.add(InvertingEffect)
+    effect = stream_builder.add(HalftoneLensEffect)
     meter = stream_builder.add(BrightnessMeter)
+    encoder = stream_builder.add(H264Encoder)
     stream_builder.connect(source.output("video"), effect.input("video_from_upstream"))
     stream_builder.connect(
         effect.output("video_to_downstream"), meter.input("video_from_upstream")
     )
-    stream_builder.expose(effect.output("video_to_downstream"))
+    stream_builder.connect(effect.output("video_to_downstream"), encoder.input("video"))
+    stream_builder.expose(encoder.output("encoded_video"), Exposure.PUBLIC)
 ```
 
-One output, two kinds of reader: the meter measures each frame, and the exposure lets code outside
-the stream read it. `add` names each node after its class, lowercased (`invertingeffect`), unless
-you pass `name=`. Swap `TestPatternSource` for `CameraSource` to run your camera through the same
-effect. A built-in's `config` is a `TypedDict` — `CameraSourceConfig`, `TestPatternSourceConfig` —
-so a type checker catches a misspelled key. `expose` makes an output private, readable by other streams and code on this
-machine; `expose(output, Exposure.PUBLIC)`, with `Exposure` imported from `tatolab.stream`, makes
-it public, readable off the machine too.
+The effect's output has two readers: the meter measures each frame, and the encoder turns it into
+H.264, whose output `expose(…, Exposure.PUBLIC)` shares as a track a browser plays, on this machine
+or off it. `add` names each node after its class, lowercased (`halftonelenseffect`), unless you
+pass `name=`. Swap `TestPatternSource` for `CameraSource`, as the comment says, to run your camera
+through the same effect. A built-in's `config` is a `TypedDict` — `CameraSourceConfig`,
+`TestPatternSourceConfig` — so a type checker catches a misspelled key. `expose` without a level
+makes an output private, readable by other streams and code on this machine.
 
 Another stream, on this machine or another, reads that output through a `RelayTrackSource` node,
 which subscribes to the port's track at the relay; a link's two ends are always in one stream.
 
-Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
+Pixels stay on the GPU. `nodes/halftone_lens_effect.py` is one shader function, with a lens that
+drifts around the frame and turns what it covers into dots:
 
 ```python
 from tatolab.stream import (
@@ -203,17 +214,46 @@ from tatolab.stream import (
     node,
 )
 
-INVERT_GLSL = """
+# The whole effect: the output pixel for the source pixel at `at`, with each
+# channel in 0.0-1.0. A lens drifts around the frame and turns what it covers
+# into dots. `dials` are the values `process()` hands it each frame. Edit it
+# while `tatolab dev` runs to see the change.
+HALFTONE_LENS_GLSL = """
+// How big the drifting lens is, as a share of the frame's height.
+const float LENS_RADIUS = 0.3;
+// How many pixels apart the dots sit under the lens.
+const float DOT_CELL_SIZE = 8.0;
+// How far the gaps between the dots fade toward grey.
+const float GAP_FADE = 0.35;
+
 vec4 effect(vec4 source, ivec2 at) {
-    // Color channels only — inverting alpha would erase the picture.
-    return vec4(1.0 - source.rgb, source.a);
+    vec2 pixel = vec2(at) + 0.5;
+    vec2 lens_centre = dials.frame_size * vec2(
+        0.5 + 0.3 * sin(dials.seconds * 0.4),
+        0.5 + 0.25 * sin(dials.seconds * 0.55)
+    );
+    float distance_from_lens_centre = length(pixel - lens_centre) / dials.frame_size.y;
+    float under_the_lens =
+        1.0 - smoothstep(LENS_RADIUS * 0.92, LENS_RADIUS, distance_from_lens_centre);
+
+    // Each cell keeps a round dot of the picture and fades the gap around it
+    // toward grey, so the dots show on every colour, black included.
+    vec2 cell_centre = (floor(pixel / DOT_CELL_SIZE) + 0.5) * DOT_CELL_SIZE;
+    float dot_radius = DOT_CELL_SIZE * 0.42;
+    float in_the_dot = 1.0 - smoothstep(dot_radius - 1.0, dot_radius, length(pixel - cell_centre));
+    vec3 gap = mix(source.rgb, vec3(0.5), GAP_FADE);
+    vec3 dotted = mix(gap, source.rgb, in_the_dot);
+
+    return vec4(mix(source.rgb, dotted, under_the_lens), source.a);
 }
 """
 
+NANOSECONDS_PER_SECOND = 1_000_000_000
+
 
 @node
-class InvertingEffect:
-    """Inverts every frame's colors on the GPU and passes it on."""
+class HalftoneLensEffect:
+    """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
 
     @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
@@ -222,18 +262,29 @@ class InvertingEffect:
     def video_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.inverting_pixel_effect = GlslPixelEffect.compile(
-            ctx.gpu_full_access, effect_glsl=INVERT_GLSL
+        self.halftone_lens_pixel_effect = GlslPixelEffect.compile(
+            ctx.gpu_full_access,
+            effect_glsl=HALFTONE_LENS_GLSL,
+            dials={"seconds": "float", "frame_size": "vec2"},
         )
+        self.first_frame_at_ns: int | None = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
         if frame is None:
             return
-        inverted_frame_record = self.inverting_pixel_effect.apply_to_frame(
-            ctx.gpu_limited_access, frame
+        # `ctx.time` is the monotonic clock every node shares, in ns.
+        if self.first_frame_at_ns is None:
+            self.first_frame_at_ns = ctx.time
+        halftone_frame_record = self.halftone_lens_pixel_effect.apply_to_frame(
+            ctx.gpu_limited_access,
+            frame,
+            dials={
+                "seconds": (ctx.time - self.first_frame_at_ns) / NANOSECONDS_PER_SECOND,
+                "frame_size": (frame.width, frame.height),
+            },
         )
-        ctx.outputs.write("video_to_downstream", msgpack.pack(inverted_frame_record))
+        ctx.outputs.write("video_to_downstream", msgpack.pack(halftone_frame_record))
 ```
 
 Logic runs on the CPU. `nodes/brightness_meter.py` reads each frame back through an explicit

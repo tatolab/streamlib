@@ -40,13 +40,14 @@ def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
 
     frame = VideoFrame(**first_message)
     assert (frame.width, frame.height) == (320, 180)
-    assert frame.surface_id, "surface_id names the pattern surface"
+    assert frame.surface_id, "surface_id names the frame's pooled buffer"
     assert frame.fps == 30
     assert frame.color_info is not None and frame.color_info.transfer == "srgb"
 
     later_frame = VideoFrame(**second_message)
-    assert later_frame.surface_id == frame.surface_id, (
-        "the pattern surface is acquired once and republished"
+    assert later_frame.surface_id != frame.surface_id, (
+        "each frame renders into the next buffer of the node's output pool, published under "
+        "an id of its own"
     )
     assert later_frame.timestamp_ns > frame.timestamp_ns, (
         "timestamps are the ordering primitive and must advance"

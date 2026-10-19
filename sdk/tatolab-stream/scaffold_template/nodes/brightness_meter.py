@@ -35,7 +35,7 @@ class BrightnessMeter:
             return
         # `frame.cpu()` is the slow door, named so: the frame lives on the GPU
         # and this reads it back into host memory. Once a second is cheap;
-        # per-frame pixel work belongs in a GPU effect like InvertingEffect.
+        # per-frame pixel work belongs in a GPU effect like HalftoneLensEffect.
         with frame.cpu() as pixels:
             # Color channels only — alpha is opaque and would skew the mean.
             brightness = float(numpy.mean(pixels[:, :, :3]))

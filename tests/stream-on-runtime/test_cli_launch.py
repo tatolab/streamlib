@@ -113,8 +113,18 @@ SCAFFOLDED_METER_REPORT = re.compile(r"brightness\b.*\bmean=")
 # (~360 in the window), and neither is a claim about wake latency.
 MINIMUM_METER_REPORTS = 5
 MAXIMUM_METER_REPORTS = 2 * int(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
-SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
-SCAFFOLDED_EFFECT_NODE_NAME = "invertingeffect"
+SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/halftone_lens_effect.py"
+SCAFFOLDED_EFFECT_NODE_NAME = "halftonelenseffect"
+SCAFFOLDED_ENCODER_NODE_NAME = "h264encoder"
+SCAFFOLDED_ENCODER_OUTPUT_PORT = "encoded_video"
+# What the scaffold's encoder logs on a device with no H.264 encoder, the
+# software device among them: a named refusal, while the stream stays loaded.
+SCAFFOLDED_ENCODER_REFUSAL = "H264Encoder: failed to mint the encoder session"
+# The encoder's own count, logged at teardown. `graph` counts a port's writes
+# only once something reads it, and nothing subscribes to the track here.
+SCAFFOLDED_ENCODER_FRAMES_ENCODED_AT_TEARDOWN = re.compile(
+    r"H264Encoder: teardown .*frames_encoded=(\d+)"
+)
 SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 
 # How long an attached stream's source has to write its first bag on `video`.
@@ -583,12 +593,17 @@ def test_the_scaffolded_app_reaches_a_running_graph(
         f"the runtime must render the stream it was loaded as; graph was {live_graph}"
     )
     assert live_graph["exposed"] == [
-        {"node": "invertingeffect", "port": "video_to_downstream", "level": "private"}
+        {
+            "node": SCAFFOLDED_ENCODER_NODE_NAME,
+            "port": SCAFFOLDED_ENCODER_OUTPUT_PORT,
+            "level": "public",
+        }
     ], f"the runtime must render the exposure the stream declared; graph was {live_graph}"
     assert {graph_node["name"] for graph_node in live_graph["nodes"]} == {
         "testpatternsource",
         SCAFFOLDED_EFFECT_NODE_NAME,
         "brightnessmeter",
+        SCAFFOLDED_ENCODER_NODE_NAME,
     }
 
     # Long enough for the source to have driven many frames through the effect.
@@ -600,6 +615,14 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     stream_output = the_first_streams_output(tatolabd)
     assert_the_effect_carried_live_video(
         tatolabd, stream_output, frames_written, "the app `tatolab new` writes"
+    )
+    frames_encoded = [
+        int(count)
+        for count in SCAFFOLDED_ENCODER_FRAMES_ENCODED_AT_TEARDOWN.findall(stream_output)
+    ]
+    assert any(frames_encoded) or SCAFFOLDED_ENCODER_REFUSAL in stream_output, (
+        f"the scaffolded encoder neither encoded an access unit nor refused by name; standard "
+        f"error ended:\n{tatolabd.recent_stderr()}"
     )
     meter_reports = len(SCAFFOLDED_METER_REPORT.findall(stream_output))
     assert meter_reports >= MINIMUM_METER_REPORTS, (
@@ -671,8 +694,13 @@ def assert_the_effect_carried_live_video(
     what editing the write-combined mapping in place through a strided view
     produced.
     """
-    assert "process() failed" not in output, (
-        f"{what_ran}: the effect raised on a live frame; standard error ended:\n"
+    process_failures_but_the_encoders_refusal = [
+        line
+        for line in output.splitlines()
+        if "process() failed" in line and SCAFFOLDED_ENCODER_REFUSAL not in line
+    ]
+    assert not process_failures_but_the_encoders_refusal, (
+        f"{what_ran}: a node failed a live frame; standard error ended:\n"
         f"{tatolabd.recent_stderr()}"
     )
     assert frames_written >= MINIMUM_FRAMES_FOR_LIVE_VIDEO, (

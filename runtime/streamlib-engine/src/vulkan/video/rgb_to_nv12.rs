@@ -330,7 +330,7 @@ impl RgbToNv12Converter {
 
     /// Convert an RGBA VkImage to NV12.
     ///
-    /// The input image must be in `SHADER_READ_ONLY_OPTIMAL` layout.
+    /// The input image is sampled in `rgba_image_layout`.
     /// After this call, the encode-src NV12 image is in `VIDEO_ENCODE_SRC_KHR`
     /// layout and ready for the encoder.
     ///
@@ -345,6 +345,7 @@ impl RgbToNv12Converter {
     pub unsafe fn convert(
         &mut self,
         rgba_image_view: vk::ImageView,
+        rgba_image_layout: crate::vulkan::rhi::SampledImageReadLayout,
         source_width: u32,
         source_height: u32,
     ) -> Result<(vk::Image, vk::ImageView), VideoError> {
@@ -354,7 +355,8 @@ impl RgbToNv12Converter {
             // --- Stage descriptor writes for this dispatch ---
             // The kernel drains its pending state on `record(...)`; setting
             // before recording is the contract.
-            self.kernel.set_sampled_image_view(0, rgba_image_view)?;
+            self.kernel
+                .set_sampled_image_view(0, rgba_image_view, rgba_image_layout)?;
             self.kernel.set_storage_image_view(1, self.luma_view)?;
             self.kernel.set_storage_image_view(2, self.chroma_view)?;
             self.kernel.set_push_constants_value(&PushConstants {

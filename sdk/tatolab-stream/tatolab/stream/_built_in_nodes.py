@@ -561,8 +561,8 @@ class TestPatternSourceConfig(TypedDict, total=False):
 
 
 class TestPatternSource(BuiltInNode[TestPatternSourceConfig]):
-    """Synthetic SMPTE-style color-bar source — demos a pipeline with no camera
-    attached.
+    """Synthetic SMPTE-style color bars with a bouncing potato and the sample stream's
+    captions, rendered on the GPU — demos a pipeline with no camera attached.
 
     Outputs:
         `video`: Test-pattern video frames.

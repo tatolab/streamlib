@@ -155,7 +155,7 @@ jobs:
           /tmp/wheel-check/bin/python -m pytest -v tests/test_third_party_notices.py
 
       # The MVP sentence on a clean machine: `tatolab new`'s sample stream —
-      # the test pattern through the Python effect — run attached on the
+      # the test pattern through the Python effect into H.264 — run attached on the
       # machine's `tatolabd` on the Vulkan driver the lend carries. The project's venv holds what a user's `uv sync`
       # gives it — `tatolab-stream`, from the wheel built above because no
       # index carries this version yet, and the numpy the scaffold declares —
@@ -251,8 +251,11 @@ jobs:
             echo "::error::tatolabd did not open the Vulkan loader the lend carries"
             exit 1
           fi
-          if grep -q 'process() failed' /tmp/tatolabd.log; then
-            echo "::error::the scaffolded effect raised on a live frame"
+          # The encoder's named refusal on a runner with no encoder is expected;
+          # any other node failing a live frame is not.
+          if grep 'process() failed' /tmp/tatolabd.log \
+              | grep -qv 'H264Encoder: failed to mint the encoder session'; then
+            echo "::error::a scaffolded node failed a live frame"
             exit 1
           fi
           echo "::group::graph --stream main"
@@ -277,6 +280,20 @@ jobs:
             exit 1
           fi
           echo "TestPatternSource.video wrote $frames_written frames"
+          # The encoder either encodes, or — on a runner with no encoder — refuses
+          # naming itself while the stream stays loaded. Its own count, logged at
+          # teardown: `graph` counts a port's writes only once something reads
+          # it, and nothing subscribes to the track here.
+          frames_encoded="$(grep -o 'H264Encoder: teardown .*frames_encoded=[0-9]*' /tmp/tatolabd.log \
+            | grep -o 'frames_encoded=[0-9]*' | cut -d= -f2 | sort -n | tail -1)"
+          if [ -n "$frames_encoded" ] && [ "$frames_encoded" -gt 0 ]; then
+            echo "H264Encoder encoded $frames_encoded frames"
+          elif grep -q 'H264Encoder: failed to mint the encoder session' /tmp/tatolabd.log; then
+            echo "H264Encoder refused by name on a runner with no encoder; the stream stayed loaded"
+          else
+            echo "::error::H264Encoder neither encoded a frame nor refused by name"
+            exit 1
+          fi
 
       - name: Keep the wheel for a clean-machine run
         uses: actions/upload-artifact@v6

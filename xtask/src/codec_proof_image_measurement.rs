@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The image measurements the codec proof scores with: per-plane PSNR against
-//! a reference frame, and the channel-mean drift lock the vivid colorimetry
-//! rig compares to its baseline.
+//! a reference frame, and the per-bar colours the test pattern's drift lock
+//! compares to its baseline.
 //!
 //! Every conversion is BT.709 full-range, applied identically to both sides of
 //! a comparison. That is the colour the rig's fixture source declares on every
@@ -153,21 +153,43 @@ impl Rgba8Image {
         )?))
     }
 
-    /// Mean of each RGB channel over every pixel, on the `[0, 1]` scale the
-    /// vivid baseline TSV is written in.
-    pub fn rgb_channel_means(&self) -> RgbChannelMeans {
-        let mut totals = [0u64; 3];
-        for pixel in self.rgba_bytes.chunks_exact(4) {
-            totals[0] += u64::from(pixel[0]);
-            totals[1] += u64::from(pixel[1]);
-            totals[2] += u64::from(pixel[2]);
-        }
-        let pixel_count = (self.rgba_bytes.len() / 4).max(1) as f64;
-        RgbChannelMeans {
-            red: totals[0] as f64 / pixel_count / EIGHT_BIT_SAMPLE_PEAK,
-            green: totals[1] as f64 / pixel_count / EIGHT_BIT_SAMPLE_PEAK,
-            blue: totals[2] as f64 / pixel_count / EIGHT_BIT_SAMPLE_PEAK,
-        }
+    /// The median colour of each SMPTE bar, left to right, on the `[0, 1]` scale.
+    ///
+    /// Read over each bar's middle three quarters of columns, clear of the
+    /// chroma a codec bleeds across a bar edge, and the rows from a sixteenth of
+    /// the way down to three quarters, above the test pattern's caption panel.
+    /// The potato covers less than half of any bar's band, so the median is the
+    /// bar's own colour wherever the potato is.
+    pub fn smpte_bar_median_colors(&self) -> Result<[RgbOnTheUnitScale; SMPTE_BAR_COUNT]> {
+        let first_band_row = self.pixel_height / 16;
+        let end_band_row = self.pixel_height * 3 / 4;
+        let bar_width = self.pixel_width / SMPTE_BAR_COUNT as u32;
+        let bar_edge_inset = bar_width / 8;
+        anyhow::ensure!(
+            end_band_row > first_band_row && bar_width > 2 * bar_edge_inset,
+            "a {}x{} frame is too small to hold eight measurable bars",
+            self.pixel_width,
+            self.pixel_height
+        );
+
+        Ok(std::array::from_fn(|bar_index| {
+            let first_bar_column = bar_index as u32 * self.pixel_width / SMPTE_BAR_COUNT as u32;
+            let end_bar_column = (bar_index as u32 + 1) * self.pixel_width / SMPTE_BAR_COUNT as u32;
+            let mut sample_counts_by_channel = [[0u32; 256]; 3];
+            for row in first_band_row..end_band_row {
+                for column in (first_bar_column + bar_edge_inset)..(end_bar_column - bar_edge_inset)
+                {
+                    let offset = ((row * self.pixel_width + column) * 4) as usize;
+                    for (channel, sample_counts) in sample_counts_by_channel.iter_mut().enumerate()
+                    {
+                        sample_counts[usize::from(self.rgba_bytes[offset + channel])] += 1;
+                    }
+                }
+            }
+            let [red, green, blue] = sample_counts_by_channel
+                .map(|sample_counts| median_sample(&sample_counts) / EIGHT_BIT_SAMPLE_PEAK);
+            RgbOnTheUnitScale { red, green, blue }
+        }))
     }
 
     /// Convert to 4:2:0 Y/U/V planes for scoring.
@@ -251,32 +273,71 @@ impl Rgba8Image {
     }
 }
 
-/// Mean of each RGB channel over a frame, on the `[0, 1]` scale.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RgbChannelMeans {
+/// The SMPTE bars the test pattern draws, left to right, by the names the bar
+/// colour baseline keys its rows by.
+pub const SMPTE_BAR_NAMES: [&str; SMPTE_BAR_COUNT] = [
+    "white", "yellow", "cyan", "green", "magenta", "red", "blue", "black",
+];
+
+/// How many bars the test pattern draws across the frame.
+pub const SMPTE_BAR_COUNT: usize = 8;
+
+/// The colour the test pattern draws each bar in, left to right, as 8-bit RGB.
+pub const SMPTE_BAR_NOMINAL_RGB: [[u8; 3]; SMPTE_BAR_COUNT] = [
+    [255, 255, 255],
+    [255, 255, 0],
+    [0, 255, 255],
+    [0, 255, 0],
+    [255, 0, 255],
+    [255, 0, 0],
+    [0, 0, 255],
+    [0, 0, 0],
+];
+
+/// The lower median of an 8-bit histogram.
+fn median_sample(sample_counts: &[u32; 256]) -> f64 {
+    let sample_total: u64 = sample_counts.iter().map(|&count| u64::from(count)).sum();
+    let median_rank = sample_total.div_ceil(2);
+    let mut samples_at_or_below = 0u64;
+    for (sample, &count) in sample_counts.iter().enumerate() {
+        samples_at_or_below += u64::from(count);
+        if samples_at_or_below >= median_rank {
+            return sample as f64;
+        }
+    }
+    0.0
+}
+
+/// An RGB colour with each channel on the `[0, 1]` scale.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RgbOnTheUnitScale {
     pub red: f64,
     pub green: f64,
     pub blue: f64,
 }
 
-impl RgbChannelMeans {
+impl RgbOnTheUnitScale {
     /// The three channels paired with the single-letter names the baseline TSV
-    /// keys its rows by, in the order it writes them.
+    /// heads its columns with, in the order it writes them.
     pub fn by_baseline_channel_name(&self) -> [(&'static str, f64); 3] {
         [("r", self.red), ("g", self.green), ("b", self.blue)]
     }
 
-    /// The arithmetic mean of a set of per-frame means — the rig-wide figure
+    /// The arithmetic mean of a set of per-frame colours — the rig-wide figure
     /// the drift lock compares, so one outlier frame cannot decide a run.
-    pub fn averaged(per_frame_means: &[RgbChannelMeans]) -> Option<RgbChannelMeans> {
-        if per_frame_means.is_empty() {
+    pub fn averaged(per_frame_colors: &[RgbOnTheUnitScale]) -> Option<RgbOnTheUnitScale> {
+        if per_frame_colors.is_empty() {
             return None;
         }
-        let frame_count = per_frame_means.len() as f64;
-        Some(RgbChannelMeans {
-            red: per_frame_means.iter().map(|means| means.red).sum::<f64>() / frame_count,
-            green: per_frame_means.iter().map(|means| means.green).sum::<f64>() / frame_count,
-            blue: per_frame_means.iter().map(|means| means.blue).sum::<f64>() / frame_count,
+        let frame_count = per_frame_colors.len() as f64;
+        Some(RgbOnTheUnitScale {
+            red: per_frame_colors.iter().map(|color| color.red).sum::<f64>() / frame_count,
+            green: per_frame_colors
+                .iter()
+                .map(|color| color.green)
+                .sum::<f64>()
+                / frame_count,
+            blue: per_frame_colors.iter().map(|color| color.blue).sum::<f64>() / frame_count,
         })
     }
 }
@@ -963,8 +1024,7 @@ mod tests {
         }
 
         // Saturated primaries already sit at the ends of the coded range, so
-        // re-expanding them clips straight back to where they were. This is why
-        // the vivid rig refuses `range-swap` and the gradients carry it.
+        // re-expanding them clips straight back to where they were.
         let saturated_red = solid_color_image(16, 16, [255, 0, 0]);
         assert_eq!(
             saturated_red.clone().with_injected_color_regression(
@@ -1169,20 +1229,105 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_channel_mean_is_the_normalised_average_of_each_channel() {
-        let means = solid_color_image(4, 4, [255, 0, 128]).rgb_channel_means();
-        assert!((means.red - 1.0).abs() < 1e-9, "{means:?}");
-        assert!(means.green.abs() < 1e-9, "{means:?}");
-        assert!((means.blue - 128.0 / 255.0).abs() < 1e-9, "{means:?}");
+    /// Eight vertical bars in the test pattern's colours, a dark square
+    /// covering some of `covered_bar` the way the potato does.
+    fn smpte_bars_image_with_a_square_over(
+        pixel_width: u32,
+        pixel_height: u32,
+        covered_bar: usize,
+        square_side: u32,
+    ) -> Rgba8Image {
+        let square_left = covered_bar as u32 * pixel_width / SMPTE_BAR_COUNT as u32;
+        let square_top = pixel_height / 8;
+        let mut rgba_bytes = Vec::with_capacity((pixel_width * pixel_height * 4) as usize);
+        for row in 0..pixel_height {
+            for column in 0..pixel_width {
+                let inside_the_square = (square_left..square_left + square_side).contains(&column)
+                    && (square_top..square_top + square_side).contains(&row);
+                let [red, green, blue] = if inside_the_square {
+                    [90, 60, 30]
+                } else {
+                    SMPTE_BAR_NOMINAL_RGB[(column as usize * SMPTE_BAR_COUNT
+                        / pixel_width as usize)
+                        .min(SMPTE_BAR_COUNT - 1)]
+                };
+                rgba_bytes.extend_from_slice(&[red, green, blue, 0xFF]);
+            }
+        }
+        Rgba8Image::from_rgba_bytes(pixel_width, pixel_height, rgba_bytes).unwrap()
+    }
 
-        let averaged = RgbChannelMeans::averaged(&[
-            RgbChannelMeans {
+    #[test]
+    fn each_bar_measures_its_own_colour_with_the_potato_over_it() {
+        // A 1280x720 frame's bar is 160 px wide, as wide as the potato; the
+        // square covers it whole for 160 of the band's 495 rows.
+        let bar_colors = smpte_bars_image_with_a_square_over(1280, 720, 5, 160)
+            .smpte_bar_median_colors()
+            .unwrap();
+
+        let as_bytes = |color: RgbOnTheUnitScale| {
+            [color.red, color.green, color.blue].map(|channel| (channel * 255.0).round() as u8)
+        };
+        assert_eq!(as_bytes(bar_colors[0]), [255, 255, 255], "white");
+        assert_eq!(as_bytes(bar_colors[2]), [0, 255, 255], "cyan");
+        assert_eq!(as_bytes(bar_colors[5]), [255, 0, 0], "red under the square");
+        assert_eq!(as_bytes(bar_colors[7]), [0, 0, 0], "black");
+    }
+
+    #[test]
+    fn every_injected_regression_drifts_a_bar_past_the_default_tolerance() {
+        let clean = smpte_bars_image_with_a_square_over(1280, 720, 3, 160);
+        let clean_bar_colors = clean.smpte_bar_median_colors().unwrap();
+        for regression in [
+            InjectedColorRegression::SwapRedAndBlueChannels,
+            InjectedColorRegression::Bt601EncodedDecodedAsBt709,
+            InjectedColorRegression::ChromaPlanesTransposed,
+        ] {
+            let injected_bar_colors = clean
+                .clone()
+                .with_injected_color_regression(regression)
+                .smpte_bar_median_colors()
+                .unwrap();
+            let largest_drift = clean_bar_colors
+                .iter()
+                .zip(&injected_bar_colors)
+                .flat_map(|(clean_color, injected_color)| {
+                    clean_color
+                        .by_baseline_channel_name()
+                        .into_iter()
+                        .zip(injected_color.by_baseline_channel_name())
+                        .map(|((_, clean_channel), (_, injected_channel))| {
+                            (clean_channel - injected_channel).abs()
+                        })
+                })
+                .fold(0.0, f64::max);
+            assert!(
+                largest_drift > 0.05,
+                "{} drifts no bar past 0.05 (largest {largest_drift:.4}) — the lock would be \
+                 vacuous for it",
+                regression.as_command_line_value()
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_too_small_for_eight_bars_is_refused_rather_than_measured_as_black() {
+        assert!(
+            solid_color_image(4, 4, [255, 0, 0])
+                .smpte_bar_median_colors()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn per_frame_colours_average_channel_by_channel() {
+        let averaged = RgbOnTheUnitScale::averaged(&[
+            RgbOnTheUnitScale {
                 red: 1.0,
                 green: 0.0,
                 blue: 0.5,
             },
-            RgbChannelMeans {
+            RgbOnTheUnitScale {
                 red: 0.0,
                 green: 1.0,
                 blue: 0.5,
@@ -1192,7 +1337,7 @@ mod tests {
         assert!((averaged.red - 0.5).abs() < 1e-9);
         assert!((averaged.green - 0.5).abs() < 1e-9);
         assert!((averaged.blue - 0.5).abs() < 1e-9);
-        assert_eq!(RgbChannelMeans::averaged(&[]), None);
+        assert_eq!(RgbOnTheUnitScale::averaged(&[]), None);
     }
 
     #[test]

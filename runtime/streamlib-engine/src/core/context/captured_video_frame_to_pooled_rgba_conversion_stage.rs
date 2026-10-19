@@ -97,7 +97,6 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
             scratch_texture,
             next_timeline_signal_value: 1,
             processor_output_pixel_buffer_pool: full
-                .host_inner()
                 .create_processor_output_pixel_buffer_pool_for_a_native_node(
                     processor_id_of_the_owning_node,
                 ),

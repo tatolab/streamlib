@@ -69,7 +69,6 @@ impl VideoCodecBackend for VulkanVideoCodecBackend {
         Ok(Box::new(VulkanVideoDecodeSession {
             decoder,
             processor_output_pixel_buffer_pool: gpu_context
-                .host_inner()
                 .create_processor_output_pixel_buffer_pool_for_a_native_node(
                     &request.processor_id_of_the_decoding_node,
                 ),

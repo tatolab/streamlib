@@ -12,6 +12,7 @@
 //! Exposes byte size and a mapped pointer only; no pixel-shaped
 //! getters that would be meaningless on an SSBO.
 
+use crate::core::{Error, Result};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::c_void;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -100,6 +101,33 @@ impl StorageBuffer {
     /// without HOST_VISIBLE).
     pub fn mapped_ptr(&self) -> *mut u8 {
         self.mapped_ptr_cached
+    }
+
+    /// Copy `bytes` into the start of this buffer's mapping, or say why they
+    /// could not be.
+    ///
+    /// The one safe door onto the mapping, so the null check, the length check
+    /// and the safety argument live on the type that owns it rather than in
+    /// each caller.
+    pub fn write_from(&self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() as u64 > self.byte_size() {
+            return Err(Error::GpuError(format!(
+                "this storage buffer holds {} bytes and {} were offered",
+                self.byte_size(),
+                bytes.len()
+            )));
+        }
+        let mapped = self.mapped_ptr();
+        if mapped.is_null() {
+            return Err(Error::GpuError(
+                "this storage buffer is not host-mapped, so nothing can be written into it".into(),
+            ));
+        }
+        // SAFETY: the mapping is `byte_size()` bytes long, which the check
+        // above proved holds every byte offered, and `bytes` is a separate
+        // allocation the caller owns.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped, bytes.len()) };
+        Ok(())
     }
 
     /// Number of handles sharing this buffer's host `Arc`. Engine-internal — a

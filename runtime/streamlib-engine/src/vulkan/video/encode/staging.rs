@@ -455,6 +455,7 @@ impl SimpleEncoder {
     pub(crate) unsafe fn encode_image_internal(
         &mut self,
         rgba_image_view: vk::ImageView,
+        rgba_image_layout: crate::vulkan::rhi::SampledImageReadLayout,
         source_width: u32,
         source_height: u32,
         timestamp_ns: Option<i64>,
@@ -468,8 +469,12 @@ impl SimpleEncoder {
 
             // Run RGB→NV12 conversion on the GPU.
             let converter = self.rgb_to_nv12.as_mut().unwrap();
-            let (nv12_image, nv12_view) =
-                converter.convert(rgba_image_view, source_width, source_height)?;
+            let (nv12_image, nv12_view) = converter.convert(
+                rgba_image_view,
+                rgba_image_layout,
+                source_width,
+                source_height,
+            )?;
 
             // Determine frame type via GOP (B-frames not supported for GPU
             // image path since we can't buffer GPU images; promote to P).
