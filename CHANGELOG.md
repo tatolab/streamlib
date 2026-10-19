@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.53.0](https://github.com/tatolab/streamlib/compare/v0.52.0...v0.53.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **builtins:** `RelayTrackSourceConfig.track_address` is gone; name the track by `broadcast` and `track`.
+
+### Features
+
+* **builtins:** RelayTrackSource names its track by relay_url, broadcast and track — MoQ's own vocabulary; track_address is deleted ([#2858](https://github.com/tatolab/streamlib/issues/2858)) ([250be1e](https://github.com/tatolab/streamlib/commit/250be1edd660f95b48cb2e0d40399ae6f9724a8a))
+
 ## [0.52.0](https://github.com/tatolab/streamlib/compare/v0.51.0...v0.52.0) (2026-10-19)
 
 
