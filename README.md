@@ -184,29 +184,8 @@ so a type checker catches a misspelled key. `expose` makes an output private, re
 machine; `expose(output, Exposure.PUBLIC)`, with `Exposure` imported from `tatolab.stream`, makes
 it public, readable off the machine too.
 
-Another stream on this machine reads that output by its address, `<stream>/<node>/<port>`:
-
-```python
-from tatolab.stream import H264Encoder, StreamBuilder, stream
-
-
-@stream
-def recorder(stream_builder: StreamBuilder) -> None:
-    encoder = stream_builder.add(H264Encoder)
-    stream_builder.connect(
-        stream_builder.remote_output("main/invertingeffect/video_to_downstream"),
-        encoder.input("video"),
-    )
-```
-
-The link belongs to the stream that holds its input, which pulls it; no stream links into
-another's input. The port must be private or public: a live `connect` to one left internal is
-refused naming the port and its level. A link whose source stream is not loaded or not started yet
-reads `awaiting_remote` in `graph`, naming the stream it waits for, and wires when that stream
-starts. A link loaded while its source port is internal waits too, naming the port and its level,
-and wires the moment `tatolab expose` makes the port private or public. Lowering the port to
-internal with `tatolab expose --remove` removes the link at once, and nothing restarts. An address
-naming another machine is refused: links between machines arrive with sharing.
+Another stream, on this machine or another, reads that output through a `RelayTrackSource` node,
+which subscribes to the port's track at the relay; a link's two ends are always in one stream.
 
 Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
 
@@ -405,8 +384,8 @@ host's connection.
 The tools are `graph`, `tap`, `logs` and `exchange` to observe; `add_node`, `connect`, `disconnect`
 and `remove_node` to change a running graph; and `run_stream`, `stop_stream`, `start_stream`,
 `remove_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds. Every tool
-about one stream names it with `stream`; `connect` makes a link in the stream that holds its input,
-and takes its source from another stream on this machine with `from_stream`. Beside them the runtime serves the node catalog — every
+about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
+them the runtime serves the node catalog — every
 node type it can add, with its description, config schema and ports — and the live graph as
 resources, and four prompts whose every step is a tool call. An agent can write a
 node class into a module beside `stream.py`, or `uv add` a package that ships one, then add it by

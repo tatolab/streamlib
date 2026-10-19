@@ -7,9 +7,7 @@ use crate::core::graph::{
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 use petgraph::{Direction, visit::EdgeRef};
 
-/// Every link carrying out of `node_ids` — the digraph's outgoing edges whose
-/// source is in this stream. A link reading another stream is an edge from its
-/// target's node to itself, which carries out of no node here.
+/// Every link carrying out of `node_ids` — the digraph's outgoing edges.
 fn every_link_carrying_out_of(
     graph: &DiGraph<ProcessorNode, Link>,
     node_ids: &[NodeIndex],
@@ -17,7 +15,6 @@ fn every_link_carrying_out_of(
     node_ids
         .iter()
         .flat_map(|&node_idx| graph.edges_directed(node_idx, Direction::Outgoing))
-        .filter(|edge| edge.weight().source_in_this_stream().is_some())
         .map(|edge| edge.id())
         .collect()
 }

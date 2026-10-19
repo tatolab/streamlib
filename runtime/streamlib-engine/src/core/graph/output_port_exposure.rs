@@ -93,8 +93,7 @@ impl std::fmt::Display for OutputPortReaderLocation {
     }
 }
 
-/// Where a reader from outside an output port's stream reads it from: the
-/// readers that register against a port and that a level change can cut off.
+/// Where a reader from outside an output port's stream reads it from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OutputPortReaderOutsideItsStream {
     /// Another stream, or other code, on this machine.

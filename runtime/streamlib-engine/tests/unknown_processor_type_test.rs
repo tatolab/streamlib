@@ -126,13 +126,8 @@ fn graph_snapshot_validate_rejects_unknown_processor_type() {
     }"#;
 
     let snapshot = GraphSnapshot::from_json_str(json).unwrap();
-    let this_machine = streamlib_engine::core::runtime::MachineName::from_a_hostname("desk")
-        .expect("`desk` names a machine");
-    match snapshot.validate(
-        &streamlib_engine::core::processors::NodeTypesOneStreamResolves::new(),
-        "main",
-        &this_machine,
-    ) {
+    match snapshot.validate(&streamlib_engine::core::processors::NodeTypesOneStreamResolves::new())
+    {
         Err(Error::UnknownProcessorType { ident }) => {
             assert_eq!(ident.as_str(), UNKNOWN_PATH);
         }

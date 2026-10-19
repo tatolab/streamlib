@@ -7,8 +7,6 @@ mod engine_teardown_watchdog;
 mod exposed_output_port_subscription;
 mod graph_change_listener;
 mod helper_process_group_registry;
-#[cfg(test)]
-mod links_between_started_streams_tests;
 mod loaded_stream;
 mod loaded_stream_output_port_exposure;
 mod local_processor_type_registration;
@@ -19,10 +17,7 @@ mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
 mod processor_interpreter_launch_record;
-pub(crate) use operations_runtime::{
-    EnginesTokioRuntimeForWorkSpawnedAgainstAStream, LinksReadingAStreamToRePlan,
-    mark_this_thread_as_a_processor_execution_thread, the_cut_of_a_link_reading_another_stream,
-};
+pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 mod reserved_slot_forwarder;
 #[allow(clippy::module_inception)]
 mod runtime;
@@ -63,10 +58,6 @@ pub(crate) use helper_process_group_registry::{
     kill_every_registered_helper_process_group_of_one_stream,
 };
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
-pub use loaded_stream_output_port_exposure::ExposedOutputPortReaderRegistration;
-pub(crate) use loaded_stream_output_port_exposure::{
-    ReaderRegisteredOnAGraph, register_a_reader_on_this_graph,
-};
 pub use machine_name::MachineName;
 pub use machine_state_directory::{
     KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord, KeptStreamRecordReadFailure,

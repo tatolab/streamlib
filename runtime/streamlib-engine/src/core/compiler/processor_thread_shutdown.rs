@@ -19,9 +19,8 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    ExposedOutputPortsComponent, Graph, GraphNodeWithComponents, ProcessorUniqueId,
-    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
-    WhyAReaderOfAnExposedOutputPortIsCutOff, cut_off_every_reader_each_under_its_own_unwind_guard,
+    Graph, GraphNodeWithComponents, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
+    ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -202,37 +201,20 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
 
     let mut first_node_left_behind = None;
     for processor_id in processor_ids {
-        let mut exposures_of_the_removed_node;
         {
             let mut graph = graph_arc.write();
-            exposures_of_the_removed_node = graph
+            if let Some(state) = graph
                 .traversal_mut()
                 .v(processor_id)
                 .first_mut()
-                .and_then(|node| {
-                    if let Some(state) = node.get::<StateComponent>() {
-                        state.transition_to(ProcessorState::Stopped);
-                    }
-                    node.remove::<ExposedOutputPortsComponent>()
-                });
+                .and_then(|node| node.get::<StateComponent>())
+            {
+                state.transition_to(ProcessorState::Stopped);
+            }
             if graph.traversal_mut().v(processor_id).drop().exists() {
-                if let Some(node) = graph.traversal_mut().v(processor_id).first_mut()
-                    && let Some(exposures) = exposures_of_the_removed_node.take()
-                {
-                    node.insert_component_without_rendering_it(exposures);
-                }
                 first_node_left_behind.get_or_insert_with(|| processor_id.clone());
                 continue;
             }
-        }
-        // Its readers' cuts may own anything, so they run only once the graph lock is released.
-        if let Some(exposures) = exposures_of_the_removed_node {
-            cut_off_every_reader_each_under_its_own_unwind_guard(
-                exposures.into_every_reader(),
-                WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream,
-                &the_stream_the_processors_belong_to.stream_name,
-                &format_args!("a port of '{processor_id}'"),
-            );
         }
         the_stream_the_processors_belong_to.publish_on_this_streams_topic(
             RuntimeEvent::CompilerDidDestroyProcessor {
@@ -511,90 +493,6 @@ mod tests {
             last_heard.duration_since(*first_heard)
         );
         assert!(graph_arc.read().traversal().v(()).ids().is_empty());
-    }
-
-    /// A removed node's readers from outside its stream are cut, told their
-    /// port's node left its stream, once the graph's lock is released.
-    ///
-    /// Fail-without-fix: drop the node's exposures uncut and the cut never
-    /// runs, so a link in another stream reading the port keeps a wiring to a
-    /// processor that is gone; cut them under the lock and a cut taking that
-    /// lock hangs the removal.
-    #[test]
-    fn a_removed_nodes_readers_are_cut_naming_that_their_node_left_once_the_graph_lock_is_released()
-    {
-        use std::sync::Weak;
-        use std::sync::atomic::AtomicBool;
-
-        use crate::core::graph::{
-            ExposedOutputPortsComponent, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
-            ReaderOfAnExposedOutputPort, WhyAReaderOfAnExposedOutputPortIsCutOff,
-        };
-
-        ensure_test_mocks_registered();
-        let mut graph = Graph::new();
-        let processor_id = a_processor_node_running_a_thread(
-            &mut graph,
-            "Camera",
-            ThreadOnceToldToStop::ReturnsAfter(Duration::ZERO),
-            ProcessorThreadKind::HelperProcessHost,
-            &WhenEachThreadWasToldToStop::default(),
-        );
-        let graph_slot: Arc<Mutex<Weak<RwLock<Graph>>>> = Arc::new(Mutex::new(Weak::new()));
-        let cuts_and_whether_the_lock_was_free = Arc::new(Mutex::new(Vec::new()));
-        let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        let graph_the_cut_reads = Arc::clone(&graph_slot);
-        let recorded = Arc::clone(&cuts_and_whether_the_lock_was_free);
-        assert!(
-            exposed_ports
-                .register_reader(
-                    "video",
-                    ReaderOfAnExposedOutputPort::new(
-                        Arc::new(AtomicBool::new(true)),
-                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                        Box::new(move |why| {
-                            let lock_was_free = graph_the_cut_reads
-                                .lock()
-                                .upgrade()
-                                .map(|graph| graph.try_write().is_some());
-                            recorded.lock().push((why, lock_was_free));
-                        }),
-                    ),
-                )
-                .is_ok()
-        );
-        graph
-            .traversal_mut()
-            .v(&processor_id)
-            .first_mut()
-            .expect("the node exists")
-            .insert_component_without_rendering_it(exposed_ports);
-        let graph_arc = Arc::new(RwLock::new(graph));
-        *graph_slot.lock() = Arc::downgrade(&graph_arc);
-
-        remove_processors_signalling_every_thread_before_joining_any(
-            &graph_arc,
-            &LoadedStreamIdentity {
-                runtime_id: "processor-thread-shutdown-test".to_string(),
-                stream_name: "main".to_string(),
-                stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
-            },
-            std::slice::from_ref(&processor_id),
-            BUDGETS_A_TEST_CAN_OUTLIVE,
-            never_forced,
-            &TeardownProgressNoteOfOneStream::default(),
-            &Mutex::new(Vec::new()),
-        )
-        .expect("the removal completes");
-
-        assert_eq!(
-            *cuts_and_whether_the_lock_was_free.lock(),
-            vec![(
-                WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream,
-                Some(true)
-            )]
-        );
     }
 
     /// A native thread that ignores shutdown is abandoned at its budget and
