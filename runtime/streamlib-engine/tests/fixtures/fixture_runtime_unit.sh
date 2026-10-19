@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # Sourced by the fixture drivers: the runtime unit a fixture stream runs on,
-# the venv it compiles in, the runtime a fixture starts and stops itself, and
-# the runtime unit's `tatolab` verbs that load and observe a stream.
+# the venv it compiles in, the runtime a fixture starts and stops itself, the
+# runtime unit's `tatolab` verbs that load and observe a stream, and
+# `tatolab-read-track`, which reads a stream's exposed port as a track at the
+# machine's local relay, as any user reads it.
 #
 # The runtime unit is what `cargo xtask build-runtime` lays out —
 # `bin/tatolab`, `bin/tatolabd` and `lib/tatolab/lend/` — at
@@ -109,16 +111,62 @@ sys.exit(0 if importlib.util.find_spec("tatolab.runtime") is not None else 1)
 }
 
 
-# Runs a verb of the runtime unit's `tatolab` (`graph`, `tap`, `logs`,
-# `exchange`, `streams`).
+# Runs a verb of the runtime unit's `tatolab` (`graph`, `logs`, `streams`,
+# `expose`).
 tatolab_observation_verb() {
     "$TATOLAB_EXECUTABLE" "$@"
 }
 
-# Runs the fixture venv's interpreter with the lend importable, for a fixture
-# script that reads `tatolab.runtime` internals.
-python_with_the_lend() {
-    PYTHONPATH="$RUNTIME_UNIT_LEND_DIRECTORY" "$FIXTURE_PYTHON" "$@"
+# The machine's local relay at its loopback listener, which serves every
+# private and public port; and the runtime's loopback HTTP listing.
+LOCAL_RELAY_LOOPBACK_URL="http://127.0.0.1:4443"
+LOOPBACK_HTTP_LISTING_URL="http://127.0.0.1:4446/"
+TATOLAB_READ_TRACK_EXECUTABLE="$FIXTURE_REPOSITORY_ROOT/target/release/tatolab-read-track"
+
+# Builds `tatolab-read-track` from this checkout, exiting 1 when it does not
+# build. A development tool, never in the runtime unit.
+require_tatolab_read_track() {
+    if ! (cd "$FIXTURE_REPOSITORY_ROOT" \
+        && cargo build --release --locked --quiet -p tatolab-read-track) >&2; then
+        echo "ERROR: tatolab-read-track does not build" >&2
+        exit 1
+    fi
+}
+
+# Prints the machine's name as the runtime's loopback listing names it.
+the_machine_name_the_loopback_listing_names() {
+    "$FIXTURE_PYTHON" -c '
+import json, sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=5) as listing:
+    print(json.load(listing)["machine"])
+' "$LOOPBACK_HTTP_LISTING_URL"
+}
+
+# Whether the runtime's loopback listing names <stream>'s port <node>/<port>
+# among those it exposes.
+the_loopback_listing_exposes() {
+    "$FIXTURE_PYTHON" -c '
+import json, sys, urllib.request
+listing_url, stream_name, node_name, port_name = sys.argv[1:]
+with urllib.request.urlopen(listing_url, timeout=5) as listing:
+    streams = json.load(listing)["streams"]
+sys.exit(0 if any(
+    stream["name"] == stream_name
+    and any(
+        exposed["node"] == node_name and exposed["port"] == port_name
+        for exposed in stream["exposed_output_ports"]
+    )
+    for stream in streams
+) else 1)
+' "$LOOPBACK_HTTP_LISTING_URL" "$1" "$2" "$3"
+}
+
+# Reads <count> objects of <track> in <broadcast> at the local relay's loopback
+# listener into <directory>, as `tatolab-read-track` writes them.
+read_the_track_at_the_local_relay() {
+    local broadcast="$1" track="$2" object_count="$3" dump_directory="$4"
+    "$TATOLAB_READ_TRACK_EXECUTABLE" "$LOCAL_RELAY_LOOPBACK_URL" "$broadcast" "$track" \
+        --count "$object_count" --out "$dump_directory"
 }
 
 # Whether a runtime answers at this user's local API socket now.

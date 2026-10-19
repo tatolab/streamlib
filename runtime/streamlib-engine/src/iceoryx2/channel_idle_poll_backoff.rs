@@ -4,8 +4,9 @@
 //! How long a subscriber with no listener slot sleeps after an empty poll.
 //!
 //! A channel's notify service is destination-keyed and sized to its fan-in, so
-//! a reader that is not one of the channel's destinations — the tap — has no
-//! fd to wait on and polls the ring instead, sleeping by this backoff.
+//! a reader that is not one of the channel's destinations — the runtime's
+//! publisher, on the reserved slot — has no fd to wait on and polls the ring
+//! instead, sleeping by this backoff.
 
 use std::time::{Duration, Instant};
 

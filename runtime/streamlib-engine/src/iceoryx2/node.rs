@@ -227,7 +227,7 @@ pub(crate) fn create_iceoryx2_node_in_domain(
 /// reopens it at — the parameters iceoryx2 verifies on each open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ChannelSizing {
-    /// The fixed destination slot count plus the tap's reserved slot.
+    /// The fixed destination slot count plus the publisher's reserved slot.
     pub(crate) max_subscribers: usize,
     /// The deepest ring any subscriber on the channel may take.
     pub(crate) channel_service_creation_depth: usize,
@@ -755,7 +755,7 @@ mod tests {
     }
 
     /// A channel created for the full destination cap admits every one of its
-    /// subscribers — the destinations and the tap — each opening the service
+    /// subscribers — the destinations and the publisher — each opening the service
     /// from its own node, as helpers do, and refuses one more.
     ///
     /// Fail-without-fix: leave `max_nodes` at iceoryx2's default of 20 and the
@@ -802,7 +802,7 @@ mod tests {
             service
                 .create_subscriber(DeliveryProfile::NEWEST_DEPTH)
                 .is_err(),
-            "subscriber {} is one past the destination cap plus the tap",
+            "subscriber {} is one past the destination cap plus the publisher",
             max_subscribers + 1
         );
     }
