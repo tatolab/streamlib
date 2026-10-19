@@ -270,7 +270,9 @@ sender exposes the encoder's port, its receiver reads that track through `RelayT
 for `X/psnr.rs`, the baselines re-taken on that path, and reads the receiver's decoded-frame count off
 `graph`. `E/../examples/codec_roundtrip_rig.rs`, an app built on an in-process engine, and
 `T/e2e_fixture_psnr.sh` with its PNG-replay arm are deleted; vivid is the codec rig's source until
-`TestPatternSource` renders deterministically per frame index (owner, 2026-10-19). `T/verify_audio_channel.sh`
+`TestPatternSource` renders deterministically per frame index (owner, 2026-10-19). From then the rig is
+`T/e2e_fixture_psnr_test_pattern.sh`, its sender encodes `TestPatternSource`, and `cargo xtask psnr
+bar-colors` locks each SMPTE bar's median colour per codec, replacing `channel-means` (owner, 2026-10-19). `T/verify_audio_channel.sh`
 and `T/audio_track_dump_check.py` read the `AudioBlock` track and decode msgpack in the script.
 `verify-live` (`:25-69`, `:103-135`), `verify-audio`, `capture-stream-evidence`, `tap-live-channel`,
 `drive-running-stream`, `inspect-live-graph`, `list-running-streams`, `evidence-verifier.md:21-28`,
@@ -364,3 +366,7 @@ Order: 1, 2, 7 first; 3 after 1 and 2; 4 after 2; 5 and 6 after 4; 8 after 3 and
 - REMOVED: new_with_test_pattern_wires_the_test_pattern_and_names_no_camera
 - REMOVED: fill_smpte_bars_rgba
 - REMOVED: CatalogFragment
+- REMOVED: e2e_fixture_psnr_vivid.sh
+- REMOVED: psnr_vivid_baseline
+- REMOVED: channel-means
+- REMOVED: RgbChannelMeans

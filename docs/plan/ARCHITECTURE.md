@@ -50,7 +50,7 @@ entry reads as **message** (the glossary).
   SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
   runtime-hosting — SHIPPED #2721, #2722; optional-accelerators — SHIPPED #2761, #2763,
   #2796]
-  <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
   <!-- verify: grep -n "The scaffolded stream runs on the driver the lend carries" .github/workflows/reusable-macos-runtime-unit.yml .github/workflows/ci.yml -->
@@ -140,7 +140,7 @@ entry reads as **message** (the glossary).
   not open meets a failure as the first thing (owner, 2026-10-16).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_depends_on_tatolab_stream_and_numpy_only -->
-  <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_tatolab_new.py::test_every_scaffolded_python_file_passes_ruff -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_binds_to_no_floor -->
 - **DECIDED** — `tatolabd` takes no stream and no argument: it is the machine's one runtime
@@ -3170,7 +3170,7 @@ entry reads as **message** (the glossary).
   moq-relays: the rig is a sender stream and a receiver stream on `tatolabd`, the sender's
   encoded track read with `tatolab-read-track` and decoded by ffmpeg; the in-process rig and
   the reference-PNG harness are deleted]
-  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh -->
 - **DECIDED** — The gate scores chroma, not luma alone: `cargo xtask psnr` classifies a
   frame Y ≥ 35 dB pass / 30–35 warn / < 30 fail **and** fails it outright when either
   chroma plane falls under 30 dB — one floor for every reference, no chroma warn band.
@@ -3199,8 +3199,10 @@ entry reads as **message** (the glossary).
   green rise reads 0.0965 off a 0.0029 floor. Measured, the two codecs agree to 0.0001 on every channel, so one shared file would
   have passed both arms here; the split is headroom for a codec that does reconstruct a
   saturated primary differently, so that it cannot be read as a colour regression.
-  [codec-blocks — SHIPPED #2085, #2086]
-  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
+  [codec-blocks — SHIPPED #2085, #2086; amended by moq-relays: the lock's source is
+  `TestPatternSource`, and it measures each SMPTE bar's median colour against
+  `psnr_test_pattern_bar_colors_baseline_<codec>.tsv`]
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh -->
 - **DECIDED** — On the rig the decoder enters at the stream's first keyframe with zero frames
   discarded, and the encoder writes parameter sets on every IDR, so even a late subscriber re-enters within
   one GOP. A failed header extraction refuses rather than degrading to an empty header, and
@@ -3255,7 +3257,7 @@ entry reads as **message** (the glossary).
   gets no Python arm — nothing Python-specific sits on the colour path.
   [python-codec-block-api — SHIPPED #2107; amended by moq-relays: the Python-authored
   streams are the codec rig itself, with no Rust arm to agree with]
-  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh -->
   <!-- verify: git ls-files runtime/streamlib-engine/tests/fixtures/codec_roundtrip_stream.py -->
 - **DECIDED** — An encoded audio packet is an ordinary bag, the encoded-frame convention
   applied to audio: `codec` (`"opus"`), `bitstream` (msgpack `bin`, one Opus packet as
