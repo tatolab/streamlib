@@ -221,7 +221,7 @@ Rejected: a hand-edited settings file as the only way to join; the app as the on
 plaintext credentials file where a store answers (owner, 2026-10-16); a secret as a CLI argument
 (owner, 2026-10-17, from the 2026-10-16 review).
 
-## ADDED: the relay source node — §Networking `:3985`
+## ADDED: the relay source node — §Networking `:3779`
 
 `RelayTrackSource` (`M/relay_track_source.rs`), `execution = manual`, config `relay_url`
 (default `http://127.0.0.1:4443`), `broadcast` and `track` — MoQ's own names, both required and
