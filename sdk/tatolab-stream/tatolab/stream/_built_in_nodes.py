@@ -477,9 +477,11 @@ class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
     The relay's object carries the writer's stamp, on the writer's clock. Every stamp in
     a graph is this machine's, so `track` is stamped with the object's own timestamp —
     the hang container's for a media track, the object's otherwise — plus one offset
-    taken at the first object, re-anchored when the track jumps, so the track's own
-    spacing survives jittered arrival. An object carrying no timestamp is stamped at
-    arrival.
+    taken at the first object, as the stack's own player takes it: lowered for an object
+    that would run more than 100 ms ahead of its arrival, such as the group in progress
+    a joining reader is handed in one burst, and taken again when the track steps back
+    or falls a second behind, so the track's own spacing survives jittered arrival. An
+    object carrying no timestamp is stamped at arrival.
 
     A relay that refuses, or a track not yet published or withdrawn, is retried with
     backoff and never ends the stream.

@@ -487,6 +487,38 @@ fn assert_the_numbered_messages_keep_their_spacing(objects: &[ObjectRead], what_
     }
 }
 
+/// A `RelayTrackSource`'s stamps against the track's own timestamps, both in
+/// nanoseconds: they never step back, every step is the track's own or shorter
+/// — the offset lowered for an object that arrived earlier than it allowed, as
+/// after the burst a joining reader is handed — and most steps are the track's.
+fn assert_the_stamps_keep_the_tracks_spacing_but_where_the_offset_was_lowered(
+    stamps_ns: &[u128],
+    track_timestamps_ns: &[u128],
+) {
+    let steps: Vec<(u128, u128)> = stamps_ns
+        .windows(2)
+        .zip(track_timestamps_ns.windows(2))
+        .map(|(stamps, track)| {
+            assert!(stamps[1] > stamps[0], "a stamp stepped back: {stamps_ns:?}");
+            (stamps[1] - stamps[0], track[1] - track[0])
+        })
+        .collect();
+    for (stamp_step, track_step) in &steps {
+        assert!(
+            stamp_step <= track_step,
+            "a step ran longer than the track's: {steps:?}"
+        );
+    }
+    let steps_kept = steps
+        .iter()
+        .filter(|(stamp_step, track_step)| stamp_step == track_step)
+        .count();
+    assert!(
+        steps_kept * 2 >= steps.len(),
+        "most steps are the track's own: {steps:?}"
+    );
+}
+
 /// Each group starts at a multiple of three and holds the messages after it
 /// until the next. A reader that falls behind may be handed a later group in
 /// place of an earlier one, as live delivery does, but never part of a group.
@@ -904,13 +936,13 @@ fn a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port() {
                 ) * 1_000
             })
             .collect();
-        for (pair, varint_pair) in objects.windows(2).zip(varint_timestamps_ns.windows(2)) {
-            assert_eq!(
-                pair[1].timestamp_ns - pair[0].timestamp_ns,
-                varint_pair[1] - varint_pair[0],
-                "the source's stamps keep the spacing of the media frames' own timestamps"
-            );
-        }
+        assert_the_stamps_keep_the_tracks_spacing_but_where_the_offset_was_lowered(
+            &objects
+                .iter()
+                .map(|object| object.timestamp_ns)
+                .collect::<Vec<_>>(),
+            &varint_timestamps_ns,
+        );
 
         let catalog = reader_at_loopback
             .the_catalog_once(
@@ -978,7 +1010,15 @@ struct ThirdPartyRelay {
 
 impl ThirdPartyRelay {
     fn start() -> Self {
-        let port = a_port_free_for_udp_and_tcp_on("127.0.0.1");
+        Self::start_on(a_port_free_for_udp_and_tcp_on("127.0.0.1"))
+    }
+
+    /// The URL a relay started on loopback `port` is dialed at.
+    fn dial_url_on(port: u16) -> Url {
+        format!("http://127.0.0.1:{port}/").parse().unwrap()
+    }
+
+    fn start_on(port: u16) -> Self {
         let configuration_directory = tempfile::tempdir().unwrap();
         let configuration_path = configuration_directory.path().join("relay.toml");
         std::fs::write(
@@ -999,7 +1039,7 @@ impl ThirdPartyRelay {
             .unwrap();
         Self {
             relay,
-            dial_url: format!("http://127.0.0.1:{port}/").parse().unwrap(),
+            dial_url: Self::dial_url_on(port),
             _configuration_directory: configuration_directory,
         }
     }
@@ -1137,13 +1177,17 @@ fn a_relay_track_source_reads_a_hang_track_a_third_party_published() {
                 (frame_number, object.timestamp_ns)
             })
             .collect();
+        assert_the_stamps_keep_the_tracks_spacing_but_where_the_offset_was_lowered(
+            &frames.iter().map(|(_, stamp)| *stamp).collect::<Vec<_>>(),
+            &frames
+                .iter()
+                .map(|(frame_number, _)| {
+                    u128::from(frame_number * THIRD_PARTY_FRAME_SPACING_MICROSECONDS) * 1_000
+                })
+                .collect::<Vec<_>>(),
+        );
         for (pair, objects_pair) in frames.windows(2).zip(objects.windows(2)) {
             let (earlier, later) = (pair[0], pair[1]);
-            assert_eq!(
-                later.1 - earlier.1,
-                u128::from((later.0 - earlier.0) * THIRD_PARTY_FRAME_SPACING_MICROSECONDS) * 1_000,
-                "the node keeps the third party's spacing: {frames:?}"
-            );
             if objects_pair[1].group_sequence != objects_pair[0].group_sequence {
                 assert_eq!(later.0 % THIRD_PARTY_FRAMES_PER_GROUP, 0, "{frames:?}");
             } else {
@@ -1209,4 +1253,38 @@ fn a_relay_track_source_whose_track_is_withdrawn_keeps_its_stream_running_and_re
         "the source wrote 20 more objects once the port was private again",
     );
     publishing.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// A `RelayTrackSource` whose relay is not there yet dials it again with
+/// backoff without its stream ending, and reads the track once the relay is up.
+#[test]
+fn a_relay_track_source_whose_relay_is_not_up_yet_reads_the_track_once_it_is() {
+    let port_the_relay_will_listen_on = a_port_free_for_udp_and_tcp_on("127.0.0.1");
+    let mut reading = TatolabdPublishingTheStream::start_with_the_streams(&[(
+        READER_STREAM,
+        a_reader_stream_holding_one_unexposed_writer(),
+    )]);
+    reading.add_a_relay_track_source_at(
+        &ThirdPartyRelay::dial_url_on(port_the_relay_will_listen_on),
+        "fromthirdparty",
+        "third/party/camera/video",
+    );
+    reading.expose_in_the_reader_stream("fromthirdparty", "track");
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(
+        reading.bags_written_by(READER_STREAM, "fromthirdparty", "track"),
+        0
+    );
+
+    let third_party_relay = ThirdPartyRelay::start_on(port_the_relay_will_listen_on);
+    let (third_party_writing, _third_party_session) = reading
+        .async_runtime
+        .block_on(publish_a_third_party_hang_broadcast_at(&third_party_relay));
+    reading.the_bags_written_once_they_reach(
+        "fromthirdparty",
+        |written| written >= 20,
+        "the source wrote 20 objects once its relay was up",
+    );
+    third_party_writing.abort();
+    reading.runtime.interrupt_and_expect_a_clean_exit();
 }

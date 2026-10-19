@@ -93,8 +93,11 @@ impl Default for RelayTrackSourceConfig {
                   The relay's object carries the writer's stamp, on the writer's clock. Every \
                   stamp in a graph is this machine's, so `track` is stamped with the object's \
                   own timestamp — the hang container's for a media track, the object's \
-                  otherwise — plus one offset taken at the first object, re-anchored when the \
-                  track jumps, so the track's own spacing survives jittered arrival. An object \
+                  otherwise — plus one offset taken at the first object, as the stack's own \
+                  player takes it: lowered for an object that would run more than 100 ms ahead \
+                  of its arrival, such as the group in progress a joining reader is handed in \
+                  one burst, and taken again when the track steps back or falls a second \
+                  behind, so the track's own spacing survives jittered arrival. An object \
                   carrying no timestamp is stamped at arrival.\n\n\
                   A relay that refuses, or a track not yet published or withdrawn, is retried \
                   with backoff and never ends the stream.",
@@ -612,20 +615,22 @@ impl WhereATrackCarriesItsTimestamp {
 /// the offset is taken again.
 const A_REBASED_STAMP_FALLS_BEHIND_ARRIVAL_BY_AT_MOST: Duration = Duration::from_secs(1);
 
-/// How far a re-based stamp may run ahead of the object's arrival before the
-/// track is taken to have leapt and the offset is taken again. A reader joining
-/// a track is handed the group in progress from its start, in one burst, and
-/// writing it at the track's own pace puts the stamps ahead of arrival by that
-/// group's age — at most the age a relay still serves a media group at.
-const A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST: Duration = hang::container::MAX_AGE;
+/// How far a re-based stamp may run ahead of the object's arrival — the
+/// jitter allowance of the stack's own player, whose reference moves down to
+/// any frame that would lead by more. An object arriving earlier than the
+/// offset allows lowers it so the object leads by exactly this much: the group
+/// a joining reader is handed in one burst is written at its arrival, and a
+/// track that leaps ahead never carries its stamps into this machine's future.
+const A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST: Duration = Duration::from_millis(100);
 
 /// How far a track's timestamp may step back — a reordered frame — before the
 /// track is taken to have restarted and the offset is taken again.
 const A_TRACKS_TIMESTAMP_STEPS_BACK_BY_AT_MOST: Duration = Duration::from_millis(250);
 
 /// A track's own timestamps restated on this machine's clock: each plus one
-/// offset taken at the first object, so the track's spacing is kept whatever
-/// the network did to the objects' arrival.
+/// offset taken at the first object, lowered when an object arrives earlier
+/// than it allows, so the track's spacing is kept whatever jitter did to the
+/// objects' arrival.
 #[derive(Debug, Default)]
 struct TrackTimestampRebasedOntoThisMachinesClock {
     offset_ns: Option<i128>,
@@ -649,17 +654,18 @@ impl TrackTimestampRebasedOntoThisMachinesClock {
             latest - track_timestamp_ns
                 > A_TRACKS_TIMESTAMP_STEPS_BACK_BY_AT_MOST.as_nanos() as i128
         });
-        let the_rebased_stamp_stays_near_arrival = |offset_ns: i128| {
-            let lead_over_arrival_ns = track_timestamp_ns + offset_ns - arrival_ns_wide;
-            (-(A_REBASED_STAMP_FALLS_BEHIND_ARRIVAL_BY_AT_MOST.as_nanos() as i128)
-                ..=A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i128)
-                .contains(&lead_over_arrival_ns)
+        let largest_lead_over_arrival_ns =
+            A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i128;
+        let the_rebased_stamp_falls_too_far_behind = |offset_ns: i128| {
+            arrival_ns_wide - (track_timestamp_ns + offset_ns)
+                > A_REBASED_STAMP_FALLS_BEHIND_ARRIVAL_BY_AT_MOST.as_nanos() as i128
         };
         let offset_ns = match self.offset_ns {
             Some(offset_ns)
-                if !the_track_stepped_back && the_rebased_stamp_stays_near_arrival(offset_ns) =>
+                if !the_track_stepped_back
+                    && !the_rebased_stamp_falls_too_far_behind(offset_ns) =>
             {
-                offset_ns
+                offset_ns.min(arrival_ns_wide + largest_lead_over_arrival_ns - track_timestamp_ns)
             }
             previous_offset_ns => {
                 if previous_offset_ns.is_some() {
@@ -755,30 +761,53 @@ mod tests {
     }
 
     /// A reader joining a track is handed the group in progress from its
-    /// keyframe in one burst, here two seconds of it, then the live objects.
+    /// keyframe in one burst, here two seconds of it, then the live objects:
+    /// the burst is written at its arrival, never stepping back, and the live
+    /// objects keep the track's spacing within the jitter allowance of arrival.
     #[test]
-    fn a_group_handed_over_in_a_burst_on_joining_keeps_the_tracks_spacing_into_the_live_edge() {
+    fn a_group_handed_over_in_a_burst_on_joining_is_written_at_arrival_and_the_live_edge_keeps_its_spacing()
+     {
         let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
         let joined_at_ns = 50_000_000_000_i64;
         let cached_objects = 60_i64;
-        let stamps: Vec<i64> = (0..cached_objects + 30)
+        let largest_lead_ns = A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i64;
+        let stamps_and_arrivals: Vec<(i64, i64)> = (0..cached_objects + 30)
             .map(|object_index| {
                 let track_timestamp_ns = i128::from(object_index) * FRAME_SPACING_NS;
                 let arrival_ns = if object_index < cached_objects {
                     joined_at_ns + object_index * 1_000_000
                 } else {
+                    let live_index = object_index - cached_objects;
                     joined_at_ns
-                        + ((object_index - cached_objects + 1) as i128 * FRAME_SPACING_NS) as i64
-                        + arrival_jitter_ns(object_index)
+                        + cached_objects * 1_000_000
+                        + (i128::from(live_index) * FRAME_SPACING_NS) as i64
+                        + (live_index * 7_919) % 16 * 1_000_000
                 };
-                rebasing.stamp_on_this_machines_clock(Some(track_timestamp_ns), arrival_ns)
+                (
+                    rebasing.stamp_on_this_machines_clock(Some(track_timestamp_ns), arrival_ns),
+                    arrival_ns,
+                )
             })
             .collect();
-        for pair in stamps.windows(2) {
+        for pair in stamps_and_arrivals.windows(2) {
+            assert!(
+                pair[1].0 > pair[0].0,
+                "the stamps never step back: {stamps_and_arrivals:?}"
+            );
+        }
+        for (stamp, arrival) in &stamps_and_arrivals {
+            assert!(
+                stamp - arrival <= largest_lead_ns,
+                "no stamp runs ahead of its arrival by more than the allowance: \
+                 {stamps_and_arrivals:?}"
+            );
+        }
+        let live_edge = &stamps_and_arrivals[cached_objects as usize..];
+        for pair in live_edge.windows(2) {
             assert_eq!(
-                i128::from(pair[1] - pair[0]),
+                i128::from(pair[1].0 - pair[0].0),
                 FRAME_SPACING_NS,
-                "the burst and the live objects after it keep the track's spacing: {stamps:?}"
+                "the live edge keeps the track's spacing: {live_edge:?}"
             );
         }
     }
@@ -793,13 +822,28 @@ mod tests {
     }
 
     #[test]
-    fn a_track_that_leaps_ahead_of_its_arrival_is_re_anchored() {
+    fn a_track_that_leaps_ahead_of_its_arrival_is_stamped_within_the_allowance_of_arrival() {
+        let largest_lead_ns = A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i64;
+        for leap_ns in [5_000_000_000_i128, 60_000_000_000] {
+            let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
+            rebasing.stamp_on_this_machines_clock(Some(0), 1_000_000_000);
+            rebasing.stamp_on_this_machines_clock(Some(FRAME_SPACING_NS), 1_033_333_333);
+            let after_the_leap =
+                rebasing.stamp_on_this_machines_clock(Some(leap_ns), 1_066_666_666);
+            assert_eq!(after_the_leap, 1_066_666_666 + largest_lead_ns);
+            let next = rebasing
+                .stamp_on_this_machines_clock(Some(leap_ns + FRAME_SPACING_NS), 1_099_999_999);
+            assert_eq!(i128::from(next - after_the_leap), FRAME_SPACING_NS);
+        }
+    }
+
+    #[test]
+    fn an_object_arriving_earlier_than_the_offset_allows_lowers_it() {
         let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
-        rebasing.stamp_on_this_machines_clock(Some(0), 1_000_000_000);
-        rebasing.stamp_on_this_machines_clock(Some(FRAME_SPACING_NS), 1_033_333_333);
-        let after_the_leap =
-            rebasing.stamp_on_this_machines_clock(Some(60_000_000_000), 1_066_666_666);
-        assert_eq!(after_the_leap, 1_066_666_666);
+        let largest_lead_ns = A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i64;
+        rebasing.stamp_on_this_machines_clock(Some(0), 1_400_000_000);
+        let early = rebasing.stamp_on_this_machines_clock(Some(FRAME_SPACING_NS), 1_033_333_333);
+        assert_eq!(early, 1_033_333_333 + largest_lead_ns);
     }
 
     #[test]

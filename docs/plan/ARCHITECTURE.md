@@ -3554,6 +3554,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::the_output_keeps_the_tracks_spacing_under_jittered_arrival -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_track_that_restarts_its_timestamps_is_re_anchored_and_keeps_its_spacing_after -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::an_object_carrying_no_timestamp_is_stamped_at_arrival -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_group_handed_over_in_a_burst_on_joining_is_written_at_arrival_and_the_live_edge_keeps_its_spacing -->
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
   machines become comparable; until then the per-clock rule above stands, and the relay
@@ -3791,6 +3792,8 @@ entry reads as **message** (the glossary).
   question with no answer (owner, 2026-10-16).
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_reads_a_hang_track_a_third_party_published -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_track_is_withdrawn_keeps_its_stream_running_and_reads_it_again -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_relay_is_not_up_yet_reads_the_track_once_it_is -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
   and the `moq-relay` program, each pinned to an exact version the change that builds the
   publisher names (0.3, 0.19, 0.21 and 0.17 lines as of 2026-10-16), and every payload a stock
