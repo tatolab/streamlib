@@ -30,6 +30,8 @@ pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod source_call_site_scan;
 pub mod stage_local_relay;
+pub mod stage_watch_page;
+pub mod watch_page_third_party_notices;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
 /// folder-backed `processors/`. `lint_logging` walks these by name rather
@@ -641,7 +643,8 @@ enum Commands {
     /// `sdk/streamlib-python-wheel` as a wheel with the pinned maturin into
     /// `wheel/`, replaces the lend with that wheel's contents, then builds
     /// `tatolabd` and `tatolab` and copies them, and the local relay
-    /// `stage-local-relay` builds, into `bin/`. It first stages the
+    /// `stage-local-relay` builds, into `bin/`, and stages the preview page
+    /// `stage-watch-page` builds into `lib/tatolab/watch/`. It first stages the
     /// platform's bundled Vulkan driver, so `_vulkan_driver/` lands beside
     /// `_engine`. The one build of the runtime unit for developers, CI and the
     /// installer; it installs and publishes nothing.
@@ -668,6 +671,12 @@ enum Commands {
     /// the tests that start a local relay read it from there. A second run
     /// with the same pin builds nothing. See [`stage_local_relay`].
     StageLocalRelay,
+
+    /// Build the preview page from `runtime/tatolab-watch/` with the bun its
+    /// `package.json` pins and the dependencies its `bun.lock` pins, into the
+    /// runtime unit's `lib/tatolab/watch/`, which `build-runtime` also stages.
+    /// See [`stage_watch_page`].
+    StageWatchPage,
 
     /// The codec proof's scorer: PSNR of a decoded frame set against the
     /// references that produced it, and the vivid rig's channel-mean drift
@@ -772,6 +781,7 @@ fn main() -> Result<()> {
         Commands::StageLocalRelay => {
             stage_local_relay::stage_the_local_relay(&workspace_root()?)?;
         }
+        Commands::StageWatchPage => stage_watch_page::stage_the_watch_page(&workspace_root()?)?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {
             generate_built_in_node_classes::run(&workspace_root()?, check)?

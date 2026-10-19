@@ -1,0 +1,709 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! `cargo xtask stage-watch-page`: the preview page, built from
+//! `runtime/tatolab-watch/` with the bun its `package.json` pins and the
+//! dependencies its `bun.lock` pins, into the directory the runtime's loopback
+//! HTTP serves under `/watch`.
+//!
+//! The staged directory holds the page's entry file, the one bundle `bun build`
+//! makes of its script, and the Opus decoder polyfill, libav.js, as its own
+//! unmodified files: the bundle leaves it external, the entry file's import map
+//! names its entry module, and that module fetches its WebAssembly build by URL
+//! from beside itself.
+
+use crate::build_runtime::runtime_unit_watch_page_directory_in_the_workspace;
+use anyhow::{Context, Result, bail};
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+
+/// The preview page's web project, relative to the workspace.
+pub const WATCH_PAGE_PROJECT_RELATIVE_TO_WORKSPACE: &str = "runtime/tatolab-watch";
+
+/// The page's entry file, in the project and in the staged directory alike.
+const WATCH_PAGE_ENTRY_FILE_NAME: &str = "index.html";
+
+/// The page's one script, which `bun build` bundles.
+const WATCH_PAGE_SCRIPT_FILE_NAME: &str = "main.ts";
+
+/// The bundle `bun build` writes of [`WATCH_PAGE_SCRIPT_FILE_NAME`].
+const WATCH_PAGE_BUNDLE_FILE_NAME: &str = "main.js";
+
+/// Where the entry file loads the bundle from: absolute under the loopback
+/// HTTP's `/watch` route, since the entry file answers at every address below
+/// it.
+const WATCH_PAGE_BUNDLE_PATH_THE_ENTRY_FILE_LOADS: &str = "/watch/main.js";
+
+/// The `package.json` field naming the bun the page is built with, as
+/// `bun@<version>`; `setup-bun` reads the same field.
+const PACKAGE_MANAGER_FIELD: &str = "packageManager";
+
+/// The polyfill package, left external to the bundle so its LGPL code stays
+/// its own unmodified files.
+const OPUS_DECODER_POLYFILL_PACKAGE_NAME: &str = "@libav.js/variant-opus-af";
+
+/// The polyfill's ES module entry, as its `package.json` `exports.import`
+/// names it.
+const OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME: &str = "libav-opus-af.mjs";
+
+/// Where the entry file's import map resolves [`OPUS_DECODER_POLYFILL_PACKAGE_NAME`].
+const OPUS_DECODER_POLYFILL_ENTRY_MODULE_PATH_THE_IMPORT_MAP_NAMES: &str =
+    "/watch/libav-opus-af.mjs";
+
+/// The polyfill package's built files, relative to the project.
+const OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT: &str =
+    "node_modules/@libav.js/variant-opus-af/dist";
+
+/// The suffix of the polyfill's WebAssembly loader, the first file libav.js
+/// fetches from beside the bundle when the page is not cross-origin isolated.
+const OPUS_DECODER_POLYFILL_WASM_LOADER_SUFFIX: &str = ".wasm.mjs";
+
+/// The suffix of the WebAssembly module the loader fetches beside itself.
+const OPUS_DECODER_POLYFILL_WASM_MODULE_SUFFIX: &str = ".wasm.wasm";
+
+/// Every polyfill file staged beside the bundle, by suffix.
+const OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE: [&str; 2] = [
+    OPUS_DECODER_POLYFILL_WASM_LOADER_SUFFIX,
+    OPUS_DECODER_POLYFILL_WASM_MODULE_SUFFIX,
+];
+
+/// The preview page's web project in `workspace_root`.
+pub fn watch_page_project_in_the_workspace(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(WATCH_PAGE_PROJECT_RELATIVE_TO_WORKSPACE)
+}
+
+/// The bun version `package_json` pins in its `packageManager` field.
+pub fn pinned_bun_version_from_package_json(package_json: &str) -> Result<String> {
+    let package: serde_json::Value =
+        serde_json::from_str(package_json).context("parsing the preview page's package.json")?;
+    let package_manager = package
+        .get(PACKAGE_MANAGER_FIELD)
+        .and_then(serde_json::Value::as_str)
+        .with_context(|| {
+            format!("the preview page's package.json names no `{PACKAGE_MANAGER_FIELD}`")
+        })?;
+    match package_manager.strip_prefix("bun@") {
+        Some(version) if !version.is_empty() => Ok(version.to_string()),
+        _ => bail!(
+            "the preview page's package.json `{PACKAGE_MANAGER_FIELD}` is `{package_manager}`, \
+             not `bun@<version>`"
+        ),
+    }
+}
+
+/// Refuse a `bun` on `PATH` other than the one the project pins, so every
+/// build of the page is made by the same bundler.
+fn ensure_the_pinned_bun_is_on_the_path(project_directory: &Path) -> Result<()> {
+    let package_json_path = project_directory.join("package.json");
+    let package_json = std::fs::read_to_string(&package_json_path)
+        .with_context(|| format!("reading {}", package_json_path.display()))?;
+    let pinned_bun_version = pinned_bun_version_from_package_json(&package_json)?;
+    let how_to_install_it = format!(
+        "install it with `curl -fsSL https://bun.sh/install | bash -s bun-v{pinned_bun_version}`"
+    );
+    let bun_version_output = std::process::Command::new("bun")
+        .arg("--version")
+        .output()
+        .with_context(|| {
+            format!(
+                "running `bun --version`: the preview page is built with bun \
+                 {pinned_bun_version}; {how_to_install_it}"
+            )
+        })?;
+    if !bun_version_output.status.success() {
+        bail!(
+            "`bun --version` failed with {}: {}; the preview page is built with bun \
+             {pinned_bun_version}",
+            bun_version_output.status,
+            String::from_utf8_lossy(&bun_version_output.stderr).trim()
+        );
+    }
+    let bun_version_on_the_path = String::from_utf8_lossy(&bun_version_output.stdout)
+        .trim()
+        .to_string();
+    if bun_version_on_the_path != pinned_bun_version {
+        bail!(
+            "the preview page is built with bun {pinned_bun_version}, and the bun on PATH is \
+             `{bun_version_on_the_path}`; {how_to_install_it}"
+        );
+    }
+    Ok(())
+}
+
+/// Run `bun` with `arguments` in `project_directory`.
+fn run_bun(project_directory: &Path, arguments: &[&OsStr]) -> Result<()> {
+    let shown_arguments = arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let status = std::process::Command::new("bun")
+        .args(arguments)
+        .current_dir(project_directory)
+        .status()
+        .with_context(|| format!("running `bun {shown_arguments}`"))?;
+    if !status.success() {
+        bail!("`bun {shown_arguments}` failed with {status}");
+    }
+    Ok(())
+}
+
+/// Install the page's dependencies exactly as `bun.lock` pins them, with the
+/// pinned bun, into the project's `node_modules`.
+pub fn install_the_watch_pages_locked_dependencies(workspace_root: &Path) -> Result<PathBuf> {
+    let project_directory = watch_page_project_in_the_workspace(workspace_root);
+    ensure_the_pinned_bun_is_on_the_path(&project_directory)?;
+    run_bun(
+        &project_directory,
+        &[OsStr::new("install"), OsStr::new("--frozen-lockfile")],
+    )?;
+    Ok(project_directory)
+}
+
+/// Build the page and stage it into the runtime unit in `workspace_root`,
+/// replacing whatever its `lib/tatolab/watch/` held.
+pub fn stage_the_watch_page(workspace_root: &Path) -> Result<()> {
+    stage_the_watch_page_into(
+        workspace_root,
+        &runtime_unit_watch_page_directory_in_the_workspace(workspace_root)?,
+    )
+}
+
+fn stage_the_watch_page_into(
+    workspace_root: &Path,
+    staged_watch_page_directory: &Path,
+) -> Result<()> {
+    let project_directory = install_the_watch_pages_locked_dependencies(workspace_root)?;
+    if staged_watch_page_directory.exists() {
+        std::fs::remove_dir_all(staged_watch_page_directory)
+            .with_context(|| format!("removing {}", staged_watch_page_directory.display()))?;
+    }
+    std::fs::create_dir_all(staged_watch_page_directory)
+        .with_context(|| format!("creating {}", staged_watch_page_directory.display()))?;
+    run_bun(
+        &project_directory,
+        &[
+            OsStr::new("build"),
+            OsStr::new(WATCH_PAGE_SCRIPT_FILE_NAME),
+            OsStr::new("--target"),
+            OsStr::new("browser"),
+            OsStr::new("--minify"),
+            OsStr::new("--external"),
+            OsStr::new(OPUS_DECODER_POLYFILL_PACKAGE_NAME),
+            OsStr::new("--outdir"),
+            staged_watch_page_directory.as_os_str(),
+        ],
+    )?;
+    copy_file_into_directory_under_its_own_name(
+        &project_directory.join(WATCH_PAGE_ENTRY_FILE_NAME),
+        staged_watch_page_directory,
+    )?;
+    let opus_decoder_polyfill_dist_directory =
+        project_directory.join(OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT);
+    copy_file_into_directory_under_its_own_name(
+        &opus_decoder_polyfill_dist_directory.join(OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME),
+        staged_watch_page_directory,
+    )?;
+    for opus_decoder_polyfill_file in
+        opus_decoder_polyfill_files_loaded_beside_the_bundle(&opus_decoder_polyfill_dist_directory)?
+    {
+        copy_file_into_directory_under_its_own_name(
+            &opus_decoder_polyfill_file,
+            staged_watch_page_directory,
+        )?;
+    }
+    make_the_staged_page_writable_by_its_owner_alone(staged_watch_page_directory)?;
+    ensure_the_staged_watch_page_is_complete(staged_watch_page_directory)?;
+    tracing::info!(
+        "stage-watch-page: the preview page is staged at {}",
+        staged_watch_page_directory.display()
+    );
+    Ok(())
+}
+
+/// The mode every staged file takes: the browser runs these scripts, and an npm
+/// tarball can carry world-writable modes that `cp`, `tar` and the installer
+/// would otherwise keep.
+#[cfg(unix)]
+const STAGED_WATCH_PAGE_FILE_MODE: u32 = 0o644;
+
+/// The staged directory's mode: one its group could write would let a member
+/// replace a staged file whatever that file's own mode.
+#[cfg(unix)]
+const STAGED_WATCH_PAGE_DIRECTORY_MODE: u32 = 0o755;
+
+/// Set `staged_watch_page_directory` to [`STAGED_WATCH_PAGE_DIRECTORY_MODE`]
+/// and every file in it to [`STAGED_WATCH_PAGE_FILE_MODE`].
+#[cfg(unix)]
+fn make_the_staged_page_writable_by_its_owner_alone(
+    staged_watch_page_directory: &Path,
+) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        staged_watch_page_directory,
+        std::fs::Permissions::from_mode(STAGED_WATCH_PAGE_DIRECTORY_MODE),
+    )
+    .with_context(|| {
+        format!(
+            "setting the mode of {}",
+            staged_watch_page_directory.display()
+        )
+    })?;
+    for staged_file in files_in(staged_watch_page_directory)? {
+        std::fs::set_permissions(
+            &staged_file,
+            std::fs::Permissions::from_mode(STAGED_WATCH_PAGE_FILE_MODE),
+        )
+        .with_context(|| format!("setting the mode of {}", staged_file.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_the_staged_page_writable_by_its_owner_alone(_: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Refuse the staged directory, or a file in it, that anyone but its owner may
+/// write.
+#[cfg(unix)]
+fn ensure_the_staged_page_is_writable_by_its_owner_alone(
+    staged_watch_page_directory: &Path,
+) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for staged_path in std::iter::once(staged_watch_page_directory.to_path_buf())
+        .chain(files_in(staged_watch_page_directory)?)
+    {
+        let mode = std::fs::metadata(&staged_path)
+            .with_context(|| format!("reading the mode of {}", staged_path.display()))?
+            .permissions()
+            .mode();
+        if mode & 0o022 != 0 {
+            bail!(
+                "{} is writable by its group or by anyone (mode {:o}), and the browser runs \
+                 what it holds",
+                staged_path.display(),
+                mode & 0o777
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_the_staged_page_is_writable_by_its_owner_alone(_: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// The files directly in `directory`.
+fn files_in(directory: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in
+        std::fs::read_dir(directory).with_context(|| format!("reading {}", directory.display()))?
+    {
+        let entry_path = entry
+            .with_context(|| format!("reading {}", directory.display()))?
+            .path();
+        if entry_path.is_file() {
+            files.push(entry_path);
+        }
+    }
+    Ok(files)
+}
+
+fn copy_file_into_directory_under_its_own_name(file: &Path, directory: &Path) -> Result<()> {
+    let file_name = file
+        .file_name()
+        .with_context(|| format!("{} names no file", file.display()))?;
+    std::fs::copy(file, directory.join(file_name))
+        .with_context(|| format!("copying {} into {}", file.display(), directory.display()))?;
+    Ok(())
+}
+
+/// The one file per suffix in [`OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE`]
+/// in `directory`: the polyfill's build, or a staged page.
+fn opus_decoder_polyfill_files_loaded_beside_the_bundle(directory: &Path) -> Result<Vec<PathBuf>> {
+    OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE
+        .iter()
+        .map(|suffix| the_one_opus_decoder_polyfill_file_ending_in(directory, suffix))
+        .collect()
+}
+
+/// The one file in `directory` whose name ends `suffix`.
+fn the_one_opus_decoder_polyfill_file_ending_in(directory: &Path, suffix: &str) -> Result<PathBuf> {
+    let mut file_names_ending_in_the_suffix = Vec::new();
+    for entry in
+        std::fs::read_dir(directory).with_context(|| format!("reading {}", directory.display()))?
+    {
+        let file_name = entry
+            .with_context(|| format!("reading {}", directory.display()))?
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        if file_name.ends_with(suffix) {
+            file_names_ending_in_the_suffix.push(file_name);
+        }
+    }
+    match file_names_ending_in_the_suffix.as_slice() {
+        [one] => Ok(directory.join(one)),
+        _ => bail!(
+            "{} holds {} Opus decoder polyfill files ending `{suffix}`, not one: \
+             {file_names_ending_in_the_suffix:?}",
+            directory.display(),
+            file_names_ending_in_the_suffix.len()
+        ),
+    }
+}
+
+/// The polyfill's WebAssembly loader in the installed `project_directory`,
+/// the file whose leading comment block is libav.js's own licence notice.
+pub fn opus_decoder_polyfill_wasm_loader_in_the_project(
+    project_directory: &Path,
+) -> Result<PathBuf> {
+    the_one_opus_decoder_polyfill_file_ending_in(
+        &project_directory.join(OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT),
+        OPUS_DECODER_POLYFILL_WASM_LOADER_SUFFIX,
+    )
+}
+
+/// Refuse a staged page whose entry file does not load the bundle from where
+/// the loopback HTTP serves it or map the polyfill to its entry module, whose
+/// bundle does not import the polyfill by name, that lacks a file it loads, or
+/// any of whose files someone besides its owner may write.
+pub fn ensure_the_staged_watch_page_is_complete(staged_watch_page_directory: &Path) -> Result<()> {
+    let entry_file_path = staged_watch_page_directory.join(WATCH_PAGE_ENTRY_FILE_NAME);
+    let entry_file = std::fs::read_to_string(&entry_file_path).with_context(|| {
+        format!(
+            "the staged preview page has no entry file at {}",
+            entry_file_path.display()
+        )
+    })?;
+    if !entry_file.contains(&format!(
+        "src=\"{WATCH_PAGE_BUNDLE_PATH_THE_ENTRY_FILE_LOADS}\""
+    )) {
+        bail!(
+            "{} loads no script from {WATCH_PAGE_BUNDLE_PATH_THE_ENTRY_FILE_LOADS}, where the \
+             bundle is served",
+            entry_file_path.display()
+        );
+    }
+    if !(entry_file.contains(&format!("\"{OPUS_DECODER_POLYFILL_PACKAGE_NAME}\""))
+        && entry_file.contains(&format!(
+            "\"{OPUS_DECODER_POLYFILL_ENTRY_MODULE_PATH_THE_IMPORT_MAP_NAMES}\""
+        )))
+    {
+        bail!(
+            "{} maps no `{OPUS_DECODER_POLYFILL_PACKAGE_NAME}` to \
+             {OPUS_DECODER_POLYFILL_ENTRY_MODULE_PATH_THE_IMPORT_MAP_NAMES}, which the bundle \
+             imports it by",
+            entry_file_path.display()
+        );
+    }
+    let bundle_path = staged_watch_page_directory.join(WATCH_PAGE_BUNDLE_FILE_NAME);
+    let bundle = std::fs::read_to_string(&bundle_path).with_context(|| {
+        format!(
+            "the staged preview page has no bundle at {}",
+            bundle_path.display()
+        )
+    })?;
+    if !bundle.contains(&format!("\"{OPUS_DECODER_POLYFILL_PACKAGE_NAME}\"")) {
+        bail!(
+            "{} does not import `{OPUS_DECODER_POLYFILL_PACKAGE_NAME}` by name: the bundle \
+             inlined the polyfill rather than leaving it its own files",
+            bundle_path.display()
+        );
+    }
+    let polyfill_entry_module_path =
+        staged_watch_page_directory.join(OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME);
+    if !polyfill_entry_module_path.is_file() {
+        bail!(
+            "the staged preview page has no Opus decoder polyfill entry module at {}",
+            polyfill_entry_module_path.display()
+        );
+    }
+    opus_decoder_polyfill_files_loaded_beside_the_bundle(staged_watch_page_directory)?;
+    ensure_the_staged_page_is_writable_by_its_owner_alone(staged_watch_page_directory)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a bundle leaving the polyfill external holds of it.
+    const A_BUNDLE_IMPORTING_THE_POLYFILL_BY_NAME: &str =
+        "watch();import(\"@libav.js/variant-opus-af\")";
+
+    /// A staged page holding `file_names` — the bundle importing the polyfill
+    /// by name, every other file a placeholder — and the checked-in entry file
+    /// when `with_the_entry_file`.
+    fn a_staged_watch_page(file_names: &[&str], with_the_entry_file: bool) -> tempfile::TempDir {
+        let staged_watch_page_directory = tempfile::tempdir().unwrap();
+        for file_name in file_names {
+            let staged_body = if *file_name == WATCH_PAGE_BUNDLE_FILE_NAME {
+                A_BUNDLE_IMPORTING_THE_POLYFILL_BY_NAME
+            } else {
+                "staged"
+            };
+            std::fs::write(
+                staged_watch_page_directory.path().join(file_name),
+                staged_body,
+            )
+            .unwrap();
+        }
+        if with_the_entry_file {
+            std::fs::write(
+                staged_watch_page_directory
+                    .path()
+                    .join(WATCH_PAGE_ENTRY_FILE_NAME),
+                include_str!("../../runtime/tatolab-watch/index.html"),
+            )
+            .unwrap();
+        }
+        make_the_staged_page_writable_by_its_owner_alone(staged_watch_page_directory.path())
+            .unwrap();
+        staged_watch_page_directory
+    }
+
+    const EVERY_BUILT_FILE: [&str; 4] = [
+        WATCH_PAGE_BUNDLE_FILE_NAME,
+        OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME,
+        "libav-6.10.9.0-opus-af.wasm.mjs",
+        "libav-6.10.9.0-opus-af.wasm.wasm",
+    ];
+
+    #[test]
+    fn a_page_staged_with_the_checked_in_entry_file_the_bundle_and_the_polyfill_is_complete() {
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, true);
+
+        ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect("every file the page loads is staged");
+    }
+
+    #[test]
+    fn a_page_missing_any_file_it_loads_is_refused_naming_it() {
+        for (missing_file_name, what_the_refusal_names) in [
+            (WATCH_PAGE_BUNDLE_FILE_NAME, WATCH_PAGE_BUNDLE_FILE_NAME),
+            (
+                OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME,
+                OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME,
+            ),
+            ("libav-6.10.9.0-opus-af.wasm.mjs", ".wasm.mjs"),
+            ("libav-6.10.9.0-opus-af.wasm.wasm", ".wasm.wasm"),
+        ] {
+            let staged_file_names: Vec<&str> = EVERY_BUILT_FILE
+                .into_iter()
+                .filter(|file_name| *file_name != missing_file_name)
+                .collect();
+            let staged_watch_page_directory = a_staged_watch_page(&staged_file_names, true);
+
+            let refusal =
+                ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+                    .expect_err("a page missing a file is refused")
+                    .to_string();
+
+            assert!(
+                refusal.contains(what_the_refusal_names),
+                "{missing_file_name}: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_page_with_no_entry_file_is_refused_naming_where_it_looked() {
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, false);
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("a page with no entry file is refused")
+            .to_string();
+
+        assert!(refusal.contains(WATCH_PAGE_ENTRY_FILE_NAME), "{refusal}");
+    }
+
+    #[test]
+    fn an_entry_file_loading_the_bundle_by_a_relative_path_is_refused() {
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, false);
+        std::fs::write(
+            staged_watch_page_directory
+                .path()
+                .join(WATCH_PAGE_ENTRY_FILE_NAME),
+            "<script type=\"module\" src=\"main.js\"></script>",
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("a relative bundle path names no file below /watch/<address>")
+            .to_string();
+
+        assert!(
+            refusal.contains(WATCH_PAGE_BUNDLE_PATH_THE_ENTRY_FILE_LOADS),
+            "{refusal}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_world_writable_staged_file_is_refused_and_staging_makes_it_owner_writable_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, true);
+        let polyfill_entry_module = staged_watch_page_directory
+            .path()
+            .join(OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME);
+        std::fs::set_permissions(
+            &polyfill_entry_module,
+            std::fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("a world-writable script is refused")
+            .to_string();
+        assert!(refusal.contains("mode 666"), "{refusal}");
+
+        make_the_staged_page_writable_by_its_owner_alone(staged_watch_page_directory.path())
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&polyfill_entry_module)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644
+        );
+        ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect("an owner-writable page is complete");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_group_writable_staged_directory_is_refused_and_staging_makes_it_owner_writable_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, true);
+        std::fs::set_permissions(
+            staged_watch_page_directory.path(),
+            std::fs::Permissions::from_mode(0o775),
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("a group-writable directory is refused")
+            .to_string();
+        assert!(refusal.contains("mode 775"), "{refusal}");
+
+        make_the_staged_page_writable_by_its_owner_alone(staged_watch_page_directory.path())
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(staged_watch_page_directory.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect("an owner-writable directory is complete");
+    }
+
+    #[test]
+    fn a_bundle_that_inlined_the_polyfill_is_refused() {
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, true);
+        std::fs::write(
+            staged_watch_page_directory
+                .path()
+                .join(WATCH_PAGE_BUNDLE_FILE_NAME),
+            "s.VER=\"6.10.9.0\",s.CONFIG=\"opus-af\"",
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("an inlined polyfill is refused")
+            .to_string();
+
+        assert!(refusal.contains("inlined the polyfill"), "{refusal}");
+    }
+
+    #[test]
+    fn an_entry_file_mapping_no_polyfill_is_refused() {
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, false);
+        std::fs::write(
+            staged_watch_page_directory
+                .path()
+                .join(WATCH_PAGE_ENTRY_FILE_NAME),
+            "<script type=\"module\" src=\"/watch/main.js\"></script>",
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("an entry file without the import map is refused")
+            .to_string();
+
+        assert!(
+            refusal.contains(OPUS_DECODER_POLYFILL_PACKAGE_NAME),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn the_polyfill_package_left_external_is_one_the_lockfile_pins() {
+        assert!(
+            include_str!("../../runtime/tatolab-watch/bun.lock")
+                .contains(&format!("\"{OPUS_DECODER_POLYFILL_PACKAGE_NAME}\""))
+        );
+    }
+
+    #[test]
+    fn the_bundle_path_the_entry_file_loads_is_the_bundle_under_the_watch_route() {
+        let watch_route_prefix_in_the_listener =
+            include_str!("../../runtime/streamlib-api-server/src/loopback_http_listener.rs");
+        assert!(
+            watch_route_prefix_in_the_listener
+                .contains("const WATCH_PAGE_ROUTE_PREFIX: &str = \"/watch\";")
+        );
+        assert_eq!(
+            WATCH_PAGE_BUNDLE_PATH_THE_ENTRY_FILE_LOADS,
+            format!("/watch/{WATCH_PAGE_BUNDLE_FILE_NAME}")
+        );
+    }
+
+    #[test]
+    fn the_checked_in_project_pins_bun_in_its_package_manager_field() {
+        let pinned_bun_version = pinned_bun_version_from_package_json(include_str!(
+            "../../runtime/tatolab-watch/package.json"
+        ))
+        .expect("the checked-in package.json pins bun");
+
+        assert!(
+            pinned_bun_version.split('.').count() == 3
+                && pinned_bun_version
+                    .split('.')
+                    .all(|part| part.parse::<u32>().is_ok()),
+            "{pinned_bun_version}"
+        );
+    }
+
+    #[test]
+    fn a_package_manager_other_than_bun_is_refused_naming_it() {
+        let refusal = pinned_bun_version_from_package_json(r#"{"packageManager": "npm@10.0.0"}"#)
+            .expect_err("npm is not bun")
+            .to_string();
+
+        assert!(refusal.contains("npm@10.0.0"), "{refusal}");
+    }
+
+    #[test]
+    fn a_polyfill_build_holding_two_files_of_one_suffix_is_refused_rather_than_guessed_between() {
+        let dist_directory = a_staged_watch_page(
+            &[
+                "libav-6.10.9.0-opus-af.wasm.mjs",
+                "libav-6.11.0.0-opus-af.wasm.mjs",
+                "libav-6.10.9.0-opus-af.wasm.wasm",
+            ],
+            false,
+        );
+
+        let refusal = opus_decoder_polyfill_files_loaded_beside_the_bundle(dist_directory.path())
+            .expect_err("two loaders are refused")
+            .to_string();
+
+        assert!(refusal.contains(".wasm.mjs"), "{refusal}");
+    }
+}

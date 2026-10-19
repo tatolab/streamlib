@@ -73,6 +73,17 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
 # many that a dependency swap fails an unrelated test.
 SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "shaderc", "axum", "moq-relay")
 
+# The preview page's npm closure, which the runtime unit carries in
+# `lib/tatolab/watch/`: the player it is built on, and the Opus decoder polyfill
+# whose WebAssembly build carries FFmpeg under the LGPL-2.1, whose text must
+# travel with it.
+SAMPLED_WATCH_PAGE_DEPENDENCY_NOTICES = (
+    "## The preview page",
+    "`@moq/watch`",
+    "`@libav.js/variant-opus-af`",
+    "GNU LESSER GENERAL PUBLIC LICENSE",
+)
+
 NOTICES_LICENSE_FILE_NAME = "THIRD-PARTY-NOTICES.md"
 BUSL_LICENSE_FILE_NAME = "LICENSE"
 
@@ -142,6 +153,14 @@ def test_the_shipped_notices_carry_the_rust_closure(installed_streamlib_distribu
     )
     missing = [name for name in SAMPLED_RUST_DEPENDENCY_NAMES if name not in contents]
     assert not missing, f"Rust dependencies absent from the notices: {missing}"
+
+
+def test_the_shipped_notices_carry_the_watch_pages_npm_closure(installed_streamlib_distribution):
+    contents = read_shipped_license_file(
+        installed_streamlib_distribution, NOTICES_LICENSE_FILE_NAME
+    )
+    missing = [name for name in SAMPLED_WATCH_PAGE_DEPENDENCY_NOTICES if name not in contents]
+    assert not missing, f"preview page notices absent from the file: {missing}"
 
 
 def test_the_shipped_notices_reproduce_licence_text_not_just_identifiers(

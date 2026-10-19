@@ -37,7 +37,7 @@ make_release() {
 	local release_contents
 	release_contents="$(mktemp -d)"
 	mkdir -p "$release_contents/bin" "$release_contents/lib/tatolab/lend/tatolab/runtime/_vulkan_driver" \
-		"$release_contents/lib/systemd/user"
+		"$release_contents/lib/tatolab/watch" "$release_contents/lib/systemd/user"
 	cat >"$release_contents/bin/tatolabd" <<EOF
 #!/bin/sh
 printf '%s %s\n' "$release_version" "\$\$" > "\$HOME/stand-in-tatolabd-running"
@@ -47,6 +47,7 @@ EOF
 	printf '#!/bin/sh\nexec sleep 3600\n' >"$release_contents/bin/moq-relay"
 	chmod +x "$release_contents/bin/tatolabd" "$release_contents/bin/tatolab" "$release_contents/bin/moq-relay"
 	touch "$release_contents/lib/tatolab/lend/tatolab/runtime/__init__.py"
+	printf '<!doctype html>\n' >"$release_contents/lib/tatolab/watch/index.html"
 	if [ "$release_shape" != without-the-bundled-vulkan-icd-manifest ]; then
 		printf '{}\n' >"$release_contents/$bundled_vulkan_icd_manifest_in_a_release"
 	fi

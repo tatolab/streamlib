@@ -1,0 +1,10 @@
+{
+	"name": "tatolab-watch",
+	"private": true,
+	"license": "SEE LICENSE IN ../../LICENSE",
+	"type": "module",
+	"packageManager": "bun@1.3.11",
+	"dependencies": {
+		"@moq/watch": "0.6.3"
+	}
+}

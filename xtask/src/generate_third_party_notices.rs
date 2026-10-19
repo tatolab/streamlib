@@ -51,6 +51,7 @@ use crate::stage_local_relay::{
     LOCAL_RELAY_CRATE_FEATURES, LOCAL_RELAY_CRATE_NAME, LOCAL_RELAY_EXECUTABLE_FILE_NAME,
     PINNED_LOCAL_RELAY_CRATE_VERSION, stage_the_local_relay,
 };
+use crate::watch_page_third_party_notices::render_the_watch_pages_closure;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -80,7 +81,7 @@ a superset of what any one artifact links — the wheel ships this file entire
 rather than a per-artifact subset, because over-attribution costs a longer file
 and under-attribution is a term unmet. The local relay the runtime unit carries,
 `moq-relay`, is no workspace member, so its own closure follows in a section of
-its own.
+its own, and so does the preview page's, whose packages are npm's.
 
 **Generated — do not edit.** Regenerate with `cargo xtask
 generate-third-party-notices`; the licence policy that decides what may appear
@@ -618,6 +619,8 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
         NoticesGenerationTarget::EngineWorkspace => {
             notices.push('\n');
             notices.push_str(&render_the_local_relays_closure(workspace_root)?);
+            notices.push('\n');
+            notices.push_str(&render_the_watch_pages_closure(workspace_root)?);
             let source_trees = NoticeSourceTrees {
                 registry_crate_roots: locate_registry_crate_roots(workspace_root)?,
                 workspace_root: workspace_root.to_path_buf(),
@@ -883,15 +886,33 @@ fn render_the_appendix_cargo_about_cannot_produce(
         let notice = read_one_notice(project, source_trees)?;
         write!(
             appendix,
-            "\n### {} ({})\n\nUpstream: <{}>\n\n````text\n{}\n````\n",
+            "\n### {} ({})\n\nUpstream: <{}>\n\n{}",
             project.display_name,
             project.license_summary,
             project.upstream_repository_url,
-            notice.trim_end(),
+            fenced_licence_text_block(&notice)
+                .with_context(|| format!("fencing the {} notice", project.display_name))?,
         )?;
     }
 
     Ok(appendix)
+}
+
+/// The fence every licence text in a notices file is reproduced in.
+const LICENCE_TEXT_FENCE: &str = "````";
+
+/// `licence_text` in a [`LICENCE_TEXT_FENCE`] block, refused when the text
+/// holds that fence itself and would close it.
+pub fn fenced_licence_text_block(licence_text: &str) -> Result<String> {
+    anyhow::ensure!(
+        !licence_text.contains(LICENCE_TEXT_FENCE),
+        "the licence text holds `{LICENCE_TEXT_FENCE}`, which would close the fence it is \
+         reproduced in"
+    );
+    Ok(format!(
+        "{LICENCE_TEXT_FENCE}text\n{}\n{LICENCE_TEXT_FENCE}\n",
+        licence_text.trim_end()
+    ))
 }
 
 /// One bullet per roster, each naming the projects that reach the binary that
@@ -1005,7 +1026,7 @@ fn read_notice_file(path: &Path, display_name: &str) -> Result<String> {
 /// Vulkan-Headers puts it after the include guard. Each branch strips only its
 /// own markers, so a `*` that is bullet text rather than a block-comment rail
 /// survives the line-comment shape.
-fn leading_comment_block_notice(source: &str) -> Result<String> {
+pub(crate) fn leading_comment_block_notice(source: &str) -> Result<String> {
     let mut lines = source
         .lines()
         .skip_while(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))

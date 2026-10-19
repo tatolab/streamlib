@@ -10,7 +10,7 @@
 //! builds `tatolabd` and `tatolab` and places them in `bin/` with the local
 //! relay `stage-local-relay` builds, beside `lib/`, the install prefix's own
 //! shape, in which `tatolabd` finds the lend and the relay from its own
-//! directory.
+//! directory, and stages the preview page beside the lend.
 //!
 //! The unit's layout below its root is `streamlib-consumer-rhi`'s
 //! `runtime_unit_layout`, included by path because xtask does not link the
@@ -19,13 +19,14 @@
 
 use crate::check_no_tatolab_namespace_package_init::ensure_lend_directory_keeps_tatolab_a_namespace;
 use crate::stage_local_relay::{LOCAL_RELAY_EXECUTABLE_FILE_NAME, stage_the_local_relay};
+use crate::stage_watch_page::stage_the_watch_page;
 use anyhow::{Context, Result};
 use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
 };
 use runtime_unit_layout::{
     BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND,
-    lend_directory_in_the_runtime_unit,
+    lend_directory_in_the_runtime_unit, watch_page_directory_beside_the_lend,
 };
 use std::path::{Path, PathBuf};
 
@@ -52,6 +53,20 @@ pub fn runtime_unit_root_in_the_workspace(workspace_root: &Path) -> PathBuf {
 /// The lend of the runtime unit in `workspace_root`.
 pub fn runtime_unit_lend_directory_in_the_workspace(workspace_root: &Path) -> PathBuf {
     lend_directory_in_the_runtime_unit(&runtime_unit_root_in_the_workspace(workspace_root))
+}
+
+/// Where the runtime unit in `workspace_root` stages its preview page, beside
+/// its lend.
+pub fn runtime_unit_watch_page_directory_in_the_workspace(
+    workspace_root: &Path,
+) -> Result<PathBuf> {
+    let lend_directory = runtime_unit_lend_directory_in_the_workspace(workspace_root);
+    watch_page_directory_beside_the_lend(&lend_directory).with_context(|| {
+        format!(
+            "the lend at {} has no directory beside it",
+            lend_directory.display()
+        )
+    })
 }
 
 /// Where the runtime unit in `workspace_root` keeps its executables.
@@ -212,6 +227,8 @@ pub fn run(
         runtime_unit_wheel.display(),
         lend_directory.display()
     );
+
+    stage_the_watch_page(workspace_root)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);
     let mut built_binaries = build_runtime_unit_binaries(

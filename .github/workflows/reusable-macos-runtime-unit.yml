@@ -67,11 +67,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Install the bun the preview page pins
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: runtime/tatolab-watch/package.json
+
       # Stages the Vulkan loader and MoltenVK, builds the release wheel at the
-      # deployment target the maturin project pins, lays out its lend, and
-      # builds `tatolabd` and `tatolab` into `bin/`. It refuses a lend missing a
-      # driver file, and a wheel carrying anything beside `tatolab/runtime/`
-      # and its `.dist-info`.
+      # deployment target the maturin project pins, lays out its lend, builds
+      # `tatolabd` and `tatolab` into `bin/`, and bundles the preview page into
+      # `lib/tatolab/watch/`. It refuses a lend missing a driver file, a wheel
+      # carrying anything beside `tatolab/runtime/` and its `.dist-info`, and a
+      # bun other than the page's pin.
       - name: Build the runtime unit
         run: cargo xtask build-runtime --release
 

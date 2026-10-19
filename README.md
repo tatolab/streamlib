@@ -109,12 +109,16 @@ export PATH="$PWD/target/tatolab-runtime/bin:$PATH"
 
 That lays out `target/tatolab-runtime/` as an install prefix: `bin/tatolabd`, `bin/tatolab`,
 `bin/moq-relay` — the machine's local relay, which `tatolabd` runs as two children, one on
-loopback port 4443 and one on every interface at 4445 — and `lib/tatolab/lend/`, the runtime's own
-Python half (`tatolab.runtime`) that each Python node's interpreter borrows. Keep `bin/tatolabd`
-beside `lib/` and `bin/moq-relay`: `tatolabd` finds both relative to its own executable.
+loopback port 4443 and one on every interface at 4445 — `lib/tatolab/lend/`, the runtime's own
+Python half (`tatolab.runtime`) that each Python node's interpreter borrows, and `lib/tatolab/watch/`,
+the preview page `tatolabd` serves at `http://127.0.0.1:4446/watch/<machine>/<stream>`. Keep
+`bin/tatolabd` beside `lib/` and `bin/moq-relay`: `tatolabd` finds all three relative to its own
+executable.
 
 The build needs a Rust toolchain and [uv](https://docs.astral.sh/uv/) on `PATH` (it runs the
-pinned maturin through `uvx`), plus a native toolchain. On Debian or Ubuntu that is:
+pinned maturin through `uvx`), the [bun](https://bun.sh) `runtime/tatolab-watch/package.json` pins
+in its `packageManager` field (it bundles the preview page, and refuses any other bun), plus a
+native toolchain. On Debian or Ubuntu that is:
 
 ```bash
 sudo apt install pkg-config protobuf-compiler libclang-dev libvulkan-dev glslc python3-dev cmake ninja-build

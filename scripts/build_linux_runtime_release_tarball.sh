@@ -8,13 +8,16 @@
 #
 # writes tatolab-runtime-<version>-x86_64-linux.tar.gz and its .sha256 there.
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
-# bin/tatolabd, bin/tatolab, lib/tatolab/lend/ — plus the systemd user units in
-# lib/systemd/user/, where install.sh takes them from.
+# bin/tatolabd, bin/tatolab, bin/moq-relay, lib/tatolab/lend/,
+# lib/tatolab/watch/ — plus the systemd user units in lib/systemd/user/, where
+# install.sh takes them from.
 #
 # Built inside manylinux_2_28, the glibc floor the engine wheel promises, so
 # every binary the tarball carries runs on glibc 2.28 and later, and the
-# portability gate runs over the result at that floor. Needs docker. The
-# workspace is mounted, and its target/ written to, as the container's root.
+# portability gate runs over the result at that floor. Needs docker, and on
+# PATH the bun runtime/tatolab-watch/package.json pins, which is mounted into
+# the container to bundle the preview page. The workspace is mounted, and its
+# target/ written to, as the container's root.
 
 set -euo pipefail
 
@@ -32,9 +35,14 @@ if [ "${1:-}" != "--inside-manylinux" ]; then
 	# toolchain this build installs below; inside, build-runtime's staging is
 	# then a cache hit.
 	bash "$workspace_root/scripts/stage_linux_bundled_vulkan_driver.sh"
+	bun_executable="$(readlink -f "$(command -v bun)")" || {
+		echo "no bun on PATH: the preview page is bundled with the bun runtime/tatolab-watch/package.json pins" >&2
+		exit 1
+	}
 	exec docker run --rm \
 		--volume "$workspace_root:/workspace" \
 		--volume "$output_directory:/output" \
+		--volume "$bun_executable:/opt/bun/bin/bun:ro" \
 		--workdir /workspace \
 		--env STREAMLIB_RUNNING_IN_MANYLINUX_2_28_IMAGE="$MANYLINUX_2_28_IMAGE" \
 		"$MANYLINUX_2_28_IMAGE" \
@@ -89,6 +97,7 @@ glslc --version
 
 uv venv --python 3.12 /tmp/runtime-unit-build-venv
 export VIRTUAL_ENV=/tmp/runtime-unit-build-venv
+export PATH="/opt/bun/bin:$PATH"
 cargo xtask build-runtime --release
 
 runtime_unit_root="$PWD/target/tatolab-runtime"
