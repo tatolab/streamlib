@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 /// How long letting go of a served router waits for it to be dropped.
 const SERVED_ROUTER_DROP_BUDGET: Duration = Duration::from_secs(5);
 
-/// A router being served. Dropping it stops serving without waiting.
+/// A router being served. Dropping it stops serving and, off a tokio runtime,
+/// waits for the router to be dropped.
 #[derive(Debug)]
 pub(crate) struct AxumRouterServedUntilStopped {
     stopping_token: CancellationToken,
@@ -54,39 +55,26 @@ impl AxumRouterServedUntilStopped {
             served_as,
         }
     }
-
-    /// Stop serving and block for up to `budget` until the router — and all it
-    /// holds — has been dropped, answering whether it was. Never call it from
-    /// inside the tokio runtime serving the router: that would block the very
-    /// worker the serving task ends on.
-    fn stop_serving_and_wait_until_the_router_is_dropped(self, budget: Duration) -> bool {
-        self.stopping_token.cancel();
-        matches!(
-            self.router_dropped_receiver.recv_timeout(budget),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
-        )
-    }
-
-    /// Stop serving and, when let go from outside a tokio runtime, wait for the
-    /// router to be dropped, warning when a connection outlives the wait.
-    /// Inside a tokio runtime the serving task may need this very worker to
-    /// end, so there is no wait.
-    pub(crate) fn stop_serving_and_let_go_of_the_router(self) {
-        if tokio::runtime::Handle::try_current().is_ok() {
-            return;
-        }
-        let served_as = self.served_as;
-        if !self.stop_serving_and_wait_until_the_router_is_dropped(SERVED_ROUTER_DROP_BUDGET) {
-            tracing::warn!(
-                "{served_as}'s router was still held {SERVED_ROUTER_DROP_BUDGET:?} after it \
-                 stopped serving; a connection outlived the shutdown"
-            );
-        }
-    }
 }
 
 impl Drop for AxumRouterServedUntilStopped {
     fn drop(&mut self) {
         self.stopping_token.cancel();
+        // Inside a tokio runtime the serving task may need this very worker to
+        // end, so the wait is only for a host letting go from its own thread.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return;
+        }
+        if !matches!(
+            self.router_dropped_receiver
+                .recv_timeout(SERVED_ROUTER_DROP_BUDGET),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ) {
+            tracing::warn!(
+                "{}'s router was still held {SERVED_ROUTER_DROP_BUDGET:?} after it stopped \
+                 serving; a connection outlived the shutdown",
+                self.served_as
+            );
+        }
     }
 }

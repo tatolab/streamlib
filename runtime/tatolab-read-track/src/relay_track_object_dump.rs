@@ -37,43 +37,54 @@ pub enum RelayTrackObjectPayloadForm {
     AsSent,
 }
 
-/// The track `track_name`'s entry in a broadcast's catalog, as
-/// `{"section": <key>, "entry": <fields>}`: hang lists a track's fields under a
-/// map of its section, keyed by the track's name. `None` when no section lists it.
-pub fn the_catalog_entry_of_the_track_named(
-    catalog: &serde_json::Value,
-    track_name: &str,
-) -> Option<serde_json::Value> {
-    catalog
-        .as_object()?
-        .iter()
-        .find_map(|(section, section_fields)| {
-            section_fields
-                .as_object()?
-                .values()
-                .find_map(|tracks_of_the_section| tracks_of_the_section.get(track_name))
-                .map(|entry| serde_json::json!({ "section": section, "entry": entry }))
-        })
+/// A track's entry in a broadcast's catalog: the section that lists it, and
+/// that section's fields for it in hang's layout.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RelayTrackCatalogEntry {
+    /// The catalog key of the section, e.g. `video` or `binary`.
+    pub section: String,
+    /// The section's fields for the track.
+    pub entry: serde_json::Value,
 }
 
-/// The form of a track whose catalog entry is `catalog_entry`, as
-/// `{"section", "entry"}`: hang's legacy container where a media entry names
-/// it, as sent otherwise.
-pub fn payload_form_of_the_track_with_the_entry(
-    catalog_entry: &serde_json::Value,
-) -> RelayTrackObjectPayloadForm {
-    let container = match catalog_entry["section"].as_str() {
-        Some("video") => hang::catalog::VideoConfig::deserialize(&catalog_entry["entry"])
-            .ok()
-            .map(|video| video.container),
-        Some("audio") => hang::catalog::AudioConfig::deserialize(&catalog_entry["entry"])
-            .ok()
-            .map(|audio| audio.container),
-        _ => None,
-    };
-    match container {
-        Some(hang::catalog::Container::Legacy) => RelayTrackObjectPayloadForm::HangLegacyContainer,
-        _ => RelayTrackObjectPayloadForm::AsSent,
+impl RelayTrackCatalogEntry {
+    /// The entry of the track `track_name` in a broadcast's catalog: hang lists
+    /// a track's fields under a map of its section, keyed by the track's name.
+    /// `None` when no section lists it.
+    pub fn of_the_track_named(catalog: &serde_json::Value, track_name: &str) -> Option<Self> {
+        catalog
+            .as_object()?
+            .iter()
+            .find_map(|(section, section_fields)| {
+                section_fields
+                    .as_object()?
+                    .values()
+                    .find_map(|tracks_of_the_section| tracks_of_the_section.get(track_name))
+                    .map(|entry| Self {
+                        section: section.clone(),
+                        entry: entry.clone(),
+                    })
+            })
+    }
+
+    /// How the track's objects carry their payload: hang's legacy container
+    /// where a media entry names it, as sent otherwise.
+    pub fn payload_form(&self) -> RelayTrackObjectPayloadForm {
+        let container = match self.section.as_str() {
+            "video" => hang::catalog::VideoConfig::deserialize(&self.entry)
+                .ok()
+                .map(|video| video.container),
+            "audio" => hang::catalog::AudioConfig::deserialize(&self.entry)
+                .ok()
+                .map(|audio| audio.container),
+            _ => None,
+        };
+        match container {
+            Some(hang::catalog::Container::Legacy) => {
+                RelayTrackObjectPayloadForm::HangLegacyContainer
+            }
+            _ => RelayTrackObjectPayloadForm::AsSent,
+        }
     }
 }
 
@@ -133,7 +144,7 @@ impl RelayTrackObjectDumpDirectory {
     }
 
     /// Write the track's catalog entry beside the objects.
-    pub fn write_the_catalog_entry(&self, catalog_entry: &serde_json::Value) -> Result<()> {
+    pub fn write_the_catalog_entry(&self, catalog_entry: &RelayTrackCatalogEntry) -> Result<()> {
         let catalog_entry_path = self.directory.join(CATALOG_ENTRY_FILE_NAME);
         std::fs::write(
             &catalog_entry_path,
@@ -336,18 +347,21 @@ mod tests {
         });
 
         assert_eq!(
-            the_catalog_entry_of_the_track_named(&catalog, "encoder/encoded_video"),
-            Some(serde_json::json!({ "section": "video", "entry": { "codec": "avc1.64001f" } }))
+            RelayTrackCatalogEntry::of_the_track_named(&catalog, "encoder/encoded_video"),
+            Some(RelayTrackCatalogEntry {
+                section: "video".to_string(),
+                entry: serde_json::json!({ "codec": "avc1.64001f" }),
+            })
         );
         assert_eq!(
-            the_catalog_entry_of_the_track_named(&catalog, "microphone/audio"),
-            Some(serde_json::json!({
-                "section": "binary",
-                "entry": { "mode": "snapshot", "mime": "application/msgpack" },
-            }))
+            RelayTrackCatalogEntry::of_the_track_named(&catalog, "microphone/audio"),
+            Some(RelayTrackCatalogEntry {
+                section: "binary".to_string(),
+                entry: serde_json::json!({ "mode": "snapshot", "mime": "application/msgpack" }),
+            })
         );
         assert_eq!(
-            the_catalog_entry_of_the_track_named(&catalog, "meter/brightness"),
+            RelayTrackCatalogEntry::of_the_track_named(&catalog, "meter/brightness"),
             None
         );
     }
@@ -356,22 +370,19 @@ mod tests {
     /// codec payload; any other entry leaves them as sent.
     #[test]
     fn a_media_entry_in_the_legacy_container_is_written_as_its_codec_payload() {
-        let video_in_the_legacy_container = serde_json::json!({
-            "section": "video",
-            "entry": { "codec": "avc1.64001f", "container": { "kind": "legacy" } },
-        });
-        let binary = serde_json::json!({
-            "section": "binary",
-            "entry": { "mode": "snapshot", "mime": "application/msgpack" },
-        });
+        let video_in_the_legacy_container = RelayTrackCatalogEntry {
+            section: "video".to_string(),
+            entry: serde_json::json!({ "codec": "avc1.64001f", "container": { "kind": "legacy" } }),
+        };
+        let binary = RelayTrackCatalogEntry {
+            section: "binary".to_string(),
+            entry: serde_json::json!({ "mode": "snapshot", "mime": "application/msgpack" }),
+        };
 
         assert_eq!(
-            payload_form_of_the_track_with_the_entry(&video_in_the_legacy_container),
+            video_in_the_legacy_container.payload_form(),
             RelayTrackObjectPayloadForm::HangLegacyContainer
         );
-        assert_eq!(
-            payload_form_of_the_track_with_the_entry(&binary),
-            RelayTrackObjectPayloadForm::AsSent
-        );
+        assert_eq!(binary.payload_form(), RelayTrackObjectPayloadForm::AsSent);
     }
 }

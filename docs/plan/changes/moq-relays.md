@@ -342,6 +342,10 @@ Order: 1, 2, 7 first; 3 after 1 and 2; 4 after 2; 5 and 6 after 4; 8 after 3 and
 - REMOVED: SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE
 - REMOVED: surface_image_exchange.rs
 - REMOVED: decode_tapped_channel_bag_frame_to_python_object
+- REMOVED: PortAddress
+- REMOVED: port_address.rs
+- REMOVED: InvalidPortAddress
+- REMOVED: PortAddressNamesAnotherMachine
 - REMOVED: EncodedVideoFrame
 - REMOVED: EncodedAudioPacket
 - REMOVED: encoded_stream_ordering.rs

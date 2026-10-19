@@ -207,21 +207,13 @@ async fn a_file_of_the_watch_page(
 #[derive(Debug)]
 pub struct LoopbackHttpListenerServedForAnEngine {
     bound_address: SocketAddr,
-    served: Option<AxumRouterServedUntilStopped>,
+    _served: AxumRouterServedUntilStopped,
 }
 
 impl LoopbackHttpListenerServedForAnEngine {
     /// The address the listener answers on: `127.0.0.1` and its port.
     pub fn bound_address(&self) -> SocketAddr {
         self.bound_address
-    }
-}
-
-impl Drop for LoopbackHttpListenerServedForAnEngine {
-    fn drop(&mut self) {
-        if let Some(served) = self.served.take() {
-            served.stop_serving_and_let_go_of_the_router();
-        }
     }
 }
 
@@ -259,7 +251,7 @@ pub fn serve_the_loopback_http_listener(
     tracing::info!("Loopback HTTP listening on http://{bound_address}/");
     Ok(LoopbackHttpListenerServedForAnEngine {
         bound_address,
-        served: Some(served),
+        _served: served,
     })
 }
 

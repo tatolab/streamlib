@@ -37,7 +37,7 @@ pub fn serve_the_local_api_for_an_engine(
     tracing::info!("Local API listening on {}", local_api_socket_path.display());
 
     Ok(LocalApiServedForAnEngine {
-        running_local_api_socket_server: Some(running_local_api_socket_server),
+        _running_local_api_socket_server: running_local_api_socket_server,
     })
 }
 
@@ -46,13 +46,5 @@ pub fn serve_the_local_api_for_an_engine(
 #[must_use = "dropping this stops serving the engine's local API"]
 #[derive(Debug)]
 pub struct LocalApiServedForAnEngine {
-    running_local_api_socket_server: Option<RunningLocalApiSocketServer>,
-}
-
-impl Drop for LocalApiServedForAnEngine {
-    fn drop(&mut self) {
-        if let Some(running_local_api_socket_server) = self.running_local_api_socket_server.take() {
-            running_local_api_socket_server.stop_serving_and_let_go_of_the_router();
-        }
-    }
+    _running_local_api_socket_server: RunningLocalApiSocketServer,
 }

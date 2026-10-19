@@ -127,7 +127,7 @@ impl LocalApiSocketBoundAndNotYetServed {
         };
         let local_api_stopping_token = CancellationToken::new();
         Ok(RunningLocalApiSocketServer {
-            served: AxumRouterServedUntilStopped::serve(
+            _served: AxumRouterServedUntilStopped::serve(
                 local_api_listener,
                 build_control_plane_router(local_api_stopping_token.clone()),
                 local_api_stopping_token,
@@ -144,17 +144,9 @@ impl LocalApiSocketBoundAndNotYetServed {
 #[must_use = "dropping this stops the local API server"]
 #[derive(Debug)]
 pub(crate) struct RunningLocalApiSocketServer {
-    served: AxumRouterServedUntilStopped,
-    // Dropped after `served`, so the socket file goes once serving has stopped.
+    _served: AxumRouterServedUntilStopped,
+    // Dropped after `_served`, so the socket file goes once serving has stopped.
     _local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
-}
-
-impl RunningLocalApiSocketServer {
-    /// Stop serving and let go of the router; see
-    /// [`AxumRouterServedUntilStopped::stop_serving_and_let_go_of_the_router`].
-    pub(crate) fn stop_serving_and_let_go_of_the_router(self) {
-        self.served.stop_serving_and_let_go_of_the_router();
-    }
 }
 
 /// Remove the local API's socket file. Already gone is not a failure.

@@ -3,8 +3,8 @@
 
 //! `tatolab-read-track <relay-url> <broadcast> <track> --count N --out <dir>`:
 //! subscribe to one track at a relay as any MoQ client does, and write its
-//! first `N` objects into `<dir>` — one file each, an index of their groups and
-//! timestamps, and the broadcast's catalog. A stream's exposed port is the
+//! first `N` objects into `<dir>` — one file each, an index of their groups,
+//! timestamps and payload form, and the track's catalog entry. A stream's exposed port is the
 //! track `<node>/<port>` of the broadcast `<machine>/<stream>.hang`; the
 //! machine's local relay answers at `http://127.0.0.1:4443`.
 
@@ -21,8 +21,8 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 
 use relay_track_object_dump::{
-    RelayTrackObjectDumpDirectory, RelayTrackObjectPayloadForm, RelayTrackObjectRead,
-    payload_form_of_the_track_with_the_entry, the_catalog_entry_of_the_track_named,
+    RelayTrackCatalogEntry, RelayTrackObjectDumpDirectory, RelayTrackObjectPayloadForm,
+    RelayTrackObjectRead,
 };
 
 /// How long the broadcast's catalog is read for a snapshot listing the track
@@ -155,10 +155,7 @@ async fn read_the_tracks_objects(
         .ordered();
     let (payload_form, catalog_entry) =
         match the_tracks_catalog_entry(broadcast, &arguments.track).await {
-            Ok(catalog_entry) => (
-                payload_form_of_the_track_with_the_entry(&catalog_entry),
-                Some(catalog_entry),
-            ),
+            Ok(catalog_entry) => (catalog_entry.payload_form(), Some(catalog_entry)),
             Err(why_not) => {
                 eprintln!("tatolab-read-track: {why_not}; its objects are written as sent");
                 (RelayTrackObjectPayloadForm::AsSent, None)
@@ -214,7 +211,7 @@ async fn read_the_tracks_objects(
 async fn the_tracks_catalog_entry(
     broadcast: &moq_net::broadcast::Consumer,
     track_name: &str,
-) -> Result<serde_json::Value> {
+) -> Result<RelayTrackCatalogEntry> {
     let catalog_track = broadcast
         .track(hang::Catalog::DEFAULT_NAME)?
         .subscribe(None)
@@ -229,7 +226,8 @@ async fn the_tracks_catalog_entry(
             let Some(snapshot) = catalog.next().await.context("the catalog does not read")? else {
                 return Err(anyhow!("the catalog ended without listing `{track_name}`"));
             };
-            if let Some(catalog_entry) = the_catalog_entry_of_the_track_named(&snapshot, track_name)
+            if let Some(catalog_entry) =
+                RelayTrackCatalogEntry::of_the_track_named(&snapshot, track_name)
             {
                 return Ok(catalog_entry);
             }
