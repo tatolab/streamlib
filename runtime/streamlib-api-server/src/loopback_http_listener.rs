@@ -7,7 +7,6 @@
 //! its directory in the runtime unit. It serves no media and binds nothing but
 //! `127.0.0.1`; what a port carries is read as a track at a relay.
 
-use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -98,9 +97,13 @@ fn build_loopback_http_router(
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     watch_page_directory: PathBuf,
 ) -> axum::Router {
-    let watch_page_files = ServeDir::new(&watch_page_directory).fallback(ServeFile::new(
-        watch_page_directory.join(WATCH_PAGE_ENTRY_FILE_NAME),
-    ));
+    // A directory answers the entry file rather than a redirect, whose location
+    // would leave the `/watch` route the request arrived under.
+    let watch_page_files = ServeDir::new(&watch_page_directory)
+        .append_index_html_on_directories(false)
+        .fallback(ServeFile::new(
+            watch_page_directory.join(WATCH_PAGE_ENTRY_FILE_NAME),
+        ));
     axum::Router::new()
         .route("/", get(the_listing_of_the_machines_streams))
         .route(WATCH_PAGE_ROUTE_PREFIX, get(a_file_of_the_watch_page))
@@ -113,6 +116,34 @@ fn build_loopback_http_router(
             watch_page_directory,
             watch_page_files,
         })
+        .layer(axum::middleware::from_fn(
+            answer_only_requests_naming_loopback_as_their_host,
+        ))
+}
+
+/// The names a request to the listener may give as its `Host`.
+const LOOPBACK_HOST_NAMES: [&str; 2] = ["127.0.0.1", "localhost"];
+
+/// Answer a request only when its `Host` names loopback. Binding loopback keeps
+/// other machines out; this keeps out a page whose own name a DNS rebinding
+/// pointed at `127.0.0.1`, which a browser lets read what it fetches.
+async fn answer_only_requests_naming_loopback_as_their_host(
+    request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let named_host = request
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .map(|host| host.rsplit_once(':').map_or(host, |(name, _port)| name));
+    match named_host {
+        Some(host) if LOOPBACK_HOST_NAMES.contains(&host) => next.run(request).await,
+        _ => (
+            StatusCode::MISDIRECTED_REQUEST,
+            "this listener answers only requests addressed to 127.0.0.1 or localhost",
+        )
+            .into_response(),
+    }
 }
 
 async fn the_listing_of_the_machines_streams(
@@ -139,31 +170,21 @@ async fn the_listing_of_the_machines_streams(
 fn the_listing_of_the_machines_streams_now(
     operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
 ) -> LoopbackHttpListingOfTheMachinesStreams {
-    let mut exposed_output_ports_by_stream: HashMap<
-        String,
-        Vec<LoopbackHttpListingOfOneExposedOutputPort>,
-    > = HashMap::new();
-    for exposed_output_port in
-        operations_on_the_loaded_streams.exposed_output_ports_of_every_loaded_stream()
-    {
-        exposed_output_ports_by_stream
-            .entry(exposed_output_port.stream_name.clone())
-            .or_default()
-            .push(exposed_output_port.into());
-    }
     LoopbackHttpListingOfTheMachinesStreams {
         machine: operations_on_the_loaded_streams
             .this_machines_name()
             .name()
             .to_string(),
         streams: operations_on_the_loaded_streams
-            .names_of_the_loaded_streams()
+            .every_loaded_stream_and_the_output_ports_it_exposes()
             .into_iter()
-            .map(|stream_name| LoopbackHttpListingOfOneStream {
-                exposed_output_ports: exposed_output_ports_by_stream
-                    .remove(&stream_name)
-                    .unwrap_or_default(),
-                name: stream_name,
+            .map(|loaded_stream| LoopbackHttpListingOfOneStream {
+                name: loaded_stream.stream_name,
+                exposed_output_ports: loaded_stream
+                    .exposed_output_ports
+                    .into_iter()
+                    .map(LoopbackHttpListingOfOneExposedOutputPort::from)
+                    .collect(),
             })
             .collect(),
     }
@@ -266,12 +287,21 @@ pub(crate) mod tests {
 
     /// One `GET path` answered at `address`: its status code and body.
     pub(crate) async fn http_get(address: SocketAddr, path: &str) -> (u16, String) {
+        http_get_naming_the_host(address, &address.to_string(), path).await
+    }
+
+    /// One `GET path` sent to `address` with `host` as its `Host`.
+    async fn http_get_naming_the_host(
+        address: SocketAddr,
+        host: &str,
+        path: &str,
+    ) -> (u16, String) {
         let mut connection = tokio::net::TcpStream::connect(address)
             .await
             .expect("the loopback HTTP listener accepts");
         connection
             .write_all(
-                format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
                     .as_bytes(),
             )
             .await
@@ -318,7 +348,8 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn the_listener_binds_loopback_alone() {
-        let served = served_over_the_stub_runtime(a_watch_page_directory().path().to_path_buf());
+        let watch_page_directory = a_watch_page_directory();
+        let served = served_over_the_stub_runtime(watch_page_directory.path().to_path_buf());
 
         assert_eq!(served.bound_address().ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
         if let Some(address_off_loopback) = this_hosts_address_off_loopback() {
@@ -360,6 +391,46 @@ pub(crate) mod tests {
         );
     }
 
+    /// A directory of the page answers the entry file rather than a redirect
+    /// whose location would leave the `/watch` route.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
+    async fn a_directory_of_the_page_answers_its_entry_file_rather_than_a_redirect() {
+        let watch_page_directory = a_watch_page_directory();
+        std::fs::create_dir(watch_page_directory.path().join("assets")).unwrap();
+        let served = served_over_the_stub_runtime(watch_page_directory.path().to_path_buf());
+
+        assert_eq!(
+            http_get(served.bound_address(), "/watch/assets").await,
+            (200, "<!doctype html><title>watch</title>".to_string())
+        );
+    }
+
+    /// Only a request naming loopback as its host is answered, so a page that
+    /// reached `127.0.0.1` through a rebound name of its own reads nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
+    async fn a_request_naming_another_host_is_refused() {
+        let watch_page_directory = a_watch_page_directory();
+        let served = served_over_the_stub_runtime(watch_page_directory.path().to_path_buf());
+        let port = served.bound_address().port();
+
+        for (host, expected_status_code) in [
+            (format!("localhost:{port}"), 200),
+            (format!("127.0.0.1:{port}"), 200),
+            (format!("attacker.example:{port}"), 421),
+            ("attacker.example".to_string(), 421),
+        ] {
+            assert_eq!(
+                http_get_naming_the_host(served.bound_address(), &host, "/")
+                    .await
+                    .0,
+                expected_status_code,
+                "{host}"
+            );
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn a_unit_carrying_no_page_answers_not_found_naming_where_it_looked() {
@@ -377,8 +448,16 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn nothing_but_the_listing_and_the_page_is_served() {
-        let served = served_over_the_stub_runtime(a_watch_page_directory().path().to_path_buf());
+        let watch_page_directory = a_watch_page_directory();
+        let served = served_over_the_stub_runtime(watch_page_directory.path().to_path_buf());
 
+        for served_path in ["/", "/watch/desk/camera"] {
+            assert_eq!(
+                http_get(served.bound_address(), served_path).await.0,
+                200,
+                "{served_path}"
+            );
+        }
         for path in ["/api/graph", "/mcp", "/health", "/ws/events", "/watchdesk"] {
             assert_eq!(
                 http_get(served.bound_address(), path).await.0,
@@ -397,7 +476,7 @@ pub(crate) mod tests {
         let refusal = serve_the_loopback_http_listener(
             a_control_plane_router_stub_runtime(),
             held_port,
-            a_watch_page_directory().path().to_path_buf(),
+            tempfile::tempdir().unwrap().path().to_path_buf(),
             &tokio::runtime::Handle::current(),
         )
         .expect_err("a held port is refused");

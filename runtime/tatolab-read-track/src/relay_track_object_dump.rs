@@ -68,23 +68,34 @@ impl RelayTrackCatalogEntry {
     }
 
     /// How the track's objects carry their payload: hang's legacy container
-    /// where a media entry names it, as sent otherwise.
-    pub fn payload_form(&self) -> RelayTrackObjectPayloadForm {
-        let container = match self.section.as_str() {
-            "video" => hang::catalog::VideoConfig::deserialize(&self.entry)
-                .ok()
-                .map(|video| video.container),
-            "audio" => hang::catalog::AudioConfig::deserialize(&self.entry)
-                .ok()
-                .map(|audio| audio.container),
-            _ => None,
+    /// where a media entry names it, as sent for any other container or
+    /// section. A media entry hang cannot read is refused, since its objects'
+    /// form would be a guess.
+    pub fn payload_form(&self) -> Result<RelayTrackObjectPayloadForm> {
+        let unreadable = |section: &str| {
+            format!(
+                "the track's `{section}` catalog entry is not one hang reads, so its objects' \
+                 container is unknown: {}",
+                self.entry
+            )
         };
-        match container {
-            Some(hang::catalog::Container::Legacy) => {
-                RelayTrackObjectPayloadForm::HangLegacyContainer
+        let container = match self.section.as_str() {
+            "video" => {
+                hang::catalog::VideoConfig::deserialize(&self.entry)
+                    .with_context(|| unreadable("video"))?
+                    .container
             }
+            "audio" => {
+                hang::catalog::AudioConfig::deserialize(&self.entry)
+                    .with_context(|| unreadable("audio"))?
+                    .container
+            }
+            _ => return Ok(RelayTrackObjectPayloadForm::AsSent),
+        };
+        Ok(match container {
+            hang::catalog::Container::Legacy => RelayTrackObjectPayloadForm::HangLegacyContainer,
             _ => RelayTrackObjectPayloadForm::AsSent,
-        }
+        })
     }
 }
 
@@ -380,9 +391,17 @@ mod tests {
         };
 
         assert_eq!(
-            video_in_the_legacy_container.payload_form(),
+            video_in_the_legacy_container.payload_form().unwrap(),
             RelayTrackObjectPayloadForm::HangLegacyContainer
         );
-        assert_eq!(binary.payload_form(), RelayTrackObjectPayloadForm::AsSent);
+        assert_eq!(
+            binary.payload_form().unwrap(),
+            RelayTrackObjectPayloadForm::AsSent
+        );
+        let video_hang_cannot_read = RelayTrackCatalogEntry {
+            section: "video".to_string(),
+            entry: serde_json::json!({ "container": { "kind": "legacy" } }),
+        };
+        assert!(video_hang_cannot_read.payload_form().is_err());
     }
 }

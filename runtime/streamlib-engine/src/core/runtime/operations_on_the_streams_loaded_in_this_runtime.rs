@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use super::operations::RuntimeOperations;
 use super::{
-    ExposedOutputPortOfALoadedStream, LoadedStreamTag, MachineName, OutputPortExposureOutcome,
-    RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome, StreamRunOutcome,
-    StreamStartOutcome, StreamStopOutcome,
+    LoadedStreamAndTheOutputPortsItExposes, LoadedStreamTag, MachineName,
+    OutputPortExposureOutcome, RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome,
+    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
@@ -61,10 +61,12 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// The cast names of the loaded streams, in order.
     fn names_of_the_loaded_streams(&self) -> Vec<String>;
 
-    /// The output ports every loaded stream exposes now, each with its level
-    /// and catalog entry. Blocks while a stream compiles, so the local API
-    /// calls it from a blocking task.
-    fn exposed_output_ports_of_every_loaded_stream(&self) -> Vec<ExposedOutputPortOfALoadedStream>;
+    /// Every loaded stream, in name order, with the output ports it exposes
+    /// now — one read of the stream table. Blocks while a stream compiles, so
+    /// the local API calls it from a blocking task.
+    fn every_loaded_stream_and_the_output_ports_it_exposes(
+        &self,
+    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes>;
 
     /// The log records of the loaded stream `stream_name` names, numbered
     /// after `after`, at most `max_count` of them, with the tag of the load
@@ -145,8 +147,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::names_of_the_loaded_streams(self)
     }
 
-    fn exposed_output_ports_of_every_loaded_stream(&self) -> Vec<ExposedOutputPortOfALoadedStream> {
-        Runner::exposed_output_ports_of_every_loaded_stream(self)
+    fn every_loaded_stream_and_the_output_ports_it_exposes(
+        &self,
+    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
+        Runner::every_loaded_stream_and_the_output_ports_it_exposes(self)
     }
 
     fn log_records_of_the_stream_a_call_names(

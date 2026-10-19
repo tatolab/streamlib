@@ -345,9 +345,9 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             ) -> bool {
                 false
             }
-            fn exposed_output_ports_of_every_loaded_stream(
+            fn every_loaded_stream_and_the_output_ports_it_exposes(
                 &self,
-            ) -> Vec<::streamlib::sdk::runtime::ExposedOutputPortOfALoadedStream> {
+            ) -> Vec<::streamlib::sdk::runtime::LoadedStreamAndTheOutputPortsItExposes> {
                 Vec::new()
             }
         }

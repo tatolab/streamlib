@@ -46,7 +46,7 @@ pub(crate) use engine_teardown_watchdog::{
 };
 pub use exposed_output_port_subscription::{
     ExposedOutputPortOfALoadedStream, ExposedOutputPortSourceWiring, ExposedOutputPortSubscription,
-    ExposureChangeReceiver,
+    ExposureChangeReceiver, LoadedStreamAndTheOutputPortsItExposes,
 };
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,

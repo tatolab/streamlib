@@ -3166,9 +3166,11 @@ entry reads as **message** (the glossary).
   (`<reference_stem>__<n>.png`) over one reference per run, not a key on the wire:
   best-match pairing was rejected as vacuous, since it satisfies the `swap-channels`
   injection by re-pairing a swapped red onto `solid_blue.png` — the exact regression
-  that mode exists to catch. [codec-blocks — SHIPPED #2084, #2085, #2086]
-  <!-- verify: cargo build -p streamlib-engine --example codec_roundtrip_rig -->
-  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh -->
+  that mode exists to catch. [codec-blocks — SHIPPED #2084, #2085, #2086; amended by
+  moq-relays: the rig is a sender stream and a receiver stream on `tatolabd`, the sender's
+  encoded track read with `tatolab-read-track` and decoded by ffmpeg; the in-process rig and
+  the reference-PNG harness are deleted]
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
 - **DECIDED** — The gate scores chroma, not luma alone: `cargo xtask psnr` classifies a
   frame Y ≥ 35 dB pass / 30–35 warn / < 30 fail **and** fails it outright when either
   chroma plane falls under 30 dB — one floor for every reference, no chroma warn band.
@@ -3251,8 +3253,9 @@ entry reads as **message** (the glossary).
   whole proof is locking to the Rust rig's number leaves nothing to lock to.
   Both codecs PASS through the arm, log gates at zero, clean exit. The reference-PNG rig
   gets no Python arm — nothing Python-specific sits on the colour path.
-  [python-codec-block-api — SHIPPED #2107]
-  <!-- verify: PIPELINE=python bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
+  [python-codec-block-api — SHIPPED #2107; amended by moq-relays: the Python-authored
+  streams are the codec rig itself, with no Rust arm to agree with]
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
   <!-- verify: git ls-files runtime/streamlib-engine/tests/fixtures/codec_roundtrip_stream.py -->
 - **DECIDED** — An encoded audio packet is an ordinary bag, the encoded-frame convention
   applied to audio: `codec` (`"opus"`), `bitstream` (msgpack `bin`, one Opus packet as

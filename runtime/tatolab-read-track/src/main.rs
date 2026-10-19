@@ -155,7 +155,7 @@ async fn read_the_tracks_objects(
         .ordered();
     let (payload_form, catalog_entry) =
         match the_tracks_catalog_entry(broadcast, &arguments.track).await {
-            Ok(catalog_entry) => (catalog_entry.payload_form(), Some(catalog_entry)),
+            Ok(catalog_entry) => (catalog_entry.payload_form()?, Some(catalog_entry)),
             Err(why_not) => {
                 eprintln!("tatolab-read-track: {why_not}; its objects are written as sent");
                 (RelayTrackObjectPayloadForm::AsSent, None)

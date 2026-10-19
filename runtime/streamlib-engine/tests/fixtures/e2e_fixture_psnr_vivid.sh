@@ -278,6 +278,13 @@ if ! read_the_track_at_the_local_relay "$SENDER_BROADCAST" "$SENDER_ENCODED_TRAC
     exit 1
 fi
 cat "$OUTPUT_DIR/read_track.log"
+if ! grep -q '"payload":"codec_payload_of_the_hang_legacy_container"' \
+        "$ENCODED_TRACK_DIR/objects.jsonl"; then
+    echo "[vivid-color] FAIL: tatolab-read-track wrote the encoder's track as sent, not as its" \
+        "codec payload — the catalog never listed it as a legacy-container video track" >&2
+    cat "$OUTPUT_DIR/read_track.log" >&2
+    exit 1
+fi
 
 # The receiver decodes the same track; its decoder's written frames, read off
 # `graph`, are its proof.

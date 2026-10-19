@@ -51,6 +51,15 @@ pub struct ExposedOutputPortOfALoadedStream {
     pub catalog_entry: Option<CatalogEntry>,
 }
 
+/// One loaded stream with the output ports it exposes now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedStreamAndTheOutputPortsItExposes {
+    /// The stream's cast name.
+    pub stream_name: String,
+    /// The output ports it exposes, private or public.
+    pub exposed_output_ports: Vec<ExposedOutputPortOfALoadedStream>,
+}
+
 /// The exposed output ports of every stream loaded in one runtime, read again
 /// after each change to them, to their catalog entries, or to the loaded
 /// streams. Changes that arrive together are read once.
@@ -116,9 +125,13 @@ impl ExposureChangeReceiver {
             // A stream's graph lock is held across a compile, which may take a
             // processor's whole setup, so the read waits off the async workers.
             let read = tokio::task::spawn_blocking(move || {
-                engine
-                    .upgrade()
-                    .map(|engine| engine.exposed_output_ports_of_every_loaded_stream())
+                engine.upgrade().map(|engine| {
+                    engine
+                        .every_loaded_stream_and_the_output_ports_it_exposes()
+                        .into_iter()
+                        .flat_map(|loaded_stream| loaded_stream.exposed_output_ports)
+                        .collect()
+                })
             })
             .await;
             match read {

@@ -18,7 +18,7 @@ use super::loaded_stream::{
 };
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
-use super::{ExposedOutputPortOfALoadedStream, RuntimeShutdownEscalation, StreamEnvironment};
+use super::{LoadedStreamAndTheOutputPortsItExposes, RuntimeShutdownEscalation, StreamEnvironment};
 use crate::core::context::GpuContext;
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
@@ -327,14 +327,18 @@ impl EngineResourcesSharedByEveryStream {
             .collect()
     }
 
-    /// The output ports every loaded stream exposes now, each with its level
-    /// and catalog entry. Blocks while a stream compiles.
-    pub(crate) fn exposed_output_ports_of_every_loaded_stream(
+    /// Every loaded stream, in name order, with the output ports it exposes
+    /// now, each with its level and catalog entry — one read of the stream
+    /// table. Blocks while a stream compiles.
+    pub(crate) fn every_loaded_stream_and_the_output_ports_it_exposes(
         &self,
-    ) -> Vec<ExposedOutputPortOfALoadedStream> {
+    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
         self.every_loaded_stream()
             .iter()
-            .flat_map(|stream| stream.exposed_output_ports())
+            .map(|stream| LoadedStreamAndTheOutputPortsItExposes {
+                stream_name: stream.stream_name().to_string(),
+                exposed_output_ports: stream.exposed_output_ports(),
+            })
             .collect()
     }
 
@@ -945,13 +949,13 @@ impl Runner {
             .every_loaded_stream()
     }
 
-    /// The output ports every loaded stream exposes now, each with its level
-    /// and catalog entry. Blocks while a stream compiles.
-    pub fn exposed_output_ports_of_every_loaded_stream(
+    /// Every loaded stream, in name order, with the output ports it exposes
+    /// now — one read of the stream table. Blocks while a stream compiles.
+    pub fn every_loaded_stream_and_the_output_ports_it_exposes(
         &self,
-    ) -> Vec<ExposedOutputPortOfALoadedStream> {
+    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
         self.engine_resources_shared_by_every_stream
-            .exposed_output_ports_of_every_loaded_stream()
+            .every_loaded_stream_and_the_output_ports_it_exposes()
     }
 
     /// The cast names of the loaded streams, in order.

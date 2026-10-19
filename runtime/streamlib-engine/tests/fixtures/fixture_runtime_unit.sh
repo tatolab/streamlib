@@ -124,13 +124,16 @@ LOOPBACK_HTTP_LISTING_URL="http://127.0.0.1:4446/"
 TATOLAB_READ_TRACK_EXECUTABLE="$FIXTURE_REPOSITORY_ROOT/target/release/tatolab-read-track"
 
 # Builds `tatolab-read-track` from this checkout, exiting 1 when it does not
-# build. A development tool, never in the runtime unit.
+# build. A development tool, never in the runtime unit. Once built, it says so
+# in the environment, so a driver it calls while a stream runs builds nothing.
 require_tatolab_read_track() {
+    [ "${TATOLAB_READ_TRACK_IS_BUILT:-}" = 1 ] && return 0
     if ! (cd "$FIXTURE_REPOSITORY_ROOT" \
         && cargo build --release --locked --quiet -p tatolab-read-track) >&2; then
         echo "ERROR: tatolab-read-track does not build" >&2
         exit 1
     fi
+    export TATOLAB_READ_TRACK_IS_BUILT=1
 }
 
 # Prints the machine's name as the runtime's loopback listing names it.
