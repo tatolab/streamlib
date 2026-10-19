@@ -443,17 +443,13 @@ class OpusEncoder(BuiltInNode[OpusEncoderConfig]):
     type: ClassVar[str] = "tatolab.stream:OpusEncoder"
 
 
-class _RelayTrackSourceConfigRequiredKeys(TypedDict):
-    """The keys `RelayTrackSource`'s config cannot leave out."""
-
-    track_address: str
-    """The track to read, `<machine>/<stream>/<node>/<port>`: the exposed port
-    `<node>/<port>` of the stream `<stream>` on the machine `<machine>`.
-    """
-
-
-class RelayTrackSourceConfig(_RelayTrackSourceConfigRequiredKeys, total=False):
+class RelayTrackSourceConfig(TypedDict, total=False):
     """`RelayTrackSource`'s config: the keys `stream_builder.add` takes."""
+
+    broadcast: str | None
+    """The broadcast to read, as its publisher named it at the relay — any MoQ
+    publisher's, whatever its layout. Given with `track`, in place of `track_address`.
+    """
 
     relay_url: str
     """The relay to subscribe at. The default is this machine's local relay on loopback,
@@ -462,12 +458,25 @@ class RelayTrackSourceConfig(_RelayTrackSourceConfigRequiredKeys, total=False):
     Default: `"http://127.0.0.1:4443"`.
     """
 
+    track: str | None
+    """The track of `broadcast` to read, as its publisher named it."""
+
+    track_address: str | None
+    """The track to read, `<machine>/<stream>/<node>/<port>`: the exposed port
+    `<node>/<port>` of the stream `<stream>` on the machine `<machine>`, read as written
+    — the broadcast `<machine>/<stream>.hang`, the track `<node>/<port>`. Give this, or
+    `broadcast` with `track`.
+    """
+
 
 class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
     """Reads one track at a MoQ relay into the graph — how a stream reads another
     stream's exposed port, on this machine through the local relay's loopback listener
     or on another machine through any relay that serves it, and how it reads a track any
-    other MoQ publisher wrote.
+    other MoQ publisher wrote. The track is named by `track_address`,
+    `<machine>/<stream>/<node>/<port>` — the broadcast `<machine>/<stream>.hang`, the
+    track `<node>/<port>` — or by `broadcast` with `track` for any other layout, each
+    read exactly as its publisher wrote it.
 
     `track` carries each object's payload bytes as the relay delivered them, the first
     object of each group starting a group, and its catalog entry is the track's own from

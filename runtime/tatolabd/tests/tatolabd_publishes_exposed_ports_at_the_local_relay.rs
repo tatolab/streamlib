@@ -253,13 +253,37 @@ impl TatolabdPublishingTheStream {
     /// Add to [`READER_STREAM`] a `RelayTrackSource` named `node` reading
     /// `track_address` at `relay_url`.
     fn add_a_relay_track_source_at(&self, relay_url: &Url, node: &str, track_address: &str) {
+        self.add_a_relay_track_source_configured(
+            node,
+            serde_json::json!({"relay_url": relay_url.as_str(), "track_address": track_address}),
+        );
+    }
+
+    /// Add to [`READER_STREAM`] a `RelayTrackSource` named `node` reading the
+    /// third party's track at `relay_url`, named as the third party wrote it.
+    fn add_a_relay_track_source_reading_the_third_partys_track_at(
+        &self,
+        relay_url: &Url,
+        node: &str,
+    ) {
+        self.add_a_relay_track_source_configured(
+            node,
+            serde_json::json!({
+                "relay_url": relay_url.as_str(),
+                "broadcast": THIRD_PARTY_BROADCAST,
+                "track": THIRD_PARTY_TRACK,
+            }),
+        );
+    }
+
+    fn add_a_relay_track_source_configured(&self, node: &str, config: serde_json::Value) {
         self.call(
             "add_node",
             serde_json::json!({
                 "stream": READER_STREAM,
                 "type": "tatolab.stream:RelayTrackSource",
                 "name": node,
-                "config": {"relay_url": relay_url.as_str(), "track_address": track_address},
+                "config": config,
             }),
         );
     }
@@ -1081,9 +1105,16 @@ fn the_third_partys_payload(frame_number: u64) -> Vec<u8> {
     format!("access unit {frame_number}").into_bytes()
 }
 
-/// Publish at `relay` the broadcast `third/party.hang` as the stack's own
+/// The broadcast the third party publishes, laid out and spelled as it likes:
+/// three segments, capitals, no `.hang`.
+const THIRD_PARTY_BROADCAST: &str = "live/Rooms/42";
+
+/// The third party's track, a name with a space and no `/`.
+const THIRD_PARTY_TRACK: &str = "Video 0";
+
+/// Publish at `relay` the broadcast [`THIRD_PARTY_BROADCAST`] as the stack's own
 /// writer does — hang's catalog listing one legacy-container video rendition,
-/// `camera/video`, and each frame written by `hang::container::Frame` — until
+/// [`THIRD_PARTY_TRACK`], and each frame written by `hang::container::Frame` — until
 /// the returned task is aborted.
 async fn publish_a_third_party_hang_broadcast_at(
     relay: &ThirdPartyRelay,
@@ -1095,7 +1126,7 @@ async fn publish_a_third_party_hang_broadcast_at(
         .with_publisher(&published_origin)
         .connect(relay.dial_url.clone());
     let broadcast = published_origin
-        .create_broadcast("third/party.hang")
+        .create_broadcast(THIRD_PARTY_BROADCAST)
         .unwrap();
     let mut catalog = moq_json::snapshot::Producer::new(
         broadcast
@@ -1108,7 +1139,7 @@ async fn publish_a_third_party_hang_broadcast_at(
     );
     catalog
         .update(&serde_json::json!({
-            "video": {"renditions": {"camera/video": {
+            "video": {"renditions": {THIRD_PARTY_TRACK: {
                 "codec": "avc1.42001f",
                 "codedWidth": 320,
                 "codedHeight": 240,
@@ -1117,7 +1148,7 @@ async fn publish_a_third_party_hang_broadcast_at(
         }))
         .unwrap();
     let video_track = broadcast
-        .create_track("camera/video", hang::container::track_info(0))
+        .create_track(THIRD_PARTY_TRACK, hang::container::track_info(0))
         .unwrap();
     broadcast.announce(Default::default()).unwrap();
     let writing = tokio::spawn(async move {
@@ -1149,8 +1180,9 @@ async fn publish_a_third_party_hang_broadcast_at(
 }
 
 /// A track no runtime published plays through the node: a third party's hang
-/// broadcast at a relay of its own reaches the graph as its frames, in its
-/// groups, with its spacing, under its own catalog entry.
+/// broadcast at a relay of its own, its names laid out and spelled its own way
+/// and read as written, reaches the graph as its frames, in its groups, with
+/// its spacing, under its own catalog entry.
 #[test]
 fn a_relay_track_source_reads_a_hang_track_a_third_party_published() {
     let third_party_relay = ThirdPartyRelay::start();
@@ -1161,10 +1193,9 @@ fn a_relay_track_source_reads_a_hang_track_a_third_party_published() {
     let (third_party_writing, _third_party_session) = reading
         .async_runtime
         .block_on(publish_a_third_party_hang_broadcast_at(&third_party_relay));
-    reading.add_a_relay_track_source_at(
+    reading.add_a_relay_track_source_reading_the_third_partys_track_at(
         &third_party_relay.dial_url,
         "fromthirdparty",
-        "third/party/camera/video",
     );
     reading.expose_in_the_reader_stream("fromthirdparty", "track");
     let at_loopback =
@@ -1283,10 +1314,9 @@ fn a_relay_track_source_whose_relay_is_not_up_yet_reads_the_track_once_it_is() {
         READER_STREAM,
         a_reader_stream_holding_one_unexposed_writer(),
     )]);
-    reading.add_a_relay_track_source_at(
+    reading.add_a_relay_track_source_reading_the_third_partys_track_at(
         &ThirdPartyRelay::dial_url_on(port_the_relay_will_listen_on),
         "fromthirdparty",
-        "third/party/camera/video",
     );
     reading.expose_in_the_reader_stream("fromthirdparty", "track");
     std::thread::sleep(Duration::from_secs(3));
