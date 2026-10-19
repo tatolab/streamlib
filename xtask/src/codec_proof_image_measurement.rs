@@ -172,8 +172,7 @@ impl Rgba8Image {
             self.pixel_height
         );
 
-        let mut bar_median_colors = [RgbOnTheUnitScale::default(); SMPTE_BAR_COUNT];
-        for (bar_index, bar_median_color) in bar_median_colors.iter_mut().enumerate() {
+        Ok(std::array::from_fn(|bar_index| {
             let first_bar_column = bar_index as u32 * self.pixel_width / SMPTE_BAR_COUNT as u32;
             let end_bar_column = (bar_index as u32 + 1) * self.pixel_width / SMPTE_BAR_COUNT as u32;
             let mut sample_counts_by_channel = [[0u32; 256]; 3];
@@ -189,9 +188,8 @@ impl Rgba8Image {
             }
             let [red, green, blue] = sample_counts_by_channel
                 .map(|sample_counts| median_sample(&sample_counts) / EIGHT_BIT_SAMPLE_PEAK);
-            *bar_median_color = RgbOnTheUnitScale { red, green, blue };
-        }
-        Ok(bar_median_colors)
+            RgbOnTheUnitScale { red, green, blue }
+        }))
     }
 
     /// Convert to 4:2:0 Y/U/V planes for scoring.
@@ -283,6 +281,18 @@ pub const SMPTE_BAR_NAMES: [&str; SMPTE_BAR_COUNT] = [
 
 /// How many bars the test pattern draws across the frame.
 pub const SMPTE_BAR_COUNT: usize = 8;
+
+/// The colour the test pattern draws each bar in, left to right, as 8-bit RGB.
+pub const SMPTE_BAR_NOMINAL_RGB: [[u8; 3]; SMPTE_BAR_COUNT] = [
+    [255, 255, 255],
+    [255, 255, 0],
+    [0, 255, 255],
+    [0, 255, 0],
+    [255, 0, 255],
+    [255, 0, 0],
+    [0, 0, 255],
+    [0, 0, 0],
+];
 
 /// The lower median of an 8-bit histogram.
 fn median_sample(sample_counts: &[u32; 256]) -> f64 {
@@ -1228,16 +1238,6 @@ mod tests {
         covered_bar: usize,
         square_side: u32,
     ) -> Rgba8Image {
-        const BAR_COLORS: [[u8; 3]; SMPTE_BAR_COUNT] = [
-            [255, 255, 255],
-            [255, 255, 0],
-            [0, 255, 255],
-            [0, 255, 0],
-            [255, 0, 255],
-            [255, 0, 0],
-            [0, 0, 255],
-            [0, 0, 0],
-        ];
         let square_left = covered_bar as u32 * pixel_width / SMPTE_BAR_COUNT as u32;
         let square_top = pixel_height / 8;
         let mut rgba_bytes = Vec::with_capacity((pixel_width * pixel_height * 4) as usize);
@@ -1248,7 +1248,8 @@ mod tests {
                 let [red, green, blue] = if inside_the_square {
                     [90, 60, 30]
                 } else {
-                    BAR_COLORS[(column as usize * SMPTE_BAR_COUNT / pixel_width as usize)
+                    SMPTE_BAR_NOMINAL_RGB[(column as usize * SMPTE_BAR_COUNT
+                        / pixel_width as usize)
                         .min(SMPTE_BAR_COUNT - 1)]
                 };
                 rgba_bytes.extend_from_slice(&[red, green, blue, 0xFF]);

@@ -12,7 +12,7 @@ use streamlib::sdk::processors::ContinuousProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
 use crate::consecutive_failure_report_schedule::ConsecutiveFailureReportSchedule;
-use crate::test_pattern_frame_renderer::TestPatternFrameRenderer;
+use crate::test_pattern_frame_renderer::{TestPatternFrameRenderOutcome, TestPatternFrameRenderer};
 use crate::video_frame::{ColorInfo, Primaries, Range, Transfer, VideoFrame};
 
 /// Configuration for [`TestPatternSource`]: frame size only — the animation,
@@ -64,11 +64,17 @@ const DROPPED_FRAMES_BETWEEN_REPORTS: u64 = 1800;
     ),
 )]
 pub struct TestPatternSource {
-    frame_renderer: Option<TestPatternFrameRenderer>,
+    rendering: Option<TestPatternRendering>,
+}
+
+/// The renderer and where the animation has reached, from `setup` to
+/// `teardown`.
+struct TestPatternRendering {
+    frame_renderer: TestPatternFrameRenderer,
     /// The index the next published frame renders; advances only on a
     /// published frame, so frame N's picture never depends on a dropped one.
     next_frame_index: u64,
-    dropped_frames: Option<ConsecutiveFailureReportSchedule>,
+    dropped_frames: ConsecutiveFailureReportSchedule,
 }
 
 impl ContinuousProcessor for TestPatternSource::Processor {
@@ -80,16 +86,18 @@ impl ContinuousProcessor for TestPatternSource::Processor {
                     .into(),
             )
         })?;
-        self.frame_renderer = Some(TestPatternFrameRenderer::create(
-            ctx.gpu_full_access(),
-            &processor_id,
-            self.config.width,
-            self.config.height,
-        )?);
-        self.next_frame_index = 0;
-        self.dropped_frames = Some(ConsecutiveFailureReportSchedule::reporting_every(
-            DROPPED_FRAMES_BETWEEN_REPORTS,
-        ));
+        self.rendering = Some(TestPatternRendering {
+            frame_renderer: TestPatternFrameRenderer::create(
+                ctx.gpu_full_access(),
+                &processor_id,
+                self.config.width,
+                self.config.height,
+            )?,
+            next_frame_index: 0,
+            dropped_frames: ConsecutiveFailureReportSchedule::reporting_every(
+                DROPPED_FRAMES_BETWEEN_REPORTS,
+            ),
+        });
         tracing::info!(
             width = self.config.width,
             height = self.config.height,
@@ -99,32 +107,39 @@ impl ContinuousProcessor for TestPatternSource::Processor {
     }
 
     fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.frame_renderer = None;
+        self.rendering = None;
         Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let (Some(frame_renderer), Some(dropped_frames)) =
-            (self.frame_renderer.as_mut(), self.dropped_frames.as_mut())
-        else {
+        let Some(rendering) = self.rendering.as_mut() else {
             return Ok(());
         };
-        let (published_frame_id, _pooled_pixel_buffer_held_until_written) =
-            match frame_renderer.render_frame(self.next_frame_index) {
-                Ok(rendered) => rendered,
-                Err(render_failure) => {
-                    if dropped_frames.note_failure_and_say_whether_to_report() {
-                        tracing::warn!(
-                            consecutive_dropped_frames = dropped_frames.consecutive_failures(),
-                            frame_index = self.next_frame_index,
-                            "TestPatternSource: dropped a frame: {render_failure}"
-                        );
-                    }
-                    return Ok(());
+        let published_frame_id = match rendering
+            .frame_renderer
+            .render_frame(rendering.next_frame_index)?
+        {
+            TestPatternFrameRenderOutcome::Rendered {
+                published_pixel_buffer_frame_id,
+                ..
+            } => published_pixel_buffer_frame_id,
+            TestPatternFrameRenderOutcome::DroppedByTheOutputPool { refusal } => {
+                if rendering
+                    .dropped_frames
+                    .note_failure_and_say_whether_to_report()
+                {
+                    tracing::warn!(
+                        consecutive_dropped_frames =
+                            rendering.dropped_frames.consecutive_failures(),
+                        frame_index = rendering.next_frame_index,
+                        "TestPatternSource: dropped a frame: {refusal}"
+                    );
                 }
-            };
-        dropped_frames.note_success();
-        self.next_frame_index += 1;
+                return Ok(());
+            }
+        };
+        rendering.dropped_frames.note_success();
+        rendering.next_frame_index += 1;
 
         let frame = VideoFrame {
             surface_id: published_frame_id.to_string(),

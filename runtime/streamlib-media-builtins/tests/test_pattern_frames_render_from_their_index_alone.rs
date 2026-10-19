@@ -19,8 +19,8 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{ContinuousProcessor, PROCESSOR_REGISTRY};
 use streamlib_media_builtins::TestPatternFrameRenderer;
 use streamlib_media_builtins::test_pattern_frame_renderer::{
-    OverlayTopLeftInTheFrame, caption_panel_extent, caption_panel_top_left, potato_sprite_extent,
-    potato_sprite_top_left_at_frame,
+    BakedRgbaOverlay, OverlayTopLeftInTheFrame, POTATO_SPRITE, SAMPLE_STREAM_CAPTION_PANEL,
+    TestPatternFrameRenderOutcome, caption_panel_top_left, potato_sprite_top_left_at_frame,
 };
 
 const FRAME_WIDTH: u32 = 640;
@@ -31,11 +31,6 @@ const FRAME_HEIGHT: u32 = 360;
 const FRAME_INDICES_RENDERED: [u64; 5] = [0, 1, 37, 50, 53];
 
 const RESULT_TIMEOUT: Duration = Duration::from_secs(60);
-
-const POTATO_SPRITE_RGBA: &[u8] =
-    include_bytes!("../src/test_pattern_assets/potato_sprite_160x160.rgba");
-const CAPTION_PANEL_RGBA: &[u8] =
-    include_bytes!("../src/test_pattern_assets/sample_stream_captions_548x62.rgba");
 
 const SMPTE_BAR_COLORS_RGB: [[u8; 3]; 8] = [
     [255, 255, 255],
@@ -74,7 +69,15 @@ fn render_every_frame_index_with_a_fresh_renderer(
     FRAME_INDICES_RENDERED
         .iter()
         .map(|&frame_index| {
-            let (_, pixel_buffer) = renderer.render_frame(frame_index)?;
+            let pixel_buffer = match renderer.render_frame(frame_index)? {
+                TestPatternFrameRenderOutcome::Rendered {
+                    pooled_pixel_buffer,
+                    ..
+                } => pooled_pixel_buffer,
+                TestPatternFrameRenderOutcome::DroppedByTheOutputPool { refusal } => {
+                    return Err(refusal);
+                }
+            };
             let plane = pixel_buffer.plane_base_address(0);
             assert!(!plane.is_null(), "the pooled frame is host-mapped");
             assert!(pixel_buffer.plane_size(0) as usize >= frame_byte_count);
@@ -151,19 +154,19 @@ fn overlay_pixel_at(
     x: u32,
     y: u32,
     top_left: OverlayTopLeftInTheFrame,
-    (overlay_width, overlay_height): (u32, u32),
-    overlay_rgba: &[u8],
-) -> Option<&[u8]> {
+    overlay: &BakedRgbaOverlay,
+) -> Option<&'static [u8]> {
     let within_x = x as i32 - top_left.left;
     let within_y = y as i32 - top_left.top;
-    if within_x < 0 || within_y < 0 || within_x >= overlay_width as i32 {
+    if within_x < 0
+        || within_y < 0
+        || within_x >= overlay.width as i32
+        || within_y >= overlay.height as i32
+    {
         return None;
     }
-    if within_y >= overlay_height as i32 {
-        return None;
-    }
-    let offset = ((within_y as u32 * overlay_width + within_x as u32) * 4) as usize;
-    Some(&overlay_rgba[offset..offset + 4])
+    let offset = ((within_y as u32 * overlay.width + within_x as u32) * 4) as usize;
+    Some(&overlay.rgba[offset..offset + 4])
 }
 
 /// The frame the kernel is held to, computed on the CPU from the same
@@ -178,20 +181,8 @@ fn expected_frame(frame_index: u64) -> Vec<u8> {
             let bar = ((x * 8) / FRAME_WIDTH).min(7) as usize;
             let mut pixel = SMPTE_BAR_COLORS_RGB[bar];
             for overlay in [
-                overlay_pixel_at(
-                    x,
-                    y,
-                    potato_sprite_top_left,
-                    potato_sprite_extent(),
-                    POTATO_SPRITE_RGBA,
-                ),
-                overlay_pixel_at(
-                    x,
-                    y,
-                    caption_panel,
-                    caption_panel_extent(),
-                    CAPTION_PANEL_RGBA,
-                ),
+                overlay_pixel_at(x, y, potato_sprite_top_left, &POTATO_SPRITE),
+                overlay_pixel_at(x, y, caption_panel, &SAMPLE_STREAM_CAPTION_PANEL),
             ]
             .into_iter()
             .flatten()

@@ -455,7 +455,7 @@ impl SimpleEncoder {
     pub(crate) unsafe fn encode_image_internal(
         &mut self,
         rgba_image_view: vk::ImageView,
-        rgba_image_layout: vk::ImageLayout,
+        rgba_image_layout: crate::vulkan::rhi::SampledImageReadLayout,
         source_width: u32,
         source_height: u32,
         timestamp_ns: Option<i64>,

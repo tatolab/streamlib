@@ -701,17 +701,10 @@ mod tests {
 
     /// Colours a decoded bar set might measure: each bar its nominal colour.
     fn nominal_bar_colors() -> SmpteBarColors {
-        [
-            [1.0, 1.0, 1.0],
-            [1.0, 1.0, 0.0],
-            [0.0, 1.0, 1.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 0.0, 1.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 0.0],
-        ]
-        .map(|[red, green, blue]| RgbOnTheUnitScale { red, green, blue })
+        crate::codec_proof_image_measurement::SMPTE_BAR_NOMINAL_RGB.map(|rgb| {
+            let [red, green, blue] = rgb.map(|channel| f64::from(channel) / 255.0);
+            RgbOnTheUnitScale { red, green, blue }
+        })
     }
 
     #[test]

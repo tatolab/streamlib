@@ -109,7 +109,7 @@ pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 
 mod vulkan_compute_kernel;
 mod vulkan_kernel_capability_refusal;
-pub use vulkan_compute_kernel::VulkanComputeKernel;
+pub use vulkan_compute_kernel::{SampledImageReadLayout, VulkanComputeKernel};
 
 mod vulkan_graphics_kernel;
 mod vulkan_pipeline_cache_on_disk;

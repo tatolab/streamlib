@@ -330,8 +330,7 @@ impl RgbToNv12Converter {
 
     /// Convert an RGBA VkImage to NV12.
     ///
-    /// The input image is sampled in `rgba_image_layout`, which is
-    /// `SHADER_READ_ONLY_OPTIMAL` or `GENERAL`.
+    /// The input image is sampled in `rgba_image_layout`.
     /// After this call, the encode-src NV12 image is in `VIDEO_ENCODE_SRC_KHR`
     /// layout and ready for the encoder.
     ///
@@ -346,7 +345,7 @@ impl RgbToNv12Converter {
     pub unsafe fn convert(
         &mut self,
         rgba_image_view: vk::ImageView,
-        rgba_image_layout: vk::ImageLayout,
+        rgba_image_layout: crate::vulkan::rhi::SampledImageReadLayout,
         source_width: u32,
         source_height: u32,
     ) -> Result<(vk::Image, vk::ImageView), VideoError> {

@@ -17,10 +17,13 @@ use streamlib::sdk::rhi::{
 };
 
 /// A picture baked into the binary as tightly packed RGBA rows.
-struct BakedRgbaOverlay {
-    width: u32,
-    height: u32,
-    rgba: &'static [u8],
+pub struct BakedRgbaOverlay {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// `width × height` RGBA pixels, row by row.
+    pub rgba: &'static [u8],
 }
 
 impl BakedRgbaOverlay {
@@ -29,7 +32,8 @@ impl BakedRgbaOverlay {
     }
 }
 
-const POTATO_SPRITE: BakedRgbaOverlay = BakedRgbaOverlay {
+/// The potato, drawn over the bars wherever its frame index puts it.
+pub const POTATO_SPRITE: BakedRgbaOverlay = BakedRgbaOverlay {
     width: 160,
     height: 160,
     rgba: include_bytes!("test_pattern_assets/potato_sprite_160x160.rgba"),
@@ -37,7 +41,7 @@ const POTATO_SPRITE: BakedRgbaOverlay = BakedRgbaOverlay {
 
 /// "Tatolab stream setup successfully" over "sample stream", right-aligned,
 /// set in Press Start 2P white on an opaque dark panel.
-const SAMPLE_STREAM_CAPTION_PANEL: BakedRgbaOverlay = BakedRgbaOverlay {
+pub const SAMPLE_STREAM_CAPTION_PANEL: BakedRgbaOverlay = BakedRgbaOverlay {
     width: 548,
     height: 62,
     rgba: include_bytes!("test_pattern_assets/sample_stream_captions_548x62.rgba"),
@@ -50,7 +54,11 @@ const _: () = assert!(SAMPLE_STREAM_CAPTION_PANEL.holds_exactly_its_extent());
 const POTATO_SPRITE_PIXELS_PER_FRAME: u64 = 4;
 
 /// The gap between the caption panel and the frame's right and bottom edges.
-const CAPTION_PANEL_MARGIN_PIXELS: i32 = 24;
+const CAPTION_PANEL_MARGIN_PIXELS: i64 = 24;
+
+/// The largest frame side the renderer accepts — 16K, far past any frame the
+/// sample stream is asked for.
+const LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS: u32 = 16_384;
 
 /// The shader's `local_size_x` and `local_size_y`.
 const TEST_PATTERN_FRAME_WORKGROUP_SIZE: u32 = 16;
@@ -92,6 +100,11 @@ pub struct OverlayTopLeftInTheFrame {
     pub top: i32,
 }
 
+/// A pixel offset as the shader's signed coordinate, saturating past `i32`.
+fn saturated_to_a_signed_pixel_offset(pixel_offset: i64) -> i32 {
+    i32::try_from(pixel_offset).unwrap_or(if pixel_offset < 0 { i32::MIN } else { i32::MAX })
+}
+
 /// The position along a span of `travel` pixels after `distance` pixels of
 /// travel, bouncing between its two ends.
 fn bounced_position_along(distance: u64, travel: u32) -> i32 {
@@ -105,7 +118,7 @@ fn bounced_position_along(distance: u64, travel: u32) -> i32 {
     } else {
         2 * travel - distance_into_the_round_trip
     };
-    position as i32
+    saturated_to_a_signed_pixel_offset(position as i64)
 }
 
 /// Where the potato sits in frame `frame_index`: it leaves the top-left corner
@@ -124,27 +137,15 @@ pub fn potato_sprite_top_left_at_frame(
 
 /// Where the caption panel sits: the bottom-right corner, inset by its margin.
 pub fn caption_panel_top_left(frame_width: u32, frame_height: u32) -> OverlayTopLeftInTheFrame {
+    let inset_from_the_far_edge = |frame_side: u32, panel_side: u32| {
+        saturated_to_a_signed_pixel_offset(
+            i64::from(frame_side) - i64::from(panel_side) - CAPTION_PANEL_MARGIN_PIXELS,
+        )
+    };
     OverlayTopLeftInTheFrame {
-        left: frame_width as i32
-            - SAMPLE_STREAM_CAPTION_PANEL.width as i32
-            - CAPTION_PANEL_MARGIN_PIXELS,
-        top: frame_height as i32
-            - SAMPLE_STREAM_CAPTION_PANEL.height as i32
-            - CAPTION_PANEL_MARGIN_PIXELS,
+        left: inset_from_the_far_edge(frame_width, SAMPLE_STREAM_CAPTION_PANEL.width),
+        top: inset_from_the_far_edge(frame_height, SAMPLE_STREAM_CAPTION_PANEL.height),
     }
-}
-
-/// The potato sprite's extent in pixels.
-pub fn potato_sprite_extent() -> (u32, u32) {
-    (POTATO_SPRITE.width, POTATO_SPRITE.height)
-}
-
-/// The caption panel's extent in pixels.
-pub fn caption_panel_extent() -> (u32, u32) {
-    (
-        SAMPLE_STREAM_CAPTION_PANEL.width,
-        SAMPLE_STREAM_CAPTION_PANEL.height,
-    )
 }
 
 fn push_constants_for_frame(
@@ -176,21 +177,26 @@ fn upload_overlay_into_a_storage_buffer(
     let storage_buffer = full_access.acquire_storage_buffer(
         &TensorStorageBufferLayout::of_bytes(overlay.rgba.len() as u64)?,
     )?;
-    let mapped = storage_buffer.mapped_ptr();
-    if mapped.is_null() || storage_buffer.byte_size() < overlay.rgba.len() as u64 {
-        return Err(Error::GpuError(format!(
-            "test pattern: overlay storage buffer unusable (mapped: {}, {} bytes < {})",
-            !mapped.is_null(),
-            storage_buffer.byte_size(),
-            overlay.rgba.len()
-        )));
-    }
-    // SAFETY: `mapped` is the host-visible mapping of a buffer of at least
-    // `overlay.rgba.len()` bytes, checked above, and nothing else writes it.
-    unsafe {
-        std::ptr::copy_nonoverlapping(overlay.rgba.as_ptr(), mapped, overlay.rgba.len());
-    }
+    storage_buffer.write_from(overlay.rgba)?;
     Ok(storage_buffer)
+}
+
+/// What one [`TestPatternFrameRenderer::render_frame`] produced.
+pub enum TestPatternFrameRenderOutcome {
+    /// The frame, host-readable in the next pixel buffer of the node's output
+    /// pool.
+    Rendered {
+        /// The id the frame is published under.
+        published_pixel_buffer_frame_id: PublishedPixelBufferFrameId,
+        /// The pooled buffer holding the frame's pixels.
+        pooled_pixel_buffer: PixelBuffer,
+    },
+    /// The output pool refused the frame — downstream holds every frame it
+    /// may, or the device's memory budget is spent; the next frame may land.
+    DroppedByTheOutputPool {
+        /// The pool's refusal, naming the node and the shape.
+        refusal: Error,
+    },
 }
 
 /// Renders the test pattern's frames of one extent into a native node's own
@@ -214,9 +220,11 @@ impl TestPatternFrameRenderer {
         frame_width: u32,
         frame_height: u32,
     ) -> Result<Self> {
-        if frame_width == 0 || frame_height == 0 {
+        let renderable_side = 1..=LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS;
+        if !renderable_side.contains(&frame_width) || !renderable_side.contains(&frame_height) {
             return Err(Error::Configuration(format!(
-                "test pattern: a {frame_width}x{frame_height} frame has no pixels to render"
+                "test pattern: a {frame_width}x{frame_height} frame cannot be rendered; each \
+                 side is 1 to {LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS} pixels"
             )));
         }
         let kernel = full_access.create_compute_kernel(&ComputeKernelDescriptor {
@@ -247,32 +255,38 @@ impl TestPatternFrameRenderer {
     /// Render frame `frame_index` into the next `Rgba32` pixel buffer of the
     /// node's output pool, returning once the buffer is host-readable.
     ///
-    /// An `Err` is a dropped frame — the pool's own refusal when downstream
-    /// holds every frame it may — and the renderer stays usable.
-    pub fn render_frame(
-        &mut self,
-        frame_index: u64,
-    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
-        let rendered = self.record_submit_and_wait(frame_index);
-        if rendered.is_err() {
-            self.recorder.abort_recording();
-        }
-        rendered
-    }
-
-    fn record_submit_and_wait(
-        &mut self,
-        frame_index: u64,
-    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
-        let (published_pixel_buffer_frame_id, pooled_pixel_buffer) = self
+    /// An `Err` is the GPU failing to render; the pool's own refusal is
+    /// [`TestPatternFrameRenderOutcome::DroppedByTheOutputPool`].
+    pub fn render_frame(&mut self, frame_index: u64) -> Result<TestPatternFrameRenderOutcome> {
+        let (published_pixel_buffer_frame_id, pooled_pixel_buffer) = match self
             .processor_output_pixel_buffer_pool
             .acquire_the_next_output_pixel_buffer(
                 self.frame_width,
                 self.frame_height,
                 PixelFormat::Rgba32,
-            )?;
+            ) {
+            Ok(acquired) => acquired,
+            Err(refusal) => {
+                return Ok(TestPatternFrameRenderOutcome::DroppedByTheOutputPool { refusal });
+            }
+        };
+        let rendered = self.record_submit_and_wait(frame_index, &pooled_pixel_buffer);
+        if rendered.is_err() {
+            self.recorder.abort_recording();
+        }
+        rendered.map(|()| TestPatternFrameRenderOutcome::Rendered {
+            published_pixel_buffer_frame_id,
+            pooled_pixel_buffer,
+        })
+    }
+
+    fn record_submit_and_wait(
+        &mut self,
+        frame_index: u64,
+        pooled_pixel_buffer: &PixelBuffer,
+    ) -> Result<()> {
         self.kernel
-            .set_storage_buffer_pixel(0, &pooled_pixel_buffer)?;
+            .set_storage_buffer_pixel(0, pooled_pixel_buffer)?;
         self.kernel
             .set_storage_buffer_storage(1, &self.potato_sprite_pixels)?;
         self.kernel
@@ -293,14 +307,13 @@ impl TestPatternFrameRenderer {
             1,
         )?;
         self.recorder.record_buffer_barrier(
-            &pooled_pixel_buffer,
+            pooled_pixel_buffer,
             VulkanStage::COMPUTE_SHADER,
             VulkanStage::HOST,
             VulkanAccess::SHADER_WRITE,
             VulkanAccess::HOST_READ,
         )?;
-        self.recorder.submit_and_wait()?;
-        Ok((published_pixel_buffer_frame_id, pooled_pixel_buffer))
+        self.recorder.submit_and_wait()
     }
 }
 
@@ -310,8 +323,25 @@ mod tests {
 
     #[test]
     fn the_baked_overlays_are_the_extents_their_names_say() {
-        assert_eq!(potato_sprite_extent(), (160, 160));
-        assert_eq!(caption_panel_extent(), (548, 62));
+        assert_eq!((POTATO_SPRITE.width, POTATO_SPRITE.height), (160, 160));
+        assert_eq!(
+            (
+                SAMPLE_STREAM_CAPTION_PANEL.width,
+                SAMPLE_STREAM_CAPTION_PANEL.height
+            ),
+            (548, 62)
+        );
+    }
+
+    #[test]
+    fn a_caption_panel_past_a_tiny_frame_sits_at_a_negative_offset_rather_than_wrapping() {
+        assert_eq!(
+            caption_panel_top_left(64, 32),
+            OverlayTopLeftInTheFrame {
+                left: 64 - 548 - 24,
+                top: 32 - 62 - 24,
+            }
+        );
     }
 
     #[test]
