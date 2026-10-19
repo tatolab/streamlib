@@ -104,7 +104,7 @@ pub(crate) struct DestinationOfALinkAsItsWiringReadsIt {
     max_notifiers: usize,
     /// Whether a channel this destination is the first to open is made as deep
     /// as a windowed reader's ring, so one connected later fits it.
-    makes_room_for_a_windowed_reader_joining_later: bool,
+    room_for_a_windowed_reader_joining_later: RoomForAWindowedReaderTheSourcesGraphCannotSee,
 }
 
 /// Read what wiring link `link_id` into `to_port` needs of its destination,
@@ -155,7 +155,8 @@ pub(crate) fn read_the_destination_of_a_link(
         input_port_delivery,
         notify_service_name,
         max_notifiers,
-        makes_room_for_a_windowed_reader_joining_later: false,
+        room_for_a_windowed_reader_joining_later:
+            RoomForAWindowedReaderTheSourcesGraphCannotSee::NotNeeded,
     })
 }
 
@@ -304,11 +305,7 @@ pub(crate) fn open_the_source_side_of_a_link(
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_chunk_ceiling_bytes(trust_tier);
     let room_for_a_windowed_reader_the_sources_graph_cannot_see =
-        if destination.makes_room_for_a_windowed_reader_joining_later {
-            RoomForAWindowedReaderTheSourcesGraphCannotSee::Made
-        } else {
-            RoomForAWindowedReaderTheSourcesGraphCannotSee::NotNeeded
-        };
+        destination.room_for_a_windowed_reader_joining_later;
     let channel_sizing = resolve_channel_sizing(
         source_graph,
         iceoryx2_node,
@@ -423,7 +420,8 @@ pub(crate) fn open_the_source_side_for_the_runtimes_publisher(
         audio_windowing: None,
         input_port_delivery: DeliveryProfile::Ordered.resolve(),
         max_notifiers: MAX_INBOUND_LINKS_PER_DESTINATION,
-        makes_room_for_a_windowed_reader_joining_later: true,
+        room_for_a_windowed_reader_joining_later:
+            RoomForAWindowedReaderTheSourcesGraphCannotSee::Made,
     };
     let opened = open_the_source_side_of_a_link(
         source_graph,
