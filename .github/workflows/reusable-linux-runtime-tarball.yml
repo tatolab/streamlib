@@ -38,6 +38,12 @@ jobs:
           path: target/linux_bundled_vulkan_driver_cache
           key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
 
+      # The tarball's build mounts this bun into its manylinux container.
+      - name: Install the bun the preview page pins
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: runtime/tatolab-watch/package.json
+
       - name: Build the tarball and run the portability gate over it
         run: bash scripts/build_linux_runtime_release_tarball.sh "$RUNNER_TEMP/linux-runtime-tarball"
 

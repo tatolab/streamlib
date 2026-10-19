@@ -456,6 +456,14 @@ jobs:
           path: target/local-relay
           key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
 
+      # `build-runtime` bundles the preview page with the bun its `package.json`
+      # pins, and refuses any other.
+      - name: Install the bun the preview page pins
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: runtime/tatolab-watch/package.json
+
       # Both forms, in debug: as users run it, and with the machine directories
       # under a test root, which the integration suite requires. The second
       # replaces the first in place, so each is packed before the next build.
@@ -808,6 +816,14 @@ jobs:
         with:
           path: target/local-relay
           key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
+
+      # `build-runtime` bundles the preview page with the bun its `package.json`
+      # pins, and refuses any other.
+      - name: Install the bun the preview page pins
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: runtime/tatolab-watch/package.json
 
       # Both forms, in debug: as users run it, and with the machine directories
       # under a test root, which the integration suite requires. The second
