@@ -30,7 +30,7 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     ),
     (
         "0004-every-key-with-a-relay-track-source.json",
-        "5128d0ff15e295845e980574e1494a1f60b20fccd05751676c4493dde1798ac2",
+        "563102a5262454f6616800f6a59ef61fa28ed358ca652ebaae52a1b236f1e706",
     ),
 ];
 

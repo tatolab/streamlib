@@ -183,15 +183,15 @@ mod tests {
         let cases: Vec<PortAddressCase> = serde_json::from_str(include_str!(
             "../../../../tests/fixtures/port_address_cases.json"
         ))
-        .expect("the shared port address fixture parses");
+        .expect("the port address fixture parses");
         assert!(!cases.is_empty());
         cases
     }
 
-    /// Every case of the shared fixture parses to the parts it names, or is
+    /// Every case of the fixture parses to the parts it names, or is
     /// refused as an invalid address.
     #[test]
-    fn every_shared_fixture_case_parses_as_written() {
+    fn every_fixture_case_parses_as_written() {
         for case in port_address_cases() {
             let parsed = PortAddress::parse(&case.address);
             if case.refused {

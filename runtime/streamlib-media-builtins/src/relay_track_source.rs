@@ -41,6 +41,10 @@ const A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER: Duration = Duration::from_millis(
 /// from [`A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER`].
 const A_FAILED_SESSION_IS_RETRIED_AT_LEAST_EVERY: Duration = Duration::from_secs(10);
 
+/// How long a session waits for the broadcast's first catalog, which says
+/// where the track carries its timestamp, before it reads the track without it.
+const THE_FIRST_CATALOG_IS_AWAITED_FOR: Duration = Duration::from_secs(2);
+
 /// The name of the thread a running node reads its track on.
 const RELAY_TRACK_READING_THREAD_NAME: &str = "relay-track-source";
 
@@ -269,15 +273,18 @@ async fn read_the_track_until_stopped(
         let objects_written_before_the_session = track_reader.objects_written;
         let reason_the_session_ended = tokio::select! {
             _ = stop_requested.wait_for(|stop_requested| *stop_requested) => return,
-            reason_the_session_ended = track_reader.read_through_one_session(&moq_client, &relay_track_location) => reason_the_session_ended,
+            reason_the_session_ended = track_reader
+                .read_through_one_session(&moq_client, &relay_track_location) => {
+                reason_the_session_ended
+            }
         };
         if track_reader.objects_written > objects_written_before_the_session {
             retried_after = A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER;
         }
         if last_reason_the_session_ended.as_ref() != Some(&reason_the_session_ended) {
             tracing::warn!(
-                "RelayTrackSource: reading {relay_track_location} stopped ({reason_the_session_ended}); \
-                 dialing again with backoff"
+                "RelayTrackSource: reading {relay_track_location} stopped \
+                 ({reason_the_session_ended}); dialing again with backoff"
             );
             last_reason_the_session_ended = Some(reason_the_session_ended);
         }
@@ -324,46 +331,73 @@ impl RelayTrackReader {
             .connect(relay_track_location.relay_url.clone());
         let announced_broadcasts = subscribed_origin.consume();
         let broadcast = tokio::select! {
-            ended = connection.closed() => return WhyARelayTrackSessionEnded::of_a_closed_session(ended),
+            ended = connection.closed() => {
+                return WhyARelayTrackSessionEnded::of_a_closed_session(ended);
+            }
             broadcast = announced_broadcasts
                 .routed_broadcast(relay_track_location.broadcast_path.as_str()) => match broadcast {
                 Ok(broadcast) => broadcast,
-                Err(refusal) => return WhyARelayTrackSessionEnded::TheBroadcastWasRefused(refusal.to_string()),
+                Err(refusal) => {
+                    return WhyARelayTrackSessionEnded::BroadcastWasRefused(
+                        refusal.to_string(),
+                    );
+                }
             },
         };
         let (mut groups_of_the_track, mut catalog_of_the_broadcast) =
             match subscribe_to_the_track_and_its_catalog(&broadcast, relay_track_location).await {
                 Ok(subscribed) => subscribed,
                 Err(refusal) => {
-                    return WhyARelayTrackSessionEnded::TheTrackWasRefused(refusal.to_string());
+                    return WhyARelayTrackSessionEnded::TrackWasRefused(refusal.to_string());
                 }
             };
+        if let Ok(Some(catalog)) = tokio::time::timeout(
+            THE_FIRST_CATALOG_IS_AWAITED_FOR,
+            the_next_catalog_of(&mut catalog_of_the_broadcast),
+        )
+        .await
+        {
+            self.take_the_tracks_entry_from(&catalog, &relay_track_location.track_name);
+        }
         tracing::info!("RelayTrackSource: reading {relay_track_location}");
 
         let mut group_being_read: Option<moq_net::group::Consumer> = None;
         let mut the_next_object_starts_a_group = false;
         loop {
+            // The catalog says where the track carries its timestamp, so an
+            // update is taken before any object waiting beside it.
             tokio::select! {
-                ended = connection.closed() => return WhyARelayTrackSessionEnded::of_a_closed_session(ended),
+                biased;
                 catalog = the_next_catalog_of(&mut catalog_of_the_broadcast) => match catalog {
-                    Some(catalog) => self.take_the_tracks_entry_from(&catalog, &relay_track_location.track_name),
+                    Some(catalog) => self
+                        .take_the_tracks_entry_from(&catalog, &relay_track_location.track_name),
                     None => catalog_of_the_broadcast = None,
                 },
-                group = groups_of_the_track.next_group(), if group_being_read.is_none() => match group {
-                    Ok(Some(group)) => {
-                        group_being_read = Some(group);
-                        the_next_object_starts_a_group = true;
+                ended = connection.closed() => {
+                    return WhyARelayTrackSessionEnded::of_a_closed_session(ended);
+                }
+                group = groups_of_the_track.next_group(), if group_being_read.is_none() => {
+                    match group {
+                        Ok(Some(group)) => {
+                            group_being_read = Some(group);
+                            the_next_object_starts_a_group = true;
+                        }
+                        Ok(None) => return WhyARelayTrackSessionEnded::TrackEnded(None),
+                        Err(refusal) => {
+                            return WhyARelayTrackSessionEnded::TrackEnded(Some(
+                                refusal.to_string(),
+                            ));
+                        }
                     }
-                    Ok(None) => return WhyARelayTrackSessionEnded::TheTrackEnded(None),
-                    Err(refusal) => return WhyARelayTrackSessionEnded::TheTrackEnded(Some(refusal.to_string())),
-                },
+                }
                 object = the_next_object_of(&mut group_being_read) => match object {
                     Ok(Some(object)) => {
-                        let group_boundary = if std::mem::take(&mut the_next_object_starts_a_group) {
-                            MessageGroupBoundary::StartsGroup
-                        } else {
-                            MessageGroupBoundary::ContinuesGroup
-                        };
+                        let group_boundary =
+                            if std::mem::take(&mut the_next_object_starts_a_group) {
+                                MessageGroupBoundary::StartsGroup
+                            } else {
+                                MessageGroupBoundary::ContinuesGroup
+                            };
                         self.write_the_object(&object, group_boundary);
                     }
                     Ok(None) => group_being_read = None,
@@ -424,18 +458,18 @@ impl RelayTrackReader {
 /// Why one session reading a relay's track ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WhyARelayTrackSessionEnded {
-    TheRelayClosedTheSession,
-    TheSessionFailed(String),
-    TheBroadcastWasRefused(String),
-    TheTrackWasRefused(String),
-    TheTrackEnded(Option<String>),
+    RelayClosedTheSession,
+    SessionFailed(String),
+    BroadcastWasRefused(String),
+    TrackWasRefused(String),
+    TrackEnded(Option<String>),
 }
 
 impl WhyARelayTrackSessionEnded {
     fn of_a_closed_session(ended: moq_tokio::Result<()>) -> Self {
         match ended {
-            Ok(()) => Self::TheRelayClosedTheSession,
-            Err(refusal) => Self::TheSessionFailed(refusal.to_string()),
+            Ok(()) => Self::RelayClosedTheSession,
+            Err(refusal) => Self::SessionFailed(refusal.to_string()),
         }
     }
 }
@@ -443,16 +477,16 @@ impl WhyARelayTrackSessionEnded {
 impl std::fmt::Display for WhyARelayTrackSessionEnded {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TheRelayClosedTheSession => formatter.write_str("the relay closed the session"),
-            Self::TheSessionFailed(refusal) => write!(formatter, "the session failed: {refusal}"),
-            Self::TheBroadcastWasRefused(refusal) => {
+            Self::RelayClosedTheSession => formatter.write_str("the relay closed the session"),
+            Self::SessionFailed(refusal) => write!(formatter, "the session failed: {refusal}"),
+            Self::BroadcastWasRefused(refusal) => {
                 write!(formatter, "the broadcast was refused: {refusal}")
             }
-            Self::TheTrackWasRefused(refusal) => {
+            Self::TrackWasRefused(refusal) => {
                 write!(formatter, "the track was refused: {refusal}")
             }
-            Self::TheTrackEnded(None) => formatter.write_str("the track ended"),
-            Self::TheTrackEnded(Some(refusal)) => write!(formatter, "the track ended: {refusal}"),
+            Self::TrackEnded(None) => formatter.write_str("the track ended"),
+            Self::TrackEnded(Some(refusal)) => write!(formatter, "the track ended: {refusal}"),
         }
     }
 }
@@ -573,9 +607,17 @@ impl WhereATrackCarriesItsTimestamp {
     }
 }
 
-/// How far a re-based stamp may sit from the object's arrival before the
-/// track is taken to have jumped and the offset is taken again.
-const A_REBASED_STAMP_STRAYS_FROM_ARRIVAL_BY_AT_MOST: Duration = Duration::from_secs(1);
+/// How far a re-based stamp may fall behind the object's arrival — a track
+/// whose time slowed or stalled — before the track is taken to have jumped and
+/// the offset is taken again.
+const A_REBASED_STAMP_FALLS_BEHIND_ARRIVAL_BY_AT_MOST: Duration = Duration::from_secs(1);
+
+/// How far a re-based stamp may run ahead of the object's arrival before the
+/// track is taken to have leapt and the offset is taken again. A reader joining
+/// a track is handed the group in progress from its start, in one burst, and
+/// writing it at the track's own pace puts the stamps ahead of arrival by that
+/// group's age — at most the age a relay still serves a media group at.
+const A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST: Duration = hang::container::MAX_AGE;
 
 /// How far a track's timestamp may step back — a reordered frame — before the
 /// track is taken to have restarted and the offset is taken again.
@@ -607,11 +649,15 @@ impl TrackTimestampRebasedOntoThisMachinesClock {
             latest - track_timestamp_ns
                 > A_TRACKS_TIMESTAMP_STEPS_BACK_BY_AT_MOST.as_nanos() as i128
         });
+        let the_rebased_stamp_stays_near_arrival = |offset_ns: i128| {
+            let lead_over_arrival_ns = track_timestamp_ns + offset_ns - arrival_ns_wide;
+            (-(A_REBASED_STAMP_FALLS_BEHIND_ARRIVAL_BY_AT_MOST.as_nanos() as i128)
+                ..=A_REBASED_STAMP_RUNS_AHEAD_OF_ARRIVAL_BY_AT_MOST.as_nanos() as i128)
+                .contains(&lead_over_arrival_ns)
+        };
         let offset_ns = match self.offset_ns {
             Some(offset_ns)
-                if !the_track_stepped_back
-                    && (track_timestamp_ns + offset_ns - arrival_ns_wide).unsigned_abs()
-                        <= A_REBASED_STAMP_STRAYS_FROM_ARRIVAL_BY_AT_MOST.as_nanos() =>
+                if !the_track_stepped_back && the_rebased_stamp_stays_near_arrival(offset_ns) =>
             {
                 offset_ns
             }
@@ -708,6 +754,44 @@ mod tests {
         );
     }
 
+    /// A reader joining a track is handed the group in progress from its
+    /// keyframe in one burst, here two seconds of it, then the live objects.
+    #[test]
+    fn a_group_handed_over_in_a_burst_on_joining_keeps_the_tracks_spacing_into_the_live_edge() {
+        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
+        let joined_at_ns = 50_000_000_000_i64;
+        let cached_objects = 60_i64;
+        let stamps: Vec<i64> = (0..cached_objects + 30)
+            .map(|object_index| {
+                let track_timestamp_ns = i128::from(object_index) * FRAME_SPACING_NS;
+                let arrival_ns = if object_index < cached_objects {
+                    joined_at_ns + object_index * 1_000_000
+                } else {
+                    joined_at_ns
+                        + ((object_index - cached_objects + 1) as i128 * FRAME_SPACING_NS) as i64
+                        + arrival_jitter_ns(object_index)
+                };
+                rebasing.stamp_on_this_machines_clock(Some(track_timestamp_ns), arrival_ns)
+            })
+            .collect();
+        for pair in stamps.windows(2) {
+            assert_eq!(
+                i128::from(pair[1] - pair[0]),
+                FRAME_SPACING_NS,
+                "the burst and the live objects after it keep the track's spacing: {stamps:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_track_that_falls_behind_its_arrival_by_more_than_a_second_is_re_anchored() {
+        let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
+        rebasing.stamp_on_this_machines_clock(Some(0), 1_000_000_000);
+        let after_the_stall =
+            rebasing.stamp_on_this_machines_clock(Some(FRAME_SPACING_NS), 2_500_000_000);
+        assert_eq!(after_the_stall, 2_500_000_000);
+    }
+
     #[test]
     fn a_track_that_leaps_ahead_of_its_arrival_is_re_anchored() {
         let mut rebasing = TrackTimestampRebasedOntoThisMachinesClock::default();
@@ -797,7 +881,9 @@ mod tests {
             "video": {"renditions": {"encoder/encoded_video": {
                 "codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720, "framerate": 30
             }}},
-            "binary": {"tracks": {"camera/video": {"mode": "snapshot", "mime": "application/msgpack"}}},
+            "binary": {"tracks": {"camera/video": {
+                "mode": "snapshot", "mime": "application/msgpack"
+            }}},
         });
         assert_eq!(
             the_catalog_entry_of_the_track_named(&catalog, "encoder/encoded_video"),

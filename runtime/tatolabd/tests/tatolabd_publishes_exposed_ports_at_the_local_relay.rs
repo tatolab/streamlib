@@ -30,6 +30,7 @@ use common::{
     an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
     the_local_apis_answer_to_get, the_staged_local_relay_executable,
 };
+use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use streamlib_relay_adapter_local::LocalRelayListener;
 use streamlib_relay_adapter_sdk::url::Url;
 
@@ -270,6 +271,28 @@ impl TatolabdPublishingTheStream {
                 "stream": READER_STREAM, "node": node, "port": port, "level": "private",
             }),
         );
+    }
+
+    /// The bags [`READER_STREAM`]'s `node` has written on `track` once `reached`
+    /// is true of them, within [`MOQ_BUDGET`].
+    fn the_bags_written_once_they_reach(
+        &self,
+        node: &str,
+        reached: impl Fn(u64) -> bool,
+        what_is_awaited: &str,
+    ) -> u64 {
+        let deadline = std::time::Instant::now() + MOQ_BUDGET;
+        loop {
+            let written = self.bags_written_by(READER_STREAM, node, "track");
+            if reached(written) {
+                return written;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what_is_awaited} within {MOQ_BUDGET:?}: {written} written"
+            );
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 
     /// The bags `node` of `stream_name` has written on `port`, read off `graph`.
@@ -866,11 +889,9 @@ fn a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port() {
             .iter()
             .map(|object| {
                 u128::from(
-                    streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame(
-                        &object.payload,
-                    )
-                    .expect("the source writes the encoder's media frames as received")
-                    .timestamp_microseconds,
+                    read_hang_legacy_container_media_frame(&object.payload)
+                        .expect("the source writes the encoder's media frames as received")
+                        .timestamp_microseconds,
                 ) * 1_000
             })
             .collect();
@@ -1141,4 +1162,42 @@ fn a_relay_track_source_reads_a_hang_track_a_third_party_published() {
     });
     third_party_writing.abort();
     reading.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// The track a `RelayTrackSource` reads is withdrawn and published again: the
+/// node writes nothing while it is gone, dials again with backoff without its
+/// stream ending, and writes the track once more when it is back.
+#[test]
+fn a_relay_track_source_whose_track_is_withdrawn_keeps_its_stream_running_and_reads_it_again() {
+    let mut publishing = TatolabdPublishingTheStream::start_beside_a_reader_stream();
+    publishing.add_a_relay_track_source_reading("private-numbers", PRIVATE_PORT);
+    let written_while_it_was_published = publishing.the_bags_written_once_they_reach(
+        "private-numbers",
+        |written| written >= 20,
+        "the source wrote 20 objects of the private port",
+    );
+
+    publishing.put_the_port_at(PRIVATE_PORT, "internal");
+    let written_once_withdrawn = publishing.the_bags_written_once_they_reach(
+        "private-numbers",
+        |_| true,
+        "the source's count reads",
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    let written_after_a_while_withdrawn =
+        publishing.bags_written_by(READER_STREAM, "private-numbers", "track");
+    assert!(
+        written_after_a_while_withdrawn <= written_once_withdrawn + MESSAGES_PER_GROUP,
+        "the source kept writing a track that was withdrawn: {written_once_withdrawn} then \
+         {written_after_a_while_withdrawn}"
+    );
+    assert!(written_once_withdrawn >= written_while_it_was_published);
+
+    publishing.put_the_port_at(PRIVATE_PORT, "private");
+    publishing.the_bags_written_once_they_reach(
+        "private-numbers",
+        |written| written >= written_after_a_while_withdrawn + 20,
+        "the source wrote 20 more objects once the port was private again",
+    );
+    publishing.runtime.interrupt_and_expect_a_clean_exit();
 }

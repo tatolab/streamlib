@@ -1,5 +1,5 @@
 {
-  "stream": "every-built-in",
+  "stream": "reader",
   "nodes": [
     {
       "id": "golden01",
@@ -193,12 +193,12 @@
       }
     },
     {
-      "id": "golden13",
+      "id": "golden02",
       "name": "relaytracksource",
       "type": "tatolab.stream:RelayTrackSource",
       "config": {
         "relay_url": "http://127.0.0.1:4443",
-        "track_address": "golden-desk/camera-rig/h264encoder/encoded_video"
+        "track_address": "golden-desk/camera-rig/camerasource/video"
       },
       "config_checksum": 0,
       "ports": {
@@ -243,20 +243,6 @@
     {
       "id": "goldenlink03",
       "source": {
-        "node": "camerasource",
-        "port": "video"
-      },
-      "target": {
-        "node": "h265encoder",
-        "port": "video"
-      },
-      "capacity": 16,
-      "state": "wired",
-      "components": {}
-    },
-    {
-      "id": "goldenlink04",
-      "source": {
         "node": "h264encoder",
         "port": "encoded_video"
       },
@@ -269,7 +255,7 @@
       "components": {}
     },
     {
-      "id": "goldenlink05",
+      "id": "goldenlink04",
       "source": {
         "node": "h265encoder",
         "port": "encoded_video"
@@ -283,21 +269,7 @@
       "components": {}
     },
     {
-      "id": "goldenlink06",
-      "source": {
-        "node": "h264decoder",
-        "port": "video"
-      },
-      "target": {
-        "node": "virtualcamerasink",
-        "port": "video"
-      },
-      "capacity": 16,
-      "state": "wired",
-      "components": {}
-    },
-    {
-      "id": "goldenlink07",
+      "id": "goldenlink05",
       "source": {
         "node": "microphonesource",
         "port": "audio"
@@ -311,7 +283,7 @@
       "components": {}
     },
     {
-      "id": "goldenlink08",
+      "id": "goldenlink06",
       "source": {
         "node": "opusencoder",
         "port": "encoded_audio"
@@ -325,7 +297,7 @@
       "components": {}
     },
     {
-      "id": "goldenlink09",
+      "id": "goldenlink07",
       "source": {
         "node": "opusdecoder",
         "port": "audio"
@@ -337,6 +309,23 @@
       "capacity": 16,
       "state": "wired",
       "components": {}
+    },
+    {
+      "id": "goldenlink11",
+      "source": {
+        "node": "relaytracksource",
+        "port": "track"
+      },
+      "target": {
+        "node": "virtualcamerasink",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "error",
+      "error_reason": "a reason `graph` renders only on a link in error",
+      "components": {
+        "state": "Error"
+      }
     }
   ],
   "exposed": [
@@ -357,5 +346,5 @@
     }
   ],
   "extensions": [],
-  "runtime_name": "golden-desk-a1b2"
+  "machine": "golden-desk"
 }

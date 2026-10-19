@@ -3,8 +3,9 @@
 
 //! A node that writes numbered messages, for the tests of the publisher: the
 //! `n`th message is the bytes `message <n>`, stamped `10 n` milliseconds — the
-//! interval it writes at — and opens a group when `n` is a multiple of three. It writes each one on both
-//! of its ports, `numbers` declaring a catalog entry and `more_numbers` none.
+//! interval it writes at — and opens a group when `n` is a multiple of three.
+//! It writes each one on both of its ports, `numbers` declaring a catalog entry
+//! and `more_numbers` none.
 //! Compiled into a test build alone.
 
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
