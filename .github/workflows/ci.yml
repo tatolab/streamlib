@@ -283,8 +283,9 @@ jobs:
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p tatolab-cli
           -p streamlib-python-wheel
           -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
+          -p tatolab-read-track
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
-          --lib --bins --tests --example codec_roundtrip_rig
+          --lib --bins --tests
 
       - name: Save the compile-fail tests' build
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.restore-trybuild.outputs.cache-hit != 'true' }}
@@ -500,11 +501,11 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
-      - name: Audio channel tap controls
+      - name: Audio track dump controls
         working-directory: runtime/streamlib-engine/tests/fixtures
         run: >-
           "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python"
-          -m unittest test_tap_audio_channel
+          -m unittest test_audio_track_dump_check
 
       - name: Driver-search tests against the lend
         run: |

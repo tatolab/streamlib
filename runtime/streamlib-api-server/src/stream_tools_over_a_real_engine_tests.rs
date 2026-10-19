@@ -27,11 +27,11 @@ use streamlib::sdk::graph::OutputPortExposureLevel;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
-    BoxFuture, ExchangedPublishedSurfaceFramePngImage, KeptStreamRecord,
-    KeptStreamRecordsInTheStateDirectory, LoadedStreamTag, LogRecordsPageOfOneLoadedStream,
-    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
-    OutputPortExposureOutcome, RunStreamRequest, Runner, RuntimeOperations, StreamEnvironment,
-    StreamListing, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+    KeptStreamRecord, KeptStreamRecordsInTheStateDirectory, LoadedStreamTag,
+    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
+    OptionsForLoadingOneStream, OutputPortExposureOutcome, RunStreamRequest, Runner,
+    RuntimeOperations, StreamEnvironment, StreamListing, StreamRemoveOutcome, StreamRunOutcome,
+    StreamStartOutcome, StreamStopOutcome,
 };
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
@@ -346,6 +346,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     fn names_of_the_loaded_streams(&self) -> Vec<String> {
         self.engine.names_of_the_loaded_streams()
     }
+    fn every_loaded_stream_and_the_output_ports_it_exposes(
+        &self,
+    ) -> Vec<streamlib::sdk::runtime::LoadedStreamAndTheOutputPortsItExposes> {
+        self.engine
+            .every_loaded_stream_and_the_output_ports_it_exposes()
+    }
     fn log_records_of_the_stream_a_call_names(
         &self,
         stream_name: &str,
@@ -417,17 +423,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             stream_name,
             stream_tag,
         )
-    }
-    fn exchange_published_surface_id_for_png_image_bytes_async(
-        &self,
-        published_surface_id: String,
-        downscale_long_edge_pixel_cap: Option<u32>,
-    ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
-        self.engine
-            .exchange_published_surface_id_for_png_image_bytes_async(
-                published_surface_id,
-                downscale_long_edge_pixel_cap,
-            )
     }
 }
 

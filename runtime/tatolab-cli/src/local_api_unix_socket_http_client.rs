@@ -1,18 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Plain HTTP/1.1 over a runtime's local API socket, through hyper's client: the routes `tatolab`
-//! reaches without MCP, and the one `/mcp/stdio` upgrade `mcp` opens its stream with. The request
-//! carries no credential; the socket's file mode is the gate.
+//! HTTP/1.1 over a runtime's local API socket, through hyper's client: the one `/mcp/stdio`
+//! upgrade `mcp` opens its stream with. The request carries no credential; the socket's file mode
+//! is the gate.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use http_body_util::{BodyExt, Full};
+use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
-use hyper::client::conn::http1::SendRequest;
 use hyper::header::{CONNECTION, UPGRADE};
-use hyper::{HeaderMap, Method, Request, Response, StatusCode};
+use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     MCP_STDIO_UPGRADE_PROTOCOL_TOKEN, MCP_STDIO_UPGRADE_REQUEST_TARGET,
@@ -24,17 +22,6 @@ const LOCAL_API_HOST_HEADER_VALUE: &str = "localhost";
 /// A request body: whole, and empty for a `GET`.
 type LocalApiHttpRequestBody = Full<Bytes>;
 
-/// One answered request, whatever its status.
-#[derive(Debug)]
-pub(crate) struct LocalApiHttpResponse {
-    /// The status the runtime answered with.
-    pub(crate) status: StatusCode,
-    /// The headers it answered with.
-    pub(crate) headers: HeaderMap,
-    /// The whole body.
-    pub(crate) body: Bytes,
-}
-
 /// What kept a request over the local API socket from being answered.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LocalApiTransportFailure {
@@ -44,21 +31,14 @@ pub(crate) enum LocalApiTransportFailure {
     /// The HTTP/1.1 exchange over the connected socket failed.
     #[error(transparent)]
     HttpExchangeFailed(hyper::Error),
-    /// No whole answer came within the bound.
-    #[error("no answer within {0:?}")]
-    NoAnswerWithin(Duration),
 }
 
 /// Why a request over the local API socket got no answer.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LocalApiHttpRequestFailure {
-    /// The request named a target that is not a valid origin-form URI.
-    #[error("`{request_target}` is not a request target the local API can be sent: {uri_failure}")]
-    RequestTargetIsNotAUri {
-        request_target: String,
-        #[source]
-        uri_failure: hyper::http::Error,
-    },
+    /// The upgrade request could not be built.
+    #[error("the `/mcp/stdio` upgrade request could not be built: {0}")]
+    UpgradeRequestNotBuilt(#[source] hyper::http::Error),
     /// Nothing answered HTTP on the socket, or the answer did not come in time.
     #[error(
         "no control plane reachable at {} ({transport_failure})",
@@ -91,39 +71,27 @@ fn local_api_unreachable(
     }
 }
 
-/// A request to `origin_form_request_target` with `Host` filled.
-fn local_api_request_builder(
-    method: Method,
-    origin_form_request_target: &str,
-) -> hyper::http::request::Builder {
+/// The one `GET /mcp/stdio` with `Connection: Upgrade` and `Upgrade: mcp-stdio`, `Host` filled.
+fn the_mcp_stdio_upgrade_request()
+-> Result<Request<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
     Request::builder()
-        .method(method)
-        .uri(origin_form_request_target)
+        .method(Method::GET)
+        .uri(MCP_STDIO_UPGRADE_REQUEST_TARGET)
         .header(hyper::header::HOST, LOCAL_API_HOST_HEADER_VALUE)
-}
-
-/// `request_builder`, built for `origin_form_request_target`, finished with no body; a target
-/// that is not a URI is refused before anything is sent.
-fn local_api_request_without_a_body(
-    request_builder: hyper::http::request::Builder,
-    origin_form_request_target: &str,
-) -> Result<Request<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
-    request_builder
+        .header(CONNECTION, "Upgrade")
+        .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN)
         .body(LocalApiHttpRequestBody::new(Bytes::new()))
-        .map_err(
-            |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
-                request_target: origin_form_request_target.to_owned(),
-                uri_failure,
-            },
-        )
+        .map_err(LocalApiHttpRequestFailure::UpgradeRequestNotBuilt)
 }
 
-/// Connect to the local API socket and hand the connection to hyper as HTTP/1.1, served with
-/// upgrades enabled so a `101` answer can be taken over with `hyper::upgrade::on`. Must run inside
-/// a tokio runtime, which drives the connection.
-async fn open_local_api_http1_connection(
+/// Connect to the local API socket, hand the connection to hyper as HTTP/1.1 served with
+/// upgrades enabled so a `101` answer can be taken over with `hyper::upgrade::on`, and send
+/// `request` on it, answering the response head with its body still streaming. Must run inside a
+/// tokio runtime, which drives the connection.
+async fn send_request_over_the_local_api_socket(
     local_api_socket_path: &Path,
-) -> Result<SendRequest<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
+    request: Request<LocalApiHttpRequestBody>,
+) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
     let local_api_stream = tokio::net::UnixStream::connect(local_api_socket_path)
         .await
         .map_err(|connect_failure| {
@@ -132,7 +100,7 @@ async fn open_local_api_http1_connection(
                 LocalApiTransportFailure::SocketConnectFailed(connect_failure),
             )
         })?;
-    let (request_sender, local_api_connection) =
+    let (mut request_sender, local_api_connection) =
         hyper::client::conn::http1::handshake(TokioIo::new(local_api_stream))
             .await
             .map_err(|handshake_failure| {
@@ -144,16 +112,6 @@ async fn open_local_api_http1_connection(
     // Served until the runtime or the sender closes it, or until a `101` hands the stream to its
     // upgrade.
     tokio::spawn(local_api_connection.with_upgrades());
-    Ok(request_sender)
-}
-
-/// Send `request` on the connection `request_sender` holds, answering the response head with its
-/// body still streaming.
-async fn send_request_on_the_local_api_connection(
-    local_api_socket_path: &Path,
-    request_sender: &mut SendRequest<LocalApiHttpRequestBody>,
-    request: Request<LocalApiHttpRequestBody>,
-) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
     request_sender
         .send_request(request)
         .await
@@ -170,163 +128,6 @@ async fn send_request_on_the_local_api_connection(
                 )
             }
         })
-}
-
-/// Open one HTTP/1.1 connection to the local API socket and send `request` on it, answering the
-/// response head with its body still streaming. Must run inside a tokio runtime, which drives the
-/// connection.
-async fn send_request_over_the_local_api_socket(
-    local_api_socket_path: &Path,
-    request: Request<LocalApiHttpRequestBody>,
-) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
-    let mut request_sender = open_local_api_http1_connection(local_api_socket_path).await?;
-    send_request_on_the_local_api_connection(local_api_socket_path, &mut request_sender, request)
-        .await
-}
-
-/// One HTTP/1.1 connection to a runtime's local API, for the routes reached without MCP: opened
-/// on the first request, kept open for the next, and opened again once the runtime has closed it.
-pub(crate) struct LocalApiHttpConnection {
-    local_api_socket_path: PathBuf,
-    kept_request_sender: Option<SendRequest<LocalApiHttpRequestBody>>,
-}
-
-impl LocalApiHttpConnection {
-    /// A connection to the local API at `local_api_socket_path`, opened by its first request.
-    pub(crate) fn to_local_api_socket(local_api_socket_path: &Path) -> Self {
-        Self {
-            local_api_socket_path: local_api_socket_path.to_path_buf(),
-            kept_request_sender: None,
-        }
-    }
-
-    /// `GET origin_form_request_target`, answering the status, headers and whole body, whatever
-    /// the status. Only a transport failure or `timeout` elapsing is an error, and either drops
-    /// the connection, so the next request opens a fresh one. Must run inside a tokio runtime,
-    /// which drives the connection.
-    pub(crate) async fn get_whole_response(
-        &mut self,
-        origin_form_request_target: &str,
-        timeout: Duration,
-    ) -> Result<LocalApiHttpResponse, LocalApiHttpRequestFailure> {
-        let get_request_to_the_target = || {
-            local_api_request_without_a_body(
-                local_api_request_builder(Method::GET, origin_form_request_target),
-                origin_form_request_target,
-            )
-        };
-        let get_request = get_request_to_the_target()?;
-        let local_api_socket_path = self.local_api_socket_path.as_path();
-        let kept_request_sender = self.kept_request_sender.take();
-        let answered = tokio::time::timeout(timeout, async {
-            let ReadyLocalApiRequestSender {
-                mut request_sender,
-                rides_the_kept_connection,
-            } = local_api_request_sender_ready_for_a_request(
-                local_api_socket_path,
-                kept_request_sender,
-            )
-            .await?;
-            let response = match send_request_on_the_local_api_connection(
-                local_api_socket_path,
-                &mut request_sender,
-                get_request,
-            )
-            .await
-            {
-                // A kept connection can be closed by the runtime between two requests yet still
-                // read as ready, since nothing drove it in between; a GET is idempotent, so it
-                // goes again on a fresh connection.
-                Err(LocalApiHttpRequestFailure::ConnectionClosedBeforeAnswering { .. })
-                    if rides_the_kept_connection =>
-                {
-                    request_sender =
-                        open_ready_local_api_http1_connection(local_api_socket_path).await?;
-                    send_request_on_the_local_api_connection(
-                        local_api_socket_path,
-                        &mut request_sender,
-                        get_request_to_the_target()?,
-                    )
-                    .await?
-                }
-                sent => sent?,
-            };
-            let (response_head, response_body) = response.into_parts();
-            let whole_body = response_body
-                .collect()
-                .await
-                .map_err(|body_failure| {
-                    local_api_unreachable(
-                        local_api_socket_path,
-                        LocalApiTransportFailure::HttpExchangeFailed(body_failure),
-                    )
-                })?
-                .to_bytes();
-            Ok((
-                request_sender,
-                LocalApiHttpResponse {
-                    status: response_head.status,
-                    headers: response_head.headers,
-                    body: whole_body,
-                },
-            ))
-        })
-        .await
-        .map_err(|_elapsed| {
-            local_api_unreachable(
-                local_api_socket_path,
-                LocalApiTransportFailure::NoAnswerWithin(timeout),
-            )
-        })?;
-        let (request_sender, whole_response) = answered?;
-        self.kept_request_sender = Some(request_sender);
-        Ok(whole_response)
-    }
-}
-
-/// A request sender whose connection can take a request.
-struct ReadyLocalApiRequestSender {
-    request_sender: SendRequest<LocalApiHttpRequestBody>,
-    /// Whether it is the kept connection, which the runtime may have closed since without it
-    /// reading as closed.
-    rides_the_kept_connection: bool,
-}
-
-/// `kept_request_sender` once its connection can take a request, or a freshly opened one when
-/// there is none or the runtime closed it.
-async fn local_api_request_sender_ready_for_a_request(
-    local_api_socket_path: &Path,
-    kept_request_sender: Option<SendRequest<LocalApiHttpRequestBody>>,
-) -> Result<ReadyLocalApiRequestSender, LocalApiHttpRequestFailure> {
-    if let Some(mut kept_request_sender) = kept_request_sender
-        && kept_request_sender.ready().await.is_ok()
-    {
-        return Ok(ReadyLocalApiRequestSender {
-            request_sender: kept_request_sender,
-            rides_the_kept_connection: true,
-        });
-    }
-    Ok(ReadyLocalApiRequestSender {
-        request_sender: open_ready_local_api_http1_connection(local_api_socket_path).await?,
-        rides_the_kept_connection: false,
-    })
-}
-
-/// A freshly opened connection to the local API, once it can take a request.
-async fn open_ready_local_api_http1_connection(
-    local_api_socket_path: &Path,
-) -> Result<SendRequest<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
-    let mut opened_request_sender = open_local_api_http1_connection(local_api_socket_path).await?;
-    opened_request_sender
-        .ready()
-        .await
-        .map_err(|readiness_failure| {
-            local_api_unreachable(
-                local_api_socket_path,
-                LocalApiTransportFailure::HttpExchangeFailed(readiness_failure),
-            )
-        })?;
-    Ok(opened_request_sender)
 }
 
 /// A runtime's MCP stream once its `101` is in: the local API socket itself, and the bytes the
@@ -387,14 +188,11 @@ fn response_status_line<ResponseBody>(response: &Response<ResponseBody>) -> Stri
 pub(crate) async fn upgrade_local_api_connection_to_mcp_stdio(
     local_api_socket_path: &Path,
 ) -> Result<UpgradedLocalApiMcpStdioStream, LocalApiMcpStdioUpgradeFailure> {
-    let upgrade_request = local_api_request_without_a_body(
-        local_api_request_builder(Method::GET, MCP_STDIO_UPGRADE_REQUEST_TARGET)
-            .header(CONNECTION, "Upgrade")
-            .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN),
-        MCP_STDIO_UPGRADE_REQUEST_TARGET,
-    )?;
-    let mut upgrade_response =
-        send_request_over_the_local_api_socket(local_api_socket_path, upgrade_request).await?;
+    let mut upgrade_response = send_request_over_the_local_api_socket(
+        local_api_socket_path,
+        the_mcp_stdio_upgrade_request()?,
+    )
+    .await?;
     if upgrade_response.status() != StatusCode::SWITCHING_PROTOCOLS {
         return Err(LocalApiMcpStdioUpgradeFailure::Refused {
             answered_status_line: response_status_line(&upgrade_response),
@@ -438,278 +236,11 @@ fn read_from_the_client_until(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::stub_local_api_server::NOTHING_LISTENS_LOCAL_API_SOCKET_PATH;
-    use crate::stub_local_api_server::{StubLocalApiServer, StubSurfaceImageAnswer};
-    use streamlib_runtime_client_contract::local_api_wire_contract::{
-        SURFACE_PIXEL_HEIGHT_HEADER_NAME, SURFACE_PIXEL_WIDTH_HEADER_NAME,
-    };
-
-    const EXCHANGE_TEST_TIMEOUT: Duration = Duration::from_secs(10);
-
-    fn a_tokio_runtime_for_the_test() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-    }
-
-    /// One GET over a connection of its own, on a tokio runtime of its own.
-    fn get_whole_response_over_one_fresh_connection(
-        local_api_socket_path: &Path,
-        origin_form_request_target: &str,
-        timeout: Duration,
-    ) -> Result<LocalApiHttpResponse, LocalApiHttpRequestFailure> {
-        a_tokio_runtime_for_the_test().block_on(
-            LocalApiHttpConnection::to_local_api_socket(local_api_socket_path)
-                .get_whole_response(origin_form_request_target, timeout),
-        )
-    }
-
-    #[test]
-    fn one_connection_carries_every_get_in_turn() {
-        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([
-            (
-                "slot#1",
-                StubSurfaceImageAnswer::png_image(b"one", None, None),
-            ),
-            (
-                "slot#2",
-                StubSurfaceImageAnswer::png_image(b"two", None, None),
-            ),
-        ]);
-        let mut local_api_http_connection = LocalApiHttpConnection::to_local_api_socket(
-            &stub_local_api_server.local_api_socket_path,
-        );
-
-        let answered_bodies: Vec<Bytes> = a_tokio_runtime_for_the_test().block_on(async {
-            let mut answered_bodies = Vec::new();
-            for request_target in [
-                "/api/surfaces/slot%231/image",
-                "/api/surfaces/never-published/image",
-                "/api/surfaces/slot%232/image",
-            ] {
-                answered_bodies.push(
-                    local_api_http_connection
-                        .get_whole_response(request_target, EXCHANGE_TEST_TIMEOUT)
-                        .await
-                        .unwrap()
-                        .body,
-                );
-            }
-            answered_bodies
-        });
-
-        assert_eq!(answered_bodies[0].as_ref(), b"one");
-        assert_eq!(answered_bodies[2].as_ref(), b"two");
-        assert_eq!(
-            stub_local_api_server.recorded_image_request_paths().len(),
-            3
-        );
-        assert_eq!(stub_local_api_server.image_request_connection_count(), 1);
-    }
-
-    #[test]
-    fn a_get_on_a_kept_connection_the_runtime_closed_goes_again_on_a_fresh_one() {
-        let local_api_socket_directory = tempfile::Builder::new()
-            .prefix("tl-http-")
-            .tempdir_in("/tmp")
-            .unwrap();
-        let local_api_socket_path = local_api_socket_directory.path().join("local-api.sock");
-        let local_api_listener =
-            std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap();
-        let playing_the_runtime = std::thread::spawn(move || {
-            use std::io::Write;
-            let (mut first_connection, _) = local_api_listener.accept().unwrap();
-            read_from_the_client_until(&mut first_connection, b"\r\n\r\n");
-            first_connection
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\none")
-                .unwrap();
-            read_from_the_client_until(&mut first_connection, b"\r\n\r\n");
-            drop(first_connection);
-            let (mut second_connection, _) = local_api_listener.accept().unwrap();
-            read_from_the_client_until(&mut second_connection, b"\r\n\r\n");
-            second_connection
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\ntwo")
-                .unwrap();
-        });
-        let mut local_api_http_connection =
-            LocalApiHttpConnection::to_local_api_socket(&local_api_socket_path);
-
-        let answered_bodies: Vec<Bytes> = a_tokio_runtime_for_the_test().block_on(async {
-            let mut answered_bodies = Vec::new();
-            for request_target in [
-                "/api/surfaces/slot%231/image",
-                "/api/surfaces/slot%232/image",
-            ] {
-                answered_bodies.push(
-                    local_api_http_connection
-                        .get_whole_response(request_target, EXCHANGE_TEST_TIMEOUT)
-                        .await
-                        .unwrap()
-                        .body,
-                );
-            }
-            answered_bodies
-        });
-        playing_the_runtime.join().unwrap();
-
-        assert_eq!(answered_bodies[0].as_ref(), b"one");
-        assert_eq!(answered_bodies[1].as_ref(), b"two");
-    }
-
-    #[test]
-    fn a_get_answers_the_status_headers_and_whole_body_of_an_image() {
-        let png_image_bytes = b"\x89PNG\r\n\x1a\nnot-really-a-png".as_slice();
-        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
-            "slot#7",
-            StubSurfaceImageAnswer::png_image(png_image_bytes, Some(1920), Some(1080)),
-        )]);
-
-        let answered = get_whole_response_over_one_fresh_connection(
-            &stub_local_api_server.local_api_socket_path,
-            "/api/surfaces/slot%237/image",
-            EXCHANGE_TEST_TIMEOUT,
-        )
-        .unwrap();
-
-        assert_eq!(answered.status, StatusCode::OK);
-        assert_eq!(answered.body.as_ref(), png_image_bytes);
-        assert_eq!(answered.headers[hyper::header::CONTENT_TYPE], "image/png");
-        assert_eq!(answered.headers[SURFACE_PIXEL_WIDTH_HEADER_NAME], "1920");
-        assert_eq!(answered.headers[SURFACE_PIXEL_HEIGHT_HEADER_NAME], "1080");
-        assert_eq!(
-            stub_local_api_server.recorded_image_request_paths(),
-            ["/api/surfaces/slot%237/image"]
-        );
-    }
-
-    #[test]
-    fn a_refused_get_answers_its_status_and_body_rather_than_failing() {
-        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
-            "slot#8",
-            StubSurfaceImageAnswer::refusal(410, "frame recycled"),
-        )]);
-
-        for (request_target, expected_status, expected_error) in [
-            (
-                "/api/surfaces/slot%238/image",
-                StatusCode::GONE,
-                "frame recycled",
-            ),
-            (
-                "/api/surfaces/never-published/image",
-                StatusCode::NOT_FOUND,
-                "no such surface",
-            ),
-        ] {
-            let answered = get_whole_response_over_one_fresh_connection(
-                &stub_local_api_server.local_api_socket_path,
-                request_target,
-                EXCHANGE_TEST_TIMEOUT,
-            )
-            .unwrap();
-
-            assert_eq!(answered.status, expected_status, "{request_target}");
-            let refusal_body: serde_json::Value = serde_json::from_slice(&answered.body).unwrap();
-            assert_eq!(refusal_body, serde_json::json!({ "error": expected_error }));
-        }
-    }
-
-    #[test]
-    fn an_image_without_extent_headers_answers_none_of_them() {
-        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
-            "slot#9",
-            StubSurfaceImageAnswer::png_image(b"png", None, None),
-        )]);
-
-        let answered = get_whole_response_over_one_fresh_connection(
-            &stub_local_api_server.local_api_socket_path,
-            "/api/surfaces/slot%239/image",
-            EXCHANGE_TEST_TIMEOUT,
-        )
-        .unwrap();
-
-        assert!(
-            !answered
-                .headers
-                .contains_key(SURFACE_PIXEL_WIDTH_HEADER_NAME)
-        );
-        assert!(
-            !answered
-                .headers
-                .contains_key(SURFACE_PIXEL_HEIGHT_HEADER_NAME)
-        );
-    }
-
-    #[test]
-    fn a_socket_nothing_listens_on_is_named_as_unreachable() {
-        let unreachable = get_whole_response_over_one_fresh_connection(
-            Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH),
-            "/api/surfaces/slot%237/image",
-            EXCHANGE_TEST_TIMEOUT,
-        )
-        .unwrap_err();
-
-        assert!(
-            unreachable.to_string().starts_with(&format!(
-                "no control plane reachable at {NOTHING_LISTENS_LOCAL_API_SOCKET_PATH} ("
-            )),
-            "{unreachable}"
-        );
-    }
-
-    #[test]
-    fn a_socket_that_accepts_and_never_answers_fails_once_the_timeout_elapses() {
-        let silent_socket_directory = tempfile::Builder::new()
-            .prefix("tl-silent-")
-            .tempdir_in("/tmp")
-            .unwrap();
-        let silent_socket_path = silent_socket_directory.path().join("local-api.sock");
-        let _never_accepting_listener =
-            std::os::unix::net::UnixListener::bind(&silent_socket_path).unwrap();
-
-        let timed_out = get_whole_response_over_one_fresh_connection(
-            &silent_socket_path,
-            "/api/surfaces/slot%237/image",
-            Duration::from_millis(200),
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            timed_out.to_string(),
-            format!(
-                "no control plane reachable at {} (no answer within 200ms)",
-                silent_socket_path.display()
-            )
-        );
-    }
-
-    #[test]
-    fn a_request_target_that_is_not_a_uri_is_refused_before_anything_is_sent() {
-        let refusal = get_whole_response_over_one_fresh_connection(
-            Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH),
-            "/api/surfaces/not percent encoded/image",
-            EXCHANGE_TEST_TIMEOUT,
-        )
-        .unwrap_err();
-
-        assert!(
-            matches!(
-                refusal,
-                LocalApiHttpRequestFailure::RequestTargetIsNotAUri { .. }
-            ),
-            "{refusal:?}"
-        );
-    }
-}
-
-#[cfg(test)]
 mod mcp_stdio_upgrade_tests {
     use std::io::{Read, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::thread::JoinHandle;
+    use std::time::Duration;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

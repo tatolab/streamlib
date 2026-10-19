@@ -4,8 +4,8 @@
 #
 # Run this on the rig, with `tatolabd` running in one shell and a stream
 # loaded from another (`tatolab dev` from a scaffolded stream, loaded as
-# `main`), so `streams`, `graph`, `tap` and `logs` have something live to
-# answer about.
+# `main`), so `streams`, `graph`, the loopback listing and `logs` have
+# something live to answer about.
 
 Output docs/assets/demo.gif
 
@@ -25,7 +25,7 @@ Type "tatolab graph --stream main | jq '.nodes[] | {name, state: .components.sta
 Enter
 Sleep 3.5s
 
-Type "tatolab tap desk-my-rig-8kq3/camerasource/video --stream main --count 3"
+Type "curl -s http://127.0.0.1:4446/ | jq '.streams'"
 Enter
 Sleep 4s
 

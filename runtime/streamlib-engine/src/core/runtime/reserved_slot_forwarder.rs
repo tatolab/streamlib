@@ -65,38 +65,16 @@ pub(crate) struct ReservedSlotOfAChannelToForward {
 /// to [`Self::recv`]. Dropping it stops and joins its thread, freeing the slot.
 #[derive(Debug)]
 pub(crate) struct ReservedSlotForwarder<Forwarded> {
-    channel: String,
     receiver: tokio::sync::mpsc::Receiver<Forwarded>,
     stop_flag: Arc<AtomicBool>,
     forwarder_thread: Option<JoinHandle<()>>,
 }
 
 impl<Forwarded> ReservedSlotForwarder<Forwarded> {
-    /// The channel data service this forwarder reads.
-    pub(crate) fn channel(&self) -> &str {
-        &self.channel
-    }
-
     /// The next forwarded item, or `None` once the forwarder has ended — its
     /// bound reached, its subscriber failed, or it is being dropped.
     pub(crate) async fn recv(&mut self) -> Option<Forwarded> {
         self.receiver.recv().await
-    }
-}
-
-#[cfg(feature = "test-support")]
-impl<Forwarded> ReservedSlotForwarder<Forwarded> {
-    /// A forwarder over a preset receiver, with no thread and no subscriber.
-    pub(crate) fn from_a_preset_receiver(
-        channel: String,
-        receiver: tokio::sync::mpsc::Receiver<Forwarded>,
-    ) -> Self {
-        Self {
-            channel,
-            receiver,
-            stop_flag: Arc::new(AtomicBool::new(false)),
-            forwarder_thread: None,
-        }
     }
 }
 
@@ -114,7 +92,7 @@ impl<Forwarded> Drop for ReservedSlotForwarder<Forwarded> {
 
 /// Start reading `slot`, forwarding through `forwarding` until dropped or the
 /// slot's bound is reached. A slot already held is refused with
-/// [`Error::TapSlotOccupied`].
+/// [`Error::ReservedPublisherSubscriberSlotOccupied`].
 ///
 /// Blocks until the slot's subscriber exists, so a refusal reaches the caller
 /// rather than the thread: call it from `spawn_blocking`, never directly on an
@@ -152,7 +130,6 @@ pub(crate) fn start_reserved_slot_forwarder<Forwarding: ReservedSlotBagForwardin
 
     match ready_rx.recv() {
         Ok(Ok(())) => Ok(ReservedSlotForwarder {
-            channel,
             receiver,
             stop_flag,
             forwarder_thread: Some(forwarder_thread),
@@ -212,7 +189,7 @@ impl<Forwarding: ReservedSlotBagForwarding> ReaderOfAReservedSlot<Forwarding> {
         {
             Ok(subscriber) => subscriber,
             Err(ChannelReservedSlotSubscribeError::ReservedSlotOccupied) => {
-                let _ = ready_tx.send(Err(Error::TapSlotOccupied(channel)));
+                let _ = ready_tx.send(Err(Error::ReservedPublisherSubscriberSlotOccupied(channel)));
                 return;
             }
             Err(ChannelReservedSlotSubscribeError::Transport(detail)) => {

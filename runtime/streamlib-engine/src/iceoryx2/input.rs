@@ -137,8 +137,8 @@ struct PortBoundSubscriber {
     link_id: String,
     local_port: String,
     /// The name a read hands back for every frame this subscriber delivers:
-    /// the channel it subscribed to, which is what `graph` and `tap` show for
-    /// the same link.
+    /// the channel it subscribed to, which is what `graph` shows for the same
+    /// link.
     inbound_link_name: InboundLinkName,
     subscriber: ChannelDataServiceSubscriber,
     /// This link's share of the destination's dropped-bag counts. Every frame

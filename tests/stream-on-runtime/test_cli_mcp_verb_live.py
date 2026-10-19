@@ -39,9 +39,7 @@ MCP_SESSION_TIMEOUT_SECONDS = 60.0
 
 CONTROL_TOOL_NAMES = {
     "graph",
-    "tap",
     "logs",
-    "exchange",
     "add_node",
     "remove_node",
     "connect",
@@ -117,8 +115,13 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
                 for uri in (NODE_CATALOG_RESOURCE_URI, LIVE_GRAPH_RESOURCE_URI)
             }
             prompt = await client.get_prompt(
-                "look_at_what_a_channel_carries",
-                {"stream": STREAM_NAME, "from_node": source_name, "from_port": "video"},
+                "fan_output_to_another_consumer",
+                {
+                    "stream": STREAM_NAME,
+                    "from_node": source_name,
+                    "from_port": "video",
+                    "type": "nodes.effect:Effect",
+                },
             )
             return {
                 "protocol_version": client.protocol_version,

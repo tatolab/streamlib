@@ -1,0 +1,37 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "tatolab-read-track"
+description = "`tatolab-read-track`: a MoQ subscriber that reads one track at a relay and writes each object's payload and timestamp to files — the rigs' way to read a port as a user does. A development tool, never shipped in the runtime unit."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "tatolab-read-track"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { version = "4.5", features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+# The MoQ client, pinned exactly as `RelayTrackSource` and the publisher pin it.
+moq-net = { version = "=0.3.15" }
+moq-tokio = { version = "=0.19.28" }
+moq-json = { version = "=0.5.13" }
+# The relay's URL, as `moq-tokio` dials it.
+url = "2"
+# The broadcast's catalog, and the legacy container a media track's objects open with.
+hang = { version = "=0.21.16" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

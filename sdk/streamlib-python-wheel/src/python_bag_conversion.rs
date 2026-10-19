@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Python data across the boundary: a tapped channel's msgpack message decoded
-//! for inspection, config and graph JSON both ways, and the cast a typed read
-//! hands a message's payload bytes to. A message's payload otherwise crosses
+//! Python data across the boundary: msgpack decoded into ordinary Python data,
+//! config and graph JSON both ways, and the cast a typed read hands a message's
+//! payload bytes to. A message's payload otherwise crosses
 //! as the bytes it is; nothing here encodes one.
 
 use std::cell::RefCell;
@@ -14,45 +14,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use rmpv::Value;
 
-use streamlib::sdk::iceoryx2::{FrameHeader, TappedFramePayloadRefusal};
-
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
-
-/// Decode msgpack bytes into ordinary Python data.
-pub(crate) fn decode_msgpack_to_python_object<'py>(
-    python: Python<'py>,
-    encoded: &[u8],
-) -> PyResult<Bound<'py, PyAny>> {
-    let value = rmpv::decode::read_value_with_max_depth(
-        &mut &encoded[..],
-        RMPV_DEPTH_ADMITTING_THE_MAXIMUM_NESTED_CONTAINERS,
-    )
-    .map_err(|decode_failure| match decode_failure {
-        rmpv::decode::Error::DepthLimitExceeded => {
-            refusal_of_decoded_data_nested_past_the_maximum()
-        }
-        decode_failure => PyValueError::new_err(decode_failure.to_string()),
-    })?;
-    msgpack_value_to_python_object(python, &value, ContainersEnclosingAValue::OUTERMOST)
-}
-
-/// Decode one raw tapped-channel message, msgpack-encoded, into ordinary Python
-/// data.
-///
-/// A tap forwards the channel's wire bytes verbatim, header included, so the
-/// transport's own accessor is what bounds the msgpack value inside them.
-#[pyfunction]
-pub(crate) fn decode_tapped_channel_bag_frame_to_python_object<'py>(
-    python: Python<'py>,
-    framed_bag_bytes: &[u8],
-) -> PyResult<Bound<'py, PyAny>> {
-    let payload =
-        FrameHeader::payload_bounded_by_its_header(framed_bag_bytes).map_err(|refusal| {
-            PyValueError::new_err(TappedFramePayloadRefusal::from(refusal).to_string())
-        })?;
-
-    decode_msgpack_to_python_object(python, payload)
-}
 
 /// Hand one message's payload bytes to the `from_bytes` of the target an author
 /// named with `read(port, into=T)`, and return what it built.
@@ -187,7 +149,7 @@ pub(crate) fn python_type_name_for_error_message(
 
 /// Convert JSON into ordinary Python data.
 ///
-/// Routed through the msgpack value tree the tap decode uses rather than
+/// Routed through the msgpack value tree the msgpack decode uses rather than
 /// growing a second converter: one conversion is one set of edge cases.
 pub(crate) fn json_value_to_python_object<'py>(
     python: Python<'py>,
@@ -217,14 +179,6 @@ pub(crate) fn python_object_to_json_value(
 /// container, so the bound keeps it inside the thread's stack and turns a
 /// container that holds itself into a refusal.
 const MAXIMUM_NESTED_CONTAINER_DEPTH: usize = 128;
-
-/// rmpv's depth budget that admits every value nesting at most
-/// [`MAXIMUM_NESTED_CONTAINER_DEPTH`] containers: rmpv 1.3 spends two levels on
-/// each container and at most three on the leaf inside the innermost, so a
-/// value that exhausts it nests past the maximum, and rmpv's recursion stays
-/// as shallow as the bound.
-const RMPV_DEPTH_ADMITTING_THE_MAXIMUM_NESTED_CONTAINERS: usize =
-    2 * MAXIMUM_NESTED_CONTAINER_DEPTH + 3;
 
 /// How many containers enclose a value being converted across the Python
 /// boundary.
@@ -315,9 +269,8 @@ fn python_object_to_msgpack_value(
     )))
 }
 
-/// The keys a decoded msgpack extension value is carried under, so a tapped
-/// message holding somebody else's extension type reads as data a reader can
-/// look at.
+/// The keys a decoded msgpack extension value is carried under, so a message
+/// holding somebody else's extension type reads as data a reader can look at.
 const EXTENSION_TYPE_KEY: &str = "__msgpack_ext_type__";
 const EXTENSION_DATA_KEY: &str = "__msgpack_ext_data__";
 
@@ -422,15 +375,7 @@ fn msgpack_value_to_python_object<'py>(
 
 #[cfg(test)]
 mod tests {
-    use streamlib::sdk::iceoryx2::{FRAME_HEADER_SIZE, MessageGroupBoundary};
-
     use super::*;
-
-    fn msgpack_bytes_of(value: &Value) -> Vec<u8> {
-        let mut encoded = Vec::new();
-        rmpv::encode::write_value(&mut encoded, value).unwrap();
-        encoded
-    }
 
     fn msgpack_map_of(entries: Vec<(&str, Value)>) -> Value {
         Value::Map(
@@ -441,107 +386,15 @@ mod tests {
         )
     }
 
-    /// No slack behind the payload — the frame ends where the message does.
-    const SLICE_HOLDS_ONLY_THE_MESSAGE: usize = 0;
-
-    /// How many bytes the truncation fixture cuts off the end of a whole frame.
-    const BYTES_THE_PREVIEW_CUT: usize = 8;
-
-    /// Frame a msgpack payload the way the transport does, in a buffer of at
-    /// least `slice_capacity_at_least` — a caller may hold the frame in
-    /// something larger than the frame.
-    fn frame_like_the_transport(payload: &[u8], slice_capacity_at_least: usize) -> Vec<u8> {
-        let mut framed = vec![0u8; slice_capacity_at_least.max(FRAME_HEADER_SIZE + payload.len())];
-        FrameHeader::new(
-            "processor/port",
-            1_234,
-            payload.len() as u32,
-            MessageGroupBoundary::StartsGroup,
-        )
-        .expect("port key fits")
-        .write_to_slice(&mut framed);
-        framed[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + payload.len()].copy_from_slice(payload);
-        framed
-    }
-
-    /// The whole job end to end: strip the transport header and decode the
-    /// declared payload. The bound itself is pinned in `streamlib-ipc-types`;
-    /// what the oversized buffer proves here is that a frame held in one does
-    /// not derail the decode.
-    #[test]
-    fn a_tapped_message_decodes_to_what_the_channel_published() {
-        Python::initialize();
-        Python::attach(|python| {
-            let payload = msgpack_bytes_of(&msgpack_map_of(vec![
-                ("surface_id", Value::from("camera/frame#7")),
-                ("width", Value::from(1920)),
-            ]));
-
-            let framed = frame_like_the_transport(&payload, 4096);
-            let decoded =
-                decode_tapped_channel_bag_frame_to_python_object(python, &framed).unwrap();
-
-            assert_eq!(
-                FrameHeader::read_payload_from_slice(&framed).map(<[u8]>::len),
-                Some(payload.len()),
-                "the buffer's trailing bytes were handed to the decoder"
-            );
-            let published = PyDict::new(python);
-            published.set_item("surface_id", "camera/frame#7").unwrap();
-            published.set_item("width", 1920i64).unwrap();
-            assert!(
-                decoded.eq(&published).unwrap(),
-                "the decode changed the message"
-            );
-        });
-    }
-
-    /// The tap tool hex-previews only the first bytes of a large message.
-    /// Decoding that prefix must refuse by name: msgpack would otherwise happily
-    /// read the leading map entries and hand back a map missing its later
-    /// fields.
-    #[test]
-    fn a_truncated_sample_is_refused_rather_than_half_decoded() {
-        Python::initialize();
-        Python::attach(|python| {
-            let payload = msgpack_bytes_of(&msgpack_map_of(vec![
-                ("surface_id", Value::from("camera/frame#7")),
-                ("filler", Value::from("x".repeat(512))),
-            ]));
-
-            let framed = frame_like_the_transport(&payload, SLICE_HOLDS_ONLY_THE_MESSAGE);
-            let truncated = &framed[..framed.len() - BYTES_THE_PREVIEW_CUT];
-
-            let refusal = decode_tapped_channel_bag_frame_to_python_object(python, truncated)
-                .expect_err("a truncated sample must not decode");
-            assert!(
-                refusal.to_string().contains("truncated"),
-                "the refusal must name the truncation; got {refusal}"
-            );
-        });
-    }
-
-    /// Fewer bytes than a header is not a zero-length message — it is a caller
-    /// handing over something that was never a frame.
-    #[test]
-    fn bytes_too_short_to_hold_a_header_are_refused() {
-        Python::initialize();
-        Python::attach(|python| {
-            let refusal = decode_tapped_channel_bag_frame_to_python_object(python, &[0u8; 8])
-                .expect_err("8 bytes cannot be a framed message");
-            assert!(refusal.to_string().contains("frame header"));
-        });
-    }
-
-    /// Every msgpack value shape decodes into the Python type a reader of a
-    /// tapped message expects: `bin` as `bytes`, a boolean as `bool` rather
+    /// Every msgpack value shape converts into the Python type a reader of a
+    /// message expects: `bin` as `bytes`, a boolean as `bool` rather
     /// than an `int`, an array as a list, and an extension value as its type
     /// and data.
     #[test]
-    fn every_msgpack_value_shape_decodes_into_ordinary_python_data() {
+    fn every_msgpack_value_shape_converts_into_ordinary_python_data() {
         Python::initialize();
         Python::attach(|python| {
-            let encoded = msgpack_bytes_of(&msgpack_map_of(vec![
+            let published = msgpack_map_of(vec![
                 ("nothing", Value::Nil),
                 ("flag", Value::from(true)),
                 ("count", Value::from(-42)),
@@ -558,9 +411,14 @@ mod tests {
                     msgpack_map_of(vec![("inner", Value::from("value"))]),
                 ),
                 ("extension", Value::Ext(42, vec![1, 2, 3])),
-            ]));
+            ]);
 
-            let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
+            let decoded = msgpack_value_to_python_object(
+                python,
+                &published,
+                ContainersEnclosingAValue::OUTERMOST,
+            )
+            .unwrap();
 
             let expected = PyDict::new(python);
             expected.set_item("nothing", python.None()).unwrap();
@@ -922,101 +780,6 @@ class Detection:
             let nested_far_past_the_maximum = lists_nested_containers_deep(python, 100_000);
             let refusal = python_object_to_json_value(&nested_far_past_the_maximum).unwrap_err();
             assert_refused_as_nesting_past_the_maximum(&refusal, python);
-        });
-    }
-
-    /// msgpack `fixarray` markers: one element, and none.
-    const MSGPACK_ONE_ELEMENT_ARRAY_MARKER: u8 = 0x91;
-    const MSGPACK_EMPTY_ARRAY_MARKER: u8 = 0x90;
-
-    /// `containers` msgpack arrays, each holding the next, the innermost
-    /// empty — written byte by byte, because rmpv's own encoder recurses.
-    fn msgpack_arrays_nested_containers_deep(containers: usize) -> Vec<u8> {
-        let mut encoded = vec![MSGPACK_ONE_ELEMENT_ARRAY_MARKER; containers - 1];
-        encoded.push(MSGPACK_EMPTY_ARRAY_MARKER);
-        encoded
-    }
-
-    /// A map — `{"nested": …}` — whose containers, itself the outermost, nest
-    /// `containers` deep.
-    fn msgpack_map_nesting_containers_deep(containers: usize) -> Vec<u8> {
-        const MSGPACK_ONE_ENTRY_MAP_MARKER: u8 = 0x81;
-        const MSGPACK_SIX_BYTE_STRING_MARKER: u8 = 0xa6;
-        let mut encoded = vec![MSGPACK_ONE_ENTRY_MAP_MARKER, MSGPACK_SIX_BYTE_STRING_MARKER];
-        encoded.extend_from_slice(b"nested");
-        encoded.extend(msgpack_arrays_nested_containers_deep(containers - 1));
-        encoded
-    }
-
-    fn assert_decode_refused_as_nesting_past_the_maximum(refusal: &PyErr, python: Python<'_>) {
-        assert!(
-            refusal.is_instance_of::<PyValueError>(python),
-            "got: {refusal}"
-        );
-        let refusal_text = refusal.value(python).to_string();
-        assert!(
-            refusal_text.contains(&format!(
-                "containers nest more than {MAXIMUM_NESTED_CONTAINER_DEPTH} deep"
-            )) && refusal_text.contains(&format!(
-                "Have its producer nest the data at most {MAXIMUM_NESTED_CONTAINER_DEPTH} \
-                 containers deep"
-            )),
-            "got: {refusal_text}"
-        );
-    }
-
-    /// Decode counts containers the way the JSON conversion does, the outermost
-    /// included: exactly the maximum decodes — holding the leaf rmpv spends
-    /// most depth on — and one more is refused by name, as is a value deep
-    /// enough to exhaust rmpv's own budget.
-    #[test]
-    fn containers_nested_exactly_the_maximum_deep_decode_and_one_more_is_refused() {
-        Python::initialize();
-        Python::attach(|python| {
-            const MSGPACK_ONE_BYTE_STRING_MARKER: u8 = 0xa1;
-            let mut nested_the_maximum_around_a_string =
-                vec![MSGPACK_ONE_ELEMENT_ARRAY_MARKER; MAXIMUM_NESTED_CONTAINER_DEPTH];
-            nested_the_maximum_around_a_string.extend([MSGPACK_ONE_BYTE_STRING_MARKER, b'x']);
-            let decoded =
-                decode_msgpack_to_python_object(python, &nested_the_maximum_around_a_string)
-                    .unwrap();
-            assert!(decoded.is_instance_of::<PyList>());
-
-            let refusal = decode_msgpack_to_python_object(
-                python,
-                &msgpack_arrays_nested_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH + 1),
-            )
-            .unwrap_err();
-            assert_decode_refused_as_nesting_past_the_maximum(&refusal, python);
-
-            let refusal = decode_msgpack_to_python_object(
-                python,
-                &msgpack_arrays_nested_containers_deep(100_000),
-            )
-            .unwrap_err();
-            assert_decode_refused_as_nesting_past_the_maximum(&refusal, python);
-        });
-    }
-
-    /// A map counts as the outermost container: one nested to the maximum
-    /// decodes and one more is refused.
-    #[test]
-    fn a_map_nested_to_the_maximum_decodes_and_one_more_is_refused() {
-        Python::initialize();
-        Python::attach(|python| {
-            let decoded = decode_msgpack_to_python_object(
-                python,
-                &msgpack_map_nesting_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH),
-            )
-            .expect("a map nested to the maximum decodes");
-            assert!(decoded.is_instance_of::<PyDict>());
-
-            let refusal = decode_msgpack_to_python_object(
-                python,
-                &msgpack_map_nesting_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH + 1),
-            )
-            .unwrap_err();
-            assert_decode_refused_as_nesting_past_the_maximum(&refusal, python);
         });
     }
 }

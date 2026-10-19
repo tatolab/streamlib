@@ -9,5 +9,4 @@ pub mod isolated_machine_directories;
 pub mod running_tatolab;
 pub mod runtime_log_line_fixtures;
 pub mod stub_local_api_server;
-pub mod tapped_channel_bag_fixtures;
 pub mod tatolab_binary_run;

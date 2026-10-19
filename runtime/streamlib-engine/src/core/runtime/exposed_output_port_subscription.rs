@@ -51,6 +51,15 @@ pub struct ExposedOutputPortOfALoadedStream {
     pub catalog_entry: Option<CatalogEntry>,
 }
 
+/// One loaded stream with the output ports it exposes now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedStreamAndTheOutputPortsItExposes {
+    /// The stream's cast name.
+    pub stream_name: String,
+    /// The output ports it exposes, private or public.
+    pub exposed_output_ports: Vec<ExposedOutputPortOfALoadedStream>,
+}
+
 /// The exposed output ports of every stream loaded in one runtime, read again
 /// after each change to them, to their catalog entries, or to the loaded
 /// streams. Changes that arrive together are read once.
@@ -116,14 +125,13 @@ impl ExposureChangeReceiver {
             // A stream's graph lock is held across a compile, which may take a
             // processor's whole setup, so the read waits off the async workers.
             let read = tokio::task::spawn_blocking(move || {
-                let engine = engine.upgrade()?;
-                Some(
+                engine.upgrade().map(|engine| {
                     engine
-                        .every_loaded_stream()
-                        .iter()
-                        .flat_map(|stream| stream.exposed_output_ports())
-                        .collect(),
-                )
+                        .every_loaded_stream_and_the_output_ports_it_exposes()
+                        .into_iter()
+                        .flat_map(|loaded_stream| loaded_stream.exposed_output_ports)
+                        .collect()
+                })
             })
             .await;
             match read {
@@ -566,9 +574,6 @@ mod tests {
     /// An exposed port no link reads still publishes once subscribed to, each
     /// message as written with its stamp and group flag; dropping the
     /// subscription lets the port's channel go.
-    ///
-    /// Fail-without-fix: subscribe through the tap's resolver and an unlinked
-    /// port has no channel, so the write is dropped and nothing arrives.
     #[test]
     fn a_subscription_reads_what_an_unlinked_exposed_port_writes_as_written() {
         use MessageGroupBoundary::{ContinuesGroup, StartsGroup};

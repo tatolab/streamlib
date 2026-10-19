@@ -3,10 +3,8 @@
 
 //! A runtime's local API stood in by a stub on a Unix socket: the official MCP SDK's server
 //! answering scripted tool calls — by tool name, and `logs` paging a stream's records by
-//! sequence number — beside the surface-image route answering scripted images and the
-//! `/mcp/stdio` upgrade playing a scripted stream, each recording what it was sent. Shared by the
-//! integration tests and, through `#[path]`, the unit tests; either mounts it beside
-//! `tapped_channel_bag_fixtures`.
+//! sequence number — beside the `/mcp/stdio` upgrade playing a scripted stream, each recording
+//! what it was sent. Shared by the integration tests and, through `#[path]`, the unit tests.
 
 #![allow(dead_code)]
 
@@ -14,14 +12,11 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::IntoFuture;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use axum::extract::connect_info::{ConnectInfo, Connected};
-use axum::extract::{Path as RoutePathSegment, State};
-use axum::http::{StatusCode, Uri, header};
+use axum::extract::State;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::serve::IncomingStream;
 use hyper_util::rt::TokioIo;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
@@ -34,12 +29,9 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     MCP_STDIO_UPGRADE_PROTOCOL_TOKEN, MCP_STDIO_UPGRADE_REQUEST_TARGET,
-    MCP_STREAMABLE_HTTP_ROUTE_PATH, SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE,
-    SURFACE_PIXEL_HEIGHT_HEADER_NAME, SURFACE_PIXEL_WIDTH_HEADER_NAME,
+    MCP_STREAMABLE_HTTP_ROUTE_PATH,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-use super::tapped_channel_bag_fixtures::empty_tap_result_text;
 
 /// What the stub answers a tool call with when the script names no fixed answer.
 pub const STUB_DEFAULT_TOOL_ANSWER_TEXT: &str = "{}";
@@ -63,19 +55,6 @@ const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion:
 /// A directory socket paths fit under: a socket path is capped near 104 bytes, and a
 /// per-user temporary directory can eat most of that.
 const SHORT_SOCKET_DIRECTORY_PARENT: &str = "/tmp";
-
-/// The ordinal the next connection any stub in this process accepts is given.
-static NEXT_STUB_ACCEPTED_CONNECTION_ORDINAL: AtomicU64 = AtomicU64::new(0);
-
-/// Which accepted connection a request came over, unique across every stub in this process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct StubAcceptedConnectionOrdinal(u64);
-
-impl Connected<IncomingStream<'_, tokio::net::UnixListener>> for StubAcceptedConnectionOrdinal {
-    fn connect_info(_accepted_stream: IncomingStream<'_, tokio::net::UnixListener>) -> Self {
-        Self(NEXT_STUB_ACCEPTED_CONNECTION_ORDINAL.fetch_add(1, Ordering::Relaxed))
-    }
-}
 
 /// How the stub answers one `tools/call`: the tool's text, whether the tool ran and failed, and
 /// the re-load of the stream the runtime made before answering, if it made one.
@@ -152,56 +131,6 @@ pub struct RecordedToolCall {
     pub tool_call_transport: StubToolCallTransport,
 }
 
-/// How the stub answers one `GET /api/surfaces/{surface_id}/image`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StubSurfaceImageAnswer {
-    pub http_status: u16,
-    pub png_image_bytes: Vec<u8>,
-    pub source_surface_pixel_width: Option<u32>,
-    pub source_surface_pixel_height: Option<u32>,
-    /// The `{"error": …}` a refusal carries.
-    pub error_message: String,
-}
-
-impl StubSurfaceImageAnswer {
-    /// A `200` carrying `png_image_bytes`, stating whichever extent headers are given.
-    pub fn png_image(
-        png_image_bytes: &[u8],
-        source_surface_pixel_width: Option<u32>,
-        source_surface_pixel_height: Option<u32>,
-    ) -> Self {
-        Self {
-            http_status: 200,
-            png_image_bytes: png_image_bytes.to_vec(),
-            source_surface_pixel_width,
-            source_surface_pixel_height,
-            error_message: String::new(),
-        }
-    }
-
-    /// A refusal with `http_status` and `{"error": error_message}` — a `410` is a recycled frame.
-    pub fn refusal(http_status: u16, error_message: &str) -> Self {
-        Self {
-            http_status,
-            png_image_bytes: Vec::new(),
-            source_surface_pixel_width: None,
-            source_surface_pixel_height: None,
-            error_message: error_message.to_owned(),
-        }
-    }
-}
-
-/// `surface_image_answers` keyed by surface id, as [`StubLocalApiScript::surface_image_answers`]
-/// holds them.
-pub fn surface_image_answers_by_id<PublishedSurfaceId: Into<String>>(
-    surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
-) -> HashMap<String, StubSurfaceImageAnswer> {
-    surface_image_answers
-        .into_iter()
-        .map(|(published_surface_id, answer)| (published_surface_id.into(), answer))
-        .collect()
-}
-
 /// How the stub answers `GET /mcp/stdio`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum StubMcpStdioUpgradeAnswer {
@@ -255,8 +184,6 @@ pub struct StubLocalApiScript {
     pub queued_tool_answers: Vec<StubToolAnswer>,
     /// Refuse every call with an invalid-params MCP error carrying this message.
     pub refuse_every_tool_call_with: Option<String>,
-    /// Answers by decoded surface id; an id not listed answers `404 {"error": "no such surface"}`.
-    pub surface_image_answers: HashMap<String, StubSurfaceImageAnswer>,
     /// The tools `tools/list` names, each taking any object; none when empty.
     pub listed_tool_names: Vec<String>,
     /// How `/mcp/stdio` answers; serving the stub's MCP server when unset.
@@ -270,33 +197,6 @@ impl StubLocalApiScript {
     pub fn answering_every_tool_call_with(stub_tool_answer: StubToolAnswer) -> Self {
         Self {
             fixed_tool_answer: Some(stub_tool_answer),
-            ..Self::default()
-        }
-    }
-
-    /// A script whose surface-image route answers `surface_image_answers` by surface id.
-    pub fn answering_surface_images<PublishedSurfaceId: Into<String>>(
-        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
-    ) -> Self {
-        Self {
-            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
-            ..Self::default()
-        }
-    }
-
-    /// A script whose `tap` answers `queued_tap_results` in order and then an empty round
-    /// forever, and whose surface-image route answers `surface_image_answers` by surface id.
-    pub fn tapping<PublishedSurfaceId: Into<String>>(
-        queued_tap_results: &[String],
-        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
-    ) -> Self {
-        Self {
-            fixed_tool_answer: Some(StubToolAnswer::tool_result(&empty_tap_result_text())),
-            queued_tool_answers: queued_tap_results
-                .iter()
-                .map(|tap_result| StubToolAnswer::tool_result(tap_result))
-                .collect(),
-            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
             ..Self::default()
         }
     }
@@ -321,9 +221,7 @@ struct StubLocalApiState {
     fixed_tool_answer: StubToolAnswer,
     queued_tool_answers: Mutex<VecDeque<StubToolAnswer>>,
     refuse_every_tool_call_with: Option<String>,
-    surface_image_answers: HashMap<String, StubSurfaceImageAnswer>,
     recorded_tool_calls: Mutex<Vec<RecordedToolCall>>,
-    recorded_image_requests: Mutex<Vec<(String, StubAcceptedConnectionOrdinal)>>,
     listed_tool_names: Vec<String>,
     mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
     recorded_mcp_stdio_request_heads: Mutex<Vec<RecordedHttpRequestHead>>,
@@ -500,56 +398,6 @@ impl StubLocalApiState {
     }
 }
 
-async fn answer_surface_image_request(
-    State(stub_state): State<Arc<StubLocalApiState>>,
-    ConnectInfo(accepted_connection_ordinal): ConnectInfo<StubAcceptedConnectionOrdinal>,
-    RoutePathSegment(surface_id): RoutePathSegment<String>,
-    request_uri: Uri,
-) -> Response {
-    stub_state
-        .recorded_image_requests
-        .lock()
-        .unwrap()
-        .push((request_uri.path().to_owned(), accepted_connection_ordinal));
-    let answer = stub_state
-        .surface_image_answers
-        .get(&surface_id)
-        .cloned()
-        .unwrap_or_else(|| StubSurfaceImageAnswer::refusal(404, "no such surface"));
-    let http_status = StatusCode::from_u16(answer.http_status).unwrap();
-    if http_status != StatusCode::OK {
-        return (
-            http_status,
-            [(header::CONTENT_TYPE, "application/json")],
-            serde_json::json!({ "error": answer.error_message }).to_string(),
-        )
-            .into_response();
-    }
-    let mut image_response = (
-        http_status,
-        [(header::CONTENT_TYPE, "image/png")],
-        answer.png_image_bytes,
-    )
-        .into_response();
-    for (extent_header, extent) in [
-        (
-            SURFACE_PIXEL_WIDTH_HEADER_NAME,
-            answer.source_surface_pixel_width,
-        ),
-        (
-            SURFACE_PIXEL_HEIGHT_HEADER_NAME,
-            answer.source_surface_pixel_height,
-        ),
-    ] {
-        if let Some(extent) = extent {
-            image_response
-                .headers_mut()
-                .insert(extent_header, extent.to_string().parse().unwrap());
-        }
-    }
-    image_response
-}
-
 /// `/mcp/stdio`: record the head, then refuse or answer `101` and play the scripted stream.
 async fn answer_mcp_stdio_upgrade_request(
     State(stub_state): State<Arc<StubLocalApiState>>,
@@ -668,8 +516,7 @@ async fn play_the_upgraded_mcp_stdio_stream(
 }
 
 /// The stub's router: `/mcp` as a runtime's local API configures it — stateless, JSON answers, no
-/// allowed-hosts check since the socket's file mode is the gate — the surface-image route, and the
-/// `/mcp/stdio` upgrade. Axum routes on the request target's path, so `rmcp`'s absolute-form `POST
+/// allowed-hosts check since the socket's file mode is the gate — and the `/mcp/stdio` upgrade. Axum routes on the request target's path, so `rmcp`'s absolute-form `POST
 /// http://localhost/mcp` reaches `/mcp` as RFC 9112 §3.2.2 requires.
 fn stub_local_api_router(stub_state: Arc<StubLocalApiState>) -> axum::Router {
     let mcp_server_handler = StubLocalApiMcpServerHandler {
@@ -687,10 +534,6 @@ fn stub_local_api_router(stub_state: Arc<StubLocalApiState>) -> axum::Router {
     );
     axum::Router::new()
         .route_service(MCP_STREAMABLE_HTTP_ROUTE_PATH, local_api_mcp_service)
-        .route(
-            SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE,
-            axum::routing::get(answer_surface_image_request),
-        )
         .route(
             MCP_STDIO_UPGRADE_REQUEST_TARGET,
             axum::routing::get(answer_mcp_stdio_upgrade_request),
@@ -759,9 +602,7 @@ impl StubLocalApiServer {
                 .unwrap_or_else(|| StubToolAnswer::tool_result(STUB_DEFAULT_TOOL_ANSWER_TEXT)),
             queued_tool_answers: Mutex::new(stub_local_api_script.queued_tool_answers.into()),
             refuse_every_tool_call_with: stub_local_api_script.refuse_every_tool_call_with,
-            surface_image_answers: stub_local_api_script.surface_image_answers,
             recorded_tool_calls: Mutex::new(Vec::new()),
-            recorded_image_requests: Mutex::new(Vec::new()),
             listed_tool_names: stub_local_api_script.listed_tool_names,
             mcp_stdio_upgrade_answer: stub_local_api_script.mcp_stdio_upgrade_answer,
             recorded_mcp_stdio_request_heads: Mutex::new(Vec::new()),
@@ -779,12 +620,8 @@ impl StubLocalApiServer {
                 let local_api_listener =
                     tokio::net::UnixListener::from_std(bound_listener).unwrap();
                 tokio::spawn(
-                    axum::serve(
-                        local_api_listener,
-                        stub_local_api_router(served_stub_state)
-                            .into_make_service_with_connect_info::<StubAcceptedConnectionOrdinal>(),
-                    )
-                    .into_future(),
+                    axum::serve(local_api_listener, stub_local_api_router(served_stub_state))
+                        .into_future(),
                 );
                 // Dropping the runtime on return ends every connection still open.
                 let _stopped_or_abandoned = serving_stopped.await;
@@ -809,27 +646,6 @@ impl StubLocalApiServer {
     /// Serve a stub that answers every tool call `{}`.
     pub fn serve_default() -> Self {
         Self::serve(StubLocalApiScript::default())
-    }
-
-    /// Serve a stub whose surface-image route answers `surface_image_answers` by surface id.
-    pub fn serve_answering_surface_images<PublishedSurfaceId: Into<String>>(
-        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
-    ) -> Self {
-        Self::serve(StubLocalApiScript::answering_surface_images(
-            surface_image_answers,
-        ))
-    }
-
-    /// Serve a stub whose `tap` answers `queued_tap_results` in order and then an empty round
-    /// forever, and whose surface-image route answers `surface_image_answers` by surface id.
-    pub fn serve_tapping<PublishedSurfaceId: Into<String>>(
-        queued_tap_results: &[String],
-        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
-    ) -> Self {
-        Self::serve(StubLocalApiScript::tapping(
-            queued_tap_results,
-            surface_image_answers,
-        ))
     }
 
     /// Serve a stub whose `/mcp/stdio` answers as `mcp_stdio_upgrade_answer` says.
@@ -888,29 +704,6 @@ impl StubLocalApiServer {
         self.stub_state
             .mcp_stdio_connection_closing_generation
             .send_modify(|closing_generation| *closing_generation += 1);
-    }
-
-    /// The path of every surface-image request received so far, percent-encoded as sent.
-    pub fn recorded_image_request_paths(&self) -> Vec<String> {
-        self.stub_state
-            .recorded_image_requests
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(image_request_path, _)| image_request_path.clone())
-            .collect()
-    }
-
-    /// How many distinct connections the surface-image requests so far came over.
-    pub fn image_request_connection_count(&self) -> usize {
-        self.stub_state
-            .recorded_image_requests
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(_, accepted_connection_ordinal)| *accepted_connection_ordinal)
-            .collect::<HashSet<StubAcceptedConnectionOrdinal>>()
-            .len()
     }
 
     /// The head of every `/mcp/stdio` request received so far, in arrival order.

@@ -304,8 +304,8 @@ class LinkInputDataReader(Protocol):
 
         Any number of links may enter one input port, each a separate producer.
         The name is the source channel the link subscribed to —
-        `{source node id}/{source output port}`, the name `graph` and `tap`
-        show — which the engine knows and a producer cannot misstate.
+        `{source node id}/{source output port}`, the name `graph` shows — which
+        the engine knows and a producer cannot misstate.
 
         Messages from one link arrive in that link's order; nothing is promised
         about how two links interleave. `into` casts as it does for `read`.

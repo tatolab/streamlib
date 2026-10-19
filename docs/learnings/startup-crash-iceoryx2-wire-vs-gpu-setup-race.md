@@ -52,8 +52,8 @@ The engine's fix shape: a channel's service is created once, at a depth the
 engine chooses before any open — 64 when any of its destinations declares an
 audio window, 16 otherwise — and each subscriber takes its own port's ring
 inside it. A live channel keeps the depth it was created at, read off the
-service a link holds or, with no link behind it, off the service a tap or a
-helper still holds, so a later opener joins at that depth. A windowed consumer
+service a link holds or, with no link behind it, off the service the runtime's
+publisher or a helper still holds, so a later opener joins at that depth. A windowed consumer
 connected onto a channel created shallower is refused by name before any open.
 `DoesNotSupportRequestedMinBufferSize` cannot arise between two engine-sized
 opens.

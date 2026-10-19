@@ -11,6 +11,7 @@ mod bundled_vulkan_driver_environment;
 mod crash_on_demand_test_node;
 mod exposed_port_publisher;
 mod local_relay_children;
+mod loopback_http_listener_of_this_runtime;
 mod machine_stream_hosting;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 mod numbered_message_writer_test_node;

@@ -45,6 +45,8 @@ done
 # a quiet skip.
 require_the_runtime_unit
 require_the_fixture_venv
+# Built before the stream runs, so the build takes none of the signal's window.
+require_tatolab_read_track
 if ! compgen -G "/dev/dri/renderD*" >/dev/null; then
     echo "SKIP: no DRM render node, so no GPU-backed runtime can start here" >&2
     exit 77

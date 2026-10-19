@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab`: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `streams` and
-//! `expose` load and manage the streams the machine's runtime holds, and `graph`, `tap`, `logs`,
-//! `exchange` and `mcp` observe them — each through the runtime's local API socket, at its fixed
-//! path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
+//! `expose` load and manage the streams the machine's runtime holds, and `graph`, `logs` and
+//! `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
 //! machine's users the virtual camera's loopback device, once. No verb starts a runtime.
 
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
@@ -24,17 +23,12 @@ mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
 mod stream_actions_on_the_runtime;
 mod stream_log_records_from_the_runtime;
-mod surface_image_exchange;
 mod verb_standard_output;
 mod virtual_camera_loopback_permission_grant;
 
 #[cfg(test)]
 #[path = "../tests/common/stub_local_api_server.rs"]
 mod stub_local_api_server;
-
-#[cfg(test)]
-#[path = "../tests/common/tapped_channel_bag_fixtures.rs"]
-mod tapped_channel_bag_fixtures;
 
 #[cfg(test)]
 #[path = "../tests/common/runtime_log_line_fixtures.rs"]
@@ -182,36 +176,6 @@ enum TatolabVerb {
         #[arg(long = "stream", value_name = "STREAM")]
         requested_stream: Option<String>,
     },
-    /// Collect a bounded sample of raw bags from one channel.
-    #[command(
-        long_about = "Attaches a read-only tap to CHANNEL and collects a bounded sample. The tap \
-                      forwards bags verbatim and never blocks the producer, so a quiet channel \
-                      returns a partial sample rather than hanging."
-    )]
-    Tap {
-        /// The channel tapped, addressed as its output port.
-        #[arg(
-            help = "The output port's address as graph names its parts: <stream>/<node>/<port>, \
-                    <node>/<port> with --stream, or <machine>/<stream>/<node>/<port> naming this \
-                    machine"
-        )]
-        channel: String,
-        /// The loaded stream the channel belongs to, when the channel names none.
-        #[arg(long = "stream", value_name = "STREAM")]
-        stream: Option<String>,
-        /// Bags to collect before returning (default: a small sample).
-        #[arg(long = "count", value_name = "N", allow_negative_numbers = true)]
-        requested_bag_count: Option<i64>,
-        /// Per-bag ceiling on the bytes returned. A bag over the cap comes back flagged and cannot
-        /// be decoded, so raise this rather than accept one (default: high enough to carry any
-        /// audio block whole).
-        #[arg(
-            long = "max-bag-bytes",
-            value_name = "BYTES",
-            allow_negative_numbers = true
-        )]
-        requested_max_bag_bytes: Option<i64>,
-    },
     /// Read a loaded stream's records from the runtime, or its JSONL log file.
     #[command(
         long_about = "With --stream, reads that loaded stream's records as the runtime holds them, \
@@ -219,17 +183,6 @@ enum TatolabVerb {
                       stream's on-disk JSONL log exactly as the runtime mirrored it."
     )]
     Logs(runtime_logs_verb::RuntimeLogsVerbArguments),
-    /// Exchange published surface ids for PNG files on disk.
-    #[command(
-        long_about = "With SURFACE_ID, exchanges that one id. With --channel, taps that output \
-                      port in the stream its address names, or in --stream when it names none, \
-                      reads a surface id out of each sampled bag, and exchanges it — \
-                      one warm process, no window in the graph and no display server in the path. \
-                      Writes exact full-resolution PNGs into --out and prints their paths on \
-                      stdout, one per line — those paths are this run's frames, and --out is not \
-                      cleared, so read them rather than listing the directory."
-    )]
-    Exchange(surface_image_exchange::SurfaceImageExchangeArguments),
     /// Connect an MCP host to the runtime over this command's stdin and stdout.
     #[command(
         long_about = "For an MCP host to launch: `claude mcp add tatolab -- tatolab mcp`, or `ssh \
@@ -320,26 +273,7 @@ fn main() -> ExitCode {
                 runtime_observation_verbs::graph_tool_arguments(requested_stream.as_deref()),
             )
         }
-        TatolabVerb::Tap {
-            channel,
-            stream,
-            requested_bag_count,
-            requested_max_bag_bytes,
-        } => runtime_observation_verbs::print_local_api_tool_result_of_the_running_runtime(
-            runtime_observation_verbs::TAP_TOOL_NAME,
-            runtime_observation_verbs::tap_tool_arguments(
-                stream.as_deref(),
-                &channel,
-                requested_bag_count,
-                requested_max_bag_bytes,
-            ),
-        ),
         TatolabVerb::Logs(logs_arguments) => runtime_logs_verb::run_runtime_logs_verb(logs_arguments),
-        TatolabVerb::Exchange(surface_image_exchange_arguments) => {
-            surface_image_exchange::run_surface_image_exchange_verb(
-                &surface_image_exchange_arguments,
-            )
-        }
         TatolabVerb::Mcp => local_api_mcp_stdio_pipe::pipe_stdio_to_the_running_runtimes_mcp_server(),
         TatolabVerb::EnableVirtualCamera {
             print_grant_without_installing: true,

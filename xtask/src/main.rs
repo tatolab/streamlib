@@ -376,13 +376,13 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-relay-adapter-sdk",
                 "-p",
                 "streamlib-relay-adapter-local",
+                "-p",
+                "tatolab-read-track",
                 "--features",
                 "streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests",
                 "--lib",
                 "--bins",
                 "--tests",
-                "--example",
-                "codec_roundtrip_rig",
             ],
         ),
         (
@@ -672,9 +672,10 @@ enum Commands {
     /// The codec proof's scorer: PSNR of a decoded frame set against the
     /// references that produced it, and the vivid rig's channel-mean drift
     /// lock, with the three bug-injection modes that keep either gate
-    /// non-vacuous. Pure image math over PNGs `tatolab exchange` wrote —
-    /// GPU-free, so it is tested in CI while the rig runs that feed it are
-    /// not. See `docs/plan/ARCHITECTURE.md` §Media I/O.
+    /// non-vacuous. Pure image math over PNGs the rig's ffmpeg decoded from a
+    /// track `tatolab-read-track` read — GPU-free, so it is tested in CI while
+    /// the rig runs that feed it are not. See `docs/plan/ARCHITECTURE.md`
+    /// §Media I/O.
     #[command(subcommand)]
     Psnr(psnr::PsnrCommand),
 

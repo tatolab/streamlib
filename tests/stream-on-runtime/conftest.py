@@ -826,7 +826,7 @@ def run_tatolab(
 def run_tatolab_observation_verb(
     runtime_unit: RuntimeUnitUnderTest, private_machine_directories: PrivateMachineDirectories
 ) -> "Callable[..., subprocess.CompletedProcess[str]]":
-    """Run a `tatolab` verb (`graph`, `streams`, `tap`, `logs`, ...) against this test's runtime.
+    """Run a `tatolab` verb (`graph`, `streams`, `logs`, ...) against this test's runtime.
 
     `run_tatolab_observation_verb(*verb_arguments, timeout=60.0)`: the runtime
     unit's `bin/tatolab`, in this test's machine environment, to completion.

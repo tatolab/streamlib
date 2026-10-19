@@ -21,8 +21,6 @@ machine-directories-under-a-test-root = []
 
 [dependencies]
 libc.workspace = true
-# The surface-image exchange route's surface-id segment.
-percent-encoding = "2.3"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

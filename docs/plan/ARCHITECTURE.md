@@ -3166,9 +3166,11 @@ entry reads as **message** (the glossary).
   (`<reference_stem>__<n>.png`) over one reference per run, not a key on the wire:
   best-match pairing was rejected as vacuous, since it satisfies the `swap-channels`
   injection by re-pairing a swapped red onto `solid_blue.png` — the exact regression
-  that mode exists to catch. [codec-blocks — SHIPPED #2084, #2085, #2086]
-  <!-- verify: cargo build -p streamlib-engine --example codec_roundtrip_rig -->
-  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh -->
+  that mode exists to catch. [codec-blocks — SHIPPED #2084, #2085, #2086; amended by
+  moq-relays: the rig is a sender stream and a receiver stream on `tatolabd`, the sender's
+  encoded track read with `tatolab-read-track` and decoded by ffmpeg; the in-process rig and
+  the reference-PNG harness are deleted]
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
 - **DECIDED** — The gate scores chroma, not luma alone: `cargo xtask psnr` classifies a
   frame Y ≥ 35 dB pass / 30–35 warn / < 30 fail **and** fails it outright when either
   chroma plane falls under 30 dB — one floor for every reference, no chroma warn band.
@@ -3251,8 +3253,9 @@ entry reads as **message** (the glossary).
   whole proof is locking to the Rust rig's number leaves nothing to lock to.
   Both codecs PASS through the arm, log gates at zero, clean exit. The reference-PNG rig
   gets no Python arm — nothing Python-specific sits on the colour path.
-  [python-codec-block-api — SHIPPED #2107]
-  <!-- verify: PIPELINE=python bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
+  [python-codec-block-api — SHIPPED #2107; amended by moq-relays: the Python-authored
+  streams are the codec rig itself, with no Rust arm to agree with]
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
   <!-- verify: git ls-files runtime/streamlib-engine/tests/fixtures/codec_roundtrip_stream.py -->
 - **DECIDED** — An encoded audio packet is an ordinary bag, the encoded-frame convention
   applied to audio: `codec` (`"opus"`), `bitstream` (msgpack `bin`, one Opus packet as
@@ -3496,24 +3499,20 @@ entry reads as **message** (the glossary).
   outside the runtime (§Networking), `tap` and `exchange` being deleted]
   <!-- verify: git ls-files packages/streamlib-webrtc -->
   <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
-- **DECIDED** — The address, as built. A port's address is `PortAddress`
-  (`core/graph/edges/port_address.rs`): `[<machine>/][<stream>/]<node>/<port>`,
-  right-anchored, leading parts omitted meaning here, every part cast as one address chunk
-  (`core/runtime/address_chunk.rs`, one shared fixture of cases the engine and the
-  pure-Python builder both cast from). It carries no processor id; whatever owns the port
-  resolves the node's name when asked. The machine is named as the machine-name entry below
-  states and read by `graph`'s top-level `machine`; a stream's name is cast at load. `tap`'s
-  channel is an address on this machine and one naming another machine is refused naming it.
+- **DECIDED** — The address, as built. A port's address is `<machine>/<stream>/<node>/<port>`,
+  every part cast as one address chunk (`core/runtime/address_chunk.rs`, one shared fixture
+  of cases the engine and the pure-Python builder both cast from): the `/watch` path names
+  it, and an exposed port is the track `<node>/<port>` of the broadcast
+  `<machine>/<stream>.hang`. It carries no processor id; whatever owns the port resolves the
+  node's name when asked. No engine type parses the string form (owner, 2026-10-19). The machine is named as the machine-name entry below
+  states and read by `graph`'s top-level `machine`; a stream's name is cast at load.
   `runtime_id` stays per-run — logs, iceoryx2 names, the surface-sharing service — and is
   never an address.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
-  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715; amended by
-  moq-relays: `tap` goes at the sharing step]
+  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_on_one_machine_both_construct_and_name_it_alike -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_machine_is_refused_naming_that_machine -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams graph_answers_the_machine_by_its_hostname_cast_and_no_streams -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
@@ -3594,7 +3593,7 @@ entry reads as **message** (the glossary).
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02. [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2658;
   runtime-hosting — SHIPPED #2715]
-  <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
   that relay's credential assigns. As built, the engine names the machine by its hostname cast
   and reads nothing of Tailscale. [runtime-hosting — SHIPPED #2715; amended by moq-relays: a

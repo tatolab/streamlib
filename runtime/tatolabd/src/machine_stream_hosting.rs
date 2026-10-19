@@ -27,6 +27,7 @@ use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDire
 
 use crate::exposed_port_publisher::start_the_exposed_port_publisher;
 use crate::local_relay_children::join_the_local_relay;
+use crate::loopback_http_listener_of_this_runtime::serve_the_loopback_http_listener_of_this_runtime;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
 
 /// How long the end of the run waits for a stream action the local API began —
@@ -58,6 +59,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         }
     };
     log_the_open_descriptor_soft_limit_raise(&raise_the_open_descriptor_soft_limit_to_its_ceiling());
+    let lend_directory = processor_interpreter_lend_directory.clone();
     if let Err(lend_directory_refusal) =
         engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory)
     {
@@ -82,11 +84,14 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
 
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
+    let mut loopback_http_listener = None;
     let mut local_relay = None;
     let mut exposed_port_publisher = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
             local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
+            loopback_http_listener =
+                serve_the_loopback_http_listener_of_this_runtime(&engine, &lend_directory);
             local_relay = join_the_local_relay(&engine);
             exposed_port_publisher = start_the_exposed_port_publisher(
                 &engine,
@@ -104,6 +109,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             // First, so no call reaches a stream as it ends, and every stream a
             // connection attached unloads with its connection.
             drop(local_api_served_for_the_engine.take());
+            drop(loopback_http_listener.take());
             drop(exposed_port_publisher.take());
             // Inside the run: a load the local API began gives itself up only
             // on reading the machine's shutdown, which the run's end clears.

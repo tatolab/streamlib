@@ -75,24 +75,6 @@ pub enum Error {
     #[error("Invalid link: {0}")]
     InvalidLink(String),
 
-    #[error("Invalid port address: {0}")]
-    InvalidPortAddress(String),
-
-    /// An address names a machine other than this one.
-    #[error(
-        "the address `{address}` names the machine `{machine}`, and this machine is \
-         `{this_machine}`: an address names a port on this machine until the sharing step, \
-         which is where links between machines arrive"
-    )]
-    PortAddressNamesAnotherMachine {
-        /// The address as it was written.
-        address: String,
-        /// The machine its machine part names, cast.
-        machine: String,
-        /// This machine's name.
-        this_machine: String,
-    },
-
     /// A chunk of a channel name is not one address chunk.
     #[error(
         "channel `{channel}` has the chunk `{chunk}`, which is not one address chunk: {reason}"
@@ -348,24 +330,10 @@ pub enum Error {
     Runtime(String),
 
     #[error(
-        "no tappable channel named '{0}' in the running graph — a channel's \
-         iceoryx2 data service exists only once a connect() has wired its source \
-         output port"
+        "the reserved subscriber slot on channel '{0}' is already held — a channel reserves \
+         exactly one slot beyond its destinations, and the runtime's publisher reads it"
     )]
-    TapChannelNotFound(String),
-
-    #[error(
-        "the reserved tap slot on channel '{0}' is already occupied — a channel \
-         reserves exactly one tap subscriber slot, so only one concurrent tap is \
-         allowed; detach the existing tap first"
-    )]
-    TapSlotOccupied(String),
-
-    #[error(
-        "channel '{0}' carries an exposed output port, and the runtime's publisher reads it \
-         through the channel's one reserved slot — read the port's track at a relay instead"
-    )]
-    TapOfAnOutputPortThePublisherReads(String),
+    ReservedPublisherSubscriberSlotOccupied(String),
 
     #[error("Bag key '{key}' is not present")]
     BagKeyMissing { key: String },

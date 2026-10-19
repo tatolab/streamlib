@@ -35,13 +35,9 @@ from typing import Any
 
 import pytest
 
-from conftest import AttachedTatolabRun, PrivateMachineDirectories, TatolabdUnderTest
+from conftest import AttachedTatolabRun, TatolabdUnderTest
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
-from runtime_unit_under_test import (
-    STREAM_ON_RUNTIME_SUITE_DIRECTORY,
-    SUITE_VENV_INTERPRETER,
-    RuntimeUnitUnderTest,
-)
+from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 from tatolab.stream import TestPatternSource
 from test_processor_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
@@ -121,15 +117,15 @@ SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
 SCAFFOLDED_EFFECT_NODE_NAME = "invertingeffect"
 SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 
-# A `tap` collects its sample server-side, so a verb can legitimately take a moment.
-OBSERVATION_VERB_TIMEOUT_SECONDS = 60.0
-# The id form races the pool: a frame tapped at 30fps can be recycled before
-# its exchange lands, which is a `410` the caller answers by tapping again.
-SURFACE_ID_EXCHANGE_ATTEMPTS = 10
-PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# How long an attached stream's source has to write its first bag on `video`.
+FIRST_BAG_WRITTEN_TIMEOUT_SECONDS = 30.0
 
 #: The one stream every project here compiles to.
 STREAM_NAME = "main"
+
+#: The variable a test build of `tatolabd` reads its loopback HTTP port from;
+#: unset, it serves no loopback HTTP.
+TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_LOOPBACK_HTTP_PORT"
 
 #: The engine's line once the attached stream's unload has finished.
 THE_STREAM_STOPPED_LOG_LINE = f"[stop] The stream `{STREAM_NAME}` stopped"
@@ -142,46 +138,6 @@ DEV_NO_STREAM_IS_LOADED = "tatolab dev: no stream is loaded — fix it and save 
 DEV_KEPT_THE_RUNNING_STREAM = (
     f"tatolab dev: {STREAM_NAME} keeps running the last save that loaded — fix it and save again"
 )
-
-# The `surface_id` field of one bag `tatolab tap` forwarded, given its hex.
-# Run with the lend on `PYTHONPATH`: a tapped bag is the channel's
-# transport-framed msgpack, and the engine's own decoder is what reads it.
-SURFACE_ID_OF_A_TAPPED_BAG_SOURCE = """\
-import json, sys
-from tatolab.runtime._engine import decode_tapped_channel_bag_frame_to_python_object
-
-bag = decode_tapped_channel_bag_frame_to_python_object(bytes.fromhex(sys.argv[1]))
-surface_id = bag.get("surface_id") if isinstance(bag, dict) else None
-print(json.dumps(surface_id if isinstance(surface_id, str) else None))
-"""
-
-
-def run_python_with_the_lend(
-    runtime_unit: RuntimeUnitUnderTest,
-    environment: "dict[str, str]",
-    python_source: str,
-    *script_arguments: str,
-) -> Any:
-    """Run `python_source` in the suite venv's interpreter with the lend leading
-    `PYTHONPATH`, and return the JSON it printed."""
-    existing_python_path = environment.get("PYTHONPATH")
-    finished = subprocess.run(
-        [str(SUITE_VENV_INTERPRETER), "-c", python_source, *script_arguments],
-        capture_output=True,
-        text=True,
-        timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-        check=False,
-        env={
-            **environment,
-            "PYTHONPATH": os.pathsep.join(
-                [str(runtime_unit.lend_directory)]
-                + ([existing_python_path] if existing_python_path else [])
-            ),
-        },
-    )
-    assert finished.returncode == 0, finished.stdout + finished.stderr
-    return json.loads(finished.stdout)
-
 
 def assert_only_its_owner_can_open(local_api_socket_path: Path) -> None:
     status = os.stat(local_api_socket_path)
@@ -282,9 +238,23 @@ def socket_inodes_held_by(pid: int) -> "set[str]":
     return held_socket_inodes
 
 
-def listening_tcp_socket_inodes_in_the_network_namespace_of(pid: int) -> "set[str]":
-    """The inode of every TCP socket in LISTEN, IPv4 and IPv6, that `pid` can see, off Linux's `/proc`."""
-    listening_tcp_socket_inodes: "set[str]" = set()
+def tcp_table_address_as_the_scan_names_it(tcp_table_address: str) -> str:
+    """A `/proc/net/tcp{,6}` local address — hex host in the kernel's byte order,
+    a colon, hex port — as `host:port`, or `[host]:port` for IPv6."""
+    hex_host, hex_port = tcp_table_address.split(":")
+    port = int(hex_port, 16)
+    host_bytes = b"".join(
+        bytes.fromhex(hex_host[word : word + 8])[::-1] for word in range(0, len(hex_host), 8)
+    )
+    if len(host_bytes) == 4:
+        return f"{socket.inet_ntop(socket.AF_INET, host_bytes)}:{port}"
+    return f"[{socket.inet_ntop(socket.AF_INET6, host_bytes)}]:{port}"
+
+
+def listening_tcp_addresses_by_inode_in_the_network_namespace_of(pid: int) -> "dict[str, str]":
+    """The local address of every TCP socket in LISTEN, IPv4 and IPv6, that
+    `pid` can see, by its inode, off Linux's `/proc`."""
+    listening_tcp_addresses_by_inode: "dict[str, str]" = {}
     for tcp_table_name in ("tcp", "tcp6"):
         tcp_table_path = Path(f"/proc/{pid}/net/{tcp_table_name}")
         if not tcp_table_path.exists():
@@ -295,8 +265,10 @@ def listening_tcp_socket_inodes_in_the_network_namespace_of(pid: int) -> "set[st
         for row in tcp_table_path.read_text().splitlines()[1:]:
             columns = row.split()
             if columns[3] == "0A":
-                listening_tcp_socket_inodes.add(columns[9])
-    return listening_tcp_socket_inodes
+                listening_tcp_addresses_by_inode[columns[9]] = tcp_table_address_as_the_scan_names_it(
+                    columns[1]
+                )
+    return listening_tcp_addresses_by_inode
 
 
 def socket_names_lsof_reports_held_by(pid: int, *socket_selection: str) -> "set[str]":
@@ -317,17 +289,23 @@ def socket_names_lsof_reports_held_by(pid: int, *socket_selection: str) -> "set[
 
 
 def listening_tcp_sockets_held_by(pid: int) -> "set[str]":
-    """Every TCP socket in LISTEN, IPv4 and IPv6, `pid` holds: by inode off
-    Linux's `/proc`, by local address off `lsof` on macOS."""
+    """The local address of every TCP socket in LISTEN, IPv4 and IPv6, `pid`
+    holds — off Linux's `/proc`, off `lsof` on macOS — as `host:port`, or
+    `[host]:port` for IPv6."""
     if sys.platform == "linux":
-        return socket_inodes_held_by(pid) & listening_tcp_socket_inodes_in_the_network_namespace_of(pid)
+        listening_tcp_addresses_by_inode = (
+            listening_tcp_addresses_by_inode_in_the_network_namespace_of(pid)
+        )
+        return {
+            listening_tcp_addresses_by_inode[socket_inode]
+            for socket_inode in socket_inodes_held_by(pid)
+            if socket_inode in listening_tcp_addresses_by_inode
+        }
     return socket_names_lsof_reports_held_by(pid, "-iTCP", "-sTCP:LISTEN")
 
 
 def listening_tcp_socket_as_the_scan_names_it(tcp_listener: socket.socket) -> str:
     """`tcp_listener` as `listening_tcp_sockets_held_by` names it."""
-    if sys.platform == "linux":
-        return str(os.fstat(tcp_listener.fileno()).st_ino)
     host, port = tcp_listener.getsockname()[:2]
     return f"[{host}]:{port}" if tcp_listener.family == socket.AF_INET6 else f"{host}:{port}"
 
@@ -389,21 +367,24 @@ def assert_the_scan_sees_the_unix_socket_listener_held_by(pid: int, unix_socket_
     )
 
 
-def test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket(
+def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_at_all(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """Nothing on the network can reach the runtime's control API: neither
-    `tatolabd` nor the `tatolab` attached to it holds a TCP socket in LISTEN, on
-    any address, loopback included.
+    """Nothing on the network can reach the runtime's control API, and its HTTP
+    listens nowhere but loopback: `tatolabd` holds one TCP socket in LISTEN, its
+    loopback HTTP on `127.0.0.1`, and the `tatolab` attached to it holds none.
 
     The same scan — Linux's `/proc`, macOS's `lsof` — has to find the TCP
     listeners the test itself holds and the local API socket's listener, and
-    the runtime has to answer over it, so an empty TCP answer is the runtime's
-    own and not a scan that saw nothing.
+    the runtime has to answer over it, so what the scan reports of the runtime
+    is the runtime's own and not a scan that saw nothing.
     """
     app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
-    tatolabd = start_tatolabd()
+    loopback_http_port = a_tcp_port_free_on_loopback()
+    tatolabd = start_tatolabd(
+        extra_environment={TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE: str(loopback_http_port)}
+    )
 
     attached = attach_the_projects_stream(tatolabd, app_directory)
     attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
@@ -414,9 +395,12 @@ def test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket(
     assert_the_scan_sees_the_unix_socket_listener_held_by(
         tatolabd.pid, str(tatolabd.local_api_socket_path)
     )
-    for process_name, pid in (("tatolabd", tatolabd.pid), ("tatolab", attached.pid)):
+    for process_name, pid, listening_tcp_sockets_it_may_hold in (
+        ("tatolabd", tatolabd.pid, {f"127.0.0.1:{loopback_http_port}"}),
+        ("tatolab", attached.pid, set()),
+    ):
         listening_tcp_sockets_it_holds = listening_tcp_sockets_held_by(pid)
-        assert listening_tcp_sockets_it_holds == set(), (
+        assert listening_tcp_sockets_it_holds == listening_tcp_sockets_it_may_hold, (
             f"{process_name} holds TCP sockets in LISTEN "
             f"({sorted(listening_tcp_sockets_it_holds)}); standard error ended:\n"
             f"{tatolabd.recent_stderr()}"
@@ -424,6 +408,12 @@ def test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket(
 
     attached.interrupt()
     assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+
+
+def a_tcp_port_free_on_loopback() -> int:
+    """A TCP port nothing holds on `127.0.0.1` now."""
+    with socket.create_server(("127.0.0.1", 0)) as probe:
+        return probe.getsockname()[1]
 
 
 def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
@@ -436,17 +426,13 @@ def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
 
 
 def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api_socket(
-    tmp_path: Path,
-    runtime_unit: RuntimeUnitUnderTest,
-    private_machine_directories: PrivateMachineDirectories,
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     run_tatolab_observation_verb: "Callable[..., subprocess.CompletedProcess[str]]",
 ):
-    """`tatolab streams`, `graph`, `tap`, `logs` and both forms of `exchange`,
-    driven the way a user drives them: a separate process, naming the stream.
-    The source is wired to a reader, since a channel is tappable only once a
-    connect has wired its output."""
+    """`tatolab streams`, `graph` and `logs`, driven the way a user drives them:
+    a separate process, naming the stream. `graph` counts the bags the source
+    writes once a connect has wired its output."""
     app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
     tatolabd = start_tatolabd()
     attached = attach_the_projects_stream(tatolabd, app_directory)
@@ -456,73 +442,24 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
     assert listed.splitlines()[0].split() == ["NAME", "STATE", "NODES", "PROJECT"], listed
     assert re.search(rf"^{STREAM_NAME}\s+attached\s+2\s+", listed, re.MULTILINE), listed
 
-    graph = json.loads(succeeded(run_tatolab_observation_verb("graph", "--stream", STREAM_NAME)))
-    source_name = next(
-        graph_node["name"]
-        for graph_node in graph["nodes"]
-        if graph_node["name"].startswith("testpatternsource")
-    )
-    channel = f"{graph['stream']}/{source_name}/video"
-
-    tapped = json.loads(
-        succeeded(
-            run_tatolab_observation_verb(
-                "tap", channel, "--count", "2",
-                timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-            )
+    bags_the_source_wrote = 0
+    deadline = time.monotonic() + FIRST_BAG_WRITTEN_TIMEOUT_SECONDS
+    while bags_the_source_wrote == 0 and time.monotonic() < deadline:
+        graph = json.loads(
+            succeeded(run_tatolab_observation_verb("graph", "--stream", STREAM_NAME))
         )
-    )  # fmt: skip
-    assert tapped["received"] > 0, f"no bags reached the tap over the socket: {tapped}"
+        [source_node] = [
+            graph_node
+            for graph_node in graph["nodes"]
+            if graph_node["name"].startswith("testpatternsource")
+        ]
+        bags_the_source_wrote = source_node["components"]["metrics"][
+            "written_bags_by_output_port"
+        ].get("video", 0)
+        time.sleep(0.1)
+    assert bags_the_source_wrote > 0, f"the source wrote nothing on `video`: {source_node}"
 
     succeeded(run_tatolab_observation_verb("logs", "--stream", STREAM_NAME))
-
-    channel_form_directory = tmp_path / "channel-form"
-    channel_form_written = succeeded(
-        run_tatolab_observation_verb(
-            "exchange", "--channel", channel, "--count", "1",
-            "--out", str(channel_form_directory),
-            timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-        )
-    ).split()  # fmt: skip
-    assert len(channel_form_written) == 1, channel_form_written
-    assert Path(channel_form_written[0]).read_bytes().startswith(PNG_SIGNATURE)
-
-    id_form_directory = tmp_path / "id-form"
-    id_form_attempts: "list[str]" = []
-    for _ in range(SURFACE_ID_EXCHANGE_ATTEMPTS):
-        tapped_for_a_surface_id = json.loads(
-            succeeded(
-                run_tatolab_observation_verb(
-                    "tap", f"{graph['machine']}/{channel}", "--count", "1",
-                    timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-                )
-            )
-        )  # fmt: skip
-        assert tapped_for_a_surface_id["bags"], f"no bag reached the tap: {tapped_for_a_surface_id}"
-        assert tapped_for_a_surface_id["bags"][0]["hex_truncated"] is False, (
-            "the tapped bag is past the tap's preview cap, so its hex cannot be decoded: "
-            f"{tapped_for_a_surface_id['bags'][0]['byte_len']} bytes"
-        )
-        published_surface_id = run_python_with_the_lend(
-            runtime_unit,
-            private_machine_directories.environment,
-            SURFACE_ID_OF_A_TAPPED_BAG_SOURCE,
-            tapped_for_a_surface_id["bags"][0]["hex_preview"],
-        )
-        assert published_surface_id is not None, f"{channel} published no surface id"
-        exchanged = run_tatolab_observation_verb(
-            "exchange", published_surface_id, "--out", str(id_form_directory),
-            timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
-        )  # fmt: skip
-        if exchanged.returncode == 0:
-            assert Path(exchanged.stdout.strip()).read_bytes().startswith(PNG_SIGNATURE)
-            break
-        id_form_attempts.append(exchanged.stderr.strip())
-    else:
-        raise AssertionError(
-            f"the id form never exchanged a frame in {SURFACE_ID_EXCHANGE_ATTEMPTS} "
-            f"attempts: {id_form_attempts}"
-        )
 
     attached.interrupt()
     assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0

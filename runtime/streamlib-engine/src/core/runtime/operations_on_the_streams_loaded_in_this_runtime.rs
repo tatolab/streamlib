@@ -3,18 +3,15 @@
 
 use std::sync::Arc;
 
-use tracing::Instrument as _;
-
-use super::operations::{BoxFuture, RuntimeOperations};
-use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
+use super::operations::RuntimeOperations;
 use super::{
-    ExchangedPublishedSurfaceFramePngImage, LoadedStreamTag, MachineName,
+    LoadedStreamAndTheOutputPortsItExposes, LoadedStreamTag, MachineName,
     OutputPortExposureOutcome, RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome,
     StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
 };
 use crate::core::ProcessorDescriptor;
-use crate::core::error::{Error, Result};
-use crate::core::graph::{OutputPortExposureLevel, PortAddress, cast_exposed_name_to_url_safe};
+use crate::core::error::Result;
+use crate::core::graph::OutputPortExposureLevel;
 use crate::core::logging::LoadedStreamLogRecordsPage;
 
 /// One page of a loaded stream's log records, and the tag of the load that
@@ -29,8 +26,7 @@ pub struct LogRecordsPageOfOneLoadedStream {
 }
 
 /// What the local API reaches a runtime through: the stream a call names, a
-/// stream's node catalog and log records, the stream actions and the surface
-/// exchange.
+/// stream's node catalog and log records, and the stream actions.
 ///
 /// Every stream action blocks — a load runs a compile and describes — so the
 /// local API calls each from a blocking task.
@@ -41,58 +37,22 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn this_machines_name(&self) -> &MachineName;
 
     /// The operations on the loaded stream `stream_name` names. Refused with
-    /// [`Error::NotFound`] naming the loaded streams when it is not loaded.
+    /// [`Error::NotFound`](crate::core::error::Error::NotFound) naming the loaded streams when it is not loaded.
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
         stream_name: &str,
     ) -> Result<Arc<dyn RuntimeOperations>>;
 
-    /// The operations on the loaded stream a tap of `channel` reads: the stream
-    /// its address names, else `stream_named_beside_it`.
-    ///
-    /// Refused with [`Error::InvalidPortAddress`] when the address does not
-    /// parse, when it and `stream_named_beside_it` name two streams (naming
-    /// both), or when neither names one; with
-    /// [`Error::PortAddressNamesAnotherMachine`] when it names another machine;
-    /// and as [`Self::runtime_operations_of_the_stream_a_call_names`] refuses.
-    fn runtime_operations_of_the_stream_a_tap_channel_names(
-        &self,
-        channel: &str,
-        stream_named_beside_it: Option<&str>,
-    ) -> Result<Arc<dyn RuntimeOperations>> {
-        let address = PortAddress::parse(channel)?;
-        address.refuse_when_it_names_another_machine(self.this_machines_name())?;
-        let stream_named_beside_it_cast = stream_named_beside_it
-            .map(cast_exposed_name_to_url_safe)
-            .transpose()?;
-        let stream = match (address.stream(), stream_named_beside_it_cast.as_deref()) {
-            (Some(in_the_address), Some(beside_it)) if in_the_address != beside_it => {
-                return Err(Error::InvalidPortAddress(format!(
-                    "the channel `{channel}` names the stream `{in_the_address}`, and the call \
-                     names the stream `{beside_it}`; name one stream, or the same one twice"
-                )));
-            }
-            (Some(stream), _) | (None, Some(stream)) => stream,
-            (None, None) => {
-                return Err(Error::InvalidPortAddress(format!(
-                    "the channel `{channel}` names no stream, and the call names none: write \
-                     the channel `<stream>/<node>/<port>`, or name the stream beside it"
-                )));
-            }
-        };
-        self.runtime_operations_of_the_stream_a_call_names(stream)
-    }
-
     /// The node types the loaded stream `stream_name` names resolves — the
     /// native ones, then the ones described in its own interpreter — with the
-    /// same [`Error::NotFound`] refusal.
+    /// same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
     fn node_catalog_of_the_stream_a_call_names(
         &self,
         stream_name: &str,
     ) -> Result<Vec<ProcessorDescriptor>>;
 
     /// The node types described in the own interpreter of the loaded stream
-    /// `stream_name` names, with the same [`Error::NotFound`] refusal.
+    /// `stream_name` names, with the same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
         &self,
         stream_name: &str,
@@ -100,6 +60,13 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// The cast names of the loaded streams, in order.
     fn names_of_the_loaded_streams(&self) -> Vec<String>;
+
+    /// Every loaded stream, in name order, with the output ports it exposes
+    /// now — one read of the stream table. Blocks while a stream compiles, so
+    /// the local API calls it from a blocking task.
+    fn every_loaded_stream_and_the_output_ports_it_exposes(
+        &self,
+    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes>;
 
     /// The log records of the loaded stream `stream_name` names, numbered
     /// after `after`, at most `max_count` of them, with the tag of the load
@@ -142,23 +109,6 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         stream_name: &str,
         stream_tag: LoadedStreamTag,
     ) -> bool;
-
-    /// Exchange a published surface id for that frame's pixels, encoded as a
-    /// PNG.
-    ///
-    /// `published_surface_id` is a surface id a bag carried
-    /// (`<slot>#<generation>` for a pooled frame); a retired one fails with
-    /// [`Error::SurfaceFrameRecycled`] before any bytes move. A surface id is
-    /// unique on the machine, so the exchange names no stream; it needs a
-    /// started stream, whose GPU context is the engine's.
-    /// `downscale_long_edge_pixel_cap` bounds the encoded image's long edge,
-    /// preserving aspect and never upscaling. Why the verb has this shape:
-    /// `docs/decisions/control-plane-pixel-exchange.md`.
-    fn exchange_published_surface_id_for_png_image_bytes_async(
-        &self,
-        published_surface_id: String,
-        downscale_long_edge_pixel_cap: Option<u32>,
-    ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>>;
 }
 
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
@@ -195,6 +145,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn names_of_the_loaded_streams(&self) -> Vec<String> {
         Runner::names_of_the_loaded_streams(self)
+    }
+
+    fn every_loaded_stream_and_the_output_ports_it_exposes(
+        &self,
+    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
+        Runner::every_loaded_stream_and_the_output_ports_it_exposes(self)
     }
 
     fn log_records_of_the_stream_a_call_names(
@@ -246,57 +202,5 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         stream_tag: LoadedStreamTag,
     ) -> bool {
         Runner::unload_the_attached_stream_if_still_the_same(self, stream_name, stream_tag)
-    }
-
-    fn exchange_published_surface_id_for_png_image_bytes_async(
-        &self,
-        published_surface_id: String,
-        downscale_long_edge_pixel_cap: Option<u32>,
-    ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
-        // Built here and entered by the async block: an instrumented
-        // `-> BoxFuture` fn opens and closes its span while the future is
-        // built, covering none of the copy or the encode.
-        let exchange_span = tracing::info_span!(
-            "runtime.exchange",
-            surface_id = %published_surface_id,
-            downscale_long_edge_pixel_cap = ?downscale_long_edge_pixel_cap,
-        );
-
-        // Read before spawning: with no started stream there is no pool to
-        // claim from and no device to convert on.
-        let gpu_context = self
-            .every_loaded_stream()
-            .iter()
-            .find_map(|stream| stream.runtime_context_while_started())
-            .map(|runtime_context| runtime_context.gpu.clone())
-            .ok_or_else(|| {
-                Error::Runtime(
-                    "no stream in this runtime has started, so no surface can be exchanged for \
-                     an image; start a stream first"
-                        .into(),
-                )
-            });
-
-        Box::pin(
-            async move {
-                let gpu_context = gpu_context?;
-                // The copy blocks on the GPU and the encode on the CPU; both
-                // run off the async worker.
-                tokio::task::spawn_blocking(move || {
-                    exchange_published_surface_id_for_png_image_bytes(
-                        &gpu_context,
-                        &published_surface_id,
-                        downscale_long_edge_pixel_cap,
-                    )
-                })
-                .await
-                .map_err(|join_error| {
-                    Error::Runtime(format!(
-                        "surface-exchange task failed to join: {join_error}"
-                    ))
-                })?
-            }
-            .instrument(exchange_span),
-        )
     }
 }

@@ -4,8 +4,8 @@
 //! The runtime's MCP server, served by the official SDK, `rmcp`.
 //!
 //! [`LocalApiMcpServerHandler`] is the runtime's whole MCP surface: its tools
-//! are the control vocabulary — the observation verbs `graph`, `tap`, `logs`
-//! and `exchange`; the graph-mutation verbs `add_node`, `remove_node`,
+//! are the control vocabulary — the observation verbs `graph` and `logs`; the
+//! graph-mutation verbs `add_node`, `remove_node`,
 //! `connect` and `disconnect`, each naming a node by its name; and the stream
 //! actions `run_stream`, `stop_stream`, `start_stream`, `remove_stream`,
 //! `list_streams` and `expose_port` — and beside them it serves the node
@@ -16,7 +16,7 @@
 //! The runtime loads any number of streams. Every tool that reads or changes
 //! one stream takes a required `stream`, refused naming the loaded streams
 //! when it is not loaded; `graph` takes it optionally and renders every loaded
-//! stream without it. `exchange` and `list_streams` name no stream.
+//! stream without it. `list_streams` names no stream.
 //!
 //! A mutation tool answers when the engine accepted the change into its graph;
 //! the wiring itself commits on the engine's own compile task, whose failure
@@ -26,23 +26,11 @@
 //! its types — so each runs on a blocking task. `run_stream` with `keep:
 //! false` attaches the stream to the `/mcp/stdio` connection that carried the
 //! call, which unloads it when it closes; a one-shot `POST /mcp` only keeps.
-//!
-//! `exchange` is the one tool whose result is not text: it answers a
-//! published surface id with the frame itself, as an image content block the
-//! host renders in-session. It composes with `tap` entirely at the caller,
-//! which decodes a bag and reads whatever field it knows carries a surface id.
-//!
-//! `tap` fronts the REST API's WebSocket tap. MCP tools are request/response,
-//! so it bridges the channel to a **bounded sample** — both by a count AND a
-//! monotonic sample window (a quiet channel returns the partial sample rather
-//! than blocking the tool call) — and returns the collected sample.
 
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
-use base64::Engine as _;
 use parking_lot::Mutex;
 use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -68,15 +56,14 @@ use streamlib::sdk::graph::{
 };
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
-    ExchangedPublishedSurfaceFramePngImage, LoadedStreamHolding, LoadedStreamTag,
-    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest,
-    RuntimeOperations, StreamListingState, StreamRunOutcome,
+    LoadedStreamHolding, LoadedStreamTag, LogRecordsPageOfOneLoadedStream,
+    OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest, RuntimeOperations,
+    StreamListingState, StreamRunOutcome,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
     ListedStreamState, LoadedStreamInstance, LogsToolResult, LogsToolResultRecord,
     RemoveStreamToolResult, RunStreamToolResult, StartStreamToolResult, StopStreamToolResult,
-    TapToolResult, TapToolResultBag, surface_image_exchange_route_path_for_surface_id,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -90,14 +77,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `tap` reads it from its channel's address, or from `stream` when the address names none; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `exchange` names no stream: a surface id is unique on the machine. Observe a stream with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<stream>/<node>/<port>` right-anchored: `<node>/<port>` beside a `stream`, or `<machine>/<stream>/<node>/<port>` naming this machine, since an address naming another machine is refused until the sharing step), `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on) and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.";
-
-/// Bounded sample size for `tap` when the caller does not pin its own `count`.
-const DEFAULT_TAP_SAMPLE_COUNT: usize = 8;
-
-/// Hard ceiling on a requested sample `count`, so a tool call cannot pin an
-/// unbounded collection loop.
-const MAX_SAMPLE_COUNT: usize = 1024;
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the local relay, which any MoQ client reads. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -106,46 +86,6 @@ const DEFAULT_LOGS_RECORD_COUNT: u32 = 256;
 /// The most log records one `logs` call returns: as many as a stream's log
 /// route holds in memory.
 const MAX_LOGS_RECORD_COUNT: u32 = 4096;
-
-/// Per-bag ceiling on the bytes a `tap` result hex-encodes, when the caller
-/// names none.
-///
-/// Generous rather than frugal, because a trimmed message is not a smaller
-/// answer — it is no answer: a message's payload is decoded whole or not at all
-/// (every built-in's is one msgpack map), and every consumer here refuses a
-/// truncated one rather than reading half a value.
-const DEFAULT_MAX_TAP_BAG_BYTES: usize = 1024 * 1024;
-
-/// Total bag bytes one `tap` result encodes, and therefore also the largest
-/// per-bag cap a caller may name — [`bounded_tap_bag_bytes`] clamps to it.
-///
-/// The two are one number rather than two so the bound holds by construction:
-/// were the per-bag cap allowed above this, a single bag could exceed the whole
-/// response budget and nothing would stop it. Hex doubles this on the wire, and
-/// serializing the result holds the encoded text and the JSON body at once,
-/// which is why the figure is modest next to what a channel may carry — a bag
-/// too big for a request/response tool is what `/ws/tap/{channel}` streams
-/// verbatim.
-const MAX_TAP_RESPONSE_BAG_BYTES: usize = 16 * 1024 * 1024;
-
-// The default has to fit the budget it is charged against, or the very first
-// bag of an ordinary call would trip it. Checked by the compiler rather than a
-// test, because it is a fact about two literals.
-const _: () = assert!(DEFAULT_MAX_TAP_BAG_BYTES <= MAX_TAP_RESPONSE_BAG_BYTES);
-
-/// Long-edge ceiling for the image an `exchange` result carries inline, and
-/// the default when a caller names no cap of its own.
-///
-/// A vision-model ingestion ceiling — not a GPU or protocol constant.
-const EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP: u32 = 1568;
-
-/// Upper bound on how long the `tap` tool waits to fill its bag sample before
-/// returning what it has collected. The tap forwarder sends nothing on an idle,
-/// slow, or paused channel (it backs off between empty polls), so without
-/// this window a request/response tool call would block until `count` bags
-/// actually flow. A quiet channel returns the partial sample (0..N bags)
-/// instead. Monotonic (tokio timer), never wall-clock.
-const TAP_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
 /// What every required `stream` argument says.
 const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about, by the name `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
@@ -310,18 +250,6 @@ impl LocalApiMcpServerHandler {
             .map_err(|refusal| format!("{tool} failed: {refusal}"))
     }
 
-    /// The operations on the loaded stream a `tap` of `channel` reads, or the
-    /// error the call fails with.
-    fn the_stream_a_tap_channel_names(
-        &self,
-        channel: &str,
-        stream: Option<&str>,
-    ) -> Result<Arc<dyn RuntimeOperations>, String> {
-        self.operations_on_the_loaded_streams
-            .runtime_operations_of_the_stream_a_tap_channel_names(channel, stream)
-            .map_err(|refusal| format!("tap failed: {refusal}"))
-    }
-
     /// Run the blocking stream action `action` over the runtime's streams on a
     /// blocking task; a refusal is the engine's own words.
     async fn a_stream_action_off_the_async_runtime<StreamActionOutcome: Send + 'static>(
@@ -374,30 +302,6 @@ struct GraphToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct TapToolArguments {
-    #[schemars(
-        description = "The loaded stream the channel is in, when the channel's address names none. A stream other than the one the address names is refused, naming both."
-    )]
-    stream: Option<String>,
-    #[schemars(
-        description = "The output port's address, right-anchored: `<stream>/<node>/<port>`; `<node>/<port>` in the stream `stream` names; or `<machine>/<stream>/<node>/<port>` naming this machine by the `machine` in `graph` — an address naming another machine is refused until the sharing step. A port is tappable once a link carries from it."
-    )]
-    channel: String,
-    #[schemars(
-        range(min = 1),
-        description = "Number of bags to collect before returning. Defaults to a small sample."
-    )]
-    count: Option<usize>,
-    #[schemars(
-        range(min = 1, max = MAX_TAP_RESPONSE_BAG_BYTES),
-        description = "Per-bag ceiling on the bytes hex-encoded into the result. A bag over the cap comes back flagged `hex_truncated` and cannot be decoded, so raise this rather than accept one. Defaults high enough to carry any audio block whole."
-    )]
-    max_bag_bytes: Option<usize>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
 struct LogsToolArguments {
     #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
     stream: String,
@@ -410,21 +314,6 @@ struct LogsToolArguments {
         description = "The most records to return. Defaults to 256; a larger value than 4096 is clamped to it."
     )]
     count: Option<u32>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct ExchangeToolArguments {
-    #[schemars(
-        description = "A surface id a bag published, e.g. the `{slot}#{generation}` of a pooled frame. A retired id is refused rather than answered with the slot's newer pixels — tap a newer bag and exchange that."
-    )]
-    surface_id: String,
-    #[schemars(
-        range(min = 1, max = EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP),
-        description = "Bound the returned image's long edge to this many pixels, aspect preserved and never upscaled. Defaults to the maximum, and a larger value is clamped to it: full resolution is the REST route's job, never an inline block."
-    )]
-    downscale_long_edge_pixel_cap: Option<u32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -590,71 +479,6 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Attach a read-only tap to a channel and collect a bounded sample of raw bags (FrameHeader-framed bytes; the hex plus byte length per bag). Bags arrive whole unless one exceeds `max_bag_bytes`, which is flagged as `hex_truncated`. The whole result is also byte-budgeted: the sample stops at the first bag that would exceed it, so `bags_withheld_at_byte_budget` is 0 or 1 — that one bag was received and discarded, and it accounts for the whole gap between `requested` and `received` when the window had time left."
-    )]
-    async fn tap(
-        &self,
-        Parameters(TapToolArguments {
-            stream,
-            channel,
-            count,
-            max_bag_bytes,
-        }): Parameters<TapToolArguments>,
-    ) -> ToolCallAnswer {
-        let sample = bounded_sample_count(count, DEFAULT_TAP_SAMPLE_COUNT);
-        let max_bag_bytes = bounded_tap_bag_bytes(max_bag_bytes);
-
-        let mut subscription = self
-            .the_stream_a_tap_channel_names(&channel, stream.as_deref())?
-            .tap_async(channel.clone(), Some(sample))
-            .await
-            .map_err(|e| format!("tap attach failed: {e}"))?;
-
-        let mut bags: Vec<TapToolResultBag> = Vec::with_capacity(sample);
-        let mut remaining_response_bytes = MAX_TAP_RESPONSE_BAG_BYTES;
-        let mut bags_withheld_at_byte_budget = 0usize;
-        let deadline = tokio::time::Instant::now() + TAP_SAMPLE_WINDOW;
-        while bags.len() < sample {
-            match tokio::time::timeout_at(deadline, subscription.recv()).await {
-                Ok(Some(bytes)) => {
-                    let encoded_len = bytes.len().min(max_bag_bytes);
-                    if encoded_len > remaining_response_bytes {
-                        // Counted rather than silently eaten: this bag was received
-                        // and is being dropped, so a caller reconciling `requested`
-                        // against `received` is not short by an unexplained one.
-                        bags_withheld_at_byte_budget += 1;
-                        break;
-                    }
-                    remaining_response_bytes -= encoded_len;
-                    bags.push(tap_tool_result_bag(&bytes[..encoded_len], bytes.len()));
-                }
-                // Tap exhausted (count reached / forwarder ended), or the bounded
-                // sample window elapsed on a quiet channel — return the partial sample.
-                Ok(None) | Err(_) => break,
-            }
-        }
-        let dropped_bags = subscription.dropped_bags();
-
-        // `TapSubscription::drop` joins the forwarder OS thread; a synchronous join
-        // must never run on a tokio worker, so detach it off the async runtime.
-        if let Err(join_error) = tokio::task::spawn_blocking(move || drop(subscription)).await {
-            tracing::warn!(channel = %channel, "tap detach task failed to join: {join_error}");
-        }
-
-        let tap_tool_result = TapToolResult {
-            channel,
-            requested: sample,
-            received: bags.len(),
-            window_ms: u64::try_from(TAP_SAMPLE_WINDOW.as_millis()).unwrap_or(u64::MAX),
-            dropped_bags,
-            max_bag_bytes,
-            bags_withheld_at_byte_budget,
-            bags,
-        };
-        serialized_tool_result("tap", &tap_tool_result)
-    }
-
-    #[tool(
         description = "Read one loaded stream's log records numbered after `after`, oldest first, each as its JSONL log file holds it beside its `sequence`. Pass the result's `next_after` back as `after` to read on; `stream_instance` names the load the records are from, and a page naming another instance than the last is a re-load numbering its records from 1 again, read from `after: 0`. `records_no_longer_held` counts records after `after` the runtime no longer holds in memory, which the stream's JSONL log under its project's `.streamlib/` still has."
     )]
     async fn logs(
@@ -692,37 +516,6 @@ impl LocalApiMcpServerHandler {
                 records_no_longer_held: page.records_no_longer_held,
             },
         )
-    }
-
-    /// The cap defaults to [`EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP`] and is clamped
-    /// to it: a caller may ask for less than the ceiling and never more.
-    #[tool(
-        description = "Exchange a published surface id for that frame's pixels, returned as a PNG image block you can see directly. Ids come from bags a `tap` returned — this tool never reads a channel itself. The image is downscaled to a declared long-edge cap; the result states the surface's true extent and the REST route that returns the exact full-resolution bytes."
-    )]
-    async fn exchange(
-        &self,
-        Parameters(ExchangeToolArguments {
-            surface_id,
-            downscale_long_edge_pixel_cap,
-        }): Parameters<ExchangeToolArguments>,
-    ) -> ToolCallAnswer {
-        let long_edge_pixel_cap = downscale_long_edge_pixel_cap
-            .unwrap_or(EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP)
-            .clamp(1, EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP);
-
-        let exchanged = self
-            .operations_on_the_loaded_streams
-            .exchange_published_surface_id_for_png_image_bytes_async(
-                surface_id.clone(),
-                Some(long_edge_pixel_cap),
-            )
-            .await
-            .map_err(|e| format!("exchange failed: {e}"))?;
-        Ok(exchanged_frame_image_tool_call_result(
-            &surface_id,
-            long_edge_pixel_cap,
-            &exchanged,
-        ))
     }
 
     #[tool(
@@ -1175,84 +968,6 @@ fn json_text_content_block(value: &Value) -> ContentBlock {
     ContentBlock::text(text)
 }
 
-/// A successful `exchange` result: the frame as an image block the host
-/// renders in-session, then a text block stating what the surface itself
-/// carries and where the exact bytes live.
-///
-/// Both extents are reported because they differ whenever the cap applied, and
-/// a downscaled picture whose true resolution went unsaid is a measurement
-/// waiting to be wrong.
-fn exchanged_frame_image_tool_call_result(
-    published_surface_id: &str,
-    downscale_long_edge_pixel_cap: u32,
-    exchanged: &ExchangedPublishedSurfaceFramePngImage,
-) -> CallToolResult {
-    let stated = json!({
-        "surface_id": published_surface_id,
-        "source_surface_pixel_width": exchanged.source_surface_pixel_width,
-        "source_surface_pixel_height": exchanged.source_surface_pixel_height,
-        "encoded_image_pixel_width": exchanged.encoded_image_pixel_width,
-        "encoded_image_pixel_height": exchanged.encoded_image_pixel_height,
-        "downscale_long_edge_pixel_cap": downscale_long_edge_pixel_cap,
-        "exact_bytes_rest_route": format!(
-            "GET {}",
-            surface_image_exchange_route_path_for_surface_id(published_surface_id)
-        ),
-    });
-    CallToolResult::success(vec![
-        ContentBlock::image(
-            base64::engine::general_purpose::STANDARD.encode(&exchanged.png_image_bytes),
-            "image/png",
-        ),
-        json_text_content_block(&stated),
-    ])
-}
-
-/// Clamp a requested sample count into `[1, MAX_SAMPLE_COUNT]`, defaulting when
-/// the caller left it unset.
-fn bounded_sample_count(requested: Option<usize>, default: usize) -> usize {
-    requested.unwrap_or(default).clamp(1, MAX_SAMPLE_COUNT)
-}
-
-/// Clamp a requested per-bag cap into `[1, MAX_TAP_RESPONSE_BAG_BYTES]`,
-/// defaulting when the caller left it unset.
-///
-/// Clamping to the whole-response budget is what makes the first bag unable to
-/// exceed it, so the collection loop needs no special case for one.
-fn bounded_tap_bag_bytes(requested: Option<usize>) -> usize {
-    requested
-        .unwrap_or(DEFAULT_MAX_TAP_BAG_BYTES)
-        .clamp(1, MAX_TAP_RESPONSE_BAG_BYTES)
-}
-
-/// One raw tap bag as the result carries it: the bag's full byte length plus
-/// the hex of however much of it the caller's cap admitted (raw bags are
-/// wire-neutral bytes; decoding is the caller's concern).
-///
-/// Takes the already-clamped slice rather than clamping again, because the
-/// collection loop must charge its budget the same number this encodes — two
-/// sites computing one rule is two sites that can disagree.
-fn tap_tool_result_bag(encoded: &[u8], full_byte_len: usize) -> TapToolResultBag {
-    TapToolResultBag {
-        byte_len: full_byte_len as u64,
-        hex_preview: hex_encode(encoded),
-        hex_truncated: encoded.len() < full_byte_len,
-    }
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    // A nibble table rather than `write!` per byte: this encodes up to
-    // `MAX_TAP_RESPONSE_BAG_BYTES` on a tokio worker, where `core::fmt`'s
-    // per-byte machinery costs several times what a two-push loop does.
-    const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut hex = Vec::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        hex.push(HEX_DIGITS[usize::from(byte >> 4)]);
-        hex.push(HEX_DIGITS[usize::from(byte & 0x0f)]);
-    }
-    String::from_utf8(hex).expect("a hex-digit table only ever yields ASCII")
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     //! MCP wire tests: an `rmcp` client drives the real `/mcp` endpoint that
@@ -1266,11 +981,8 @@ pub(crate) mod tests {
     //! and what must never be again.
 
     use crate::control_plane_stub_support::{
-        LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID,
-        STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
-        STUB_MACHINE_NAME, STUB_SOURCE_SURFACE_EXTENT, STUB_STREAM_NAME, StubSurfaceExchange,
+        LocalApiServedOnAFreshSocket, STUB_MACHINE_NAME, STUB_STREAM_NAME,
     };
-    use base64::Engine as _;
     use rmcp::RoleClient;
     use rmcp::model::{
         CallToolRequestParams, ClientCapabilities, GetPromptRequestParams,
@@ -1282,26 +994,14 @@ pub(crate) mod tests {
     };
     use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
     use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
-    use streamlib::sdk::error::{Error, Result};
+    use streamlib::sdk::error::Result;
     use streamlib::sdk::runtime::{
-        BoxFuture, OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, TapSubscription,
+        BoxFuture, OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations,
     };
-    use streamlib_runtime_client_contract::local_api_wire_contract::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE;
+
+    use std::time::Duration;
 
     use super::*;
-
-    /// How the stub's `tap_async` answers: either it refuses (no channel), or it
-    /// hands back a synthetic [`TapSubscription`] pre-loaded with `bags` and a
-    /// fixed `dropped_bags` count. `keep_sender_open` retains the forward
-    /// sender so `recv()` pends after the bags drain — modelling a quiet channel
-    /// so the tap tool's monotonic sample window is what ends the collection.
-    #[derive(Clone)]
-    struct StubTapPlan {
-        bags: Vec<Vec<u8>>,
-        dropped_bags: u64,
-        keep_sender_open: bool,
-        sender_keepalive: Arc<Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>>,
-    }
 
     /// Stub runtime answering the observation ops without a live engine.
     ///
@@ -1311,20 +1011,18 @@ pub(crate) mod tests {
     #[derive(Clone)]
     pub(crate) struct ControlPlaneMcpDispatchStubRuntime {
         exported_graph: Arc<Mutex<Value>>,
-        tap_plan: Option<StubTapPlan>,
         recorded_graph_mutations: crate::control_plane_stub_support::RecordedGraphMutations,
         armed_add_processor_refusal: crate::control_plane_stub_support::ArmedAddProcessorRefusal,
-        exchange: StubSurfaceExchange,
+        add_processor_answers_after: Option<Duration>,
     }
 
     impl ControlPlaneMcpDispatchStubRuntime {
         pub(crate) fn new() -> Self {
             Self {
                 exported_graph: Arc::new(Mutex::new(json!({ "nodes": [], "links": [] }))),
-                tap_plan: None,
                 recorded_graph_mutations: Arc::new(Mutex::new(Vec::new())),
                 armed_add_processor_refusal: Arc::new(Mutex::new(None)),
-                exchange: StubSurfaceExchange::default(),
+                add_processor_answers_after: None,
             }
         }
 
@@ -1337,32 +1035,11 @@ pub(crate) mod tests {
             }
         }
 
-        /// A stub whose `tap_async` yields a synthetic subscription over `bags`
-        /// with the given dropped-bag count, dropping the forward sender once the
-        /// bags are queued so `recv()` ends (exhaustion path).
-        fn with_tap_bags(bags: Vec<Vec<u8>>, dropped_bags: u64) -> Self {
+        /// A stub whose `add_node` answers only once `answers_after` has
+        /// passed, so it is the request still in flight.
+        pub(crate) fn with_add_node_answering_after(answers_after: Duration) -> Self {
             Self {
-                tap_plan: Some(StubTapPlan {
-                    bags,
-                    dropped_bags,
-                    keep_sender_open: false,
-                    sender_keepalive: Arc::new(Mutex::new(None)),
-                }),
-                ..Self::new()
-            }
-        }
-
-        /// A stub whose `tap_async` yields a subscription over `bags` but keeps
-        /// the forward sender alive, so `recv()` pends after the bags drain — a
-        /// quiet channel whose collection ends on the monotonic sample window.
-        pub(crate) fn with_quiet_tap(bags: Vec<Vec<u8>>) -> Self {
-            Self {
-                tap_plan: Some(StubTapPlan {
-                    bags,
-                    dropped_bags: 0,
-                    keep_sender_open: true,
-                    sender_keepalive: Arc::new(Mutex::new(None)),
-                }),
+                add_processor_answers_after: Some(answers_after),
                 ..Self::new()
             }
         }
@@ -1372,30 +1049,6 @@ pub(crate) mod tests {
         fn to_json_async(&self) -> BoxFuture<'_, Result<Value>> {
             let exported_graph = self.exported_graph.lock().clone();
             Box::pin(async move { Ok(exported_graph) })
-        }
-        fn tap_async(
-            &self,
-            channel: String,
-            _count: Option<usize>,
-        ) -> BoxFuture<'_, Result<TapSubscription>> {
-            let Some(plan) = self.tap_plan.clone() else {
-                return Box::pin(async move { Err(Error::TapChannelNotFound(channel)) });
-            };
-            Box::pin(async move {
-                let (sender, receiver) =
-                    tokio::sync::mpsc::channel::<Vec<u8>>(plan.bags.len().max(1));
-                for bag in &plan.bags {
-                    sender.send(bag.clone()).await.expect("stub tap queue send");
-                }
-                if plan.keep_sender_open {
-                    *plan.sender_keepalive.lock() = Some(sender);
-                }
-                Ok(TapSubscription::from_forward_channel(
-                    channel,
-                    receiver,
-                    plan.dropped_bags,
-                ))
-            })
         }
         crate::control_plane_stub_support::the_exposed_port_subscription_is_unreachable!("tool");
         crate::control_plane_stub_support::graph_mutation_ops_record_the_call!();
@@ -1412,9 +1065,7 @@ pub(crate) mod tests {
     /// `tools/list` is asserted equal to this, not merely a superset.
     const CONTROL_TOOL_NAMES: &[&str] = &[
         "graph",
-        "tap",
         "logs",
-        "exchange",
         "add_node",
         "remove_node",
         "connect",
@@ -2417,242 +2068,6 @@ pub(crate) mod tests {
         assert_eq!(refusal.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     }
 
-    /// One 1024-sample stereo `f32` `AudioBlock`: its 8 290-byte msgpack payload
-    /// behind the frame header, the exact size this rig's PipeWire arm publishes.
-    const AUDIO_BLOCK_MESSAGE_BYTES: usize = streamlib::sdk::iceoryx2::FRAME_HEADER_SIZE + 8290;
-
-    async fn tap_sample_from(
-        runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
-        arguments: Value,
-    ) -> Value {
-        first_text_block_json(&tool_call_result(runtime, "tap", arguments).await)
-    }
-
-    /// A message's payload is decoded whole or not at all (every built-in's is
-    /// one msgpack map) — which makes the default cap load-bearing for every
-    /// data model that rides its payload inline, audio first among them.
-    ///
-    /// Mental revert: set the default cap under `AUDIO_BLOCK_MESSAGE_BYTES` and this reddens.
-    #[tokio::test]
-    async fn tools_call_tap_carries_a_whole_audio_block_without_being_asked_to() {
-        let audio_bag = vec![0xABu8; AUDIO_BLOCK_MESSAGE_BYTES];
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
-            vec![audio_bag],
-            0,
-        ));
-
-        let sample = tap_sample_from(
-            runtime,
-            json!({ "stream": STUB_STREAM_NAME, "channel": "mic/audio" }),
-        )
-        .await;
-
-        let bag = &sample["bags"][0];
-        assert_eq!(
-            bag["byte_len"].as_u64().unwrap(),
-            AUDIO_BLOCK_MESSAGE_BYTES as u64
-        );
-        assert_eq!(
-            bag["hex_truncated"], false,
-            "an audio block must arrive whole with no caller-supplied cap"
-        );
-        assert_eq!(
-            bag["hex_preview"].as_str().unwrap().len(),
-            AUDIO_BLOCK_MESSAGE_BYTES * 2,
-            "the hex is the whole bag, so a consumer can decode it"
-        );
-    }
-
-    /// The bound the response budget's doc claims, held where it was false: a
-    /// caller cannot name a per-bag cap above the whole-response budget, so one
-    /// bag can never exceed it and the loop needs no exemption for the first.
-    ///
-    /// Mental revert: clamp `bounded_tap_bag_bytes` to anything larger and this
-    /// reddens — which is what a 64 MiB ceiling against a 16 MiB budget did.
-    #[test]
-    fn a_per_bag_cap_can_never_be_named_above_the_whole_response_budget() {
-        assert_eq!(
-            bounded_tap_bag_bytes(Some(MAX_TAP_RESPONSE_BAG_BYTES * 4)),
-            MAX_TAP_RESPONSE_BAG_BYTES
-        );
-        assert_eq!(bounded_tap_bag_bytes(Some(0)), 1);
-        assert_eq!(bounded_tap_bag_bytes(None), DEFAULT_MAX_TAP_BAG_BYTES);
-    }
-
-    /// A single bag larger than any cap could admit still comes back — trimmed
-    /// and flagged — rather than the sample being empty. This is the case the
-    /// removed first-bag exemption used to serve, and it now holds because the
-    /// cap cannot exceed the budget rather than because of a special case.
-    #[tokio::test]
-    async fn one_bag_larger_than_the_budget_is_returned_trimmed_rather_than_withheld() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
-            vec![vec![0x5Au8; MAX_TAP_RESPONSE_BAG_BYTES + 4096]],
-            0,
-        ));
-
-        let sample = tap_sample_from(
-            runtime,
-            json!({ "stream": STUB_STREAM_NAME, "channel": "big/bag", "max_bag_bytes": MAX_TAP_RESPONSE_BAG_BYTES }),
-        )
-        .await;
-
-        assert_eq!(sample["received"], 1, "the sample is not empty");
-        assert_eq!(sample["bags_withheld_at_byte_budget"], 0);
-        assert_eq!(sample["bags"][0]["hex_truncated"], true);
-        assert_eq!(
-            sample["bags"][0]["byte_len"].as_u64().unwrap(),
-            (MAX_TAP_RESPONSE_BAG_BYTES + 4096) as u64,
-            "the bag's true size is reported however much of it was encoded"
-        );
-    }
-
-    /// A bag over the cap is still reported and still flagged — the escape
-    /// hatch is naming a bigger cap, not guessing at half a value.
-    #[tokio::test]
-    async fn tools_call_tap_honours_a_caller_named_per_bag_cap() {
-        let bag_bytes = DEFAULT_MAX_TAP_BAG_BYTES + 4096;
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
-            vec![vec![0xCDu8; bag_bytes]],
-            0,
-        ));
-
-        let trimmed = tap_sample_from(
-            Arc::clone(&runtime),
-            json!({ "stream": STUB_STREAM_NAME, "channel": "big/bag" }),
-        )
-        .await;
-        assert_eq!(trimmed["bags"][0]["hex_truncated"], true);
-        assert_eq!(trimmed["max_bag_bytes"], DEFAULT_MAX_TAP_BAG_BYTES);
-
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
-            vec![vec![0xCDu8; bag_bytes]],
-            0,
-        ));
-        let whole = tap_sample_from(
-            runtime,
-            json!({ "stream": STUB_STREAM_NAME, "channel": "big/bag", "max_bag_bytes": bag_bytes }),
-        )
-        .await;
-        assert_eq!(
-            whole["bags"][0]["hex_truncated"], false,
-            "a caller who names a cap big enough gets the bag whole"
-        );
-    }
-
-    /// `count` times the per-bag cap multiplies to gigabytes at the extremes,
-    /// so the response carries its own budget. It stops the sample rather than
-    /// trimming, because whole bags are the only ones worth returning.
-    #[tokio::test]
-    async fn tools_call_tap_stops_at_its_response_budget_rather_than_trimming() {
-        let one_mib_bag = vec![0xEFu8; DEFAULT_MAX_TAP_BAG_BYTES];
-        let bags_that_exceed_the_budget =
-            MAX_TAP_RESPONSE_BAG_BYTES / DEFAULT_MAX_TAP_BAG_BYTES + 4;
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
-            vec![one_mib_bag; bags_that_exceed_the_budget],
-            0,
-        ));
-
-        let sample = tap_sample_from(
-            runtime,
-            json!({ "stream": STUB_STREAM_NAME, "channel": "big/bag", "count": bags_that_exceed_the_budget }),
-        )
-        .await;
-
-        assert_eq!(
-            sample["bags_withheld_at_byte_budget"], 1,
-            "the bag the budget refused was received, so it is counted rather \
-             than leaving `received` short for no stated reason"
-        );
-        let bags = sample["bags"].as_array().expect("bags array");
-        assert!(
-            bags.len() < bags_that_exceed_the_budget,
-            "the budget must stop the sample short of what was asked for"
-        );
-        assert!(
-            bags.iter().all(|bag| bag["hex_truncated"] == false),
-            "every bag the budget did admit is whole"
-        );
-    }
-
-    #[tokio::test]
-    async fn tools_call_tap_shapes_bags_and_reports_dropped_count() {
-        let big_bag = vec![0xABu8; DEFAULT_MAX_TAP_BAG_BYTES + 512];
-        // Spans both nibble halves and every digit class, so the hex table is
-        // pinned for case and for the six letters — `010203` alone leaves an
-        // uppercase or transposed table green.
-        let small_bag = vec![0x01u8, 0x02, 0x03, 0xAB, 0xCD, 0xEF];
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
-            vec![big_bag.clone(), small_bag.clone()],
-            7,
-        ));
-
-        let body = tool_call_result(
-            runtime,
-            "tap",
-            json!({ "stream": STUB_STREAM_NAME, "channel": "cam/frame" }),
-        )
-        .await;
-        let result = &body;
-        assert_eq!(result["isError"], false, "body={body}");
-        let text = result["content"][0]["text"].as_str().unwrap();
-        let sample: Value = serde_json::from_str(text).expect("tap result text is JSON");
-
-        assert_eq!(sample["channel"], "cam/frame");
-        assert_eq!(sample["received"], 2);
-        assert_eq!(sample["dropped_bags"], 7);
-        assert!(sample["window_ms"].as_u64().unwrap() > 0);
-
-        let bags = sample["bags"].as_array().expect("bags array");
-        // Big bag: the full byte length is reported, the hex stops at the
-        // per-bag cap, and truncation is flagged.
-        assert_eq!(
-            bags[0]["byte_len"].as_u64().unwrap(),
-            (DEFAULT_MAX_TAP_BAG_BYTES + 512) as u64
-        );
-        assert_eq!(bags[0]["hex_truncated"], true);
-        assert_eq!(
-            bags[0]["hex_preview"].as_str().unwrap().len(),
-            DEFAULT_MAX_TAP_BAG_BYTES * 2,
-            "the hex is exactly the first DEFAULT_MAX_TAP_BAG_BYTES bytes"
-        );
-        // Small bag: previewed whole, not truncated.
-        assert_eq!(bags[1]["byte_len"].as_u64().unwrap(), 6);
-        assert_eq!(bags[1]["hex_truncated"], false);
-        assert_eq!(bags[1]["hex_preview"], "010203abcdef");
-    }
-
-    #[tokio::test]
-    async fn tools_call_tap_returns_partial_sample_within_window_on_quiet_channel() {
-        // One bag flows, then the channel goes quiet (the forward sender is kept
-        // open) so `recv()` pends; the request asks for four. Without the
-        // monotonic sample window this tool call would block until three more
-        // bags arrive — the hang this fix closes.
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_quiet_tap(vec![
-            vec![0xAA, 0xBB],
-        ]));
-
-        let started = tokio::time::Instant::now();
-        let body = tool_call_result(
-            runtime,
-            "tap",
-            json!({ "stream": STUB_STREAM_NAME, "channel": "cam/frame", "count": 4 }),
-        )
-        .await;
-        let elapsed = started.elapsed();
-        assert_eq!(body["isError"], false, "body={body}");
-        let text = body["content"][0]["text"].as_str().unwrap();
-        let sample: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(sample["requested"], 4);
-        assert_eq!(
-            sample["received"], 1,
-            "a quiet channel returns the partial sample, not a full four"
-        );
-        assert!(
-            elapsed < TAP_SAMPLE_WINDOW * 4,
-            "tap must return within its sample window, not hang; took {elapsed:?}"
-        );
-    }
-
     /// `logs` reads the named stream's records after the sequence number it is
     /// handed, and answers where to read on from.
     #[tokio::test]
@@ -2898,292 +2313,11 @@ pub(crate) mod tests {
         }
     }
 
-    // ------------------------------------------------------------------
-    // exchange: a published surface id in, an image content block out
-    // ------------------------------------------------------------------
-
-    fn exchange_stub(exchange: StubSurfaceExchange) -> Arc<ControlPlaneMcpDispatchStubRuntime> {
-        Arc::new(ControlPlaneMcpDispatchStubRuntime {
-            exchange,
-            ..ControlPlaneMcpDispatchStubRuntime::new()
-        })
-    }
-
-    /// Drive `tools/call` on `exchange` against a default stub, returning the
-    /// `result` object and the `(surface id, cap)` pairs the tool handed the
-    /// operation.
-    async fn call_exchange_tool(arguments: Value) -> (Value, Vec<(String, Option<u32>)>) {
-        call_exchange_tool_on(exchange_stub(StubSurfaceExchange::default()), arguments).await
-    }
-
-    /// The same call against a stub the test chose, returning the tool result
-    /// and the exchange calls the stub recorded.
-    async fn call_exchange_tool_on(
-        runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
-        arguments: Value,
-    ) -> (Value, Vec<(String, Option<u32>)>) {
-        let recorded = runtime.exchange.recorded_calls.clone();
-        let body = tool_call_result(runtime, "exchange", arguments).await;
-        let calls = recorded.lock().clone();
-        (body, calls)
-    }
-
-    fn content_block_of_type<'a>(result: &'a Value, block_type: &str) -> &'a Value {
-        result["content"]
-            .as_array()
-            .unwrap_or_else(|| panic!("a content array; got {result}"))
-            .iter()
-            .find(|block| block["type"] == block_type)
-            .unwrap_or_else(|| panic!("a `{block_type}` content block; got {result}"))
-    }
-
-    /// The whole point of the MCP spelling: the frame arrives *in the
-    /// session* as a picture, not as a path or a URL the host would have to
-    /// fetch — which is also why a host on another machine needs no shared
-    /// filesystem.
-    #[tokio::test]
-    async fn tools_call_exchange_returns_the_frame_as_a_renderable_png_image_block() {
-        let (result, _) =
-            call_exchange_tool(json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID })).await;
-
-        assert_eq!(result["isError"], false, "result={result}");
-        let image = content_block_of_type(&result, "image");
-        assert_eq!(image["mimeType"], "image/png");
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(image["data"].as_str().expect("base64 image data"))
-            .expect("the image block carries decodable base64");
-        assert_eq!(
-            decoded, STUB_EXCHANGED_IMAGE_BYTES,
-            "the tool re-encodes nothing: the block is base64 of the operation's own bytes"
-        );
-    }
-
-    /// A downscaled picture without its true extent is a measurement trap —
-    /// so the text block states what the surface actually carries, which id
-    /// it answered, and the one route that returns the exact bytes.
-    #[tokio::test]
-    async fn tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route() {
-        let (result, _) =
-            call_exchange_tool(json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID })).await;
-
-        let text = content_block_of_type(&result, "text")["text"]
-            .as_str()
-            .expect("text content block");
-        let stated: Value = serde_json::from_str(text).expect("the text block is JSON");
-
-        let (source_pixel_width, source_pixel_height) = STUB_SOURCE_SURFACE_EXTENT;
-        assert_eq!(stated["surface_id"], STUB_EXCHANGED_FRAME_SURFACE_ID);
-        assert_eq!(stated["source_surface_pixel_width"], source_pixel_width);
-        assert_eq!(stated["source_surface_pixel_height"], source_pixel_height);
-        assert_eq!(
-            stated["encoded_image_pixel_width"], EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP,
-            "the inline image is the downscaled one, and says so"
-        );
-        assert_eq!(
-            stated["encoded_image_pixel_height"],
-            source_pixel_height * EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP / source_pixel_width,
-            "the short edge takes the cap's ratio, and stating it is what shows the two \
-             extents differ at all"
-        );
-        assert_eq!(
-            stated["exact_bytes_rest_route"],
-            format!("GET /api/surfaces/{STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED}/image"),
-            "the `#` of a frame id must be percent-encoded or the route names a fragment"
-        );
-    }
-
-    /// The route the tool points at has to be the route the server serves;
-    /// a drifting path would send an agent chasing a 404 for exact bytes.
-    #[tokio::test]
-    async fn the_exact_bytes_route_the_tool_names_is_the_route_the_spec_serves() {
-        let (result, _) =
-            call_exchange_tool(json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID })).await;
-        let text = content_block_of_type(&result, "text")["text"]
-            .as_str()
-            .expect("text content block");
-        let stated: Value = serde_json::from_str(text).unwrap();
-        let named_route = stated["exact_bytes_rest_route"].as_str().unwrap();
-
-        let served = SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace(
-            "{surface_id}",
-            STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        );
-        assert_eq!(named_route, format!("GET {served}"));
-        assert!(
-            crate::handlers::control_plane_openapi_spec()
-                .paths
-                .paths
-                .contains_key(SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE),
-            "the route the tool names must exist in the served spec"
-        );
-    }
-
-    /// Downscaled *by default*: a caller that names no cap still gets an
-    /// image bounded to the declared ceiling, because a full-resolution
-    /// frame inline is the one banned combination.
-    #[tokio::test]
-    async fn tools_call_exchange_applies_the_declared_cap_when_the_caller_names_none() {
-        let (result, calls) =
-            call_exchange_tool(json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID })).await;
-
-        assert_eq!(result["isError"], false, "result={result}");
-        assert_eq!(
-            calls,
-            vec![(
-                STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(),
-                Some(EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP)
-            )],
-            "the operation must never be handed `None` from this front end"
-        );
-    }
-
-    #[tokio::test]
-    async fn tools_call_exchange_honours_a_caller_cap_below_the_declared_ceiling() {
-        let (_, calls) = call_exchange_tool(json!({
-            "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID,
-            "downscale_long_edge_pixel_cap": 512
-        }))
-        .await;
-
-        assert_eq!(
-            calls,
-            vec![(STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(), Some(512))]
-        );
-    }
-
-    /// Full resolution lives on REST and nowhere else, so a cap above the
-    /// declared ceiling is clamped rather than obeyed — an agent cannot ask
-    /// its way into a payload its own API will refuse.
-    #[tokio::test]
-    async fn tools_call_exchange_clamps_a_caller_cap_above_the_declared_ceiling() {
-        let (result, calls) = call_exchange_tool(json!({
-            "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID,
-            "downscale_long_edge_pixel_cap": 4096
-        }))
-        .await;
-
-        assert_eq!(result["isError"], false, "result={result}");
-        assert_eq!(
-            calls,
-            vec![(
-                STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(),
-                Some(EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP)
-            )],
-            "a larger cap is clamped to the ceiling, never passed through"
-        );
-    }
-
-    /// A retired id is an in-band tool error naming the recycling, so the
-    /// agent reads why its call returned no picture and taps a newer bag —
-    /// never a JSON-RPC error, and never the slot's newer pixels.
-    #[tokio::test]
-    async fn tools_call_exchange_on_a_recycled_frame_is_a_tool_error_naming_the_recycling() {
-        let (body, _) = call_exchange_tool_on(
-            exchange_stub(StubSurfaceExchange::refusing_as_recycled(
-                STUB_EXCHANGED_FRAME_SURFACE_ID,
-            )),
-            json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID }),
-        )
-        .await;
-        let result = &body;
-        assert_eq!(result["isError"], true, "body={body}");
-        let reported = result["content"][0]["text"].as_str().unwrap();
-        assert!(
-            reported.contains(STUB_EXCHANGED_FRAME_SURFACE_ID),
-            "the refusal must name the id asked for: {reported}"
-        );
-        assert!(
-            reported.contains("recycled"),
-            "the refusal must say the frame was recycled: {reported}"
-        );
-        assert!(
-            result["content"]
-                .as_array()
-                .is_some_and(|content| content.iter().all(|block| block["type"] == "text")),
-            "a refusal carries no image block: {body}"
-        );
-    }
-
-    /// Arguments the schema forbids never reach the runtime, and say why in
-    /// band. The misspelled-key case is the one that would otherwise be
-    /// silent: dropped, then answered with a differently-sized picture.
-    #[tokio::test]
-    async fn tools_call_exchange_with_arguments_the_schema_forbids_is_an_in_band_tool_error() {
-        for (case, arguments, offending) in [
-            (
-                "no surface id",
-                json!({ "downscale_long_edge_pixel_cap": 64 }),
-                "surface_id",
-            ),
-            (
-                "a cap of the wrong type",
-                json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID, "downscale_long_edge_pixel_cap": "big" }),
-                "big",
-            ),
-            (
-                "a misspelled cap key",
-                json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID, "downscal_long_edge_pixel_cap": 512 }),
-                "downscal_long_edge_pixel_cap",
-            ),
-        ] {
-            let (body, calls) =
-                call_exchange_tool_on(exchange_stub(StubSurfaceExchange::default()), arguments)
-                    .await;
-            assert_eq!(body["isError"], true, "{case}: {body}");
-            assert!(
-                body["content"][0]["text"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains(offending),
-                "{case} must name `{offending}`: {body}"
-            );
-            assert!(
-                calls.is_empty(),
-                "{case} must not reach the runtime: {calls:?}"
-            );
-        }
-    }
-
-    /// Tap's arguments are its whole contract with a caller: the channel, and
-    /// nothing else required, since the channel's address can name its stream.
-    #[tokio::test]
-    async fn the_tap_tool_schema_requires_the_channel_alone() {
-        let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
-        let tap = tools
-            .iter()
-            .find(|tool| tool["name"] == "tap")
-            .expect("the tap tool");
-        let mut argument_names: Vec<&str> = tap["inputSchema"]["properties"]
-            .as_object()
-            .expect("tap declares properties")
-            .keys()
-            .map(String::as_str)
-            .collect();
-        argument_names.sort_unstable();
-        assert_eq!(
-            argument_names,
-            ["channel", "count", "max_bag_bytes", "stream"]
-        );
-        let mut required: Vec<&str> = tap["inputSchema"]["required"]
-            .as_array()
-            .expect("tap declares what it requires")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect();
-        required.sort_unstable();
-        assert_eq!(
-            required,
-            ["channel"],
-            "every argument beyond the channel stays optional"
-        );
-    }
-
     /// The `stream` argument each tool advertises: required on every tool
-    /// that acts on one stream, optional on `graph` and on `tap`, whose channel
-    /// can name it, and absent from the tools that name none.
+    /// that acts on one stream, optional on `graph`, and absent from the tools
+    /// that name none.
     #[tokio::test]
-    async fn every_tool_acting_on_one_stream_requires_its_stream_and_graph_and_tap_take_it_optionally()
-     {
+    async fn every_tool_acting_on_one_stream_requires_its_stream_and_graph_takes_it_optionally() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         for tool in &tools {
             let tool_name = tool["name"].as_str().expect("a named tool");
@@ -3194,7 +2328,7 @@ pub(crate) mod tests {
             let (must_advertise, must_require) = if TOOLS_THAT_REQUIRE_A_STREAM.contains(&tool_name)
             {
                 (true, true)
-            } else if ["graph", "tap"].contains(&tool_name) {
+            } else if tool_name == "graph" {
                 (true, false)
             } else {
                 (false, false)
@@ -3664,7 +2798,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn prompts_list_names_the_four_recipes_and_their_arguments() {
+    async fn prompts_list_names_the_three_recipes_and_their_arguments() {
         let result =
             listed_prompts_result(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         let prompts = result["prompts"].as_array().expect("a prompts array");
@@ -3718,10 +2852,6 @@ pub(crate) mod tests {
                     ("camera_name", false),
                 ],
             ),
-            owned(
-                "look_at_what_a_channel_carries",
-                &[("stream", true), ("from_node", true), ("from_port", true)],
-            ),
         ];
         let mut described = described;
         described.sort();
@@ -3747,10 +2877,6 @@ pub(crate) mod tests {
             ),
             (
                 "show_channel_on_virtual_camera",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video" }),
-            ),
-            (
-                "look_at_what_a_channel_carries",
                 json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video" }),
             ),
         ] {
@@ -3868,40 +2994,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn the_look_prompt_taps_the_channel_the_output_publishes_on() {
-        let text = prompt_text(
-            stub_serving_two_linked_nodes(),
-            "look_at_what_a_channel_carries",
-            json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video" }),
-        )
-        .await;
-
-        assert_eq!(
-            tool_names_the_numbered_steps_call(&text),
-            ["tap", "exchange"]
-        );
-        assert!(
-            text.contains(&format!("`channel`: `{STUB_STREAM_NAME}/pattern/video`")),
-            "the channel is the stream's name, the node's name, then the port:\n{text}"
-        );
-        assert!(
-            text.contains(&format!(
-                "{}-byte frame header",
-                streamlib::sdk::iceoryx2::FRAME_HEADER_SIZE
-            )),
-            "{text}"
-        );
-        assert!(
-            text.contains(&format!("1. `tap` — `stream`: `{STUB_STREAM_NAME}`; ")),
-            "a step whose tool names a stream names the prompt's:\n{text}"
-        );
-        assert!(
-            text.contains("2. `exchange` — `surface_id`"),
-            "`exchange` names no stream:\n{text}"
-        );
-    }
-
-    #[tokio::test]
     async fn a_prompt_request_naming_nothing_the_node_has_is_refused_by_name() {
         for (case, prompt_name, arguments, named) in [
             (
@@ -3918,13 +3010,13 @@ pub(crate) mod tests {
             ),
             (
                 "a missing stream",
-                "look_at_what_a_channel_carries",
+                "show_channel_on_virtual_camera",
                 json!({ "from_node": "pattern", "from_port": "video" }),
                 "`stream`",
             ),
             (
                 "a stream not loaded",
-                "look_at_what_a_channel_carries",
+                "show_channel_on_virtual_camera",
                 json!({ "stream": "elsewhere", "from_node": "pattern", "from_port": "video" }),
                 STUB_STREAM_NAME,
             ),
@@ -3936,19 +3028,19 @@ pub(crate) mod tests {
             ),
             (
                 "a node the graph does not have",
-                "look_at_what_a_channel_carries",
+                "show_channel_on_virtual_camera",
                 json!({ "stream": STUB_STREAM_NAME, "from_node": "nosuchnode", "from_port": "video" }),
                 "nosuchnode",
             ),
             (
                 "a port that is not one of the node's outputs",
-                "look_at_what_a_channel_carries",
+                "show_channel_on_virtual_camera",
                 json!({ "stream": STUB_STREAM_NAME, "from_node": "window", "from_port": "video" }),
                 "video",
             ),
             (
                 "an argument that is not a string",
-                "look_at_what_a_channel_carries",
+                "show_channel_on_virtual_camera",
                 json!({ "stream": STUB_STREAM_NAME, "from_node": 7, "from_port": "video" }),
                 "7",
             ),

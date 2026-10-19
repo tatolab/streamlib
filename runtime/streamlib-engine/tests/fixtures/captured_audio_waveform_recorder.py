@@ -3,11 +3,9 @@
 
 """Writes what a microphone captured to a WAV, for the signal analysis to read.
 
-The tap cannot serve this: `tatolab tap` collects inside a bounded 500 ms
-window (`TAP_SAMPLE_WINDOW`), which is a fifth of the known signal. That bound
-is right for an observation verb and wrong for a measurement, so the
-measurement is taken inside the graph instead — this is a consumer like any
-other, reading the microphone's port over a real link.
+The measurement is taken inside the graph, over the whole known signal — this
+is a consumer like any other, reading the microphone's port over a real link —
+while the block-level check reads only a bounded sample of the port's track.
 
 Blocks are placed by their own timestamps rather than concatenated. Audio that
 went missing then stays missing, which is what lets `known_audio_signal analyse`

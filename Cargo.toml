@@ -19,12 +19,13 @@ members = [
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
     "sdk/streamlib-python-wheel", # `tatolab.runtime` — the processor-interpreter bindings (`_engine`) and bootstrap a runtime unit lends; hosts no engine
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
-    "runtime/streamlib-runtime-client-contract", # engine-free: the contract a running runtime offers the clients on its machine — STREAMLIB_HOME, the runtime directory, the node registry, the JSONL runtime log, and its local API's wire names and tap result shape
+    "runtime/streamlib-runtime-client-contract", # engine-free: the contract a running runtime offers the clients on its machine — STREAMLIB_HOME, the runtime directory, the node registry, the JSONL runtime log, and its local API's wire names and tool result shapes
     "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into `tatolabd`
     "runtime/streamlib-relay-adapter-sdk", # The one interface every relay adapter implements — joining, the levels served, the broadcast root, the dial credential, connection events; one crate per adapter against it, all linked into `tatolabd`
     "runtime/streamlib-relay-adapter-local", # The local relay adapter: `moq-relay` from the runtime unit as two supervised children of `tatolabd` — loopback serving every exposed port, every interface serving public ones — with the certificates and admission `tatolabd` provides
     "runtime/tatolabd", # `tatolabd` — the runtime process: hosts one stream in the foreground, engine and built-ins, no Python in its process
-    "runtime/tatolab-cli", # `tatolab` — the native CLI, linking no engine: `new`; `run`/`dev`, which compile in the project's venv and start `tatolabd` attached; `nodes`, `graph`, `tap`, `exchange`, `logs` and `mcp`, which observe running runtimes through their local API sockets and their log files; `enable-virtual-camera`
+    "runtime/tatolab-cli", # `tatolab` — the native CLI, linking no engine: `new`; `run`/`dev`, which compile in the project's venv and start `tatolabd` attached; `graph`, `logs` and `mcp`, which observe running runtimes through their local API sockets and their log files; `enable-virtual-camera`
+    "runtime/tatolab-read-track", # `tatolab-read-track` — a MoQ subscriber writing one track's objects to files, the rigs' way to read a port as a user does; a development tool, never shipped in the runtime unit
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-sys", # Vendored vulkanalia-sys fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-vma", # Vendored vulkanalia-vma fork (Apache-2.0, VMA 3.3.0 + Vulkan-Headers 1.4.309) — see docs/architecture/vendored-vulkanalia.md

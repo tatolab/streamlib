@@ -14,6 +14,8 @@ use streamlib::sdk::unix_socket_path_cleared_for_bind::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::axum_router_served_until_stopped::AxumRouterServedUntilStopped;
+
 /// Owner read-write only: the socket's file mode is what keeps every other user out.
 pub const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
 
@@ -124,16 +126,14 @@ impl LocalApiSocketBoundAndNotYetServed {
             tokio::net::UnixListener::from_std(local_api_listener).map_err(adopt_failure)?
         };
         let local_api_stopping_token = CancellationToken::new();
-        let (router_dropped_sender, router_dropped_receiver) = std::sync::mpsc::channel::<()>();
-        tokio_handle.spawn(serve_local_api_until_stopped(
-            local_api_listener,
-            build_control_plane_router(local_api_stopping_token.clone()),
-            local_api_stopping_token.clone(),
-            router_dropped_sender,
-        ));
         Ok(RunningLocalApiSocketServer {
-            local_api_stopping_token,
-            router_dropped_receiver,
+            _served: AxumRouterServedUntilStopped::serve(
+                local_api_listener,
+                build_control_plane_router(local_api_stopping_token.clone()),
+                local_api_stopping_token,
+                "the local API socket",
+                tokio_handle,
+            ),
             _local_api_socket_file: local_api_socket_file,
         })
     }
@@ -144,50 +144,9 @@ impl LocalApiSocketBoundAndNotYetServed {
 #[must_use = "dropping this stops the local API server"]
 #[derive(Debug)]
 pub(crate) struct RunningLocalApiSocketServer {
-    local_api_stopping_token: CancellationToken,
-    /// Disconnected once the serving task has dropped the router and all it
-    /// holds; never sent on.
-    router_dropped_receiver: std::sync::mpsc::Receiver<()>,
+    _served: AxumRouterServedUntilStopped,
+    // Dropped after `_served`, so the socket file goes once serving has stopped.
     _local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
-}
-
-impl RunningLocalApiSocketServer {
-    /// Stop serving and block for up to `budget` until the router — and all it
-    /// holds — has been dropped, answering whether it was. Never call it from
-    /// inside the tokio runtime serving the socket: that would block the very
-    /// worker the serving task ends on.
-    pub(crate) fn stop_serving_and_wait_until_the_router_is_dropped(
-        self,
-        budget: std::time::Duration,
-    ) -> bool {
-        self.local_api_stopping_token.cancel();
-        matches!(
-            self.router_dropped_receiver.recv_timeout(budget),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
-        )
-    }
-}
-
-impl Drop for RunningLocalApiSocketServer {
-    fn drop(&mut self) {
-        // The socket file goes after this, as its field drops.
-        self.local_api_stopping_token.cancel();
-    }
-}
-
-async fn serve_local_api_until_stopped(
-    local_api_listener: tokio::net::UnixListener,
-    control_plane_router: axum::Router,
-    local_api_stopping_token: CancellationToken,
-    router_dropped_sender: std::sync::mpsc::Sender<()>,
-) {
-    let served = axum::serve(local_api_listener, control_plane_router)
-        .with_graceful_shutdown(local_api_stopping_token.cancelled_owned())
-        .await;
-    if let Err(error) = served {
-        tracing::error!(%error, "the local API socket stopped serving");
-    }
-    drop(router_dropped_sender);
 }
 
 /// Remove the local API's socket file. Already gone is not a failure.
@@ -202,8 +161,7 @@ fn remove_local_api_socket_file(local_api_socket_path: &Path) -> std::io::Result
 mod tests {
     use super::*;
     use crate::control_plane_stub_support::{
-        LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        STUB_EXCHANGED_IMAGE_BYTES, response_head_over_the_socket,
+        LocalApiServedOnAFreshSocket, response_head_over_the_socket,
         serve_the_control_plane_router_at,
     };
     use crate::handlers::router_surface_tests::a_control_plane_router_stub_runtime;
@@ -304,20 +262,10 @@ mod tests {
         let health = assert_the_local_api_socket_answers_health(local_api_socket_path).await;
         assert_eq!(health.body, b"ok");
 
-        let exchanged_image = http_exchange_over_unix_socket(
-            local_api_socket_path,
-            &format!(
-                "GET /api/surfaces/{STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED}/image HTTP/1.1"
-            ),
-            b"",
-        )
-        .await;
-        assert!(
-            exchanged_image.status_line.contains(" 200 "),
-            "{}",
-            exchanged_image.status_line
-        );
-        assert_eq!(exchanged_image.body, STUB_EXCHANGED_IMAGE_BYTES);
+        let graph =
+            http_exchange_over_unix_socket(local_api_socket_path, "GET /api/graph HTTP/1.1", b"")
+                .await;
+        assert!(graph.status_line.contains(" 200 "), "{}", graph.status_line);
     }
 
     #[tokio::test]
@@ -456,11 +404,12 @@ mod tests {
 
     /// Serving the real router through [`LocalApiSocketBoundAndNotYetServed::serve_router`]
     /// leaves this process holding no new TCP listener, loopback included. The
-    /// scan covers the whole test process, so no other test in this binary may
-    /// hold a TCP listener. A running runtime's own proof is the rig test
-    /// `test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket`.
+    /// scan covers the whole test process, so every test in this binary that
+    /// holds a TCP listener runs serially with it. A running runtime's own proof
+    /// is `test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_at_all`.
     #[cfg(target_os = "linux")]
     #[tokio::test]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn serving_the_router_on_the_local_api_socket_opens_no_tcp_listener() {
         use std::os::fd::AsRawFd;
 

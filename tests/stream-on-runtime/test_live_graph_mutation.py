@@ -38,6 +38,8 @@ CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 # A disconnect takes the link, not the frame the effect was already holding;
 # that one still goes out, well inside this.
 SECONDS_FOR_A_HELD_FRAME_TO_LEAVE = 1.0
+# How long a disconnected effect's write count is watched for standing still.
+SECONDS_A_STARVED_OUTPUT_IS_WATCHED = 0.5
 # How long a link handed to a running helper has to come back `wired`. The
 # helper answers between callbacks, so this is bounded by one frame of the
 # processor's own work, not by the wire.
@@ -207,9 +209,14 @@ def await_node_state(local_api: LocalApiClient, stream_name: str, name: str, wan
     return f"still {state} after {FIRST_FRAME_TIMEOUT_SECONDS}s"
 
 
-def tap_channel_of(graph: dict, node_name: str, output_port: str) -> str:
-    """The channel `tap` takes: the port's address on this machine, `<stream>/<node>/<port>`."""
-    return f"{graph['stream']}/{node_name}/{output_port}"
+def bags_written_on(
+    local_api: LocalApiClient, stream_name: str, node_name: str, output_port: str
+) -> int:
+    """The bags `node_name` has written on `output_port` so far, read off `graph`."""
+    graph = local_api.call_tool("graph", {"stream": stream_name})
+    return node_named(graph, node_name)["components"]["metrics"]["written_bags_by_output_port"][
+        output_port
+    ]
 
 
 @dataclass(frozen=True)
@@ -375,12 +382,8 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
             "to_port": "video_from_upstream",
         },
     )
-    effect_output_channel = tap_channel_of(graph_after_add, "effect", "video_to_downstream")
-    flowing = local_api.call_tool(
-        "tap", {"stream": stream_name, "channel": effect_output_channel, "count": 3}
-    )
-    assert flowing["received"] > 0, f"no bags left the live-added effect: {flowing}"
     tatolabd.await_marker("DOWNSTREAM_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
+    assert bags_written_on(local_api, stream_name, "effect", "video_to_downstream") > 0
 
     # A native built-in added live, by the type `graph` reports for one: its
     # class in `tatolab.stream`, resolved apart from a project's processors.
@@ -402,13 +405,15 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     graph_after_disconnect = local_api.call_tool("graph", {"stream": stream_name})
     assert link_with_id(graph_after_disconnect, upstream_link_id) is None
     # Nothing feeds the effect any more, so nothing leaves it — once the frame
-    # it already held when the link went has gone out. A tap that then waits
-    # out its window and comes back empty is the disconnect taking.
+    # it already held when the link went has gone out. A write count that then
+    # stands still across a window is the disconnect taking.
     time.sleep(SECONDS_FOR_A_HELD_FRAME_TO_LEAVE)
-    starved = local_api.call_tool(
-        "tap", {"stream": stream_name, "channel": effect_output_channel, "count": 3}
-    )
-    assert starved["received"] == 0, f"bags still leave a disconnected effect: {starved}"
+    written_once_starved = bags_written_on(local_api, stream_name, "effect", "video_to_downstream")
+    time.sleep(SECONDS_A_STARVED_OUTPUT_IS_WATCHED)
+    assert (
+        bags_written_on(local_api, stream_name, "effect", "video_to_downstream")
+        == written_once_starved
+    ), "bags still leave a disconnected effect"
 
     assert local_api.call_tool("remove_node", {"stream": stream_name, "name": "effect"}) == {
         "removed_name": "effect"

@@ -57,9 +57,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=fixture_runtime_unit.sh
 . "$HERE/fixture_runtime_unit.sh"
 
-# What the block-level tap asks for. Bounded by the control plane's own 500 ms
-# sample window in practice, which is why the signal itself is measured off the
-# waveform the node writes rather than off the tap.
+# How many objects the block-level check reads off the microphone's track: a
+# bounded sample, well short of the whole signal, which is why the signal
+# itself is measured off the waveform the node writes.
 BAG_COUNT=64
 LOOPBACK_PATH=""
 while [ $# -gt 0 ]; do
@@ -91,6 +91,8 @@ fi
 
 require_the_runtime_unit
 require_the_fixture_venv
+# Built before the stream runs, so the build takes none of the signal's window.
+require_tatolab_read_track
 
 # Spelled in full rather than `mktemp -t`, which BSD reads as a prefix to
 # suffix under $TMPDIR — so the directory is where the skill looks on both.
@@ -334,7 +336,7 @@ fi
 # cadence, timestamp continuity, and a frame the engine did not re-stamp.
 if ! "$HERE/verify_audio_channel.sh" microphonesource \
     --stream "$STREAM_NAME" --count "$BAG_COUNT" --port audio \
-    --expect-frame-not-restamped >&2; then
+    --expect-the-track-stamped-with-the-block >&2; then
     echo "ERROR: the microphone's channel failed its block-level contract" >&2
     exit 1
 fi

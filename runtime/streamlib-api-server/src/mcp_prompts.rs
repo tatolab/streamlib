@@ -22,10 +22,6 @@ use serde_json::json;
 use streamlib::sdk::descriptors::{ProcessorClassImportPath, ProcessorDescriptor};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
-use streamlib::sdk::iceoryx2::{
-    FRAME_HEADER_FLAGS_SIZE, FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE,
-    FRAME_HEADER_TIMESTAMP_NS_SIZE, MAX_PORT_KEY_SIZE,
-};
 use streamlib::sdk::json_schema::{
     GraphResponse, PortDescriptorOutput, PortInfoOutput, ProcessorDescriptorOutput,
     ProcessorNodeOutput,
@@ -56,7 +52,6 @@ const INSERT_NODE_BETWEEN_LINKED_NODES_PROMPT_DESCRIPTION: &str =
     "Splice a new node into an existing link, so what the link carried passes through it.";
 const FAN_OUTPUT_TO_ANOTHER_CONSUMER_PROMPT_DESCRIPTION: &str = "Add a node as one more consumer of an output port, leaving the consumers it already feeds as they are.";
 const SHOW_CHANNEL_ON_VIRTUAL_CAMERA_PROMPT_DESCRIPTION: &str = "Present an output's video frames as a camera every other application on the machine can select.";
-const LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION: &str = "Sample one bag an output port publishes, decode it, and see the frame it names when it names one.";
 
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -98,18 +93,6 @@ struct ShowChannelOnVirtualCameraPromptArguments {
     from_port: String,
     #[schemars(description = CAMERA_NAME_ARGUMENT_DESCRIPTION)]
     camera_name: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct LookAtWhatAChannelCarriesPromptArguments {
-    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
-    #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
-    from_node: String,
-    #[schemars(description = FROM_PORT_ARGUMENT_DESCRIPTION)]
-    from_port: String,
 }
 
 #[prompt_router(vis = "pub(crate)")]
@@ -164,22 +147,6 @@ impl LocalApiMcpServerHandler {
             |live_graph, node_catalog| {
                 show_channel_on_virtual_camera_recipe(live_graph, node_catalog, &arguments)
             },
-        )
-        .await
-    }
-
-    #[prompt(
-        title = "Look at what a channel carries",
-        description = LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION
-    )]
-    async fn look_at_what_a_channel_carries(
-        &self,
-        Parameters(arguments): Parameters<LookAtWhatAChannelCarriesPromptArguments>,
-    ) -> Result<GetPromptResult, McpError> {
-        self.render_a_recipe_against_the_stream_it_names(
-            &arguments.stream,
-            LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION,
-            |live_graph, _| look_at_what_a_channel_carries_recipe(live_graph, &arguments),
         )
         .await
     }
@@ -244,11 +211,10 @@ async fn exported_live_graph_json(
         .map_err(|e| McpError::internal_error(format!("graph export failed: {e}"), None))
 }
 
-/// One numbered step of a recipe: the served tool it calls, whether that tool
-/// names the stream, and what to pass.
+/// One numbered step of a recipe: the served tool it calls on the recipe's
+/// stream, and what to pass.
 struct GraphRecipeStep {
     tool_name: &'static str,
-    names_the_stream: bool,
     instruction: String,
 }
 
@@ -262,7 +228,7 @@ struct GraphRecipe {
 
 impl GraphRecipe {
     /// The recipe as a `prompts/get` result: one user message carrying its
-    /// text, every step that names a stream naming `stream_name`.
+    /// text, every step naming `stream_name`.
     fn prompt_result(&self, stream_name: &str, description: &str) -> GetPromptResult {
         GetPromptResult::new(vec![PromptMessage::new_text(
             Role::User,
@@ -278,15 +244,10 @@ impl GraphRecipe {
             self.introduction_text
         );
         for (index, step) in self.steps.iter().enumerate() {
-            let stream_argument = if step.names_the_stream {
-                format!("`stream`: `{stream_name}`; ")
-            } else {
-                String::new()
-            };
             // Writing into a `String` cannot fail.
             let _ = writeln!(
                 text,
-                "{}. `{}` — {stream_argument}{}",
+                "{}. `{}` — `stream`: `{stream_name}`; {}",
                 index + 1,
                 step.tool_name,
                 step.instruction
@@ -306,19 +267,6 @@ fn graph_recipe_step_calling_tool(
 ) -> GraphRecipeStep {
     GraphRecipeStep {
         tool_name,
-        names_the_stream: true,
-        instruction: instruction.into(),
-    }
-}
-
-/// A step calling `tool_name`, which names no stream.
-fn graph_recipe_step_calling_a_tool_that_names_no_stream(
-    tool_name: &'static str,
-    instruction: impl Into<String>,
-) -> GraphRecipeStep {
-    GraphRecipeStep {
-        tool_name,
-        names_the_stream: false,
         instruction: instruction.into(),
     }
 }
@@ -650,50 +598,6 @@ fn show_channel_on_virtual_camera_recipe(
         ],
         closing_note: Some(
             "The camera goes away with its node: `remove_node` with that `name`.".to_string(),
-        ),
-    })
-}
-
-fn look_at_what_a_channel_carries_recipe(
-    graph: &GraphResponse,
-    arguments: &LookAtWhatAChannelCarriesPromptArguments,
-) -> Result<GraphRecipe, McpError> {
-    let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
-    let from_port = arguments.from_port.as_str();
-    let stream = graph.stream.as_deref().unwrap_or(&arguments.stream);
-    let channel = format!("{stream}/{}/{from_port}", source.name);
-
-    Ok(GraphRecipe {
-        introduction_text: format!(
-            "Look at what `{}` publishes on port `{from_port}`, the channel `{channel}`.",
-            source.name
-        ),
-        steps: vec![
-            graph_recipe_step_calling_tool(
-                "tap",
-                format!(
-                    "`channel`: `{channel}`, `count`: 1. A bag's `hex_preview` is the channel's \
-                     wire bytes: an {FRAME_HEADER_SIZE}-byte frame header — a \
-                     {MAX_PORT_KEY_SIZE}-byte port key, the producer's timestamp as \
-                     {FRAME_HEADER_TIMESTAMP_NS_SIZE} little-endian bytes of monotonic \
-                     nanoseconds, the payload length as {FRAME_HEADER_PAYLOAD_LEN_SIZE} \
-                     little-endian bytes, then {FRAME_HEADER_FLAGS_SIZE} little-endian bytes of \
-                     flags whose bit 0 marks a message that starts a group — followed by that \
-                     many bytes of payload, one msgpack map for every built-in. `received` of 0 \
-                     means nothing was published inside the sample window; tap again."
-                ),
-            ),
-            graph_recipe_step_calling_a_tool_that_names_no_stream(
-                "exchange",
-                "`surface_id`: the bag's `surface_id`, when it carries one. The result is that \
-                 frame's picture. A refusal naming a recycled frame means the frame was retired \
-                 first; tap a newer bag and exchange that.",
-            ),
-        ],
-        closing_note: Some(
-            "A bag naming no `surface_id` has nothing to exchange: its keys are what the channel \
-             carries."
-                .to_string(),
         ),
     })
 }

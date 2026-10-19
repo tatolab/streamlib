@@ -62,8 +62,8 @@ TRAILING_SILENCE_SECONDS = 1.0
 # Whether the signal plays once or over and over. Off by default, because every
 # analysis arm scores one pass of a finite waveform and a second pass would run
 # past the window it records. On for an arm that has to still be publishing
-# when something downstream gets round to looking — a `tap`, whose window opens
-# whenever its caller asks rather than when the signal starts.
+# when something downstream gets round to looking — a read of its track, which
+# starts whenever its caller asks rather than when the signal starts.
 THE_SIGNAL_PLAYS_OVER_AND_OVER = os.environ.get("STREAMLIB_KNOWN_SIGNAL_REPEATS") == "1"
 
 # One of `known_audio_signal`'s injectable faults, published in place of the

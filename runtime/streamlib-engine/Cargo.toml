@@ -31,11 +31,9 @@ hardware-tests = []
 #   cargo test -p streamlib-engine --features audible-hardware-tests \
 #     --test coreaudio_arm_hears_what_it_plays -- --test-threads=1 --nocapture
 audible-hardware-tests = ["hardware-tests"]
-# In-memory constructors for engine primitives (e.g. `TapSubscription`) that
-# normally require a live iceoryx2 channel, so a downstream consumer (the
-# api-server tap tools) can be tested without one. Default-off; enabled only by
-# a consumer's `[dev-dependencies]`, so it is physically excluded from a
-# production build's dependency graph.
+# The iceoryx2 domain of one test process, for a downstream crate's tests.
+# Default-off; enabled only by a consumer's `[dev-dependencies]`, so it is
+# physically excluded from a production build's dependency graph.
 test-support = []
 # Test builds only, never a release: the runtime directory the engine resolves moves under the
 # absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
@@ -128,11 +126,6 @@ schemars = "0.8"  # JSON Schema generation from Rust types
 # OpenAPI schema derives on the JSON wire types in `core/json_schema.rs`.
 utoipa = { version = "5.3", features = ["axum_extras"] }
 
-# PNG encoding for the control plane's `exchange` verb (surface id in,
-# image bytes out) and decoding for shader-output fixture comparisons.
-# Pure Rust end to end (miniz_oxide / fdeflate), so it links nothing the
-# wheel's portability contract forbids.
-png = "0.17"
 
 # Platform-specific: macOS/iOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
@@ -202,14 +195,9 @@ v4l = "0.14"
 # paths through the SDK (which transitively re-exports engine items).
 # Dev-dep cycles are permitted by Cargo because they don't propagate.
 streamlib = { path = "../../sdk/streamlib-sdk" }
-# The codec built-ins the `codec_roundtrip_rig` example wires into a graph.
-# Same permitted dev-dep cycle as the self-alias above: built-ins depend on
-# the SDK, which re-exports this crate.
-streamlib-media-builtins = { path = "../streamlib-media-builtins" }
-# The local API the `codec_roundtrip_rig` example serves for its engine, so a
-# rig run is reachable by `tatolab graph` / `tap` / `exchange` — the
-# observation surface the codec proof is scored on. Same permitted dev-dep cycle.
-streamlib-api-server = { path = "../streamlib-api-server" }
+# PNG decoding for the codec tests that score against the checked-in PSNR
+# references.
+png = "0.17"
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
@@ -236,14 +224,6 @@ harness = false
 [[bench]]
 name = "output_writer_ffi_hop"
 harness = false
-
-# The engine-owned codec round-trip rig: fixture source or camera → H.264
-# encode → H.264 decode → display. Rig-only to run (Vulkan Video queues, a
-# display server, optionally a /dev/video* device); CI compiles it so it
-# cannot rot between rig runs.
-[[example]]
-name = "codec_roundtrip_rig"
-path = "examples/codec_roundtrip_rig.rs"
 
 [[bin]]
 name = "log_emit_1000"

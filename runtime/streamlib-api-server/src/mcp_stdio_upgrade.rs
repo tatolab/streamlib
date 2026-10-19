@@ -176,16 +176,25 @@ pub(crate) mod tests {
     };
     use crate::mcp_resources::LIVE_GRAPH_RESOURCE_URI;
 
-    /// Longer than the stub's quiet `tap`, which answers when its 500 ms
-    /// sample window closes.
-    const LONGER_THAN_A_QUIET_TAP: Duration = Duration::from_millis(1500);
+    /// How long the stub's slow `add_node` takes to answer.
+    const SLOW_ADD_NODE_ANSWERS_AFTER: Duration = Duration::from_millis(500);
 
-    /// A node whose `tap` on any channel answers only when its sample window
-    /// closes, so it is the request that is still in flight.
-    fn served_over_a_quiet_tap() -> LocalApiServedOnAFreshSocket {
+    /// Longer than the stub's slow `add_node` takes to answer.
+    const LONGER_THAN_A_SLOW_ADD_NODE: Duration = Duration::from_millis(1500);
+
+    /// A node whose `add_node` answers only after
+    /// [`SLOW_ADD_NODE_ANSWERS_AFTER`], so it is the request still in flight.
+    fn served_over_a_slow_add_node() -> LocalApiServedOnAFreshSocket {
         LocalApiServedOnAFreshSocket::over(Arc::new(
-            ControlPlaneMcpDispatchStubRuntime::with_quiet_tap(Vec::new()),
+            ControlPlaneMcpDispatchStubRuntime::with_add_node_answering_after(
+                SLOW_ADD_NODE_ANSWERS_AFTER,
+            ),
         ))
+    }
+
+    /// The arguments of the slow `add_node` call.
+    fn slow_add_node_arguments() -> Value {
+        json!({ "stream": STUB_STREAM_NAME, "type": "nodes.slow:SlowNode" })
     }
 
     pub(crate) async fn upgraded_mcp_stdio_stream(
@@ -295,7 +304,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_request_without_the_upgrade_is_answered_upgrade_required_naming_mcp_stdio() {
-        let served = served_over_a_quiet_tap();
+        let served = served_over_a_slow_add_node();
         let mut stream = UnixStream::connect(&served.local_api_socket_path)
             .await
             .unwrap();
@@ -315,7 +324,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn the_upgraded_stream_answers_each_request_with_one_json_rpc_line() {
-        let served = served_over_a_quiet_tap();
+        let served = served_over_a_slow_add_node();
         let mut lines = McpStdioLines::upgraded_on(&served).await;
 
         lines.send_request(1, "tools/list", json!({})).await;
@@ -334,7 +343,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn the_upgraded_stream_serves_the_same_tools_and_resources_as_post_mcp() {
-        let served = served_over_a_quiet_tap();
+        let served = served_over_a_slow_add_node();
         let client = rmcp_client_over_the_upgraded_stream(&served).await;
 
         let tools = client.list_all_tools().await.unwrap();
@@ -351,37 +360,29 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn requests_run_concurrently_and_each_answer_is_written_as_it_completes() {
-        let served = served_over_a_quiet_tap();
+        let served = served_over_a_slow_add_node();
         let mut lines = McpStdioLines::upgraded_on(&served).await;
 
         lines
-            .send_tool_call(
-                1,
-                "tap",
-                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet/video", "count": 5 }),
-            )
+            .send_tool_call(1, "add_node", slow_add_node_arguments())
             .await;
         lines.send_tool_call(2, "graph", json!({})).await;
 
         assert_eq!(
             lines.next_message().await["id"],
             2,
-            "graph overtakes the quiet tap"
+            "graph overtakes the slow add_node"
         );
         assert_eq!(lines.next_message().await["id"], 1);
     }
 
     #[tokio::test]
     async fn a_cancelled_request_is_never_answered() {
-        let served = served_over_a_quiet_tap();
+        let served = served_over_a_slow_add_node();
         let mut lines = McpStdioLines::upgraded_on(&served).await;
 
         lines
-            .send_tool_call(
-                1,
-                "tap",
-                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet/video", "count": 5 }),
-            )
+            .send_tool_call(1, "add_node", slow_add_node_arguments())
             .await;
         lines
             .send(json!({
@@ -393,8 +394,8 @@ pub(crate) mod tests {
         lines.send_tool_call(2, "graph", json!({})).await;
 
         assert_eq!(lines.next_message().await["id"], 2);
-        let late = lines.next_line_within(LONGER_THAN_A_QUIET_TAP).await;
-        assert_eq!(late, None, "the cancelled tap was answered");
+        let late = lines.next_line_within(LONGER_THAN_A_SLOW_ADD_NODE).await;
+        assert_eq!(late, None, "the cancelled add_node was answered");
         lines.send_tool_call(3, "graph", json!({})).await;
         assert_eq!(
             lines.next_message().await["id"],
@@ -407,15 +408,11 @@ pub(crate) mod tests {
     /// accepted is still answered before the node closes its side.
     #[tokio::test]
     async fn half_closing_the_stream_answers_the_requests_in_flight_then_closes() {
-        let served = served_over_a_quiet_tap();
+        let served = served_over_a_slow_add_node();
         let mut lines = McpStdioLines::upgraded_on(&served).await;
 
         lines
-            .send_tool_call(
-                1,
-                "tap",
-                json!({ "stream": STUB_STREAM_NAME, "channel": "quiet/video", "count": 5 }),
-            )
+            .send_tool_call(1, "add_node", slow_add_node_arguments())
             .await;
         lines.to_the_node.shutdown().await.unwrap();
 
@@ -430,7 +427,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_held_listen_ends_with_its_final_result_when_the_local_api_stops() {
-        let mut served = served_over_a_quiet_tap();
+        let mut served = served_over_a_slow_add_node();
         let client = rmcp_client_over_the_upgraded_stream(&served).await;
         let mut subscription = client
             .listen(SubscriptionFilter::default())

@@ -7,8 +7,9 @@
 //! `score` compares a decoded frame set to the references that produced it, and
 //! `channel-means` is the vivid colorimetry rig's drift lock.
 //!
-//! Frames reach this tool as PNGs on disk, written by
-//! `tatolab exchange --channel`. Nothing here touches a GPU.
+//! Frames reach this tool as PNGs on disk, which the rig's ffmpeg decoded from
+//! an encoded track `tatolab-read-track` read at a relay. Nothing here touches a
+//! GPU.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

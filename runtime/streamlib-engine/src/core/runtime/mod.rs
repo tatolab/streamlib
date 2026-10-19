@@ -27,8 +27,6 @@ mod runtime_unique_id;
 mod status;
 mod stream_actions_of_this_runtime;
 mod stream_environment;
-mod surface_image_exchange;
-mod tap;
 
 pub use crate::core::compiler::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
@@ -48,7 +46,7 @@ pub(crate) use engine_teardown_watchdog::{
 };
 pub use exposed_output_port_subscription::{
     ExposedOutputPortOfALoadedStream, ExposedOutputPortSourceWiring, ExposedOutputPortSubscription,
-    ExposureChangeReceiver,
+    ExposureChangeReceiver, LoadedStreamAndTheOutputPortsItExposes,
 };
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
@@ -108,5 +106,3 @@ pub use stream_actions_of_this_runtime::{
     StreamStopOutcome,
 };
 pub use stream_environment::StreamEnvironment;
-pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;
-pub use tap::TapSubscription;
