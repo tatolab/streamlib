@@ -101,6 +101,7 @@ enum BindingResource {
     /// `texture2D` / `texelFetch` style.
     SampledImageOnly {
         view: vk::ImageView,
+        layout: vk::ImageLayout,
     },
     StorageImage {
         view: vk::ImageView,
@@ -490,15 +491,29 @@ impl VulkanComputeKernelInner {
     /// build per-plane reinterpreted-format views by hand against a
     /// multi-planar image — those views can't be expressed through the
     /// higher-level [`Self::set_sampled_texture`] / [`Self::set_storage_image`]
-    /// setters that take engine `Texture` handles. The view must be in
-    /// `SHADER_READ_ONLY_OPTIMAL` at dispatch time; caller is responsible
-    /// for the layout transition.
-    pub(crate) fn set_sampled_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
+    /// setters that take engine `Texture` handles. `layout` is the layout the
+    /// view is in at dispatch time, written into the descriptor: a sampled
+    /// image may be read in `SHADER_READ_ONLY_OPTIMAL` or `GENERAL`, and any
+    /// other layout is refused here.
+    pub(crate) fn set_sampled_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+        layout: vk::ImageLayout,
+    ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledImage)?;
+        if layout != vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL && layout != vk::ImageLayout::GENERAL
+        {
+            return Err(Error::GpuError(format!(
+                "Compute kernel '{}': binding {} cannot sample an image in {:?}; a sampled \
+                 image is read in SHADER_READ_ONLY_OPTIMAL or GENERAL",
+                self.label, binding, layout
+            )));
+        }
         self.pending
             .lock()
             .bindings
-            .insert(binding, BindingResource::SampledImageOnly { view });
+            .insert(binding, BindingResource::SampledImageOnly { view, layout });
         Ok(())
     }
 
@@ -885,12 +900,15 @@ impl VulkanComputeKernelInner {
                         image_idx: Some(idx),
                     });
                 }
-                (ComputeBindingKind::SampledImage, BindingResource::SampledImageOnly { view }) => {
+                (
+                    ComputeBindingKind::SampledImage,
+                    BindingResource::SampledImageOnly { view, layout },
+                ) => {
                     let idx = image_infos.len();
                     image_infos.push(
                         vk::DescriptorImageInfo::builder()
                             .image_view(*view)
-                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_layout(*layout)
                             .build(),
                     );
                     slots.push(Slot {
@@ -1147,8 +1165,14 @@ impl VulkanComputeKernel {
     ///
     /// Crate-private surface; engine-internal callers only
     /// (e.g. `RgbToNv12Converter::convert`).
-    pub(crate) fn set_sampled_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
-        self.host_inner().set_sampled_image_view(binding, view)
+    pub(crate) fn set_sampled_image_view(
+        &self,
+        binding: u32,
+        view: vk::ImageView,
+        layout: vk::ImageLayout,
+    ) -> Result<()> {
+        self.host_inner()
+            .set_sampled_image_view(binding, view, layout)
     }
 
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledTexture`]
@@ -2629,8 +2653,17 @@ void main() {
         // single-thread no-op-ish texelFetch — what we lock is that
         // descriptor-layout + descriptor write + bind + dispatch run
         // end-to-end without validation errors.
+        let refusal = kernel
+            .set_sampled_image_view(0, in_view, vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .expect_err("a sampled image is never read in TRANSFER_DST_OPTIMAL");
+        assert!(
+            refusal
+                .to_string()
+                .contains("SHADER_READ_ONLY_OPTIMAL or GENERAL"),
+            "{refusal}"
+        );
         kernel
-            .set_sampled_image_view(0, in_view)
+            .set_sampled_image_view(0, in_view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .expect("set_sampled_image_view");
         kernel
             .set_storage_image_view(1, out_view)

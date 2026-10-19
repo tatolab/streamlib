@@ -386,6 +386,7 @@ impl SimpleEncoder {
     pub fn encode_image(
         &mut self,
         rgba_image_view: vk::ImageView,
+        rgba_image_layout: vk::ImageLayout,
         source_width: u32,
         source_height: u32,
         timestamp_ns: Option<i64>,
@@ -398,7 +399,13 @@ impl SimpleEncoder {
             )));
         }
         unsafe {
-            self.encode_image_internal(rgba_image_view, source_width, source_height, timestamp_ns)
+            self.encode_image_internal(
+                rgba_image_view,
+                rgba_image_layout,
+                source_width,
+                source_height,
+                timestamp_ns,
+            )
         }
     }
 
@@ -406,10 +413,11 @@ impl SimpleEncoder {
     /// the handle-shaped submit for callers outside the RHI, which hold no
     /// raw `vk::ImageView`.
     ///
-    /// `source_layout` is the layout the caller's texture is currently in;
-    /// anything but `SHADER_READ_ONLY_OPTIMAL` (the layout resolved
-    /// published surfaces are left in, and the one the RGB→NV12 converter
-    /// samples from) is refused naming both layouts. The source extent is
+    /// `source_layout` is the layout the caller's texture is currently in,
+    /// and the one the RGB→NV12 converter samples it in:
+    /// `SHADER_READ_ONLY_OPTIMAL`, which resolved published surfaces are left
+    /// in, or `GENERAL`, which a compute kernel's output is left in. Any other
+    /// is refused naming the layouts it may be in. The source extent is
     /// read off the texture itself and bound by the same picture-area rule
     /// as [`encode_image`](Self::encode_image).
     ///
@@ -422,12 +430,17 @@ impl SimpleEncoder {
     ) -> Result<Vec<EncodePacket>, VideoError> {
         use crate::host_rhi::HostTextureExt;
 
-        if source_layout != crate::core::rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+        use crate::core::rhi::VulkanLayout;
+
+        if source_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+            && source_layout != VulkanLayout::GENERAL
+        {
             return Err(VideoError::BitstreamError(format!(
                 "encode_source_texture: source layout {} unsupported — the RGB→NV12 \
-                 converter samples the source in SHADER_READ_ONLY_OPTIMAL ({})",
+                 converter samples the source in SHADER_READ_ONLY_OPTIMAL ({}) or GENERAL ({})",
                 source_layout.0,
-                crate::core::rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0,
+                VulkanLayout::GENERAL.0
             )));
         }
         let rgba_image_view = source.vulkan_inner().image_view().map_err(|e| {
@@ -437,6 +450,7 @@ impl SimpleEncoder {
         })?;
         self.encode_image(
             rgba_image_view,
+            vk::ImageLayout::from_raw(source_layout.0),
             source.width(),
             source.height(),
             timestamp_ns,
