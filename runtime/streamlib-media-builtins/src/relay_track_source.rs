@@ -4,8 +4,9 @@
 //! Built-in relay track source: one track at a MoQ relay, read into a graph.
 //!
 //! The node is one MoQ client among any. It subscribes to a broadcast's track,
-//! each named as its publisher wrote it, and writes each object's payload to its one output as received, the first object of each
-//! group starting a group. Every stamp in a graph is this machine's, so an
+//! each named as its publisher wrote it, and writes each object's payload to
+//! its one output as received, the first object of each group starting a
+//! group. Every stamp in a graph is this machine's, so an
 //! object is stamped from the track's own timestamp re-based onto this
 //! machine's clock by one offset, never by its arrival.
 
