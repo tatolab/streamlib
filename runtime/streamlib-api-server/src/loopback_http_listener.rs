@@ -324,6 +324,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn the_listener_binds_loopback_alone() {
         let served = served_over_the_stub_runtime(a_watch_page_directory().path().to_path_buf());
 
@@ -345,6 +346,7 @@ pub(crate) mod tests {
     /// address out of the path; a path naming one of the page's files answers
     /// that file.
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn every_watch_address_answers_the_page_and_a_named_file_answers_itself() {
         let watch_page_directory = a_watch_page_directory();
         let served = served_over_the_stub_runtime(watch_page_directory.path().to_path_buf());
@@ -367,6 +369,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn a_unit_carrying_no_page_answers_not_found_naming_where_it_looked() {
         let no_page_here = tempfile::tempdir().unwrap().path().join("watch");
         let served = served_over_the_stub_runtime(no_page_here.clone());
@@ -380,6 +383,7 @@ pub(crate) mod tests {
     /// The listener serves no media and no control: nothing but the listing and
     /// the page answers.
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn nothing_but_the_listing_and_the_page_is_served() {
         let served = served_over_the_stub_runtime(a_watch_page_directory().path().to_path_buf());
 
@@ -393,6 +397,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
     async fn a_port_another_process_holds_is_refused_naming_it() {
         let held = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let held_port = held.local_addr().unwrap().port();

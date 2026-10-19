@@ -133,13 +133,11 @@ pub(crate) async fn health() -> &'static str {
 
 /// What a route answers when the stream it was asked about cannot be named:
 /// `404` for one not loaded — the refusal names the loaded streams — `400` for
-/// an address that names no stream here, and `500` for anything else.
+/// a name that casts to nothing, and `500` for anything else.
 fn stream_resolution_refusal_response(refusal: &Error) -> Response {
     let status = match refusal {
         Error::NotFound(_) => StatusCode::NOT_FOUND,
-        Error::InvalidPortAddress(_)
-        | Error::PortAddressNamesAnotherMachine { .. }
-        | Error::ExposedNameCastsToNothing(_) => StatusCode::BAD_REQUEST,
+        Error::ExposedNameCastsToNothing(_) => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error_response(status, refusal)

@@ -75,24 +75,6 @@ pub enum Error {
     #[error("Invalid link: {0}")]
     InvalidLink(String),
 
-    #[error("Invalid port address: {0}")]
-    InvalidPortAddress(String),
-
-    /// An address names a machine other than this one.
-    #[error(
-        "the address `{address}` names the machine `{machine}`, and this machine is \
-         `{this_machine}`: an address names a port on this machine until the sharing step, \
-         which is where links between machines arrive"
-    )]
-    PortAddressNamesAnotherMachine {
-        /// The address as it was written.
-        address: String,
-        /// The machine its machine part names, cast.
-        machine: String,
-        /// This machine's name.
-        this_machine: String,
-    },
-
     /// A chunk of a channel name is not one address chunk.
     #[error(
         "channel `{channel}` has the chunk `{chunk}`, which is not one address chunk: {reason}"

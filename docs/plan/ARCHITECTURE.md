@@ -3496,12 +3496,12 @@ entry reads as **message** (the glossary).
   outside the runtime (§Networking), `tap` and `exchange` being deleted]
   <!-- verify: git ls-files packages/streamlib-webrtc -->
   <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
-- **DECIDED** — The address, as built. A port's address is `PortAddress`
-  (`core/graph/edges/port_address.rs`): `[<machine>/][<stream>/]<node>/<port>`,
-  right-anchored, leading parts omitted meaning here, every part cast as one address chunk
-  (`core/runtime/address_chunk.rs`, one shared fixture of cases the engine and the
-  pure-Python builder both cast from). It carries no processor id; whatever owns the port
-  resolves the node's name when asked. The machine is named as the machine-name entry below
+- **DECIDED** — The address, as built. A port's address is `<machine>/<stream>/<node>/<port>`,
+  every part cast as one address chunk (`core/runtime/address_chunk.rs`, one shared fixture
+  of cases the engine and the pure-Python builder both cast from): the `/watch` path names
+  it, and an exposed port is the track `<node>/<port>` of the broadcast
+  `<machine>/<stream>.hang`. It carries no processor id; whatever owns the port resolves the
+  node's name when asked. No engine type parses the string form (owner, 2026-10-19). The machine is named as the machine-name entry below
   states and read by `graph`'s top-level `machine`; a stream's name is cast at load.
   `runtime_id` stays per-run — logs, iceoryx2 names, the surface-sharing service — and is
   never an address.
@@ -3509,7 +3509,6 @@ entry reads as **message** (the glossary).
   package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_on_one_machine_both_construct_and_name_it_alike -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams graph_answers_the_machine_by_its_hostname_cast_and_no_streams -->
@@ -3591,7 +3590,7 @@ entry reads as **message** (the glossary).
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02. [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2658;
   runtime-hosting — SHIPPED #2715]
-  <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
   that relay's credential assigns. As built, the engine names the machine by its hostname cast
   and reads nothing of Tailscale. [runtime-hosting — SHIPPED #2715; amended by moq-relays: a

@@ -465,6 +465,7 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
 /// the ports it exposes at their levels and catalog entries; a stream exposing
 /// nothing is listed with none, and an internal port is not listed.
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial(tcp_listeners_of_this_test_process)]
 async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
     let loaded = AnEngineLoadingTwoStreams::load();
     PROCESSOR_REGISTRY.register::<TwoStreamsTestCataloguedNode::Processor>();
