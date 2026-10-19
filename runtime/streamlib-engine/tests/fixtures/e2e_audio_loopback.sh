@@ -4,8 +4,8 @@
 #
 # Known-signal audio loopback gate.
 #
-# Sister fixture to e2e_fixture_psnr_vivid.sh. Where that one guards the V4L2
-# colour path by comparing captured channel means to a baseline, this one
+# Sister fixture to e2e_fixture_psnr_test_pattern.sh. Where that one guards the
+# encode colour path by comparing each bar's colour to a baseline, this one
 # guards the audio path by playing a signal whose every property is known and
 # measuring what comes back: the tone's frequency, amplitude and distortion,
 # and the symbol stream's identity AND spacing.

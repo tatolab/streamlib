@@ -5,7 +5,7 @@
 //!
 //! Two verbs over one set of measurements ([`crate::codec_proof_image_measurement`]):
 //! `score` compares a decoded frame set to the references that produced it, and
-//! `channel-means` is the vivid colorimetry rig's drift lock.
+//! `bar-colors` is the test pattern's colour drift lock.
 //!
 //! Frames reach this tool as PNGs on disk, which the rig's ffmpeg decoded from
 //! an encoded track `tatolab-read-track` read at a relay. Nothing here touches a
@@ -20,8 +20,8 @@ use clap::Subcommand;
 
 use crate::codec_proof_image_measurement::{
     CHROMA_PSNR_PASS_FLOOR_DB, InjectedColorRegression, LUMA_PSNR_PASS_FLOOR_DB,
-    LUMA_PSNR_WARN_FLOOR_DB, ReferenceComparisonVerdict, RgbChannelMeans, Rgba8Image,
-    Yuv420PlanePeakSignalToNoiseRatios,
+    LUMA_PSNR_WARN_FLOOR_DB, ReferenceComparisonVerdict, RgbOnTheUnitScale, Rgba8Image,
+    SMPTE_BAR_COUNT, SMPTE_BAR_NAMES, Yuv420PlanePeakSignalToNoiseRatios,
 };
 
 /// What separates a decoded sample's reference stem from the rest of its file
@@ -29,9 +29,12 @@ use crate::codec_proof_image_measurement::{
 /// names the files, and this is the whole pairing contract between them.
 const DECODED_SAMPLE_REFERENCE_STEM_SEPARATOR: &str = "__";
 
-/// Default absolute drift a channel mean may carry from its baseline, on the
+/// Default absolute drift a bar's channel may carry from its baseline, on the
 /// `[0, 1]` scale.
-const DEFAULT_CHANNEL_MEAN_DRIFT_TOLERANCE: f64 = 0.05;
+const DEFAULT_BAR_COLOR_DRIFT_TOLERANCE: f64 = 0.05;
+
+/// Each SMPTE bar's colour, in the bars' left-to-right order.
+type SmpteBarColors = [RgbOnTheUnitScale; SMPTE_BAR_COUNT];
 
 #[derive(Subcommand)]
 pub enum PsnrCommand {
@@ -55,12 +58,12 @@ pub enum PsnrCommand {
         report: Option<PathBuf>,
     },
 
-    /// The vivid colorimetry drift lock: rig-wide mean of each RGB channel
-    /// across a decoded frame set, compared to a checked-in baseline TSV.
-    /// Vivid produces no ground truth to score PSNR against, so a saturated
-    /// test pattern's channel means are what catches a matrix
-    /// mis-interpretation there.
-    ChannelMeans {
+    /// The test pattern's colour drift lock: each SMPTE bar's median colour,
+    /// averaged across a decoded frame set, compared to a checked-in baseline
+    /// TSV. Each bar is a saturated primary, secondary or neutral, so a matrix
+    /// mis-interpretation moves the bars it touches by more than a whole-frame
+    /// average would show.
+    BarColors {
         /// Directory of decoded PNGs.
         #[arg(long)]
         images: PathBuf,
@@ -72,19 +75,18 @@ pub enum PsnrCommand {
         /// before measuring.
         #[arg(long)]
         inject: Option<InjectedColorRegression>,
-        /// Absolute drift a channel may carry, on the `[0, 1]` scale.
-        #[arg(long, default_value_t = DEFAULT_CHANNEL_MEAN_DRIFT_TOLERANCE)]
+        /// Absolute drift a bar's channel may carry, on the `[0, 1]` scale.
+        #[arg(long, default_value_t = DEFAULT_BAR_COLOR_DRIFT_TOLERANCE)]
         tolerance: f64,
-        /// Overwrite the baseline with this run's means instead of comparing.
+        /// Overwrite the baseline with this run's colours instead of comparing.
         #[arg(long)]
         capture_baseline: bool,
         /// Provenance lines recorded in a captured baseline's header, repeatable
-        /// — the vivid test pattern the run forced and what the numbers were
-        /// measured from, which is what makes them re-derivable rather than
-        /// just re-checkable.
+        /// — the codec and what the numbers were measured from, which is what
+        /// makes them re-derivable rather than just re-checkable.
         #[arg(long)]
         baseline_note: Vec<String>,
-        /// Write the per-frame means as TSV.
+        /// Write each frame's bar colours as TSV.
         #[arg(long)]
         report: Option<PathBuf>,
     },
@@ -100,7 +102,7 @@ pub fn run(command: PsnrCommand) -> Result<()> {
         } => {
             score_decoded_frames_against_references(&decoded, &reference, inject, report.as_deref())
         }
-        PsnrCommand::ChannelMeans {
+        PsnrCommand::BarColors {
             images,
             baseline,
             inject,
@@ -109,11 +111,11 @@ pub fn run(command: PsnrCommand) -> Result<()> {
             baseline_note,
             report,
         } => {
-            let measured = measure_channel_means(&images, inject, report.as_deref())?;
+            let measured = measure_bar_colors(&images, inject, report.as_deref())?;
             if capture_baseline {
-                write_channel_mean_baseline(&baseline, measured, &baseline_note)
+                write_bar_color_baseline(&baseline, &measured, &baseline_note)
             } else {
-                compare_channel_means_to_baseline(&baseline, measured, tolerance)
+                compare_bar_colors_to_baseline(&baseline, &measured, tolerance)
             }
         }
     }
@@ -330,11 +332,11 @@ fn report_scored_comparisons(
     Ok(())
 }
 
-fn measure_channel_means(
+fn measure_bar_colors(
     images_directory: &Path,
     inject: Option<InjectedColorRegression>,
     report_path: Option<&Path>,
-) -> Result<RgbChannelMeans> {
+) -> Result<SmpteBarColors> {
     let image_paths = sorted_png_paths_in(images_directory)?;
     anyhow::ensure!(
         !image_paths.is_empty(),
@@ -348,142 +350,175 @@ fn measure_channel_means(
         );
     }
 
-    let mut report_tsv = String::from("sample\tr_mean\tg_mean\tb_mean\n");
-    let mut per_frame_means: Vec<RgbChannelMeans> = Vec::with_capacity(image_paths.len());
+    let mut report_tsv = String::from("sample\tbar\tr\tg\tb\n");
+    let mut per_frame_colors_by_bar: [Vec<RgbOnTheUnitScale>; SMPTE_BAR_COUNT] =
+        std::array::from_fn(|_| Vec::with_capacity(image_paths.len()));
     for image_path in &image_paths {
         let mut image = Rgba8Image::read_png(image_path)?;
         if let Some(regression) = inject {
             image = image.with_injected_color_regression(regression);
         }
-        let means = image.rgb_channel_means();
-        writeln!(
-            report_tsv,
-            "{}\t{:.6}\t{:.6}\t{:.6}",
-            image_path.file_name().unwrap_or_default().to_string_lossy(),
-            means.red,
-            means.green,
-            means.blue
-        )?;
-        per_frame_means.push(means);
+        let bar_colors = image
+            .smpte_bar_median_colors()
+            .with_context(|| format!("measuring the bars of {}", image_path.display()))?;
+        let sample_name = image_path.file_name().unwrap_or_default().to_string_lossy();
+        for ((bar_name, bar_color), per_frame_colors) in SMPTE_BAR_NAMES
+            .iter()
+            .zip(bar_colors)
+            .zip(per_frame_colors_by_bar.iter_mut())
+        {
+            writeln!(
+                report_tsv,
+                "{sample_name}\t{bar_name}\t{:.6}\t{:.6}\t{:.6}",
+                bar_color.red, bar_color.green, bar_color.blue
+            )?;
+            per_frame_colors.push(bar_color);
+        }
     }
 
-    let rig_wide_means = RgbChannelMeans::averaged(&per_frame_means)
-        .expect("the image list was checked non-empty above");
+    let rig_wide_bar_colors: SmpteBarColors = per_frame_colors_by_bar.map(|per_frame_colors| {
+        RgbOnTheUnitScale::averaged(&per_frame_colors)
+            .expect("the image list was checked non-empty above")
+    });
     tracing::info!("══════════════════════════════════════════════════════════════════");
-    tracing::info!("  Vivid colour round-trip channel means");
+    tracing::info!("  Test-pattern colour round trip: each bar's median colour");
     tracing::info!("══════════════════════════════════════════════════════════════════");
-    tracing::info!("  Samples:  {}", per_frame_means.len());
-    tracing::info!("  Mean R:   {:.4}", rig_wide_means.red);
-    tracing::info!("  Mean G:   {:.4}", rig_wide_means.green);
-    tracing::info!("  Mean B:   {:.4}", rig_wide_means.blue);
+    tracing::info!("  Samples:  {}", image_paths.len());
+    for (bar_name, bar_color) in SMPTE_BAR_NAMES.iter().zip(&rig_wide_bar_colors) {
+        tracing::info!(
+            "  {bar_name:<8} R {:.4}  G {:.4}  B {:.4}",
+            bar_color.red,
+            bar_color.green,
+            bar_color.blue
+        );
+    }
 
     if let Some(report_path) = report_path {
         write_file_creating_parents(report_path, &report_tsv)?;
         tracing::info!("  Per-sample stats: {}", report_path.display());
     }
-    Ok(rig_wide_means)
+    Ok(rig_wide_bar_colors)
 }
 
-fn compare_channel_means_to_baseline(
+fn compare_bar_colors_to_baseline(
     baseline_path: &Path,
-    measured: RgbChannelMeans,
+    measured: &SmpteBarColors,
     tolerance: f64,
 ) -> Result<()> {
-    let baseline = read_channel_mean_baseline(baseline_path)?;
-    let mut drifted_channel_names: Vec<&str> = Vec::new();
+    let baseline = read_bar_color_baseline(baseline_path)?;
+    let mut drifted_bar_channel_names: Vec<String> = Vec::new();
 
-    for ((channel_name, measured_mean), (_, baseline_mean)) in measured
-        .by_baseline_channel_name()
-        .into_iter()
-        .zip(baseline.by_baseline_channel_name())
+    for ((bar_name, measured_color), baseline_color) in
+        SMPTE_BAR_NAMES.iter().zip(measured).zip(&baseline)
     {
-        let drift = (measured_mean - baseline_mean).abs();
-        if drift <= tolerance {
-            tracing::info!("    {channel_name} drift: {drift:.4}  (limit {tolerance})  PASS");
-        } else {
-            tracing::error!("    {channel_name} drift: {drift:.4}  (limit {tolerance})  FAIL");
-            drifted_channel_names.push(channel_name);
+        for ((channel_name, measured_channel), (_, baseline_channel)) in measured_color
+            .by_baseline_channel_name()
+            .into_iter()
+            .zip(baseline_color.by_baseline_channel_name())
+        {
+            let drift = (measured_channel - baseline_channel).abs();
+            if drift <= tolerance {
+                tracing::info!(
+                    "    {bar_name}.{channel_name} drift: {drift:.4}  (limit {tolerance})  PASS"
+                );
+            } else {
+                tracing::error!(
+                    "    {bar_name}.{channel_name} drift: {drift:.4}  (limit {tolerance})  FAIL"
+                );
+                drifted_bar_channel_names.push(format!("{bar_name}.{channel_name}"));
+            }
         }
     }
     tracing::info!("══════════════════════════════════════════════════════════════════");
 
     anyhow::ensure!(
-        drifted_channel_names.is_empty(),
-        "channel-mean drift outside ±{tolerance} on {} — a colour-management regression is \
+        drifted_bar_channel_names.is_empty(),
+        "bar colour drift outside ±{tolerance} on {} — a colour-management regression is \
          the first thing to look for (baseline: {})",
-        drifted_channel_names.join(", "),
+        drifted_bar_channel_names.join(", "),
         baseline_path.display()
     );
-    tracing::info!("[vivid-color] RESULT: PASS");
+    tracing::info!("[test-pattern-color] RESULT: PASS");
     Ok(())
 }
 
-fn read_channel_mean_baseline(baseline_path: &Path) -> Result<RgbChannelMeans> {
+fn read_bar_color_baseline(baseline_path: &Path) -> Result<SmpteBarColors> {
     let baseline_text = std::fs::read_to_string(baseline_path)
         .with_context(|| format!("reading the baseline at {}", baseline_path.display()))?;
 
-    let mut means_by_channel_name: BTreeMap<&str, f64> = BTreeMap::new();
+    let mut colors_by_bar_name: BTreeMap<&str, RgbOnTheUnitScale> = BTreeMap::new();
     for line in baseline_text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some((channel_name, mean)) = line.split_once('\t') else {
+        let fields: Vec<&str> = line.split('\t').map(str::trim).collect();
+        let [bar_name, red, green, blue] = fields[..] else {
             continue;
         };
-        let channel_name = channel_name.trim();
-        if !matches!(channel_name, "r" | "g" | "b") {
+        if !SMPTE_BAR_NAMES.contains(&bar_name) {
             continue;
         }
-        if let Ok(mean) = mean.trim().parse::<f64>() {
-            means_by_channel_name.insert(channel_name, mean);
-        }
-    }
-
-    let channel_mean = |channel_name: &str| -> Result<f64> {
-        means_by_channel_name
-            .get(channel_name)
-            .copied()
-            .with_context(|| {
+        let parsed_channel = |channel_text: &str| -> Result<f64> {
+            channel_text.parse::<f64>().with_context(|| {
                 format!(
-                    "the baseline at {} carries no `{channel_name}` row — capture it with \
-                     `--capture-baseline`",
+                    "the baseline at {} reads `{channel_text}` for bar `{bar_name}`",
                     baseline_path.display()
                 )
             })
-    };
-    Ok(RgbChannelMeans {
-        red: channel_mean("r")?,
-        green: channel_mean("g")?,
-        blue: channel_mean("b")?,
-    })
+        };
+        colors_by_bar_name.insert(
+            bar_name,
+            RgbOnTheUnitScale {
+                red: parsed_channel(red)?,
+                green: parsed_channel(green)?,
+                blue: parsed_channel(blue)?,
+            },
+        );
+    }
+
+    let mut baseline_bar_colors = [RgbOnTheUnitScale::default(); SMPTE_BAR_COUNT];
+    for (bar_name, baseline_bar_color) in SMPTE_BAR_NAMES.iter().zip(&mut baseline_bar_colors) {
+        *baseline_bar_color = *colors_by_bar_name.get(bar_name).with_context(|| {
+            format!(
+                "the baseline at {} carries no `{bar_name}` row — capture it with \
+                 `--capture-baseline`",
+                baseline_path.display()
+            )
+        })?;
+    }
+    Ok(baseline_bar_colors)
 }
 
-fn write_channel_mean_baseline(
+fn write_bar_color_baseline(
     baseline_path: &Path,
-    measured: RgbChannelMeans,
+    measured: &SmpteBarColors,
     baseline_notes: &[String],
 ) -> Result<()> {
     let mut baseline_tsv = String::from(
-        "# Vivid color-roundtrip channel-mean baseline.\n\
-         # Generated by runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh\n\
-         # Captured with: BASELINE_CAPTURE=1 e2e_fixture_psnr_vivid.sh <out> <codec>\n",
+        "# Test-pattern colour round trip: each SMPTE bar's median colour.\n\
+         # Generated by runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh\n\
+         # Captured with: BASELINE_CAPTURE=1 e2e_fixture_psnr_test_pattern.sh <out> <codec>\n",
     );
     for baseline_note in baseline_notes {
         writeln!(baseline_tsv, "# {baseline_note}")?;
     }
     writeln!(
         baseline_tsv,
-        "# Default verification tolerance is ±{DEFAULT_CHANNEL_MEAN_DRIFT_TOLERANCE} absolute on \
-         the [0,1] scale.\nchannel\tmean"
+        "# Default verification tolerance is ±{DEFAULT_BAR_COLOR_DRIFT_TOLERANCE} absolute on \
+         the [0,1] scale, per bar and channel.\nbar\tr\tg\tb"
     )?;
-    for (channel_name, mean) in measured.by_baseline_channel_name() {
-        writeln!(baseline_tsv, "{channel_name}\t{mean:.4}")?;
+    for (bar_name, bar_color) in SMPTE_BAR_NAMES.iter().zip(measured) {
+        writeln!(
+            baseline_tsv,
+            "{bar_name}\t{:.4}\t{:.4}\t{:.4}",
+            bar_color.red, bar_color.green, bar_color.blue
+        )?;
     }
 
     write_file_creating_parents(baseline_path, &baseline_tsv)?;
     tracing::info!("  Baseline written: {}", baseline_path.display());
-    tracing::info!("[vivid-color] BASELINE CAPTURED");
+    tracing::info!("[test-pattern-color] BASELINE CAPTURED");
     Ok(())
 }
 
@@ -664,80 +699,81 @@ mod tests {
         );
     }
 
+    /// Colours a decoded bar set might measure: each bar its nominal colour.
+    fn nominal_bar_colors() -> SmpteBarColors {
+        [
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ]
+        .map(|[red, green, blue]| RgbOnTheUnitScale { red, green, blue })
+    }
+
     #[test]
-    fn channel_means_pass_inside_the_tolerance_and_fail_outside_it() {
+    fn bar_colors_pass_inside_the_tolerance_and_fail_outside_it_naming_the_bar() {
         let scratch = tempfile::tempdir().unwrap();
         let baseline_path = scratch.path().join("baseline.tsv");
-        std::fs::write(
-            &baseline_path,
-            "channel\tmean\nr\t0.9000\ng\t0.0500\nb\t0.0500\n",
-        )
-        .unwrap();
+        write_bar_color_baseline(&baseline_path, &nominal_bar_colors(), &[]).unwrap();
 
-        let measured = RgbChannelMeans {
-            red: 0.92,
-            green: 0.06,
-            blue: 0.06,
-        };
-        compare_channel_means_to_baseline(&baseline_path, measured, 0.05)
+        let mut measured = nominal_bar_colors();
+        measured[5].green = 0.02;
+        compare_bar_colors_to_baseline(&baseline_path, &measured, 0.05)
             .expect("0.02 of drift is inside a 0.05 tolerance");
 
-        let drifted = RgbChannelMeans {
-            red: 0.80,
-            green: 0.06,
-            blue: 0.06,
-        };
-        let failure = compare_channel_means_to_baseline(&baseline_path, drifted, 0.05)
-            .expect_err("0.10 of drift is outside a 0.05 tolerance");
+        measured[5].green = 0.0965;
+        let failure = compare_bar_colors_to_baseline(&baseline_path, &measured, 0.05)
+            .expect_err("the bt601/bt709 green rise on red is outside a 0.05 tolerance");
         assert!(
-            failure.to_string().contains(" r"),
-            "the failure names the drifted channel: {failure}"
+            failure.to_string().contains("red.g"),
+            "the failure names the drifted bar and channel: {failure}"
         );
     }
 
     #[test]
-    fn a_captured_baseline_reads_back_as_the_means_that_wrote_it() {
+    fn a_captured_baseline_reads_back_as_the_colours_that_wrote_it() {
         let scratch = tempfile::tempdir().unwrap();
-        let baseline_path = scratch.path().join("psnr_vivid_baseline.tsv");
-        let captured = RgbChannelMeans {
+        let baseline_path = scratch
+            .path()
+            .join("psnr_test_pattern_bar_colors_baseline.tsv");
+        let mut captured = nominal_bar_colors();
+        captured[5] = RgbOnTheUnitScale {
             red: 0.9180,
             green: 0.0575,
             blue: 0.0536,
         };
-        write_channel_mean_baseline(
-            &baseline_path,
-            captured,
-            &["Vivid test_pattern: 7".to_string()],
-        )
-        .unwrap();
+        write_bar_color_baseline(&baseline_path, &captured, &["Codec: h264".to_string()]).unwrap();
 
         let baseline_text = std::fs::read_to_string(&baseline_path).unwrap();
         assert!(
-            baseline_text.contains("# Vivid test_pattern: 7"),
+            baseline_text.contains("# Codec: h264"),
             "the provenance line is what makes the numbers reproducible: {baseline_text}"
         );
         // Round-tripping at the tightest tolerance the written precision allows
         // is what proves the writer and the reader agree on the format.
-        compare_channel_means_to_baseline(&baseline_path, captured, 0.0001).unwrap();
+        compare_bar_colors_to_baseline(&baseline_path, &captured, 0.0001).unwrap();
     }
 
     #[test]
-    fn a_baseline_missing_a_channel_is_refused_rather_than_read_as_zero() {
+    fn a_baseline_missing_a_bar_is_refused_rather_than_read_as_black() {
         let scratch = tempfile::tempdir().unwrap();
         let baseline_path = scratch.path().join("baseline.tsv");
-        std::fs::write(&baseline_path, "channel\tmean\nr\t0.9000\ng\t0.0500\n").unwrap();
+        write_bar_color_baseline(&baseline_path, &nominal_bar_colors(), &[]).unwrap();
+        let without_blue: String = std::fs::read_to_string(&baseline_path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("blue\t"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        std::fs::write(&baseline_path, without_blue).unwrap();
 
-        let refusal = compare_channel_means_to_baseline(
-            &baseline_path,
-            RgbChannelMeans {
-                red: 0.9,
-                green: 0.05,
-                blue: 0.05,
-            },
-            0.05,
-        )
-        .expect_err("a missing channel read as 0.0 would silently pass a blue-channel regression");
-        assert!(refusal.to_string().contains("no `b` row"), "{refusal}");
+        let refusal = compare_bar_colors_to_baseline(&baseline_path, &nominal_bar_colors(), 0.05)
+            .expect_err("a missing bar read as black would silently pass a blue regression");
+        assert!(refusal.to_string().contains("no `blue` row"), "{refusal}");
     }
 
     #[test]
