@@ -9,19 +9,15 @@ use super::super::components::{
 };
 use super::super::{GraphEdgeWithComponents, GraphWeight};
 use super::LinkCapacity;
-use super::{
-    InputLinkPortRef, LinkState, OutputLinkPortRef, OutputPortALinkCarriesFrom,
-    OutputPortInAnotherStreamOnThisMachine,
-};
+use super::{InputLinkPortRef, LinkState, OutputLinkPortRef};
 
 /// Link in the processor graph (connection between two ports) with embedded component storage.
 #[derive(Serialize, Deserialize)]
 pub struct Link {
     /// Unique link identifier
     pub id: LinkUniqueId,
-    /// The output port the link carries from: in this stream, or in another
-    /// stream on this machine.
-    pub source: OutputPortALinkCarriesFrom,
+    /// The output port the link carries from.
+    pub source: OutputLinkPortRef,
     /// Target endpoint (input port)
     pub target: InputLinkPortRef,
     /// Ring buffer capacity for the channel.
@@ -82,23 +78,6 @@ impl Link {
         target: InputLinkPortRef,
         capacity: LinkCapacity,
     ) -> Self {
-        Self::carrying_from_with_capacity(source.into(), target, capacity)
-    }
-
-    /// Create a link reading output port `source` of another stream on this
-    /// machine into `target`, with default capacity.
-    pub fn reading_an_output_port_in_another_stream(
-        source: OutputPortInAnotherStreamOnThisMachine,
-        target: InputLinkPortRef,
-    ) -> Self {
-        Self::carrying_from_with_capacity(source.into(), target, LinkCapacity::default())
-    }
-
-    fn carrying_from_with_capacity(
-        source: OutputPortALinkCarriesFrom,
-        target: InputLinkPortRef,
-        capacity: LinkCapacity,
-    ) -> Self {
         Self {
             id: LinkUniqueId::new(),
             source,
@@ -116,14 +95,8 @@ impl Link {
     }
 
     /// The output port the link carries from.
-    pub fn source(&self) -> &OutputPortALinkCarriesFrom {
+    pub fn source(&self) -> &OutputLinkPortRef {
         &self.source
-    }
-
-    /// The output port the link carries from, when it is on a node of this
-    /// stream.
-    pub fn source_in_this_stream(&self) -> Option<&OutputLinkPortRef> {
-        self.source.in_this_stream()
     }
 
     /// Get target endpoint reference.

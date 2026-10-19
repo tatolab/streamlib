@@ -17,11 +17,7 @@ use std::sync::{Arc, Mutex, Once};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
-use crate as the_engine_under_test;
 use crate::core::processors::PROCESSOR_REGISTRY;
-
-#[path = "../../tests/support/links_between_streams_harness.rs"]
-pub(crate) mod links_between_streams_harness;
 
 #[path = "../../tests/support/rig_only_capability_skip.rs"]
 pub(crate) mod rig_only_capability_skip;

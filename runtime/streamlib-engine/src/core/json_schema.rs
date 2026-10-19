@@ -140,35 +140,22 @@ pub struct LinkOutput {
     /// Current state of the link.
     #[serde(default)]
     pub state: LinkStateOutput,
-    /// Why the link is in the `error` state, in the words of whoever refused
-    /// it: a helper process that could not open its port, or the stream a
-    /// link reading another stream was refused by.
+    /// Why the link is in the `error` state, in the words of the helper
+    /// process that could not open its port.
     ///
     /// Absent in every other state, so a reader that finds it knows the link
     /// carries nothing and will not start to: disconnect it and wire again.
     /// `state` stays a plain string so a check against `"wired"` is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
-    /// What a link in the `awaiting_remote` state waits for: the stream its
-    /// source is in, not loaded or not started yet. Absent in every other
-    /// state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub awaiting_remote_reason: Option<String>,
     /// Runtime components (dynamic, varies based on link state).
     pub components: serde_json::Map<String, serde_json::Value>,
 }
 
-/// One end of a link: a port on a node this graph holds, or — for a source —
-/// a port of another stream on this machine.
+/// One end of a link: a port on a node this graph holds. A link's ends are
+/// both in one stream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct LinkPortRefOutput {
-    /// The machine the port is on. Never rendered, since every end `graph`
-    /// renders is on this machine; a graph a load reads may name this one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub machine: Option<String>,
-    /// The stream the port is in, absent for a port of this stream.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream: Option<String>,
     /// The node's name.
     pub node: String,
     /// The port's own name on that node.
@@ -184,32 +171,8 @@ impl LinkPortRefOutput {
         node_names: &NodeNamesByProcessorId,
     ) -> Self {
         Self {
-            machine: None,
-            stream: None,
             node: node_names.name_of(processor_id),
             port: port_name.to_string(),
-        }
-    }
-
-    /// The source a link carries from, its node named by its name: a port of
-    /// this stream as `{node, port}`, one of another stream as
-    /// `{stream, node, port}`.
-    fn of_a_source(
-        source: &crate::core::graph::OutputPortALinkCarriesFrom,
-        node_names: &NodeNamesByProcessorId,
-    ) -> Self {
-        match source {
-            crate::core::graph::OutputPortALinkCarriesFrom::InThisStream(port) => {
-                Self::of_a_port(port.processor_id(), port.port_name(), node_names)
-            }
-            crate::core::graph::OutputPortALinkCarriesFrom::InAnotherStreamOnThisMachine(port) => {
-                Self {
-                    machine: None,
-                    stream: Some(port.stream_name().to_string()),
-                    node: port.node_name().to_string(),
-                    port: port.port_name().to_string(),
-                }
-            }
         }
     }
 }
@@ -283,8 +246,6 @@ pub enum LinkStateOutput {
     Disconnected,
     /// Link is in error state.
     Error,
-    /// Link reads another stream that is not loaded or not started yet.
-    AwaitingRemote,
 }
 
 // =============================================================================
@@ -511,13 +472,17 @@ impl LinkOutput {
         // alone it would contradict the top-level state a reader was told to
         // check — the same disagreement the top-level state reads the component
         // to avoid, in the other direction.
-        let (state, error_reason, awaiting_remote_reason) = rendered.into_state_and_its_reason();
+        let (state, error_reason) = rendered.into_state_and_its_reason();
         if let Some(rendered_state) = components.get_mut("state") {
             *rendered_state = serde_json::json!(format!("{state:?}"));
         }
         Self {
             id: link.id.to_string(),
-            source: LinkPortRefOutput::of_a_source(link.source(), node_names),
+            source: LinkPortRefOutput::of_a_port(
+                link.source.processor_id(),
+                link.source.port_name(),
+                node_names,
+            ),
             target: LinkPortRefOutput::of_a_port(
                 link.target.processor_id(),
                 link.target.port_name(),
@@ -526,18 +491,15 @@ impl LinkOutput {
             capacity: link.capacity.get(),
             state,
             error_reason,
-            awaiting_remote_reason,
             components,
         }
     }
 }
 
-/// What a link reports as its state, and why where that is `error` or
-/// `awaiting_remote`.
+/// What a link reports as its state, and why where that is `error`.
 enum RenderedLinkState {
     WithoutAReason(LinkStateOutput),
     ErrorBecause(String),
-    AwaitingRemoteBecause(String),
 }
 
 impl RenderedLinkState {
@@ -551,33 +513,13 @@ impl RenderedLinkState {
     /// disconnect path has moved the component past `Pending`, that
     /// stamp is the answer: a link on its way out is not `wired` because a
     /// helper once said so.
-    ///
-    /// A link reading another stream says why it carries nothing on its own
-    /// component: the stream it awaits, or why it was refused.
     fn of(link: &crate::core::graph::Link) -> Self {
         let stamped = link
             .get::<crate::core::graph::LinkStateComponent>()
             .map(|state| state.0)
             .unwrap_or(link.state);
-        let why_a_link_reading_another_stream_carries_nothing = link
-            .get::<crate::core::graph::LinkReadingAnotherStreamComponent>()
-            .and_then(|component| component.why_it_carries_nothing())
-            .map(str::to_string);
-        match stamped {
-            crate::core::graph::LinkState::Pending => {}
-            crate::core::graph::LinkState::AwaitingRemote => {
-                return why_a_link_reading_another_stream_carries_nothing.map_or(
-                    Self::WithoutAReason(LinkStateOutput::AwaitingRemote),
-                    Self::AwaitingRemoteBecause,
-                );
-            }
-            crate::core::graph::LinkState::Error => {
-                return why_a_link_reading_another_stream_carries_nothing.map_or(
-                    Self::WithoutAReason(LinkStateOutput::Error),
-                    Self::ErrorBecause,
-                );
-            }
-            other => return Self::WithoutAReason(LinkStateOutput::from(other)),
+        if stamped != crate::core::graph::LinkState::Pending {
+            return Self::WithoutAReason(LinkStateOutput::from(stamped));
         }
         let Some(replies) = link.get::<crate::core::graph::OutOfProcessLinkWireRepliesComponent>()
         else {
@@ -596,14 +538,11 @@ impl RenderedLinkState {
         }
     }
 
-    /// The state, then its `error_reason` and its `awaiting_remote_reason`.
-    fn into_state_and_its_reason(self) -> (LinkStateOutput, Option<String>, Option<String>) {
+    /// The state, then its `error_reason`.
+    fn into_state_and_its_reason(self) -> (LinkStateOutput, Option<String>) {
         match self {
-            Self::WithoutAReason(state) => (state, None, None),
-            Self::ErrorBecause(reason) => (LinkStateOutput::Error, Some(reason), None),
-            Self::AwaitingRemoteBecause(reason) => {
-                (LinkStateOutput::AwaitingRemote, None, Some(reason))
-            }
+            Self::WithoutAReason(state) => (state, None),
+            Self::ErrorBecause(reason) => (LinkStateOutput::Error, Some(reason)),
         }
     }
 }
@@ -616,7 +555,6 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
             crate::core::graph::LinkState::Disconnecting => LinkStateOutput::Disconnecting,
             crate::core::graph::LinkState::Disconnected => LinkStateOutput::Disconnected,
             crate::core::graph::LinkState::Error => LinkStateOutput::Error,
-            crate::core::graph::LinkState::AwaitingRemote => LinkStateOutput::AwaitingRemote,
         }
     }
 }
@@ -791,99 +729,6 @@ mod link_rendering_tests {
         assert!(
             rendered.get("error_reason").is_none(),
             "an ordinary link's shape is unchanged by this key: {rendered}"
-        );
-    }
-
-    fn a_link_reading_camera_video_of_the_stream_a() -> Link {
-        Link::reading_an_output_port_in_another_stream(
-            crate::core::graph::OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "video")
-                .unwrap(),
-            InputLinkPortRef::new("Pdisplay", "video"),
-        )
-    }
-
-    fn rendered_with_the_display_named(link: &Link) -> serde_json::Value {
-        let display = crate::core::graph::ProcessorUniqueId::from("Pdisplay");
-        serde_json::to_value(LinkOutput::of_a_link(
-            link,
-            &NodeNamesByProcessorId(std::collections::HashMap::from([(
-                display,
-                "display".to_string(),
-            )])),
-        ))
-        .unwrap()
-    }
-
-    /// A source in another stream renders as the address chunks a load reads
-    /// back, `{stream, node, port}`, while a port of this stream keeps
-    /// `{node, port}`; no end renders a machine.
-    #[test]
-    fn a_link_reading_another_stream_renders_its_source_as_stream_node_and_port() {
-        let rendered =
-            rendered_with_the_display_named(&a_link_reading_camera_video_of_the_stream_a());
-
-        assert_eq!(
-            rendered["source"],
-            serde_json::json!({"stream": "a", "node": "camera", "port": "video"})
-        );
-        assert_eq!(
-            rendered["target"],
-            serde_json::json!({"node": "display", "port": "video"})
-        );
-    }
-
-    /// A link stamped awaiting its source's stream renders `awaiting_remote`
-    /// in both places a state renders, with the reason naming that stream, and
-    /// no error reason.
-    #[test]
-    fn an_awaiting_link_renders_awaiting_remote_with_the_reason_naming_the_stream() {
-        use crate::core::graph::LinkReadingAnotherStreamComponent;
-
-        let mut link = a_link_reading_camera_video_of_the_stream_a();
-        link.insert(LinkStateComponent(LinkState::AwaitingRemote));
-        link.insert_component_without_rendering_it(
-            LinkReadingAnotherStreamComponent::carrying_nothing_because(
-                "the stream `a` is not loaded on this machine; the link wires when it loads"
-                    .to_string(),
-            ),
-        );
-
-        let rendered = rendered_with_the_display_named(&link);
-        assert_eq!(rendered["state"], "awaiting_remote");
-        assert_eq!(rendered["components"]["state"], "AwaitingRemote");
-        assert_eq!(
-            rendered["awaiting_remote_reason"],
-            "the stream `a` is not loaded on this machine; the link wires when it loads"
-        );
-        assert!(rendered.get("error_reason").is_none(), "{rendered}");
-        assert!(
-            rendered["components"]
-                .as_object()
-                .is_some_and(|components| components.len() == 1),
-            "the component holding the reason renders only at the top level: {rendered}"
-        );
-    }
-
-    /// A link reading another stream that was refused renders `error` with the
-    /// refusal its component holds, and no awaiting reason.
-    #[test]
-    fn a_refused_link_reading_another_stream_renders_its_reason_as_the_error_reason() {
-        use crate::core::graph::LinkReadingAnotherStreamComponent;
-
-        let refusal = "node `camera` of the stream `a` holds no output writer, so its port \
-                       `video` publishes nothing";
-        let mut link = a_link_reading_camera_video_of_the_stream_a();
-        link.insert(LinkStateComponent(LinkState::Error));
-        link.insert_component_without_rendering_it(
-            LinkReadingAnotherStreamComponent::carrying_nothing_because(refusal.to_string()),
-        );
-
-        let rendered = rendered_with_the_display_named(&link);
-        assert_eq!(rendered["state"], "error");
-        assert_eq!(rendered["error_reason"], refusal);
-        assert!(
-            rendered.get("awaiting_remote_reason").is_none(),
-            "{rendered}"
         );
     }
 }

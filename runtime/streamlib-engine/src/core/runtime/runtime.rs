@@ -18,9 +18,7 @@ use super::loaded_stream::{
 };
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
-use super::{
-    EnginesTokioRuntimeForWorkSpawnedAgainstAStream, RuntimeShutdownEscalation, StreamEnvironment,
-};
+use super::{RuntimeShutdownEscalation, StreamEnvironment};
 use crate::core::context::GpuContext;
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
@@ -109,9 +107,8 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     setup_hooks: Mutex<SetupHooksOfTheEngine>,
     /// The lend directory the host handed this runtime.
     pub(crate) processor_interpreter_lend_directory: ProcessorInterpreterLendDirectoryOfTheEngine,
-    /// Whether [`Runner::shut_down`] has run; shared with the work spawned
-    /// against a stream, which does nothing past it.
-    shut_down: Arc<AtomicBool>,
+    /// Whether [`Runner::shut_down`] has run.
+    shut_down: AtomicBool,
     /// Whether this engine holds the machine's shutdown signals now, and so
     /// walks every loaded stream to the machine's shutdown level as it waits.
     owns_the_machine_shutdown_signals: AtomicBool,
@@ -282,8 +279,8 @@ impl EngineResourcesSharedByEveryStream {
 
     /// Take `stream` out of the table, unless another stream has taken its
     /// name since, into the streams whose end is not yet recorded — under the
-    /// table's lock, so a wait always finds it in one or the other — then
-    /// re-plan every link reading it and say it left on
+    /// table's lock, so a wait always finds it in one or the other — then say
+    /// it left on
     /// [`topics::OUTPUT_PORT_EXPOSURE`](crate::core::pubsub::topics::OUTPUT_PORT_EXPOSURE).
     pub(crate) fn remove_from_the_stream_table(&self, stream: &Arc<LoadedStreamInThisRuntime>) {
         let removed = {
@@ -304,48 +301,10 @@ impl EngineResourcesSharedByEveryStream {
             it_is_this_stream
         };
         if removed {
-            self.spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
-                stream.stream_name(),
-                crate::core::runtime::LinksReadingAStreamToRePlan::EveryOneStillToBeWired,
-            );
             crate::core::pubsub::OutputPortExposureChange::StreamUnloaded {
                 stream_name: stream.stream_name().to_string(),
             }
             .publish();
-        }
-    }
-
-    /// The engine's tokio runtime as work spawned against a stream reaches
-    /// it, with the flag that stops that work once the engine shuts down.
-    pub(crate) fn tokio_runtime_for_work_spawned_against_a_stream(
-        &self,
-    ) -> EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
-        EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
-            engines_tokio_runtime_handle: self.tokio_runtime_variant.handle(),
-            set_once_the_engine_shuts_down: Arc::clone(&self.shut_down),
-        }
-    }
-
-    /// Re-plan, on every other loaded stream, the links reading the stream
-    /// `source_stream_name` that `which` picks: each stream's re-plan is
-    /// spawned on the engine's tokio runtime and commits on that stream's own
-    /// compiler, never inline. Nothing once the engine is shutting down, when
-    /// every stream is.
-    pub(crate) fn spawn_a_re_plan_of_the_links_reading_the_stream_on_every_other_stream(
-        &self,
-        source_stream_name: &str,
-        which: crate::core::runtime::LinksReadingAStreamToRePlan,
-    ) {
-        let engines_tokio_runtime = self.tokio_runtime_for_work_spawned_against_a_stream();
-        if engines_tokio_runtime.the_engine_has_shut_down() {
-            return;
-        }
-        for reading_stream in self.every_loaded_stream() {
-            if reading_stream.stream_name() == source_stream_name {
-                continue;
-            }
-            reading_stream
-                .spawn_a_re_plan_of_its_links_reading_the_stream(source_stream_name, which);
         }
     }
 
@@ -406,8 +365,8 @@ enum SetupHooksOfTheEngine {
 /// Every graph operation is a stream's: load a stream, then use the
 /// [`LoadedStreamInThisRuntime`] it hands back.
 pub struct Runner {
-    // Declared first so it drops before the engine resources: a task spawned against a stream
-    // may hold them, and their last drop must never land on one of this runtime's workers.
+    // Declared first so it drops before the engine resources: a task spawned on this runtime may
+    // hold them, and their last drop must never land on one of this runtime's workers.
     _tokio_runtime_the_runner_owns: Option<TokioRuntimeShutDownWithinItsBudget>,
     pub(super) engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
     /// Where this runtime keeps its streams, and the lock its stream actions
@@ -636,7 +595,7 @@ impl Runner {
                 setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
                 processor_interpreter_lend_directory:
                     ProcessorInterpreterLendDirectoryOfTheEngine::default(),
-                shut_down: Arc::new(AtomicBool::new(false)),
+                shut_down: AtomicBool::new(false),
                 owns_the_machine_shutdown_signals: AtomicBool::new(false),
                 #[cfg(target_os = "linux")]
                 surface_service: Mutex::new(Some(surface_service)),
@@ -1627,6 +1586,43 @@ mod tests {
     fn a_project_directory_this_test_owns() -> tempfile::TempDir {
         crate::core::test_support::a_temporary_directory_at_owner_only_mode()
             .expect("a temporary project directory")
+    }
+
+    /// A task on the engine's tokio runtime still holding a stream as the
+    /// `Runner` drops never holds the engine past it: the runtime the
+    /// `Runner` owns goes first, taking the task with it, so the engine's last
+    /// drop is the `Runner`'s own and never lands on one of that runtime's
+    /// workers.
+    #[test]
+    #[serial]
+    fn a_task_holding_a_stream_as_the_runner_drops_never_holds_the_engine_past_it() {
+        crate::core::test_support::ensure_test_mocks_registered();
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("the engine builds");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "held");
+        let the_engine = Arc::downgrade(stream.engine_resources_shared_by_every_stream());
+        let (the_task_holds_its_stream, the_task_holds_its_stream_now) = std::sync::mpsc::channel();
+
+        let held_stream = Arc::clone(&stream);
+        stream
+            .engine_resources_shared_by_every_stream()
+            .tokio_runtime_variant
+            .handle()
+            .spawn(async move {
+                let _ = the_task_holds_its_stream.send(());
+                std::future::pending::<()>().await;
+                drop(held_stream);
+            });
+        the_task_holds_its_stream_now
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the task holds its stream");
+        drop(stream);
+        drop(runner);
+
+        assert!(
+            the_engine.upgrade().is_none(),
+            "the engine outlived the Runner, held by a task on the runtime's workers"
+        );
     }
 
     // All Runner::new() tests are `#[serial]` because the runtime

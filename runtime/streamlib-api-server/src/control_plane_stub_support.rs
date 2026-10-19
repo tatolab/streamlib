@@ -346,21 +346,6 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             ) -> bool {
                 false
             }
-            fn connect_from_another_stream(
-                &self,
-                stream_name: &str,
-                _source: ::streamlib::sdk::graph::OutputPortInAnotherStreamOnThisMachine,
-                _to: ::streamlib::sdk::graph::InputLinkPortRef,
-            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkUniqueId> {
-                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
-                    stream_name,
-                )?;
-                Err(::streamlib::sdk::error::Error::Runtime(format!(
-                    "`connect` from another stream was refused: the stub runtime loads \
-                     `{}` and no other stream to link from",
-                    $crate::control_plane_stub_support::STUB_STREAM_NAME
-                )))
-            }
             fn exchange_published_surface_id_for_png_image_bytes_async(
                 &self,
                 published_surface_id: String,

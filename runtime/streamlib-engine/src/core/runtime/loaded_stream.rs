@@ -29,8 +29,7 @@ use crate::core::context::{
 };
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
-    OutputPortInAnotherStreamOnThisMachine, ProcessorPauseGateComponent, ProcessorUniqueId,
-    StateComponent, cast_exposed_name_to_url_safe,
+    ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::logging::{LoadedStreamLogRecordsPage, LoadedStreamLogRoute};
@@ -1112,10 +1111,8 @@ impl LoadedStreamInThisRuntime {
     /// Load `graph` into this stream, which is not in the stream table yet:
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
-    /// resolves, each node added under its name, each link connected by name —
-    /// one whose source is in another stream on this machine by that stream's
-    /// name too — and each exposure put at its level in the stream's live
-    /// exposure map.
+    /// resolves, each node added under its name, each link connected by name,
+    /// and each exposure put at its level in the stream's live exposure map.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
@@ -1127,11 +1124,7 @@ impl LoadedStreamInThisRuntime {
                 graph.nodes.iter().map(|node| &node.processor_type),
                 lend_directory,
             )?;
-        graph.validate(
-            &self.node_types_this_stream_resolves,
-            self.stream_name(),
-            &self.engine_resources_shared_by_every_stream.machine_name,
-        )?;
+        graph.validate(&self.node_types_this_stream_resolves)?;
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
@@ -1150,30 +1143,10 @@ impl LoadedStreamInThisRuntime {
         };
 
         for link in &graph.links {
-            let target =
-                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port);
-            let source = link.source.the_port_address_it_names()?;
-            match source.the_stream_it_names_other_than(self.stream_name()) {
-                Some(source_stream) => {
-                    self.connect_from_an_output_port_in_another_stream(
-                        OutputPortInAnotherStreamOnThisMachine::new(
-                            source_stream,
-                            source.node_name(),
-                            source.port_name(),
-                        )?,
-                        target,
-                    )?;
-                }
-                None => {
-                    self.connect(
-                        OutputLinkPortRef::new(
-                            processor_id_of(source.node_name())?,
-                            source.port_name(),
-                        ),
-                        target,
-                    )?;
-                }
-            }
+            self.connect(
+                OutputLinkPortRef::new(processor_id_of(&link.source.node)?, &link.source.port),
+                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port),
+            )?;
         }
 
         for exposed in &graph.exposed {

@@ -3,22 +3,15 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
-use crate::core::graph::{
-    OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
-    output_port_exposure_allows_the_reader,
-};
+use crate::core::graph::OutputPortExposureLevel;
 
-/// The output ports of this node its stream exposes, each at its level, with
-/// the readers from outside the stream registered against it.
+/// The output ports of this node its stream exposes, each at its level.
 ///
-/// Held on the node so a removed node takes its exposures with it, its
-/// readers cut once the node has left its stream. Stored but never rendered
-/// under the node's `components`: `graph` renders every exposure once, in its
-/// top-level `exposed`. An internal port has no entry. Every reader it lets go
-/// is handed back to the caller, so a reader's cut is never run or dropped
-/// under the graph's lock.
+/// Held on the node so a removed node takes its exposures with it. Stored but
+/// never rendered under the node's `components`: `graph` renders every
+/// exposure once, in its top-level `exposed`. An internal port has no entry.
 #[derive(Debug, Default)]
 pub struct ExposedOutputPortsComponent {
     exposed_ports_by_port_name: BTreeMap<String, ExposedOutputPortOfThisNode>,
@@ -28,7 +21,6 @@ pub struct ExposedOutputPortsComponent {
 struct ExposedOutputPortOfThisNode {
     level: OutputPortExposureLevel,
     level_now: LevelOfAnExposedOutputPortNow,
-    readers_from_outside_the_stream: Vec<ReaderOfAnExposedOutputPort>,
 }
 
 impl Drop for ExposedOutputPortOfThisNode {
@@ -69,118 +61,6 @@ impl LevelOfAnExposedOutputPortNow {
     }
 }
 
-/// What cuts one reader off the port it reads, told why. It runs at most once,
-/// outside every graph lock, and may race the drop of its reader's
-/// registration.
-pub type CutOffAReaderOfAnExposedOutputPort =
-    Box<dyn FnOnce(WhyAReaderOfAnExposedOutputPortIsCutOff) + Send + Sync>;
-
-/// Why a reader from outside a port's stream is cut off the port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WhyAReaderOfAnExposedOutputPortIsCutOff {
-    /// The port's level was lowered to one that no longer allows the reader.
-    TheLevelNoLongerAllowsIt {
-        /// The level the port is at now.
-        level: OutputPortExposureLevel,
-    },
-    /// The node holding the port was removed from its stream.
-    ItsPortsNodeLeftItsStream,
-}
-
-impl std::fmt::Display for WhyAReaderOfAnExposedOutputPortIsCutOff {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TheLevelNoLongerAllowsIt { level } => write!(f, "the port is now {level}"),
-            Self::ItsPortsNodeLeftItsStream => f.write_str("the port's node left its stream"),
-        }
-    }
-}
-
-/// Cut each of `readers` still registered off what it reads for `why`, each
-/// under its own unwind guard so one panicking cut still lets the rest run.
-/// `what_the_readers_read` names the port or node in the log lines, on the
-/// stream `stream_name`.
-pub(crate) fn cut_off_every_reader_each_under_its_own_unwind_guard(
-    readers: impl IntoIterator<Item = ReaderOfAnExposedOutputPort>,
-    why: WhyAReaderOfAnExposedOutputPortIsCutOff,
-    stream_name: &str,
-    what_the_readers_read: &dyn std::fmt::Display,
-) {
-    for reader in readers {
-        if !reader.is_still_registered() {
-            continue;
-        }
-        tracing::info!(
-            stream = %stream_name,
-            reader = %reader.location(),
-            "[exposure] cutting off {} reading {what_the_readers_read}: {why}",
-            reader.location()
-        );
-        let cut_off = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            reader.cut_off_unless_its_registration_was_dropped(why)
-        }));
-        if cut_off.is_err() {
-            tracing::error!(
-                stream = %stream_name,
-                "[exposure] a reader's cut off {what_the_readers_read} panicked; the readers \
-                 after it are still cut off"
-            );
-        }
-    }
-}
-
-/// One reader from outside a port's stream, registered against the port.
-pub struct ReaderOfAnExposedOutputPort {
-    still_registered: Arc<AtomicBool>,
-    location: OutputPortReaderOutsideItsStream,
-    cut_off: CutOffAReaderOfAnExposedOutputPort,
-}
-
-impl std::fmt::Debug for ReaderOfAnExposedOutputPort {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReaderOfAnExposedOutputPort")
-            .field("still_registered", &self.is_still_registered())
-            .field("location", &self.location)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ReaderOfAnExposedOutputPort {
-    /// A reader at `location`, registered while `still_registered` holds.
-    pub(crate) fn new(
-        still_registered: Arc<AtomicBool>,
-        location: OutputPortReaderOutsideItsStream,
-        cut_off: CutOffAReaderOfAnExposedOutputPort,
-    ) -> Self {
-        Self {
-            still_registered,
-            location,
-            cut_off,
-        }
-    }
-
-    /// Where the reader reads the port from.
-    pub fn location(&self) -> OutputPortReaderOutsideItsStream {
-        self.location
-    }
-
-    /// Whether the reader's registration has not been dropped.
-    pub fn is_still_registered(&self) -> bool {
-        self.still_registered.load(Ordering::Acquire)
-    }
-
-    /// Cut the reader off its port for `why`, unless its registration was
-    /// dropped before the cut began.
-    pub(crate) fn cut_off_unless_its_registration_was_dropped(
-        self,
-        why: WhyAReaderOfAnExposedOutputPortIsCutOff,
-    ) {
-        if self.is_still_registered() {
-            (self.cut_off)(why);
-        }
-    }
-}
-
 impl ExposedOutputPortsComponent {
     /// The level of output port `port_name`: internal unless the stream
     /// exposes it.
@@ -207,21 +87,11 @@ impl ExposedOutputPortsComponent {
             .map(|(port_name, exposed)| (port_name.as_str(), exposed.level))
     }
 
-    /// Put `port_name` at `level`, handing back every reader that leaves the
-    /// port: each the new level no longer allows, and each whose registration
-    /// was dropped. The caller cuts them off once it has let go of the graph.
-    #[must_use = "the readers leaving the port are cut off or dropped once the graph lock is released"]
-    pub(crate) fn set_level(
-        &mut self,
-        port_name: &str,
-        level: OutputPortExposureLevel,
-    ) -> Vec<ReaderOfAnExposedOutputPort> {
+    /// Put `port_name` at `level`; an internal port leaves the component.
+    pub(crate) fn set_level(&mut self, port_name: &str, level: OutputPortExposureLevel) {
         if level == OutputPortExposureLevel::Internal {
-            return self
-                .exposed_ports_by_port_name
-                .remove(port_name)
-                .map(|mut exposed| std::mem::take(&mut exposed.readers_from_outside_the_stream))
-                .unwrap_or_default();
+            self.exposed_ports_by_port_name.remove(port_name);
+            return;
         }
         let exposed = self
             .exposed_ports_by_port_name
@@ -229,294 +99,74 @@ impl ExposedOutputPortsComponent {
             .or_insert_with(|| ExposedOutputPortOfThisNode {
                 level,
                 level_now: LevelOfAnExposedOutputPortNow::at(level),
-                readers_from_outside_the_stream: Vec::new(),
             });
         exposed.level = level;
         exposed.level_now.store(level);
-        let (staying, leaving) = std::mem::take(&mut exposed.readers_from_outside_the_stream)
-            .into_iter()
-            .partition(|reader| {
-                reader.is_still_registered()
-                    && output_port_exposure_allows_the_reader(level, reader.location.location())
-            });
-        exposed.readers_from_outside_the_stream = staying;
-        leaving
-    }
-
-    /// Register `reader` against `port_name`, handing back every reader whose
-    /// registration was dropped since, for the caller to drop once it has let
-    /// go of the graph; or hand `reader` back with the port's level when that
-    /// level does not allow a reader where it reads from.
-    #[must_use = "the readers handed back are dropped once the graph lock is released"]
-    pub(crate) fn register_reader(
-        &mut self,
-        port_name: &str,
-        reader: ReaderOfAnExposedOutputPort,
-    ) -> std::result::Result<
-        Vec<ReaderOfAnExposedOutputPort>,
-        (ReaderOfAnExposedOutputPort, OutputPortExposureLevel),
-    > {
-        let level = self.level_of(port_name);
-        let Some(exposed) = self
-            .exposed_ports_by_port_name
-            .get_mut(port_name)
-            .filter(|_| output_port_exposure_allows_the_reader(level, reader.location.location()))
-        else {
-            return Err((reader, level));
-        };
-        let (still_registered, registration_dropped) =
-            std::mem::take(&mut exposed.readers_from_outside_the_stream)
-                .into_iter()
-                .partition(ReaderOfAnExposedOutputPort::is_still_registered);
-        exposed.readers_from_outside_the_stream = still_registered;
-        exposed.readers_from_outside_the_stream.push(reader);
-        Ok(registration_dropped)
-    }
-
-    /// Every reader registered against any port of this node, for a caller
-    /// taking the node out of its stream to cut once it has let go of the
-    /// graph.
-    pub(crate) fn into_every_reader(self) -> Vec<ReaderOfAnExposedOutputPort> {
-        self.exposed_ports_by_port_name
-            .into_values()
-            .flat_map(|mut exposed| std::mem::take(&mut exposed.readers_from_outside_the_stream))
-            .collect()
-    }
-
-    /// How many readers from outside the stream are registered against
-    /// `port_name`.
-    pub fn readers_registered_against(&self, port_name: &str) -> usize {
-        self.exposed_ports_by_port_name
-            .get(port_name)
-            .map_or(0, |exposed| {
-                exposed
-                    .readers_from_outside_the_stream
-                    .iter()
-                    .filter(|reader| reader.is_still_registered())
-                    .count()
-            })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
-
     use super::*;
 
-    fn a_reader_counting_its_cuts_into(
-        location: OutputPortReaderOutsideItsStream,
-        cuts: &Arc<AtomicUsize>,
-    ) -> (ReaderOfAnExposedOutputPort, Arc<AtomicBool>) {
-        let still_registered = Arc::new(AtomicBool::new(true));
-        let cuts = Arc::clone(cuts);
-        let reader = ReaderOfAnExposedOutputPort::new(
-            Arc::clone(&still_registered),
-            location,
-            Box::new(move |_why| {
-                cuts.fetch_add(1, Ordering::SeqCst);
-            }),
-        );
-        (reader, still_registered)
-    }
-
-    fn cut_off_every(readers: Vec<ReaderOfAnExposedOutputPort>) {
-        for reader in readers {
-            reader.cut_off_unless_its_registration_was_dropped(
-                WhyAReaderOfAnExposedOutputPortIsCutOff::ItsPortsNodeLeftItsStream,
-            );
-        }
-    }
-
-    /// A reader's cut is told why it is cut: a lowered level names the level
-    /// the port is at now.
     #[test]
-    fn a_cut_is_told_the_level_that_no_longer_allows_its_reader() {
-        let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        let told = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let told_by_the_cut = Arc::clone(&told);
-        assert!(
-            exposed_ports
-                .register_reader(
-                    "video",
-                    ReaderOfAnExposedOutputPort::new(
-                        Arc::new(AtomicBool::new(true)),
-                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                        Box::new(move |why| told_by_the_cut.lock().push(why)),
-                    ),
-                )
-                .is_ok()
-        );
-
-        for reader in exposed_ports.set_level("video", OutputPortExposureLevel::Internal) {
-            reader.cut_off_unless_its_registration_was_dropped(
-                WhyAReaderOfAnExposedOutputPortIsCutOff::TheLevelNoLongerAllowsIt {
-                    level: OutputPortExposureLevel::Internal,
-                },
-            );
-        }
-
-        assert_eq!(
-            *told.lock(),
-            vec![
-                WhyAReaderOfAnExposedOutputPortIsCutOff::TheLevelNoLongerAllowsIt {
-                    level: OutputPortExposureLevel::Internal
-                }
-            ]
-        );
-    }
-
-    /// A node taken out of its stream hands back every reader of every one of
-    /// its ports, whatever the port's level.
-    #[test]
-    fn a_node_leaving_its_stream_hands_back_every_reader_of_every_port() {
-        let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        let _ = exposed_ports.set_level("preview", OutputPortExposureLevel::Public);
-        let cuts = Arc::new(AtomicUsize::new(0));
-        for port_name in ["video", "preview", "preview"] {
-            let (reader, _) = a_reader_counting_its_cuts_into(
-                OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                &cuts,
-            );
-            assert!(exposed_ports.register_reader(port_name, reader).is_ok());
-        }
-
-        let every_reader = exposed_ports.into_every_reader();
-
-        assert_eq!(every_reader.len(), 3);
-        cut_off_every(every_reader);
-        assert_eq!(cuts.load(Ordering::SeqCst), 3);
-    }
-
-    #[test]
-    fn a_port_with_no_entry_is_internal_and_refuses_a_reader_from_outside_the_stream() {
-        let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let cuts = Arc::new(AtomicUsize::new(0));
-        let (reader, _) = a_reader_counting_its_cuts_into(
-            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            &cuts,
-        );
-
-        let refused = exposed_ports.register_reader("video", reader);
+    fn a_port_with_no_entry_is_internal_and_has_no_level_to_read() {
+        let exposed_ports = ExposedOutputPortsComponent::default();
 
         assert_eq!(
             exposed_ports.level_of("video"),
             OutputPortExposureLevel::Internal
         );
-        assert!(matches!(
-            refused,
-            Err((_, OutputPortExposureLevel::Internal))
-        ));
-        assert_eq!(
-            cuts.load(Ordering::SeqCst),
-            0,
-            "a refused reader is never cut"
-        );
+        assert!(exposed_ports.level_now_of("video").is_none());
     }
 
+    /// The level read without the lock follows every change, and reads
+    /// internal for good once the port is lowered to internal.
     #[test]
-    fn lowering_a_level_hands_back_exactly_the_readers_it_no_longer_allows() {
+    fn the_level_read_without_the_lock_follows_each_change_and_ends_internal() {
         let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Public);
-        let on_this_machine = Arc::new(AtomicUsize::new(0));
-        let off_this_machine = Arc::new(AtomicUsize::new(0));
-        for (location, cuts) in [
-            (
-                OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                &on_this_machine,
-            ),
-            (
-                OutputPortReaderOutsideItsStream::OnAnotherMachine,
-                &off_this_machine,
-            ),
-        ] {
-            let (reader, _) = a_reader_counting_its_cuts_into(location, cuts);
-            assert!(exposed_ports.register_reader("video", reader).is_ok());
-        }
+        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        let level_now = exposed_ports
+            .level_now_of("video")
+            .expect("a private port has a level to read");
+        assert_eq!(level_now.read(), OutputPortExposureLevel::Private);
 
-        let leaving_at_private = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        assert_eq!(leaving_at_private.len(), 1);
-        cut_off_every(leaving_at_private);
-        assert_eq!(off_this_machine.load(Ordering::SeqCst), 1);
-        assert_eq!(on_this_machine.load(Ordering::SeqCst), 0);
-        assert_eq!(exposed_ports.readers_registered_against("video"), 1);
+        exposed_ports.set_level("video", OutputPortExposureLevel::Public);
+        assert_eq!(level_now.read(), OutputPortExposureLevel::Public);
 
-        cut_off_every(exposed_ports.set_level("video", OutputPortExposureLevel::Internal));
-        assert_eq!(on_this_machine.load(Ordering::SeqCst), 1);
-        assert_eq!(off_this_machine.load(Ordering::SeqCst), 1);
+        exposed_ports.set_level("video", OutputPortExposureLevel::Internal);
+        assert_eq!(level_now.read(), OutputPortExposureLevel::Internal);
         assert_eq!(
             exposed_ports.exposed_ports_and_their_levels().count(),
             0,
             "an internal port has no entry"
         );
-    }
 
-    #[test]
-    fn raising_a_level_cuts_no_reader() {
-        let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        let cuts = Arc::new(AtomicUsize::new(0));
-        let (reader, _) = a_reader_counting_its_cuts_into(
-            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            &cuts,
-        );
-        assert!(exposed_ports.register_reader("video", reader).is_ok());
-
-        assert!(
-            exposed_ports
-                .set_level("video", OutputPortExposureLevel::Public)
-                .is_empty()
-        );
-        assert_eq!(exposed_ports.readers_registered_against("video"), 1);
-    }
-
-    #[test]
-    fn a_reader_whose_registration_was_dropped_is_never_cut_and_leaves_at_the_next_change() {
-        let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        let cuts = Arc::new(AtomicUsize::new(0));
-        let (reader, still_registered) = a_reader_counting_its_cuts_into(
-            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            &cuts,
-        );
-        assert!(exposed_ports.register_reader("video", reader).is_ok());
-
-        still_registered.store(false, Ordering::Release);
-        assert_eq!(exposed_ports.readers_registered_against("video"), 0);
-        let leaving = exposed_ports.set_level("video", OutputPortExposureLevel::Public);
+        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
         assert_eq!(
-            leaving.len(),
-            1,
-            "a dropped registration's reader leaves the port"
+            level_now.read(),
+            OutputPortExposureLevel::Internal,
+            "a port exposed again has a new level to read"
         );
-        cut_off_every(leaving);
-
-        assert_eq!(cuts.load(Ordering::SeqCst), 0);
     }
 
+    /// A node leaving its stream drops its exposures, and every level read
+    /// without the lock reads internal.
     #[test]
-    fn a_registration_hands_back_the_readers_whose_registrations_were_dropped() {
+    fn dropping_the_exposures_leaves_every_level_read_without_the_lock_internal() {
         let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        let cuts = Arc::new(AtomicUsize::new(0));
-        let (first, first_still_registered) = a_reader_counting_its_cuts_into(
-            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            &cuts,
-        );
-        assert!(exposed_ports.register_reader("video", first).is_ok());
-        first_still_registered.store(false, Ordering::Release);
+        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        exposed_ports.set_level("preview", OutputPortExposureLevel::Public);
+        let levels_now: Vec<LevelOfAnExposedOutputPortNow> = ["video", "preview"]
+            .into_iter()
+            .filter_map(|port_name| exposed_ports.level_now_of(port_name))
+            .collect();
+        assert_eq!(levels_now.len(), 2);
 
-        let (second, _) = a_reader_counting_its_cuts_into(
-            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            &cuts,
-        );
-        let registration_dropped = exposed_ports
-            .register_reader("video", second)
-            .expect("a private port takes a reader on this machine");
+        drop(exposed_ports);
 
-        assert_eq!(registration_dropped.len(), 1);
-        assert_eq!(exposed_ports.readers_registered_against("video"), 1);
+        for level_now in levels_now {
+            assert_eq!(level_now.read(), OutputPortExposureLevel::Internal);
+        }
     }
 }

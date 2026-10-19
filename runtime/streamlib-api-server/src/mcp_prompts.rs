@@ -457,28 +457,12 @@ fn insert_node_between_linked_nodes_recipe(
                 None,
             )
         })?;
-    // A source in another stream is that stream's node, which this graph does
-    // not hold; the new node takes it with `from_stream`.
-    let source_stream = link.source.stream.as_deref();
-    if source_stream.is_none() {
-        node_named(graph, &link.source.node)?;
-    }
+    let source = node_named(graph, &link.source.node)?;
     let target = node_named(graph, &link.target.node)?;
     let source_port = link.source.port.as_str();
     let target_port = link.target.port.as_str();
-    let source_name = link.source.node.as_str();
+    let source_name = source.name.as_str();
     let target_name = target.name.as_str();
-    let from_the_source = match source_stream {
-        Some(source_stream) => format!(
-            "`from_stream`: `{source_stream}`, `from_node`: `{source_name}`, `from_port`: \
-             `{source_port}`"
-        ),
-        None => format!("`from_node`: `{source_name}`, `from_port`: `{source_port}`"),
-    };
-    let the_source_named = match source_stream {
-        Some(source_stream) => format!("`{source_name}` of the stream `{source_stream}`"),
-        None => format!("`{source_name}`"),
-    };
 
     let inserted_type_entry = catalog_entry_for(node_catalog, node_type);
     let target_port_takes_one_inbound_link =
@@ -486,7 +470,10 @@ fn insert_node_between_linked_nodes_recipe(
 
     let connect_source_to_inserted = graph_recipe_step_calling_tool(
         "connect",
-        format!("{from_the_source}, `to_node`: the new node's `name`, `to_port`: its input port."),
+        format!(
+            "`from_node`: `{source_name}`, `from_port`: `{source_port}`, `to_node`: the new \
+             node's `name`, `to_port`: its input port."
+        ),
     );
     let connect_inserted_to_target = graph_recipe_step_calling_tool(
         "connect",
@@ -533,14 +520,14 @@ fn insert_node_between_linked_nodes_recipe(
              `{target_port}` declares an audio window contract, so it takes a single inbound \
              link; `{target_name}` receives nothing between the `disconnect` and the second \
              `connect`. If a `connect` after the `disconnect` is refused, `connect` \
-             {the_source_named} port `{source_port}` to `{target_name}` port `{target_port}` \
-             again to restore what the link carried."
+             `{source_name}` port `{source_port}` to `{target_name}` port `{target_port}` again \
+             to restore what the link carried."
         )
     });
 
     Ok(GraphRecipe {
         introduction_text: format!(
-            "Insert a `{node_type}` node into link `{link_id}`, which carries {the_source_named} \
+            "Insert a `{node_type}` node into link `{link_id}`, which carries `{source_name}` \
              port `{source_port}` to `{target_name}` port `{target_port}`.\n\n{}",
             catalog_introduction_for(node_type, inserted_type_entry.as_ref())?
         ),

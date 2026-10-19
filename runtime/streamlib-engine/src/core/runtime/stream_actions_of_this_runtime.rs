@@ -787,9 +787,9 @@ impl Runner {
     }
 
     /// Put output port `port` of node `node` in the stream `stream_name`
-    /// names at `level`: live on a loaded stream, cutting off at once every
-    /// reader from outside the stream the level no longer allows, and
-    /// recorded as the owner's ruling on a kept stream. On a loaded kept
+    /// names at `level`: live on a loaded stream, where the runtime's
+    /// publisher withdraws the port's track from each relay the level no
+    /// longer allows, and recorded as the owner's ruling on a kept stream. On a loaded kept
     /// stream a restriction is recorded before it changes live, and refused
     /// with the live level unchanged when its record cannot be written, so a
     /// restart never re-opens a port the owner closed; a promotion changes
@@ -2713,17 +2713,12 @@ mod tests {
             the_exposures_graph_renders_for(&loaded),
             serde_json::json!([{"node": "source", "port": "out2", "level": "public"}])
         );
-        let refusal = loaded
-            .register_a_reader_of_an_exposed_output_port(
-                "source",
-                "out1",
-                crate::core::graph::OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                Box::new(|_why| {}),
-            )
-            .expect_err("the owner's internal holds over the function's private");
-        assert!(
-            matches!(refusal, Error::OutputPortNotExposedToTheReader(_)),
-            "{refusal}"
+        assert_eq!(
+            loaded
+                .output_port_exposure_level("source", "out1")
+                .expect("the port is there"),
+            OutputPortExposureLevel::Internal,
+            "the owner's internal holds over the function's private"
         );
     }
 
