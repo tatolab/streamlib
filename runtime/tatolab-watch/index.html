@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- Copyright (c) 2025 Jonathan Fontanez -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>tatolab watch</title>
+		<style>
+			body {
+				margin: 0;
+				font-family: system-ui, sans-serif;
+				background: #111;
+				color: #ddd;
+			}
+			header {
+				padding: 0.5rem 1rem;
+			}
+			#watch-canvas {
+				display: block;
+				width: 100%;
+				max-height: 80vh;
+				object-fit: contain;
+				background: #000;
+			}
+			a {
+				color: #8cf;
+			}
+			a[aria-current] {
+				font-weight: bold;
+			}
+		</style>
+		<!-- Absolute: the page answers at every /watch/<address>, below which a relative path would name no file. -->
+		<script type="module" src="/watch/main.js"></script>
+	</head>
+	<body>
+		<header>
+			<div id="watch-address"></div>
+			<div id="watch-status">loading</div>
+		</header>
+		<canvas id="watch-canvas"></canvas>
+		<ul id="watch-video-tracks"></ul>
+	</body>
+</html>
