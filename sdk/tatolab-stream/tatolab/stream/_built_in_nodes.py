@@ -30,6 +30,8 @@ __all__ = [
     "OpusDecoderConfig",
     "OpusEncoder",
     "OpusEncoderConfig",
+    "RelayTrackSource",
+    "RelayTrackSourceConfig",
     "SpeakerSink",
     "SpeakerSinkConfig",
     "TestPatternSource",
@@ -439,6 +441,68 @@ class OpusEncoder(BuiltInNode[OpusEncoderConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:OpusEncoder"
+
+
+class RelayTrackSourceConfig(TypedDict, total=False):
+    """`RelayTrackSource`'s config: the keys `stream_builder.add` takes."""
+
+    broadcast: str | None
+    """The broadcast to read, as its publisher named it at the relay — any MoQ
+    publisher's, whatever its layout. Given with `track`, in place of `track_address`.
+    """
+
+    relay_url: str
+    """The relay to subscribe at. The default is this machine's local relay on loopback,
+    which serves every private and public port of the machine.
+
+    Default: `"http://127.0.0.1:4443"`.
+    """
+
+    track: str | None
+    """The track of `broadcast` to read, as its publisher named it."""
+
+    track_address: str | None
+    """The track to read, `<machine>/<stream>/<node>/<port>`: the exposed port
+    `<node>/<port>` of the stream `<stream>` on the machine `<machine>`, read as written
+    — the broadcast `<machine>/<stream>.hang`, the track `<node>/<port>`. Give this, or
+    `broadcast` with `track`.
+    """
+
+
+class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
+    """Reads one track at a MoQ relay into the graph — how a stream reads another
+    stream's exposed port, on this machine through the local relay's loopback listener
+    or on another machine through any relay that serves it, and how it reads a track any
+    other MoQ publisher wrote. The track is named by `track_address`,
+    `<machine>/<stream>/<node>/<port>` — the broadcast `<machine>/<stream>.hang`, the
+    track `<node>/<port>` — or by `broadcast` with `track` for any other layout, each
+    read exactly as its publisher wrote it.
+
+    `track` carries each object's payload bytes as the relay delivered them, the first
+    object of each group starting a group, and its catalog entry is the track's own from
+    the broadcast's catalog. What a payload means is the publisher's: a `VideoFrame`
+    track names surfaces on the machine that wrote it, which mean nothing here.
+
+    The relay's object carries the writer's stamp, on the writer's clock. Every stamp in
+    a graph is this machine's, so `track` is stamped with the object's own timestamp —
+    the hang container's for a media track, the object's otherwise — plus one offset
+    taken at the first object and lowered for an object that would run more than 100 ms
+    ahead of its arrival, as the stack's own player lowers its reference past its
+    buffer, such as the group in progress a joining reader is handed in one burst; it is
+    taken again when the track steps back or falls a second behind, so the track's own
+    spacing survives jittered arrival. An object carrying no timestamp is stamped at
+    arrival.
+
+    A relay that refuses, or a track not yet published or withdrawn, is retried with
+    backoff and never ends the stream.
+
+    Outputs:
+        `track`: Each object of the track, as the relay delivered it.
+
+    Config: `RelayTrackSourceConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:RelayTrackSource"
 
 
 class SpeakerSinkConfig(TypedDict, total=False):

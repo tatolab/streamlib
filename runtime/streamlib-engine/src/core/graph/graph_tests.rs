@@ -421,13 +421,7 @@ mod edge_query_ops {
 
         let link = graph.traversal().e(link_id.as_str()).first().unwrap();
 
-        assert_eq!(
-            link.source_in_this_stream()
-                .expect("a link between two nodes of the graph")
-                .processor_id()
-                .as_str(),
-            upstream_id.as_str()
-        );
+        assert_eq!(link.source().processor_id().as_str(), upstream_id.as_str());
         assert_eq!(link.source().port_name(), "out1");
         assert_eq!(
             link.to_port().processor_id().as_str(),
@@ -839,14 +833,11 @@ mod mutation_persistence {
     }
 
     /// A node's exposures live on the node, so dropping it — what a live
-    /// removal's commit does — takes them out of `graph` and drops every
-    /// reader's cut unrun.
+    /// removal's commit does — takes them out of `graph`, and the level the
+    /// publisher reads without the lock reads internal.
     #[test]
-    fn a_dropped_node_takes_its_exposures_and_their_readers_with_it() {
-        use crate::core::graph::{
-            ExposedOutputPortsComponent, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
-            ReaderOfAnExposedOutputPort,
-        };
+    fn a_dropped_node_takes_its_exposures_with_it() {
+        use crate::core::graph::{ExposedOutputPortsComponent, OutputPortExposureLevel};
 
         let mut graph = test_graph();
         let id = graph
@@ -857,24 +848,11 @@ mod mutation_persistence {
             .expect("should create processor")
             .id
             .to_string();
-        let cuts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut exposed_ports = ExposedOutputPortsComponent::default();
-        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
-        let cut_holding_the_count = Arc::clone(&cuts);
-        assert!(
-            exposed_ports
-                .register_reader(
-                    "video",
-                    ReaderOfAnExposedOutputPort::new(
-                        Arc::new(std::sync::atomic::AtomicBool::new(true)),
-                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-                        Box::new(move |_why| {
-                            cut_holding_the_count.fetch_add(1, Ordering::SeqCst);
-                        }),
-                    ),
-                )
-                .is_ok()
-        );
+        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        let level_now = exposed_ports
+            .level_now_of("video")
+            .expect("a private port has a level to read");
         graph
             .traversal_mut()
             .v(id.as_str())
@@ -890,16 +868,7 @@ mod mutation_persistence {
         graph.traversal_mut().v(id.as_str()).drop();
 
         assert!(graph.to_graph_response("rig".into()).exposed.is_empty());
-        assert_eq!(
-            cuts.load(Ordering::SeqCst),
-            0,
-            "a dropped node's readers are not cut"
-        );
-        assert_eq!(
-            Arc::strong_count(&cuts),
-            1,
-            "the node took its readers' cuts with it"
-        );
+        assert_eq!(level_now.read(), OutputPortExposureLevel::Internal);
     }
 
     #[test]
@@ -1340,160 +1309,6 @@ mod edge_navigation {
         let downstream_processors = graph.traversal().e(link_id.as_str()).in_v().ids();
         assert_eq!(downstream_processors.len(), 1);
         assert_eq!(downstream_processors[0].as_str(), downstream_id);
-    }
-}
-
-// =============================================================================
-// Links reading another stream
-// =============================================================================
-
-mod links_reading_another_stream {
-    use super::*;
-    use crate::core::graph::{
-        InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, OutputPortInAnotherStreamOnThisMachine,
-        ProcessorUniqueId,
-    };
-
-    /// A node that reads and writes, a node feeding it in this stream, and a
-    /// link into the reader from `camera/video` of the stream `a`.
-    struct AGraphWithALinkReadingAnotherStream {
-        graph: Graph,
-        reader: ProcessorUniqueId,
-        writer_in_this_stream: ProcessorUniqueId,
-        link_reading_another_stream: LinkUniqueId,
-    }
-
-    impl AGraphWithALinkReadingAnotherStream {
-        fn build() -> Self {
-            let mut graph = test_graph();
-            let mut add = |node| {
-                graph
-                    .traversal_mut()
-                    .add_v(node)
-                    .expect("the node is named")
-                    .first()
-                    .expect("the node is added")
-                    .id
-                    .clone()
-            };
-            let reader = add(MockProcessor::Processor::node(Default::default()));
-            let writer_in_this_stream =
-                add(MockOutputOnlyProcessor::Processor::node(Default::default()));
-            graph.traversal_mut().add_e(
-                OutputLinkPortRef::new(writer_in_this_stream.clone(), "out1"),
-                InputLinkPortRef::new(reader.clone(), "in1"),
-            );
-            let link_reading_another_stream = graph
-                .traversal_mut()
-                .add_e_reading_another_stream(
-                    OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "video").unwrap(),
-                    InputLinkPortRef::new(reader.clone(), "in2"),
-                )
-                .first()
-                .expect("the link is added")
-                .id
-                .clone();
-            Self {
-                graph,
-                reader,
-                writer_in_this_stream,
-                link_reading_another_stream,
-            }
-        }
-    }
-
-    #[test]
-    fn a_link_reading_another_stream_is_an_inbound_link_of_its_target_and_no_outbound_link_of_any_node()
-     {
-        let built = AGraphWithALinkReadingAnotherStream::build();
-        let graph = &built.graph;
-
-        let inbound = graph.traversal().v(&built.reader).in_e().ids();
-        assert_eq!(inbound.len(), 2, "both links carry into the reader");
-        assert!(inbound.contains(&built.link_reading_another_stream));
-
-        assert!(
-            graph.traversal().v(&built.reader).out_e().ids().is_empty(),
-            "the edge from the reader to itself carries out of no node"
-        );
-        assert_eq!(
-            graph
-                .traversal()
-                .v(&built.writer_in_this_stream)
-                .out_e()
-                .ids()
-                .len(),
-            1
-        );
-        assert_eq!(
-            graph.traversal().e(()).ids().len(),
-            2,
-            "every link is in the one collection"
-        );
-    }
-
-    #[test]
-    fn a_link_reading_another_stream_has_no_source_node_in_this_graph() {
-        let built = AGraphWithALinkReadingAnotherStream::build();
-
-        assert!(
-            built
-                .graph
-                .traversal()
-                .e(&built.link_reading_another_stream)
-                .out_v()
-                .ids()
-                .is_empty()
-        );
-        assert_eq!(
-            built
-                .graph
-                .traversal()
-                .e(&built.link_reading_another_stream)
-                .in_v()
-                .ids(),
-            std::slice::from_ref(&built.reader)
-        );
-        let link = built
-            .graph
-            .traversal()
-            .e(&built.link_reading_another_stream)
-            .first()
-            .unwrap();
-        assert!(link.source_in_this_stream().is_none());
-        assert_eq!(link.source().to_string(), "a/camera/video");
-    }
-
-    #[test]
-    fn removing_the_target_node_takes_a_link_reading_another_stream_with_it() {
-        let mut built = AGraphWithALinkReadingAnotherStream::build();
-
-        built.graph.traversal_mut().v(&built.reader).drop();
-
-        assert!(
-            !built
-                .graph
-                .traversal()
-                .e(&built.link_reading_another_stream)
-                .exists()
-        );
-        assert!(built.graph.traversal().e(()).ids().is_empty());
-    }
-
-    #[test]
-    fn a_link_reading_another_stream_is_refused_onto_an_input_its_node_does_not_have() {
-        let mut built = AGraphWithALinkReadingAnotherStream::build();
-
-        assert!(
-            !built
-                .graph
-                .traversal_mut()
-                .add_e_reading_another_stream(
-                    OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "video").unwrap(),
-                    InputLinkPortRef::new(built.reader.clone(), "no_such_input"),
-                )
-                .exists()
-        );
     }
 }
 

@@ -191,6 +191,23 @@
       "components": {
         "state": "Running"
       }
+    },
+    {
+      "id": "golden02",
+      "name": "relaytracksource",
+      "type": "tatolab.stream:RelayTrackSource",
+      "config": {
+        "relay_url": "http://127.0.0.1:4443",
+        "track_address": "golden-desk/camera-rig/camerasource/video"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
     }
   ],
   "links": [
@@ -294,29 +311,10 @@
       "components": {}
     },
     {
-      "id": "goldenlink10",
-      "source": {
-        "stream": "camera-rig",
-        "node": "camerasource",
-        "port": "video"
-      },
-      "target": {
-        "node": "h265encoder",
-        "port": "video"
-      },
-      "capacity": 16,
-      "state": "awaiting_remote",
-      "awaiting_remote_reason": "the stream `camera-rig` is not loaded on this machine; the link wires when it loads",
-      "components": {
-        "state": "AwaitingRemote"
-      }
-    },
-    {
       "id": "goldenlink11",
       "source": {
-        "stream": "camera-rig",
-        "node": "camerasource",
-        "port": "video"
+        "node": "relaytracksource",
+        "port": "track"
       },
       "target": {
         "node": "virtualcamerasink",
@@ -324,7 +322,7 @@
       },
       "capacity": 16,
       "state": "error",
-      "error_reason": "Invalid configuration: output port 'goldencamerarig01.video' would feed 33 destinations, and a channel carries at most 32",
+      "error_reason": "a reason `graph` renders only on a link in error",
       "components": {
         "state": "Error"
       }
@@ -340,6 +338,11 @@
       "node": "h264encoder",
       "port": "encoded_video",
       "level": "public"
+    },
+    {
+      "node": "relaytracksource",
+      "port": "track",
+      "level": "private"
     }
   ],
   "extensions": [],

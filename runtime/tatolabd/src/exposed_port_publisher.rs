@@ -13,9 +13,10 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use bytes::Bytes;
-use hang::catalog::Section;
 use moq_net::{Timescale, Timestamp};
-use streamlib::sdk::descriptors::{CatalogEntry, CatalogSection};
+use streamlib::sdk::descriptors::{
+    CatalogEntry, CatalogSection, the_hang_map_a_catalog_section_lists_its_tracks_under,
+};
 use streamlib::sdk::graph::ProcessorUniqueId;
 use streamlib::sdk::iceoryx2::{
     MessageGroupBoundary, MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate,
@@ -324,9 +325,6 @@ impl Drop for BroadcastOfAStreamAtARelay {
     }
 }
 
-/// The key hang's `video` and `audio` sections hold their renditions under.
-const HANG_MAP_OF_THE_RENDITIONS_OF_A_MEDIA_SECTION: &str = "renditions";
-
 /// A broadcast's catalog: each port's entry copied under its section, keyed by
 /// its track name. A port with no entry is a track the catalog does not list.
 fn the_catalog_merged_from_the_entries_of<'entry>(
@@ -345,17 +343,11 @@ fn the_catalog_merged_from_the_entries_of<'entry>(
             .into_iter()
             .filter_map(|section| {
                 let tracks = tracks_by_section.remove(&section)?;
-                let map_of_the_section = match section {
-                    CatalogSection::Video | CatalogSection::Audio => {
-                        HANG_MAP_OF_THE_RENDITIONS_OF_A_MEDIA_SECTION
-                    }
-                    CatalogSection::Text => hang::catalog::Text::MAP,
-                    CatalogSection::Json => hang::catalog::Json::MAP,
-                    CatalogSection::Binary => hang::catalog::Binary::MAP,
-                };
                 Some((
                     section.as_catalog_key().to_string(),
-                    serde_json::json!({ map_of_the_section: tracks }),
+                    serde_json::json!({
+                        the_hang_map_a_catalog_section_lists_its_tracks_under(section): tracks
+                    }),
                 ))
             })
             .collect(),

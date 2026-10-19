@@ -19,3 +19,5 @@ pub use streamlib_processor_schema::{
     ProcessorClassImportPath, ProcessorClassShortName, ProcessorScheduling, TextEntry, VideoEntry,
     refuse_audio_window_beside_a_skipping_delivery_profile,
 };
+
+pub use crate::core::output_port_catalog_entries::the_hang_map_a_catalog_section_lists_its_tracks_under;

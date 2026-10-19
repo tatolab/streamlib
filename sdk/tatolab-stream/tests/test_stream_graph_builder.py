@@ -22,16 +22,10 @@ import numpy
 import pytest
 
 import tatolab.stream
-from shared_port_address_cases import (
-    PORT_ADDRESS_CASES_THAT_ARE_REFUSED,
-    PORT_ADDRESS_CASES_THAT_PARSE,
-    port_address_case_id,
-)
 from stream_graph_builder_nodes import BrightnessReader, FrameFilters, FrameInverter
 from tatolab.stream import (
     NodeInputPortReference,
     NodeOutputPortReference,
-    NodeOutputPortReferenceByAddress,
     NodeReference,
     StreamBuilder,
     compile_stream_to_graph,
@@ -42,7 +36,6 @@ from tatolab.stream._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
     ExposedNameCastsToNothingError,
 )
-from tatolab.stream._port_address import InvalidPortAddressError
 from tatolab.stream._stream_graph_builder import is_stream_function
 
 STREAM_GRAPH_BUILDER_SOURCE = (
@@ -187,21 +180,6 @@ def hand_built_references(stream_builder: StreamBuilder) -> None:
         NodeInputPortReference("BrightnessReader", "VIDEO_FROM_UPSTREAM"),
     )
     stream_builder.expose(NodeOutputPortReference("FrameInverter", "Video_To_Downstream"))
-
-
-@stream
-def reads_another_stream(stream_builder: StreamBuilder) -> None:
-    """An inverter pulling stream `Camera Rig`'s exposed output, and its own output to a reader."""
-    inverter = stream_builder.add(FrameInverter)
-    reader = stream_builder.add(BrightnessReader)
-    stream_builder.connect(
-        stream_builder.remote_output("Camera Rig/FrameInverter/Video_To_Downstream"),
-        inverter.input("video_from_upstream"),
-    )
-    stream_builder.connect(
-        stream_builder.remote_output("reads_another_stream/frameinverter/video_to_downstream"),
-        reader.input("video_from_upstream"),
-    )
 
 
 def not_decorated(stream_builder: StreamBuilder) -> None:
@@ -766,8 +744,27 @@ def test_connect_refuses_an_input_as_its_source_naming_the_fix() -> None:
     message = str(refusal.value)
     assert "connect's source must name an output port" in message
     assert "`stream_builder.add(...).output(port_name)`" in message
-    assert '`stream_builder.remote_output("<stream>/<node>/<port>")`' in message
     assert "NodeInputPortReference" in message
+
+
+def test_connect_refuses_a_port_address_as_its_source_naming_relay_track_source() -> None:
+    stream_builder = StreamBuilder("rig")
+    reader = stream_builder.add(BrightnessReader)
+
+    with pytest.raises(TypeError) as refusal:
+        stream_builder.connect(
+            "main/camera/video",  # pyright: ignore[reportArgumentType]
+            reader.input("video_from_upstream"),
+        )
+
+    message = str(refusal.value)
+    assert message.startswith("connect's source must name an output port of a node this stream")
+    assert "`stream_builder.add(...).output(port_name)`" in message
+    assert (
+        "A link's ends are both in this stream; read another stream's port, on this machine "
+        "or another, through a `RelayTrackSource` node this stream adds."
+    ) in message
+    assert stream_builder._compiled_graph()["links"] == []
 
 
 def test_connect_refuses_an_output_as_its_destination_naming_the_fix() -> None:
@@ -846,254 +843,6 @@ def test_exposing_one_output_twice_is_refused_at_the_second_naming_it() -> None:
     assert "`video_to_downstream`" in message
     assert "`frameinverter`" in message
     assert "already exposes" in message
-
-
-@pytest.mark.parametrize("case", PORT_ADDRESS_CASES_THAT_PARSE, ids=port_address_case_id)
-def test_remote_output_names_the_port_a_fixture_address_parses_to(
-    case: "dict[str, Any]",
-) -> None:
-    remote_output = StreamBuilder("rig").remote_output(case["address"])
-
-    assert (
-        remote_output.machine_name,
-        remote_output.stream_name,
-        remote_output.node_name,
-        remote_output.port_name,
-    ) == (case.get("machine"), case.get("stream"), case["node"], case["port"])
-
-
-@pytest.mark.parametrize("case", PORT_ADDRESS_CASES_THAT_ARE_REFUSED, ids=port_address_case_id)
-def test_remote_output_refuses_a_fixture_address_naming_no_port_where_it_is_written(
-    case: "dict[str, Any]",
-) -> None:
-    with pytest.raises(InvalidPortAddressError) as refusal:
-        StreamBuilder("rig").remote_output(case["address"])
-
-    assert repr(case["address"]) in str(refusal.value)
-
-
-def test_remote_output_refuses_a_chunk_casting_to_nothing_naming_its_part() -> None:
-    with pytest.raises(InvalidPortAddressError) as refusal:
-        StreamBuilder("rig").remote_output("main/../video")
-
-    assert str(refusal.value).startswith(
-        "the node chunk '..' of the port address 'main/../video' cannot name a node: "
-    )
-
-
-def test_remote_output_refuses_an_address_that_is_not_a_string() -> None:
-    with pytest.raises(TypeError) as refusal:
-        StreamBuilder("rig").remote_output(7)  # pyright: ignore[reportArgumentType]
-
-    assert str(refusal.value) == (
-        "a port address is a str, `<stream>/<node>/<port>`; got 7, of type `int` — pass "
-        "the address as a str"
-    )
-
-
-def test_an_address_reference_holds_its_address_cast() -> None:
-    remote_output = StreamBuilder("rig").remote_output("Main Stream/Camera Source 2/Video")
-
-    assert remote_output.address == "main-stream/camera-source-2/video"
-    assert remote_output == NodeOutputPortReferenceByAddress("main-stream/camera-source-2/video")
-    assert repr(remote_output) == (
-        "NodeOutputPortReferenceByAddress(address='main-stream/camera-source-2/video', "
-        "machine_name=None, stream_name='main-stream', node_name='camera-source-2', "
-        "port_name='video')"
-    )
-    with pytest.raises(AttributeError):
-        remote_output.stream_name = "other"  # pyright: ignore[reportAttributeAccessIssue]
-
-
-def test_a_link_from_another_streams_output_compiles_to_its_stream_node_and_port() -> None:
-    stream_builder = StreamBuilder("rig")
-    inverter = stream_builder.add(FrameInverter)
-
-    stream_builder.connect(
-        stream_builder.remote_output("Main/Camera/Video"), inverter.input("video_from_upstream")
-    )
-
-    assert stream_builder._compiled_graph()["links"] == [
-        {
-            "source": {"stream": "main", "node": "camera", "port": "video"},
-            "target": {"node": "frameinverter", "port": "video_from_upstream"},
-        }
-    ]
-
-
-@pytest.mark.parametrize(
-    ("address", "machine_name"),
-    [
-        ("desk/main/camera/video", "desk"),
-        ("desk.tail2950db.ts.net/main/camera/video", "desk.tail2950db.ts.net"),
-        ("Rig/rig/frameinverter/video_to_downstream", "rig"),
-    ],
-    ids=["machine", "full-tailnet-name", "naming-this-stream"],
-)
-def test_an_address_naming_a_machine_compiles_with_its_machine_chunk(
-    address: str, machine_name: str
-) -> None:
-    stream_builder = StreamBuilder("rig")
-    reader = stream_builder.add(BrightnessReader)
-    remote_output = stream_builder.remote_output(address)
-
-    stream_builder.connect(remote_output, reader.input("video_from_upstream"))
-
-    assert stream_builder._compiled_graph()["links"][0]["source"] == {
-        "machine": machine_name,
-        "stream": remote_output.stream_name,
-        "node": remote_output.node_name,
-        "port": remote_output.port_name,
-    }
-
-
-@pytest.mark.parametrize(
-    "address",
-    ["FrameInverter/Video_To_Downstream", "Rig/FrameInverter/Video_To_Downstream"],
-    ids=["node-and-port", "this-stream"],
-)
-def test_an_address_in_this_stream_compiles_to_a_link_within_it(address: str) -> None:
-    stream_builder = StreamBuilder("Rig")
-    stream_builder.add(FrameInverter)
-    reader = stream_builder.add(BrightnessReader)
-
-    stream_builder.connect(
-        stream_builder.remote_output(address), reader.input("video_from_upstream")
-    )
-
-    assert stream_builder._compiled_graph()["links"] == [
-        {
-            "source": {"node": "frameinverter", "port": "video_to_downstream"},
-            "target": {"node": "brightnessreader", "port": "video_from_upstream"},
-        }
-    ]
-
-
-def test_an_address_in_this_stream_naming_a_node_it_does_not_hold_is_refused_at_connect() -> (
-    None
-):
-    stream_builder = StreamBuilder("rig")
-    reader = stream_builder.add(BrightnessReader)
-
-    with pytest.raises(ValueError) as refusal:
-        stream_builder.connect(
-            stream_builder.remote_output("rig/camera/video"), reader.input("video_from_upstream")
-        )
-
-    message = str(refusal.value)
-    assert "node `camera` is not in stream `rig`" in message
-    assert "brightnessreader" in message
-
-
-def test_a_stream_reading_another_compiles_to_its_graph() -> None:
-    graph = compile_stream_to_graph(reads_another_stream)
-
-    assert graph["links"] == [
-        {
-            "source": {
-                "stream": "camera-rig",
-                "node": "frameinverter",
-                "port": "video_to_downstream",
-            },
-            "target": {"node": "frameinverter", "port": "video_from_upstream"},
-        },
-        {
-            "source": {"node": "frameinverter", "port": "video_to_downstream"},
-            "target": {"node": "brightnessreader", "port": "video_from_upstream"},
-        },
-    ]
-    assert json.loads(json.dumps(graph)) == graph
-
-
-def test_a_stream_loaded_under_the_name_its_address_names_links_within_itself() -> None:
-    graph = compile_stream_to_graph(reads_another_stream, name="Camera Rig")
-
-    assert graph["links"][0]["source"] == {
-        "node": "frameinverter",
-        "port": "video_to_downstream",
-    }
-
-
-def test_connect_refuses_an_address_as_its_destination_because_a_link_is_only_pulled() -> (
-    None
-):
-    stream_builder = StreamBuilder("rig")
-    inverter = stream_builder.add(FrameInverter)
-
-    with pytest.raises(TypeError) as refusal:
-        stream_builder.connect(
-            inverter.output("video_to_downstream"),
-            stream_builder.remote_output("main/reader/video_from_upstream"),  # pyright: ignore[reportArgumentType]
-        )
-
-    message = str(refusal.value)
-    assert message.startswith("connect's destination must name an input port")
-    assert "A link is only pulled — the stream that owns the input creates it" in message
-    assert "no reference names another stream's input" in message
-    assert (
-        'its source `stream_builder.remote_output("rig/frameinverter/video_to_downstream")`, '
-        "once this stream exposes that output with `stream_builder.expose(...)`."
-    ) in message
-
-
-@pytest.mark.parametrize(
-    ("source_address", "fix_the_refusal_ends_with"),
-    [
-        ("a/camera/video", 'its source `stream_builder.remote_output("a/camera/video")`.'),
-        (
-            "FrameInverter/Video_To_Downstream",
-            'its source `stream_builder.remote_output("rig/frameinverter/video_to_downstream")`, '
-            "once this stream exposes that output with `stream_builder.expose(...)`.",
-        ),
-    ],
-    ids=["another-stream", "this-stream"],
-)
-def test_connect_refuses_addresses_at_both_ends_naming_the_source_as_the_reader_writes_it(
-    source_address: str, fix_the_refusal_ends_with: str
-) -> None:
-    stream_builder = StreamBuilder("rig")
-    stream_builder.add(FrameInverter)
-
-    with pytest.raises(TypeError) as refusal:
-        stream_builder.connect(
-            stream_builder.remote_output(source_address),
-            stream_builder.remote_output("b/reader/video_from_upstream"),  # pyright: ignore[reportArgumentType]
-        )
-
-    message = str(refusal.value)
-    assert "no reference names another stream's input" in message
-    assert message.endswith(fix_the_refusal_ends_with)
-
-
-def test_a_refused_connect_records_no_link() -> None:
-    stream_builder = StreamBuilder("rig")
-    inverter = stream_builder.add(FrameInverter)
-
-    with pytest.raises(TypeError):
-        stream_builder.connect(
-            inverter.output("video_to_downstream"),
-            stream_builder.remote_output("main/reader/video_from_upstream"),  # pyright: ignore[reportArgumentType]
-        )
-
-    assert stream_builder._compiled_graph()["links"] == []
-
-
-def test_expose_refuses_an_address_naming_the_stream_that_exposes_it() -> None:
-    stream_builder = StreamBuilder("rig")
-    stream_builder.add(FrameInverter)
-
-    with pytest.raises(TypeError) as refusal:
-        stream_builder.expose(
-            stream_builder.remote_output("main/camera/video")  # pyright: ignore[reportArgumentType]
-        )
-
-    message = str(refusal.value)
-    assert "`stream_builder.add(...).output(port_name)`" in message
-    assert "a stream exposes only its own nodes' outputs" in message
-    assert "`main/camera/video` is exposed in the function of the stream that adds its node" in (
-        message
-    )
-    assert stream_builder._compiled_graph()["exposed"] == []
 
 
 def test_a_node_reference_casts_the_port_names_it_names() -> None:
@@ -1509,7 +1258,6 @@ def test_the_builder_is_on_the_public_surface_and_the_cli_helper_is_not() -> Non
     for public_name in (
         "NodeInputPortReference",
         "NodeOutputPortReference",
-        "NodeOutputPortReferenceByAddress",
         "NodeReference",
         "StreamBuilder",
         "compile_stream_to_graph",
@@ -1543,5 +1291,4 @@ def test_the_builder_module_imports_nothing_native() -> None:
                 (1, "_exposed_name_cast"),
                 (1, "_built_in_node"),
                 (1, "_node_declaration"),
-                (1, "_port_address"),
             }, module_name

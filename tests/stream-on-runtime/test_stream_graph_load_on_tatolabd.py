@@ -51,6 +51,7 @@ from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 from tatolab.stream import (
     H264Encoder,
+    RelayTrackSource,
     TestPatternSource,
     VirtualCameraSink,
     _built_in_nodes,
@@ -71,6 +72,11 @@ BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES = [
     for built_in_node_class in EVERY_BUILT_IN_NODE_CLASS
     if built_in_node_class is not VirtualCameraSink or sys.platform.startswith("linux")
 ]
+
+# The keys a built-in's config cannot leave out; every other built-in loads with none.
+CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT: "dict[type[BuiltInNode[Any]], dict[str, Any]]" = {
+    RelayTrackSource: {"track_address": "desk/camera-rig/camerasource/video"},
+}
 
 OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
 
@@ -146,7 +152,7 @@ def test_a_graph_naming_every_compiled_built_in_by_its_type_loads(
                 {
                     "name": built_in_node_class.__name__,
                     "type": built_in_node_class.type,
-                    "config": {},
+                    "config": CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT.get(built_in_node_class, {}),
                 }
                 for built_in_node_class in BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES
             ],
@@ -448,7 +454,7 @@ def test_a_graph_naming_an_unknown_type_is_refused(
     assert unknown_type in refusal
 
 
-# ---- links: a port no node has, and an end naming a machine -----------------
+# ---- links: a port no node has, and an end naming a stream or a machine -----
 
 
 def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
@@ -462,33 +468,37 @@ def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
 
 
 @pytest.mark.parametrize("end", ["source", "target"])
-def test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the_address_shape(
-    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, end: str
+@pytest.mark.parametrize(
+    ("keys_naming_a_port_outside_the_stream", "what_the_refusal_names"),
+    [
+        ({"machine": "studio-display"}, "names the machine `studio-display`"),
+        ({"stream": "camera-rig"}, "names the stream `camera-rig`"),
+        (
+            {"machine": "studio-display", "stream": "camera-rig"},
+            "names the machine `studio-display` and the stream `camera-rig`",
+        ),
+    ],
+    ids=["machine", "stream", "machine-and-stream"],
+)
+def test_a_link_end_naming_a_stream_or_a_machine_is_refused_by_load_naming_relay_track_source(
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
+    end: str,
+    keys_naming_a_port_outside_the_stream: "dict[str, str]",
+    what_the_refusal_names: str,
 ):
-    """An end naming a machine names its stream too, so one naming a machine
-    alone is refused rather than read as a local end with its machine dropped."""
+    """A link's ends are both in the stream that loads it, so an end naming a
+    stream or a machine is refused naming how a stream reads a port outside it."""
     graph = pattern_to_encoder_graph()
-    graph["links"][0][end]["machine"] = "studio-display"
+    graph["links"][0][end].update(keys_naming_a_port_outside_the_stream)
 
     refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
 
-    assert "names the machine `studio-display` and no stream" in refusal, refusal
-    assert "`machine/stream/node/port`" in refusal, refusal
-
-
-@pytest.mark.parametrize("end", ["source", "target"])
-def test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machine(
-    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, end: str
-):
-    """Nothing links two machines until the sharing step, so an end on
-    another machine is refused by that machine's name."""
-    graph = pattern_to_encoder_graph()
-    graph["links"][0][end].update({"machine": "studio-display", "stream": graph["stream"]})
-
-    refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
-
-    assert "names the machine `studio-display`" in refusal, refusal
-    assert "which is where links between machines arrive" in refusal, refusal
+    assert f"the {end} end of the link" in refusal, refusal
+    assert what_the_refusal_names in refusal, refusal
+    assert (
+        "a link's ends are both in this stream; read another stream's port, on this machine "
+        "or another, through a `RelayTrackSource` node"
+    ) in refusal, refusal
 
 
 # ---- an interrupt during a load's describe ------------------------------------

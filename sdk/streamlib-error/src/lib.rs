@@ -93,19 +93,6 @@ pub enum Error {
         this_machine: String,
     },
 
-    /// A link was made in a stream other than the one that holds its input.
-    #[error(
-        "a link is made in the stream that holds its input, and this link's input is in the \
-         stream `{input_stream}` while it was made in the stream `{acting_stream}`: make it in \
-         `{input_stream}`, naming the stream its source is in when that is another one"
-    )]
-    LinkMadeOutsideTheStreamOfItsInput {
-        /// The stream the link was made in.
-        acting_stream: String,
-        /// The stream that holds the link's input.
-        input_stream: String,
-    },
-
     /// A chunk of a channel name is not one address chunk.
     #[error(
         "channel `{channel}` has the chunk `{chunk}`, which is not one address chunk: {reason}"

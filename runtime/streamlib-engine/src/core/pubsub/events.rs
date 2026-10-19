@@ -4,7 +4,7 @@
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::Result;
 use crate::core::graph::{
-    InputLinkPortRef, OutputPortALinkCarriesFrom, OutputPortExposureLevel, ProcessorUniqueId,
+    InputLinkPortRef, OutputLinkPortRef, OutputPortExposureLevel, ProcessorUniqueId,
 };
 use crate::core::runtime::LoadedStreamTag;
 use serde::{Deserialize, Serialize};
@@ -299,13 +299,13 @@ pub enum RuntimeEvent {
     // Emitted by Runtime when user connects/disconnects ports
     /// Emitted when runtime will connect two ports.
     RuntimeWillConnect {
-        from: OutputPortALinkCarriesFrom,
+        from: OutputLinkPortRef,
         to: InputLinkPortRef,
     },
     /// Emitted when runtime did connect two ports
     RuntimeDidConnect {
         link_id: String,
-        from: OutputPortALinkCarriesFrom,
+        from: OutputLinkPortRef,
         to: InputLinkPortRef,
     },
     /// Emitted when runtime will disconnect a link
@@ -816,18 +816,7 @@ mod tests {
             Event::OfALoadedStream {
                 stream: a_loaded_stream_identity(),
                 event: RuntimeEvent::RuntimeWillConnect {
-                    from: crate::core::graph::OutputLinkPortRef::new("Pcam", "video_out").into(),
-                    to: InputLinkPortRef::new("Pdisplay", "video_in"),
-                },
-            },
-            Event::OfALoadedStream {
-                stream: a_loaded_stream_identity(),
-                event: RuntimeEvent::RuntimeWillConnect {
-                    from: crate::core::graph::OutputPortInAnotherStreamOnThisMachine::new(
-                        "a", "camera", "video",
-                    )
-                    .unwrap()
-                    .into(),
+                    from: OutputLinkPortRef::new("Pcam", "video_out"),
                     to: InputLinkPortRef::new("Pdisplay", "video_in"),
                 },
             },

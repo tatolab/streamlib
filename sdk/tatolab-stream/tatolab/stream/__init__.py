@@ -38,6 +38,8 @@ from ._built_in_nodes import OpusDecoder as OpusDecoder
 from ._built_in_nodes import OpusDecoderConfig as OpusDecoderConfig
 from ._built_in_nodes import OpusEncoder as OpusEncoder
 from ._built_in_nodes import OpusEncoderConfig as OpusEncoderConfig
+from ._built_in_nodes import RelayTrackSource as RelayTrackSource
+from ._built_in_nodes import RelayTrackSourceConfig as RelayTrackSourceConfig
 from ._built_in_nodes import SpeakerSink as SpeakerSink
 from ._built_in_nodes import SpeakerSinkConfig as SpeakerSinkConfig
 from ._built_in_nodes import TestPatternSource as TestPatternSource
@@ -80,9 +82,6 @@ from ._stream_graph_builder import Exposure as Exposure
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
-)
-from ._stream_graph_builder import (
-    NodeOutputPortReferenceByAddress as NodeOutputPortReferenceByAddress,
 )
 from ._stream_graph_builder import NodeReference as NodeReference
 from ._stream_graph_builder import StreamBuilder as StreamBuilder
@@ -167,7 +166,6 @@ __all__ = [
     "NodeInputPortReference",
     "NodeLinkDataAccess",
     "NodeOutputPortReference",
-    "NodeOutputPortReferenceByAddress",
     "NodeOutputTextureRing",
     "NodeReference",
     "OpaqueFdAllocationExport",
@@ -177,6 +175,8 @@ __all__ = [
     "OpusEncoderConfig",
     "PixelAccessToOneClaimedSurface",
     "RayTracingKernel",
+    "RelayTrackSource",
+    "RelayTrackSourceConfig",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "SpeakerSink",

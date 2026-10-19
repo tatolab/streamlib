@@ -9,7 +9,6 @@ mod link_port_markers;
 mod link_state;
 mod link_unique_id;
 mod output_link_port_ref;
-mod output_port_in_another_stream_on_this_machine;
 mod port_address;
 
 pub use input_link_port_ref::InputLinkPortRef;
@@ -20,7 +19,4 @@ pub use link_port_markers::{InputPortMarker, OutputPortMarker, PortMarker, input
 pub use link_state::LinkState;
 pub use link_unique_id::LinkUniqueId;
 pub use output_link_port_ref::OutputLinkPortRef;
-pub use output_port_in_another_stream_on_this_machine::{
-    OutputPortALinkCarriesFrom, OutputPortInAnotherStreamOnThisMachine,
-};
 pub use port_address::PortAddress;

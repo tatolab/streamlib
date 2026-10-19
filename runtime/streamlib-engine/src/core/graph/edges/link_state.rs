@@ -18,9 +18,6 @@ pub enum LinkState {
     Disconnected,
     /// Link is in error state (wiring failed).
     Error,
-    /// Link reads another stream that cannot be wired to yet; its reason
-    /// says what it waits for.
-    AwaitingRemote,
 }
 
 impl std::fmt::Display for LinkState {
@@ -31,7 +28,6 @@ impl std::fmt::Display for LinkState {
             Self::Disconnecting => write!(f, "Disconnecting"),
             Self::Disconnected => write!(f, "Disconnected"),
             Self::Error => write!(f, "Error"),
-            Self::AwaitingRemote => write!(f, "AwaitingRemote"),
         }
     }
 }
