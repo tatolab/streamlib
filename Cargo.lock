@@ -6146,6 +6146,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tatolab-read-track"
+version = "0.53.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hang",
+ "moq-json",
+ "moq-net",
+ "moq-tokio",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "tatolab-vulkanalia"
 version = "0.35.0"
 dependencies = [
