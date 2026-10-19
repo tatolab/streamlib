@@ -45,6 +45,10 @@ const A_FAILED_SESSION_IS_RETRIED_AT_LEAST_EVERY: Duration = Duration::from_secs
 /// where the track carries its timestamp, before it reads the track without it.
 const THE_FIRST_CATALOG_IS_AWAITED_FOR: Duration = Duration::from_secs(2);
 
+/// How long `stop()` spends telling the relay the session closed, inside
+/// [`THE_READING_THREAD_ENDS_WITHIN`].
+const THE_RELAY_IS_TOLD_THE_SESSION_CLOSED_WITHIN: Duration = Duration::from_secs(1);
+
 /// The name of the thread a running node reads its track on.
 const RELAY_TRACK_READING_THREAD_NAME: &str = "relay-track-source";
 
@@ -166,10 +170,10 @@ impl RelayTrackLocation {
     /// Locate the track `config` names, refusing by name a relay URL that does
     /// not parse and a track address that is not `<machine>/<stream>/<node>/<port>`.
     fn of(config: &RelayTrackSourceConfig) -> Result<Self> {
+        // A relay's credential may ride its URL, so a refusal never echoes it.
         let relay_url = config.relay_url.parse::<url::Url>().map_err(|unparsed| {
             Error::Configuration(format!(
-                "RelayTrackSource: `relay_url` `{}` is not a URL ({unparsed})",
-                config.relay_url
+                "RelayTrackSource: `relay_url` is not a URL ({unparsed})"
             ))
         })?;
         let port_address = PortAddress::parse(&config.track_address).map_err(|refusal| {
@@ -195,11 +199,15 @@ impl RelayTrackLocation {
 }
 
 impl std::fmt::Display for RelayTrackLocation {
+    /// Names the relay by its origin alone: a credential rides a relay URL's
+    /// path, query or user info, and none of them reaches a log line.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
             "the track `{}` of `{}` at {}",
-            self.track_name, self.broadcast_path, self.relay_url
+            self.track_name,
+            self.broadcast_path,
+            self.relay_url.origin().ascii_serialization()
         )
     }
 }
@@ -221,6 +229,7 @@ impl RelayTrackReadingThread {
                      {refusal}"
                 ))
             })?;
+        // One dial per session: the node's own backoff is the only redial.
         let moq_client = {
             let _inside_the_async_runtime = async_runtime.enter();
             moq_tokio::connect::Config::default()
@@ -231,6 +240,7 @@ impl RelayTrackReadingThread {
                          {refusal}"
                     ))
                 })?
+                .with_reconnect(false)
         };
         let (stop_requested, stop_requested_receiver) = tokio::sync::watch::channel(false);
         let thread = std::thread::Builder::new()
@@ -276,7 +286,7 @@ async fn read_the_track_until_stopped(
     loop {
         let objects_written_before_the_session = track_reader.objects_written;
         let reason_the_session_ended = tokio::select! {
-            _ = stop_requested.wait_for(|stop_requested| *stop_requested) => return,
+            _ = stop_requested.wait_for(|stop_requested| *stop_requested) => break,
             reason_the_session_ended = track_reader
                 .read_through_one_session(&moq_client, &relay_track_location) => {
                 reason_the_session_ended
@@ -293,11 +303,19 @@ async fn read_the_track_until_stopped(
             last_reason_the_session_ended = Some(reason_the_session_ended);
         }
         tokio::select! {
-            _ = stop_requested.wait_for(|stop_requested| *stop_requested) => return,
+            _ = stop_requested.wait_for(|stop_requested| *stop_requested) => break,
             () = tokio::time::sleep(retried_after) => {}
         }
         retried_after = (retried_after * 2).min(A_FAILED_SESSION_IS_RETRIED_AT_LEAST_EVERY);
     }
+    // Dropping a session only queues its close, which nothing sends once this
+    // thread's runtime stops; closing the client sends it, so the relay lets
+    // the subscriber go rather than waiting out its idle timeout.
+    let _ = tokio::time::timeout(
+        THE_RELAY_IS_TOLD_THE_SESSION_CLOSED_WITHIN,
+        moq_client.close(),
+    )
+    .await;
 }
 
 /// Writes one track's objects onto the node's output, across every session
@@ -355,11 +373,12 @@ impl RelayTrackReader {
                     return WhyARelayTrackSessionEnded::TrackWasRefused(refusal.to_string());
                 }
             };
-        if let Ok(Some(catalog)) = tokio::time::timeout(
-            THE_FIRST_CATALOG_IS_AWAITED_FOR,
-            the_next_catalog_of(&mut catalog_of_the_broadcast),
-        )
-        .await
+        if catalog_of_the_broadcast.is_some()
+            && let Ok(Some(catalog)) = tokio::time::timeout(
+                THE_FIRST_CATALOG_IS_AWAITED_FOR,
+                the_next_catalog_of(&mut catalog_of_the_broadcast),
+            )
+            .await
         {
             self.take_the_tracks_entry_from(&catalog, &relay_track_location.track_name);
         }
@@ -981,14 +1000,30 @@ mod tests {
     }
 
     #[test]
-    fn a_relay_url_that_does_not_parse_is_refused_naming_it() {
+    fn a_relay_url_that_does_not_parse_is_refused_without_echoing_it() {
         let refusal = RelayTrackLocation::of(&RelayTrackSourceConfig {
-            relay_url: "not a url".into(),
+            relay_url: "not a url?jwt=secret".into(),
             track_address: "desk/main/camera/video".into(),
         })
         .expect_err("a relay URL that does not parse")
         .to_string();
-        assert!(refusal.contains("`relay_url` `not a url`"), "{refusal}");
+        assert!(refusal.contains("`relay_url` is not a URL"), "{refusal}");
+        assert!(!refusal.contains("secret"), "{refusal}");
+    }
+
+    #[test]
+    fn a_located_track_names_its_relay_by_origin_alone() {
+        let location = RelayTrackLocation::of(&RelayTrackSourceConfig {
+            relay_url: "https://user:password@relay.example:4443/token-in-the-path?jwt=secret"
+                .into(),
+            track_address: "desk/main/camera/video".into(),
+        })
+        .expect("the track is located");
+        let shown = location.to_string();
+        assert!(shown.ends_with("at https://relay.example:4443"), "{shown}");
+        for credential in ["user", "password", "token-in-the-path", "secret"] {
+            assert!(!shown.contains(credential), "{shown}");
+        }
     }
 
     #[test]

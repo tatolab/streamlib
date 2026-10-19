@@ -411,12 +411,10 @@ impl BroadcastReadAtAListener {
         Ok(track.subscribe(None).await?.ordered())
     }
 
-    /// The next `count` objects of `track_name`, each with its group.
+    /// The next `count` objects of `track_name` once it is served, each with
+    /// its group.
     async fn the_next_objects_of(&self, track_name: &str, count: usize) -> Vec<ObjectRead> {
-        let mut ordered = self
-            .subscribe_to(track_name)
-            .await
-            .unwrap_or_else(|refusal| panic!("{:?}: `{track_name}`: {refusal}", self.listener));
+        let mut ordered = self.the_track_once_it_is_served(track_name).await;
         let mut objects = Vec::new();
         while objects.len() < count {
             let mut group = tokio::time::timeout(MOQ_BUDGET, ordered.next_group())
@@ -486,17 +484,20 @@ fn assert_the_objects_are_the_messages_as_written(objects: &[ObjectRead]) {
     assert_the_objects_are_grouped_as_the_node_wrote_them(objects);
 }
 
-/// The stamps of the numbered messages in `objects` are as far apart as the
-/// writer stamped them, `what_keeps_it` naming what restated them.
+/// The stamps a `RelayTrackSource` wrote of the numbered messages in `objects`
+/// keep the writer's spacing as the re-basing model does, `what_keeps_it`
+/// naming what restated them.
 fn assert_the_numbered_messages_keep_their_spacing(objects: &[ObjectRead], what_keeps_it: &str) {
-    for pair in objects.windows(2) {
-        let messages_between = the_number_in(&pair[1]) - the_number_in(&pair[0]);
-        assert_eq!(
-            pair[1].timestamp_ns - pair[0].timestamp_ns,
-            u128::from(messages_between) * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,
-            "{what_keeps_it}: {objects:?}"
-        );
-    }
+    let stamps_ns: Vec<u128> = objects.iter().map(|object| object.timestamp_ns).collect();
+    let writer_stamps_ns: Vec<u128> = objects
+        .iter()
+        .map(|object| u128::from(the_number_in(object)) * NANOSECONDS_BETWEEN_MESSAGE_STAMPS)
+        .collect();
+    assert_the_stamps_keep_the_tracks_spacing_but_where_the_offset_was_lowered(
+        &stamps_ns,
+        &writer_stamps_ns,
+        what_keeps_it,
+    );
 }
 
 /// A `RelayTrackSource`'s stamps against the track's own timestamps, both in
@@ -506,19 +507,23 @@ fn assert_the_numbered_messages_keep_their_spacing(objects: &[ObjectRead], what_
 fn assert_the_stamps_keep_the_tracks_spacing_but_where_the_offset_was_lowered(
     stamps_ns: &[u128],
     track_timestamps_ns: &[u128],
+    what_restated_them: &str,
 ) {
     let steps: Vec<(u128, u128)> = stamps_ns
         .windows(2)
         .zip(track_timestamps_ns.windows(2))
         .map(|(stamps, track)| {
-            assert!(stamps[1] > stamps[0], "a stamp stepped back: {stamps_ns:?}");
+            assert!(
+                stamps[1] > stamps[0],
+                "{what_restated_them}: a stamp stepped back: {stamps_ns:?}"
+            );
             (stamps[1] - stamps[0], track[1] - track[0])
         })
         .collect();
     for (stamp_step, track_step) in &steps {
         assert!(
             stamp_step <= track_step,
-            "a step ran longer than the track's: {steps:?}"
+            "{what_restated_them}: a step ran longer than the track's: {steps:?}"
         );
     }
     let steps_kept = steps
@@ -527,7 +532,7 @@ fn assert_the_stamps_keep_the_tracks_spacing_but_where_the_offset_was_lowered(
         .count();
     assert!(
         steps_kept * 2 >= steps.len(),
-        "most steps are the track's own: {steps:?}"
+        "{what_restated_them}: most steps are the track's own: {steps:?}"
     );
 }
 
@@ -954,6 +959,7 @@ fn a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port() {
                 .map(|object| object.timestamp_ns)
                 .collect::<Vec<_>>(),
             &varint_timestamps_ns,
+            "the source restating the encoder's media frames",
         );
 
         let catalog = reader_at_loopback
@@ -1197,6 +1203,7 @@ fn a_relay_track_source_reads_a_hang_track_a_third_party_published() {
                     u128::from(frame_number * THIRD_PARTY_FRAME_SPACING_MICROSECONDS) * 1_000
                 })
                 .collect::<Vec<_>>(),
+            "the node restating the third party's frames",
         );
         for (pair, objects_pair) in frames.windows(2).zip(objects.windows(2)) {
             let (earlier, later) = (pair[0], pair[1]);

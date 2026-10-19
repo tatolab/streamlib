@@ -330,13 +330,19 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
                 port_address_at(link, "target")
             )
         };
-        refuse_a_key_no_such_object_holds(link, &GRAPH_LINK_KEYS, link_named)?;
-        for end_key in ["source", "target"] {
-            let Some(link_end) = link.get(end_key).and_then(serde_json::Value::as_object) else {
-                continue;
-            };
-            let link_end_named = || format!("the {end_key} end of {}", link_named());
+        let link_ends = ["source", "target"].into_iter().filter_map(|end_key| {
+            let link_end = link.get(end_key).and_then(serde_json::Value::as_object)?;
+            Some((link_end, move || {
+                format!("the {end_key} end of {}", link_named())
+            }))
+        });
+        // A link to another stream is refused naming the way to read one before
+        // any key a runtime once rendered on such a link is refused unread.
+        for (link_end, link_end_named) in link_ends.clone() {
             refuse_a_link_end_naming_a_port_outside_this_stream(link_end, link_end_named)?;
+        }
+        refuse_a_key_no_such_object_holds(link, &GRAPH_LINK_KEYS, link_named)?;
+        for (link_end, link_end_named) in link_ends {
             refuse_a_key_no_such_object_holds(link_end, &GRAPH_LINK_END_KEYS, link_end_named)?;
         }
     }
@@ -1063,6 +1069,30 @@ mod tests {
                 )
             );
         }
+    }
+
+    /// A graph an older runtime rendered, holding a link to another stream in
+    /// the state that runtime gave it, is refused naming how to read that
+    /// stream's port, not for the key it rendered on the link.
+    #[test]
+    fn a_link_to_another_stream_as_an_older_runtime_rendered_it_is_refused_naming_relay_track_source()
+     {
+        let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": a_registered_camera_class()}],
+            "links": [{
+                "source": {"stream": "camera-rig", "node": "camerasource", "port": "video"},
+                "target": {"node": "camera", "port": "frames_in"},
+                "state": "awaiting_remote",
+                "awaiting_remote_reason": "the stream `camera-rig` is not loaded on this machine",
+            }]
+        }))
+        .expect_err("a link to another stream is refused at load")
+        .to_string();
+        assert!(
+            refusal.contains("names the stream `camera-rig`")
+                && refusal.contains("`RelayTrackSource` node"),
+            "{refusal}"
+        );
     }
 
     /// A link end is spelled `{node, port}` and no other key: one carrying the

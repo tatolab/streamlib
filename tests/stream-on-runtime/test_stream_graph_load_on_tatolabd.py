@@ -51,6 +51,7 @@ from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 from tatolab.stream import (
     H264Encoder,
+    RelayTrackSource,
     TestPatternSource,
     VirtualCameraSink,
     _built_in_nodes,
@@ -71,6 +72,11 @@ BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES = [
     for built_in_node_class in EVERY_BUILT_IN_NODE_CLASS
     if built_in_node_class is not VirtualCameraSink or sys.platform.startswith("linux")
 ]
+
+# The keys a built-in's config cannot leave out; every other built-in loads with none.
+CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT: "dict[type[BuiltInNode[Any]], dict[str, Any]]" = {
+    RelayTrackSource: {"track_address": "desk/camera-rig/camerasource/video"},
+}
 
 OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
 
@@ -146,7 +152,7 @@ def test_a_graph_naming_every_compiled_built_in_by_its_type_loads(
                 {
                     "name": built_in_node_class.__name__,
                     "type": built_in_node_class.type,
-                    "config": {},
+                    "config": CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT.get(built_in_node_class, {}),
                 }
                 for built_in_node_class in BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES
             ],
