@@ -20,6 +20,21 @@ use crate::core::graph::{LinkUniqueId, PortInfo, cast_exposed_name_to_url_safe};
 use crate::core::pubsub::OutputPortExposureChange;
 use crate::iceoryx2::InboundLinkName;
 
+/// The key under which hang's catalog lists a section's tracks by name:
+/// `renditions` for video and audio, each data section's own map otherwise.
+pub fn the_hang_map_a_catalog_section_lists_its_tracks_under(
+    section: CatalogSection,
+) -> &'static str {
+    use hang::catalog::Section;
+
+    match section {
+        CatalogSection::Video | CatalogSection::Audio => "renditions",
+        CatalogSection::Text => hang::catalog::Text::MAP,
+        CatalogSection::Json => hang::catalog::Json::MAP,
+        CatalogSection::Binary => hang::catalog::Binary::MAP,
+    }
+}
+
 /// Refuse an entry hang's own catalog types do not read, naming the port and
 /// the field hang refused.
 pub fn refuse_a_catalog_entry_hang_does_not_read(

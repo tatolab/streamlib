@@ -13,10 +13,11 @@
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use hang::catalog::Section;
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::descriptors::{CatalogEntry, CatalogSection};
+use streamlib::sdk::descriptors::{
+    CatalogEntry, CatalogSection, the_hang_map_a_catalog_section_lists_its_tracks_under,
+};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::graph::PortAddress;
 use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
@@ -39,6 +40,9 @@ const A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER: Duration = Duration::from_millis(
 /// The longest a failed session waits to be dialed again, the wait doubling
 /// from [`A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER`].
 const A_FAILED_SESSION_IS_RETRIED_AT_LEAST_EVERY: Duration = Duration::from_secs(10);
+
+/// The name of the thread a running node reads its track on.
+const RELAY_TRACK_READING_THREAD_NAME: &str = "relay-track-source";
 
 /// How long `stop()` waits for the reading thread before detaching it; inside
 /// the runtime's 5 s teardown budget.
@@ -209,12 +213,24 @@ impl RelayTrackReadingThread {
                      {refusal}"
                 ))
             })?;
+        let moq_client = {
+            let _inside_the_async_runtime = async_runtime.enter();
+            moq_tokio::connect::Config::default()
+                .init(moq_tokio::quic::Config::default())
+                .map_err(|refusal| {
+                    Error::Runtime(format!(
+                        "RelayTrackSource: no MoQ client builds to read {relay_track_location}: \
+                         {refusal}"
+                    ))
+                })?
+        };
         let (stop_requested, stop_requested_receiver) = tokio::sync::watch::channel(false);
         let thread = std::thread::Builder::new()
-            .name("relay-track-source".to_string())
+            .name(RELAY_TRACK_READING_THREAD_NAME.to_string())
             .spawn(move || {
                 async_runtime.block_on(read_the_track_until_stopped(
                     relay_track_location,
+                    moq_client,
                     outputs,
                     stop_requested_receiver,
                 ));
@@ -235,24 +251,25 @@ impl RelayTrackReadingThread {
         join_within_grace_or_detach(
             self.thread,
             THE_READING_THREAD_ENDS_WITHIN,
-            "relay-track-source",
+            RELAY_TRACK_READING_THREAD_NAME,
         );
     }
 }
 
 async fn read_the_track_until_stopped(
     relay_track_location: RelayTrackLocation,
+    moq_client: moq_tokio::Client,
     outputs: OutputWriter,
     mut stop_requested: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut track_reader = RelayTrackReader::new(outputs);
     let mut retried_after = A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER;
-    let mut last_reason_the_session_ended: Option<String> = None;
+    let mut last_reason_the_session_ended: Option<WhyARelayTrackSessionEnded> = None;
     loop {
         let objects_written_before_the_session = track_reader.objects_written;
         let reason_the_session_ended = tokio::select! {
             _ = stop_requested.wait_for(|stop_requested| *stop_requested) => return,
-            reason_the_session_ended = track_reader.read_through_one_session(&relay_track_location) => reason_the_session_ended,
+            reason_the_session_ended = track_reader.read_through_one_session(&moq_client, &relay_track_location) => reason_the_session_ended,
         };
         if track_reader.objects_written > objects_written_before_the_session {
             retried_after = A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER;
@@ -294,62 +311,40 @@ impl RelayTrackReader {
     }
 
     /// Dial the relay once and write the track until the session, the
-    /// broadcast or the track ends; the reason it ended.
+    /// broadcast or the track ends; why it ended.
     async fn read_through_one_session(
         &mut self,
+        moq_client: &moq_tokio::Client,
         relay_track_location: &RelayTrackLocation,
-    ) -> String {
-        let client =
-            match moq_tokio::connect::Config::default().init(moq_tokio::quic::Config::default()) {
-                Ok(client) => client,
-                Err(refusal) => return format!("no MoQ client builds: {refusal}"),
-            };
+    ) -> WhyARelayTrackSessionEnded {
         let subscribed_origin = moq_tokio::origin::spawn();
-        let connection = client
+        let connection = moq_client
+            .clone()
             .with_subscriber(subscribed_origin.clone())
             .connect(relay_track_location.relay_url.clone());
         let announced_broadcasts = subscribed_origin.consume();
         let broadcast = tokio::select! {
-            ended = connection.closed() => return the_reason_a_session_ended(ended),
+            ended = connection.closed() => return WhyARelayTrackSessionEnded::of_a_closed_session(ended),
             broadcast = announced_broadcasts
                 .routed_broadcast(relay_track_location.broadcast_path.as_str()) => match broadcast {
                 Ok(broadcast) => broadcast,
-                Err(refusal) => return format!("the broadcast was refused: {refusal}"),
+                Err(refusal) => return WhyARelayTrackSessionEnded::TheBroadcastWasRefused(refusal.to_string()),
             },
         };
-        let mut groups_of_the_track = match broadcast
-            .track(&relay_track_location.track_name)
-            .map(|track| track.subscribe(None))
-        {
-            Ok(subscribing) => match subscribing.await {
-                Ok(subscriber) => subscriber.ordered(),
-                Err(refusal) => return format!("the track was refused: {refusal}"),
-            },
-            Err(refusal) => return format!("the track was refused: {refusal}"),
-        };
-        let mut catalog_of_the_broadcast = match broadcast.track(hang::Catalog::DEFAULT_NAME) {
-            Ok(catalog_track) => match catalog_track.subscribe(None).await {
-                Ok(catalog_subscriber) => Some(moq_json::snapshot::Consumer::<Value>::new(
-                    catalog_subscriber,
-                    moq_json::snapshot::consumer::Config::default(),
-                )),
+        let (mut groups_of_the_track, mut catalog_of_the_broadcast) =
+            match subscribe_to_the_track_and_its_catalog(&broadcast, relay_track_location).await {
+                Ok(subscribed) => subscribed,
                 Err(refusal) => {
-                    tracing::debug!("RelayTrackSource: the broadcast serves no catalog: {refusal}");
-                    None
+                    return WhyARelayTrackSessionEnded::TheTrackWasRefused(refusal.to_string());
                 }
-            },
-            Err(refusal) => {
-                tracing::debug!("RelayTrackSource: the broadcast serves no catalog: {refusal}");
-                None
-            }
-        };
+            };
         tracing::info!("RelayTrackSource: reading {relay_track_location}");
 
         let mut group_being_read: Option<moq_net::group::Consumer> = None;
         let mut the_next_object_starts_a_group = false;
         loop {
             tokio::select! {
-                ended = connection.closed() => return the_reason_a_session_ended(ended),
+                ended = connection.closed() => return WhyARelayTrackSessionEnded::of_a_closed_session(ended),
                 catalog = the_next_catalog_of(&mut catalog_of_the_broadcast) => match catalog {
                     Some(catalog) => self.take_the_tracks_entry_from(&catalog, &relay_track_location.track_name),
                     None => catalog_of_the_broadcast = None,
@@ -359,8 +354,8 @@ impl RelayTrackReader {
                         group_being_read = Some(group);
                         the_next_object_starts_a_group = true;
                     }
-                    Ok(None) => return "the track ended".to_string(),
-                    Err(refusal) => return format!("the track ended: {refusal}"),
+                    Ok(None) => return WhyARelayTrackSessionEnded::TheTrackEnded(None),
+                    Err(refusal) => return WhyARelayTrackSessionEnded::TheTrackEnded(Some(refusal.to_string())),
                 },
                 object = the_next_object_of(&mut group_being_read) => match object {
                     Ok(Some(object)) => {
@@ -426,11 +421,73 @@ impl RelayTrackReader {
     }
 }
 
-fn the_reason_a_session_ended(ended: moq_tokio::Result<()>) -> String {
-    match ended {
-        Ok(()) => "the relay closed the session".to_string(),
-        Err(refusal) => format!("the session failed: {refusal}"),
+/// Why one session reading a relay's track ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WhyARelayTrackSessionEnded {
+    TheRelayClosedTheSession,
+    TheSessionFailed(String),
+    TheBroadcastWasRefused(String),
+    TheTrackWasRefused(String),
+    TheTrackEnded(Option<String>),
+}
+
+impl WhyARelayTrackSessionEnded {
+    fn of_a_closed_session(ended: moq_tokio::Result<()>) -> Self {
+        match ended {
+            Ok(()) => Self::TheRelayClosedTheSession,
+            Err(refusal) => Self::TheSessionFailed(refusal.to_string()),
+        }
     }
+}
+
+impl std::fmt::Display for WhyARelayTrackSessionEnded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TheRelayClosedTheSession => formatter.write_str("the relay closed the session"),
+            Self::TheSessionFailed(refusal) => write!(formatter, "the session failed: {refusal}"),
+            Self::TheBroadcastWasRefused(refusal) => {
+                write!(formatter, "the broadcast was refused: {refusal}")
+            }
+            Self::TheTrackWasRefused(refusal) => {
+                write!(formatter, "the track was refused: {refusal}")
+            }
+            Self::TheTrackEnded(None) => formatter.write_str("the track ended"),
+            Self::TheTrackEnded(Some(refusal)) => write!(formatter, "the track ended: {refusal}"),
+        }
+    }
+}
+
+/// The track's groups, and the broadcast's catalog when it serves one.
+async fn subscribe_to_the_track_and_its_catalog(
+    broadcast: &moq_net::broadcast::Consumer,
+    relay_track_location: &RelayTrackLocation,
+) -> moq_net::Result<(
+    moq_net::track::Ordered,
+    Option<moq_json::snapshot::Consumer<Value>>,
+)> {
+    let groups_of_the_track = broadcast
+        .track(&relay_track_location.track_name)?
+        .subscribe(None)
+        .await?
+        .ordered();
+    let catalog_subscribed: moq_net::Result<_> = async {
+        broadcast
+            .track(hang::Catalog::DEFAULT_NAME)?
+            .subscribe(None)
+            .await
+    }
+    .await;
+    let catalog_of_the_broadcast = match catalog_subscribed {
+        Ok(catalog_subscriber) => Some(moq_json::snapshot::Consumer::new(
+            catalog_subscriber,
+            moq_json::snapshot::consumer::Config::default(),
+        )),
+        Err(refusal) => {
+            tracing::debug!("RelayTrackSource: the broadcast serves no catalog: {refusal}");
+            None
+        }
+    };
+    Ok((groups_of_the_track, catalog_of_the_broadcast))
 }
 
 async fn the_next_catalog_of(
@@ -461,15 +518,11 @@ async fn the_next_object_of(
 /// layout: the same fields under the section that lists it.
 fn the_catalog_entry_of_the_track_named(catalog: &Value, track_name: &str) -> Option<CatalogEntry> {
     CatalogSection::ALL.into_iter().find_map(|section| {
-        let map_of_the_section = match section {
-            CatalogSection::Video | CatalogSection::Audio => "renditions",
-            CatalogSection::Text => hang::catalog::Text::MAP,
-            CatalogSection::Json => hang::catalog::Json::MAP,
-            CatalogSection::Binary => hang::catalog::Binary::MAP,
-        };
         let entry = catalog
             .get(section.as_catalog_key())?
-            .get(map_of_the_section)?
+            .get(the_hang_map_a_catalog_section_lists_its_tracks_under(
+                section,
+            ))?
             .get(track_name)?;
         Some(CatalogEntry {
             section,

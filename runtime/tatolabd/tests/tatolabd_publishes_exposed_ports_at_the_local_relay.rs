@@ -62,6 +62,15 @@ fn a_stream_writing_numbered_messages_on_a_public_and_a_private_port() -> serde_
     })
 }
 
+/// [`READER_STREAM`] holding one writer it exposes nothing of, since a stream
+/// holding no node does not load.
+fn a_reader_stream_holding_one_unexposed_writer() -> serde_json::Value {
+    serde_json::json!({
+        "stream": READER_STREAM,
+        "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
+    })
+}
+
 /// A `tatolabd` with both local relay listeners, running the stream.
 struct TatolabdPublishingTheStream {
     runtime: SpawnedTatolabd,
@@ -80,8 +89,7 @@ impl TatolabdPublishingTheStream {
         )])
     }
 
-    /// The stream, and beside it [`READER_STREAM`] holding one writer it
-    /// exposes nothing of, since a stream holding no node does not load.
+    /// The stream, and beside it [`READER_STREAM`].
     fn start_beside_a_reader_stream() -> Self {
         Self::start_with_the_streams(&[
             (
@@ -90,10 +98,7 @@ impl TatolabdPublishingTheStream {
             ),
             (
                 READER_STREAM,
-                serde_json::json!({
-                    "stream": READER_STREAM,
-                    "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
-                }),
+                a_reader_stream_holding_one_unexposed_writer(),
             ),
         ])
     }
@@ -334,6 +339,28 @@ impl BroadcastReadAtAListener {
         None
     }
 
+    /// The broadcast's catalog once `holds` is true of it, `what_it_lists`
+    /// naming what the wait is for.
+    async fn the_catalog_once(
+        &self,
+        holds: impl Fn(&hang::Catalog) -> bool,
+        what_it_lists: &str,
+    ) -> hang::Catalog {
+        let catalog_track = self.broadcast.track(hang::Catalog::DEFAULT_NAME).unwrap();
+        let mut catalog_consumer =
+            hang::catalog::Consumer::<()>::new(catalog_track.subscribe(None).await.unwrap());
+        loop {
+            let catalog = tokio::time::timeout(MOQ_BUDGET, catalog_consumer.next())
+                .await
+                .unwrap_or_else(|_| panic!("{what_it_lists} within {MOQ_BUDGET:?}"))
+                .expect("hang reads the catalog")
+                .expect("the catalog track is live");
+            if holds(&catalog) {
+                return catalog;
+            }
+        }
+    }
+
     /// `track_name` subscribed once it carries a group, asking again until
     /// [`MOQ_BUDGET`] runs out.
     async fn the_track_once_it_is_served(&self, track_name: &str) -> moq_net::track::Ordered {
@@ -413,6 +440,19 @@ fn assert_the_objects_are_the_messages_as_written(objects: &[ObjectRead]) {
         );
     }
     assert_the_objects_are_grouped_as_the_node_wrote_them(objects);
+}
+
+/// The stamps of the numbered messages in `objects` are as far apart as the
+/// writer stamped them, `what_keeps_it` naming what restated them.
+fn assert_the_numbered_messages_keep_their_spacing(objects: &[ObjectRead], what_keeps_it: &str) {
+    for pair in objects.windows(2) {
+        let messages_between = the_number_in(&pair[1]) - the_number_in(&pair[0]);
+        assert_eq!(
+            pair[1].timestamp_ns - pair[0].timestamp_ns,
+            u128::from(messages_between) * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,
+            "{what_keeps_it}: {objects:?}"
+        );
+    }
 }
 
 /// Each group starts at a multiple of three and holds the messages after it
@@ -705,31 +745,17 @@ fn a_relay_track_source_in_another_stream_reads_a_private_port_through_loopback_
         );
         let objects = reader_at_loopback.the_next_objects_of(read_track, 12).await;
         assert_the_objects_are_grouped_as_the_node_wrote_them(&objects);
-        for pair in objects.windows(2) {
-            let messages_between = the_number_in(&pair[1]) - the_number_in(&pair[0]);
-            assert_eq!(
-                pair[1].timestamp_ns - pair[0].timestamp_ns,
-                u128::from(messages_between) * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,
-                "the source keeps the track's spacing whatever the arrival: {objects:?}"
-            );
-        }
+        assert_the_numbered_messages_keep_their_spacing(
+            &objects,
+            "the source keeps the track's spacing whatever the arrival",
+        );
 
-        let catalog_track = reader_at_loopback
-            .broadcast
-            .track(hang::Catalog::DEFAULT_NAME)
-            .unwrap();
-        let mut catalog_consumer =
-            hang::catalog::Consumer::<()>::new(catalog_track.subscribe(None).await.unwrap());
-        let catalog = loop {
-            let catalog = tokio::time::timeout(MOQ_BUDGET, catalog_consumer.next())
-                .await
-                .expect("the reader stream's catalog lists the source reading the public port")
-                .expect("hang reads the catalog")
-                .expect("the catalog track is live");
-            if !catalog.binary.tracks.is_empty() {
-                break catalog;
-            }
-        };
+        let catalog = reader_at_loopback
+            .the_catalog_once(
+                |catalog| !catalog.binary.tracks.is_empty(),
+                "the reader stream's catalog lists the source reading the public port",
+            )
+            .await;
         assert_eq!(
             catalog.binary.tracks.keys().collect::<Vec<_>>(),
             [&"public-numbers/track".to_string()],
@@ -795,10 +821,7 @@ fn a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port() {
         ),
         (
             READER_STREAM,
-            serde_json::json!({
-                "stream": READER_STREAM,
-                "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
-            }),
+            a_reader_stream_holding_one_unexposed_writer(),
         ),
     ]);
     publishing.add_a_relay_track_source_reading_the_port_of(
@@ -859,22 +882,12 @@ fn a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port() {
             );
         }
 
-        let catalog_track = reader_at_loopback
-            .broadcast
-            .track(hang::Catalog::DEFAULT_NAME)
-            .unwrap();
-        let mut catalog_consumer =
-            hang::catalog::Consumer::<()>::new(catalog_track.subscribe(None).await.unwrap());
-        let catalog = loop {
-            let catalog = tokio::time::timeout(MOQ_BUDGET, catalog_consumer.next())
-                .await
-                .expect("the reader stream's catalog lists the source's video entry")
-                .expect("hang reads the catalog")
-                .expect("the catalog track is live");
-            if catalog.video.renditions.contains_key("fromcamera/track") {
-                break catalog;
-            }
-        };
+        let catalog = reader_at_loopback
+            .the_catalog_once(
+                |catalog| catalog.video.renditions.contains_key("fromcamera/track"),
+                "the reader stream's catalog lists the source's video entry",
+            )
+            .await;
         let video_entry = &catalog.video.renditions["fromcamera/track"];
         assert!(
             video_entry.codec.to_string().starts_with("avc1."),
@@ -897,10 +910,7 @@ fn a_relay_track_source_in_a_second_runtime_reads_the_first_runtimes_public_port
     let mut first_runtime = TatolabdPublishingTheStream::start();
     let mut second_runtime = TatolabdPublishingTheStream::start_with_the_streams(&[(
         READER_STREAM,
-        serde_json::json!({
-            "stream": READER_STREAM,
-            "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
-        }),
+        a_reader_stream_holding_one_unexposed_writer(),
     )]);
     second_runtime.add_a_relay_track_source_at(
         &first_runtime.dial_url_of(LocalRelayListener::EveryInterface),
@@ -919,14 +929,10 @@ fn a_relay_track_source_in_a_second_runtime_reads_the_first_runtimes_public_port
             .the_next_objects_of("fromfirst/track", 12)
             .await;
         assert_the_objects_are_grouped_as_the_node_wrote_them(&objects);
-        for pair in objects.windows(2) {
-            let messages_between = the_number_in(&pair[1]) - the_number_in(&pair[0]);
-            assert_eq!(
-                pair[1].timestamp_ns - pair[0].timestamp_ns,
-                u128::from(messages_between) * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,
-                "the second runtime keeps the first's spacing: {objects:?}"
-            );
-        }
+        assert_the_numbered_messages_keep_their_spacing(
+            &objects,
+            "the second runtime keeps the first's spacing",
+        );
     });
     second_runtime.runtime.interrupt_and_expect_a_clean_exit();
     first_runtime.runtime.interrupt_and_expect_a_clean_exit();
@@ -1062,10 +1068,7 @@ fn a_relay_track_source_reads_a_hang_track_a_third_party_published() {
     let third_party_relay = ThirdPartyRelay::start();
     let mut reading = TatolabdPublishingTheStream::start_with_the_streams(&[(
         READER_STREAM,
-        serde_json::json!({
-            "stream": READER_STREAM,
-            "nodes": [{"name": "unexposed", "type": WRITER_NODE_TYPE, "config": {}}],
-        }),
+        a_reader_stream_holding_one_unexposed_writer(),
     )]);
     let (third_party_writing, _third_party_session) = reading
         .async_runtime
@@ -1118,26 +1121,17 @@ fn a_relay_track_source_reads_a_hang_track_a_third_party_published() {
             }
         }
 
-        let catalog_track = at_loopback
-            .broadcast
-            .track(hang::Catalog::DEFAULT_NAME)
-            .unwrap();
-        let mut catalog_consumer =
-            hang::catalog::Consumer::<()>::new(catalog_track.subscribe(None).await.unwrap());
-        let catalog = loop {
-            let catalog = tokio::time::timeout(MOQ_BUDGET, catalog_consumer.next())
-                .await
-                .expect("the reading stream's catalog lists the third party's entry")
-                .expect("hang reads the catalog")
-                .expect("the catalog track is live");
-            if catalog
-                .video
-                .renditions
-                .contains_key("fromthirdparty/track")
-            {
-                break catalog;
-            }
-        };
+        let catalog = at_loopback
+            .the_catalog_once(
+                |catalog| {
+                    catalog
+                        .video
+                        .renditions
+                        .contains_key("fromthirdparty/track")
+                },
+                "the reading stream's catalog lists the third party's entry",
+            )
+            .await;
         let video_entry = &catalog.video.renditions["fromthirdparty/track"];
         assert_eq!(video_entry.codec.to_string(), "avc1.42001f");
         assert_eq!(
