@@ -12,6 +12,7 @@
 //! neither is refused, so a new dependency cannot reach the page with no
 //! notice.
 
+use crate::generate_third_party_notices::fenced_licence_text_block;
 use crate::stage_watch_page::{
     WATCH_PAGE_PROJECT_RELATIVE_TO_WORKSPACE, install_the_watch_pages_locked_dependencies,
     opus_decoder_polyfill_wasm_loader_in_the_project,
@@ -62,9 +63,15 @@ pub struct InstalledWatchPagePackage {
     pub license: String,
     /// The package's repository, as a browsable URL.
     pub repository_url: Option<String>,
-    /// Each licence file the package ships beside its `package.json`, by name,
-    /// with its text.
-    pub licence_files: Vec<(String, String)>,
+    /// Each licence file the package ships beside its `package.json`.
+    pub licence_files: Vec<LicenceFileShippedInThePackage>,
+}
+
+/// One licence file an installed package ships beside its `package.json`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LicenceFileShippedInThePackage {
+    pub file_name: String,
+    pub text: String,
 }
 
 /// Where the notice for a package shipping no licence file is reproduced.
@@ -157,22 +164,27 @@ fn collect_the_packages_installed_in(
 fn package_directories_in(node_modules_directory: &Path) -> Result<Vec<PathBuf>> {
     let mut package_directories = Vec::new();
     for entry in sorted_directory_entries(node_modules_directory)? {
-        let entry_name = entry
+        let Some(entry_name) = entry
             .file_name()
-            .map(|name| name.to_string_lossy().into_owned());
-        match entry_name.as_deref() {
-            Some(name) if name.starts_with('.') => {}
-            Some(name) if name.starts_with('@') => {
-                package_directories.extend(sorted_directory_entries(&entry)?);
-            }
-            Some(_) => package_directories.push(entry),
-            None => {}
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        if entry_name.starts_with('.') {
+            continue;
         }
+        let candidate_package_directories = if entry_name.starts_with('@') {
+            sorted_directory_entries(&entry)?
+        } else {
+            vec![entry]
+        };
+        package_directories.extend(
+            candidate_package_directories
+                .into_iter()
+                .filter(|package_directory| package_directory.join("package.json").is_file()),
+        );
     }
-    Ok(package_directories
-        .into_iter()
-        .filter(|package_directory| package_directory.join("package.json").is_file())
-        .collect())
+    Ok(package_directories)
 }
 
 fn sorted_directory_entries(directory: &Path) -> Result<Vec<PathBuf>> {
@@ -180,13 +192,31 @@ fn sorted_directory_entries(directory: &Path) -> Result<Vec<PathBuf>> {
     for entry in
         std::fs::read_dir(directory).with_context(|| format!("reading {}", directory.display()))?
     {
-        let entry = entry.with_context(|| format!("reading {}", directory.display()))?;
-        if entry.path().is_dir() {
-            entries.push(entry.path());
+        let entry_path = entry
+            .with_context(|| format!("reading {}", directory.display()))?
+            .path();
+        if entry_path.is_dir() {
+            entries.push(entry_path);
         }
     }
     entries.sort();
     Ok(entries)
+}
+
+/// A `package.json` member that is a string, or an object whose `object_key`
+/// member is one — the two shapes npm accepts for `license` and `repository`.
+fn string_or_object_member_string(
+    member: Option<&serde_json::Value>,
+    object_key: &str,
+) -> Option<String> {
+    match member? {
+        serde_json::Value::String(member_string) => Some(member_string.clone()),
+        serde_json::Value::Object(member_object) => member_object
+            .get(object_key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        _ => None,
+    }
 }
 
 fn read_the_installed_package(package_directory: &Path) -> Result<InstalledWatchPagePackage> {
@@ -196,33 +226,19 @@ fn read_the_installed_package(package_directory: &Path) -> Result<InstalledWatch
             .with_context(|| format!("reading {}", package_json_path.display()))?,
     )
     .with_context(|| format!("parsing {}", package_json_path.display()))?;
-    let field = |name: &str| {
+    let package_json_string_field = |name: &str| {
         package
             .get(name)
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
             .with_context(|| format!("{} names no `{name}`", package_json_path.display()))
     };
-    let license = match package.get("license") {
-        Some(serde_json::Value::Object(legacy_license)) => legacy_license
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned),
-        Some(serde_json::Value::String(license)) => Some(license.clone()),
-        _ => None,
-    }
-    .with_context(|| format!("{} names no `license`", package_json_path.display()))?;
-    let repository = match package.get("repository") {
-        Some(serde_json::Value::Object(repository)) => repository
-            .get("url")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned),
-        Some(serde_json::Value::String(repository)) => Some(repository.clone()),
-        _ => None,
-    };
+    let license = string_or_object_member_string(package.get("license"), "type")
+        .with_context(|| format!("{} names no `license`", package_json_path.display()))?;
+    let repository = string_or_object_member_string(package.get("repository"), "url");
     Ok(InstalledWatchPagePackage {
-        name: field("name")?,
-        version: field("version")?,
+        name: package_json_string_field("name")?,
+        version: package_json_string_field("version")?,
         license,
         repository_url: repository.as_deref().map(browsable_repository_url),
         licence_files: licence_files_shipped_in(package_directory)?,
@@ -246,7 +262,9 @@ fn browsable_repository_url(repository: &str) -> String {
 
 /// The licence files directly in `package_directory`: those named for a
 /// licence, a copying grant, a notice or a copyright.
-fn licence_files_shipped_in(package_directory: &Path) -> Result<Vec<(String, String)>> {
+fn licence_files_shipped_in(
+    package_directory: &Path,
+) -> Result<Vec<LicenceFileShippedInThePackage>> {
     let mut licence_files = Vec::new();
     for entry in std::fs::read_dir(package_directory)
         .with_context(|| format!("reading {}", package_directory.display()))?
@@ -268,19 +286,11 @@ fn licence_files_shipped_in(package_directory: &Path) -> Result<Vec<(String, Str
         if names_a_licence && path.is_file() {
             let text = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading {}", path.display()))?;
-            licence_files.push((file_name, text));
+            licence_files.push(LicenceFileShippedInThePackage { file_name, text });
         }
     }
     licence_files.sort();
     Ok(licence_files)
-}
-
-/// `text` in a fenced block, refused when it would close the fence itself.
-fn fenced_text_block(text: &str, read_from: &str) -> Result<String> {
-    if text.contains("```") {
-        bail!("{read_from} holds a code fence, which would break the notices' own");
-    }
-    Ok(format!("```text\n{}\n```\n", text.trim_end()))
 }
 
 /// The section rendered from `packages`, with the checked-in licence files
@@ -328,10 +338,16 @@ pub fn render_the_watch_page_section(
             section.push_str(&notice.sentence());
             section.push_str("\n\n");
         }
-        for (licence_file_name, licence_text) in &package.licence_files {
-            let read_from = format!("{} {}'s {licence_file_name}", package.name, package.version);
-            write!(section, "`{licence_file_name}`:\n\n")?;
-            section.push_str(&fenced_text_block(licence_text, &read_from)?);
+        for licence_file in &package.licence_files {
+            write!(section, "`{}`:\n\n", licence_file.file_name)?;
+            section.push_str(&fenced_licence_text_block(&licence_file.text).with_context(
+                || {
+                    format!(
+                        "fencing {} {}'s {}",
+                        package.name, package.version, licence_file.file_name
+                    )
+                },
+            )?);
             section.push('\n');
         }
     }
@@ -353,10 +369,10 @@ pub fn render_the_watch_page_section(
             let licence_file_path = workspace_root.join(licence_file_relative_to_workspace);
             let licence_text = std::fs::read_to_string(&licence_file_path)
                 .with_context(|| format!("reading {}", licence_file_path.display()))?;
-            section.push_str(&fenced_text_block(
-                &licence_text,
-                licence_file_relative_to_workspace,
-            )?);
+            section.push_str(
+                &fenced_licence_text_block(&licence_text)
+                    .with_context(|| format!("fencing {licence_file_relative_to_workspace}"))?,
+            );
             section.push('\n');
         }
     }
@@ -371,15 +387,16 @@ pub fn render_the_watch_page_section(
          `.wasm` it loads. Their corresponding source, the FFmpeg and Opus they compile \
          among it, is libav.js {libav_js_version} at <https://github.com/Yahweasel/libav.js>.\n\n"
     )?;
-    section.push_str(&fenced_text_block(
-        libav_js_webassembly_build_notice,
-        "libav.js's WebAssembly build",
-    )?);
+    section.push_str(
+        &fenced_licence_text_block(libav_js_webassembly_build_notice)
+            .context("fencing libav.js's WebAssembly build notice")?,
+    );
     Ok(section)
 }
 
-/// The notice opening libav.js's WebAssembly loader `source`, its
-/// `/*! … */` block with the comment markers kept.
+/// The notice opening libav.js's WebAssembly loader `source`: its `/*! … */`
+/// block without the ` * ` rail, every other indentation kept, since the LGPL
+/// text it reproduces is laid out by it.
 fn libav_js_webassembly_build_notice(source: &str) -> Result<String> {
     let block = source
         .strip_prefix("/*!")
@@ -504,7 +521,7 @@ mod tests {
         let tslib_licence_file_names: Vec<&str> = packages[2]
             .licence_files
             .iter()
-            .map(|(licence_file_name, _)| licence_file_name.as_str())
+            .map(|licence_file| licence_file.file_name.as_str())
             .collect();
         assert_eq!(
             tslib_licence_file_names,
@@ -615,8 +632,30 @@ mod tests {
     }
 
     #[test]
-    fn a_licence_text_holding_a_code_fence_is_refused_rather_than_breaking_the_file() {
-        assert!(fenced_text_block("```\nrm -rf /\n```", "a package's LICENSE").is_err());
+    fn a_licence_text_holding_a_three_backtick_code_sample_is_fenced_whole() {
+        let fenced = fenced_licence_text_block("Usage:\n```\nnpm i\n```").unwrap();
+
+        assert!(fenced.starts_with("````text\n"), "{fenced}");
+        assert!(fenced.contains("```\nnpm i\n```"), "{fenced}");
+    }
+
+    #[test]
+    fn the_libav_notice_keeps_the_lgpl_layout_the_c_header_extractor_trims() {
+        let source =
+            "/*!\n * ffmpeg:\n *\n *                   GNU LESSER GENERAL PUBLIC LICENSE\n */";
+
+        let libav_notice = libav_js_webassembly_build_notice(source).unwrap();
+        let c_header_notice =
+            crate::generate_third_party_notices::leading_comment_block_notice(source).unwrap();
+
+        assert!(
+            libav_notice.contains("\n                  GNU LESSER"),
+            "{libav_notice}"
+        );
+        assert!(
+            c_header_notice.contains("\nGNU LESSER"),
+            "{c_header_notice}"
+        );
     }
 
     #[test]
@@ -630,6 +669,16 @@ mod tests {
             "GNU LESSER GENERAL PUBLIC LICENSE",
         ] {
             assert!(committed_notices.contains(expected), "{expected}");
+        }
+        if committed_notices.contains(
+            NoticeOfAPackageShippingNoLicenceFile::NoneAskedByZeroClauseBsd
+                .sentence()
+                .as_str(),
+        ) {
+            assert!(
+                committed_notices.contains("### BSD Zero Clause License"),
+                "a 0BSD package points at a licence text the file no longer carries"
+            );
         }
     }
 }

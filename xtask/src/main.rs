@@ -781,13 +781,7 @@ fn main() -> Result<()> {
         Commands::StageLocalRelay => {
             stage_local_relay::stage_the_local_relay(&workspace_root()?)?;
         }
-        Commands::StageWatchPage => {
-            let workspace_root = workspace_root()?;
-            stage_watch_page::stage_the_watch_page(
-                &workspace_root,
-                &build_runtime::runtime_unit_watch_page_directory_in_the_workspace(&workspace_root)?,
-            )?;
-        }
+        Commands::StageWatchPage => stage_watch_page::stage_the_watch_page(&workspace_root()?)?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {
             generate_built_in_node_classes::run(&workspace_root()?, check)?

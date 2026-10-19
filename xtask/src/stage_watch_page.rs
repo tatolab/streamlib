@@ -10,7 +10,9 @@
 //! makes of its script, and the Opus decoder polyfill's WebAssembly build,
 //! which libav.js fetches by URL from beside the bundle and no bundler inlines.
 
+use crate::build_runtime::runtime_unit_watch_page_directory_in_the_workspace;
 use anyhow::{Context, Result, bail};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// The preview page's web project, relative to the workspace.
@@ -38,10 +40,18 @@ const PACKAGE_MANAGER_FIELD: &str = "packageManager";
 const OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT: &str =
     "node_modules/@libav.js/variant-opus-af/dist";
 
-/// The suffixes of the polyfill's WebAssembly loader and module, the build
-/// libav.js loads when the page is not cross-origin isolated.
-const OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE: [&str; 2] =
-    [".wasm.mjs", ".wasm.wasm"];
+/// The suffix of the polyfill's WebAssembly loader, the first file libav.js
+/// fetches from beside the bundle when the page is not cross-origin isolated.
+const OPUS_DECODER_POLYFILL_WASM_LOADER_SUFFIX: &str = ".wasm.mjs";
+
+/// The suffix of the WebAssembly module the loader fetches beside itself.
+const OPUS_DECODER_POLYFILL_WASM_MODULE_SUFFIX: &str = ".wasm.wasm";
+
+/// Every polyfill file staged beside the bundle, by suffix.
+const OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE: [&str; 2] = [
+    OPUS_DECODER_POLYFILL_WASM_LOADER_SUFFIX,
+    OPUS_DECODER_POLYFILL_WASM_MODULE_SUFFIX,
+];
 
 /// The preview page's web project in `workspace_root`.
 pub fn watch_page_project_in_the_workspace(workspace_root: &Path) -> PathBuf {
@@ -86,6 +96,14 @@ fn ensure_the_pinned_bun_is_on_the_path(project_directory: &Path) -> Result<()> 
                  {pinned_bun_version}; {how_to_install_it}"
             )
         })?;
+    if !bun_version_output.status.success() {
+        bail!(
+            "`bun --version` failed with {}: {}; the preview page is built with bun \
+             {pinned_bun_version}",
+            bun_version_output.status,
+            String::from_utf8_lossy(&bun_version_output.stderr).trim()
+        );
+    }
     let bun_version_on_the_path = String::from_utf8_lossy(&bun_version_output.stdout)
         .trim()
         .to_string();
@@ -99,14 +117,19 @@ fn ensure_the_pinned_bun_is_on_the_path(project_directory: &Path) -> Result<()> 
 }
 
 /// Run `bun` with `arguments` in `project_directory`.
-fn run_bun(project_directory: &Path, arguments: &[&str]) -> Result<()> {
+fn run_bun(project_directory: &Path, arguments: &[&OsStr]) -> Result<()> {
+    let shown_arguments = arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
     let status = std::process::Command::new("bun")
         .args(arguments)
         .current_dir(project_directory)
         .status()
-        .with_context(|| format!("running `bun {}`", arguments.join(" ")))?;
+        .with_context(|| format!("running `bun {shown_arguments}`"))?;
     if !status.success() {
-        bail!("`bun {}` failed with {status}", arguments.join(" "));
+        bail!("`bun {shown_arguments}` failed with {status}");
     }
     Ok(())
 }
@@ -116,13 +139,23 @@ fn run_bun(project_directory: &Path, arguments: &[&str]) -> Result<()> {
 pub fn install_the_watch_pages_locked_dependencies(workspace_root: &Path) -> Result<PathBuf> {
     let project_directory = watch_page_project_in_the_workspace(workspace_root);
     ensure_the_pinned_bun_is_on_the_path(&project_directory)?;
-    run_bun(&project_directory, &["install", "--frozen-lockfile"])?;
+    run_bun(
+        &project_directory,
+        &[OsStr::new("install"), OsStr::new("--frozen-lockfile")],
+    )?;
     Ok(project_directory)
 }
 
-/// Build the page and stage it into `staged_watch_page_directory`, replacing
-/// whatever it held.
-pub fn stage_the_watch_page(
+/// Build the page and stage it into the runtime unit in `workspace_root`,
+/// replacing whatever its `lib/tatolab/watch/` held.
+pub fn stage_the_watch_page(workspace_root: &Path) -> Result<()> {
+    stage_the_watch_page_into(
+        workspace_root,
+        &runtime_unit_watch_page_directory_in_the_workspace(workspace_root)?,
+    )
+}
+
+fn stage_the_watch_page_into(
     workspace_root: &Path,
     staged_watch_page_directory: &Path,
 ) -> Result<()> {
@@ -133,27 +166,29 @@ pub fn stage_the_watch_page(
     }
     std::fs::create_dir_all(staged_watch_page_directory)
         .with_context(|| format!("creating {}", staged_watch_page_directory.display()))?;
-    let staged_watch_page_directory_argument = staged_watch_page_directory.display().to_string();
     run_bun(
         &project_directory,
         &[
-            "build",
-            WATCH_PAGE_SCRIPT_FILE_NAME,
-            "--target",
-            "browser",
-            "--minify",
-            "--outdir",
-            &staged_watch_page_directory_argument,
+            OsStr::new("build"),
+            OsStr::new(WATCH_PAGE_SCRIPT_FILE_NAME),
+            OsStr::new("--target"),
+            OsStr::new("browser"),
+            OsStr::new("--minify"),
+            OsStr::new("--outdir"),
+            staged_watch_page_directory.as_os_str(),
         ],
     )?;
-    copy_into(
+    copy_file_into_directory_under_its_own_name(
         &project_directory.join(WATCH_PAGE_ENTRY_FILE_NAME),
         staged_watch_page_directory,
     )?;
     for opus_decoder_polyfill_file in opus_decoder_polyfill_files_loaded_beside_the_bundle(
         &project_directory.join(OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT),
     )? {
-        copy_into(&opus_decoder_polyfill_file, staged_watch_page_directory)?;
+        copy_file_into_directory_under_its_own_name(
+            &opus_decoder_polyfill_file,
+            staged_watch_page_directory,
+        )?;
     }
     ensure_the_staged_watch_page_is_complete(staged_watch_page_directory)?;
     tracing::info!(
@@ -163,8 +198,7 @@ pub fn stage_the_watch_page(
     Ok(())
 }
 
-/// Copy `file` into `directory` under its own name.
-fn copy_into(file: &Path, directory: &Path) -> Result<()> {
+fn copy_file_into_directory_under_its_own_name(file: &Path, directory: &Path) -> Result<()> {
     let file_name = file
         .file_name()
         .with_context(|| format!("{} names no file", file.display()))?;
@@ -173,49 +207,37 @@ fn copy_into(file: &Path, directory: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The suffix of the polyfill's WebAssembly loader, the first file libav.js
-/// fetches from beside the bundle.
-const OPUS_DECODER_POLYFILL_WASM_LOADER_SUFFIX: &str =
-    OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE[0];
-
 /// The one file per suffix in [`OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE`]
-/// in the polyfill's `dist_directory`.
-fn opus_decoder_polyfill_files_loaded_beside_the_bundle(
-    dist_directory: &Path,
-) -> Result<Vec<PathBuf>> {
+/// in `directory`: the polyfill's build, or a staged page.
+fn opus_decoder_polyfill_files_loaded_beside_the_bundle(directory: &Path) -> Result<Vec<PathBuf>> {
     OPUS_DECODER_POLYFILL_FILE_SUFFIXES_LOADED_BESIDE_THE_BUNDLE
         .iter()
-        .map(|suffix| the_one_opus_decoder_polyfill_file_ending_in(dist_directory, suffix))
+        .map(|suffix| the_one_opus_decoder_polyfill_file_ending_in(directory, suffix))
         .collect()
 }
 
-/// The one file in the polyfill's `dist_directory` whose name ends `suffix`.
-fn the_one_opus_decoder_polyfill_file_ending_in(
-    dist_directory: &Path,
-    suffix: &str,
-) -> Result<PathBuf> {
-    let mut matching = Vec::new();
-    for entry in std::fs::read_dir(dist_directory).with_context(|| {
-        format!(
-            "reading the Opus decoder polyfill at {}",
-            dist_directory.display()
-        )
-    })? {
+/// The one file in `directory` whose name ends `suffix`.
+fn the_one_opus_decoder_polyfill_file_ending_in(directory: &Path, suffix: &str) -> Result<PathBuf> {
+    let mut file_names_ending_in_the_suffix = Vec::new();
+    for entry in
+        std::fs::read_dir(directory).with_context(|| format!("reading {}", directory.display()))?
+    {
         let file_name = entry
-            .with_context(|| format!("reading {}", dist_directory.display()))?
+            .with_context(|| format!("reading {}", directory.display()))?
             .file_name()
             .to_string_lossy()
             .into_owned();
         if file_name.ends_with(suffix) {
-            matching.push(file_name);
+            file_names_ending_in_the_suffix.push(file_name);
         }
     }
-    match matching.as_slice() {
-        [one] => Ok(dist_directory.join(one)),
+    match file_names_ending_in_the_suffix.as_slice() {
+        [one] => Ok(directory.join(one)),
         _ => bail!(
-            "the Opus decoder polyfill at {} holds {} files ending `{suffix}`, not one: {matching:?}",
-            dist_directory.display(),
-            matching.len()
+            "{} holds {} Opus decoder polyfill files ending `{suffix}`, not one: \
+             {file_names_ending_in_the_suffix:?}",
+            directory.display(),
+            file_names_ending_in_the_suffix.len()
         ),
     }
 }

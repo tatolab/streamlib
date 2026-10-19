@@ -228,8 +228,7 @@ pub fn run(
         lend_directory.display()
     );
 
-    let watch_page_directory = runtime_unit_watch_page_directory_in_the_workspace(workspace_root)?;
-    stage_the_watch_page(workspace_root, &watch_page_directory)?;
+    stage_the_watch_page(workspace_root)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);
     let mut built_binaries = build_runtime_unit_binaries(

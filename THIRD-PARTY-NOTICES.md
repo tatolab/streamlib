@@ -21296,7 +21296,7 @@ Licence: `Apache-2.0`. Source: <https://github.com/streaming-video-technology-al
 
 `LICENSE`:
 
-```text
+````text
 
                                  Apache License
                            Version 2.0, January 2004
@@ -21499,7 +21499,7 @@ Licence: `Apache-2.0`. Source: <https://github.com/streaming-video-technology-al
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-```
+````
 
 ### `@svta/cml-utils` 1.6.1
 
@@ -21507,7 +21507,7 @@ Licence: `Apache-2.0`. Source: <https://github.com/streaming-video-technology-al
 
 `LICENSE`:
 
-```text
+````text
 
                                  Apache License
                            Version 2.0, January 2004
@@ -21710,7 +21710,7 @@ Licence: `Apache-2.0`. Source: <https://github.com/streaming-video-technology-al
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-```
+````
 
 ### `@ungap/global-this` 0.4.4
 
@@ -21718,7 +21718,7 @@ Licence: `ISC`. Source: <https://github.com/ungap/global-this>.
 
 `LICENSE`:
 
-```text
+````text
 ISC License
 
 Copyright (c) 2020, Andrea Giammarchi, @WebReflection
@@ -21734,7 +21734,7 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
 OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
-```
+````
 
 ### `@zod/mini` 4.6.7
 
@@ -21742,7 +21742,7 @@ Licence: `MIT`. Source: <https://github.com/colinhacks/zod>.
 
 `LICENSE`:
 
-```text
+````text
 MIT License
 
 Copyright (c) 2025 Colin McDonnell
@@ -21764,7 +21764,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
+````
 
 ### `async-mutex` 0.5.0
 
@@ -21772,7 +21772,7 @@ Licence: `MIT`. Source: <https://github.com/DirtyHairy/async-mutex>.
 
 `LICENSE`:
 
-```text
+````text
 The MIT License (MIT)
 
 Copyright (c) 2016 Christian Speckner <cnspeckn@googlemail.com>
@@ -21794,7 +21794,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-```
+````
 
 ### `bowser` 2.14.1
 
@@ -21802,7 +21802,7 @@ Licence: `MIT`. Source: <https://github.com/bowser-js/bowser>.
 
 `LICENSE`:
 
-```text
+````text
 Copyright 2015, Dustin Diaz (the "Original Author")
 All rights reserved.
 
@@ -21842,7 +21842,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 Except where noted, this license applies to any and all software
 programs and associated documentation files created by the
 Original Author, when distributed with the Software.
-```
+````
 
 ### `media-captions` 0.0.18
 
@@ -21850,7 +21850,7 @@ Licence: `MIT`. Source: <https://github.com/vidstack/media-captions>.
 
 `LICENSE`:
 
-```text
+````text
 MIT License
 
 Copyright (c) 2023 Rahim Alwer
@@ -21872,7 +21872,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
+````
 
 ### `pako` 3.0.2
 
@@ -21880,7 +21880,7 @@ Licence: `(MIT AND Zlib)`. Source: <https://github.com/nodeca/pako>.
 
 `LICENSE`:
 
-```text
+````text
 (The MIT License)
 
 Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn
@@ -21902,7 +21902,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-```
+````
 
 ### `tslib` 2.8.1
 
@@ -21910,7 +21910,7 @@ Licence: `0BSD`. Source: <https://github.com/Microsoft/tslib>.
 
 `CopyrightNotice.txt`:
 
-```text
+````text
 /******************************************************************************
 Copyright (c) Microsoft Corporation.
 
@@ -21925,11 +21925,11 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ***************************************************************************** */
-```
+````
 
 `LICENSE.txt`:
 
-```text
+````text
 Copyright (c) Microsoft Corporation.
 
 Permission to use, copy, modify, and/or distribute this software for any
@@ -21942,7 +21942,7 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
-```
+````
 
 ### `zod` 4.6.7
 
@@ -21950,7 +21950,7 @@ Licence: `MIT`. Source: <https://github.com/colinhacks/zod>.
 
 `LICENSE`:
 
-```text
+````text
 MIT License
 
 Copyright (c) 2025 Colin McDonnell
@@ -21972,11 +21972,11 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
+````
 
 ### The licence files of <https://github.com/moq-dev/moq>
 
-```text
+````text
 MIT License
 
 Copyright (c) 2023 Luke Curley
@@ -21998,9 +21998,9 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
+````
 
-```text
+````text
 
                                  Apache License
                            Version 2.0, January 2004
@@ -22203,11 +22203,11 @@ SOFTWARE.
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-```
+````
 
 ### The licence files of <https://github.com/moq-dev/web-transport>
 
-```text
+````text
 MIT License
 
 Copyright (c) 2023 Luke Curley
@@ -22229,9 +22229,9 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
+````
 
-```text
+````text
 
                                  Apache License
                            Version 2.0, January 2004
@@ -22434,13 +22434,13 @@ SOFTWARE.
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-```
+````
 
 ### libav.js's WebAssembly build
 
 The notice opening `libav-*-opus-af.wasm.mjs`, which the page carries unmodified beside the `.wasm` it loads. Their corresponding source, the FFmpeg and Opus they compile among it, is libav.js 6.10.9 at <https://github.com/Yahweasel/libav.js>.
 
-```text
+````text
 libav.js v6.10.9.0
 
 This software is compiled from several sources, the licenses for which are
@@ -23057,7 +23057,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
 
 emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)
-```
+````
 
 ## Notices `cargo about` cannot produce
 
