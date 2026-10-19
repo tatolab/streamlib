@@ -93,9 +93,8 @@ license-files = []
 # `license-file` is not the fix: cargo then warns `only one of 'license' or
 # 'license-file' is necessary` on every build, and dropping `license-file`
 # would stop cargo copying the parameterized text into each published `.crate`.
-# `licenses.private.ignore` is no shortcut either: of the twenty-one it reaches
-# only `xtask`, `streamlib-test-fixtures`, `tatolab-cli` and `tatolabd`, the
-# four that set `publish = false`, and the other seventeen still need an entry
+# `licenses.private.ignore` is no shortcut either: it reaches only the crates
+# that set `publish = false`, and every published crate still needs an entry
 # apiece.
 #
 # A new workspace crate reds this gate until it is listed. That is the intended
@@ -213,5 +212,10 @@ license-files = []
 
 [[licenses.clarify]]
 name = "tatolabd"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "tatolab-read-track"
 expression = "BUSL-1.1"
 license-files = []
