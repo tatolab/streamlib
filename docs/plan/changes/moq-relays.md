@@ -261,13 +261,17 @@ serving the preview page, static. The page is `runtime/tatolab-watch/` — `pack
 `png` at `runtime/streamlib-engine/Cargo.toml:127`); CLI tests `tatolab_{exchange_verb,observation_verbs,mcp_verb,machine_runtime_socket}.rs`,
 `common/tapped_channel_bag_fixtures.rs`; the wheel's `decode_tapped_channel_bag_frame_to_python_object`;
 `tests/stream-on-runtime/test_cli_launch.py:124-153`, `:448-469`, `test_cli_mcp_verb_live.py:42-44`.
-Nothing replaces them in the runtime. The rigs become tools: `cargo xtask read-track <relay-url>
-<track> --count N --out <dir>`, a `moq-net` subscriber writing each object's payload and timestamp,
-replaces `tap` + `exchange` in `E/../examples/codec_roundtrip_rig.rs:32-51`, `T/e2e_fixture_psnr.sh:275`,
-`:321`, `T/e2e_fixture_psnr_vivid.sh:343-347`, `:395`; the scripts decode an H.264 dump with the
-rig's ffmpeg into PNGs for `X/psnr.rs`, the baselines re-taken on that path; `T/codec_roundtrip_stream.py:51-70`
-exposes the decoder's port instead of ending in a window; `T/verify_audio_channel.sh:114-121` and
-`T/tap_audio_channel.py:76-111` read the `AudioBlock` track and decode msgpack in the script.
+Nothing replaces them in the runtime. The rigs become tools: `tatolab-read-track <relay-url>
+<broadcast> <track> --count N --out <dir>`, a `moq-net` subscriber writing each object's payload and
+timestamp, its own never-shipped crate so no xtask gate compiles the QUIC stack (owner, 2026-10-19). The
+codec round trip is two streams, as a deployment builds it (owner, 2026-10-19): `T/codec_roundtrip_stream.py`'s
+sender exposes the encoder's port, its receiver reads that track through `RelayTrackSource` and decodes it;
+`T/e2e_fixture_psnr_vivid.sh` reads the sender's track, decodes the dump with the rig's ffmpeg into PNGs
+for `X/psnr.rs`, the baselines re-taken on that path, and reads the receiver's decoded-frame count off
+`graph`. `E/../examples/codec_roundtrip_rig.rs`, an app built on an in-process engine, and
+`T/e2e_fixture_psnr.sh` with its PNG-replay arm are deleted; vivid is the codec rig's source until
+`TestPatternSource` renders deterministically per frame index (owner, 2026-10-19). `T/verify_audio_channel.sh`
+and `T/audio_track_dump_check.py` read the `AudioBlock` track and decode msgpack in the script.
 `verify-live` (`:25-69`, `:103-135`), `verify-audio`, `capture-stream-evidence`, `tap-live-channel`,
 `drive-running-stream`, `inspect-live-graph`, `list-running-streams`, `evidence-verifier.md:21-28`,
 `README.md:283-408` and the nine `examples/*/README.md` move onto `read-track` and `/watch` in their own `.claude/` PR.
@@ -323,7 +327,7 @@ Order: 1, 2, 7 first; 3 after 1 and 2; 4 after 2; 5 and 6 after 4; 8 after 3 and
 - The Python entry helpers are dataclasses in `tatolab.stream.catalog`, one per hang section.
 - `tatolabd` answers `--auth-url` in-process over a unix socket, no `moq auth serve` child; its own
   publish token is minted at start, never written to disk. Ports 4443, 4445, 4446 are settings defaults.
-- `read-track` lives in `xtask`; the rig's PSNR decoder is ffmpeg, already on the rig, never shipped.
+- The rig's PSNR decoder is ffmpeg, already on the rig, never shipped.
 - The web project is built with bun, pinned in the workflows, staged like the lend; the scaffold
   exposes the encoder's `encoded_video`.
 
