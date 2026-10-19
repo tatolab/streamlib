@@ -212,7 +212,7 @@ fn stage_the_watch_page_into(
             staged_watch_page_directory,
         )?;
     }
-    make_every_staged_file_writable_by_its_owner_alone(staged_watch_page_directory)?;
+    make_the_staged_page_writable_by_its_owner_alone(staged_watch_page_directory)?;
     ensure_the_staged_watch_page_is_complete(staged_watch_page_directory)?;
     tracing::info!(
         "stage-watch-page: the preview page is staged at {}",
@@ -227,13 +227,28 @@ fn stage_the_watch_page_into(
 #[cfg(unix)]
 const STAGED_WATCH_PAGE_FILE_MODE: u32 = 0o644;
 
-/// Set every file in `staged_watch_page_directory` to
-/// [`STAGED_WATCH_PAGE_FILE_MODE`].
+/// The staged directory's mode: one its group could write would let a member
+/// replace a staged file whatever that file's own mode.
 #[cfg(unix)]
-fn make_every_staged_file_writable_by_its_owner_alone(
+const STAGED_WATCH_PAGE_DIRECTORY_MODE: u32 = 0o755;
+
+/// Set `staged_watch_page_directory` to [`STAGED_WATCH_PAGE_DIRECTORY_MODE`]
+/// and every file in it to [`STAGED_WATCH_PAGE_FILE_MODE`].
+#[cfg(unix)]
+fn make_the_staged_page_writable_by_its_owner_alone(
     staged_watch_page_directory: &Path,
 ) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        staged_watch_page_directory,
+        std::fs::Permissions::from_mode(STAGED_WATCH_PAGE_DIRECTORY_MODE),
+    )
+    .with_context(|| {
+        format!(
+            "setting the mode of {}",
+            staged_watch_page_directory.display()
+        )
+    })?;
     for staged_file in files_in(staged_watch_page_directory)? {
         std::fs::set_permissions(
             &staged_file,
@@ -245,25 +260,29 @@ fn make_every_staged_file_writable_by_its_owner_alone(
 }
 
 #[cfg(not(unix))]
-fn make_every_staged_file_writable_by_its_owner_alone(_: &Path) -> Result<()> {
+fn make_the_staged_page_writable_by_its_owner_alone(_: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Refuse a staged file anyone but its owner may write.
+/// Refuse the staged directory, or a file in it, that anyone but its owner may
+/// write.
 #[cfg(unix)]
-fn ensure_no_staged_file_is_writable_by_anyone_but_its_owner(
+fn ensure_the_staged_page_is_writable_by_its_owner_alone(
     staged_watch_page_directory: &Path,
 ) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    for staged_file in files_in(staged_watch_page_directory)? {
-        let mode = std::fs::metadata(&staged_file)
-            .with_context(|| format!("reading the mode of {}", staged_file.display()))?
+    for staged_path in std::iter::once(staged_watch_page_directory.to_path_buf())
+        .chain(files_in(staged_watch_page_directory)?)
+    {
+        let mode = std::fs::metadata(&staged_path)
+            .with_context(|| format!("reading the mode of {}", staged_path.display()))?
             .permissions()
             .mode();
         if mode & 0o022 != 0 {
             bail!(
-                "{} is writable by its group or by anyone (mode {:o}), and the browser runs it",
-                staged_file.display(),
+                "{} is writable by its group or by anyone (mode {:o}), and the browser runs \
+                 what it holds",
+                staged_path.display(),
                 mode & 0o777
             );
         }
@@ -272,7 +291,7 @@ fn ensure_no_staged_file_is_writable_by_anyone_but_its_owner(
 }
 
 #[cfg(not(unix))]
-fn ensure_no_staged_file_is_writable_by_anyone_but_its_owner(_: &Path) -> Result<()> {
+fn ensure_the_staged_page_is_writable_by_its_owner_alone(_: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -403,7 +422,7 @@ pub fn ensure_the_staged_watch_page_is_complete(staged_watch_page_directory: &Pa
         );
     }
     opus_decoder_polyfill_files_loaded_beside_the_bundle(staged_watch_page_directory)?;
-    ensure_no_staged_file_is_writable_by_anyone_but_its_owner(staged_watch_page_directory)
+    ensure_the_staged_page_is_writable_by_its_owner_alone(staged_watch_page_directory)
 }
 
 #[cfg(test)]
@@ -440,7 +459,7 @@ mod tests {
             )
             .unwrap();
         }
-        make_every_staged_file_writable_by_its_owner_alone(staged_watch_page_directory.path())
+        make_the_staged_page_writable_by_its_owner_alone(staged_watch_page_directory.path())
             .unwrap();
         staged_watch_page_directory
     }
@@ -540,7 +559,7 @@ mod tests {
             .to_string();
         assert!(refusal.contains("mode 666"), "{refusal}");
 
-        make_every_staged_file_writable_by_its_owner_alone(staged_watch_page_directory.path())
+        make_the_staged_page_writable_by_its_owner_alone(staged_watch_page_directory.path())
             .unwrap();
         assert_eq!(
             std::fs::metadata(&polyfill_entry_module)
@@ -552,6 +571,36 @@ mod tests {
         );
         ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
             .expect("an owner-writable page is complete");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_group_writable_staged_directory_is_refused_and_staging_makes_it_owner_writable_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, true);
+        std::fs::set_permissions(
+            staged_watch_page_directory.path(),
+            std::fs::Permissions::from_mode(0o775),
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("a group-writable directory is refused")
+            .to_string();
+        assert!(refusal.contains("mode 775"), "{refusal}");
+
+        make_the_staged_page_writable_by_its_owner_alone(staged_watch_page_directory.path())
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(staged_watch_page_directory.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect("an owner-writable directory is complete");
     }
 
     #[test]
