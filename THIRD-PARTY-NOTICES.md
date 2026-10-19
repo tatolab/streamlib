@@ -21204,7 +21204,7 @@ the following restrictions:
 
 ## The preview page
 
-The runtime unit's `lib/tatolab/watch/` is the preview page, `runtime/tatolab-watch/`, bundled with bun from the npm packages its `bun.lock` pins, beside libav.js's WebAssembly build of the Opus decoder, carried unmodified. Each package, with the licence files it ships:
+The runtime unit's `lib/tatolab/watch/` is the preview page, `runtime/tatolab-watch/`, bundled with bun from the npm packages its `bun.lock` pins, beside libav.js's Opus decoder, which the bundle leaves external and the page carries as its own unmodified files. Each package, with the licence files it ships:
 
 ### `@kixelated/libavjs-webcodecs-polyfill` 0.5.5
 
@@ -22438,7 +22438,7 @@ SOFTWARE.
 
 ### libav.js's WebAssembly build
 
-The notice opening `libav-*-opus-af.wasm.mjs`, which the page carries unmodified beside the `.wasm` it loads. Their corresponding source, the FFmpeg and Opus they compile among it, is libav.js 6.10.9 at <https://github.com/Yahweasel/libav.js>.
+The notice opening `libav-*-opus-af.wasm.mjs`, which the page carries unmodified beside `libav-opus-af.mjs`, the entry module that loads it, and the `.wasm` it loads. Their corresponding source, the FFmpeg and Opus they compile among it, is libav.js 6.10.9 at <https://github.com/Yahweasel/libav.js>.
 
 ````text
 libav.js v6.10.9.0

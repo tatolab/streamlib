@@ -31,6 +31,10 @@
 				font-weight: bold;
 			}
 		</style>
+		<!-- libav.js stays its own unmodified files, LGPL beside the bundle; the bundle imports it by this name. -->
+		<script type="importmap">
+			{ "imports": { "@libav.js/variant-opus-af": "/watch/libav-opus-af.mjs" } }
+		</script>
 		<!-- Absolute: the page answers at every /watch/<address>, below which a relative path would name no file. -->
 		<script type="module" src="/watch/main.js"></script>
 	</head>

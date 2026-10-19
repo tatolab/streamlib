@@ -304,8 +304,9 @@ pub fn render_the_watch_page_section(
     let mut section = format!(
         "## The preview page\n\nThe runtime unit's `lib/tatolab/watch/` is the preview page, \
          `{WATCH_PAGE_PROJECT_RELATIVE_TO_WORKSPACE}/`, bundled with bun from the npm packages \
-         its `bun.lock` pins, beside libav.js's WebAssembly build of the Opus decoder, carried \
-         unmodified. Each package, with the licence files it ships:\n\n"
+         its `bun.lock` pins, beside libav.js's Opus decoder, which the bundle leaves external \
+         and the page carries as its own unmodified files. Each package, with the licence files \
+         it ships:\n\n"
     );
     let mut libav_js_version = None;
     let mut upstream_repository_urls_cited = Vec::new();
@@ -383,9 +384,10 @@ pub fn render_the_watch_page_section(
     write!(
         section,
         "### libav.js's WebAssembly build\n\nThe notice opening \
-         `libav-*-opus-af.wasm.mjs`, which the page carries unmodified beside the \
-         `.wasm` it loads. Their corresponding source, the FFmpeg and Opus they compile \
-         among it, is libav.js {libav_js_version} at <https://github.com/Yahweasel/libav.js>.\n\n"
+         `libav-*-opus-af.wasm.mjs`, which the page carries unmodified beside \
+         `libav-opus-af.mjs`, the entry module that loads it, and the `.wasm` it loads. Their \
+         corresponding source, the FFmpeg and Opus they compile among it, is libav.js \
+         {libav_js_version} at <https://github.com/Yahweasel/libav.js>.\n\n"
     )?;
     section.push_str(
         &fenced_licence_text_block(libav_js_webassembly_build_notice)

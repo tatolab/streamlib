@@ -26,11 +26,16 @@ function watchedAddressFromThePath(path: string): WatchedAddress | undefined {
 	if (!path.startsWith(WATCH_PAGE_ROUTE_PREFIX)) {
 		return undefined;
 	}
-	const segments = path
-		.slice(WATCH_PAGE_ROUTE_PREFIX.length)
-		.split("/")
-		.filter((segment) => segment !== "")
-		.map(decodeURIComponent);
+	let segments: string[];
+	try {
+		segments = path
+			.slice(WATCH_PAGE_ROUTE_PREFIX.length)
+			.split("/")
+			.filter((segment) => segment !== "")
+			.map(decodeURIComponent);
+	} catch {
+		return undefined;
+	}
 	if (segments.length === 2) {
 		return { machine: segments[0], stream: segments[1], trackOfOneNodesPort: undefined };
 	}

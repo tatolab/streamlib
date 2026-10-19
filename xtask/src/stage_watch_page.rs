@@ -7,8 +7,10 @@
 //! HTTP serves under `/watch`.
 //!
 //! The staged directory holds the page's entry file, the one bundle `bun build`
-//! makes of its script, and the Opus decoder polyfill's WebAssembly build,
-//! which libav.js fetches by URL from beside the bundle and no bundler inlines.
+//! makes of its script, and the Opus decoder polyfill, libav.js, as its own
+//! unmodified files: the bundle leaves it external, the entry file's import map
+//! names its entry module, and that module fetches its WebAssembly build by URL
+//! from beside itself.
 
 use crate::build_runtime::runtime_unit_watch_page_directory_in_the_workspace;
 use anyhow::{Context, Result, bail};
@@ -35,6 +37,18 @@ const WATCH_PAGE_BUNDLE_PATH_THE_ENTRY_FILE_LOADS: &str = "/watch/main.js";
 /// The `package.json` field naming the bun the page is built with, as
 /// `bun@<version>`; `setup-bun` reads the same field.
 const PACKAGE_MANAGER_FIELD: &str = "packageManager";
+
+/// The polyfill package, left external to the bundle so its LGPL code stays
+/// its own unmodified files.
+const OPUS_DECODER_POLYFILL_PACKAGE_NAME: &str = "@libav.js/variant-opus-af";
+
+/// The polyfill's ES module entry, as its `package.json` `exports.import`
+/// names it.
+const OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME: &str = "libav-opus-af.mjs";
+
+/// Where the entry file's import map resolves [`OPUS_DECODER_POLYFILL_PACKAGE_NAME`].
+const OPUS_DECODER_POLYFILL_ENTRY_MODULE_PATH_THE_IMPORT_MAP_NAMES: &str =
+    "/watch/libav-opus-af.mjs";
 
 /// The polyfill package's built files, relative to the project.
 const OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT: &str =
@@ -174,6 +188,8 @@ fn stage_the_watch_page_into(
             OsStr::new("--target"),
             OsStr::new("browser"),
             OsStr::new("--minify"),
+            OsStr::new("--external"),
+            OsStr::new(OPUS_DECODER_POLYFILL_PACKAGE_NAME),
             OsStr::new("--outdir"),
             staged_watch_page_directory.as_os_str(),
         ],
@@ -182,9 +198,15 @@ fn stage_the_watch_page_into(
         &project_directory.join(WATCH_PAGE_ENTRY_FILE_NAME),
         staged_watch_page_directory,
     )?;
-    for opus_decoder_polyfill_file in opus_decoder_polyfill_files_loaded_beside_the_bundle(
-        &project_directory.join(OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT),
-    )? {
+    let opus_decoder_polyfill_dist_directory =
+        project_directory.join(OPUS_DECODER_POLYFILL_DIST_RELATIVE_TO_THE_PROJECT);
+    copy_file_into_directory_under_its_own_name(
+        &opus_decoder_polyfill_dist_directory.join(OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME),
+        staged_watch_page_directory,
+    )?;
+    for opus_decoder_polyfill_file in
+        opus_decoder_polyfill_files_loaded_beside_the_bundle(&opus_decoder_polyfill_dist_directory)?
+    {
         copy_file_into_directory_under_its_own_name(
             &opus_decoder_polyfill_file,
             staged_watch_page_directory,
@@ -254,7 +276,8 @@ pub fn opus_decoder_polyfill_wasm_loader_in_the_project(
 }
 
 /// Refuse a staged page whose entry file does not load the bundle from where
-/// the loopback HTTP serves it, or that lacks the bundle or a polyfill file.
+/// the loopback HTTP serves it or map the polyfill to its entry module, whose
+/// bundle does not import the polyfill by name, or that lacks a file it loads.
 pub fn ensure_the_staged_watch_page_is_complete(staged_watch_page_directory: &Path) -> Result<()> {
     let entry_file_path = staged_watch_page_directory.join(WATCH_PAGE_ENTRY_FILE_NAME);
     let entry_file = std::fs::read_to_string(&entry_file_path).with_context(|| {
@@ -272,11 +295,38 @@ pub fn ensure_the_staged_watch_page_is_complete(staged_watch_page_directory: &Pa
             entry_file_path.display()
         );
     }
-    let bundle_path = staged_watch_page_directory.join(WATCH_PAGE_BUNDLE_FILE_NAME);
-    if !bundle_path.is_file() {
+    if !(entry_file.contains(&format!("\"{OPUS_DECODER_POLYFILL_PACKAGE_NAME}\""))
+        && entry_file.contains(&format!(
+            "\"{OPUS_DECODER_POLYFILL_ENTRY_MODULE_PATH_THE_IMPORT_MAP_NAMES}\""
+        )))
+    {
         bail!(
+            "{} maps no `{OPUS_DECODER_POLYFILL_PACKAGE_NAME}` to \
+             {OPUS_DECODER_POLYFILL_ENTRY_MODULE_PATH_THE_IMPORT_MAP_NAMES}, which the bundle \
+             imports it by",
+            entry_file_path.display()
+        );
+    }
+    let bundle_path = staged_watch_page_directory.join(WATCH_PAGE_BUNDLE_FILE_NAME);
+    let bundle = std::fs::read_to_string(&bundle_path).with_context(|| {
+        format!(
             "the staged preview page has no bundle at {}",
             bundle_path.display()
+        )
+    })?;
+    if !bundle.contains(&format!("\"{OPUS_DECODER_POLYFILL_PACKAGE_NAME}\"")) {
+        bail!(
+            "{} does not import `{OPUS_DECODER_POLYFILL_PACKAGE_NAME}` by name: the bundle \
+             inlined the polyfill rather than leaving it its own files",
+            bundle_path.display()
+        );
+    }
+    let polyfill_entry_module_path =
+        staged_watch_page_directory.join(OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME);
+    if !polyfill_entry_module_path.is_file() {
+        bail!(
+            "the staged preview page has no Opus decoder polyfill entry module at {}",
+            polyfill_entry_module_path.display()
         );
     }
     opus_decoder_polyfill_files_loaded_beside_the_bundle(staged_watch_page_directory)?;
@@ -287,12 +337,26 @@ pub fn ensure_the_staged_watch_page_is_complete(staged_watch_page_directory: &Pa
 mod tests {
     use super::*;
 
-    /// A staged page holding `file_names`, each with a placeholder body, and
-    /// the checked-in entry file when `with_the_entry_file`.
+    /// What a bundle leaving the polyfill external holds of it.
+    const A_BUNDLE_IMPORTING_THE_POLYFILL_BY_NAME: &str =
+        "watch();import(\"@libav.js/variant-opus-af\")";
+
+    /// A staged page holding `file_names` — the bundle importing the polyfill
+    /// by name, every other file a placeholder — and the checked-in entry file
+    /// when `with_the_entry_file`.
     fn a_staged_watch_page(file_names: &[&str], with_the_entry_file: bool) -> tempfile::TempDir {
         let staged_watch_page_directory = tempfile::tempdir().unwrap();
         for file_name in file_names {
-            std::fs::write(staged_watch_page_directory.path().join(file_name), "staged").unwrap();
+            let staged_body = if *file_name == WATCH_PAGE_BUNDLE_FILE_NAME {
+                A_BUNDLE_IMPORTING_THE_POLYFILL_BY_NAME
+            } else {
+                "staged"
+            };
+            std::fs::write(
+                staged_watch_page_directory.path().join(file_name),
+                staged_body,
+            )
+            .unwrap();
         }
         if with_the_entry_file {
             std::fs::write(
@@ -306,8 +370,9 @@ mod tests {
         staged_watch_page_directory
     }
 
-    const EVERY_BUILT_FILE: [&str; 3] = [
+    const EVERY_BUILT_FILE: [&str; 4] = [
         WATCH_PAGE_BUNDLE_FILE_NAME,
+        OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME,
         "libav-6.10.9.0-opus-af.wasm.mjs",
         "libav-6.10.9.0-opus-af.wasm.wasm",
     ];
@@ -324,6 +389,10 @@ mod tests {
     fn a_page_missing_any_file_it_loads_is_refused_naming_it() {
         for (missing_file_name, what_the_refusal_names) in [
             (WATCH_PAGE_BUNDLE_FILE_NAME, WATCH_PAGE_BUNDLE_FILE_NAME),
+            (
+                OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME,
+                OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME,
+            ),
             ("libav-6.10.9.0-opus-af.wasm.mjs", ".wasm.mjs"),
             ("libav-6.10.9.0-opus-af.wasm.wasm", ".wasm.wasm"),
         ] {
@@ -374,6 +443,53 @@ mod tests {
         assert!(
             refusal.contains(WATCH_PAGE_BUNDLE_PATH_THE_ENTRY_FILE_LOADS),
             "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_bundle_that_inlined_the_polyfill_is_refused() {
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, true);
+        std::fs::write(
+            staged_watch_page_directory
+                .path()
+                .join(WATCH_PAGE_BUNDLE_FILE_NAME),
+            "s.VER=\"6.10.9.0\",s.CONFIG=\"opus-af\"",
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("an inlined polyfill is refused")
+            .to_string();
+
+        assert!(refusal.contains("inlined the polyfill"), "{refusal}");
+    }
+
+    #[test]
+    fn an_entry_file_mapping_no_polyfill_is_refused() {
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, false);
+        std::fs::write(
+            staged_watch_page_directory
+                .path()
+                .join(WATCH_PAGE_ENTRY_FILE_NAME),
+            "<script type=\"module\" src=\"/watch/main.js\"></script>",
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("an entry file without the import map is refused")
+            .to_string();
+
+        assert!(
+            refusal.contains(OPUS_DECODER_POLYFILL_PACKAGE_NAME),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn the_polyfill_package_left_external_is_one_the_lockfile_pins() {
+        assert!(
+            include_str!("../../runtime/tatolab-watch/bun.lock")
+                .contains(&format!("\"{OPUS_DECODER_POLYFILL_PACKAGE_NAME}\""))
         );
     }
 
