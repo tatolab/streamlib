@@ -323,12 +323,12 @@ expect_warn "an env-prefixed e2e fixture run is noted" e2e_fixture
 run_hook 'DISPLAY=:1 REFERENCE_STEMS="solid_red complex_pattern" SAMPLES_PER_REFERENCE=2 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-v h264'
 expect_warn "a quoted env value with a space does not hide the run" e2e_fixture
 
-run_hook 'timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-h264 h264 2>&1 | grep -E "RESULT"'
+run_hook 'timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/vivid-h264 h264 2>&1 | grep -E "RESULT"'
 expect_warn "an e2e fixture run behind timeout and bash is noted" e2e_fixture
 
 run_hook 'cd /home/dev/streamlib
 export DISPLAY=:1
-RUN_SECONDS=30 timeout 570 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/x h264'
+RUN_SECONDS=30 timeout 570 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/x h264'
 expect_warn "a multi-line cd + export + e2e run is noted" e2e_fixture
 
 run_hook 'for codec in h264 h265; do
@@ -341,25 +341,25 @@ run_hook 'PYTHON=/usr/bin/python3 \
   ./runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/va-healthy'
 expect_warn "an e2e run on a continuation line is noted" e2e_fixture
 
-run_hook "sed -n '1,120p' runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh"
+run_hook "sed -n '1,120p' runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh"
 expect_silent "reading an e2e fixture script with sed stays silent"
 
 run_hook 'cat -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
 expect_silent "reading an e2e fixture script with cat stays silent"
 
-run_hook "git diff runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh | sed -n '1,200p'"
+run_hook "git diff runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh | sed -n '1,200p'"
 expect_silent "diffing an e2e fixture script stays silent"
 
 run_hook 'chmod +x runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
 expect_silent "chmod on an e2e fixture script stays silent"
 
-run_hook 'bash -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh && echo "syntax OK"'
+run_hook 'bash -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh && echo "syntax OK"'
 expect_silent "a bash -n syntax check of an e2e fixture script stays silent"
 
-run_hook 'git add runtime/streamlib-engine/tests/fixtures/codec_roundtrip_node.py runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh'
+run_hook 'git add runtime/streamlib-engine/tests/fixtures/codec_roundtrip_node.py runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "staging an e2e fixture script stays silent"
 
-run_hook 'grep -n "STREAMLIB_CLI" runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh | head'
+run_hook 'grep -n "STREAMLIB_CLI" runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh | head'
 expect_silent "grepping an e2e fixture script stays silent"
 
 run_hook 'ls runtime/streamlib-engine/tests/fixtures/ && head -40 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
@@ -375,7 +375,7 @@ expect_silent "a python heredoc editing an e2e fixture script stays silent"
 run_hook 'cat > /tmp/pr-body.md <<'"'"'MD'"'"'
 ## Summary
 
-The fixture runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh gains a Python arm.
+The fixture runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh gains a Python arm.
 MD'
 expect_silent "a PR body naming an e2e fixture script stays silent"
 
@@ -445,8 +445,8 @@ run_hook 'tatolab run --dir examples/camera-display'
 [[ "$(field '.hookSpecificOutput.additionalContext')" == *"exit 144"* ]] \
   && ok "the model is told about exit 144" || bad "the model's note lacks the exit 144 warning"
 
-run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/v h264'
-[[ "$(field '.systemMessage')" == *"allow '*DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh*'"* ]] \
+run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/v h264'
+[[ "$(field '.systemMessage')" == *"allow '*DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh*'"* ]] \
   && ok "the suggested glob keeps the line up to the script name" || bad "the suggested glob is not cut after the script name"
 
 set_config project '{"preferences": "Ask me before touching /dev/video2."}'
@@ -478,7 +478,7 @@ expect_warn "a per-rule off leaves the other rules at warn" ffmpeg_v4l2
 clear_config
 
 set_config project '{"rules": {"e2e_fixture": "off"}}'
-run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/v h264'
+run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/v h264'
 expect_silent "e2e_fixture off silences a fixture run"
 clear_config
 
@@ -494,8 +494,8 @@ clear_config
 
 echo ""
 echo "rig-brake.sh — globs"
-set_config project '{"allow": ["*e2e_fixture_psnr_vivid.sh*"]}'
-run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/v h264'
+set_config project '{"allow": ["*e2e_fixture_psnr_test_pattern.sh*"]}'
+run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/v h264'
 expect_silent "an allow glob silences a matching command"
 run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/p h264'
 expect_warn "an allow glob leaves a non-matching command noted" e2e_fixture
