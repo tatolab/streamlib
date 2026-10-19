@@ -212,12 +212,84 @@ fn stage_the_watch_page_into(
             staged_watch_page_directory,
         )?;
     }
+    make_every_staged_file_writable_by_its_owner_alone(staged_watch_page_directory)?;
     ensure_the_staged_watch_page_is_complete(staged_watch_page_directory)?;
     tracing::info!(
         "stage-watch-page: the preview page is staged at {}",
         staged_watch_page_directory.display()
     );
     Ok(())
+}
+
+/// The mode every staged file takes: the browser runs these scripts, and an npm
+/// tarball can carry world-writable modes that `cp`, `tar` and the installer
+/// would otherwise keep.
+#[cfg(unix)]
+const STAGED_WATCH_PAGE_FILE_MODE: u32 = 0o644;
+
+/// Set every file in `staged_watch_page_directory` to
+/// [`STAGED_WATCH_PAGE_FILE_MODE`].
+#[cfg(unix)]
+fn make_every_staged_file_writable_by_its_owner_alone(
+    staged_watch_page_directory: &Path,
+) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for staged_file in files_in(staged_watch_page_directory)? {
+        std::fs::set_permissions(
+            &staged_file,
+            std::fs::Permissions::from_mode(STAGED_WATCH_PAGE_FILE_MODE),
+        )
+        .with_context(|| format!("setting the mode of {}", staged_file.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_every_staged_file_writable_by_its_owner_alone(_: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Refuse a staged file anyone but its owner may write.
+#[cfg(unix)]
+fn ensure_no_staged_file_is_writable_by_anyone_but_its_owner(
+    staged_watch_page_directory: &Path,
+) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for staged_file in files_in(staged_watch_page_directory)? {
+        let mode = std::fs::metadata(&staged_file)
+            .with_context(|| format!("reading the mode of {}", staged_file.display()))?
+            .permissions()
+            .mode();
+        if mode & 0o022 != 0 {
+            bail!(
+                "{} is writable by its group or by anyone (mode {:o}), and the browser runs it",
+                staged_file.display(),
+                mode & 0o777
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_no_staged_file_is_writable_by_anyone_but_its_owner(_: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// The files directly in `directory`.
+fn files_in(directory: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in
+        std::fs::read_dir(directory).with_context(|| format!("reading {}", directory.display()))?
+    {
+        let entry_path = entry
+            .with_context(|| format!("reading {}", directory.display()))?
+            .path();
+        if entry_path.is_file() {
+            files.push(entry_path);
+        }
+    }
+    Ok(files)
 }
 
 fn copy_file_into_directory_under_its_own_name(file: &Path, directory: &Path) -> Result<()> {
@@ -277,7 +349,8 @@ pub fn opus_decoder_polyfill_wasm_loader_in_the_project(
 
 /// Refuse a staged page whose entry file does not load the bundle from where
 /// the loopback HTTP serves it or map the polyfill to its entry module, whose
-/// bundle does not import the polyfill by name, or that lacks a file it loads.
+/// bundle does not import the polyfill by name, that lacks a file it loads, or
+/// any of whose files someone besides its owner may write.
 pub fn ensure_the_staged_watch_page_is_complete(staged_watch_page_directory: &Path) -> Result<()> {
     let entry_file_path = staged_watch_page_directory.join(WATCH_PAGE_ENTRY_FILE_NAME);
     let entry_file = std::fs::read_to_string(&entry_file_path).with_context(|| {
@@ -330,7 +403,7 @@ pub fn ensure_the_staged_watch_page_is_complete(staged_watch_page_directory: &Pa
         );
     }
     opus_decoder_polyfill_files_loaded_beside_the_bundle(staged_watch_page_directory)?;
-    Ok(())
+    ensure_no_staged_file_is_writable_by_anyone_but_its_owner(staged_watch_page_directory)
 }
 
 #[cfg(test)]
@@ -367,6 +440,8 @@ mod tests {
             )
             .unwrap();
         }
+        make_every_staged_file_writable_by_its_owner_alone(staged_watch_page_directory.path())
+            .unwrap();
         staged_watch_page_directory
     }
 
@@ -444,6 +519,39 @@ mod tests {
             refusal.contains(WATCH_PAGE_BUNDLE_PATH_THE_ENTRY_FILE_LOADS),
             "{refusal}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_world_writable_staged_file_is_refused_and_staging_makes_it_owner_writable_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let staged_watch_page_directory = a_staged_watch_page(&EVERY_BUILT_FILE, true);
+        let polyfill_entry_module = staged_watch_page_directory
+            .path()
+            .join(OPUS_DECODER_POLYFILL_ENTRY_MODULE_FILE_NAME);
+        std::fs::set_permissions(
+            &polyfill_entry_module,
+            std::fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+
+        let refusal = ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect_err("a world-writable script is refused")
+            .to_string();
+        assert!(refusal.contains("mode 666"), "{refusal}");
+
+        make_every_staged_file_writable_by_its_owner_alone(staged_watch_page_directory.path())
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&polyfill_entry_module)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644
+        );
+        ensure_the_staged_watch_page_is_complete(staged_watch_page_directory.path())
+            .expect("an owner-writable page is complete");
     }
 
     #[test]
