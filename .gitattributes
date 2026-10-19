@@ -10,3 +10,6 @@ packages/streamlib-webrtc/THIRD-PARTY-NOTICES.md -text
 # A golden graph's bytes are pinned by SHA-256 (every_golden_graph_loads.rs), so
 # no checkout may rewrite them.
 runtime/streamlib-media-builtins/tests/golden_graphs/*.json -text
+
+# Raw RGBA pixels the test pattern bakes into the binary, read byte for byte.
+runtime/streamlib-media-builtins/src/test_pattern_assets/*.rgba -text

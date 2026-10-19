@@ -4927,6 +4927,19 @@ impl GpuContextFullAccess {
         self.host_inner().wait_device_idle()
     }
 
+    /// An empty output pool the native node `processor_id_of_the_owning_node`
+    /// publishes its per-frame pixel buffers from. See
+    /// [`ProcessorOutputPixelBufferPoolOfOneNativeNode`].
+    pub fn create_processor_output_pixel_buffer_pool_for_a_native_node(
+        &self,
+        processor_id_of_the_owning_node: &str,
+    ) -> super::ProcessorOutputPixelBufferPoolOfOneNativeNode {
+        self.host_inner()
+            .create_processor_output_pixel_buffer_pool_for_a_native_node(
+                processor_id_of_the_owning_node,
+            )
+    }
+
     /// Acquire a pixel buffer from the shared pool. LimitedAccess
     /// mirror.
     /// Counted against this node's one-offs of its shape; see
