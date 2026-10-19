@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.1](https://github.com/tatolab/streamlib/compare/v0.54.0...v0.54.1) (2026-10-19)
+
+
+### Features
+
+* **api-server:** /watch serves the preview page — a bun-built @moq/watch project staged into lib/tatolab/watch, playing the track its URL names over the loopback relay ([#2864](https://github.com/tatolab/streamlib/issues/2864)) ([b8334b0](https://github.com/tatolab/streamlib/commit/b8334b0aa5967fb7c301d70f04e1003bfd44db2b))
+
 ## [0.54.0](https://github.com/tatolab/streamlib/compare/v0.53.0...v0.54.0) (2026-10-19)
 
 
