@@ -346,6 +346,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     fn names_of_the_loaded_streams(&self) -> Vec<String> {
         self.engine.names_of_the_loaded_streams()
     }
+    fn exposed_output_ports_of_every_loaded_stream(
+        &self,
+    ) -> Vec<streamlib::sdk::runtime::ExposedOutputPortOfALoadedStream> {
+        self.engine.exposed_output_ports_of_every_loaded_stream()
+    }
     fn log_records_of_the_stream_a_call_names(
         &self,
         stream_name: &str,

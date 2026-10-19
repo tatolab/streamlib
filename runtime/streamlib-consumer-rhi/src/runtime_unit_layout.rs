@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Where a runtime unit lays out what it carries: `bin/` beside the lend, and
-//! on macOS and Linux the bundled Vulkan driver beside `_engine` in the lent
-//! `tatolab/runtime/`. Also where the macOS app bundle lays the same unit out:
+//! Where a runtime unit lays out what it carries: `bin/` beside the lend, the
+//! preview page beside the lend, and on macOS and Linux the bundled Vulkan
+//! driver beside `_engine` in the lent `tatolab/runtime/`. Also where the macOS app bundle lays the same unit out:
 //! binaries in `Contents/MacOS`, the lend in `Contents/Resources/lend`, and the
 //! lend's Mach-Os in `Contents/Frameworks/tatolab-runtime`.
 //!
@@ -17,6 +17,11 @@ pub const BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "bin";
 
 /// The lend directory, relative to the runtime unit's root.
 pub const LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "lib/tatolab/lend";
+
+/// The directory the preview page is staged in, beside the lend in a runtime
+/// unit (`lib/tatolab/watch`) and in an app bundle (`Contents/Resources/watch`)
+/// alike.
+pub const WATCH_PAGE_DIRECTORY_NAME: &str = "watch";
 
 /// The lent `tatolab.runtime` package, relative to the lend.
 pub const LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND: &str = "tatolab/runtime";
@@ -88,6 +93,12 @@ pub fn lend_directory_in_the_runtime_unit(runtime_unit_root: &Path) -> PathBuf {
     runtime_unit_root.join(LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT)
 }
 
+/// The preview page's directory beside the lend at `lend_directory`, or `None`
+/// for a lend at the filesystem root.
+pub fn watch_page_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(lend_directory.parent()?.join(WATCH_PAGE_DIRECTORY_NAME))
+}
+
 /// The bundled Vulkan driver directory in the lend at `lend_directory`.
 pub fn bundled_vulkan_driver_directory_in_the_lend(lend_directory: &Path) -> PathBuf {
     lend_directory
@@ -147,6 +158,24 @@ mod tests {
         assert_eq!(
             BUNDLED_VULKAN_DRIVER_FILE_NAMES,
             ["libvulkan.so.1", "libvulkan_lvp.so", "lvp_icd.x86_64.json"]
+        );
+    }
+
+    #[test]
+    fn the_preview_page_sits_beside_the_lend_in_the_unit_and_in_the_app_bundle() {
+        assert_eq!(
+            watch_page_directory_beside_the_lend(&lend_directory_in_the_runtime_unit(Path::new(
+                "/opt/tatolab"
+            ))),
+            Some(PathBuf::from("/opt/tatolab/lib/tatolab/watch"))
+        );
+        assert_eq!(
+            watch_page_directory_beside_the_lend(&lend_directory_in_the_app_bundle_contents(
+                Path::new("/Applications/Tatolab.app/Contents")
+            )),
+            Some(PathBuf::from(
+                "/Applications/Tatolab.app/Contents/Resources/watch"
+            ))
         );
     }
 }

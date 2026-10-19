@@ -116,13 +116,10 @@ impl ExposureChangeReceiver {
             // A stream's graph lock is held across a compile, which may take a
             // processor's whole setup, so the read waits off the async workers.
             let read = tokio::task::spawn_blocking(move || {
-                let engine = engine.upgrade()?;
                 Some(
                     engine
-                        .every_loaded_stream()
-                        .iter()
-                        .flat_map(|stream| stream.exposed_output_ports())
-                        .collect(),
+                        .upgrade()?
+                        .exposed_output_ports_of_every_loaded_stream(),
                 )
             })
             .await;

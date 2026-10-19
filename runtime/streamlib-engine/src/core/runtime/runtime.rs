@@ -327,6 +327,17 @@ impl EngineResourcesSharedByEveryStream {
             .collect()
     }
 
+    /// The output ports every loaded stream exposes now, each with its level
+    /// and catalog entry. Blocks while a stream compiles.
+    pub(crate) fn exposed_output_ports_of_every_loaded_stream(
+        &self,
+    ) -> Vec<crate::core::runtime::ExposedOutputPortOfALoadedStream> {
+        self.every_loaded_stream()
+            .iter()
+            .flat_map(|stream| stream.exposed_output_ports())
+            .collect()
+    }
+
     /// Every loaded stream, then every stream out of the table whose end is
     /// not yet recorded that anything still holds, read under the table's lock.
     fn every_stream_still_held_whose_end_is_not_yet_recorded(
@@ -932,6 +943,15 @@ impl Runner {
     pub fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
         self.engine_resources_shared_by_every_stream
             .every_loaded_stream()
+    }
+
+    /// The output ports every loaded stream exposes now, each with its level
+    /// and catalog entry. Blocks while a stream compiles.
+    pub fn exposed_output_ports_of_every_loaded_stream(
+        &self,
+    ) -> Vec<crate::core::runtime::ExposedOutputPortOfALoadedStream> {
+        self.engine_resources_shared_by_every_stream
+            .exposed_output_ports_of_every_loaded_stream()
     }
 
     /// The cast names of the loaded streams, in order.

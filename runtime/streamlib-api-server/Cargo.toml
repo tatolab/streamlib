@@ -38,11 +38,14 @@ machine-directories-under-a-test-root = [
 [dependencies]
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.53.0" }
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.53.0" }
-# The runtime directory the local API's socket is bound in, and the wire names and tap result
-# shape it serves.
+# The runtime directory the local API's socket is bound in, and the wire names and tool result
+# shapes it serves.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.53.0" }
 
-tower-http = { version = "0.6", features = ["trace"] }
+# `trace` for every request's span; `fs` serves the preview page's files on the loopback listener.
+tower-http = { version = "0.6", features = ["trace", "fs"] }
+# Hands one `/watch` request to the preview page's file service.
+tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
 
 utoipa = { version = "5.3", features = ["axum_extras"] }
@@ -70,7 +73,6 @@ tokio-util = "0.7"
 # The MCP wire tests drive the real router over its socket with rmcp's own client.
 rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-unix-socket"] }
 tempfile = "3"
-tower = {version = "0.5", features = ["util"]}
 serial_test = "3.2"
 # The request-trace level test drives a request under a real `EnvFilter` and
 # captures what reached the subscriber.

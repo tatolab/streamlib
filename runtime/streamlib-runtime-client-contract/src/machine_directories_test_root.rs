@@ -3,7 +3,8 @@
 
 //! The one root a test build of the runtime and its clients keeps the
 //! machine's directories under: the runtime directory, the state directory and
-//! the machine runtime lock; and the ports a test build's local relay binds.
+//! the machine runtime lock; and the ports a test build's local relay and
+//! loopback HTTP listener bind.
 //! Compiled only with the `machine-directories-under-a-test-root` feature,
 //! which a release build never enables, so a test build never touches the real
 //! machine's.
@@ -23,6 +24,10 @@ pub const TEST_LOCAL_RELAY_LOOPBACK_PORT_ENVIRONMENT_VARIABLE: &str =
 /// every-interface listener port from; unset, the listener's own default.
 pub const TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT_ENVIRONMENT_VARIABLE: &str =
     "TATOLAB_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT";
+
+/// The environment variable a test build reads its loopback HTTP listener's
+/// port from; unset, a test build's runtime serves no loopback HTTP.
+pub const TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE: &str = "TATOLAB_TEST_LOOPBACK_HTTP_PORT";
 
 /// Why a test build refused its machine root, naming the variable.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

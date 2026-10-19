@@ -11,6 +11,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::OutputPortExposureLevel;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::{
     LoadedStreamInThisRuntime, OperationsOnTheStreamsLoadedInThisRuntime,
@@ -31,6 +32,19 @@ use crate::mcp::tests::{
 pub struct TwoStreamsTestIdleNode;
 
 impl ManualProcessor for TwoStreamsTestIdleNode::Processor {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A native node with nothing to do whose one output declares a catalog entry.
+#[streamlib::sdk::processor(
+    execution = manual,
+    output("blocks", catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" }),
+)]
+pub struct TwoStreamsTestCataloguedNode;
+
+impl ManualProcessor for TwoStreamsTestCataloguedNode::Processor {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -445,4 +459,86 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
     drop(served);
 
     assert!(!local_api_socket_path.exists());
+}
+
+/// The loopback listing names the machine and every loaded stream, each with
+/// the ports it exposes at their levels and catalog entries; a stream exposing
+/// nothing is listed with none, and an internal port is not listed.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
+    let loaded = AnEngineLoadingTwoStreams::load();
+    PROCESSOR_REGISTRY.register::<TwoStreamsTestCataloguedNode::Processor>();
+    let mut catalogued_node = ProcessorSpec::new(
+        TwoStreamsTestCataloguedNode::processor_class_import_path(),
+        json!({}),
+    );
+    catalogued_node.display_name = Some("catalogued".to_string());
+    loaded
+        .first
+        .add_processor_reporting_its_name(catalogued_node)
+        .expect("the catalogued node is added");
+    let served = crate::serve_the_loopback_http_listener(
+        loaded.operations_on_the_loaded_streams(),
+        0,
+        tempfile::tempdir().unwrap().path().to_path_buf(),
+        &tokio::runtime::Handle::current(),
+    )
+    .expect("a free loopback port binds");
+
+    let (_, nothing_exposed) =
+        crate::loopback_http_listener::tests::http_get(served.bound_address(), "/").await;
+    let nothing_exposed: Value = serde_json::from_str(&nothing_exposed).unwrap();
+    assert_eq!(
+        nothing_exposed["streams"],
+        json!([
+            { "name": "first", "exposed_output_ports": [] },
+            { "name": "second", "exposed_output_ports": [] },
+        ])
+    );
+
+    loaded
+        .first
+        .set_output_port_exposure_level("catalogued", "blocks", OutputPortExposureLevel::Public)
+        .unwrap();
+    loaded
+        .first
+        .set_output_port_exposure_level("idle-in-first", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+    let (status_code, listing) =
+        crate::loopback_http_listener::tests::http_get(served.bound_address(), "/").await;
+
+    assert_eq!(status_code, 200, "{listing}");
+    let listing: Value = serde_json::from_str(&listing).unwrap();
+    assert_eq!(listing["machine"], loaded.engine.machine_name().name());
+    let [first, second] = [0, 1].map(|stream| listing["streams"][stream].clone());
+    assert_eq!(
+        second,
+        json!({ "name": "second", "exposed_output_ports": [] })
+    );
+    assert_eq!(first["name"], "first");
+    let mut exposed_output_ports = first["exposed_output_ports"]
+        .as_array()
+        .expect("a stream lists its exposed ports")
+        .clone();
+    exposed_output_ports.sort_by_key(|exposed_output_port| exposed_output_port["node"].to_string());
+    assert_eq!(
+        exposed_output_ports,
+        [
+            json!({
+                "node": "catalogued",
+                "port": "blocks",
+                "level": "public",
+                "catalog_entry": {
+                    "section": "binary",
+                    "entry": { "mode": "snapshot", "mime": "application/msgpack" },
+                },
+            }),
+            json!({
+                "node": "idle-in-first",
+                "port": "video",
+                "level": "private",
+                "catalog_entry": null,
+            }),
+        ]
+    );
 }

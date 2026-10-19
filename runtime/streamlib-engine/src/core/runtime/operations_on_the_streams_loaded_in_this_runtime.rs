@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use super::operations::RuntimeOperations;
 use super::{
-    LoadedStreamTag, MachineName, OutputPortExposureOutcome, RunStreamRequest, Runner,
-    StreamListing, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+    ExposedOutputPortOfALoadedStream, LoadedStreamTag, MachineName, OutputPortExposureOutcome,
+    RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome, StreamRunOutcome,
+    StreamStartOutcome, StreamStopOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
@@ -36,7 +37,7 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn this_machines_name(&self) -> &MachineName;
 
     /// The operations on the loaded stream `stream_name` names. Refused with
-    /// [`Error::NotFound`] naming the loaded streams when it is not loaded.
+    /// [`Error::NotFound`](crate::core::error::Error::NotFound) naming the loaded streams when it is not loaded.
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
         stream_name: &str,
@@ -44,14 +45,14 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// The node types the loaded stream `stream_name` names resolves — the
     /// native ones, then the ones described in its own interpreter — with the
-    /// same [`Error::NotFound`] refusal.
+    /// same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
     fn node_catalog_of_the_stream_a_call_names(
         &self,
         stream_name: &str,
     ) -> Result<Vec<ProcessorDescriptor>>;
 
     /// The node types described in the own interpreter of the loaded stream
-    /// `stream_name` names, with the same [`Error::NotFound`] refusal.
+    /// `stream_name` names, with the same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
         &self,
         stream_name: &str,
@@ -59,6 +60,11 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// The cast names of the loaded streams, in order.
     fn names_of_the_loaded_streams(&self) -> Vec<String>;
+
+    /// The output ports every loaded stream exposes now, each with its level
+    /// and catalog entry. Blocks while a stream compiles, so the local API
+    /// calls it from a blocking task.
+    fn exposed_output_ports_of_every_loaded_stream(&self) -> Vec<ExposedOutputPortOfALoadedStream>;
 
     /// The log records of the loaded stream `stream_name` names, numbered
     /// after `after`, at most `max_count` of them, with the tag of the load
@@ -137,6 +143,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn names_of_the_loaded_streams(&self) -> Vec<String> {
         Runner::names_of_the_loaded_streams(self)
+    }
+
+    fn exposed_output_ports_of_every_loaded_stream(&self) -> Vec<ExposedOutputPortOfALoadedStream> {
+        Runner::exposed_output_ports_of_every_loaded_stream(self)
     }
 
     fn log_records_of_the_stream_a_call_names(
