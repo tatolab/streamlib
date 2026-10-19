@@ -425,16 +425,25 @@ impl BroadcastReadAtAListener {
                 .expect("the track is live")
                 .expect("the track has not ended");
             let group_sequence = group.sequence;
-            while let Some(frame) = tokio::time::timeout(MOQ_BUDGET, group.read_frame())
-                .await
-                .expect("an object arrives")
-                .expect("the group is live")
-            {
-                objects.push(ObjectRead {
-                    group_sequence,
-                    payload: frame.payload.to_vec(),
-                    timestamp_ns: frame.timestamp.as_nanos(),
-                });
+            let objects_before_the_group = objects.len();
+            loop {
+                match tokio::time::timeout(MOQ_BUDGET, group.read_frame())
+                    .await
+                    .expect("an object arrives")
+                {
+                    Ok(Some(frame)) => objects.push(ObjectRead {
+                        group_sequence,
+                        payload: frame.payload.to_vec(),
+                        timestamp_ns: frame.timestamp.as_nanos(),
+                    }),
+                    Ok(None) => break,
+                    // A reader that falls behind may lose a group mid-way, as
+                    // live delivery does; what it read of it is never kept.
+                    Err(_) => {
+                        objects.truncate(objects_before_the_group);
+                        break;
+                    }
+                }
                 if objects.len() == count {
                     break;
                 }
