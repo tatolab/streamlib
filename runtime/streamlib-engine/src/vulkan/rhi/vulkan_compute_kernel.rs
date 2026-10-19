@@ -2502,10 +2502,6 @@ void main() {
     const SAMPLED_IMAGE_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/test_sampled_image.spv"));
 
-    #[cfg_attr(
-        not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-    )]
     #[test]
     fn a_sampled_image_is_read_in_shader_read_only_optimal_or_general_and_nothing_else() {
         use crate::core::rhi::VulkanLayout;
@@ -2527,6 +2523,10 @@ void main() {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn sampled_image_binding_dispatches_with_raw_view() {
         let device = vulkan_device_for_dispatch_tests();
