@@ -78,7 +78,11 @@ writes its payloads out as received; the one way a graph reads a relay, on this 
 another. _Avoid_: "remote link", "remote_output" (retired 2026-10-16), "subscriber node".
 
 **Broadcast** / **Track**: MoQ's words, used as they are — a stream is one broadcast at a
-relay, each exposed port one track in it. _Avoid_: "channel" (iceoryx2's word), "topic".
+relay, each exposed port one track in it. The relay source node names what it reads by them alone,
+`broadcast` and `track`, each read exactly as its publisher wrote it: the runtime casts the names it
+gives, never a name it reads (owner, 2026-10-18). _Avoid_: "channel" (iceoryx2's word), "topic",
+"track address" / `track_address` (retired 2026-10-18 — an invented term for what MoQ already
+names).
 
 **Tailnet** _(user)_: the Tailscale network a machine may belong to. A docs word only: the
 runtime reads, configures and requires nothing of Tailscale, and a tailnet reaches a machine's

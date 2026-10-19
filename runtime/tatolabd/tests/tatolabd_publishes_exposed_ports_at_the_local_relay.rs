@@ -164,6 +164,11 @@ impl TatolabdPublishingTheStream {
         self.the_broadcast_of_the_stream_at(STREAM, listener)
     }
 
+    /// The path of `stream_name`'s broadcast at this runtime's local relay.
+    fn broadcast_path_of_the_stream(&self, stream_name: &str) -> String {
+        format!("{}/{stream_name}.hang", self.machine)
+    }
+
     /// `stream_name`'s broadcast as an anonymous client of `listener` reads it.
     fn the_broadcast_of_the_stream_at(
         &self,
@@ -171,7 +176,7 @@ impl TatolabdPublishingTheStream {
         listener: LocalRelayListener,
     ) -> BroadcastReadAtAListener {
         let dial_url = self.dial_url_of(listener);
-        let broadcast_path = format!("{}/{stream_name}.hang", self.machine);
+        let broadcast_path = self.broadcast_path_of_the_stream(stream_name);
         self.async_runtime.block_on(async move {
             let subscribed = moq_tokio::origin::spawn();
             let session = moq_tokio::connect::Config::default()
@@ -243,19 +248,27 @@ impl TatolabdPublishingTheStream {
         self.add_a_relay_track_source_at(
             &self.dial_url_of(LocalRelayListener::Loopback),
             node,
-            &format!(
-                "{}/{source_stream}/{source_node}/{source_port}",
-                self.machine
-            ),
+            &self.broadcast_path_of_the_stream(source_stream),
+            &format!("{source_node}/{source_port}"),
         );
     }
 
-    /// Add to [`READER_STREAM`] a `RelayTrackSource` named `node` reading
-    /// `track_address` at `relay_url`.
-    fn add_a_relay_track_source_at(&self, relay_url: &Url, node: &str, track_address: &str) {
+    /// Add to [`READER_STREAM`] a `RelayTrackSource` named `node` reading the
+    /// track `track` of `broadcast` at `relay_url`.
+    fn add_a_relay_track_source_at(
+        &self,
+        relay_url: &Url,
+        node: &str,
+        broadcast: &str,
+        track: &str,
+    ) {
         self.add_a_relay_track_source_configured(
             node,
-            serde_json::json!({"relay_url": relay_url.as_str(), "track_address": track_address}),
+            serde_json::json!({
+                "relay_url": relay_url.as_str(),
+                "broadcast": broadcast,
+                "track": track,
+            }),
         );
     }
 
@@ -266,14 +279,7 @@ impl TatolabdPublishingTheStream {
         relay_url: &Url,
         node: &str,
     ) {
-        self.add_a_relay_track_source_configured(
-            node,
-            serde_json::json!({
-                "relay_url": relay_url.as_str(),
-                "broadcast": THIRD_PARTY_BROADCAST,
-                "track": THIRD_PARTY_TRACK,
-            }),
-        );
+        self.add_a_relay_track_source_at(relay_url, node, THIRD_PARTY_BROADCAST, THIRD_PARTY_TRACK);
     }
 
     fn add_a_relay_track_source_configured(&self, node: &str, config: serde_json::Value) {
@@ -1019,7 +1025,8 @@ fn a_relay_track_source_in_a_second_runtime_reads_the_first_runtimes_public_port
     second_runtime.add_a_relay_track_source_at(
         &first_runtime.dial_url_of(LocalRelayListener::EveryInterface),
         "fromfirst",
-        &format!("{}/{STREAM}/writer/{PUBLIC_PORT}", first_runtime.machine),
+        &first_runtime.broadcast_path_of_the_stream(STREAM),
+        &format!("writer/{PUBLIC_PORT}"),
     );
     second_runtime.expose_in_the_reader_stream("fromfirst", "track");
     let at_the_second_runtimes_loopback =

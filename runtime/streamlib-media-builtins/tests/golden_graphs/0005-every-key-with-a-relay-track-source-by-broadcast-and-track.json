@@ -198,7 +198,8 @@
       "type": "tatolab.stream:RelayTrackSource",
       "config": {
         "relay_url": "http://127.0.0.1:4443",
-        "track_address": "golden-desk/camera-rig/camerasource/video"
+        "broadcast": "golden-desk/camera-rig.hang",
+        "track": "camerasource/video"
       },
       "config_checksum": 0,
       "ports": {

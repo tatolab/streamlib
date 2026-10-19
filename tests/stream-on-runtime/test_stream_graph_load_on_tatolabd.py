@@ -75,7 +75,7 @@ BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES = [
 
 # The keys a built-in's config cannot leave out; every other built-in loads with none.
 CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT: "dict[type[BuiltInNode[Any]], dict[str, Any]]" = {
-    RelayTrackSource: {"track_address": "desk/camera-rig/camerasource/video"},
+    RelayTrackSource: {"broadcast": "desk/camera-rig.hang", "track": "camerasource/video"},
 }
 
 OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"

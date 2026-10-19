@@ -4,7 +4,9 @@
 //! The compatibility record: every golden graph in `golden_graphs/` loads on
 //! this build. A golden is never edited — a change to the graph's shape, a
 //! built-in or a setting adds one beside it — so a graph an older stream
-//! recorded stays provably loadable by every later runtime.
+//! recorded stays provably loadable by every later runtime. A golden is
+//! deleted only by the breaking change that retires a shape it holds, which
+//! adds the golden replacing it beside the others.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -18,7 +20,8 @@ use streamlib::sdk::runtime::{OptionsForLoadingOneStream, Runner};
 use streamlib_media_builtins::register_media_builtin_processor_types;
 
 /// Each golden graph's SHA-256, pinned as it was added: a golden is never
-/// edited, so a change to what a graph holds adds a golden and a line here.
+/// edited, so a change to what a graph holds adds a golden and a line here,
+/// and only the breaking change retiring a shape a golden holds drops its line.
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
         "0001-every-key-and-every-built-in.json",
@@ -29,8 +32,8 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
         "2dd8a602a81595b922fc772116491b7d812a12ba7e7707708aa2b95a2d1a6020",
     ),
     (
-        "0004-every-key-with-a-relay-track-source.json",
-        "563102a5262454f6616800f6a59ef61fa28ed358ca652ebaae52a1b236f1e706",
+        "0005-every-key-with-a-relay-track-source-by-broadcast-and-track.json",
+        "039aa23c351db3716ea6a69dd1c1530d241c1d01560e7732f9d7af2d6c8c7b49",
     ),
 ];
 
@@ -208,7 +211,8 @@ fn no_golden_graph_has_changed_or_gone_since_it_was_pinned() {
     for (pinned_file_name, _) in GOLDEN_GRAPH_SHA256_BY_FILE_NAME {
         assert!(
             file_names_checked_in.contains(*pinned_file_name),
-            "{pinned_file_name} is pinned and no longer checked in — a golden is never deleted"
+            "{pinned_file_name} is pinned and no longer checked in — a golden is deleted only \
+             with its pin, by the breaking change that retires a shape it holds"
         );
     }
 }

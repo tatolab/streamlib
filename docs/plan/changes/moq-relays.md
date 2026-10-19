@@ -221,12 +221,12 @@ Rejected: a hand-edited settings file as the only way to join; the app as the on
 plaintext credentials file where a store answers (owner, 2026-10-16); a secret as a CLI argument
 (owner, 2026-10-17, from the 2026-10-16 review).
 
-## ADDED: the relay source node — §Networking `:3985`
+## ADDED: the relay source node — §Networking `:3779`
 
 `RelayTrackSource` (`M/relay_track_source.rs`), `execution = manual`, config `relay_url`
-(default `http://127.0.0.1:4443`) and `track_address` (`<machine>/<stream>/<node>/<port>`), or
-`broadcast` with `track` for any other publisher's layout, each read as written (owner,
-2026-10-18), one output `track`. A processor-owned thread subscribes with `moq-net`, sets `track`'s entry to the
+(default `http://127.0.0.1:4443`), `broadcast` and `track` — MoQ's own names, both required and
+each read exactly as written; a stream's exposed port is the track `<node>/<port>` of the broadcast
+`<machine>/<stream>.hang` (owner, 2026-10-18), one output `track`. A processor-owned thread subscribes with `moq-net`, sets `track`'s entry to the
 track's own from the broadcast's catalog, and writes each object with `write_bytes_with_timestamp`:
 the stamp is the object's timestamp (the hang varint for media, the transport timestamp otherwise)
 plus one offset fixed at the first object, re-anchored when the track jumps; no timestamp means
