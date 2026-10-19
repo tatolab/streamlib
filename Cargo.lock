@@ -5621,7 +5621,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "streamlib"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5631,7 +5631,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "libc",
  "serde",
@@ -5650,7 +5650,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cuda"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "cudarc",
  "dlpark",
@@ -5671,7 +5671,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-opengl"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "gl",
  "khronos-egl",
@@ -5694,7 +5694,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-skia"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "libc",
  "png",
@@ -5716,7 +5716,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-vulkan"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "libc",
  "serde",
@@ -5764,7 +5764,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "libc",
  "objc2",
@@ -5779,7 +5779,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-engine"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -5859,7 +5859,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-error"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
@@ -5869,7 +5869,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-ipc-types"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "iceoryx2",
  "tracing",
@@ -5877,7 +5877,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-macros"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "crossbeam-channel",
  "proc-macro-crate",
@@ -5891,7 +5891,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-media-builtins"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "hang",
  "libc",
@@ -5915,7 +5915,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-schema"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "rmp-serde",
  "schemars 0.8.22",
@@ -5929,7 +5929,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-wheel"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "cudarc",
  "libc",
@@ -5954,7 +5954,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-local"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "aws-lc-rs",
  "axum",
@@ -5977,7 +5977,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-relay-adapter-sdk"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "schemars 0.8.22",
  "secrecy",
@@ -5992,7 +5992,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-runtime-client-contract"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "libc",
  "serde",
@@ -6005,7 +6005,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-adapter"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "bitflags 2.11.0",
  "libc",
@@ -6016,7 +6016,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "libc",
  "mach2",
@@ -6029,7 +6029,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6127,7 +6127,7 @@ checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
 name = "tatolab-cli"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "axum",
  "chrono",
@@ -6147,7 +6147,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-read-track"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6194,7 +6194,7 @@ dependencies = [
 
 [[package]]
 name = "tatolabd"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "bytes",
  "clap",
@@ -6940,7 +6940,7 @@ dependencies = [
 
 [[package]]
 name = "vulkan-jpeg"
-version = "0.53.0"
+version = "0.54.0"
 dependencies = [
  "bytemuck",
  "jpeg-encoder",

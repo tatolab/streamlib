@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.54.0](https://github.com/tatolab/streamlib/compare/v0.53.0...v0.54.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api-server:** loopback HTTP on 127.0.0.1:4446 serves the listing and the /watch route; tap and exchange are deleted; tatolab-read-track replaces them on the rigs ([#2860](https://github.com/tatolab/streamlib/issues/2860))
+
+### Features
+
+* **api-server:** loopback HTTP on 127.0.0.1:4446 serves the listing and the /watch route; tap and exchange are deleted; tatolab-read-track replaces them on the rigs ([#2860](https://github.com/tatolab/streamlib/issues/2860)) ([7d0b612](https://github.com/tatolab/streamlib/commit/7d0b612cd7757310e0763bb676045b3bdaee3650))
+
 ## [0.53.0](https://github.com/tatolab/streamlib/compare/v0.52.0...v0.53.0) (2026-10-19)
 
 
