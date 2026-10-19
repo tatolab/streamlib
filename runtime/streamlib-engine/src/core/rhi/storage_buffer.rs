@@ -12,11 +12,11 @@
 //! Exposes byte size and a mapped pointer only; no pixel-shaped
 //! getters that would be meaningless on an SSBO.
 
+use crate::core::{Error, Result};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::c_void;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
-use crate::core::{Error, Result};
 
 /// Raw byte-shaped GPU storage buffer (SSBO).
 ///
