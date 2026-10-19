@@ -1621,23 +1621,20 @@ entry reads as **message** (the glossary).
   crash budget or graph change never touches another's. A stream's watchdog, on expiry, kills
   that stream's groups, abandons its threads and unloads it, never recording it `failed`; past
   an engine-chosen bound of abandoned threads in the process, the runtime exits 124. A stream
-  links to any private or public port of another stream on the same machine (§Networking,
-  exposure) over iceoryx2; the input's stream owns the link, and a source stream not loaded
-  leaves it `awaiting_remote`, its reason naming that stream. Surfaces are shared across every
-  stream's processor interpreters on both floors, all being the runtime's children, so a link
-  between two streams on one machine copies no pixels. Streams needing conflicting Python
+  reads another stream's private or public port on the same machine through the local relay's
+  loopback listener and the relay source node (§Networking); no link crosses a stream's edge.
+  Surfaces are shared across every stream's processor interpreters on both floors, all being
+  the runtime's children. Streams needing conflicting Python
   packages each start from their own venv (the package split and the lend, §Packages). Owner,
   2026-10-01; the surface clause confirmed 2026-10-02. [one-runtime-per-machine;
-  runtime-hosting — SHIPPED #2704, #2715; amended by moq-relays: the cross-stream link over
-  iceoryx2 and `awaiting_remote` are deleted — streams read each other through the local relay
-  and the relay source node (§Networking) — and the publisher, the adapters and the local
-  relay child are kept once for the machine, built at the sharing step]
+  runtime-hosting — SHIPPED #2704, #2715; amended by moq-relays: the publisher, the adapters
+  and the local relay child are kept once for the machine, built at the sharing step]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::one_streams_shutdown_ends_it_and_leaves_the_other_loaded -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::one_streams_graph_change_reaches_only_its_own_compiler_and_topic -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_streams_log_each_to_its_own_file_and_a_record_no_stream_emitted_to_neither -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::helper_process_group_registry::tests::one_streams_kill_takes_only_the_groups_tagged_with_that_stream -->
   <!-- verify: cargo test -p streamlib-engine --lib core::processors::node_types_one_stream_resolves::tests::two_streams_describing_one_class_each_resolve_their_own -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test two_streams_reading_each_other_wire_and_shut_down_within_the_budget -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_in_another_stream_reads_a_private_port_through_loopback_keeping_its_groups_and_spacing -->
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
   admission control, and how a stream states what it needs. Direction (review, not decided):
   what a stream needs is read from its graph (the derived needs above) and granted per stream
@@ -3508,14 +3505,11 @@ entry reads as **message** (the glossary).
   states and read by `graph`'s top-level `machine`; a stream's name is cast at load. `tap`'s
   channel is an address on this machine and one naming another machine is refused naming it.
   `runtime_id` stays per-run — logs, iceoryx2 names, the surface-sharing service — and is
-  never an address. In Python `stream_builder.remote_output(address)` takes the address string,
-  right-anchored — `"main/camera/video"` another stream on this machine — each chunk cast, one
-  casting to empty, `.` or `..` refused where it is written; an address naming another machine
-  links nothing and is refused by name.
+  never an address. `RelayTrackSource`'s `track_address` is one, naming its machine and its
+  stream, each chunk cast.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
   package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715; amended by
-  moq-relays: `remote_output` is deleted — a stream reads another stream's port through the
-  relay source node; `tap` goes at the sharing step]
+  moq-relays: `tap` goes at the sharing step]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
@@ -3526,21 +3520,17 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket the_retired_verbs_and_flags_are_usage_errors -->
 - **DECIDED** — A link's ends are both on this machine, in one stream. As built, a link end
-  names a port of this stream's graph, or — a source only — `{stream, node, port}` of another
-  stream on this machine; the graph holds one link collection, which every traversal walks.
-  `LinkState`'s `AwaitingRemote` waits on a source stream that is not loaded or a source port
-  it may not read yet, its reason naming which, and the link wires once the source can be
-  read. A snapshot whose link end names another machine is refused by name at load rather
-  than read as a local end. In Python `connect(source, destination)` takes a reference minted
-  by this stream's builder, or `remote_output`'s, as its source, and a value of any other kind
-  is refused naming the spelling that would work. The engine reads no payload to carry a
-  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715;
-  amended by moq-relays: a link's ends are both in one stream — the cross-stream source end,
-  `AwaitingRemote` and `remote_output` are deleted, and a stream reads another stream's port,
-  on this machine or another, through the relay source node below]
-  <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_carrying_a_key_no_address_chunk_is_refused_naming_the_keys_of_a_link_end -->
-  <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_a_machine_and_no_stream_is_refused_by_load_naming_the_address_shape -->
-  <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_another_machine_is_refused_by_load_naming_that_machine -->
+  is `{node, port}`, a port of this stream's graph; the graph holds one link collection, which
+  every traversal walks. A snapshot whose link end names a stream or a machine is refused by
+  name at load, the refusal naming the relay source node, through which a stream reads
+  another stream's port on this machine or another. In Python `connect(source, destination)`
+  takes a reference minted by this stream's builder as its source, and a value of any other
+  kind is refused naming the spelling that would work. The engine reads no payload to carry a
+  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715]
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_naming_a_stream_or_a_machine_is_refused_naming_relay_track_source -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_carrying_a_key_besides_node_and_port_is_refused_naming_the_keys_of_a_link_end -->
+  <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_a_stream_or_a_machine_is_refused_by_load_naming_relay_track_source -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_a_port_address_as_its_source_naming_relay_track_source -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_an_input_as_its_source_naming_the_fix -->
 - **DECIDED** — Reading across streams is always pulled, and the source is never asked. The
   stream that wants another stream's port subscribes to it at a relay — through the relay
@@ -3548,11 +3538,8 @@ entry reads as **message** (the glossary).
   subscribes to. No runtime pushes its output into another's input, and no runtime wires two
   others. Owner, 2026-10-04: a source never wires itself into a reader, the way a server never
   wires its URL into a client's browser. [exposure-levels; moq-relays]
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_between_streams_carries_a_native_source_into_python_and_a_python_source_into_a_native_window -->
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_reader_run_before_its_source_awaits_naming_it_then_wires_once_the_source_runs -->
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_the_builders_address_refusals_are_the_compiles_refusal -->
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_an_address_as_its_destination_because_a_link_is_only_pulled -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test a_link_loaded_before_its_source_stream_awaits_naming_it_then_wires_when_it_starts -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_in_another_stream_reads_a_private_port_through_loopback_keeping_its_groups_and_spacing -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_in_a_second_runtime_reads_the_first_runtimes_public_port -->
 - **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
   is one clock per machine, and a stamp is never compared against one from another clock. No
   link carries a stamp from another machine, so nothing reads or renders a clock identity, and
@@ -3564,6 +3551,9 @@ entry reads as **message** (the glossary).
   stamped at arrival. The relay's object carries the writer's stamp and the node's doc says
   both. Owner, 2026-10-17. [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643;
   moq-relays]
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::the_output_keeps_the_tracks_spacing_under_jittered_arrival -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_track_that_restarts_its_timestamps_is_re_anchored_and_keeps_its_spacing_after -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::an_object_carrying_no_timestamp_is_stamped_at_arrival -->
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
   machines become comparable; until then the per-clock rule above stands, and the relay
@@ -3605,9 +3595,7 @@ entry reads as **message** (the glossary).
   Owner, 2026-10-02. [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2658;
   runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_names_the_port_a_fixture_address_parses_to -->
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_remote_output_refuses_a_fixture_address_naming_no_port_where_it_is_written -->
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_the_builders_address_refusals_are_the_compiles_refusal -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_track_address_locates_the_streams_broadcast_and_the_ports_track_cast -->
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
   that relay's credential assigns. As built, the engine names the machine by its hostname cast
   and reads nothing of Tailscale. [runtime-hosting — SHIPPED #2715; amended by moq-relays: a
@@ -3616,17 +3604,15 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_names_the_machine_cast -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams graph_answers_the_machine_by_its_hostname_cast_and_no_streams -->
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_naming_another_machine_is_refused_by_name -->
 - **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
   any node of the stream may link to it, and it is at no relay. **Private**: at the machine's
   local relay's loopback listener only, so a stream, a script, the preview page or any MoQ
   client on the machine reads it and nothing off the machine can. **Public**: at every relay
-  the machine has joined, the local relay's every-interface listener included. As
-  built, private also admits another stream's link over iceoryx2 and public also means a URL
-  reachable off the machine. `stream_builder.expose(output)` makes an
-  output private and `stream_builder.expose(output, Exposure.PUBLIC)` public; a level is an enum
-  member, never a string. The stream's function sets where its exposures start; `expose` at
+  the machine has joined, the local relay's every-interface listener included.
+  `stream_builder.expose(output)` makes an output private and
+  `stream_builder.expose(output, Exposure.PUBLIC)` public; a level is an enum member, never a
+  string. The stream's function sets where its exposures start; `expose` at
   the CLI, the app or the local API changes them while the stream runs, the change applies at
   once — a reader the new level no longer allows is cut off, a relay subscriber included — and
   neither the runtime nor the stream restarts. The engine checks the live exposures wherever a
@@ -3636,11 +3622,10 @@ entry reads as **message** (the glossary).
   list every running stream with its private and public ports; an internal port may be
   listed and is never readable. Owner, 2026-10-04 and 2026-10-16. [exposure-levels;
   one-runtime-per-machine; stream-graph — SHIPPED #2708; amended by moq-relays: private is
-  the local relay, public every joined relay, and the cross-stream iceoryx2 link is deleted]
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_a_link_to_an_internal_port_awaits_naming_the_port_and_its_level_and_wires_once_it_is_exposed -->
-  <!-- verify: pytest tests/stream-on-runtime/test_links_between_streams_on_one_machine.py::test_lowering_the_source_to_internal_cuts_the_link_at_once_and_a_link_to_a_still_private_port_keeps_flowing -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test a_link_to_an_internal_port_of_another_stream_is_refused_naming_the_port_and_its_level -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test links_between_streams_on_one_machine_test lowering_the_source_to_internal_disconnects_the_link_at_once_and_other_links_keep_carrying -->
+  the local relay, public every joined relay]
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_public_port_is_read_at_both_listeners_and_a_private_one_at_loopback_alone -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay an_internal_port_is_at_no_relay_and_lowering_a_port_to_internal_ends_its_loopback_subscribers -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay lowering_a_port_ends_its_subscribers_and_raising_it_announces_it_again -->
 - **DECIDED** — Every exposed port is a track at a relay, named by its address, and that is the
   one way a port is read from outside its stream — by another stream through the relay source
   node, by the preview page, by a script, by ffmpeg-side MoQ tooling, by another runtime,
@@ -3804,6 +3789,8 @@ entry reads as **message** (the glossary).
   Rejected: the engine subscribing inside the link machinery so `remote_output("desk/…")`
   wires through a relay — a MoQ reader in the engine, a second link kind, and a stamp-marking
   question with no answer (owner, 2026-10-16).
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_reads_a_hang_track_a_third_party_published -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
   and the `moq-relay` program, each pinned to an exact version the change that builds the
   publisher names (0.3, 0.19, 0.21 and 0.17 lines as of 2026-10-16), and every payload a stock
