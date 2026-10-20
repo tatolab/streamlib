@@ -86,6 +86,8 @@ fn help_lists_exactly_the_served_verbs() {
             "rm",
             "streams",
             "expose",
+            "relays",
+            "relay",
             "graph",
             "logs",
             "mcp",
