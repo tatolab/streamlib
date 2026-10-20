@@ -3,23 +3,13 @@ name = "fisheye-object-detection"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "streamlib",
+    "tatolab-stream>=0.54.3",
     # The tensor the detector runs on and the slice assignments that draw the
     # boxes. 2.10 is the floor where a frame's Metal DLPack capsule imports,
     # sliced tensors included.
     "torch>=2.10",
     # YOLOv8n and its weights fetcher. Pulls opencv and its own dependency set
-    # — a detector is not a small dependency, and this app is about what one
+    # — a detector is not a small dependency, and this stream is about what one
     # costs to wire up, not about avoiding it.
     "ultralytics>=8.3",
 ]
-
-# streamlib is served from its own simple index until the PyPI publication that
-# follows the project rename; everything else resolves from PyPI as usual.
-[[tool.uv.index]]
-name = "streamlib"
-url = "https://tatolab.github.io/streamlib/simple/"
-explicit = true
-
-[tool.uv.sources]
-streamlib = { index = "streamlib" }

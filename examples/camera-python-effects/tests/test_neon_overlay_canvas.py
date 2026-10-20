@@ -3,8 +3,8 @@
 
 """The skia overlay, drawn into a raster surface instead of an engine texture.
 
-The drawing code is deliberately free of streamlib, so it can be checked here
-for the things that make it composite correctly downstream: a transparent
+The drawing code is deliberately free of `tatolab.stream`, so it can be checked
+here for the things that make it composite correctly downstream: a transparent
 background, premultiplied edges, and an animation that actually moves.
 """
 

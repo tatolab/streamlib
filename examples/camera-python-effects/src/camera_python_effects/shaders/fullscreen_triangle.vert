@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// The vertex stage every pass in this app shares. No vertex buffer is
-// reachable from a Python processor, so three vertices are fabricated from
+// The vertex stage every pass in this stream shares. No vertex buffer is
+// reachable from a Python node, so three vertices are fabricated from
 // `gl_VertexIndex` and cover the whole viewport:
 //   vertex 0: pos(-1,-1), uv(0,0)   vertex 1: pos(3,-1), uv(2,0)
 //   vertex 2: pos(-1,3),  uv(0,2)

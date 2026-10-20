@@ -1,40 +1,57 @@
 # camera-virtual-camera
 
-One capture device in, **two cameras out**. While this app runs, Chrome, OBS,
-Zoom and `v4l2-ctl` all see two extra cameras on the machine — "StreamLib
-Camera" showing the capture device untouched, and "StreamLib Camera Inverted"
-showing the same picture after a Python processor has inverted its colors. Stop
-the app and both are gone.
+One capture device in, **two cameras out**. While this stream runs, Chrome, OBS,
+Zoom and `v4l2-ctl` all see two extra cameras on the machine — "Tatolab Camera"
+showing the capture device untouched, and "Tatolab Camera Inverted" showing the
+same picture after a Python node has inverted its colours. Stop the stream and
+both are gone.
 
 ## The model this example teaches
 
-**A camera is a processor.** `VirtualCameraSink` is a native built-in like
-`DisplayWindow`: it takes video on an input port and has no output, because its
-output is a camera other applications open. Each instance is one camera that
-exists exactly as long as its processor runs — created at `setup()`, removed at
-`teardown()` — so from every other application's point of view a StreamLib
-graph starting is a USB camera being plugged in, and Ctrl-C is it being pulled
-back out.
+**A camera is a node.** `VirtualCameraSink` is a native built-in: it takes video
+on an input port and has no output port, because its output is a camera other
+applications open. Each instance is one camera that exists exactly as long as
+its node runs — created at `setup()`, removed at `teardown()` — so from every
+other application's point of view a stream starting is a USB camera being
+plugged in, and Ctrl-C is it being pulled back out.
 
-**As many as the graph adds.** Two cameras is two `rt.add` calls and one more
-`rt.connect`; there is no registry, no device number to reserve, and no limit in
+**As many as the stream adds.** Two cameras is two `add` calls and one more
+`connect`; there is no registry, no device number to reserve, and no limit in
 the built-in:
 
 ```python
-def setup(rt: Runtime) -> None:
-    camera = rt.add(CameraSource, config=camera_configuration)
-    inverting_effect = rt.add(InvertingEffect)
-    passthrough_virtual_camera = rt.add(VirtualCameraSink, config={"name": "StreamLib Camera"})
-    inverted_virtual_camera = rt.add(VirtualCameraSink, config={"name": "StreamLib Camera Inverted"})
+@stream
+def main(stream_builder: StreamBuilder) -> None:
+    camera = stream_builder.add(CameraSource, config=camera_config)
+    inverting_effect = stream_builder.add(InvertingEffect)
+    passthrough_virtual_camera = stream_builder.add(
+        VirtualCameraSink,
+        name="passthrough-virtual-camera",
+        config={"name": "Tatolab Camera"},
+    )
+    inverted_virtual_camera = stream_builder.add(
+        VirtualCameraSink,
+        name="inverted-virtual-camera",
+        config={"name": "Tatolab Camera Inverted"},
+    )
 
-    rt.connect(camera.output("video"), passthrough_virtual_camera.input("video"))
-    rt.connect(camera.output("video"), inverting_effect.input("video_from_upstream"))
-    rt.connect(inverting_effect.output("video_to_downstream"), inverted_virtual_camera.input("video"))
+    stream_builder.connect(
+        camera.output("video"), passthrough_virtual_camera.input("video")
+    )
+    stream_builder.connect(
+        camera.output("video"), inverting_effect.input("video_from_upstream")
+    )
+    stream_builder.connect(
+        inverting_effect.output("video_to_downstream"),
+        inverted_virtual_camera.input("video"),
+    )
 ```
 
 The camera's one output port feeds two consumers. That is an ordinary fan-out —
 the passthrough sink and the effect each get every frame — and it is why this
-app is two cameras rather than the same camera twice.
+stream is two cameras rather than the same camera twice. Two names are at work:
+`name=` is the node's name in the stream's graph, the one `graph`, `connect` and
+MCP take; the config's `name` is the camera's name in every picker.
 
 **One door per instance, chosen for you.** A virtual camera has to be a device
 the rest of the system already knows how to open, and Linux has two such doors:
@@ -43,8 +60,8 @@ the rest of the system already knows how to open, and Linux has two such doors:
   through the module's control node and removes it at teardown. This is the
   door *every* application sees — `/dev/video*` readers directly, and
   portal-based readers through the session manager's V4L2 mirror.
-- the **PipeWire** door, a `Video/Source` node with `media.role = Camera`. It
-  needs no kernel module and no root, and portal-based applications list it;
+- the **PipeWire** door, a camera node in the PipeWire graph. It needs no
+  kernel module and no root, and portal-based applications list it;
   applications that only enumerate `/dev/video*` do not.
 
 The sink picks at `setup()` and logs which and why. Under the default
@@ -54,113 +71,102 @@ with no setup at all still produces a camera. Never both for one instance: the
 session manager mirrors V4L2 devices into the portal's camera set, so a sink on
 both doors would list the same camera twice.
 
-**The effect publishes its own textures.** `processors/inverting_effect.py`
-copies the camera's pixels out, inverts them on the host, and writes them into a
-slot of its own `ProcessorOutputTextureRing` — rather than editing the frame in
-place the way the effect `streamlib new` scaffolds does. It has to: the
-passthrough sink is reading that same engine-owned surface, and an edit in place
-would land in the picture it is showing. Whenever a producer's output feeds more
-than one consumer, an effect between them owns its output or it corrupts its
-sibling.
+**The effect publishes its own textures.** `nodes/inverting_effect.py` reads
+the camera's pixels through a read-only `numpy.from_dlpack(frame, device="cpu")`
+view and writes their inversion straight into a slot of its own
+`NodeOutputTextureRing`, in one pass on the host. It never edits the frame
+it was handed: the passthrough sink is reading that same engine-owned surface.
+Whenever a producer's output feeds more than one consumer, an effect between
+them publishes from textures it owns. The ring hands out a fresh slot per
+frame, and a slot a consumer still holds is skipped, never rewritten.
 
 The two sinks' per-frame paths never enter a Python interpreter — they are
-native built-ins, and the RGBA→YUYV conversion is one GPU pass straight into the
-device's mapped buffers. The effect runs in its own child interpreter, which is
-where the per-frame Python cost in this app begins and ends — and you can see it
-in the frame counts: over one 1080p run the passthrough camera wrote 1325 frames
-while the inverted one wrote 523 — and both sinks' dropped-frame counters read
-zero, so neither was outrun. The effect is simply slower, because a 1920×1080
-frame goes out to the host and back for it.
-An effect that stays on the GPU does not pay that — `ShaderEffect`, below, is
-one.
+native built-ins, and the RGBA→YUYV conversion on the loopback door is one GPU
+pass straight into the device's buffers. The effect runs in its own child
+interpreter, which is where the per-frame Python cost in this stream begins and
+ends: each frame goes out to the host and back, so at 1080p the inverted camera
+writes fewer frames than the passthrough one. A node in its own interpreter
+can never slow another, so the passthrough camera keeps the capture's rate
+whatever the effect costs. An effect that stays on the GPU does not pay that —
+`ShaderEffect`, below, is one.
 
 ## One host, many looks
 
-`processors/shader_effect.py` is an effect written once. It takes a fragment
-shader as config, and the shader *is* the look — the engine compiles it at
-`setup()` and draws it over every frame as one fullscreen pass, so the pixels
-never leave the GPU. Three looks ship in `processors/shaders/` to start from:
-`grayscale.frag`, `vignette.frag` and `pixelate.frag`.
+`nodes/shader_effect.py` is an effect written once. It takes a GLSL function
+as config, and the function *is* the look: `GlslPixelEffect` compiles it at
+`setup()` and runs it over every frame on the GPU, so the pixels never leave
+it. Three looks ship in `nodes/looks/` to start from: `grayscale.glsl`,
+`vignette.glsl` and `pixelate.glsl`.
 
 ```python
-from processors.shader_effect import SHIPPED_SHADERS_DIRECTORY, ShaderEffect
+from nodes.shader_effect import ShaderEffect, shipped_look_glsl
 
-vignette = rt.add(
-    ShaderEffect,
-    config={"fragment_glsl": (SHIPPED_SHADERS_DIRECTORY / "vignette.frag").read_text()},
+vignette = stream_builder.add(
+    ShaderEffect, config={"effect_glsl": shipped_look_glsl("vignette.glsl")}
 )
 ```
 
-A new look is a paragraph of GLSL, not a processor. The shader samples the
-frame as a `sampler2D` named `upstream_frame` (or whatever
-`sampled_input_binding_name` in the config says), may read `screen_uv` at
-location 0 — 0..1 across the frame from the top left — and writes one colour:
+A new look is a paragraph of GLSL, not a node. It is one function returning
+the output pixel for the source pixel `source` at `at`, in pixels from the top
+left; `streamlib_extent` is the frame's size, and `streamlib_source_at(at)`
+reads any other source pixel, clamped to the frame's edge:
 
 ```glsl
-#version 450
-layout(location = 0) in vec2 screen_uv;
-layout(location = 0) out vec4 painted_colour;
-layout(set = 0, binding = 0) uniform sampler2D upstream_frame;
-
-void main() {
-    vec4 source = texture(upstream_frame, screen_uv);
-    painted_colour = vec4(source.bgr, source.a);
+vec4 effect(vec4 source, ivec2 at) {
+    return vec4(source.bgr, source.a);
 }
 ```
 
-A shader that does not compile never gets as far as a frame: the effect is
-refused at `setup()` with the compiler's own diagnostic in `streamlib logs`,
-and every other processor in the graph keeps running.
+A look that does not compile never gets as far as a frame: the effect is
+refused at `setup()` with the compiler's own diagnostic, naming the line of the
+look, in `tatolab logs`. That node never reaches `Running`; the rest of the
+stream keeps going.
 
 The ports are the inverting effect's, so a look takes its place without
-touching anything else. **Into the running app, over MCP**, that is one remove
-and one add — `ShaderEffect` is importable as
-`processors.shader_effect:ShaderEffect` from this directory, which is what
-`add_processor` needs:
+touching anything else. **Into the running stream, over MCP**, that is one
+remove and one add. Every tool names the stream, `main`; `ShaderEffect` is
+importable as `nodes.shader_effect:ShaderEffect` from this project, which is
+the `type` `add_node` takes:
 
-1. `remove_processor` with the `InvertingEffect`'s id from `graph`;
-2. `add_processor` with `{"type": "processors.shader_effect:ShaderEffect",
-   "config": {"fragment_glsl": "…"}}`;
-3. `connect` the camera's `video` to its `video_from_upstream`, and its
-   `video_to_downstream` to the inverted sink's `video`.
+1. `remove_node` with `{"stream": "main", "name": "invertingeffect"}`;
+2. `add_node` with `{"stream": "main", "type": "nodes.shader_effect:ShaderEffect",
+   "config": {"effect_glsl": "…"}}`, which answers the node's name —
+   `shadereffect`;
+3. `connect` `camerasource`'s `video` to `shadereffect`'s
+   `video_from_upstream`, and `shadereffect`'s `video_to_downstream` to
+   `inverted-virtual-camera`'s `video` — each as `from_node`, `from_port`,
+   `to_node`, `to_port`.
 
 Swapping one look for another is the same remove and add again. The camera,
-both sinks and every other processor keep running through it — only the second
-camera goes without new frames for the moment the splice takes, under a second
-on a 640×480 feed.
+both sinks and every other node keep running through it — only the second
+camera goes without new frames for the moment the splice takes.
 
-The effect keeps its source's rate: 30 fps in that 640×480 showcase run, and
-30 fps from a synthetic 1920×1080 source into a counting sink.
-
-Each frame is copied device-to-device into a texture the effect owns before the
-pass samples it: a camera publishes buffer-backed frames, and a draw binds
-texture-backed ones. The engine does that copy, with
-`ctx.gpu_limited_access.copy_surface_to_surface`.
-
-The tests in `tests/` run each shipped look over a known pattern and check a
-pixel against the same maths done on the CPU, and check that a broken shader is
-refused. They boot an engine and build kernels, so they need a GPU the engine
-can drive:
-
-```bash
-uv run pytest
-```
+Before the look runs, `GlslPixelEffect` copies each frame device-to-device into
+a texture it owns, with `ctx.gpu_limited_access.copy_surface_to_surface`: a
+camera publishes buffer-backed frames, and a kernel samples textures.
 
 ## Run it
 
-This app runs on Linux only. `VirtualCameraSink` is a v4l2loopback and
-PipeWire mechanism, and macOS has no virtual camera the engine can create. The
-processors are not what binds it — they use nothing single-floor, and the
-cross-floor check `streamlib dev` prints names only the two sinks in `app.py`.
+This stream runs on Linux only. `VirtualCameraSink` is a v4l2loopback and
+PipeWire mechanism, and macOS has no virtual camera the runtime can create; off
+Linux the runtime refuses the stream at load, naming the platform. The nodes are
+not what binds it — they use nothing single-floor, and the cross-floor check
+`tatolab dev` prints names only the two sinks in `stream.py`.
+
+With this machine's runtime running (`tatolabd`, which the installer starts):
 
 ```bash
-uv venv --python 3.12 && uv sync
-streamlib dev
+uv sync
+tatolab dev
 ```
 
-`uv sync` installs `streamlib` from the simple index pinned in
-`pyproject.toml`; the wheel carries the Python API, the engine, and the
-`streamlib` CLI.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
+only Tatolab package a stream's venv holds — beside `numpy`. The runtime itself
+is not on pip.
+
+Use `tatolab dev` while editing — it loads the stream again on every saved edit
+— and `tatolab run` otherwise. Both keep the stream as long as the command
+runs; Ctrl-C unloads it, and both cameras go with it.
 
 That is enough for a camera. If the application you want to open it in
 enumerates `/dev/video*` — OBS, `ffmpeg`, `v4l2-ctl`, Chrome as it ships today —
@@ -168,25 +174,17 @@ you want the loopback door, and it needs one permission this machine may not
 have yet:
 
 ```bash
-streamlib enable-virtual-camera
+tatolab enable-virtual-camera
 ```
 
 A one-time step, and the only one that asks for a password: it installs the
-standard udev grant (the module loaded with no devices, its control node tagged
-`uaccess` for the logged-in seat) through your desktop's own polkit dialog, or
-`sudo` in a headless shell. **The engine never runs it, never loads a module and
-never asks for elevation** — running it is yours. `--print` writes the three
-files and the root commands to stdout instead, for placing them by hand. Where
-the grant is missing, `door = "auto"` takes the PipeWire door and says so in the
-log, naming this verb.
-
-To work against a checkout rather than a release, install that checkout's wheel
-into this venv instead:
-
-```bash
-uv pip install maturin
-maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
-```
+standard grant — v4l2loopback loaded with no devices, its control node tagged
+`uaccess` for the logged-in user — through `pkexec`, or `sudo` in a headless
+shell. **The runtime never runs it, never loads a module and never asks for
+elevation** — running it is yours. `--print` writes the three files and the
+commands to stdout instead, for placing them by hand. Where the grant is
+missing, `door = "auto"` takes the PipeWire door and says so in the log, naming
+this verb.
 
 ## Observing it
 
@@ -214,59 +212,64 @@ pw-cli ls Node                        # the same, node by node
 
 Either way, run the listing again after Ctrl-C and neither camera is there.
 
-The running app is also a node, and the usual verbs work from another terminal:
+The stream itself is observed like any other, from another terminal:
 
 ```bash
-streamlib nodes           # the live nodes on this machine
-streamlib graph           # this node's processors, ports and links, as JSON
-streamlib logs --follow   # the node's JSONL log
+tatolab streams                 # the streams this machine's runtime holds
+tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
+tatolab logs --stream main -f   # the stream's records, Rust and Python alike
 ```
 
-`streamlib logs` is where the door decision is written down — one line per sink
-at setup, carrying `door`, the device it created, the module version, and the
-reason it chose that door. It also reports which tier the GPU took to reach the
-device's buffers (`imported_host_pointer`, or host-cached staging where the
-driver refuses the import), and a progress line every 300 frames with the
-dropped-frame counts.
+The nodes are `camerasource`, `invertingeffect`, `passthrough-virtual-camera`
+and `inverted-virtual-camera` — a node is named after its class, lowercased,
+unless `add` passes `name=`. `tatolab logs` is where the door decision is
+written down: one record per sink at setup, carrying the camera, the `door`,
+the reason it chose that door and, on the loopback door, the device it created
+and the module version; then the tier the GPU writes the device's buffers
+through; and at teardown the frames each sink wrote and dropped.
 
-To watch the effect's frames rather than its picture, expose its output and read
-it as a track. Read the machine's, the stream's and the node's names out of
-`tatolab graph` rather than spelling them by hand: a port is the track
-`<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the machine's
-local relay.
+To watch the effect's frames rather than its picture, expose its output. An
+exposed port is the track `<node>/<port>` of the broadcast
+`<machine>/<stream>.hang` at the machine's local relay, so any MoQ client reads
+it; read the machine's name out of `tatolab graph`. This repository's
+`tatolab-read-track` writes a track's objects to files:
 
 ```bash
-tatolab expose <stream> <effect> video_to_downstream
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
-    <effect>/video_to_downstream --count 5 --out /tmp/effect
+tatolab expose main invertingeffect video_to_downstream
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
+    invertingeffect/video_to_downstream --count 5 --out /tmp/effect
 ```
 
-Each object is one frame's record, and it is metadata — `surface_id`, `width`,
-`height`, `timestamp_ns` — naming pixels that stay in engine-owned GPU memory,
-so it is a few hundred bytes whatever the resolution. The `surface_id` differs
-from the camera's: it names the effect's own ring slot, which is the whole point
-of the ring. The `timestamp_ns` does not — the effect carries the camera's stamp
-through, so both cameras present the same picture under the same time.
+Each object is one frame's record, and it is metadata, not picture —
+`surface_id`, `width`, `height`, `timestamp_ns` and `color_info` — naming pixels
+that stay in engine-owned GPU memory, so it is a few hundred bytes whatever the
+resolution. The `surface_id` differs from the camera's: it names the effect's
+own ring slot, which is the whole point of the ring. The `timestamp_ns` does
+not — the effect carries the camera's stamp through, so both cameras present
+the same picture under the same time.
 
-## Runtime knobs
+## Knobs
 
-| Env var | Effect |
-| --- | --- |
-| `STREAMLIB_PASSTHROUGH_CAMERA_NAME` | The untouched camera's name in every picker. Default `StreamLib Camera`. |
-| `STREAMLIB_INVERTED_CAMERA_NAME` | The inverted camera's name. Default `StreamLib Camera Inverted`. |
-| `STREAMLIB_VIRTUAL_CAMERA_DOOR` | `auto` (the sink's own default), `v4l2loopback`, or `pipewire`. Applies to both sinks. |
-| `STREAMLIB_CAMERA_DEVICE` | Capture device (e.g. `/dev/video0`). Unset picks the first device found. |
+Everything is literal config at the top of `stream.py` — edit it and save while
+`tatolab dev` runs.
+
+| Knob | Where | Effect |
+| --- | --- | --- |
+| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`). `None` picks the first device found. |
+| `PASSTHROUGH_VIRTUAL_CAMERA_NAME` | top of `stream.py` | The untouched camera's name in every picker. `Tatolab Camera`. |
+| `INVERTED_VIRTUAL_CAMERA_NAME` | top of `stream.py` | The inverted camera's name. `Tatolab Camera Inverted`. |
+| `VIRTUAL_CAMERA_DOOR` | top of `stream.py` | `auto` (the sink's own default), `v4l2loopback`, or `pipewire`. Applies to both sinks. |
 
 A name is what every picker shows, on either door. The loopback device's label
 field holds 31 bytes, so a longer name is cut to fit — pick one that reads whole
-in a list. Leaving either variable unset gives that row's default, above; this
-app always passes a `name`, so the sink's own unnamed fallback — `StreamLib
-Camera` plus a short id derived from the app's directory and the processor's
-name — is what a graph that omits the key gets, not what you see here.
+in a list. This stream always passes a camera name; a sink given none is named
+`StreamLib Camera` plus a short id unique to the node and the stream.
 
 Naming `v4l2loopback` explicitly turns the fallback off: without the permission
 the sink refuses at `setup()` by name, saying it cannot create a camera and
-naming `streamlib enable-virtual-camera`. That processor never reaches
-`Running`, the rest of the graph keeps going, and `streamlib graph` shows it in
+naming `tatolab enable-virtual-camera`. That node never reaches `Running`, the
+rest of the stream keeps going, and `tatolab graph --stream main` shows it in
 state `Error` — which is what you want when you meant the door that every
 application can see and would rather know than be quietly given the other one.
+`pipewire` is taken whatever the control node says, and refuses by name where
+no PipeWire session answers.

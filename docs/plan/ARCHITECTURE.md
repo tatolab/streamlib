@@ -796,22 +796,22 @@ entry reads as **message** (the glossary).
   this doctrine, and that backlog is executed in full: `audio-mixer-demo`,
   `microphone-reverb-speaker`, `raytracing-showcase` and `fisheye-object-detection` are
   Python, and `camera-compute-kernel` and `camera-halftone` are kernel examples.
-  `examples/` stands at twelve converted beside two held. A showcase authored in the
-  current idiom is an ordinary addition under the convention below, not conversion backlog: `camera-codec-roundtrip` is the codec
-  blocks' showcase; `camera-audio-recorder` is the recording showcase — `CameraSource →
-  H264Encoder → Mp4Sink` beside `MicrophoneSource → OpusEncoder → Mp4Sink`, the camera
-  also fanned to a `DisplayWindow`, Ctrl-C stopping and closing the file;
+  `examples/` stands at ten converted beside two held. A showcase authored in the
+  current idiom is an ordinary addition under the convention below, not conversion backlog:
   `camera-webrtc-publish` sends camera and microphone through the codec blocks to
   `WhipPublisher`, credentials from the environment; and `camera-virtual-camera` is the
   virtual camera's showcase — one `CameraSource` fanned to a `VirtualCameraSink` and to a
   Python effect feeding a second one, so a graph appears as two named cameras in any other
-  application on the machine and both are gone at Ctrl-C.
+  application on the machine and both are gone at Ctrl-C. No example opens a window: an
+  example's picture is shared through an exposed `H264Encoder` and watched at `/watch`
+  (owner, 2026-10-20).
+  Rejected: a recording showcase (`CameraSource → H264Encoder` beside `MicrophoneSource →
+  OpusEncoder`, exposed and recorded to MP4 with a MoQ client's fmp4 export) and a codec
+  round-trip showcase (a sender's encoded track read back through `RelayTrackSource →
+  H264Decoder`) — the owner chose no showcase for either (owner, 2026-10-20).
   [consumer-tree-disposition — SHIPPED #2053, #2054, #2055, #2056, #2057, #2058, #2059;
-  codec-roundtrip-reproof — SHIPPED #2087; python-codec-block-api — SHIPPED #2108;
-  opus-mp4-recording-rung — SHIPPED #2129; networking-extension-wheels — SHIPPED #2153;
-  virtual-camera-sink — SHIPPED #2198]
-  <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-codec-roundtrip examples/camera-virtual-camera -->
-  <!-- verify: git ls-files examples/camera-audio-recorder/app.py examples/camera-audio-recorder/pyproject.toml -->
+  networking-extension-wheels — SHIPPED #2153; virtual-camera-sink — SHIPPED #2198]
+  <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-virtual-camera examples/camera-display/stream.py -->
 - **DECIDED** — An example shows a person writing and running a stream: the scaffold's
   idiom, built-ins, nodes, links and exposure. It never shows engine work. That means no
   engine embedded in a host process, no driving the executor or its async runtime, and no

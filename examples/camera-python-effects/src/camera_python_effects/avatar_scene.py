@@ -451,18 +451,41 @@ def flat_shaded(vertices: numpy.ndarray, triangles: numpy.ndarray) -> numpy.ndar
 def unit_box_mesh() -> numpy.ndarray:
     """A box spanning y 0..1, centred in x/z — grown along its bone."""
     x, z = 0.5, 0.5
-    v = numpy.array([
-        [-x, 0, -z], [x, 0, -z], [x, 0, z], [-x, 0, z],
-        [-x, 1, -z], [x, 1, -z], [x, 1, z], [-x, 1, z],
-    ], dtype="f8")
-    t = numpy.array([
-        [0, 2, 1], [0, 3, 2],  # bottom
-        [4, 5, 6], [4, 6, 7],  # top
-        [0, 1, 5], [0, 5, 4],  # -z
-        [2, 3, 7], [2, 7, 6],  # +z
-        [1, 2, 6], [1, 6, 5],  # +x
-        [3, 0, 4], [3, 4, 7],  # -x
-    ])
+    v = numpy.array(
+        [
+            [-x, 0, -z],
+            [x, 0, -z],
+            [x, 0, z],
+            [-x, 0, z],
+            [-x, 1, -z],
+            [x, 1, -z],
+            [x, 1, z],
+            [-x, 1, z],
+        ],
+        dtype="f8",
+    )
+    t = numpy.array(
+        [
+            # bottom
+            [0, 2, 1],
+            [0, 3, 2],
+            # top
+            [4, 5, 6],
+            [4, 6, 7],
+            # -z
+            [0, 1, 5],
+            [0, 5, 4],
+            # +z
+            [2, 3, 7],
+            [2, 7, 6],
+            # +x
+            [1, 2, 6],
+            [1, 6, 5],
+            # -x
+            [3, 0, 4],
+            [3, 4, 7],
+        ]
+    )
     # As listed the faces wind inward; flipped here so every normal points out.
     return flat_shaded(v, t[:, ::-1])
 
@@ -472,14 +495,18 @@ def prism_mesh(sides: int = 8, taper: float = 0.78) -> numpy.ndarray:
     angles = numpy.linspace(0.0, 2.0 * math.pi, sides, endpoint=False)
     ring = numpy.stack([numpy.cos(angles) * 0.5, numpy.sin(angles) * 0.5], axis=1)
     bottom = numpy.hstack([ring[:, :1], numpy.zeros((sides, 1)), ring[:, 1:]])
-    top = numpy.hstack([ring[:, :1] * taper, numpy.ones((sides, 1)), ring[:, 1:] * taper])
+    top = numpy.hstack(
+        [ring[:, :1] * taper, numpy.ones((sides, 1)), ring[:, 1:] * taper]
+    )
     v = numpy.vstack([bottom, top, [[0, 0, 0]], [[0, 1, 0]]])
     triangles = []
     for side in range(sides):
         after = (side + 1) % sides
         triangles += [
-            [side, after, sides + after], [side, sides + after, sides + side],
-            [2 * sides, after, side], [2 * sides + 1, sides + side, sides + after],
+            [side, after, sides + after],
+            [side, sides + after, sides + side],
+            [2 * sides, after, side],
+            [2 * sides + 1, sides + side, sides + after],
         ]
     # Same inward winding as the box's listing; flipped for outward normals.
     return flat_shaded(v, numpy.array(triangles)[:, ::-1])
@@ -492,11 +519,13 @@ def sphere_mesh(rings: int = 6, sectors: int = 10) -> numpy.ndarray:
         polar = math.pi * ring / rings
         for sector in range(sectors):
             azimuth = 2.0 * math.pi * sector / sectors
-            v.append([
-                math.sin(polar) * math.cos(azimuth),
-                math.cos(polar),
-                math.sin(polar) * math.sin(azimuth),
-            ])
+            v.append(
+                [
+                    math.sin(polar) * math.cos(azimuth),
+                    math.cos(polar),
+                    math.sin(polar) * math.sin(azimuth),
+                ]
+            )
     triangles = []
     for ring in range(rings):
         for sector in range(sectors):
@@ -512,7 +541,9 @@ def sphere_mesh(rings: int = 6, sectors: int = 10) -> numpy.ndarray:
     return flat_shaded(numpy.array(v, dtype="f8"), numpy.array(triangles))
 
 
-def _perspective(fov_y_degrees: float, aspect: float, near: float, far: float) -> numpy.ndarray:
+def _perspective(
+    fov_y_degrees: float, aspect: float, near: float, far: float
+) -> numpy.ndarray:
     focal = 1.0 / math.tan(math.radians(fov_y_degrees) / 2.0)
     projection = numpy.zeros((4, 4))
     projection[0, 0] = focal / aspect
@@ -555,13 +586,13 @@ _DRONE_BODY = (0.10, 0.11, 0.15)
 _DRONE_DARK = (0.05, 0.055, 0.08)
 
 
-def drone_placements(elapsed_seconds: float) -> "list[SegmentPlacement]":
+def drone_placements(elapsed_seconds: float) -> list[SegmentPlacement]:
     """The drones currently crossing, posed as rig segments.
 
     They ride the character's own shader and lights, so the stage lights
     catch them on the way past and the bloom takes their lamps.
     """
-    placements: "list[SegmentPlacement]" = []
+    placements: list[SegmentPlacement] = []
     for flight, (period, altitude, depth, direction) in enumerate(_DRONE_FLIGHTS):
         phase = (elapsed_seconds / period + flight * 0.37) % 1.0
         x = (phase * 2.0 - 1.0) * 3.6 * direction
@@ -572,21 +603,43 @@ def drone_placements(elapsed_seconds: float) -> "list[SegmentPlacement]":
 
         placements += [
             # Body: a wide flat slab; rotor bar across it; lamps below and aft.
-            _placement("box", centre, centre + numpy.array([0.0, 0.055, 0.0]),
-                       0.20, _DRONE_BODY, 0.0, forward, depth=0.11),
-            _placement("prism", centre + level * -0.17 + numpy.array([0.0, 0.05, 0.0]),
-                       centre + level * 0.17 + numpy.array([0.0, 0.05, 0.0]),
-                       0.020, _DRONE_DARK, 0.0, forward),
-            _orb(centre + numpy.array([0.0, -0.012, 0.0]), 0.024,
-                 (0.0, 0.95, 1.0), 1.0),
-            _orb(centre + level * (-0.13 * direction) + numpy.array([0.0, 0.045, 0.0]),
-                 0.016, (1.0, 0.12, 0.2),
-                 1.0 if math.modf(elapsed_seconds * 2.2 + flight * 0.4)[0] < 0.5 else 0.15),
+            _placement(
+                "box",
+                centre,
+                centre + numpy.array([0.0, 0.055, 0.0]),
+                0.20,
+                _DRONE_BODY,
+                0.0,
+                forward,
+                depth=0.11,
+            ),
+            _placement(
+                "prism",
+                centre + level * -0.17 + numpy.array([0.0, 0.05, 0.0]),
+                centre + level * 0.17 + numpy.array([0.0, 0.05, 0.0]),
+                0.020,
+                _DRONE_DARK,
+                0.0,
+                forward,
+            ),
+            _orb(
+                centre + numpy.array([0.0, -0.012, 0.0]), 0.024, (0.0, 0.95, 1.0), 1.0
+            ),
+            _orb(
+                centre + level * (-0.13 * direction) + numpy.array([0.0, 0.045, 0.0]),
+                0.016,
+                (1.0, 0.12, 0.2),
+                1.0
+                if math.modf(elapsed_seconds * 2.2 + flight * 0.4)[0] < 0.5
+                else 0.15,
+            ),
         ]
     return placements
 
 
-def clone_burst_echoes(elapsed_seconds: float) -> "list[tuple[float, float, tuple[float, float, float], int]]":
+def clone_burst_echoes(
+    elapsed_seconds: float,
+) -> list[tuple[float, float, tuple[float, float, float], int]]:
     """The burst's echoes as `(x_offset, alpha, tint, pose_age_steps)`.
 
     Empty outside a burst. Inside one, the copies fan outward on an eased
@@ -614,16 +667,33 @@ def clone_burst_echoes(elapsed_seconds: float) -> "list[tuple[float, float, tupl
 
 
 def _character_speed(
-    newest: "list[SegmentPlacement]", previous: "list[SegmentPlacement]", dt: float
+    newest: list[SegmentPlacement], previous: list[SegmentPlacement], dt: float
 ) -> float:
     """Mean segment speed between two poses — what arms the motion trail."""
     if len(newest) != len(previous) or dt <= 0.0:
         return 0.0
-    travelled = numpy.mean([
-        float(numpy.linalg.norm(a.model_matrix[:3, 3] - b.model_matrix[:3, 3]))
-        for a, b in zip(newest, previous)
-    ])
+    travelled = numpy.mean(
+        [
+            float(numpy.linalg.norm(a.model_matrix[:3, 3] - b.model_matrix[:3, 3]))
+            for a, b in zip(newest, previous)
+        ]
+    )
     return float(travelled) / dt
+
+
+def _uniform_named(program: moderngl.Program, uniform_name: str) -> moderngl.Uniform:
+    """The uniform `program` declares as `uniform_name`.
+
+    ModernGL's `program[name]` answers any member kind — uniform, block,
+    attribute or varying — and every member read here is a plain uniform.
+    """
+    program_member = program[uniform_name]
+    if not isinstance(program_member, moderngl.Uniform):
+        raise TypeError(
+            f"{uniform_name!r} is a {type(program_member).__name__} of this program, "
+            f"not a uniform"
+        )
+    return program_member
 
 
 class AvatarSceneRenderer:
@@ -634,9 +704,10 @@ class AvatarSceneRenderer:
         self.height = height
         try:
             self.gl = moderngl.create_context(standalone=True)
-        except Exception:
-            # A helper with no X reaches the GPU through EGL instead.
-            self.gl = moderngl.create_context(standalone=True, backend="egl")
+        except Exception:  # noqa: BLE001 — any failure falls back to EGL
+            # A child process with no X display reaches the GPU through EGL.
+            # ModernGL infers its `**settings` as dicts; `backend` takes a name.
+            self.gl = moderngl.create_context(standalone=True, backend="egl")  # pyright: ignore[reportArgumentType]
         self.gl.enable(moderngl.PROGRAM_POINT_SIZE)
 
         self._character_program = self.gl.program(
@@ -666,6 +737,88 @@ class AvatarSceneRenderer:
         self._bloom_composite_program = self.gl.program(
             vertex_shader=FULL_SCREEN_VERTEX_SHADER,
             fragment_shader=BLOOM_COMPOSITE_FRAGMENT_SHADER,
+        )
+
+        self._character_elapsed_seconds_uniform = _uniform_named(
+            self._character_program, "u_elapsed_seconds"
+        )
+        self._character_camera_position_uniform = _uniform_named(
+            self._character_program, "u_camera_position"
+        )
+        self._character_brightness_uniform = _uniform_named(
+            self._character_program, "u_brightness"
+        )
+        self._character_ghost_alpha_uniform = _uniform_named(
+            self._character_program, "u_ghost_alpha"
+        )
+        self._character_ghost_colour_uniform = _uniform_named(
+            self._character_program, "u_ghost_colour"
+        )
+        self._character_model_uniform = _uniform_named(
+            self._character_program, "u_model"
+        )
+        self._character_normal_matrix_uniform = _uniform_named(
+            self._character_program, "u_normal_matrix"
+        )
+        self._character_base_colour_uniform = _uniform_named(
+            self._character_program, "u_base_colour"
+        )
+        self._character_emissive_uniform = _uniform_named(
+            self._character_program, "u_emissive"
+        )
+        self._character_orbit_light_a_uniform = _uniform_named(
+            self._character_program, "u_orbit_light_a"
+        )
+        self._character_orbit_light_b_uniform = _uniform_named(
+            self._character_program, "u_orbit_light_b"
+        )
+        self._character_view_projection_uniform = _uniform_named(
+            self._character_program, "u_view_projection"
+        )
+        self._backdrop_elapsed_seconds_uniform = _uniform_named(
+            self._backdrop_program, "u_elapsed_seconds"
+        )
+        self._backdrop_aspect_uniform = _uniform_named(
+            self._backdrop_program, "u_aspect"
+        )
+        self._backdrop_camera_sway_uniform = _uniform_named(
+            self._backdrop_program, "u_camera_sway"
+        )
+        self._floor_orbit_light_a_uniform = _uniform_named(
+            self._floor_program, "u_orbit_light_a"
+        )
+        self._floor_orbit_light_b_uniform = _uniform_named(
+            self._floor_program, "u_orbit_light_b"
+        )
+        self._floor_character_ground_position_uniform = _uniform_named(
+            self._floor_program, "u_character_ground_position"
+        )
+        self._floor_view_projection_uniform = _uniform_named(
+            self._floor_program, "u_view_projection"
+        )
+        self._floor_elapsed_seconds_uniform = _uniform_named(
+            self._floor_program, "u_elapsed_seconds"
+        )
+        self._dust_view_projection_uniform = _uniform_named(
+            self._dust_program, "u_view_projection"
+        )
+        self._dust_elapsed_seconds_uniform = _uniform_named(
+            self._dust_program, "u_elapsed_seconds"
+        )
+        self._bloom_extract_scene_uniform = _uniform_named(
+            self._bloom_extract_program, "u_scene"
+        )
+        self._bloom_blur_source_uniform = _uniform_named(
+            self._bloom_blur_program, "u_source"
+        )
+        self._bloom_blur_step_uniform = _uniform_named(
+            self._bloom_blur_program, "u_step"
+        )
+        self._bloom_composite_scene_uniform = _uniform_named(
+            self._bloom_composite_program, "u_scene"
+        )
+        self._bloom_composite_bloom_uniform = _uniform_named(
+            self._bloom_composite_program, "u_bloom"
         )
 
         self._primitives = {
@@ -718,33 +871,41 @@ class AvatarSceneRenderer:
             bloom_texture.repeat_x = bloom_texture.repeat_y = False
         self._bloom_framebuffer_a = self.gl.framebuffer([self._bloom_texture_a])
         self._bloom_framebuffer_b = self.gl.framebuffer([self._bloom_texture_b])
-        self._output_framebuffer = self.gl.framebuffer([self.gl.texture((width, height), 4)])
+        self._output_framebuffer = self.gl.framebuffer(
+            [self.gl.texture((width, height), 4)]
+        )
 
-        self._recent_poses: "deque[tuple[float, list[SegmentPlacement]]]" = deque(
+        self._recent_poses: deque[tuple[float, list[SegmentPlacement]]] = deque(
             maxlen=TRAIL_POSE_MEMORY
         )
 
     def _draw_character(
         self,
-        placements: "list[SegmentPlacement]",
+        placements: list[SegmentPlacement],
         elapsed_seconds: float,
         camera_position: numpy.ndarray,
         *,
         mirrored_under_the_floor: bool = False,
         ghost_alpha: float = 0.0,
-        ghost_colour: "tuple[float, float, float]" = TRAIL_ECHO_CYAN,
+        ghost_colour: tuple[float, float, float] = TRAIL_ECHO_CYAN,
         x_offset: float = 0.0,
     ) -> None:
         mirror = numpy.diag([1.0, -1.0, 1.0, 1.0])
-        self._character_program["u_elapsed_seconds"].value = elapsed_seconds
-        self._character_program["u_camera_position"].value = tuple(camera_position)
-        self._character_program["u_brightness"].value = 0.85 if mirrored_under_the_floor else 1.0
-        self._character_program["u_ghost_alpha"].value = ghost_alpha
-        self._character_program["u_ghost_colour"].value = ghost_colour
+        self._character_elapsed_seconds_uniform.value = elapsed_seconds
+        self._character_camera_position_uniform.value = tuple(camera_position)
+        self._character_brightness_uniform.value = (
+            0.85 if mirrored_under_the_floor else 1.0
+        )
+        self._character_ghost_alpha_uniform.value = ghost_alpha
+        self._character_ghost_colour_uniform.value = ghost_colour
         # A mirrored draw flips the winding, so the cull side flips with it.
         self.gl.front_face = "cw" if mirrored_under_the_floor else "ccw"
         for placement in placements:
-            model = mirror @ placement.model_matrix if mirrored_under_the_floor else placement.model_matrix
+            model = (
+                mirror @ placement.model_matrix
+                if mirrored_under_the_floor
+                else placement.model_matrix
+            )
             if x_offset != 0.0:
                 model = model.copy()
                 model[0, 3] += x_offset
@@ -752,12 +913,12 @@ class AvatarSceneRenderer:
             # the scale divided back out — the model's columns, normalized.
             linear = model[:3, :3]
             normal_matrix = linear / numpy.linalg.norm(linear, axis=0, keepdims=True)
-            self._character_program["u_model"].write(model.T.astype("f4").tobytes())
-            self._character_program["u_normal_matrix"].write(
+            self._character_model_uniform.write(model.T.astype("f4").tobytes())
+            self._character_normal_matrix_uniform.write(
                 normal_matrix.T.astype("f4").tobytes()
             )
-            self._character_program["u_base_colour"].value = placement.base_colour
-            self._character_program["u_emissive"].value = placement.emissive
+            self._character_base_colour_uniform.value = placement.base_colour
+            self._character_emissive_uniform.value = placement.emissive
             self._primitives[placement.primitive].render(moderngl.TRIANGLES)
 
     def _trail_strength(self) -> float:
@@ -765,20 +926,25 @@ class AvatarSceneRenderer:
             return 0.0
         previous_time, previous_pose = self._recent_poses[-2]
         newest_time, newest_pose = self._recent_poses[-1]
-        speed = _character_speed(newest_pose, previous_pose, newest_time - previous_time)
+        speed = _character_speed(
+            newest_pose, previous_pose, newest_time - previous_time
+        )
         return min(speed / TRAIL_FULL_STRENGTH_SPEED, 1.0)
 
     def render(
-        self, placements: "list[SegmentPlacement]", elapsed_seconds: float
+        self, placements: list[SegmentPlacement], elapsed_seconds: float
     ) -> numpy.ndarray:
         """One frame of the stage, as an (height, width, 4) uint8 array."""
         self._recent_poses.append((elapsed_seconds, placements))
 
         sway = math.sin(elapsed_seconds * 0.32)
-        eye = numpy.array([sway * 0.30, 1.22 + math.sin(elapsed_seconds * 0.21) * 0.05, 2.65])
+        eye = numpy.array(
+            [sway * 0.30, 1.22 + math.sin(elapsed_seconds * 0.21) * 0.05, 2.65]
+        )
         target = numpy.array([0.0, 0.98, 0.0])
         view_projection = (
-            _perspective(46.0, self.width / self.height, 0.1, 60.0) @ _look_at(eye, target)
+            _perspective(46.0, self.width / self.height, 0.1, 60.0)
+            @ _look_at(eye, target)
         ).T.astype("f4")
 
         orbit_light_a = (
@@ -791,15 +957,15 @@ class AvatarSceneRenderer:
             0.65 + math.sin(elapsed_seconds * 0.5) * 0.25,
             math.sin(-elapsed_seconds * 0.6 + 2.4) * 1.2,
         )
-        self._character_program["u_orbit_light_a"].value = orbit_light_a
-        self._character_program["u_orbit_light_b"].value = orbit_light_b
-        self._floor_program["u_orbit_light_a"].value = orbit_light_a
-        self._floor_program["u_orbit_light_b"].value = orbit_light_b
+        self._character_orbit_light_a_uniform.value = orbit_light_a
+        self._character_orbit_light_b_uniform.value = orbit_light_b
+        self._floor_orbit_light_a_uniform.value = orbit_light_a
+        self._floor_orbit_light_b_uniform.value = orbit_light_b
 
         # The torso placements lead the list; their translation is where the
         # contact glow pools.
         ground = placements[0].model_matrix[:3, 3] if placements else numpy.zeros(3)
-        self._floor_program["u_character_ground_position"].value = (
+        self._floor_character_ground_position_uniform.value = (
             float(ground[0]),
             float(ground[2]),
         )
@@ -809,16 +975,16 @@ class AvatarSceneRenderer:
         self.gl.disable(moderngl.DEPTH_TEST)
         self.gl.clear(0.0, 0.0, 0.0, 1.0)
 
-        self._backdrop_program["u_elapsed_seconds"].value = elapsed_seconds
-        self._backdrop_program["u_aspect"].value = self.width / self.height
+        self._backdrop_elapsed_seconds_uniform.value = elapsed_seconds
+        self._backdrop_aspect_uniform.value = self.width / self.height
         # The skyline parallaxes against the same sway the camera rides.
-        self._backdrop_program["u_camera_sway"].value = sway
+        self._backdrop_camera_sway_uniform.value = sway
         self._backdrop.render(moderngl.TRIANGLES)
 
         self.gl.enable(moderngl.DEPTH_TEST)
-        self._character_program["u_view_projection"].write(view_projection.tobytes())
-        self._floor_program["u_view_projection"].write(view_projection.tobytes())
-        self._dust_program["u_view_projection"].write(view_projection.tobytes())
+        self._character_view_projection_uniform.write(view_projection.tobytes())
+        self._floor_view_projection_uniform.write(view_projection.tobytes())
+        self._dust_view_projection_uniform.write(view_projection.tobytes())
 
         # Reflection first, then the translucent grid floor over it, then the
         # android itself — three passes of fake it till it looks expensive.
@@ -828,7 +994,7 @@ class AvatarSceneRenderer:
         self.gl.front_face = "ccw"
         self.gl.enable(moderngl.BLEND)
         self.gl.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        self._floor_program["u_elapsed_seconds"].value = elapsed_seconds
+        self._floor_elapsed_seconds_uniform.value = elapsed_seconds
         self._floor.render(moderngl.TRIANGLES)
         self.gl.disable(moderngl.BLEND)
         self._draw_character(placements, elapsed_seconds, eye)
@@ -846,8 +1012,12 @@ class AvatarSceneRenderer:
             for x_offset, alpha, tint, pose_age in echoes:
                 echo_pose = poses[max(len(poses) - 1 - pose_age, 0)][1]
                 self._draw_character(
-                    echo_pose, elapsed_seconds, eye,
-                    ghost_alpha=alpha, ghost_colour=tint, x_offset=x_offset,
+                    echo_pose,
+                    elapsed_seconds,
+                    eye,
+                    ghost_alpha=alpha,
+                    ghost_colour=tint,
+                    x_offset=x_offset,
                 )
             self.gl.disable(moderngl.BLEND)
 
@@ -861,15 +1031,13 @@ class AvatarSceneRenderer:
             ghost_poses = list(self._recent_poses)[:-1][::-stride][:TRAIL_GHOST_COUNT]
             for age, (_, ghost_pose) in enumerate(ghost_poses, start=1):
                 fade = trail * 0.32 * (1.0 - age / (TRAIL_GHOST_COUNT + 1.0))
-                self._draw_character(
-                    ghost_pose, elapsed_seconds, eye, ghost_alpha=fade
-                )
+                self._draw_character(ghost_pose, elapsed_seconds, eye, ghost_alpha=fade)
             self.gl.disable(moderngl.BLEND)
 
         # Dust, additive, drifting through the light.
         self.gl.enable(moderngl.BLEND)
         self.gl.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
-        self._dust_program["u_elapsed_seconds"].value = elapsed_seconds
+        self._dust_elapsed_seconds_uniform.value = elapsed_seconds
         self._dust.render(moderngl.POINTS, vertices=DUST_MOTE_COUNT)
         self.gl.disable(moderngl.BLEND)
         self.gl.disable(moderngl.DEPTH_TEST)
@@ -878,25 +1046,31 @@ class AvatarSceneRenderer:
         # resolution, lay it back over the scene with a soft shoulder.
         self._bloom_framebuffer_a.use()
         self._scene_texture.use(0)
-        self._bloom_extract_program["u_scene"].value = 0
+        self._bloom_extract_scene_uniform.value = 0
         self._bloom_extract.render(moderngl.TRIANGLES)
 
         half_width, half_height = self._bloom_texture_a.size
         self._bloom_framebuffer_b.use()
         self._bloom_texture_a.use(0)
-        self._bloom_blur_program["u_source"].value = 0
-        self._bloom_blur_program["u_step"].value = (1.0 / half_width, 0.0)
+        self._bloom_blur_source_uniform.value = 0
+        self._bloom_blur_step_uniform.value = (
+            1.0 / half_width,
+            0.0,
+        )
         self._bloom_blur.render(moderngl.TRIANGLES)
         self._bloom_framebuffer_a.use()
         self._bloom_texture_b.use(0)
-        self._bloom_blur_program["u_step"].value = (0.0, 1.0 / half_height)
+        self._bloom_blur_step_uniform.value = (
+            0.0,
+            1.0 / half_height,
+        )
         self._bloom_blur.render(moderngl.TRIANGLES)
 
         self._output_framebuffer.use()
         self._scene_texture.use(0)
         self._bloom_texture_a.use(1)
-        self._bloom_composite_program["u_scene"].value = 0
-        self._bloom_composite_program["u_bloom"].value = 1
+        self._bloom_composite_scene_uniform.value = 0
+        self._bloom_composite_bloom_uniform.value = 1
         self._bloom_composite.render(moderngl.TRIANGLES)
 
         pixels = numpy.frombuffer(

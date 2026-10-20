@@ -3,15 +3,13 @@ name = "camera-python-effects"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    # `ProcessorOutputTextureRing` ships from 0.18.6; the index serves it
-    # once the release that precedes this example lands.
-    "streamlib>=0.18.6",
+    "tatolab-stream>=0.54.3",
     "numpy>=2.1",
-    # The overlay generator's 2D canvas. Not in the wheel's adapter closure —
-    # it is an ordinary PyPI dependency of this app, like any other.
+    # The overlay generator's 2D canvas, an ordinary PyPI dependency of this
+    # stream like any other.
     "skia-python>=138",
-    # Pose detection: 33 landmarks with real depth, model bundled in the
-    # wheel, CPU-fast — no torch, no CUDA stack to disagree with. 1.0.1's
+    # Pose detection: 33 landmarks with real depth, model fetched once and
+    # cached, CPU-fast — no torch, no CUDA stack to disagree with. 1.0.1's
     # macOS arm64 wheel aborts the process when the landmarker graph opens
     # ("graph_service.h: Service is unavailable" from its Metal helper).
     "mediapipe>=0.10.14,!=1.0.1",
@@ -19,16 +17,8 @@ dependencies = [
     "moderngl>=5.10",
 ]
 
-# streamlib is served from its own simple index until the PyPI publication that
-# follows the project rename; everything else resolves from PyPI as usual.
-[[tool.uv.index]]
-name = "streamlib"
-url = "https://tatolab.github.io/streamlib/simple/"
-explicit = true
-
-[tool.uv.sources]
-streamlib = { index = "streamlib" }
-
+# The nodes live in an installable package, so `uv sync` installs it into the
+# stream's venv and every node's child interpreter imports it by name.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -37,8 +27,8 @@ build-backend = "hatchling.build"
 packages = ["src/camera_python_effects"]
 
 [project.optional-dependencies]
-# The LeRobot bridge: `uv sync --extra lerobot` (or install lerobot[dataset]
-# by hand). Only the recorder processor's helper imports it.
+# The LeRobot bridge: `uv sync --extra lerobot`. Only the recorder node's
+# child process imports it.
 lerobot = ["lerobot[dataset]>=0.6"]
 
 [dependency-groups]
@@ -46,3 +36,7 @@ dev = ["pytest>=8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The stream's own package, so its imports sort as first-party.
+src = ["src"]

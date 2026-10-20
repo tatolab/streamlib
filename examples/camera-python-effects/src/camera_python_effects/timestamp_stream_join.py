@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Joins bags from several ports that all descend from one camera frame.
+"""Joins messages from several ports that all descend from one camera frame.
 
 Every stream in this app carries the source frame's `timestamp_ns` forward —
-the camera stamps it, the effects keep it, the pose bag copies it — so the
+the camera stamps it, the effects keep it, the solved-pose record copies it — so the
 stamp is a join key, not just an ordering. The join holds early arrivals per
 stream until every stream has answered for a stamp, then hands the complete
 row out; stamps that never complete age out instead of pooling.
@@ -27,7 +27,7 @@ class TimestampStreamJoin:
 
     def __init__(
         self,
-        stream_names: "tuple[str, ...]",
+        stream_names: tuple[str, ...],
         pending_row_limit: int = DEFAULT_PENDING_ROW_LIMIT,
     ) -> None:
         if len(stream_names) < 2:
@@ -37,12 +37,12 @@ class TimestampStreamJoin:
             )
         self._stream_names = stream_names
         self._pending_row_limit = pending_row_limit
-        self._pending: "dict[int, dict[str, Any]]" = {}
+        self._pending: dict[int, dict[str, Any]] = {}
         self.rows_abandoned = 0
 
     def offer(
         self, stream_name: str, timestamp_ns: int, value: Any
-    ) -> "dict[str, Any] | None":
+    ) -> dict[str, Any] | None:
         """Add one arrival; the completed row when this one completes it.
 
         A row completes at most once — completing removes it — and a second

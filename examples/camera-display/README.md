@@ -1,90 +1,102 @@
 # camera-display
 
-Camera → display. A minimal, canonical StreamLib app.
+Camera → H.264, watched in a browser. The minimal, canonical Tatolab camera
+stream.
 
 ## The model this example teaches
 
-**A StreamLib app is a normal Python codebase.** One venv, one Python version,
-ordinary PyPI dependencies. There is no manifest, no `main()`, and nothing is
-downloaded or compiled at runtime:
+**A Tatolab stream is a normal Python project.** One venv, one Python version,
+ordinary PyPI dependencies. There is no manifest, and nothing is downloaded or
+compiled at run time:
 
 ```python
-def setup(rt: Runtime) -> None:
-    camera = rt.add(CameraSource, config=camera_configuration)
-    window = rt.add(DisplayWindow, config={...})
-
-    rt.connect(camera.output("video"), window.input("video"))
+@stream
+def main(stream_builder: StreamBuilder) -> None:
+    camera = stream_builder.add(CameraSource, config=camera_config)
+    encoder = stream_builder.add(H264Encoder)
+    stream_builder.connect(camera.output("video"), encoder.input("video"))
+    stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)
 ```
 
-- `streamlib run` reads `app.py` from the current directory and calls its
-  `setup(rt)` — found by convention, never declared.
-- `CameraSource` and `DisplayWindow` are **native built-in processors**,
-  statically linked into the `streamlib` wheel. `rt.add` takes the class
-  itself. Their per-frame paths never enter a Python interpreter, so there is
-  nothing to install and nothing to load.
-- This app declares no processor of its own. One that did would live in its own
-  module — never in `app.py` — because every Python processor runs in its own
-  child interpreter that imports the class by name. `streamlib new` scaffolds
-  that shape; see `examples/camera-python-effects` for processors in anger.
+- `tatolab dev` reads `stream.py` from the current directory and loads its one
+  `@stream` function into this machine's runtime, `tatolabd` — found by
+  convention, never declared.
+- `CameraSource` and `H264Encoder` are **native built-ins**: they ship inside
+  the runtime, and their per-frame paths never enter a Python interpreter.
+  `add` takes the class itself, and its `config` is a `TypedDict`
+  (`CameraSourceConfig`), so a type checker catches a misspelled key.
+- **The runtime opens no windows.** What a stream shows, it exposes: `expose`
+  makes the encoder's output a track at this machine's local relay, which a
+  browser plays and any other stream or MoQ client reads. `Exposure.PRIVATE`
+  keeps it on this machine; `Exposure.PUBLIC` shares it off the machine too.
+- This stream declares no node of its own. One that did would live in its own
+  module under `nodes/` — never in `stream.py` — because every Python node runs
+  in its own child interpreter that imports the class by name. `tatolab new`
+  scaffolds that shape; see `examples/camera-python-effects` for nodes in anger.
 
 ## Run it
 
-```bash
-uv venv --python 3.12 && uv sync
-streamlib dev
-```
-
-`uv sync` installs `streamlib` from the simple index pinned in
-`pyproject.toml`; the wheel carries the Python API, the engine, and the
-`streamlib` CLI, so there is no second artifact to install and no shell setup
-step.
-
-Use `streamlib dev` while editing and `streamlib run` otherwise — they launch
-identically today; `dev` names the edit loop, which is re-running it.
-
-To work against a checkout rather than a release, install that checkout's wheel
-into this venv instead:
+With this machine's runtime running (`tatolabd`, which the installer starts):
 
 ```bash
-uv pip install maturin
-maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
+uv sync
+tatolab dev
 ```
+
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
+only Tatolab package a stream's venv holds. The runtime itself is not on pip.
+
+Use `tatolab dev` while editing — it loads the stream again on every saved edit
+— and `tatolab run` otherwise. Both keep the stream as long as the command
+runs; Ctrl-C unloads it.
+
+Then open the stream in a browser:
+
+```text
+http://127.0.0.1:4446/watch/<machine>/main
+```
+
+`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
+ports.
 
 ## Observing it
 
-The running app is a node. From another terminal:
+From another terminal:
 
 ```bash
-streamlib nodes           # the live nodes on this machine
-streamlib graph           # this node's processors, ports and links, as JSON
-streamlib logs --follow   # the node's JSONL log
+tatolab streams                 # the streams this machine's runtime holds
+tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
+tatolab logs --stream main -f   # the stream's records, Rust and Python alike
 ```
 
-A port is read as a track at the machine's local relay once it is exposed. Read
-the machine's, the stream's and the node's names out of `tatolab graph` rather
-than spelling them by hand: a port is the track `<node>/<port>` of the broadcast
-`<machine>/<stream>.hang` at the machine's local relay.
+A node is named after its class, lowercased — `camerasource`, `h264encoder` —
+unless `add` passes `name=`. An exposed port is the track `<node>/<port>` of the
+broadcast `<machine>/<stream>.hang` at the machine's local relay, so any MoQ
+client reads it; this repository's `tatolab-read-track` writes a track's objects
+to files:
 
 ```bash
-tatolab expose <stream> <camera> video
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
-    <camera>/video --count 5 --out /tmp/camera
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
+    h264encoder/encoded_video --count 30 --out /tmp/camera
 ```
 
-Each object is one frame's record, and it is metadata, not picture:
-`surface_id`, `width`, `height`, `timestamp_ns` and `color_info`, around 250
-bytes whatever the resolution. The pixels stay in engine-owned GPU memory that
-the surface id names, which means nothing outside the runtime. The records tell
-you frames are flowing and what they claim to be; to see the pictures, connect
-an `H264Encoder` to the camera, expose its `encoded_video`, and open
-`http://127.0.0.1:4446/watch/<machine>/<stream>`.
+Each file is one H.264 access unit, so the files concatenated in `objects.jsonl`
+order are an H.264 stream ffmpeg plays.
 
-## Runtime knobs
+The camera's own `video` port is internal to the stream. `tatolab expose main
+camerasource video` makes it a track too, but each of its objects is a frame's
+record, not its picture: `surface_id`, `width`, `height`, `timestamp_ns` and
+`color_info`, around 250 bytes whatever the resolution. The pixels stay in
+engine-owned GPU memory that the surface id names, which means nothing outside
+the runtime — that is why the picture is shared through the encoder.
 
-| Env var | Effect |
-| --- | --- |
-| `STREAMLIB_CAMERA_DEVICE` | Capture device (e.g. `/dev/video0`). Unset picks the first device found. |
+## Knobs
 
-Capture size and window geometry are literal config in `app.py` — edit them and
-re-run. `CameraSource` also takes `max_width` / `max_height`; `DisplayWindow`
-takes `title`, `width`, `height`, and `scaling` (`fit` / `fill` / `stretch`).
+Everything is literal config in `stream.py` — edit it and save while
+`tatolab dev` runs.
+
+| Knob | Where | Effect |
+| --- | --- | --- |
+| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
+| `max_width` / `max_height` | `CameraSourceConfig` | Resolution cap; the negotiated format is clamped to fit. Default 1920×1080. |
+| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |

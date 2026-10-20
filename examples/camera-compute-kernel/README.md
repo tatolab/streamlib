@@ -1,7 +1,8 @@
 # camera-compute-kernel
 
-Camera → a GLSL compute kernel → window. Your webcam in black and white,
-graded on the GPU by a shader that lives in this app as a string.
+Camera → a GLSL compute kernel → H.264, watched in a browser. Your webcam in
+black and white, graded on the GPU by a shader that lives in this project as a
+string.
 
 ## The model this example teaches
 
@@ -19,8 +20,10 @@ self.grayscale_kernel = ctx.gpu_full_access.create_compute_kernel(
 
 ```python
 self.grayscale_kernel.dispatch(
-    bindings={"camera_frame": camera_frame_landing_texture,
-              "grayscale_frame": grayscale_frame_texture},
+    bindings={
+        "camera_frame": camera_frame_landing_texture,
+        "grayscale_frame": grayscale_frame_texture,
+    },
     group_count=(240, 135, 1),
     push_constants=self.strength_push_constants,
 )
@@ -28,12 +31,11 @@ self.grayscale_kernel.dispatch(
 
 Four things fall out of that pair, and they are the whole lesson:
 
-- **The GLSL is a string, and there is no toolchain.** The wheel carries a C++
+- **The GLSL is a string, and there is no toolchain.** The runtime carries the
   GLSL compiler, so `source=` is compiled at construction on the machine that
-  runs the app. There is no `glslc` to install, no `.spv` to build and no build
-  step between editing the shader and re-running. Re-creating an identical
-  kernel costs no compilation — the result is cached under everything that
-  changes it, never under the source alone.
+  runs the stream. There is no `glslc` to install, no `.spv` to build and no
+  build step between editing the shader and running it again. Re-creating an
+  identical kernel costs no compilation.
 - **Bindings are passed at dispatch, by name, and never persist.** The names
   are the shader's own, read off it by reflection; the `bindings=` mapping at
   construction merely *asserts* that reflection, so renaming `camera_frame` in
@@ -47,18 +49,14 @@ Four things fall out of that pair, and they are the whole lesson:
   the **Full** capability, the one `setup()` is handed, not on the limited
   context `process()` gets. This effect is one pass, so it needs neither.
 - **The kernel's output is an engine-owned texture named by surface id.** The
-  bag this processor writes carries that id, an extent and a timestamp — 167
-  bytes on the wire, header included, and the same 167 whatever the resolution.
-  (The camera's own bag is 248, the difference being the per-frame metadata it
-  carries and this one does not — colour traits and `fps`.)
-  Pixels never ride a link.
+  record this node writes carries that id, an extent and a timestamp, and is
+  the same size whatever the resolution. Pixels never ride a link.
 
 ### The landing copy, and why it is here
 
 `CameraSource` publishes a **buffer-backed** frame, and a kernel binding
-resolves **texture-backed** surfaces only — hand a dispatch a buffer-backed
-surface id and it is refused by name. So each frame is copied into a texture
-this processor owns before the kernel can sample it:
+resolves **texture-backed** surfaces only. So each frame is copied into a
+texture this node owns before the kernel can sample it:
 
 ```python
 ctx.gpu_limited_access.copy_surface_to_surface(
@@ -78,66 +76,64 @@ refused by name rather than converted.
 
 ### Two rings, two depths
 
-Both textures come from `ProcessorOutputTextureRing`, which allocates once and
-re-allocates only when the upstream extent changes. Their depths differ, and
-the difference is the contract:
+Both textures come from `NodeOutputTextureRing`, which hands each frame the
+next slot of a pool the engine owns and replaces the slots when the upstream
+extent changes. A slot a consumer still holds is skipped, never rewritten, and
+a frame nobody claimed stays resolvable for `depth` publishes. Their depths
+differ, and the difference is the contract:
 
 | Ring | Depth | Why |
 | --- | --- | --- |
-| the landing texture | 1 | `dispatch` returns with the GPU work retired, and nothing outside this processor ever names this texture |
-| the kernel's output | 2 | the window may still be sampling the frame before this one |
+| the landing texture | 1 | `dispatch` returns with the GPU work retired, and nothing outside this node ever names this texture |
+| the kernel's output | 2 | the encoder reads it after this node has moved on to the next frame |
 
-Depth bounds how far behind a consumer may fall, not how fast anything runs: a
-slot is redrawn when its turn comes round again, so a consumer still holding a
-frame `depth` publishes old reads the producer's newer pixels.
+When every slot the pool may grow to is held, `next_texture_for_this_frame`
+raises: this node drops its own frame and never waits on a consumer.
 
 ### And the ordinary parts
 
 `GrayscaleCompute` runs in its own child interpreter with its own GIL, like
-every Python processor. `CameraSource` and `DisplayWindow` are native built-ins
-inside the wheel whose per-frame paths never enter an interpreter at all. The
-input port declares `newest`, the profile for a stream where a stale frame has
-no value once a fresher one exists.
+every Python node. `CameraSource` and `H264Encoder` are native built-ins inside
+the runtime whose per-frame paths never enter an interpreter at all. The input
+port declares `newest`, the profile for a stream where a stale frame has no
+value once a fresher one exists. The runtime opens no windows: the stream ends
+in an encoder whose `encoded_video` it exposes, so a browser plays it.
 
 ## Run it
 
-```bash
-uv venv --python 3.12 && uv sync
-source .venv/bin/activate
-streamlib run
-```
-
-A window opens with your camera in it, in black and white. Ctrl-C stops it.
-
-`uv sync` installs `streamlib` from the simple index pinned in
-`pyproject.toml`; the wheel carries the Python API, the engine and the
-`streamlib` CLI. The CLI lands in `.venv/bin`, so it needs the venv on your
-`PATH` — activate it as above, or spell it `.venv/bin/streamlib` every time.
-
-**Not `uv run streamlib`.** It re-syncs the environment from `pyproject.toml`
-first, which silently replaces a locally built wheel with the released one —
-exactly what the next paragraph is for.
-
-To work against a checkout rather than a release, install that checkout's wheel
-into this venv instead:
+With this machine's runtime running (`tatolabd`, which the installer starts):
 
 ```bash
-uv pip install maturin
-maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
+uv sync
+tatolab dev
 ```
 
-This app needs real hardware, and says so rather than pretending: the kernel
-runs on the engine's own Vulkan device, so a machine without one fails while
-the graph is starting. It runs on Linux and on macOS alike. There is no
-demotion path here of the kind the audio backends have — a null GPU would have
-no pixels to hand back.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
+only Tatolab package a stream's venv holds. The runtime itself is not on pip.
+
+Use `tatolab dev` while editing — it loads the stream again on every saved edit
+— and `tatolab run` otherwise. Both keep the stream as long as the command
+runs; Ctrl-C unloads it.
+
+Then open the stream in a browser — your camera, in black and white:
+
+```text
+http://127.0.0.1:4446/watch/<machine>/main
+```
+
+`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
+ports.
+
+This stream needs a GPU, and says so rather than pretending: the kernel runs on
+the runtime's own device, so a machine without one fails while the stream is
+starting. It runs on Linux and on macOS alike. There is no fallback — a null GPU
+would have no pixels to hand back.
 
 ## Editing it
 
-The shader is `GRAYSCALE_COMPUTE_GLSL` in `processors/grayscale_compute.py`.
-Change the luma weights, or the whole effect, and re-run — the engine compiles
-the new text at startup, and a warm restart is sub-second. That is the edit
-loop; there is no reload-on-save and nothing is cached against you.
+The shader is `GRAYSCALE_COMPUTE_GLSL` in `nodes/grayscale_compute.py`. Change
+the luma weights, or the whole effect, and save while `tatolab dev` runs — the
+stream loads again and the runtime compiles the new text.
 
 `WORKGROUP_TILE_SIZE` is safe to change on its own: it reaches the shader as a
 `#define`, so the tile size and the group count cannot disagree. Everything
@@ -149,56 +145,49 @@ Two edits worth making on purpose, because each fails in an instructive way:
   `setup()`, before a single frame, and names the shader's own bindings.
 - Bind the camera's own surface id — `frame.surface_id` in place of
   `camera_frame_landing_texture` — and skip the landing copy. The dispatch
-  refuses, saying the graph cannot resolve that surface to a device texture.
-  Resolving the frame first (`ctx.gpu_limited_access.resolve_surface(...)`) and
-  binding the handle is refused identically, because a handle binding travels
-  as its surface id. That refusal is why the landing copy exists, and it is
-  worth seeing once.
+  refuses it, because the camera's frame is buffer-backed. That refusal is why
+  the landing copy exists, and it is worth seeing once.
 
 ## Observing it
 
-From another terminal with this venv activated, while it runs:
+From another terminal:
 
 ```bash
-streamlib nodes                       # the live nodes on this machine
-streamlib graph                       # processors, ports, links and their states
-streamlib logs --list                 # the runtimes that have a log file
-streamlib logs <RUNTIME_ID> --follow  # tail one of them, like `tail -F`
+tatolab streams                 # the streams this machine's runtime holds
+tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
+tatolab logs --stream main -f   # the stream's records, Rust and Python alike
 ```
 
-`graph` renders per-link drop counts under a node's `metrics`, but only for a
-destination that lives in the app process — here, the window. `GrayscaleCompute`
-is helper-placed, like every Python processor, and counts its losses inside its
-own child; its node carries no `metrics` key at all rather than a zero the
-parent cannot stand behind. So a quiet `graph` is not yet proof that the effect
-dropped nothing.
-
-`logs` takes the runtime id, not a node — it reads the file on disk, and the
-ids `--list` prints are what `nodes` calls `runtime_id`.
-
-To see what the kernel actually wrote rather than what the window shows, encode
-it: a frame's record names its pixels by a surface id, which means nothing
-outside the runtime, so a frame port is seen by connecting an `H264Encoder` to
-`grayscale_frame_to_downstream` and exposing the encoder's `encoded_video`.
-`http://127.0.0.1:4446/watch/<machine>/<stream>` then plays it in a browser, and
-any MoQ client reads it — this repository's `tatolab-read-track` writes its
-access units to files that concatenate into an H.264 stream ffmpeg decodes to
-PNGs. Read the machine's, the stream's and the node's names out of `tatolab
-graph` rather than spelling them by hand: a port is the track `<node>/<port>` of
-the broadcast `<machine>/<stream>.hang` at the machine's local relay.
+A node is named after its class, lowercased — `camerasource`,
+`grayscalecompute`, `h264encoder` — unless `add` passes `name=`. An exposed port
+is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the
+machine's local relay, so any MoQ client reads it; this repository's
+`tatolab-read-track` writes a track's objects to files:
 
 ```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
-    <encoder>/encoded_video --count 30 --out /tmp/grayscale
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
+    h264encoder/encoded_video --count 30 --out /tmp/grayscale
 ```
 
-## Runtime knobs
+Each file is one H.264 access unit, so the files concatenated in `objects.jsonl`
+order are an H.264 stream ffmpeg decodes to PNGs — what the kernel wrote.
 
-Everything is literal config in `app.py` — edit it and re-run.
+The kernel's own `grayscale_frame_to_downstream` port is internal to the stream.
+`tatolab expose main grayscalecompute grayscale_frame_to_downstream` makes it a
+track too, but each of its objects is a frame's record, not its picture: a
+`VideoFrame` naming its `surface_id`, `width`, `height`, `timestamp_ns` and the
+camera's `color_info`. The pixels stay in
+engine-owned GPU memory that the surface id names, which means nothing outside
+the runtime — that is why the picture is shared through the encoder.
 
-| Knob | Where | What it does |
+## Knobs
+
+Everything is literal config in `stream.py` — edit it and save while
+`tatolab dev` runs.
+
+| Knob | Where | Effect |
 | --- | --- | --- |
-| `strength` | `rt.add(GrayscaleCompute, config=…)` | 0.0 leaves the picture alone, 1.0 is full luma |
-| `max_width` / `max_height` | `rt.add(CameraSource, config=…)` | the capture size to ask the device for |
-| `title` / `width` / `height` / `scaling` | `rt.add(DisplayWindow, config=…)` | window geometry; `scaling` is `fit` / `fill` / `stretch` |
-| `STREAMLIB_CAMERA_DEVICE` | environment | capture device (e.g. `/dev/video0`); unset picks the first device found |
+| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
+| `strength` | `stream_builder.add(GrayscaleCompute, config=…)` | 0.0 leaves the picture alone, 1.0 is full luma. |
+| `max_width` / `max_height` | `CameraSourceConfig` | Resolution cap; the negotiated format is clamped to fit. |
+| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |

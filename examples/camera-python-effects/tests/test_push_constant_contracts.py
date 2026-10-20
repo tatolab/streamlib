@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Every processor's push-constant payload against its shader's own block.
+"""Every node's push-constant payload against its shader's own block.
 
-The one contract in this app that nothing else checks. What these lock is the
+The one contract in this stream that nothing else checks. What these lock is the
 byte size: a wrong size is refused at the draw, and a drifted member list
 shows up here as a size mismatch. What no test here can lock is member ORDER
 at equal size — the engine sees bytes and the Python side packs positionally,
@@ -19,15 +19,15 @@ import struct
 import pytest
 
 from camera_python_effects.gpu_surface_conventions import read_shader_source
-from camera_python_effects.processors.breaking_news_compositor import (
+from camera_python_effects.nodes.breaking_news_compositor import (
     COMPOSITE_PUSH_CONSTANT_FORMAT,
     COMPOSITE_PUSH_CONSTANT_SIZE,
 )
-from camera_python_effects.processors.crt_film_grain import (
+from camera_python_effects.nodes.crt_film_grain import (
     CRT_PUSH_CONSTANT_FORMAT,
     CRT_PUSH_CONSTANT_SIZE,
 )
-from camera_python_effects.processors.cyberpunk_glitch import (
+from camera_python_effects.nodes.cyberpunk_glitch import (
     GLITCH_PUSH_CONSTANT_FORMAT,
     GLITCH_PUSH_CONSTANT_SIZE,
 )
@@ -66,11 +66,13 @@ EVERY_PUSH_CONSTANT_CONTRACT = [
 def test_the_payload_is_exactly_the_block_the_shader_declares(
     shader_file_name: str, packing_format: str, declared_size: int
 ) -> None:
-    shader_block_size = push_constant_block_size_of(read_shader_source(shader_file_name))
+    shader_block_size = push_constant_block_size_of(
+        read_shader_source(shader_file_name)
+    )
     assert struct.calcsize(packing_format) == declared_size
     assert declared_size == shader_block_size, (
         f"{shader_file_name} declares a {shader_block_size}-byte push-constant block "
-        f"and the processor packs {declared_size} bytes for it"
+        f"and the node packs {declared_size} bytes for it"
     )
 
 

@@ -1,12 +1,8 @@
 # camera-halftone
 
-Camera → a GLSL compute kernel → window. Your webcam printed as newsprint:
-one ink dot per cell, each dot as big as that cell is bright.
-
-The effect is recovered from a retired example that ran it through a Deno
-subprocess and a WebGPU pipeline of its own. Nothing of that survives — the
-shader is rewritten as GLSL the engine compiles, and the pixels never leave
-the GPU or the engine's own device.
+Camera → a GLSL compute kernel → H.264, watched in a browser. Your webcam
+printed as newsprint: one ink dot per cell, each dot as big as that cell is
+bright. The pixels never leave the GPU.
 
 ## What the shader does
 
@@ -24,10 +20,9 @@ vec4 ink = texelFetch(camera_frame, centre, 0);
 
 What scales with brightness is the dot's **area**, not its radius — a cell
 twice as bright is twice as covered in ink — so the radius takes a square
-root. The mined original scaled the radius directly, which loses the shadows:
-a quarter grey inks one texel of the sixty-four there, against nine here. The
-edge gets one texel of feather for a reason worth knowing too, and the shader
-says which.
+root. A radius scaled by brightness directly loses the shadows: a quarter grey
+inks one texel of the sixty-four, against nine here. The edge gets one texel of
+feather for a reason worth knowing too, and the shader says which.
 
 **Every invocation reads a texel it does not write.** That is the one line
 worth carrying away, and it is what separates this from a per-texel grade like
@@ -37,6 +32,39 @@ place — an invocation early in the cell would overwrite the sample its
 neighbours have not read yet — so the effect needs a texture to read and a
 different texture to write, which is exactly the two-binding shape the kernel
 declares.
+
+## The stream
+
+```python
+@stream
+def main(stream_builder: StreamBuilder) -> None:
+    camera = stream_builder.add(CameraSource, config=camera_config)
+    halftone = stream_builder.add(HalftoneCompute, config={"cell_size": 8, ...})
+    encoder = stream_builder.add(H264Encoder)
+    stream_builder.connect(
+        camera.output("video"), halftone.input("camera_frame_from_upstream")
+    )
+    stream_builder.connect(
+        halftone.output("halftone_frame_to_downstream"), encoder.input("video")
+    )
+    stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)
+```
+
+- `tatolab dev` reads `stream.py` from the current directory and loads its one
+  `@stream` function into this machine's runtime, `tatolabd`.
+- `CameraSource` and `H264Encoder` are **native built-ins**: they ship inside
+  the runtime, and their per-frame paths never enter a Python interpreter.
+- `HalftoneCompute` is this project's own node, in `nodes/halftone_compute.py`
+  — never in `stream.py`, because every Python node runs in its own child
+  interpreter with its own GIL, which imports the class by name. Its config is
+  the `HalftoneComputeConfig` dataclass its `__init__` names; `add` passes a
+  dict and the child builds the dataclass from it.
+- The input port declares `delivery_profile="newest"`, the profile for a
+  stream where a stale frame has no value once a fresher one exists.
+- **The runtime opens no windows.** What a stream shows, it exposes: `expose`
+  makes the encoder's output a track at this machine's local relay, which a
+  browser plays and any other stream or MoQ client reads. `H264Encoder` takes
+  a texture-backed frame like the kernel's output as readily as the camera's.
 
 ## A kernel is an object
 
@@ -54,17 +82,19 @@ self.halftone_kernel = ctx.gpu_full_access.create_compute_kernel(
 
 ```python
 self.halftone_kernel.dispatch(
-    bindings={"camera_frame": camera_frame_landing_texture,
-              "halftone_frame": halftone_frame_texture},
+    bindings={
+        "camera_frame": camera_frame_landing_texture,
+        "halftone_frame": halftone_frame_texture,
+    },
     group_count=(240, 135, 1),
     push_constants=self.halftone_dial_push_constants,
 )
 ```
 
-- **The GLSL is a string, and there is no toolchain.** The wheel carries a C++
-  GLSL compiler, so `source=` is compiled at construction on the machine that
-  runs the app. There is no `glslc` to install, no `.spv` to build and no build
-  step between editing the shader and re-running.
+- **The GLSL is a string, and there is no toolchain.** The engine compiles
+  `source=` when the node sets up, on the machine that runs the stream. There
+  is no `glslc` to install, no `.spv` to build and no build step between
+  editing the shader and saving.
 - **Bindings are passed at dispatch, by name, and never persist.** The names
   are the shader's own, read off it by reflection; the `bindings=` mapping at
   construction merely *asserts* that reflection, so renaming `camera_frame` in
@@ -72,15 +102,16 @@ self.halftone_kernel.dispatch(
   producing a wrong picture. Every dispatch supplies every binding, and an
   unknown or omitted name raises before any GPU work is submitted.
 - **Dispatch is synchronous.** It returns when the work has retired and the
-  writes are visible. This effect is one pass, so it needs no batching scope.
+  writes are visible. This effect is one pass, so it needs no
+  `kernel_dispatch_batch()` scope.
 - **The kernel's output is an engine-owned texture named by surface id.** The
-  bag this processor writes carries that id, an extent and a timestamp.
-  Pixels never ride a link.
+  record this node writes carries that id, an extent and the camera's
+  timestamp. Pixels never ride a link.
 
 ### The three dials, and how they reach the shader
 
-The mined original hardcoded its cell size, its ink boost and its background.
-Here all three are runtime values in one push-constant block:
+The cell size, the ink boost and the background are all runtime values in one
+push-constant block:
 
 ```glsl
 layout(push_constant) uniform HalftoneDial {
@@ -113,10 +144,9 @@ the other.
 
 ### The landing copy
 
-`CameraSource` publishes a **buffer-backed** frame, and a kernel binding
-resolves **texture-backed** surfaces only — hand a dispatch a buffer-backed
-surface id and it is refused by name. So each frame is copied into a texture
-this processor owns before the kernel can sample it:
+`CameraSource` publishes a **buffer-backed** frame, and a pixel buffer cannot
+bind as a sampled texture. So each frame is copied into a texture this node
+owns before the kernel can sample it:
 
 ```python
 ctx.gpu_limited_access.copy_surface_to_surface(
@@ -136,83 +166,71 @@ alone, if this one is the first you have read.
 
 ### Two rings, two depths
 
-Both textures come from `ProcessorOutputTextureRing`, which allocates once and
-re-allocates only when the upstream extent changes. Their depths differ, and
-the difference is the contract:
+Both textures come from `NodeOutputTextureRing`, which names a pool the engine
+owns and asks it for the next slot each frame; an extent change replaces the
+slots with ones the new size. Their depths differ, and the difference is the
+contract:
 
 | Ring | Depth | Why |
 | --- | --- | --- |
-| the landing texture | 1 | `dispatch` returns with the GPU work retired, and nothing outside this processor ever names this texture |
-| the kernel's output | 2 | the window may still be sampling the frame before this one |
+| the landing texture | 1 | `dispatch` returns with the GPU work retired, and nothing outside this node ever names this texture |
+| the kernel's output | 2 (the standard) | the encoder reads it in its own time, downstream |
 
-Depth bounds how far behind a consumer may fall, not how fast anything runs: a
-slot is redrawn when its turn comes round again, so a consumer still holding a
-frame `depth` publishes old reads the producer's newer pixels.
-
-### And the ordinary parts
-
-`HalftoneCompute` runs in its own child interpreter with its own GIL, like
-every Python processor. `CameraSource` and `DisplayWindow` are native built-ins
-inside the wheel whose per-frame paths never enter an interpreter at all. The
-input port declares `newest`, the profile for a stream where a stale frame has
-no value once a fresher one exists.
+A slot a consumer still holds is skipped, never rewritten, so the encoder never
+reads newer pixels under an older frame's id. A frame nobody claimed stays
+resolvable for `depth` publishes, then its id is refused as recycled. When
+every slot the pool may grow to is held, the ring raises and this node drops its
+own frame — it never waits on a consumer.
 
 ## Run it
 
-```bash
-uv venv --python 3.12 && uv sync
-source .venv/bin/activate
-streamlib run
-```
-
-A window opens with your camera in it, printed as dots. Ctrl-C stops it.
-
-`uv sync` installs `streamlib` from the simple index pinned in
-`pyproject.toml`; the wheel carries the Python API, the engine and the
-`streamlib` CLI. The CLI lands in `.venv/bin`, so it needs the venv on your
-`PATH` — activate it as above, or spell it `.venv/bin/streamlib` every time.
-
-**Not `uv run streamlib`.** It re-syncs the environment from `pyproject.toml`
-first, which silently replaces a locally built wheel with the released one —
-exactly what the next paragraph is for.
-
-To work against a checkout rather than a release, install that checkout's wheel
-into this venv instead:
+With this machine's runtime running (`tatolabd`, which the installer starts):
 
 ```bash
-uv pip install maturin
-maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
+uv sync
+tatolab dev
 ```
 
-This app needs real hardware, and says so rather than pretending: the kernel
-runs on the engine's own Vulkan device, so a machine without one fails while
-the graph is starting. It runs on Linux and on macOS alike. There is no
-demotion path here of the kind the audio backends have — a null GPU would have
-no pixels to hand back.
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
+only Tatolab package a stream's venv holds. The runtime itself is not on pip.
+
+Use `tatolab dev` while editing — it loads the stream again on every saved edit
+— and `tatolab run` otherwise. Both keep the stream as long as the command
+runs; Ctrl-C unloads it.
+
+Then open the stream in a browser — your camera, printed as dots:
+
+```text
+http://127.0.0.1:4446/watch/<machine>/main
+```
+
+`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
+ports.
+
+This stream needs real hardware: the kernel runs on the engine's own Vulkan
+device, so a machine without one fails while the stream is starting. It runs on
+Linux and on macOS alike.
 
 ## Editing it
 
-The shader is `HALFTONE_COMPUTE_GLSL` in `processors/halftone_compute.py`.
-Change it and re-run — the engine compiles the new text at startup, and a warm
-restart is sub-second. That is the edit loop; there is no reload-on-save and
-nothing is cached against you.
+The shader is `HALFTONE_COMPUTE_GLSL` in `nodes/halftone_compute.py`. Save it
+while `tatolab dev` runs and the stream loads again with the new text compiled.
 
 Four edits worth making, in rising order of how much they teach:
 
-- **Turn the screen up.** Raise `cell_size` from 8 to 24 in `app.py` and the
+- **Turn the screen up.** Raise `cell_size` from 8 to 24 in `stream.py` and the
   dots get big enough to count, the effect unmistakable from across a room;
   drop it to 3 and the picture comes back. No shader change — it is a push
   constant.
 - **Scale the radius by luma directly** — drop the `sqrt` — and watch the
-  shadows collapse. That is the mined original's tone curve, and against a
-  colour-bar pattern the magenta, red and blue bars go to near-black while the
-  four brighter than them screen fine. It is the clearest demonstration in this app
-  that a halftone's tone lives in dot *area*.
+  shadows collapse. Against a colour-bar pattern the magenta, red and blue bars
+  go to near-black while the four brighter than them screen fine. It is the
+  clearest demonstration here that a halftone's tone lives in dot *area*.
 - **Drop the feather.** Replace the `smoothstep` coverage with
-  `float coverage = distance_from_centre <= radius ? 1.0 : 0.0;`, also what the
-  mined original did. Still recognisably halftone on a still frame, and visibly
-  crawling once you move — a dot's radius changes by a fraction of a texel per
-  frame, and a hard edge can only move a whole texel at a time.
+  `float coverage = distance_from_centre <= radius ? 1.0 : 0.0;`. Still
+  recognisably halftone on a still frame, and visibly crawling once you move —
+  a dot's radius changes by a fraction of a texel per frame, and a hard edge can
+  only move a whole texel at a time.
 - **Screen the dots monochrome.** Replace `ink.rgb` in `dot_colour` with
   `vec3(luma)` and the picture becomes true black-and-white newsprint rather
   than a colour screen.
@@ -224,57 +242,52 @@ itself:
   `setup()`, before a single frame, and names the shader's own bindings.
 - Bind the camera's own surface id — `frame.surface_id` in place of
   `camera_frame_landing_texture` — and skip the landing copy. The dispatch
-  refuses, saying the graph cannot resolve that surface to a device texture.
-  Resolving the frame first (`ctx.gpu_limited_access.resolve_surface(...)`) and
-  binding the handle is refused identically, because a handle binding travels
-  as its surface id. That refusal is why the landing copy exists.
+  refuses it, because the camera's frame is a buffer, not a texture. That
+  refusal is why the landing copy exists.
 
 ## Observing it
 
-From another terminal with this venv activated, while it runs:
+From another terminal:
 
 ```bash
-streamlib nodes                       # the live nodes on this machine
-streamlib graph                       # processors, ports, links and their states
-streamlib logs --list                 # the runtimes that have a log file
-streamlib logs <RUNTIME_ID> --follow  # tail one of them, like `tail -F`
+tatolab streams                 # the streams this machine's runtime holds
+tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
+tatolab logs --stream main -f   # the stream's records, Rust and Python alike
 ```
 
-`graph` renders per-link drop counts under a node's `metrics`, but only for a
-destination that lives in the app process — here, the window. `HalftoneCompute`
-is helper-placed, like every Python processor, and counts its losses inside its
-own child; its node carries no `metrics` key at all rather than a zero the
-parent cannot stand behind. So a quiet `graph` is not yet proof that the effect
-dropped nothing.
-
-`logs` takes the runtime id, not a node — it reads the file on disk, and the
-ids `--list` prints are what `nodes` calls `runtime_id`.
-
-To see what the kernel actually wrote rather than what the window shows, encode
-it: a frame's record names its pixels by a surface id, which means nothing
-outside the runtime, so a frame port is seen by connecting an `H264Encoder` to
-`halftone_frame_to_downstream` and exposing the encoder's `encoded_video`.
-`http://127.0.0.1:4446/watch/<machine>/<stream>` then plays it in a browser, and
-any MoQ client reads it — this repository's `tatolab-read-track` writes its
-access units to files that concatenate into an H.264 stream ffmpeg decodes to
-PNGs. Read the machine's, the stream's and the node's names out of `tatolab
-graph` rather than spelling them by hand: a port is the track `<node>/<port>` of
-the broadcast `<machine>/<stream>.hang` at the machine's local relay.
+The nodes are `camerasource`, `halftonecompute` and `h264encoder` — each named
+after its class, lowercased, since `add` passes no `name=`. An exposed port is
+the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the
+machine's local relay, so any MoQ client reads it; this repository's
+`tatolab-read-track` writes a track's objects to files:
 
 ```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
-    <encoder>/encoded_video --count 30 --out /tmp/halftone
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
+    h264encoder/encoded_video --count 30 --out /tmp/halftone
 ```
 
-## Runtime knobs
+Each file is one H.264 access unit, so the files concatenated in `objects.jsonl`
+order are an H.264 stream ffmpeg decodes — to PNGs, to see exactly what the
+kernel wrote.
 
-Everything is literal config in `app.py` — edit it and re-run.
+The kernel's own `halftone_frame_to_downstream` port is internal to the stream.
+`tatolab expose main halftonecompute halftone_frame_to_downstream` makes it a
+track too, but each of its objects is a frame's record, not its picture: a
+`VideoFrame` naming its `surface_id`, `width`, `height`, `timestamp_ns` and the
+camera's `color_info`. The pixels stay in
+engine-owned GPU memory that the surface id names, which means nothing outside
+the runtime — that is why the picture is shared through the encoder.
 
-| Knob | Where | What it does |
+## Knobs
+
+Everything is literal config in `stream.py` — edit it and save while
+`tatolab dev` runs.
+
+| Knob | Where | Effect |
 | --- | --- | --- |
-| `cell_size` | `rt.add(HalftoneCompute, config=…)` | pixels across one dot cell; bigger is a coarser screen |
-| `dot_boost` | `rt.add(HalftoneCompute, config=…)` | how far a dot's ink is lifted above the colour it sampled |
-| `background_level` | `rt.add(HalftoneCompute, config=…)` | the grey the paper is, 0.0 black to 1.0 white |
-| `max_width` / `max_height` | `rt.add(CameraSource, config=…)` | the capture size to ask the device for |
-| `title` / `width` / `height` / `scaling` | `rt.add(DisplayWindow, config=…)` | window geometry; `scaling` is `fit` / `fill` / `stretch` |
-| `STREAMLIB_CAMERA_DEVICE` | environment | capture device (e.g. `/dev/video0`); unset picks the first device found |
+| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
+| `CAPTURE_MAX_WIDTH` / `CAPTURE_MAX_HEIGHT` | top of `stream.py` | The camera's resolution cap; the negotiated format is clamped to fit. 1920×1080. |
+| `cell_size` | `add(HalftoneCompute, config=…)` | Pixels across one dot cell; bigger is a coarser screen. At least 2. |
+| `dot_boost` | `add(HalftoneCompute, config=…)` | How far a dot's ink is lifted above the colour it sampled; above 0.0. |
+| `background_level` | `add(HalftoneCompute, config=…)` | The grey the paper is, 0.0 black to 1.0 white. |
+| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |

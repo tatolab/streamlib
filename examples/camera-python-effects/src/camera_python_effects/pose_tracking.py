@@ -33,7 +33,7 @@ POSE_MODEL_URL = (
 POSE_MODEL_CACHE_DIRECTORY = Path.home() / ".cache" / "camera-python-effects"
 
 
-def resolve_pose_model_file(explicit_model_path: "str | None" = None) -> Path:
+def resolve_pose_model_file(explicit_model_path: str | None = None) -> Path:
     """The `.task` model file, downloaded into the cache when absent."""
     if explicit_model_path is not None:
         return Path(explicit_model_path)
@@ -52,8 +52,8 @@ def resolve_pose_model_file(explicit_model_path: "str | None" = None) -> Path:
 class PoseSample:
     """One person's joints, and how much each one was actually seen."""
 
-    joints: "dict[str, numpy.ndarray]"
-    visibility: "dict[str, float]"
+    joints: dict[str, numpy.ndarray]
+    visibility: dict[str, float]
 
 
 class PoseTracker:
@@ -62,7 +62,7 @@ class PoseTracker:
     def __init__(
         self,
         detection_confidence: float = 0.35,
-        model_path: "str | None" = None,
+        model_path: str | None = None,
         tracking_confidence: float = 0.3,
     ) -> None:
         # Floors deliberately low: the rig's own visibility gating decides
@@ -81,7 +81,7 @@ class PoseTracker:
 
     def world_joints(
         self, rgb_frame: numpy.ndarray, timestamp_ms: int
-    ) -> "PoseSample | None":
+    ) -> PoseSample | None:
         """The rig's joint set for the most confident person, mirrored.
 
         `rgb_frame` is HxWx3 uint8; `timestamp_ms` must increase between
