@@ -60,22 +60,24 @@ streamlib graph           # this node's processors, ports and links, as JSON
 streamlib logs --follow   # the node's JSONL log
 ```
 
-`streamlib tap` samples raw bags off one channel. The channel name is the
-**source processor's id**, lowercased, joined to its output port — not its
-display name — so read it out of `graph` rather than spelling it by hand:
+A port is read as a track at the machine's local relay once it is exposed. Read
+the machine's, the stream's and the node's names out of `tatolab graph` rather
+than spelling them by hand: a port is the track `<node>/<port>` of the broadcast
+`<machine>/<stream>.hang` at the machine's local relay.
 
 ```bash
-CHANNEL=$(streamlib graph | python3 -c 'import json,sys; s=json.load(sys.stdin)["links"][0]["source"]; print((s["processor_id"]+"/"+s["port_name"]).lower())')
-streamlib tap "$CHANNEL" --count 5
+tatolab expose <stream> <camera> video
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
+    <camera>/video --count 5 --out /tmp/camera
 ```
 
-`--count` is an upper bound over a short sampling window, so a slower channel
-returns fewer bags rather than blocking — the tap never paces the producer.
-
-A video bag is metadata, not picture: `surface_id`, `width`, `height`,
-`timestamp_ns` and `color_info`, around 250 bytes whatever the resolution. The
-pixels stay in engine-owned GPU memory that the surface id names. Tap tells you
-frames are flowing and what they claim to be; to see them, look at the window.
+Each object is one frame's record, and it is metadata, not picture:
+`surface_id`, `width`, `height`, `timestamp_ns` and `color_info`, around 250
+bytes whatever the resolution. The pixels stay in engine-owned GPU memory that
+the surface id names, which means nothing outside the runtime. The records tell
+you frames are flowing and what they claim to be; to see the pictures, connect
+an `H264Encoder` to the camera, expose its `encoded_video`, and open
+`http://127.0.0.1:4446/watch/<machine>/<stream>`.
 
 ## Runtime knobs
 

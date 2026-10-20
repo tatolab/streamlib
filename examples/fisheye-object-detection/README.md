@@ -16,10 +16,10 @@ That is the motivation, and this app demonstrates the *pipeline* rather than
 measuring the benefit — on any single scene the detection count moves in both
 directions, and a claim about detection quality needs a dataset and a metric,
 not a webcam. What it does show is that the correction is real, and you can
-check that yourself with two `exchange` calls (see *Observing it*): against a
-static test pattern the rectified frame scores about **36 dB** PSNR on the
-camera frame it came from, where the distorted frame in the other window
-scores about **15 dB**.
+check that yourself by encoding both ports (see *Observing it*): against a
+static test pattern, measured on the uncompressed frames, the rectified frame
+scores about **36 dB** PSNR on the camera frame it came from, where the
+distorted frame in the other window scores about **15 dB**.
 
 There is no fisheye lens on your desk, so `SyntheticFisheyeLens` applies the
 distortion a real one would have baked in. Everything downstream of it is the
@@ -309,36 +309,27 @@ losses inside their own children; their nodes carry no `metrics` key at all
 rather than a zero the parent cannot stand behind. So a quiet `graph` is not
 yet proof that nothing was dropped.
 
-To see what a kernel actually wrote rather than what a window shows, tap its
-output channel and exchange the surface ids for PNGs. The channel name is the
-source processor's id, lowercased, joined to its output port — read it out of
-`graph` rather than spelling it by hand:
+To see what a kernel actually wrote rather than what a window shows, encode it:
+a frame's record names its pixels by a surface id, which means nothing outside
+the runtime, so a frame port is seen by connecting an `H264Encoder` to it and
+exposing the encoder's `encoded_video`. One encoder on
+`fisheye_frame_to_downstream` and one on `annotated_frame_to_downstream` give
+the before-and-after: `http://127.0.0.1:4446/watch/<machine>/<stream>` plays
+either in a browser, and `tatolab-read-track` writes their access units to files
+that concatenate into an H.264 stream ffmpeg decodes to PNGs. Read the
+machine's, the stream's and the node's names out of `tatolab graph` rather than
+spelling them by hand: a port is the track `<node>/<port>` of the broadcast
+`<machine>/<stream>.hang` at the machine's local relay.
+
+The rectifier's own port is worth reading as it is. Exposed, each object is its
+record, which carries the picture as a surface id and the detections beside it,
+as ordinary fields:
 
 ```bash
-channel_for() {
-  streamlib graph | python3 -c '
-import json, sys
-wanted = sys.argv[1]
-for link in json.load(sys.stdin)["links"]:
-    source = link["source"]
-    if source["port_name"] == wanted:
-        print((source["processor_id"] + "/" + source["port_name"]).lower())
-        break' "$1"
-}
-streamlib exchange --channel "$(channel_for fisheye_frame_to_downstream)" \
-    --count 3 --out /tmp/fisheye
-streamlib exchange --channel "$(channel_for annotated_frame_to_downstream)" \
-    --count 3 --out /tmp/rectified
+tatolab expose <stream> <rectifier> annotated_frame_to_downstream
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
+    <rectifier>/annotated_frame_to_downstream --count 3 --out /tmp/rectified
 ```
-
-That pair is the before-and-after at full resolution, with no window in the
-graph and no display server in the path — the same door any API consumer uses.
-`exchange` prints the paths it wrote, one per line; read those rather than
-listing the directory, which is not cleared between runs.
-
-`streamlib tap` on the same channel shows the bag itself. The rectifier's
-carries the picture as a surface id and the detections beside it, as ordinary
-bag fields:
 
 ```json
 {"surface_id": "...", "width": 1280, "height": 720, "timestamp_ns": 12345,
@@ -350,12 +341,6 @@ bag fields:
 Nothing in the engine knows what any of those keys mean — a bag is a
 self-describing named map and a link is plumbing. The window on that same port
 reads `surface_id`, `width` and `height` and ignores the rest.
-
-`--count` here is a target, not a ceiling: `exchange` keeps tapping — up to
-eight bounded sampling rounds — until it has that many frames, and a run that
-comes up short **exits nonzero** and says how many it got. That is the opposite
-of `tap`'s own `--count`, which is an upper bound over one 500 ms window and
-returns whatever arrived. Worth knowing before either goes in a script.
 
 ## Runtime knobs
 

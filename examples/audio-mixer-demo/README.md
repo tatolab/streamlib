@@ -93,26 +93,23 @@ streamlib logs --follow   # the node's JSONL log
 `graph` renders each windowed port's contract beside its delivery profile, and
 the speaker's `match_device` port renders the five values its device settled on.
 
-To see the mix itself, tap the mixer's output channel. The channel name is the
-source processor's id, lowercased, joined to its output port — read it out of
-`graph` rather than spelling it by hand:
+To see the mix itself, expose the mixer's output and read it as a track. Read
+the machine's, the stream's and the node's names out of `tatolab graph` rather
+than spelling them by hand: a port is the track `<node>/<port>` of the broadcast
+`<machine>/<stream>.hang` at the machine's local relay.
 
 ```bash
-CHANNEL=$(streamlib graph | python3 -c '
-import json, sys
-for link in json.load(sys.stdin)["links"]:
-    source = link["source"]
-    if source["port_name"] == "mixed_chord_to_downstream":
-        print((source["processor_id"] + "/" + source["port_name"]).lower())
-        break')
-streamlib tap "$CHANNEL" --count 5
+tatolab expose <stream> <mixer> mixed_chord_to_downstream
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
+    <mixer>/mixed_chord_to_downstream --count 5 --out /tmp/mix
 ```
 
-Unlike a video bag, an audio bag carries its payload: `samples` is the block's
-interleaved little-endian bytes, with `sample_rate`, `channels`, `sample_count`,
-`dtype` and `first_sample_timestamp_ns` beside them. Audio touches no surface
-machinery at all — there is nothing to exchange, because the samples are already
-there.
+Each object is one block as the mixer wrote it, a msgpack record, indexed with
+its timestamp in `objects.jsonl`. Unlike a video frame's record, an audio
+block's carries its payload: `samples` is the block's interleaved little-endian
+bytes, with `sample_rate`, `channels`, `sample_count`, `dtype` and
+`first_sample_timestamp_ns` beside them. Audio touches no surface machinery at
+all — the samples are already there.
 
 ### A handful of dropped windows at startup is expected
 

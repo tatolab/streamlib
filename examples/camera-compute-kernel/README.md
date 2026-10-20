@@ -49,9 +49,9 @@ Four things fall out of that pair, and they are the whole lesson:
 - **The kernel's output is an engine-owned texture named by surface id.** The
   bag this processor writes carries that id, an extent and a timestamp — 167
   bytes on the wire, header included, and the same 167 whatever the resolution.
-  (`streamlib tap` reports it as `byte_len`; the camera's own bag is 248, the
-  difference being the per-frame metadata it carries and this one does not —
-  colour traits and `fps`.)
+  (Read off the exposed port, that is one object's size; the camera's own bag is
+  248, the difference being the per-frame metadata it carries and this one does
+  not — colour traits and `fps`.)
   Pixels never ride a link.
 
 ### The landing copy, and why it is here
@@ -177,34 +177,21 @@ dropped nothing.
 `logs` takes the runtime id, not a node — it reads the file on disk, and the
 ids `--list` prints are what `nodes` calls `runtime_id`.
 
-To see what the kernel actually wrote rather than what the window shows, tap
-its output channel and exchange the surface ids for PNGs. The channel name is
-the source processor's id, lowercased, joined to its output port — read it out
-of `graph` rather than spelling it by hand:
+To see what the kernel actually wrote rather than what the window shows, encode
+it: a frame's record names its pixels by a surface id, which means nothing
+outside the runtime, so a frame port is seen by connecting an `H264Encoder` to
+`grayscale_frame_to_downstream` and exposing the encoder's `encoded_video`.
+`http://127.0.0.1:4446/watch/<machine>/<stream>` then plays it in a browser, and
+any MoQ client reads it — this repository's `tatolab-read-track` writes its
+access units to files that concatenate into an H.264 stream ffmpeg decodes to
+PNGs. Read the machine's, the stream's and the node's names out of `tatolab
+graph` rather than spelling them by hand: a port is the track `<node>/<port>` of
+the broadcast `<machine>/<stream>.hang` at the machine's local relay.
 
 ```bash
-CHANNEL=$(streamlib graph | python3 -c '
-import json, sys
-for link in json.load(sys.stdin)["links"]:
-    source = link["source"]
-    if source["port_name"] == "grayscale_frame_to_downstream":
-        print((source["processor_id"] + "/" + source["port_name"]).lower())
-        break')
-streamlib exchange --channel "$CHANNEL" --count 3 --out /tmp/grayscale
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
+    <encoder>/encoded_video --count 30 --out /tmp/grayscale
 ```
-
-`streamlib tap "$CHANNEL"` on the same channel shows the bag itself: a surface
-id, an extent, a timestamp, and no pixels. `exchange` is the door that turns
-one of those ids into a full-resolution PNG — the same door any API consumer
-uses, with no window in the graph and no display server in the path. It prints
-the paths it wrote, one per line; read those rather than listing the directory,
-which is not cleared between runs.
-
-`--count` here is a target, not a ceiling: `exchange` keeps tapping — up to
-eight bounded sampling rounds — until it has that many frames, and a run that
-comes up short **exits nonzero** and says how many it got. That is the opposite
-of `tap`'s own `--count`, which is an upper bound over one 500 ms window and
-returns whatever arrived. Worth knowing before either goes in a script.
 
 ## Runtime knobs
 

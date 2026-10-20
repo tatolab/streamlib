@@ -229,28 +229,24 @@ device's buffers (`imported_host_pointer`, or host-cached staging where the
 driver refuses the import), and a progress line every 300 frames with the
 dropped-frame counts.
 
-To watch the effect's frames rather than its picture, tap its output. Read the
-channel name out of `graph` rather than spelling it by hand — a channel is the
-source processor's **id**, lowercased, joined to its output port:
+To watch the effect's frames rather than its picture, expose its output and read
+it as a track. Read the machine's, the stream's and the node's names out of
+`tatolab graph` rather than spelling them by hand: a port is the track
+`<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the machine's
+local relay.
 
 ```bash
-CHANNEL=$(streamlib graph | python3 -c '
-import json, sys
-for link in json.load(sys.stdin)["links"]:
-    source = link["source"]
-    if source["port_name"] == "video_to_downstream":
-        print((source["processor_id"] + "/" + source["port_name"]).lower())
-        break
-')
-streamlib tap "$CHANNEL" --count 5
+tatolab expose <stream> <effect> video_to_downstream
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
+    <effect>/video_to_downstream --count 5 --out /tmp/effect
 ```
 
-A video bag is metadata — `surface_id`, `width`, `height`, `timestamp_ns` —
-naming pixels that stay in engine-owned GPU memory, so it is a few hundred bytes
-whatever the resolution. The `surface_id` differs from the camera's: it names
-the effect's own ring slot, which is the whole point of the ring. The
-`timestamp_ns` does not — the effect carries the camera's stamp through, so both
-cameras present the same picture under the same time.
+Each object is one frame's record, and it is metadata — `surface_id`, `width`,
+`height`, `timestamp_ns` — naming pixels that stay in engine-owned GPU memory,
+so it is a few hundred bytes whatever the resolution. The `surface_id` differs
+from the camera's: it names the effect's own ring slot, which is the whole point
+of the ring. The `timestamp_ns` does not — the effect carries the camera's stamp
+through, so both cameras present the same picture under the same time.
 
 ## Runtime knobs
 
