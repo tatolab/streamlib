@@ -22,15 +22,13 @@ The build of the §Networking align of 2026-10-20 (`ARCHITECTURE.md:3825-3843`, 
 **Scale gate — this skill, plus the existing ADR.**
 - **Contract changes:** a built-in's config contract (a new key on `RelayTrackSourceConfig`)
   and the processor model's loss accounting (a writer-declared loss).
-- **ADR:** `relay-track-reading` gains the loss-accounting clause once
-  `[NEEDS DECISION] 1` is answered.
+- **ADR:** `relay-track-reading` carries the loss-accounting clause.
 - **Not touched:** the RHI and the frame header.
 
 **Precondition.** Every entry built is DECIDED:
 - §Networking `:3794-3824` (the relay source node, its config list naming `max_age`) and
   `:3825-3843` (the reading rule, the loss sentence, the three `Rejected:` lines);
-- §Processor model `:972-1046` (loss visibility). It is modified here only as
-  `[NEEDS DECISION] 1` resolves.
+- §Processor model `:972-1046` (loss visibility). It is modified here as Decided 1 states.
 
 ## Current state (recon, 2026-10-20, `main` `acbc86f68`)
 
@@ -70,14 +68,16 @@ The build of the §Networking align of 2026-10-20 (`ARCHITECTURE.md:3825-3843`, 
 - **The test-side reader:** the loopback relay test reads with `.ordered()` too
   (`runtime/tatolabd/tests/tatolabd_publishes_exposed_ports_at_the_local_relay.rs:441`).
 
-## [NEEDS DECISION] 1 — how a given-up group is carried as a loss
+## Decided 1 — a given-up group is carried in its own header field (owner, 2026-10-20)
 
 The plan says a given-up group reaches readers in `lost_since_last_read`, "the way a link
 counts one" (`:3836-3838`). It also says "A bag dropped at a port is counted by the port that
 dropped it" (`:972-974`) and that the first sample after wiring is the baseline (`:999-1000`).
 The ways to carry it disagree with those sentences differently.
 
-- **(a) Advance the existing sequence number.** The relay source node bumps its output's
+- Rejected: (a) advance the existing sequence number — `graph` would show the loss as the
+  downstream link's drop, and it vanishes on a link's first sample (owner, 2026-10-20).
+  **What (a) was:** The relay source node bumps its output's
   `next_sequence_number` by the count before its next write. There is no wire change, and
   every `ordered` reader counts the jump today.
   - **Cost:** the loss lands in the *downstream link's* `dropped_bags_by_link`, as if that
@@ -85,7 +85,7 @@ The ways to carry it disagree with those sentences differently.
   - **Cost:** it is lost uncounted when it rides a link's first sample, the baseline.
   - **Cost:** it cannot be told apart from a ring overwrite.
   - **Plan wording:** `:999-1003` gains "or a writer declared lost".
-- **(b) A second field in the user header** (recommended).
+- **(b) A second field in the user header — chosen.**
   `DataChannelBagSequenceNumberUserHeader` gains `messages_lost_upstream_before_this_one: u64`,
   with its layout test, written by a new engine-internal writer call.
   - **Readers:** a reader adds it to `lost_since_last_read` on `ordered` ports, read straight
@@ -99,8 +99,8 @@ The ways to carry it disagree with those sentences differently.
     and opener and builder must agree, which is already gated
     (`iceoryx2::node::tests::a_channel_data_service_and_an_opener_disagreeing_on_the_user_header_are_refused_by_name`).
 
-**Recommendation: (b).** It is the only option that keeps both `:972-974` and the loss
-sentence true. Either way the call is engine-internal Rust: Python's `write` gains nothing.
+(b) is the only option that keeps both `:972-974` and the loss sentence true. The call is
+engine-internal Rust: Python's `write` gains nothing.
 
 ## Decided 2 — one given-up group counts as one (owner, 2026-10-20)
 
@@ -131,8 +131,8 @@ object. A given-up group's object count is unknown: it may never have been seen 
   - **What it yields:** `ReleasedRelayTrackGroup::InSequence(group)` or
     `ReleasedRelayTrackGroup::GivenUp { groups: u64 }`.
 - **The relay source node** reads through it. On `GivenUp` it declares the loss on its output
-  before its next write (mechanism per `[NEEDS DECISION] 1`), and it counts the loss on itself
-  under (b). Its private `RelayTrackReader` is renamed `RelayTrackSourceSession`.
+  before its next write, through the header field of Decided 1, and counts it on itself as
+  `given_up_groups_by_output_port`. Its private `RelayTrackReader` is renamed `RelayTrackSourceSession`.
   - **Config:** `RelayTrackSourceConfig` gains `max_age`, a whole number of milliseconds, 100
     by default. Its doc comment names the unit, and the generated
     `_built_in_nodes.py` TypedDict follows through
@@ -142,17 +142,13 @@ object. A given-up group's object count is unknown: it may never have been seen 
 - **The tatolabd loopback test's reader** reads through it too, so no test reads a relay with
   `.ordered()`.
 
-## MODIFIED: §Processor model — loss visibility (`:972-1046`), per `[NEEDS DECISION] 1`
+## MODIFIED: §Processor model — loss visibility (`:972-1046`)
 
-**Under (b):**
 - **A new DECIDED clause after `:1036-1045`.** "A message a writer declares lost upstream is
   carried in the user header beside the sequence number and added to an `ordered` reader's
   `lost_since_last_read`, never to its link's dropped count; the writer counts it on itself,
   per output port. Only engine-internal writers declare one."
 - **The two residuals at `:1022-1024` stay as written.** They are about ring gaps.
-
-**Under (a):** `:999-1003` gains "or a writer declared lost", and `:1022-1024` gains a third
-residual: a declared loss riding a link's first sample is not counted.
 
 ## MODIFIED: §Networking — verify lines for `:3794-3824` and `:3825-3843`
 
@@ -175,8 +171,8 @@ The entries' text stands. Each gains `<!-- verify: -->` lines naming the tests b
   - `a_config_without_max_age_reads_with_one_hundred_milliseconds`
   - `a_given_up_group_reaches_the_reader_of_the_output_as_lost_since_last_read`. This runs
     the engine's input and output pair.
-  - Under (b): `a_given_up_group_is_counted_on_the_relay_source_and_not_on_the_downstream_link`.
-- **The engine, under (b):**
+  - `a_given_up_group_is_counted_on_the_relay_source_and_not_on_the_downstream_link`.
+- **The engine:**
   - a layout regression test for the widened `DataChannelBagSequenceNumberUserHeader`;
   - `a_declared_upstream_loss_reaches_lost_since_last_read_on_an_ordered_port`;
   - `a_declared_upstream_loss_on_a_links_first_sample_is_still_counted`;
@@ -205,8 +201,9 @@ The entries' text stands. Each gains `<!-- verify: -->` lines naming the tests b
 1. **The reader and both readers.** The crate, `RelayTrackSource` and `tatolab-read-track`
    read through it, `max_age` config, the loopback test, and the stopgaps removed. It is
    proven end to end on the audio rig.
-2. **The declared loss.** Whichever `[NEEDS DECISION] 1` picks, wired from the relay source
-   node to `lost_since_last_read`, with the §Processor model text.
+2. **The declared loss.** The header field, wired from the relay source node to
+   `lost_since_last_read` and to `given_up_groups_by_output_port`, with the §Processor model
+   text.
 
 ## Left to later
 

@@ -25,6 +25,10 @@ subscription's `max_age`, and before adding a playout or jitter buffer.
 - **Losses are visible.** The relay source node writes each group it gives up as a loss its
   readers count in `lost_since_last_read`, so a decoder downstream conceals it as it would a
   loss on a link.
+- **How a given-up group is carried.** A given-up group counts as one. It travels in its own
+  user-header field beside the sequence number, "messages lost upstream before this one". An
+  `ordered` reader adds that field to `lost_since_last_read`, never to its link's dropped
+  count. The relay source node counts its give-ups on itself, per output port.
 - **The catalog entry stays.** `AudioBlock` keeps `binary` / `mode: snapshot`, and no reader in
   the runtime consults a data track's `mode`. Publishing decoded audio as `audio` / `pcm` is
   OPEN.
@@ -60,6 +64,13 @@ subscription's `max_age`, and before adding a playout or jitter buffer.
 
 - **Giving up a group silently.** A decoder after the relay source then sees the next group
   arrive as if nothing were missing, never conceals the gap, and plays a step in the audio.
+- **Skipping numbers in the existing sequence to declare the loss.** There is no wire change,
+  but the loss would land on the downstream link as if that link had dropped it. It would read
+  the same as a ring overwrite, and it would vanish when it rode a link's first sample, which is
+  the baseline gaps are measured from.
+- **Counting a given-up group as the objects seen of it, plus one.** The bookkeeping buys a
+  number that is still a guess when a group's header never arrived. One per group is exact for
+  audio and a lower bound for video, and a decoder reacts the same to any nonzero count.
 - **Re-describing `AudioBlock` now.** hang has no data mode for one record per group: `snapshot`
   is lossy latest-value, and `stream` forbids a second group. `mode` is mandatory, and an
   unknown value makes a conforming reader ignore the track. A player plays the Opus track,
