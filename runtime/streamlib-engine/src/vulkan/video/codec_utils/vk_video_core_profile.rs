@@ -1092,27 +1092,6 @@ impl VkVideoCoreProfile {
 
     // -- YCbCr helpers (ported from ycbcr_utils.h) --------------------------
 
-    /// Maps `video_full_range_flag` to `VkSamplerYcbcrRange`.
-    pub fn codec_full_range_to_ycbcr_range(video_full_range_flag: bool) -> vk::SamplerYcbcrRange {
-        if video_full_range_flag {
-            vk::SamplerYcbcrRange::ITU_FULL
-        } else {
-            vk::SamplerYcbcrRange::ITU_NARROW
-        }
-    }
-
-    /// Maps ITU colour_primaries to `VkSamplerYcbcrModelConversion`.
-    pub fn codec_color_primaries_to_ycbcr_model(
-        colour_primaries: u32,
-    ) -> vk::SamplerYcbcrModelConversion {
-        match colour_primaries {
-            1 => vk::SamplerYcbcrModelConversion::YCBCR_709,
-            5 | 6 => vk::SamplerYcbcrModelConversion::YCBCR_601,
-            9 => vk::SamplerYcbcrModelConversion::YCBCR_2020,
-            _ => vk::SamplerYcbcrModelConversion::YCBCR_IDENTITY,
-        }
-    }
-
     /// Maps ITU matrix_coefficients to `YcbcrPrimariesConstants`.
     pub fn codec_get_matrix_coefficients(matrix_coefficients: u32) -> YcbcrPrimariesConstants {
         match matrix_coefficients {
@@ -1374,42 +1353,6 @@ mod tests {
         assert_eq!(
             VkVideoCoreProfile::codec_to_name(CODEC_OP_DECODE_VP9),
             "decode vp9"
-        );
-    }
-
-    #[test]
-    fn test_ycbcr_range() {
-        assert_eq!(
-            VkVideoCoreProfile::codec_full_range_to_ycbcr_range(true),
-            vk::SamplerYcbcrRange::ITU_FULL
-        );
-        assert_eq!(
-            VkVideoCoreProfile::codec_full_range_to_ycbcr_range(false),
-            vk::SamplerYcbcrRange::ITU_NARROW
-        );
-    }
-
-    #[test]
-    fn test_ycbcr_model() {
-        assert_eq!(
-            VkVideoCoreProfile::codec_color_primaries_to_ycbcr_model(1),
-            vk::SamplerYcbcrModelConversion::YCBCR_709
-        );
-        assert_eq!(
-            VkVideoCoreProfile::codec_color_primaries_to_ycbcr_model(5),
-            vk::SamplerYcbcrModelConversion::YCBCR_601
-        );
-        assert_eq!(
-            VkVideoCoreProfile::codec_color_primaries_to_ycbcr_model(6),
-            vk::SamplerYcbcrModelConversion::YCBCR_601
-        );
-        assert_eq!(
-            VkVideoCoreProfile::codec_color_primaries_to_ycbcr_model(9),
-            vk::SamplerYcbcrModelConversion::YCBCR_2020
-        );
-        assert_eq!(
-            VkVideoCoreProfile::codec_color_primaries_to_ycbcr_model(99),
-            vk::SamplerYcbcrModelConversion::YCBCR_IDENTITY
         );
     }
 

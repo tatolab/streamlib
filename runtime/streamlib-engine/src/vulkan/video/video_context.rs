@@ -82,6 +82,9 @@ pub enum VideoError {
     /// An error surfaced from the engine RHI layer (compute-kernel
     /// construction, descriptor management, etc.).
     Engine(String),
+    /// A stream signals an H.273 `matrix_coefficients` no Vulkan sampler
+    /// YCbCr model converts.
+    MatrixCoefficientsNotConvertible(u8),
 }
 
 impl std::fmt::Display for VideoError {
@@ -94,6 +97,11 @@ impl std::fmt::Display for VideoError {
             Self::BitstreamError(msg) => write!(f, "Bitstream error: {}", msg),
             Self::FormatNotSupported(fmt) => write!(f, "Format not supported: {:?}", fmt),
             Self::Engine(msg) => write!(f, "{}", msg),
+            Self::MatrixCoefficientsNotConvertible(matrix_coefficients) => write!(
+                f,
+                "the stream signals matrix_coefficients {matrix_coefficients}, which no Vulkan \
+                 sampler YCbCr model converts"
+            ),
         }
     }
 }

@@ -550,8 +550,8 @@ fn mint_encode_session_from_first_frame<Identity: HardwareVideoCodecProcessorIde
         frame.fps,
     );
 
-    // The first frame's color drives the session-level SPS VUI; an absent
-    // color emits no colour_description block rather than an empty one.
+    // The first frame's colour is the source colour the session's SPS VUI is
+    // stated from.
     let color_vui = frame
         .color_info
         .as_ref()

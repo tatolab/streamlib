@@ -55,8 +55,9 @@ pub struct VideoEncodeSessionRequest {
     pub frames_per_second: u32,
     /// The knobs the block's config set.
     pub knobs: VideoEncodeKnobs,
-    /// The colour the parameter sets' VUI signals. `None` emits no colour
-    /// description block.
+    /// The source frames' colour. The parameter sets' VUI signals its primaries
+    /// and transfer, and the matrix and range the backend's RGB → NV12
+    /// conversion writes.
     pub color_vui: Option<H273ColorVui>,
 }
 
@@ -147,6 +148,9 @@ pub struct DecodedVideoPictureInPooledPixelBuffer {
     pub width: u32,
     /// Picture height in pixels.
     pub height: u32,
+    /// The colour the picture was converted to RGBA from: the stream's
+    /// signalled axes, matrix and range always set.
+    pub decoded_picture_color_vui: H273ColorVui,
 }
 
 /// A decode session a backend opened.
@@ -159,10 +163,6 @@ pub trait VideoDecodeSession: Send {
         annex_b_access_unit_bytes: &[u8],
         decoded_pictures_in_completion_order: &mut Vec<DecodedVideoPictureInPooledPixelBuffer>,
     ) -> Result<()>;
-
-    /// The colour the stream's parsed parameter sets signal, once any have
-    /// been parsed.
-    fn parsed_parameter_set_color_vui(&self) -> Option<H273ColorVui>;
 
     /// Drop what a broken stream left in flight, keeping the parameter sets:
     /// the next sync point re-enters the same stream.

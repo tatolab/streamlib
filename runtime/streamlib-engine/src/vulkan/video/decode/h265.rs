@@ -581,6 +581,7 @@ impl SimpleDecoder {
             coded_width: width,
             coded_height: height,
             display_window,
+            decoded_picture_color_vui: self.decoded_picture_color_vui(display_window),
             decode_order: self.frame_counter,
             poc: poc_val,
             setup_slot,

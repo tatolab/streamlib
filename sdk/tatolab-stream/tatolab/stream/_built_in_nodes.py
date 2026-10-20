@@ -109,11 +109,13 @@ class H264Decoder(BuiltInNode[H264DecoderConfig]):
     references it did not see. A keyframe whose parameter sets differ from the ones
     before it reconfigures the session. `video` publishes an ordinary `VideoFrame` on a
     pooled RGBA pixel-buffer surface at the conformance-windowed extent — never the
-    coded picture — carrying the message's timestamp and the `color_info` the SPS VUI
-    signals, with `fps`, `texture_layout` and the HDR sidecars absent, so an encoder and
-    a `read(port, into=VideoFrame)` consume it unchanged. A decoded frame is
-    buffer-backed, so it reaches a Python kernel through a DLPack landing copy, never by
-    bare surface id.
+    coded picture — carrying the message's timestamp and the `color_info` the picture
+    was converted with: the SPS VUI's, its matrix and range filled when the stream
+    leaves them out (BT.709 for HD, BT.601 for SD, limited range); a matrix no converter
+    represents is refused. `fps`, `texture_layout` and the HDR sidecars are absent, so
+    an encoder and a `read(port, into=VideoFrame)` consume it unchanged. A decoded frame
+    is buffer-backed, so it reaches a Python kernel through a DLPack landing copy, never
+    by bare surface id.
 
     The decode session is minted at `setup()`. On a device with no hardware decoder for
     the codec — no Vulkan Video decode queue, or no VideoToolbox hardware decoder —
@@ -221,11 +223,13 @@ class H265Decoder(BuiltInNode[H265DecoderConfig]):
     references it did not see. A keyframe whose parameter sets differ from the ones
     before it reconfigures the session. `video` publishes an ordinary `VideoFrame` on a
     pooled RGBA pixel-buffer surface at the conformance-windowed extent — never the
-    coded picture — carrying the message's timestamp and the `color_info` the SPS VUI
-    signals, with `fps`, `texture_layout` and the HDR sidecars absent, so an encoder and
-    a `read(port, into=VideoFrame)` consume it unchanged. A decoded frame is
-    buffer-backed, so it reaches a Python kernel through a DLPack landing copy, never by
-    bare surface id.
+    coded picture — carrying the message's timestamp and the `color_info` the picture
+    was converted with: the SPS VUI's, its matrix and range filled when the stream
+    leaves them out (BT.709 for HD, BT.601 for SD, limited range); a matrix no converter
+    represents is refused. `fps`, `texture_layout` and the HDR sidecars are absent, so
+    an encoder and a `read(port, into=VideoFrame)` consume it unchanged. A decoded frame
+    is buffer-backed, so it reaches a Python kernel through a DLPack landing copy, never
+    by bare surface id.
 
     The decode session is minted at `setup()`. On a device with no hardware decoder for
     the codec — no Vulkan Video decode queue, or no VideoToolbox hardware decoder —

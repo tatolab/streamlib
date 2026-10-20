@@ -97,6 +97,32 @@ impl H273ColorVui {
             kind,
         )
     }
+
+    /// This description as a decoder converts a `picture_width`×`picture_height`
+    /// picture with: matrix and range always set, primaries and transfer as
+    /// signalled.
+    ///
+    /// H.264 / H.265 leave an unsignalled matrix to the application; the
+    /// convention ffmpeg, libplacebo and Chromium share is BT.709 for HD and
+    /// BT.601 for SD, split at 1280 wide or taller than 576. An unsignalled
+    /// range is limited.
+    pub fn with_decoded_picture_matrix_and_range_defaults(
+        &self,
+        picture_width: u32,
+        picture_height: u32,
+    ) -> H273ColorVui {
+        let picture_is_high_definition = picture_width >= 1280 || picture_height > 576;
+        let unsignalled_matrix_default = if picture_is_high_definition {
+            matrix::BT709
+        } else {
+            matrix::SMPTE170M
+        };
+        H273ColorVui {
+            matrix: Some(self.matrix.unwrap_or(unsignalled_matrix_default)),
+            full_range: Some(self.full_range.unwrap_or(false)),
+            ..*self
+        }
+    }
 }
 
 /// The engine primaries id an H.273 `ColourPrimaries` byte names, `None` for
@@ -166,6 +192,27 @@ fn matrix_id_from_h273_byte(byte: u8) -> Option<MatrixId> {
         matrix::ICTCP => MatrixId::Ictcp,
         _ => return None,
     })
+}
+
+/// The H.273 `MatrixCoefficients` byte that names `matrix_id` — the inverse
+/// of the byte → id table, so a producer can signal the matrix it converted with.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn h273_matrix_byte_of(matrix_id: MatrixId) -> u8 {
+    match matrix_id {
+        MatrixId::Identity => matrix::IDENTITY,
+        MatrixId::Bt709 => matrix::BT709,
+        MatrixId::Fcc => matrix::FCC,
+        MatrixId::Bt470Bg => matrix::BT470_BG,
+        MatrixId::Smpte170m => matrix::SMPTE170M,
+        MatrixId::Smpte240m => matrix::SMPTE240M,
+        MatrixId::Ycgco => matrix::YCGCO,
+        MatrixId::Bt2020Ncl => matrix::BT2020_NCL,
+        MatrixId::Bt2020Cl => matrix::BT2020_CL,
+        MatrixId::Smpte2085 => matrix::SMPTE2085,
+        MatrixId::ChromaNcl => matrix::CHROMA_NCL,
+        MatrixId::ChromaCl => matrix::CHROMA_CL,
+        MatrixId::Ictcp => matrix::ICTCP,
+    }
 }
 
 /// The engine range id a `video_full_range_flag` names.
@@ -328,6 +375,72 @@ mod tests {
                 transfer: TransferId::Pq,
                 matrix: MatrixId::Bt2020Ncl,
                 range: RangeId::Limited,
+            }
+        );
+    }
+
+    #[test]
+    fn every_matrix_id_names_the_byte_that_names_it() {
+        for matrix_byte in 0..=u8::MAX {
+            if let Some(matrix_id) = matrix_id_from_h273_byte(matrix_byte) {
+                assert_eq!(h273_matrix_byte_of(matrix_id), matrix_byte, "{matrix_id:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unsignalled_hd_picture_decodes_as_bt709_limited() {
+        for (picture_width, picture_height) in [(1280, 720), (1920, 1080), (960, 1080)] {
+            let decoded = H273ColorVui::default()
+                .with_decoded_picture_matrix_and_range_defaults(picture_width, picture_height);
+            assert_eq!(
+                (decoded.matrix, decoded.full_range),
+                (Some(matrix::BT709), Some(false)),
+                "{picture_width}x{picture_height}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unsignalled_sd_picture_decodes_as_bt601_limited() {
+        for (picture_width, picture_height) in [(720, 576), (640, 480), (320, 180), (1279, 576)] {
+            let decoded = H273ColorVui::default()
+                .with_decoded_picture_matrix_and_range_defaults(picture_width, picture_height);
+            assert_eq!(
+                (decoded.matrix, decoded.full_range),
+                (Some(matrix::SMPTE170M), Some(false)),
+                "{picture_width}x{picture_height}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_signalled_matrix_and_range_survive_the_decoded_picture_defaults() {
+        let signalled = H273ColorVui {
+            primaries: Some(primaries::BT470_BG),
+            transfer: None,
+            matrix: Some(matrix::BT470_BG),
+            full_range: Some(true),
+        };
+        assert_eq!(
+            signalled.with_decoded_picture_matrix_and_range_defaults(1920, 1080),
+            signalled
+        );
+    }
+
+    #[test]
+    fn the_decoded_picture_defaults_fill_only_matrix_and_range() {
+        let range_only = H273ColorVui {
+            full_range: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            range_only.with_decoded_picture_matrix_and_range_defaults(1920, 1080),
+            H273ColorVui {
+                primaries: None,
+                transfer: None,
+                matrix: Some(matrix::BT709),
+                full_range: Some(true),
             }
         );
     }

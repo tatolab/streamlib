@@ -20,10 +20,9 @@
 # is each bar's own colour wherever the potato crosses it, so which frames the
 # read caught does not move the measurement.
 #
-# Range mis-interpretation is not part of this lock. Today the encoder writes
-# TV-range samples under a full-range VUI, so the bars decode inside the range
-# and a range swap would move them; once that is corrected, saturated bars sit
-# at the ends of the coded range and a swap clips straight back to them.
+# Range mis-interpretation is not part of this lock: the encoder writes TV-range
+# samples under a VUI that signals TV range, so saturated bars sit at the ends of
+# the coded range and a range swap clips straight back to them.
 #
 # Frames are read the way any user reads a port: `tatolab-read-track` reads the
 # sender's encoded track at the local relay's loopback listener, the rig's

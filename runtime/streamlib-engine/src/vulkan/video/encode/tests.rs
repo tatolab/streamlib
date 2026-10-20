@@ -398,6 +398,56 @@ fn test_simple_config_validate_streaming_ok() {
 }
 
 #[test]
+fn the_sps_states_the_matrix_and_range_rgb_to_nv12_writes_whatever_the_source_frame_says() {
+    use crate::core::color::H273ColorVui;
+    use crate::core::color::h273_color_vui::{matrix, primaries, transfer};
+
+    let vivid_camera_frame_color_vui = H273ColorVui {
+        primaries: Some(primaries::SMPTE170M),
+        transfer: Some(transfer::BT709),
+        matrix: Some(matrix::SMPTE170M),
+        full_range: Some(true),
+    };
+    let cfg = SimpleEncoderConfig {
+        width: 1920,
+        height: 1080,
+        color_vui: Some(vivid_camera_frame_color_vui),
+        ..Default::default()
+    };
+    assert_eq!(
+        cfg.to_encode_config().color_vui,
+        Some(H273ColorVui {
+            primaries: Some(primaries::SMPTE170M),
+            transfer: Some(transfer::BT709),
+            matrix: Some(matrix::BT709),
+            full_range: Some(false),
+        })
+    );
+}
+
+#[test]
+fn a_source_frame_with_no_colour_still_gets_an_sps_stating_bt709_limited() {
+    use crate::core::color::H273ColorVui;
+    use crate::core::color::h273_color_vui::matrix;
+
+    let cfg = SimpleEncoderConfig {
+        width: 320,
+        height: 180,
+        color_vui: None,
+        ..Default::default()
+    };
+    assert_eq!(
+        cfg.to_encode_config().color_vui,
+        Some(H273ColorVui {
+            primaries: None,
+            transfer: None,
+            matrix: Some(matrix::BT709),
+            full_range: Some(false),
+        })
+    );
+}
+
+#[test]
 fn test_simple_config_to_encode_config_preset_fast() {
     let cfg = SimpleEncoderConfig {
         width: 1920,

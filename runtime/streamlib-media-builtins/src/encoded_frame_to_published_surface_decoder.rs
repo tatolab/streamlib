@@ -45,7 +45,7 @@ use streamlib::sdk::video_bitstream::{
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::h273_color_vui_translation::h273_color_vui_to_color_info;
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
-use crate::video_frame::{ColorInfo, VideoFrame};
+use crate::video_frame::VideoFrame;
 
 /// Decode-progress log cadence, in frames.
 const DECODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
@@ -246,18 +246,9 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                     Identity::PROCESSOR_NAME
                 ))
             });
-        let published_color = session
-            .parsed_parameter_set_color_vui()
-            .as_ref()
-            .and_then(h273_color_vui_to_color_info);
-
         let mut decoded_pictures = std::mem::take(&mut self.decoded_pictures_from_session);
         staged.extend(decoded_pictures.drain(..).map(|decoded_picture| {
-            self.decoded_frame_awaiting_publication(
-                decoded_picture,
-                published_color.clone(),
-                message.timestamp_ns,
-            )
+            self.decoded_frame_awaiting_publication(decoded_picture, message.timestamp_ns)
         }));
         self.decoded_pictures_from_session = decoded_pictures;
         decode_outcome
@@ -335,7 +326,6 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     fn decoded_frame_awaiting_publication(
         &mut self,
         decoded_picture: DecodedVideoPictureInPooledPixelBuffer,
-        color_info: Option<ColorInfo>,
         frame_header_timestamp_ns: i64,
     ) -> DecodedFrameAwaitingPublication {
         let width = decoded_picture.width;
@@ -345,7 +335,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             width,
             height,
             timestamp_ns: frame_header_timestamp_ns,
-            color_info,
+            color_info: h273_color_vui_to_color_info(&decoded_picture.decoded_picture_color_vui),
             // Rate, HDR sidecars and a per-frame layout override are not
             // things a decoded elementary stream knows.
             fps: None,

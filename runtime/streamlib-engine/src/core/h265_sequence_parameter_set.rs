@@ -937,8 +937,7 @@ pub fn parse_h265_sequence_parameter_set(reader: &mut RbspBitstreamReader) -> Op
     // VUI parameters — parse only the color-relevant subset
     // (aspect-ratio + video_signal_type → colour_description).
     // The rest of the VUI is left unparsed; full H.265 VUI parsing
-    // is huge and not needed for decode correctness. Color fields
-    // are surfaced via `SimpleDecoder::current_color_vui()`.
+    // is huge and not needed for decode correctness.
     sps.flags.vui_parameters_present_flag = reader.u(1)? != 0;
     if sps.flags.vui_parameters_present_flag {
         // aspect_ratio_info_present_flag

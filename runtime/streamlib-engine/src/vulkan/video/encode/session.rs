@@ -548,13 +548,9 @@ impl SimpleEncoder {
                     enc.log2_max_pic_order_cnt_lsb_minus4,
                 );
 
-                // Build the SPS VUI: always emit timing (replaces the post-write
-                // patch in vui_patch.rs) and conditionally include the
-                // colour_description block when the caller provided color info.
-                // Time scale convention matches the legacy patcher:
+                // H.264 timing is field-based, two ticks per frame:
                 // num_units_in_tick = framerate_denominator,
-                // time_scale = framerate_numerator * 2 (field-based, 2 ticks
-                // per frame).
+                // time_scale = framerate_numerator * 2.
                 let mut vui_flags: vk::video::StdVideoH264SpsVuiFlags = std::mem::zeroed();
                 vui_flags.set_timing_info_present_flag(1);
                 vui_flags.set_fixed_frame_rate_flag(1);
@@ -755,9 +751,7 @@ impl SimpleEncoder {
                 // H.265 timing rides in the VPS (patched separately in
                 // vui_patch.rs because NVIDIA's driver emits broken VPS
                 // timing). The SPS VUI therefore carries color metadata
-                // only — skipped entirely when the caller provided no
-                // color info, since fabricating defaults defeats the
-                // purpose of typed color metadata.
+                // only.
                 h265_sps_vui = match config.color_vui {
                     Some(cv) if cv.is_video_signal_type_block_needed() => {
                         let mut flags: vk::video::StdVideoH265SpsVuiFlags = std::mem::zeroed();
