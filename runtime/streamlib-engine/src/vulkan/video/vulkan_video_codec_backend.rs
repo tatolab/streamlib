@@ -118,8 +118,6 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
         &mut self,
         source: &VideoEncodeSourceSurface<'_>,
     ) -> Result<Vec<EncodedVideoAccessUnitFromSession>> {
-        // The registration's tracked layout is what the submit checks against
-        // its sampling contract.
         let source_registration = self
             .gpu_context
             .resolve_texture_registration_by_surface_id(
@@ -131,11 +129,9 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
         if source.force_sync_point {
             self.encoder.force_idr();
         }
-        let packets = self.encoder.encode_source_texture(
-            source_registration.texture(),
-            source_registration.current_layout(),
-            Some(source.timestamp_ns),
-        )?;
+        let packets = self
+            .encoder
+            .encode_source_texture(&source_registration, Some(source.timestamp_ns))?;
         Ok(packets
             .into_iter()
             .map(|packet| EncodedVideoAccessUnitFromSession {

@@ -370,8 +370,8 @@ impl SimpleEncoder {
     /// Encode a GPU-resident RGBA image directly, without CPU staging.
     ///
     /// Runs the RGB→NV12 compute shader on the GPU, then feeds the NV12
-    /// result to the video encoder. The input image must be in
-    /// `SHADER_READ_ONLY_OPTIMAL` layout.
+    /// result to the video encoder. The input image must already be in
+    /// `rgba_image_layout`.
     ///
     /// The `RgbToNv12Converter` is lazily created on first call and reused
     /// for subsequent frames.
@@ -391,6 +391,90 @@ impl SimpleEncoder {
         source_height: u32,
         timestamp_ns: Option<i64>,
     ) -> Result<Vec<EncodePacket>, VideoError> {
+        self.refuse_a_source_short_of_the_configured_picture_area(source_width, source_height)?;
+        unsafe {
+            let (nv12_image, nv12_view) = self.convert_rgba_source_to_nv12(
+                rgba_image_view,
+                rgba_image_layout,
+                None,
+                source_width,
+                source_height,
+            )?;
+            self.encode_converted_nv12(nv12_image, nv12_view, timestamp_ns)
+        }
+    }
+
+    /// Encode a published GPU-resident RGBA source named by its
+    /// [`TextureRegistration`] — the handle-shaped submit for callers outside
+    /// the RHI, which hold no raw `vk::ImageView`.
+    ///
+    /// The source is sampled in the layout it was published in when a sampled
+    /// image may be read in it, and is otherwise barriered into
+    /// `SHADER_READ_ONLY_OPTIMAL` first and that layout republished on the
+    /// registration; a source published in `UNDEFINED` is refused. The source
+    /// extent is read off the texture itself and bound by the same
+    /// picture-area rule as [`encode_image`](Self::encode_image).
+    ///
+    /// [`TextureRegistration`]: crate::core::context::TextureRegistration
+    pub fn encode_source_texture(
+        &mut self,
+        source_registration: &crate::core::context::TextureRegistration,
+        timestamp_ns: Option<i64>,
+    ) -> Result<Vec<EncodePacket>, VideoError> {
+        use crate::host_rhi::HostTextureExt;
+
+        let source = source_registration.texture();
+        self.refuse_a_source_short_of_the_configured_picture_area(source.width(), source.height())?;
+        let published_layout = source_registration.current_layout();
+        let rgba_image_layout =
+            crate::vulkan::rhi::SampledImageReadLayout::to_read_an_image_published_in(
+                published_layout,
+            )
+            .map_err(|refusal| VideoError::Engine(format!("encode_source_texture: {refusal}")))?;
+        let rgba_source_barrier = if rgba_image_layout.as_vk() == published_layout.as_vk() {
+            None
+        } else {
+            let rgba_image = source.vulkan_inner().image().ok_or_else(|| {
+                VideoError::Engine(
+                    "encode_source_texture: the source texture has no VkImage to barrier"
+                        .to_string(),
+                )
+            })?;
+            Some(
+                crate::vulkan::video::rgb_to_nv12::RgbaSourceImageBarrierIntoItsSampledLayout {
+                    rgba_image,
+                    published_layout: published_layout.as_vk(),
+                },
+            )
+        };
+        let rgba_image_view = source.vulkan_inner().image_view().map_err(|e| {
+            VideoError::Engine(format!(
+                "encode_source_texture: resolve the source texture's image view: {e}"
+            ))
+        })?;
+        unsafe {
+            let (nv12_image, nv12_view) = self.convert_rgba_source_to_nv12(
+                rgba_image_view,
+                rgba_image_layout,
+                rgba_source_barrier,
+                source.width(),
+                source.height(),
+            )?;
+            source_registration.update_layout(crate::core::rhi::VulkanLayout(
+                rgba_image_layout.as_vk().as_raw(),
+            ));
+            self.encode_converted_nv12(nv12_image, nv12_view, timestamp_ns)
+        }
+    }
+
+    /// A source smaller than the configured picture area is refused naming
+    /// both extents — encoding it would smear its edge pixels across the
+    /// missing picture region.
+    fn refuse_a_source_short_of_the_configured_picture_area(
+        &self,
+        source_width: u32,
+        source_height: u32,
+    ) -> Result<(), VideoError> {
         if source_width < self.config.width || source_height < self.config.height {
             return Err(VideoError::BitstreamError(format!(
                 "encode_image: source {}x{} does not cover the session's configured \
@@ -398,51 +482,7 @@ impl SimpleEncoder {
                 source_width, source_height, self.config.width, self.config.height
             )));
         }
-        unsafe {
-            self.encode_image_internal(
-                rgba_image_view,
-                rgba_image_layout,
-                source_width,
-                source_height,
-                timestamp_ns,
-            )
-        }
-    }
-
-    /// Encode a GPU-resident RGBA source named as an engine [`Texture`] —
-    /// the handle-shaped submit for callers outside the RHI, which hold no
-    /// raw `vk::ImageView`.
-    ///
-    /// `source_layout` is the layout the caller's texture is currently in,
-    /// and the one the RGB→NV12 converter samples it in; a layout a sampled
-    /// image cannot be read in is refused naming the ones it can. The source
-    /// extent is
-    /// read off the texture itself and bound by the same picture-area rule
-    /// as [`encode_image`](Self::encode_image).
-    ///
-    /// [`Texture`]: crate::core::rhi::Texture
-    pub fn encode_source_texture(
-        &mut self,
-        source: &crate::core::rhi::Texture,
-        source_layout: crate::core::rhi::VulkanLayout,
-        timestamp_ns: Option<i64>,
-    ) -> Result<Vec<EncodePacket>, VideoError> {
-        use crate::host_rhi::HostTextureExt;
-
-        let rgba_image_layout = crate::vulkan::rhi::SampledImageReadLayout::try_from(source_layout)
-            .map_err(|refusal| VideoError::Engine(format!("encode_source_texture: {refusal}")))?;
-        let rgba_image_view = source.vulkan_inner().image_view().map_err(|e| {
-            VideoError::Engine(format!(
-                "encode_source_texture: resolve the source texture's image view: {e}"
-            ))
-        })?;
-        self.encode_image(
-            rgba_image_view,
-            rgba_image_layout,
-            source.width(),
-            source.height(),
-            timestamp_ns,
-        )
+        Ok(())
     }
 
     /// Eagerly allocate the GPU resources used by [`encode_image`](Self::encode_image).

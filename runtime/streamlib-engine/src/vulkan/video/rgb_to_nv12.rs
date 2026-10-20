@@ -29,6 +29,15 @@ use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor};
 use crate::vulkan::rhi::VulkanComputeKernel;
 use crate::vulkan::video::video_context::{VideoContext, VideoError};
 
+/// An RGBA source published in a layout it is not sampled in, which the
+/// converter barriers out of before its dispatch reads it.
+pub struct RgbaSourceImageBarrierIntoItsSampledLayout {
+    /// The source image the sampled view is a view of.
+    pub rgba_image: vk::Image,
+    /// The layout the source was published in.
+    pub published_layout: vk::ImageLayout,
+}
+
 /// Pre-compiled SPIR-V bytecode for the RGB→NV12 compute shader.
 const SHADER_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rgb_to_nv12.spv"));
 
@@ -330,7 +339,8 @@ impl RgbToNv12Converter {
 
     /// Convert an RGBA VkImage to NV12.
     ///
-    /// The input image is sampled in `rgba_image_layout`.
+    /// The input image is sampled in `rgba_image_layout`, barriered into it
+    /// ahead of the dispatch when `rgba_source_barrier` is given.
     /// After this call, the encode-src NV12 image is in `VIDEO_ENCODE_SRC_KHR`
     /// layout and ready for the encoder.
     ///
@@ -346,6 +356,7 @@ impl RgbToNv12Converter {
         &mut self,
         rgba_image_view: vk::ImageView,
         rgba_image_layout: crate::vulkan::rhi::SampledImageReadLayout,
+        rgba_source_barrier: Option<RgbaSourceImageBarrierIntoItsSampledLayout>,
         source_width: u32,
         source_height: u32,
     ) -> Result<(vk::Image, vk::ImageView), VideoError> {
@@ -390,7 +401,32 @@ impl RgbToNv12Converter {
                     layer_count: 1,
                 });
 
-            let pre_barriers = [barrier_compute_to_general];
+            // A pool slot can be handed back while an earlier reader's submit
+            // is still in flight, so the source's barrier waits on every prior
+            // stage and write.
+            let mut pre_barriers = vec![barrier_compute_to_general.build()];
+            if let Some(source) = rgba_source_barrier {
+                pre_barriers.push(
+                    vk::ImageMemoryBarrier2::builder()
+                        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                        .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                        .old_layout(source.published_layout)
+                        .new_layout(rgba_image_layout.as_vk())
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(source.rgba_image)
+                        .subresource_range(vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        })
+                        .build(),
+                );
+            }
             let pre_dep = vk::DependencyInfo::builder().image_memory_barriers(&pre_barriers);
             self.device.cmd_pipeline_barrier2(cb, &pre_dep);
 
