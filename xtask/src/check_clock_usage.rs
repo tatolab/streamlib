@@ -69,6 +69,7 @@ pub enum PermittedWallClockSurfaceKind {
     LogRecordSourceTimestamp,
     LogFileName,
     CertificateValidity,
+    TokenExpiry,
 }
 
 impl PermittedWallClockSurfaceKind {
@@ -77,6 +78,7 @@ impl PermittedWallClockSurfaceKind {
         PermittedWallClockSurfaceKind::LogRecordSourceTimestamp,
         PermittedWallClockSurfaceKind::LogFileName,
         PermittedWallClockSurfaceKind::CertificateValidity,
+        PermittedWallClockSurfaceKind::TokenExpiry,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -85,6 +87,7 @@ impl PermittedWallClockSurfaceKind {
             PermittedWallClockSurfaceKind::LogRecordSourceTimestamp => "log record `source_ts`",
             PermittedWallClockSurfaceKind::LogFileName => "log file naming",
             PermittedWallClockSurfaceKind::CertificateValidity => "certificate validity",
+            PermittedWallClockSurfaceKind::TokenExpiry => "token expiry",
         }
     }
 }
@@ -122,6 +125,11 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
         path: "runtime/streamlib-relay-adapter-local/src/local_relay_certificate.rs",
         surface: PermittedWallClockSurfaceKind::CertificateValidity,
         reason: "sets and ages the local relay certificate's UTC `notBefore` / `notAfter`, which a browser checks against its own clock",
+    },
+    PermittedWallClockSurface {
+        path: "runtime/streamlib-relay-adapter-moqpro/src/moqpro_relay_token.rs",
+        surface: PermittedWallClockSurfaceKind::TokenExpiry,
+        reason: "sets a moq.pro JWT's UTC `iat` / `exp`, which the relay checks against its own clock",
     },
 ];
 

@@ -23,6 +23,8 @@ use streamlib::sdk::runtime::{
     raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
+use streamlib_relay_adapter_cloudflare::CloudflareRelayAdapterInstanceMaker;
+use streamlib_relay_adapter_moqpro::MoqProRelayAdapterInstanceMaker;
 use streamlib_relay_adapter_sdk::RelayAdapterInstanceMaker;
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
@@ -183,8 +185,9 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
 }
 
 /// Every relay instance this runtime holds, each joined: the local relay's
-/// two built in, then each `relays.json` records. A test build adds the
-/// secret-holding test relay's adapter.
+/// two built in, then each `relays.json` records, through the local,
+/// Cloudflare and moq.pro adapters. A test build adds the secret-holding test
+/// relay's adapter.
 fn join_every_relay_instance_of_this_runtime(
     engine: &Runner,
     tatolab_state_directory: &TatolabStateDirectory,
@@ -193,8 +196,13 @@ fn join_every_relay_instance_of_this_runtime(
         not(feature = "machine-directories-under-a-test-root"),
         expect(unused_mut, reason = "a test build adds an adapter")
     )]
-    let mut adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> =
-        vec![Box::new(the_local_relay_adapter_of_this_runtime(engine))];
+    let mut adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> = vec![
+        Box::new(the_local_relay_adapter_of_this_runtime(engine)),
+        Box::new(CloudflareRelayAdapterInstanceMaker),
+        Box::new(MoqProRelayAdapterInstanceMaker::for_the_machine(
+            engine.machine_name().clone(),
+        )),
+    ];
     #[cfg(feature = "machine-directories-under-a-test-root")]
     adapter_makers.push(Box::new(
         crate::secret_holding_test_relay_adapter::SecretHoldingTestRelayAdapterInstanceMaker,

@@ -6051,6 +6051,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamlib-relay-adapter-cloudflare"
+version = "0.54.2"
+dependencies = [
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "streamlib-relay-adapter-sdk",
+ "tokio",
+]
+
+[[package]]
 name = "streamlib-relay-adapter-local"
 version = "0.54.2"
 dependencies = [
@@ -6070,6 +6081,20 @@ dependencies = [
  "time",
  "tokio",
  "toml 0.8.23",
+ "tracing",
+]
+
+[[package]]
+name = "streamlib-relay-adapter-moqpro"
+version = "0.54.2"
+dependencies = [
+ "base64 0.22.1",
+ "moq-auth",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "streamlib-relay-adapter-sdk",
+ "tokio",
  "tracing",
 ]
 
@@ -6301,6 +6326,7 @@ dependencies = [
  "hang",
  "keyring-core",
  "libc",
+ "moq-auth",
  "moq-json",
  "moq-net",
  "moq-tokio",
@@ -6310,7 +6336,9 @@ dependencies = [
  "streamlib",
  "streamlib-api-server",
  "streamlib-media-builtins",
+ "streamlib-relay-adapter-cloudflare",
  "streamlib-relay-adapter-local",
+ "streamlib-relay-adapter-moqpro",
  "streamlib-relay-adapter-sdk",
  "streamlib-runtime-client-contract",
  "tempfile",

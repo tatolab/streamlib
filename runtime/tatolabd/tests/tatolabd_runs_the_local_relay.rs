@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use common::{
     LocalRelayPortsOfATest, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
-    http_get_body_on_loopback, the_port_is_free_for_udp_and_tcp_on,
+    call_a_tool_over_the_local_api, every_file_under, http_get_body_on_loopback,
+    the_port_is_free_for_udp_and_tcp_on,
 };
 
 /// How long both children have to answer once `tatolabd` serves, and to be
@@ -91,6 +92,69 @@ fn spawn_tatolabd_with_its_local_relay(
     let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
     ports.given_to(&mut tatolabd_command);
     SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command)
+}
+
+/// `relay_id`'s connection state as `list_relays` reports it.
+fn the_connection_state_listed_for(
+    machine_root: &TatolabTestMachineRoot,
+    relay_id: &str,
+) -> serde_json::Value {
+    let listing = call_a_tool_over_the_local_api(
+        &machine_root.local_api_socket_path(),
+        "list_relays",
+        serde_json::json!({}),
+    )
+    .json();
+    listing["relays"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|relay| relay["relay_id"] == relay_id)
+        .unwrap_or_else(|| panic!("`{relay_id}` is not listed: {listing}"))["connection_state"]
+        .clone()
+}
+
+/// The publisher dials each listener with the token in the URL's query, and
+/// the stack's WebTransport and WebSocket clients print that URL whole below
+/// `warn`; at `RUST_LOG=trace` it still reaches no log line.
+#[test]
+fn each_listener_is_listed_joined_once_the_publishers_session_connects_and_its_token_is_never_logged()
+ {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend_and_the_local_relay();
+    let machine_root = TatolabTestMachineRoot::new();
+    let ports = LocalRelayPortsOfATest::free_now();
+    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
+    ports.given_to(&mut tatolabd_command);
+    tatolabd_command.env("RUST_LOG", "trace");
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
+
+    for relay_id in [LOOPBACK_RELAY_ID, EVERY_INTERFACE_RELAY_ID] {
+        let mut listed = serde_json::Value::Null;
+        assert!(
+            wait_until(LOCAL_RELAY_BUDGET, || {
+                listed = the_connection_state_listed_for(&machine_root, relay_id);
+                listed == serde_json::json!({"state": "joined"})
+            }),
+            "`{relay_id}` is listed {listed} {LOCAL_RELAY_BUDGET:?} after the runtime serves"
+        );
+    }
+    runtime.interrupt_and_expect_a_clean_exit();
+
+    let standard_error = runtime.standard_error();
+    assert!(
+        standard_error.contains("the publisher's session with the relay is connected"),
+        "{standard_error}"
+    );
+    let runtime_log = every_file_under(&machine_root.runtime_log_directory());
+    for (shown_in, text) in [
+        ("the standard error", standard_error),
+        ("the runtime log", runtime_log),
+    ] {
+        assert!(
+            !text.contains("jwt="),
+            "a dial token is in {shown_in}:\n{text}"
+        );
+    }
 }
 
 #[test]

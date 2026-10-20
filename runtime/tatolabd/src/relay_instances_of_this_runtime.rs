@@ -81,14 +81,17 @@ impl HeldRelayInstance {
     }
 
     /// How the publisher dials this instance, or `None` while it is not
-    /// joined: the one asked for at its join, or a fresh one once its
-    /// credential is due at `now`.
+    /// joined or serves no level, so has nothing to publish: the one asked
+    /// for at its join, or a fresh one once its credential is due at `now`.
     fn dialed_as_at(
         &mut self,
         machine: &MachineName,
         now: Instant,
     ) -> Option<RelayTheExposedPortPublisherDials> {
-        let adapter = self.adapter.as_deref()?;
+        let adapter = self
+            .adapter
+            .as_deref()
+            .filter(|adapter| !adapter.levels_served().is_empty())?;
         let joined = self.joined.as_ref()?;
         let due = self
             .dialed_as
@@ -106,14 +109,14 @@ impl HeldRelayInstance {
     }
 
     /// Where this instance stands, its adapter's state and, once joined, the
-    /// publisher's session with it.
+    /// publisher's session with it if it serves a level.
     fn connection_state_as_listed(&self) -> ListedRelayConnectionState {
         match (&self.why_not_joined, &self.adapter) {
             (Some(why), _) => ListedRelayConnectionState::NotJoined {
                 why: Some(why.clone()),
             },
             (None, Some(adapter)) => match adapter.events().borrow().as_listed() {
-                ListedRelayConnectionState::Joined => {
+                ListedRelayConnectionState::Joined if !adapter.levels_served().is_empty() => {
                     self.session_state.borrow().as_listed_for_a_joined_relay()
                 }
                 not_joined => not_joined,

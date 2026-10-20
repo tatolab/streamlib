@@ -633,6 +633,24 @@ impl LocalApiToolCallAnswer {
     }
 }
 
+/// Every file under `directory`, read as text.
+pub fn every_file_under(directory: &std::path::Path) -> String {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return String::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                every_file_under(&path)
+            } else {
+                String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default()).into_owned()
+            }
+        })
+        .collect()
+}
+
 /// Call `tool_name` with `tool_arguments` through `rmcp`'s client over the
 /// local API socket — one connection per call, as a one-shot client makes it.
 pub fn call_a_tool_over_the_local_api(

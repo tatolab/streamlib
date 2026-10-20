@@ -28,6 +28,8 @@ default-filter = """
   | package(tatolab-cli)
   | package(streamlib-relay-adapter-sdk)
   | package(streamlib-relay-adapter-local)
+  | package(streamlib-relay-adapter-cloudflare)
+  | package(streamlib-relay-adapter-moqpro)
   | (kind(lib) & (
         package(streamlib-macros)
       | package(streamlib-processor-schema)

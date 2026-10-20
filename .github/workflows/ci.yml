@@ -283,6 +283,7 @@ jobs:
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p tatolab-cli
           -p streamlib-python-wheel
           -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
+          -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
           -p tatolab-read-track
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
           --lib --bins --tests
@@ -657,7 +658,8 @@ jobs:
             cargo test --locked -p streamlib-api-server --lib \
             --features machine-directories-under-a-test-root
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
-          cargo test --locked -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
+          cargo test --locked -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local \
+            -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
           # The runtime directory is fixed under /tmp on macOS, so the CLI's
           # tests need the feature to isolate each test's machine.
           cargo test --locked -p tatolab-cli \
