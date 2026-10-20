@@ -7,6 +7,10 @@
 //! inside the PSNR bands, and its registration then names the layout it was
 //! left in. A frame published in `UNDEFINED` is refused by name.
 //!
+//! A driver may sample an image left in `COLOR_ATTACHMENT_OPTIMAL` without
+//! complaint, so the barrier itself is checked by the validation layer: run
+//! under `STREAMLIB_VULKAN_VALIDATION=1`, a new error fails the test.
+//!
 //! Rig tier — it needs Vulkan Video encode and decode queues, so Cargo builds
 //! it only under `hardware-tests`.
 
@@ -169,6 +173,10 @@ fn a_frame_published_in_color_attachment_optimal_encodes_and_decodes_inside_the_
         })
         .expect("a decode session");
 
+    let validation_counts_before_the_encodes = gpu_context()
+        .device()
+        .vulkan_device()
+        .validation_layer_message_counts();
     let mut last_decoded_picture = None;
     for frame_index in 0..FRAMES_ENCODED {
         leave_it_in_color_attachment_optimal_as_a_draw_does(&registration);
@@ -201,6 +209,20 @@ fn a_frame_published_in_color_attachment_optimal_encodes_and_decodes_inside_the_
             .expect("the access unit decodes");
         assert_eq!(decoded_pictures.len(), 1, "one picture per access unit");
         last_decoded_picture = decoded_pictures.pop();
+    }
+
+    // `None` means no messenger is installed: not measured, never zero.
+    if let Some(counts_before) = validation_counts_before_the_encodes {
+        let counts_after = gpu_context()
+            .device()
+            .vulkan_device()
+            .validation_layer_message_counts()
+            .expect("the messenger installed before the encodes is still installed");
+        assert_eq!(
+            counts_after.error_count, counts_before.error_count,
+            "the encoder sampled a source it did not barrier into the layout its descriptor \
+             declares"
+        );
     }
 
     let picture = last_decoded_picture.expect("a decoded picture");
