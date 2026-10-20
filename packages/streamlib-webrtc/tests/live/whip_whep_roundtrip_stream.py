@@ -5,15 +5,14 @@
 
 `CameraSource -> H264Encoder -> WhipPublisher` beside
 `MicrophoneSource -> OpusEncoder -> WhipPublisher`, and
-`WhepPlayer -> H264Decoder -> DisplayWindow` beside `-> OpusDecoder ->
+`WhepPlayer -> H264Decoder`, its `video` port exposed, beside `-> OpusDecoder ->
 SpeakerSink`. It is `examples/camera-webrtc-publish` with the playback half
 attached: the same publish shape, with node names the driving script can
 find nodes by and a local API socket it can read them through.
 
 Nothing joins the two halves locally. Every frame the decoder publishes was
 packetised into RTP, ingested by the endpoint, and depacketised back out of it,
-so a channel mean taken off the decoder's output and matched against the vivid
-baseline the codec rig captured is a statement about this wheel.
+so what the decoder publishes is a statement about this wheel.
 
 The two URLs arrive in the environment and never in argv: Cloudflare Stream
 carries the stream key as a path segment, and argv is world-readable through
@@ -34,9 +33,6 @@ import tatolab.stream
 from tatolab.webrtc import WhepPlayer, WhipPublisher
 from tatolab.stream import StreamBuilder, stream
 
-#: Stated rather than left to the encoder's default, because the baseline this
-#: run locks against was captured with it stated: one baseline scores two paths
-#: only if both present the same GOP structure to the decoder.
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 PUBLISH_URL_VARIABLE = "STREAMLIB_WHIP_URL"
@@ -105,13 +101,6 @@ def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
 
     video_decoder = stream_builder.add(tatolab.stream.H264Decoder, name="video_decoder")
     audio_decoder = stream_builder.add(tatolab.stream.OpusDecoder, name="audio_decoder")
-    # Both sinks are here so each decoder has a subscriber for the whole run,
-    # which is the shape the showcase ships and the shape the codec rig scored.
-    window = stream_builder.add(
-        tatolab.stream.DisplayWindow,
-        config={"title": "streamlib whip/whep round-trip"},
-        name="window",
-    )
     speaker = stream_builder.add(tatolab.stream.SpeakerSink, name="speaker")
 
     stream_builder.connect(camera.output("video"), video_encoder.input("video"))
@@ -122,9 +111,10 @@ def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(
         player.output("encoded_video"), video_decoder.input("encoded_video")
     )
-    stream_builder.connect(video_decoder.output("video"), window.input("video"))
     stream_builder.connect(
         player.output("encoded_audio"), audio_decoder.input("encoded_audio")
     )
     stream_builder.connect(audio_decoder.output("audio"), speaker.input("audio"))
 
+    # The exposure is the decoded video's reader for the whole run.
+    stream_builder.expose(video_decoder.output("video"))
