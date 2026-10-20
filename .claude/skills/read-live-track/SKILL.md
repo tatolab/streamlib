@@ -29,7 +29,7 @@ cargo build --release -p tatolab-read-track
 target/release/tatolab-read-track http://127.0.0.1:4443 desk/lab.hang encoder/encoded_video \
   --count 30 --out /tmp/lab-encoded-video
 ```
-`http://127.0.0.1:4443` is the local relay's loopback listener, which serves every private and public port; a runtime of the session's own serves it at the port its `tatolabd` was given (`drive-running-stream`). It is a development tool built from this checkout, never part of the runtime unit. It ends once `--count` objects are written, and fails naming how many arrived when they do not within `--wait-at-most` seconds (default 30). A relay URL carrying a credential is passed as `-` and read from stdin, never as an argument.
+`http://127.0.0.1:4443` is the local relay's loopback listener, which serves every private and public port; a runtime of the session's own serves it at the port its `tatolabd` was given (`drive-running-stream`). It is a development tool built from this checkout, never part of the runtime unit. A track the catalog does not list as video or audio is read as sent once `--catalog-wait-at-most` seconds (default 5) pass without an entry. It ends once `--count` objects are written, and fails naming how many arrived when they do not within `--wait-at-most` seconds (default 30). A relay URL carrying a credential is passed as `-` and read from stdin, never as an argument.
 
 ### 4. Read the dump
 The directory holds one `object-NNNNNN.bin` per object, `objects.jsonl` indexing them (`index`, `group_sequence`, `starts_group`, `timestamp_ns`, `file`, `payload`), and `catalog_entry.json`, the track's entry in the broadcast's catalog when one listed it. `payload` says what each file holds:
