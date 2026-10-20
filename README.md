@@ -143,7 +143,7 @@ tatolabd                    # in a terminal of its own: this machine's runtime
 tatolab new my-stream       # test pattern → GPU effect, plus a CPU meter, wired and working
 cd my-stream
 uv sync                     # the stream's venv: tatolab-stream and numpy
-tatolab dev                 # the test pattern, live and inverted on the GPU, its brightness logged
+tatolab dev                 # the test pattern through a GPU lens, encoded and shared, its brightness logged
 ```
 
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
@@ -325,13 +325,15 @@ tatolab start STREAM
 tatolab rm STREAM
 tatolab expose STREAM NODE PORT [--public | --remove]
 
+tatolab relays
+tatolab relay add ADAPTER [--settings-file PATH]
+tatolab relay set RELAY_ID [KEY=VALUE ...] [--secret FIELD (--from-file PATH | --from-stdin)]
+tatolab relay rm RELAY_ID
+
 tatolab graph [--stream STREAM]
-tatolab tap CHANNEL [--stream STREAM] [--count N] [--max-bag-bytes BYTES]
 tatolab logs (--stream STREAM | RUNTIME_ID-STREAM) [-f | --follow] [--processor ID] [--pipeline ID]
              [--rhi] [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
 tatolab logs --list
-tatolab exchange SURFACE_ID --out DIR
-tatolab exchange --channel CHANNEL [--stream STREAM] [--count N] [--every N] [--field NAME] --out DIR
 tatolab mcp
 
 tatolab enable-virtual-camera [--print]
@@ -361,25 +363,21 @@ tatolab enable-virtual-camera [--print]
   other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
   its stream). A reader the new level no longer allows is cut at once. On a kept stream the level
   is recorded and wins over what the stream function exposes, across restarts.
+- **`relays`** lists the relays the runtime joins — the local relay's two listeners and each one
+  added — with each one's adapter, connection state and settings, and each secret setting as set
+  or unset, never its value. **`relay add`** joins a relay through an adapter, from a JSON file of
+  its settings; **`relay set`** replaces settings, or reads one secret from a file or stdin, never
+  an argument; **`relay rm`** leaves a relay and forgets its secrets. A secret is kept in the OS
+  secret store, never in `relays.json`.
 - **`graph`** prints every loaded stream's nodes, ports, links and exposed ports as JSON, with each
   node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
   one stream's graph alone, in the shape a load takes. The machine's name is its hostname, less a
   trailing mDNS `.local`, cast to lowercase URL-safe.
-- **`tap`** samples the raw bags one output port carries. The channel is the port's address,
-  `<stream>/<node>/<port>` as `graph` names them — `<node>/<port>` with `--stream`, or
-  `<machine>/<stream>/<node>/<port>` naming this machine. The sample is bounded and never
-  blocks the producer: a quiet port returns a partial sample rather than hanging, and
-  `--max-bag-bytes` raises the per-bag cap when a bag comes back flagged as truncated.
 - **`logs --stream`** reads a loaded stream's records from the runtime, rendered the way the runtime
   prints them; `--follow` keeps reading as records land. Without `--stream` it reads a stream's
   JSONL log on disk. Run it in the stream's project directory, where the runtime writes each
   stream's log: `--list` shows the stream logs there, each named `<runtime_id>-<stream>`, and
   `RUNTIME_ID-STREAM` renders one. The other flags filter what either shows.
-- **`exchange`** turns a published surface id (`<slot>#<generation>`, as a bag carries it) into that
-  frame's exact, full-resolution PNG in `--out`, and prints each written path on stdout. With
-  `--channel` it taps the port, reads the id from each sampled bag (the `surface_id`
-  field unless `--field` names another) and exchanges `--count` frames, every `--every`th bag — no
-  window in the graph and no display server in the path.
 - **`mcp`** connects an MCP host to the runtime over its own stdin and stdout; see below.
 - **`enable-virtual-camera`** installs, once, the permission a `VirtualCameraSink` needs for its
   loopback camera: the `v4l2loopback` module loaded with no devices, and its control node handed to
@@ -400,25 +398,26 @@ Unix socket only your user can open — so control is reachable only on that mac
 $ tatolab graph | jq -r .machine
 desk
 
-$ tatolab tap main/invertingeffect/video_to_downstream --count 3
-{
-  "channel": "main/invertingeffect/video_to_downstream",
-  "requested": 3,
-  "received": 3,
-  "window_ms": 500,
-  "dropped_bags": 0,
-  ...
-  "bags": [
-    { "byte_len": 214, "hex_preview": "84aa73...", "hex_truncated": false },
-    ...
-  ]
-}
+$ curl -s http://127.0.0.1:4446/
+{"machine":"desk","streams":[{"name":"main","exposed_output_ports":[{"node":"h264encoder","port":"encoded_video","level":"public",...}]}]}
 ```
 
-`tap` returns what the link really carried.
-`tatolab exchange --channel <that channel> --count 2 --out frames/` writes two of those frames as
-PNGs and prints their paths, so you see the pixels of a mid-graph port without adding a window to
-the graph. `logs` reads what every node logged, Rust and Python alike.
+`graph` shows every node's state and counters, so it says whether data is moving; `logs` reads
+what every node logged, Rust and Python alike. What a port carries is read the way anyone reads it:
+an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the
+machine's local relay, which answers on this machine at `http://127.0.0.1:4443`.
+`http://127.0.0.1:4446/watch/desk/main` plays the stream's video in a browser, and any MoQ client
+reads its tracks — this repository's `tatolab-read-track` writes a track's objects to files:
+
+```console
+$ cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/main.hang h264encoder/encoded_video --count 30 --out frames/
+```
+
+An `H264Encoder`'s track files, concatenated, are an H.264 stream any decoder plays; an
+`H265Encoder`'s are an HEVC one. A port that is not exposed is internal to its stream: `tatolab
+expose main <node> <port>` makes it a track on this machine. A raw frame's port carries a GPU
+surface's id, which means nothing outside the runtime, so to see a mid-graph frame, connect an
+encoder to it and expose the encoder.
 
 <details>
 <summary><b>The same operations speak MCP, so an agent can do this itself</b></summary>
@@ -436,9 +435,10 @@ machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. The ser
 runtime and comes and goes with it, and a stream the host loads attached lives as long as the
 host's connection.
 
-The tools are `graph`, `tap`, `logs` and `exchange` to observe; `add_node`, `connect`, `disconnect`
-and `remove_node` to change a running graph; and `run_stream`, `stop_stream`, `start_stream`,
-`remove_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds. Every tool
+The tools are `graph` and `logs` to observe; `add_node`, `connect`, `disconnect` and
+`remove_node` to change a running graph; `run_stream`, `stop_stream`, `start_stream`,
+`remove_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
+`add_relay`, `configure_relay`, `remove_relay` and `list_relays` to manage the relays it joins. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every
 node type it can add, with its description, config schema and ports — and the live graph as

@@ -1,6 +1,6 @@
 ---
 name: drive-running-stream
-description: Confirm the machine's StreamLib runtime answers and that one named stream on it is loaded and running, with a live `graph --stream` round-trip, then use that stream name on every following verb. Use at the start of a session against a running stream — after `list-running-streams`, or whenever you are about to inspect, tap, read logs, or capture evidence — and when the session needs a runtime of its own, isolated from the machine's. Wraps `tatolab streams` then `tatolab graph --stream`.
+description: Confirm the machine's StreamLib runtime answers and that one named stream on it is loaded and running, with a live `graph --stream` round-trip, then use that stream name on every following verb. Use at the start of a session against a running stream — after `list-running-streams`, or whenever you are about to inspect, read a track, read logs, or capture evidence — and when the session needs a runtime of its own, isolated from the machine's. Wraps `tatolab streams` then `tatolab graph --stream`.
 ---
 
 # drive-running-stream
@@ -24,7 +24,7 @@ A JSON graph (nodes, links, exposed ports, states, metrics, and the `machine` na
 - A refusal naming the loaded streams — no loaded stream has that name; re-read `tatolab streams` (a `stopped` or `failed` stream is not loaded).
 
 ### 3. Use the name for the rest of the session
-Pass the same stream name to every later verb: `graph --stream <stream>`, `tap <stream>/<node>/<port>`, `logs --stream <stream>`, `exchange --channel <stream>/<node>/<port>`, `stop <stream>` (`inspect-live-graph`, `tap-live-channel`, `capture-stream-evidence`, `stop-running-stream`).
+Pass the same stream name to every later verb: `graph --stream <stream>`, `logs --stream <stream>`, `expose <stream> <node> <port>`, `stop <stream>`, and the broadcast `<machine>/<stream>.hang` that `tatolab-read-track` reads a port's track in (`inspect-live-graph`, `read-live-track`, `capture-stream-evidence`, `stop-running-stream`).
 
 ## A runtime of the session's own
 
@@ -33,13 +33,15 @@ The machine's runtime belongs to the owner: its kept streams, its state director
 ```bash
 cargo xtask build-runtime --machine-directories-under-a-test-root
 export TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)"
-( target/tatolab-runtime/bin/tatolabd > "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.log" 2>&1 &
+( TATOLAB_TEST_LOCAL_RELAY_LOOPBACK_PORT=14443 TATOLAB_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT=14445 \
+  TATOLAB_TEST_LOOPBACK_HTTP_PORT=14446 target/tatolab-runtime/bin/tatolabd > "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.log" 2>&1 &
   echo $! > "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.pid"
   wait $!; echo $? > "$TATOLAB_TEST_MACHINE_ROOT/tatolabd.exit" ) &
 ```
 The pid and, once it ends, the exit status land in files, because a later Bash call cannot `wait` on a process an earlier one started.
 
 - The test-only build moves the machine lock, the state directory and the runtime directory — the local API socket among them — under `TATOLAB_TEST_MACHINE_ROOT`, so it runs beside the machine's runtime and re-loads none of its kept streams. Keep the root short, under `/tmp`: socket paths must stay under 104 bytes.
+- A test build never binds the machine's relay or HTTP ports. It runs a local relay only with both `TATOLAB_TEST_LOCAL_RELAY_*_PORT`s set, and serves the loopback listing and `/watch` only with `TATOLAB_TEST_LOOPBACK_HTTP_PORT` set — so its tracks are read at `http://127.0.0.1:14443` and its listing is `http://127.0.0.1:14446/` above, never `4443` / `4446`, which are the machine's runtime's. Pick free ports when another session runtime holds those.
 - Drive it with its own `tatolab`, `target/tatolab-runtime/bin/tatolab` — an installed `tatolab` on PATH is a release build and reaches the machine's runtime instead. It refuses to run without `TATOLAB_TEST_MACHINE_ROOT`, and only reaches this runtime with the same value. Shell state does not persist between Bash calls, so set it on every call that runs a verb.
 - Set every stream setting on `tatolabd`, not on `tatolab run`: the runtime compiles a stream and starts its processor interpreters with its own environment, never the caller's (`STREAMLIB_CAMERA_DEVICE=/dev/videoN target/tatolab-runtime/bin/tatolabd …`).
 - Poll `tatolab streams` until it answers (`No streams in this runtime.`), then load: `tatolab run --dir <project> --name <stream> &` (attached) or `tatolab run -d --dir <project> --name <stream>` (kept, in this root's state directory only).
@@ -47,4 +49,4 @@ The pid and, once it ends, the exit status land in files, because a later Bash c
 - End it with `stop-running-stream`, then delete the root.
 
 ## Notes
-- To drive the runtime from an MCP host instead of the CLI: `claude mcp add tatolab -- tatolab mcp`, or `claude mcp add tatolab -- ssh <machine> tatolab mcp` for another machine's runtime. Every tool about one stream names it with `stream`; `graph` and `tap` take it optionally, `run_stream` takes `name`, and `exchange` and `list_streams` take none. No token.
+- To drive the runtime from an MCP host instead of the CLI: `claude mcp add tatolab -- tatolab mcp`, or `claude mcp add tatolab -- ssh <machine> tatolab mcp` for another machine's runtime. Every tool about one stream names it with `stream`; `graph` takes it optionally, `run_stream` takes `name`, and `list_streams` and the relay tools take none. No token. MCP observes the graph and the logs; what a port carries is read as a track, never through a tool.

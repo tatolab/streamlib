@@ -246,30 +246,27 @@ streamlib logs --list                 # the runtimes that have a log file
 streamlib logs <RUNTIME_ID> --follow  # tail one of them, like `tail -F`
 ```
 
-To see each half on its own rather than only the cut, exchange the surface ids
-one of the three channels publishes for PNGs. The channel name is the source
-processor's id, lowercased, joined to its output port — read it out of `graph`
-rather than spelling it by hand:
+To see each half on its own rather than only the cut, encode it: a frame's
+record names its pixels by a surface id, which means nothing outside the
+runtime, so a frame port is seen by connecting an `H264Encoder` to
+`ray_traced_frame_to_downstream` and exposing the encoder's `encoded_video`.
+`http://127.0.0.1:4446/watch/<machine>/<stream>` then plays it in a browser, and
+any MoQ client reads it — this repository's `tatolab-read-track` writes its
+access units to files that concatenate into an H.264 stream ffmpeg decodes to
+PNGs. Read the machine's, the stream's and the node's names out of `tatolab
+graph` rather than spelling them by hand: a port is the track `<node>/<port>` of
+the broadcast `<machine>/<stream>.hang` at the machine's local relay.
 
 ```bash
-CHANNEL=$(streamlib graph | python3 -c '
-import json, sys
-for node in json.load(sys.stdin)["nodes"]:
-    for port in node["ports"]["outputs"]:
-        if port["name"] == "ray_traced_frame_to_downstream":
-            print((node["id"] + "/" + port["name"]).lower())')
-streamlib exchange --channel "$CHANNEL" --count 3 --out /tmp/traced
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
+    <encoder>/encoded_video --count 30 --out /tmp/traced
 ```
 
-`streamlib tap "$CHANNEL"` on the same channel shows the bag itself: a surface
-id, an extent, a timestamp, and no pixels. `exchange` is the door that turns
-one of those ids into a full-resolution PNG — the same door any API consumer
-uses, with no window in the graph and no display server in the path. Swap the
-port name for `rasterized_frame_to_downstream` or
-`split_screen_frame_to_downstream` to see the other two.
-
-Exchanging a few frames several seconds apart is also how you check the light
-is really orbiting rather than the picture being static.
+To see the other two, connect an encoder of its own to
+`rasterized_frame_to_downstream` or `split_screen_frame_to_downstream` and read
+that encoder's `encoded_video` the same way; reading either frame port directly
+gives its records, not pictures. Reading twice, several seconds apart, is also
+how you check the light is really orbiting rather than the picture being static.
 
 `graph` renders per-link drop counts under a node's `metrics`, but only for a
 destination that lives in the app process — here, the window. Every Python

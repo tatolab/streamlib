@@ -22,7 +22,7 @@ lab     kept      6      /home/me/lab
 old     stopped   -      /home/me/old
 ```
 
-- `NAME` — the stream's name, which `stop`, `start`, `rm`, `expose`, `graph --stream`, `logs --stream` and the first part of a `tap` / `exchange` channel take. It is the function's name, or `--name` on `run`, cast to lowercase URL-safe.
+- `NAME` — the stream's name, which `stop`, `start`, `rm`, `expose`, `graph --stream` and `logs --stream` take, and the `<stream>` in a port's broadcast `<machine>/<stream>.hang`. It is the function's name, or `--name` on `run`, cast to lowercase URL-safe.
 - `STATE` — `attached` (lives as long as the `tatolab run`, `tatolab dev` or MCP connection that loaded it), `kept` (loaded with `run -d`; comes back on every start of the runtime), `stopped` (kept, unloaded by `tatolab stop`), or `failed` (kept, implicated in the runtime's last two crashes in a row or unable to re-load at its start).
 - `NODES` — the loaded graph's node count; `-` when the stream is not loaded.
 - `PROJECT` — the project directory the runtime compiled it in.

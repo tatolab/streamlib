@@ -129,30 +129,28 @@ streamlib logs --follow   # the node's JSONL log
 `graph` renders each windowed port's contract beside its delivery profile, which
 is where the two rows above come from.
 
-To see the wet signal itself, tap the reverb's output channel. The channel name
-is the source processor's id, lowercased, joined to its output port — read it
-out of `graph` rather than spelling it by hand:
+To see the wet signal itself, expose the reverb's output and read it as a track.
+Read the machine's, the stream's and the node's names out of `tatolab graph`
+rather than spelling them by hand: a port is the track `<node>/<port>` of the
+broadcast `<machine>/<stream>.hang` at the machine's local relay.
 
 ```bash
-CHANNEL=$(streamlib graph | python3 -c '
-import json, sys
-for link in json.load(sys.stdin)["links"]:
-    source = link["source"]
-    if source["port_name"] == "reverberated_audio_to_downstream":
-        print((source["processor_id"] + "/" + source["port_name"]).lower())
-        break')
-streamlib tap "$CHANNEL" --count 20
+tatolab expose <stream> <reverb> reverberated_audio_to_downstream
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
+    <reverb>/reverberated_audio_to_downstream --count 20 --out /tmp/wet
 ```
 
-Unlike a video bag, an audio bag carries its payload: `samples` is the block's
-interleaved little-endian bytes, with `sample_rate`, `channels`, `sample_count`,
-`dtype` and `first_sample_timestamp_ns` beside them. The payload off this port
-is always 512 bytes — 128 mono `f32` samples — and consecutive stamps are one
-window apart: 2 666 666, 2 666 667, 2 666 667, repeating, and summing to
-exactly 8 000 000 ns every three windows. 128/48 000 s is not a whole number of
-nanoseconds, so a stamp that accumulated a rounded delta would drift; each one
-is instead derived from a single anchor in integer arithmetic, which is what
-makes the cycle exact rather than approximately right.
+Each object is one block's msgpack record, indexed with its timestamp in
+`objects.jsonl`. Unlike a video frame's record, an audio block's carries its
+payload: `samples` is the block's interleaved little-endian bytes, with
+`sample_rate`, `channels`, `sample_count`, `dtype` and
+`first_sample_timestamp_ns` beside them. The payload off this port is always 512
+bytes — 128 mono `f32` samples — and consecutive stamps are one window apart: 2
+666 666, 2 666 667, 2 666 667, repeating, and summing to exactly 8 000 000 ns
+every three windows. 128/48 000 s is not a whole number of nanoseconds, so a
+stamp that accumulated a rounded delta would drift; each one is instead derived
+from a single anchor in integer arithmetic, which is what makes the cycle exact
+rather than approximately right.
 
 ### Recording the loop instead of shouting at it
 

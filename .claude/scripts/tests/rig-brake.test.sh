@@ -132,13 +132,13 @@ run_hook 'tatolab run' '/home/dev/streamlib/examples/camera-display'
 expect_warn "tatolab run from inside an example directory is noted" example_launch
 
 # ── The observation verbs stay silent ────────────────────────────────
-# /verify-live taps a channel and exchanges surface ids per frame; a note on
+# /verify-live exposes a port and reads its track at the local relay; a note on
 # each read would bury the audit in reminders.
-run_hook 'tatolab exchange --channel effects/cyberpunkglitch/video --out /tmp/e2e --count 3'
-expect_silent "tatolab exchange is a control-plane read, not a rig command"
+run_hook 'tatolab expose main h264encoder encoded_video'
+expect_silent "tatolab expose is a control-plane write that launches nothing"
 
-run_hook 'tatolab tap camera/video --count 5'
-expect_silent "tatolab tap is a control-plane read"
+run_hook 'target/release/tatolab-read-track http://127.0.0.1:4443 desk/main.hang h264encoder/encoded_video --count 30 --out /tmp/e2e/track'
+expect_silent "tatolab-read-track reads a track as any MoQ client does"
 
 run_hook 'tatolab streams'
 expect_silent "tatolab streams is a control-plane read"
@@ -246,8 +246,8 @@ expect_silent "cargo run of a workspace tool stays silent"
 run_hook 'cargo run -p camera-display'
 expect_silent "no -p spelling reaches an example crate"
 
-run_hook 'cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera'
-expect_silent "the codec rig is a workspace target and names no examples/ path (known gap, locked)"
+run_hook 'cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/main.hang h264encoder/encoded_video --count 30 --out /tmp/e2e/track' '/home/dev/streamlib/examples/camera-display'
+expect_silent "cargo run -p tatolab-read-track from inside an example directory is a workspace tool, not a launch"
 
 run_hook 'cargo run --release' '/home/dev/streamlib/examples/jpeg-psnr'
 expect_warn "cargo run from inside an example directory is noted" example_launch
@@ -311,16 +311,16 @@ run_hook 'tatolab dev --dir /home/dev/scaffolds/camera-app'
 expect_silent "tatolab dev outside examples/ is NOT noted (scoped to examples/)"
 
 # ── e2e fixture scripts: executing one is noted, naming one is not ───
-run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e'
+run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/streamlib-e2e'
 expect_warn "an e2e fixture script run directly is noted" e2e_fixture
 
 run_hook './runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/va'
 expect_warn "an e2e fixture script run by relative path is noted" e2e_fixture
 
-run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-full h264 2>&1 | tail -45'
+run_hook 'TOLERANCE=0.05 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-full h264 2>&1 | tail -45'
 expect_warn "an env-prefixed e2e fixture run is noted" e2e_fixture
 
-run_hook 'DISPLAY=:1 REFERENCE_STEMS="solid_red complex_pattern" SAMPLES_PER_REFERENCE=2 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-v h264'
+run_hook 'INJECT_BUG=swap-chroma RUN_LABEL="swap chroma" OBJECT_COUNT=10 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-v h264'
 expect_warn "a quoted env value with a space does not hide the run" e2e_fixture
 
 run_hook 'timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/vivid-h264 h264 2>&1 | grep -E "RESULT"'
@@ -333,7 +333,7 @@ expect_warn "a multi-line cd + export + e2e run is noted" e2e_fixture
 
 run_hook 'for codec in h264 h265; do
   echo "######## $codec"
-  REFERENCE_STEMS="complex_pattern" timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-$codec $codec
+  OBJECT_COUNT=10 timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-$codec $codec
 done'
 expect_warn "an e2e run inside a for loop is noted" e2e_fixture
 
@@ -344,30 +344,30 @@ expect_warn "an e2e run on a continuation line is noted" e2e_fixture
 run_hook "sed -n '1,120p' runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh"
 expect_silent "reading an e2e fixture script with sed stays silent"
 
-run_hook 'cat -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
+run_hook 'cat -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "reading an e2e fixture script with cat stays silent"
 
 run_hook "git diff runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh | sed -n '1,200p'"
 expect_silent "diffing an e2e fixture script stays silent"
 
-run_hook 'chmod +x runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
+run_hook 'chmod +x runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "chmod on an e2e fixture script stays silent"
 
 run_hook 'bash -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh && echo "syntax OK"'
 expect_silent "a bash -n syntax check of an e2e fixture script stays silent"
 
-run_hook 'git add runtime/streamlib-engine/tests/fixtures/codec_roundtrip_node.py runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
+run_hook 'git add runtime/streamlib-engine/tests/fixtures/codec_roundtrip_stream.py runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "staging an e2e fixture script stays silent"
 
 run_hook 'grep -n "STREAMLIB_CLI" runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh | head'
 expect_silent "grepping an e2e fixture script stays silent"
 
-run_hook 'ls runtime/streamlib-engine/tests/fixtures/ && head -40 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
+run_hook 'ls runtime/streamlib-engine/tests/fixtures/ && head -40 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "listing then reading an e2e fixture script stays silent"
 
 run_hook 'python3 - <<'"'"'PY'"'"'
 import pathlib
-p = pathlib.Path("runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh")
+p = pathlib.Path("runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh")
 s = p.read_text()
 PY'
 expect_silent "a python heredoc editing an e2e fixture script stays silent"
@@ -466,7 +466,7 @@ clear_config
 set_config project '{"rules": {"example_launch": "ask"}}'
 run_hook 'tatolab run --dir examples/camera-display'
 expect_ask "a per-rule ask prompts on that rule" "rules.example_launch"
-run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/e2e'
+run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/e2e'
 expect_warn "a per-rule ask leaves the other rules at warn" e2e_fixture
 clear_config
 
@@ -497,7 +497,7 @@ echo "rig-brake.sh — globs"
 set_config project '{"allow": ["*e2e_fixture_psnr_test_pattern.sh*"]}'
 run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/v h264'
 expect_silent "an allow glob silences a matching command"
-run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/p h264'
+run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/p'
 expect_warn "an allow glob leaves a non-matching command noted" e2e_fixture
 clear_config
 

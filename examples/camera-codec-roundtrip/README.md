@@ -93,20 +93,23 @@ streamlib graph           # this node's processors, ports and links, as JSON
 streamlib logs --follow   # the node's JSONL log
 ```
 
-The interesting channel here is the encoded one. Read its name out of `graph`
-rather than spelling it by hand — a channel is the source processor's **id**,
-lowercased, joined to its output port:
+The interesting port here is the encoded one, and it is the one a user shares:
+exposed, it is a video track that
+`http://127.0.0.1:4446/watch/<machine>/<stream>` plays in a browser and any MoQ
+client reads. Read the machine's, the stream's and the node's names out of
+`tatolab graph` rather than spelling them by hand: a port is the track
+`<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the machine's
+local relay.
 
 ```bash
-CHANNEL=$(streamlib graph | python3 -c '
-import json, sys
-for link in json.load(sys.stdin)["links"]:
-    source = link["source"]
-    if source["port_name"] == "encoded_video":
-        print((source["processor_id"] + "/" + source["port_name"]).lower())
-')
-streamlib tap "$CHANNEL" --count 5
+tatolab expose <stream> <encoder> encoded_video
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
+    <encoder>/encoded_video --count 30 --out /tmp/encoded
 ```
+
+Each file is one Annex-B access unit, so the files concatenated in
+`objects.jsonl` order are an H.264 stream ffmpeg plays. Inside the graph, the
+port carries a record rather than a bare access unit.
 
 An encoded bag is **not** shaped like a video bag. A video bag is metadata —
 `surface_id`, `width`, `height`, `timestamp_ns`, `color_info` — naming pixels
