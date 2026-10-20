@@ -317,10 +317,10 @@ expect_warn "an e2e fixture script run directly is noted" e2e_fixture
 run_hook './runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/va'
 expect_warn "an e2e fixture script run by relative path is noted" e2e_fixture
 
-run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-full h264 2>&1 | tail -45'
+run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-full h264 2>&1 | tail -45'
 expect_warn "an env-prefixed e2e fixture run is noted" e2e_fixture
 
-run_hook 'DISPLAY=:1 REFERENCE_STEMS="solid_red complex_pattern" SAMPLES_PER_REFERENCE=2 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-v h264'
+run_hook 'INJECT_BUG=swap-chroma OBJECT_COUNT=10 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-v h264'
 expect_warn "a quoted env value with a space does not hide the run" e2e_fixture
 
 run_hook 'timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/vivid-h264 h264 2>&1 | grep -E "RESULT"'
@@ -333,7 +333,7 @@ expect_warn "a multi-line cd + export + e2e run is noted" e2e_fixture
 
 run_hook 'for codec in h264 h265; do
   echo "######## $codec"
-  REFERENCE_STEMS="complex_pattern" timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-$codec $codec
+  OBJECT_COUNT=10 timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-$codec $codec
 done'
 expect_warn "an e2e run inside a for loop is noted" e2e_fixture
 
@@ -344,13 +344,13 @@ expect_warn "an e2e run on a continuation line is noted" e2e_fixture
 run_hook "sed -n '1,120p' runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh"
 expect_silent "reading an e2e fixture script with sed stays silent"
 
-run_hook 'cat -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
+run_hook 'cat -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "reading an e2e fixture script with cat stays silent"
 
 run_hook "git diff runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh | sed -n '1,200p'"
 expect_silent "diffing an e2e fixture script stays silent"
 
-run_hook 'chmod +x runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
+run_hook 'chmod +x runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "chmod on an e2e fixture script stays silent"
 
 run_hook 'bash -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh && echo "syntax OK"'
@@ -362,12 +362,12 @@ expect_silent "staging an e2e fixture script stays silent"
 run_hook 'grep -n "STREAMLIB_CLI" runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh | head'
 expect_silent "grepping an e2e fixture script stays silent"
 
-run_hook 'ls runtime/streamlib-engine/tests/fixtures/ && head -40 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh'
+run_hook 'ls runtime/streamlib-engine/tests/fixtures/ && head -40 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "listing then reading an e2e fixture script stays silent"
 
 run_hook 'python3 - <<'"'"'PY'"'"'
 import pathlib
-p = pathlib.Path("runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh")
+p = pathlib.Path("runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh")
 s = p.read_text()
 PY'
 expect_silent "a python heredoc editing an e2e fixture script stays silent"
@@ -497,7 +497,7 @@ echo "rig-brake.sh — globs"
 set_config project '{"allow": ["*e2e_fixture_psnr_test_pattern.sh*"]}'
 run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/v h264'
 expect_silent "an allow glob silences a matching command"
-run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/p h264'
+run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/p'
 expect_warn "an allow glob leaves a non-matching command noted" e2e_fixture
 clear_config
 

@@ -39,8 +39,9 @@ The directory holds one `object-NNNNNN.bin` per object, `objects.jsonl` indexing
 Interpreting it:
 - **`--count` objects written, sizes non-zero** — the port is producing.
 - **`timestamp_ns` advancing at the expected cadence** — live data rather than a stuck producer.
-- **`N of M objects … arrived within …`** — the port is slow or quiet; re-check the node is `Running` and its counters move (`inspect-live-graph`) before reading again.
-- **`the broadcast … was refused` / `the track … was refused`** — the port is not exposed, or the address is wrong; re-read the graph.
+- **`0 of M objects … arrived within …`** — most often the broadcast was never announced: the reader waits for `<machine>/<stream>.hang` rather than refusing it, so a misspelt machine or stream, or a stream with nothing exposed, ends here. Check the address against `graph` and the port against `exposed` (or `curl -s http://127.0.0.1:4446/`) first; then that the node is `Running` and its counters move (`inspect-live-graph`).
+- **`N of M objects … arrived within …`, N above 0** — the port is slow or quiet; read again with a larger `--wait-at-most`.
+- **`the track … was refused`** — the broadcast is announced but does not carry that track; re-read the port's name off the graph.
 
 ## Notes
 - Read-only toward the stream: a subscriber never blocks the producer or disturbs its other readers. Exposing is the one change, and it is the user's own verb.

@@ -30,7 +30,7 @@ target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang 
 target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang microphonesource/audio \
   --count 30 --out "$EVIDENCE_DIR/track-microphonesource-audio"
 ```
-Each directory holds the objects, `objects.jsonl` indexing them with their timestamps and sizes on disk, and the track's catalog entry. An encoded video track decodes to PNGs with ffmpeg (`verify-live` § Reading pixels); any other holds the records as the node wrote them.
+Each directory holds one file per object, `objects.jsonl` indexing each file with its group and timestamp — an object's size is its file's — and the track's catalog entry. An encoded video track decodes to PNGs with ffmpeg (`verify-live` § Reading pixels); any other holds the records as the node wrote them.
 
 ### 4. Capture the stream's log records
 ```bash

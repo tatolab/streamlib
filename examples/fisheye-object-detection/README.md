@@ -15,11 +15,12 @@ sees the lens at all.
 That is the motivation, and this app demonstrates the *pipeline* rather than
 measuring the benefit — on any single scene the detection count moves in both
 directions, and a claim about detection quality needs a dataset and a metric,
-not a webcam. What it does show is that the correction is real, and you can
-check that yourself by encoding both ports (see *Observing it*): against a
-static test pattern, measured on the uncompressed frames, the rectified frame
-scores about **36 dB** PSNR on the camera frame it came from, where the
-distorted frame in the other window scores about **15 dB**.
+not a webcam. What it does show is that the correction is real: against a static
+test pattern, measured on the uncompressed frames, the rectified frame scores
+about **36 dB** PSNR on the camera frame it came from, where the distorted frame
+in the other window scores about **15 dB**. Encoding both ports (see *Observing
+it*) shows the same difference by eye, and reproduces the figures only
+approximately, since the encode is lossy.
 
 There is no fisheye lens on your desk, so `SyntheticFisheyeLens` applies the
 distortion a real one would have baked in. Everything downstream of it is the

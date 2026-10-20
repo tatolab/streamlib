@@ -49,9 +49,8 @@ Four things fall out of that pair, and they are the whole lesson:
 - **The kernel's output is an engine-owned texture named by surface id.** The
   bag this processor writes carries that id, an extent and a timestamp — 167
   bytes on the wire, header included, and the same 167 whatever the resolution.
-  (Read off the exposed port, that is one object's size; the camera's own bag is
-  248, the difference being the per-frame metadata it carries and this one does
-  not — colour traits and `fps`.)
+  (The camera's own bag is 248, the difference being the per-frame metadata it
+  carries and this one does not — colour traits and `fps`.)
   Pixels never ride a link.
 
 ### The landing copy, and why it is here

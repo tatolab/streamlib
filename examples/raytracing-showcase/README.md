@@ -263,9 +263,9 @@ cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang
 ```
 
 Swap the port for `rasterized_frame_to_downstream` or
-`split_screen_frame_to_downstream` to see the other two. Reading a few frames
-several seconds apart is also how you check the light is really orbiting rather
-than the picture being static.
+`split_screen_frame_to_downstream` to see the other two. Reading twice, several
+seconds apart, is also how you check the light is really orbiting rather than
+the picture being static.
 
 `graph` renders per-link drop counts under a node's `metrics`, but only for a
 destination that lives in the app process — here, the window. Every Python
