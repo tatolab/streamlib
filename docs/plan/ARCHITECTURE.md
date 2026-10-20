@@ -3562,6 +3562,10 @@ entry reads as **message** (the glossary).
   machines become comparable; until then the per-clock rule above stands, and the relay
   source node's restated stamp is a local stamp like any relay node's. [runtime-mesh;
   cross-runtime-links; moq-relays]
+- **OPEN** — An adaptive jitter buffer: intended, do not build until designed. Direction: a
+  playing sink holds what it plays at a steady delay sized from the jitter it measures, the
+  way WebRTC's NetEQ does, separate from a relay reader's `max_age`. Owner, 2026-10-20.
+  [relay-track-reading]
 - **DECIDED** — The runtime decides what leaves the machine; who reads at a relay is that
   relay's own access rules. [one-runtime-per-machine; moq-relays]
 - **DECIDED** — Tatolab solves no networking problem. Reach between machines, a peer's
@@ -3740,7 +3744,8 @@ entry reads as **message** (the glossary).
   data track `mode` (`snapshot` or `stream`) and `mime`. The node that owns the port writes its
   entry from its config and from what it learns at its first frame — an encoder its codec
   string and coded extent — and replaces it while running; a built-in whose payload is a
-  msgpack record declares `binary`, `mode: snapshot`, `mime: application/msgpack`. The
+  msgpack record declares `binary`, `mode: snapshot`, `mime: application/msgpack`, and no
+  reader in the runtime consults a data track's `mode`. The
   publisher merges the entries of a stream's exposed ports into the broadcast's catalog track
   as text, one entry per track named `<node>/<port>` under its section, and `graph` renders
   each port's entry. Any reader may read a port's entry — a local node off its inbound link,
@@ -3753,6 +3758,10 @@ entry reads as **message** (the glossary).
   import path — for the publisher to translate into the players' layout; a port describes
   itself in the layout the players read, so one malformed entry breaks its own track and
   never the broadcast (owner, 2026-10-17).
+- **OPEN** — A decoded audio port playable by any MoQ player: intended, do not build until
+  designed. Direction: an exposed decoded audio port publishes an `audio` entry with the `pcm`
+  codec and raw interleaved little-endian f32 objects in place of its `AudioBlock` records.
+  Owner, 2026-10-20. [relay-track-reading]
 - **DECIDED** — Relay adapters carry what differs between relays, behind one interface. A
   relay-adapter SDK crate holds the trait — joining, publishing, the events and calls the app
   and the CLI drive, how a credential is held and refreshed — and one crate per adapter
@@ -3791,7 +3800,7 @@ entry reads as **message** (the glossary).
   a stream on another machine reads a public one, and the only way a graph reads a relay.
   Nothing in the runtime is built for runtime-to-runtime: the node is one MoQ client among
   any. Owner, 2026-10-16. Its config is MoQ's own vocabulary and nothing else: `relay_url`,
-  `broadcast` and `track`, both names required and each read exactly as written — a stream's
+  `broadcast`, `track` and `max_age` (the entry below), both names required and each read exactly as written — a stream's
   exposed port `desk/camera-rig/encoder/encoded_video` is the broadcast `desk/camera-rig.hang`,
   the track `encoder/encoded_video`, as the preview page and any MoQ client show it. The
   runtime casts every name it gives, and a name another publisher's relay accepts is read as
@@ -3813,6 +3822,26 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_config_missing_the_broadcast_or_the_track_is_refused_naming_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_track_is_withdrawn_keeps_its_stream_running_and_reads_it_again -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_relay_is_not_up_yet_reads_the_track_once_it_is -->
+- **DECIDED** — A relay track is read through one relay-track reader, which the relay source
+  node and `tatolab-read-track` share. It receives a track's groups in arrival order and
+  releases them in sequence order, holding at a missing sequence. A missing group is given up
+  only when its stream is reset after its header arrived, when the track ends, or when newer
+  content on the track has run the reader's `max_age` past where the missing group would end,
+  measured in the track's own timestamps — never on a clock, and never because a newer group
+  arrived first. A group that arrives in sequence is released at once, so the hold adds no
+  latency unless a group is missing. The reader joins at the live edge, replaying no cached
+  history, and subscribes with its own `max_age`, so the relay sheds nothing the reader would
+  still take. `max_age` is the reader's: the relay source node's defaults to 100 ms, and
+  `tatolab-read-track` waits the track's declared retention. It is a transport budget, how late
+  a group may arrive and still be used, and never a playout delay. The relay source node
+  writes every group it gives up as a loss its readers count in `lost_since_last_read`, the
+  way a link counts one, never as a silent step. Owner, 2026-10-20. [relay-track-reading]
+  Rejected: moq-net's sequence cursor (`.ordered()`) — it steps over a group whose stream lands
+  after its successor's, at any budget (session, 2026-10-20).
+  Rejected: giving up a missing group when the budget elapses on a clock — waits and sleeps
+  never fix realtime streaming (owner, 2026-10-20).
+  Rejected: one budget for every reader, the track's 5 s retention — one lost group becomes
+  5 s of silence and then a burst (owner, 2026-10-20).
 - **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
   and the `moq-relay` program, each pinned to an exact version the change that builds the
   publisher names (0.3, 0.19, 0.21 and 0.17 lines as of 2026-10-16), and every payload a stock
