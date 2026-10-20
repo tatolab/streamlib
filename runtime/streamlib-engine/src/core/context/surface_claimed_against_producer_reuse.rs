@@ -25,13 +25,7 @@ impl GpuContext {
         &self,
         surface_id: &str,
     ) -> Result<SurfaceClaimedAgainstProducerReuse> {
-        let pooled_backing_share = self
-            .pooled_backing_held_in_this_process(surface_id)
-            .map(ResolvedSurfaceBacking::PixelBuffer)
-            .or_else(|| {
-                self.producer_registered_texture_for_surface_id(surface_id)
-                    .map(ResolvedSurfaceBacking::RegisteredTexture)
-            });
+        let pooled_backing_share = self.same_process_backing_of_surface(surface_id);
         self.refuse_a_retired_frame_id(surface_id)?;
         Ok(SurfaceClaimedAgainstProducerReuse {
             _pooled_backing_share: pooled_backing_share,

@@ -226,17 +226,14 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             .as_ref()
             .ok_or_else(gpu_context_not_initialized::<Identity>)?
             .claim_surface_against_producer_reuse(&frame.surface_id);
-        let _frame_claimed_against_producer_reuse = match claimed {
-            Ok(claim) => claim,
-            Err(refusal) => {
-                self.frames_that_failed_to_encode += 1;
-                return Err(Error::Runtime(format!(
-                    "{}: encode failed: {refusal}",
-                    Identity::PROCESSOR_NAME
-                )));
-            }
-        };
+        let _frame_claimed_against_producer_reuse =
+            claimed.map_err(|refusal| self.count_an_encode_failure(refusal))?;
         self.encode_one_claimed_surface(config, frame, staged)
+    }
+
+    fn count_an_encode_failure(&mut self, cause: impl std::fmt::Display) -> Error {
+        self.frames_that_failed_to_encode += 1;
+        encode_failure_naming_the_encoder::<Identity>(cause)
     }
 
     fn encode_one_claimed_surface(
@@ -299,10 +296,9 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 Ok(packets) => packets,
                 Err(encode_failure) => {
                     self.frames_that_failed_to_encode += 1;
-                    return Err(Error::Runtime(format!(
-                        "{}: encode failed: {encode_failure}",
-                        Identity::PROCESSOR_NAME
-                    )));
+                    return Err(encode_failure_naming_the_encoder::<Identity>(
+                        encode_failure,
+                    ));
                 }
             };
             self.next_frame_must_be_a_sync_point = false;
@@ -436,8 +432,6 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     }
 }
 
-/// One access unit, stamped with its packet's own timestamp when the arm
-/// carried one through and the source frame's otherwise.
 fn gpu_context_not_initialized<Identity: HardwareVideoCodecProcessorIdentity>() -> Error {
     Error::Runtime(format!(
         "{}: GPU context not initialized",
@@ -445,6 +439,17 @@ fn gpu_context_not_initialized<Identity: HardwareVideoCodecProcessorIdentity>() 
     ))
 }
 
+fn encode_failure_naming_the_encoder<Identity: HardwareVideoCodecProcessorIdentity>(
+    cause: impl std::fmt::Display,
+) -> Error {
+    Error::Runtime(format!(
+        "{}: encode failed: {cause}",
+        Identity::PROCESSOR_NAME
+    ))
+}
+
+/// One access unit, stamped with its packet's own timestamp when the arm
+/// carried one through and the source frame's otherwise.
 fn access_unit_awaiting_publication(
     packet: EncodedVideoAccessUnitFromSession,
     source_frame_timestamp_ns: i64,

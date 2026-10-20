@@ -245,18 +245,12 @@ impl PixelBuffer {
     /// == 1` even if the platform's own refcount is higher.
     ///
     pub(crate) fn strong_count(&self) -> usize {
-        if self.handle.is_null() {
-            return 0;
-        }
         // SAFETY: `handle` is `Arc::into_raw(Arc<PixelBufferRef>)` (see
-        // `from_arc_into_raw`). The Arc is reconstructed to read the count
-        // and immediately re-leaked, so the strong count returns to its
-        // pre-call value — `Arc::strong_count_from_raw` is not stable.
+        // `from_arc_into_raw`), its count held until Drop.
         unsafe {
-            let arc = Arc::from_raw(self.handle as *const PixelBufferRef);
-            let count = Arc::strong_count(&arc);
-            let _ = Arc::into_raw(arc);
-            count
+            super::leaked_arc_strong_count::strong_count_of_leaked_arc::<PixelBufferRef>(
+                self.handle,
+            )
         }
     }
 }

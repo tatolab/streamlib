@@ -103,18 +103,12 @@ impl TextureRegistration {
     /// Engine-internal — a lease-aware pool reads it to tell whether a holder
     /// in this process still has the slot.
     pub(crate) fn strong_count(&self) -> usize {
-        if self.handle.is_null() {
-            return 0;
-        }
         // SAFETY: `handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`
-        // (see `from_arc_into_raw`). The Arc is reconstructed to read the count
-        // and immediately re-leaked, so the strong count returns to its
-        // pre-call value.
+        // (see `from_arc_into_raw`), its count held until Drop.
         unsafe {
-            let arc = Arc::from_raw(self.handle as *const TextureRegistrationInner);
-            let count = Arc::strong_count(&arc);
-            let _ = Arc::into_raw(arc);
-            count
+            crate::core::rhi::leaked_arc_strong_count::strong_count_of_leaked_arc::<
+                TextureRegistrationInner,
+            >(self.handle)
         }
     }
 

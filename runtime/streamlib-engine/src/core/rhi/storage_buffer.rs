@@ -135,18 +135,12 @@ impl StorageBuffer {
     /// has the slot.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn strong_count(&self) -> usize {
-        if self.handle.is_null() {
-            return 0;
-        }
         // SAFETY: `handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)` (see
-        // `from_arc_into_raw`). The Arc is reconstructed to read the count and
-        // immediately re-leaked, so the strong count returns to its pre-call
-        // value.
+        // `from_arc_into_raw`), its count held until Drop.
         unsafe {
-            let arc = Arc::from_raw(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer);
-            let count = Arc::strong_count(&arc);
-            let _ = Arc::into_raw(arc);
-            count
+            super::leaked_arc_strong_count::strong_count_of_leaked_arc::<
+                crate::vulkan::rhi::HostVulkanBuffer,
+            >(self.handle)
         }
     }
 

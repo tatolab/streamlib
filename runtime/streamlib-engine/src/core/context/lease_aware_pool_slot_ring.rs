@@ -366,12 +366,15 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
             return None;
         }
         let mut reuse = PoolSlotReuse::over(check_out_leases);
-        let unheld_slot_count = self
-            .slots
-            .iter()
-            .filter(|slot| slot.is_unheld(&reuse))
-            .count();
-        if unheld_slot_count < unheld_slots_a_reuse_needs {
+        if unheld_slots_a_reuse_needs > ANY_ONE_UNHELD_SLOT_IS_REUSABLE
+            && self
+                .slots
+                .iter()
+                .filter(|slot| slot.is_unheld(&reuse))
+                .take(unheld_slots_a_reuse_needs)
+                .count()
+                < unheld_slots_a_reuse_needs
+        {
             return None;
         }
         for _ in 0..slot_count {
