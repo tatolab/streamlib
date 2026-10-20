@@ -385,6 +385,22 @@ impl RelayInstancesOfThisRuntime {
         }
     }
 
+    /// Refuse a change to `relay_id` before it touches a relay or the store
+    /// when `relays.json` could not be read at start: the instances it holds
+    /// are not held, so an id or a secret of theirs could be taken.
+    fn refuse_while_the_record_is_not_written(
+        &self,
+        relay_id: &str,
+    ) -> Result<(), RelayInstanceControlRefusal> {
+        match &self.why_the_record_is_not_written {
+            Some(why) => Err(RelayInstanceControlRefusal::NotRecorded {
+                relay_id: relay_id.to_string(),
+                why: why.clone(),
+            }),
+            None => Ok(()),
+        }
+    }
+
     /// Record exactly `instances` in `relays.json`, or refuse naming `relay_id`.
     fn record<'recorded>(
         &self,
@@ -395,9 +411,7 @@ impl RelayInstancesOfThisRuntime {
             relay_id: relay_id.to_string(),
             why,
         };
-        if let Some(why) = &self.why_the_record_is_not_written {
-            return Err(not_recorded(why.clone()));
-        }
+        self.refuse_while_the_record_is_not_written(relay_id)?;
         self.record_file.write(instances).map_err(not_recorded)
     }
 
@@ -539,6 +553,7 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
         }
         let mut held_instances = self.lock_the_held_instances();
         let relay_id = Self::the_lowest_free_relay_id_of(adapter, &held_instances);
+        self.refuse_while_the_record_is_not_written(&relay_id)?;
         let split = self.split_the_settings_from_the_secrets(&relay_id, adapter, settings)?;
         let secrets: BTreeMap<String, SecretString> = split
             .secrets
@@ -586,6 +601,7 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
     ) -> Result<(), RelayInstanceControlRefusal> {
         let mut held_instances = self.lock_the_held_instances();
         let position = Self::position_of(relay_id, &held_instances)?;
+        self.refuse_while_the_record_is_not_written(relay_id)?;
         let held = &held_instances[position];
         let split =
             self.split_the_settings_from_the_secrets(relay_id, &held.recorded.adapter, settings)?;
@@ -1378,5 +1394,50 @@ mod tests {
                 .is_empty()
         );
         assert!(!machine.record_path().exists());
+    }
+
+    #[test]
+    fn while_relays_json_cannot_be_read_no_change_touches_a_recorded_relays_id_or_secret() {
+        let machine = RelayInstancesOverAStateDirectory::new();
+        machine
+            .start_a_runtime()
+            .add_relay(
+                "provider",
+                provider_settings(&a_relay_url_carrying("recorded")),
+            )
+            .unwrap();
+        std::fs::write(machine.record_path(), "{not json").unwrap();
+        let relay_instances = machine.start_a_runtime();
+        let joins_before = machine.joins_seen.lock().unwrap().len();
+
+        for refusal in [
+            relay_instances
+                .add_relay(
+                    "provider",
+                    provider_settings(&a_relay_url_carrying("added")),
+                )
+                .unwrap_err(),
+            relay_instances
+                .configure_relay(
+                    "built-in-only-relay",
+                    json!({"label": "x"}).as_object().unwrap().clone(),
+                )
+                .unwrap_err(),
+        ] {
+            assert!(
+                matches!(refusal, RelayInstanceControlRefusal::NotRecorded { .. }),
+                "{refusal}"
+            );
+        }
+        assert_eq!(
+            machine.joins_seen.lock().unwrap().len(),
+            joins_before,
+            "nothing joined"
+        );
+        let written = machine.every_file_written();
+        assert!(
+            written.contains("recorded") && !written.contains("added"),
+            "the recorded relay's secret is untouched: {written}"
+        );
     }
 }
