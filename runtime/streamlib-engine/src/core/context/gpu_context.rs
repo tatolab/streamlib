@@ -93,7 +93,7 @@ impl LeaseAwarePoolSlotResource for PixelBufferPoolSlot {
         self.buffer.strong_count() > 2
     }
 
-    fn is_flagged_to_be_freed_once_unheld(&self) -> bool {
+    fn is_flagged_freed_as_soon_as_unheld(&self) -> bool {
         self.freeing_record.is_flagged_freed_as_soon_as_unheld()
     }
 
@@ -559,17 +559,22 @@ impl PixelBufferPoolManager {
         let mut slots_taken_out = Vec::new();
         for mut lent_slot in lent_slots {
             ring_pool.note_a_lent_slot_came_back(shape);
-            let mut minted_frame_generations_held =
-                self.minted_frame_generations.held_for_a_hand_off();
-            let is_unheld = lent_slot.is_unheld(&cross_process_holders);
-            let freeing_record = &mut lent_slot.resource_mut().freeing_record;
-            freeing_record.flag_freed_as_soon_as_unheld();
-            if scan.observe(freeing_record, is_unheld) {
-                cross_process_holders.retire_every_frame_a_slot_being_freed_published(
-                    &lent_slot,
-                    &mut minted_frame_generations_held,
-                );
-                drop(minted_frame_generations_held);
+            let lent_slot_is_freed = {
+                let mut minted_frame_generations_held =
+                    self.minted_frame_generations.held_for_a_hand_off();
+                let is_unheld = lent_slot.is_unheld(&cross_process_holders);
+                let freeing_record = &mut lent_slot.resource_mut().freeing_record;
+                freeing_record.flag_freed_as_soon_as_unheld();
+                let is_due_to_be_freed = scan.observe(freeing_record, is_unheld);
+                if is_due_to_be_freed {
+                    cross_process_holders.retire_every_frame_a_slot_being_freed_published(
+                        &lent_slot,
+                        &mut minted_frame_generations_held,
+                    );
+                }
+                is_due_to_be_freed
+            };
+            if lent_slot_is_freed {
                 slots_taken_out.push(self.forget_the_slot_in_its_rings_allocator_and_every_cache(
                     &mut ring_pool.pool,
                     lent_slot,

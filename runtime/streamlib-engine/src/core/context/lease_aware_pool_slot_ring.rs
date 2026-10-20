@@ -13,7 +13,7 @@
 //! business; the ring decides only reuse.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use super::{SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseRegistry};
 use crate::core::rhi::published_frame_id_of_pool_slot;
@@ -36,7 +36,7 @@ pub(crate) trait LeaseAwarePoolSlotResource {
 
     /// Whether the resource is flagged to be freed once unheld, so a hand-off
     /// reuses it only when no other unheld slot is left.
-    fn is_flagged_to_be_freed_once_unheld(&self) -> bool {
+    fn is_flagged_freed_as_soon_as_unheld(&self) -> bool {
         false
     }
 }
@@ -134,7 +134,7 @@ impl LeaseAwarePoolMintedFrameGenerations {
             minted_frame_generation_by_pool_slot: self
                 .minted_frame_generation_by_pool_slot
                 .lock()
-                .unwrap(),
+                .unwrap_or_else(PoisonError::into_inner),
         }
     }
 
@@ -143,7 +143,7 @@ impl LeaseAwarePoolMintedFrameGenerations {
     pub(crate) fn minted_frame_generation_of_slot(&self, pool_slot_key: &str) -> Option<u64> {
         self.minted_frame_generation_by_pool_slot
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .get(pool_slot_key)
             .copied()
     }
@@ -154,7 +154,7 @@ impl LeaseAwarePoolMintedFrameGenerations {
     pub(crate) fn forget_slot(&self, pool_slot_key: &str) {
         self.minted_frame_generation_by_pool_slot
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .remove(pool_slot_key);
     }
 
@@ -393,16 +393,17 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         slot_indices_oldest_hand_off_first.sort_by_key(|&slot_index| {
             let slot = &self.slots[slot_index];
             (
-                slot.resource.is_flagged_to_be_freed_once_unheld(),
+                slot.resource.is_flagged_freed_as_soon_as_unheld(),
                 slot.ring_hand_off_order,
             )
         });
         let mut unheld_slot_indices_oldest_first = slot_indices_oldest_hand_off_first
             .into_iter()
             .filter(|&slot_index| self.slots[slot_index].is_unheld(&reuse))
-            .take(unheld_slots_a_reuse_needs.max(ANY_ONE_UNHELD_SLOT_IS_REUSABLE));
+            .take(unheld_slots_a_reuse_needs.max(1));
         let oldest_unheld_slot_index = unheld_slot_indices_oldest_first.next()?;
-        if 1 + unheld_slot_indices_oldest_first.count() < unheld_slots_a_reuse_needs {
+        let unheld_slot_count = 1 + unheld_slot_indices_oldest_first.count();
+        if unheld_slot_count < unheld_slots_a_reuse_needs {
             return None;
         }
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! A native consumer's claim on a published frame: a share of the frame's
-//! pooled backing, which its producer's pool counts as a holder.
+//! backing in this process, which its producer's pool counts as a holder.
 
 use super::surface_backing_resolution::ResolvedSurfaceBacking;
 use super::{GpuContext, GpuContextLimitedAccess};
@@ -12,7 +12,7 @@ use crate::core::error::Result;
 /// pool that published the frame never rehands its slot.
 #[must_use = "a claim holds the frame only while it is kept"]
 pub struct SurfaceClaimedAgainstProducerReuse {
-    _pooled_backing_share: Option<ResolvedSurfaceBacking>,
+    _same_process_backing_share: Option<ResolvedSurfaceBacking>,
 }
 
 impl GpuContext {
@@ -27,10 +27,10 @@ impl GpuContext {
         &self,
         surface_id: &str,
     ) -> Result<SurfaceClaimedAgainstProducerReuse> {
-        let pooled_backing_share = self.same_process_backing_of_surface(surface_id);
+        let same_process_backing_share = self.same_process_backing_of_surface(surface_id);
         self.refuse_a_retired_frame_id(surface_id)?;
         Ok(SurfaceClaimedAgainstProducerReuse {
-            _pooled_backing_share: pooled_backing_share,
+            _same_process_backing_share: same_process_backing_share,
         })
     }
 }
