@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.2](https://github.com/tatolab/streamlib/compare/v0.54.1...v0.54.2) (2026-10-20)
+
+
+### Features
+
+* **runtime:** relays are configured like built-ins — the relay-adapter catalog, add/configure/remove/list tools and tatolab relay verbs, relays.json, secrets in the OS secret store ([#2871](https://github.com/tatolab/streamlib/issues/2871)) ([6a48ee4](https://github.com/tatolab/streamlib/commit/6a48ee4f70bcaa43198175b7e7cef7e72849a621))
+
 ## [0.54.1](https://github.com/tatolab/streamlib/compare/v0.54.0...v0.54.1) (2026-10-19)
 
 
