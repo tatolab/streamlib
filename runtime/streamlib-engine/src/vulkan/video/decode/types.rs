@@ -284,6 +284,9 @@ pub struct SimpleDecodedFrame {
     /// True when `data` contains RGBA pixels (W*H*4 bytes).
     /// False when `data` contains NV12 pixels (W*H*3/2 bytes).
     pub is_rgba: bool,
+    /// The colour the decoded samples are in, matrix and range always set —
+    /// on the RGBA path, the colour `data` was converted from.
+    pub decoded_picture_color_vui: crate::core::color::H273ColorVui,
 }
 
 // ---------------------------------------------------------------------------

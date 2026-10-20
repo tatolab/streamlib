@@ -5,7 +5,6 @@
 //! [`SimpleDecoder`] minted on the host device, behind the seam's session
 //! shapes.
 
-use crate::core::color::H273ColorVui;
 use crate::core::context::{
     DecodedVideoPictureInPooledPixelBuffer, EncodedVideoAccessUnitFromSession,
     GpuContextFullAccess, GpuContextLimitedAccess, ProcessorOutputPixelBufferPoolOfOneNativeNode,
@@ -202,10 +201,6 @@ impl VideoDecodeSession for VulkanVideoDecodeSession {
         Ok(())
     }
 
-    fn parsed_parameter_set_color_vui(&self) -> Option<H273ColorVui> {
-        self.decoder.current_color_vui()
-    }
-
     fn discard_in_flight_state_after_a_gap(&mut self) {
         self.decoder.feed_discontinuity();
     }
@@ -253,6 +248,7 @@ fn stage_decoded_frame_into_pooled_pixel_buffer(
         pixel_buffer,
         width,
         height,
+        decoded_picture_color_vui: decoded_frame.decoded_picture_color_vui,
     })
 }
 

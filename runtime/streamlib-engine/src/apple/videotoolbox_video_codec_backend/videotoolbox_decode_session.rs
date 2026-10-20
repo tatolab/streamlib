@@ -40,7 +40,7 @@ use crate::core::annex_b_access_unit::{
     NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
     length_prefix_annex_b_access_unit,
 };
-use crate::core::color::{ColorSpaceKind, H273ColorVui};
+use crate::core::color::ColorSpaceKind;
 use crate::core::context::{
     DecodedVideoPictureInPooledPixelBuffer, GpuContextLimitedAccess, VideoCodecElementaryStream,
     VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest,
@@ -110,7 +110,6 @@ pub(super) struct VideoToolboxDecodeSession {
     decompression_session_for_current_parameter_sets:
         Option<VideoToolboxDecompressionSessionForOneFormat>,
     pooled_rgba_conversion: Option<PooledRgbaConversionForOneShape>,
-    last_decoded_color_vui: Option<H273ColorVui>,
     /// Escalates to build the pool conversion and to import the IOSurfaces
     /// pictures are decoded on.
     gpu_context: GpuContextLimitedAccess,
@@ -132,7 +131,6 @@ impl VideoToolboxDecodeSession {
             parameter_sets: ParameterSetsFromAnnexBAccessUnit::default(),
             decompression_session_for_current_parameter_sets: None,
             pooled_rgba_conversion: None,
-            last_decoded_color_vui: None,
             gpu_context,
             processor_id_of_the_decoding_node: request.processor_id_of_the_decoding_node.clone(),
         }
@@ -234,8 +232,8 @@ impl VideoToolboxDecodeSession {
         })?;
         let picture_extent = clean_aperture_extent_of(decoded)?;
         self.refuse_a_picture_past_the_maximum_extent(picture_extent)?;
-        let color_vui = core_video_pixel_buffer_color_to_h273_color_vui(decoded);
-        self.last_decoded_color_vui = Some(color_vui);
+        let decoded_picture_color_vui = core_video_pixel_buffer_color_to_h273_color_vui(decoded)
+            .with_decoded_picture_matrix_and_range_defaults(picture_extent.0, picture_extent.1);
 
         if self.pooled_rgba_conversion.as_ref().is_some_and(|built| {
             built.source_pixel_format != source_pixel_format
@@ -266,13 +264,14 @@ impl VideoToolboxDecodeSession {
             .convert_into_pooled_pixel_buffer(
                 &self.gpu_context,
                 &iosurface,
-                &color_vui.resolve_defaults(ColorSpaceKind::Yuv),
+                &decoded_picture_color_vui.resolve_defaults(ColorSpaceKind::Yuv),
             )?;
         Ok(DecodedVideoPictureInPooledPixelBuffer {
             published_pixel_buffer_frame_id,
             pixel_buffer,
             width: picture_extent.0,
             height: picture_extent.1,
+            decoded_picture_color_vui,
         })
     }
 }
@@ -336,10 +335,6 @@ impl VideoDecodeSession for VideoToolboxDecodeSession {
         Ok(())
     }
 
-    fn parsed_parameter_set_color_vui(&self) -> Option<H273ColorVui> {
-        self.last_decoded_color_vui
-    }
-
     fn discard_in_flight_state_after_a_gap(&mut self) {
         self.decompression_session_for_current_parameter_sets = None;
     }
@@ -347,7 +342,6 @@ impl VideoDecodeSession for VideoToolboxDecodeSession {
     fn reset_for_new_parameter_sets(&mut self) {
         self.discard_in_flight_state_after_a_gap();
         self.parameter_sets = ParameterSetsFromAnnexBAccessUnit::default();
-        self.last_decoded_color_vui = None;
     }
 }
 

@@ -215,6 +215,9 @@ struct PendingFrame {
     coded_height: u32,
     /// The sub-region the RGBA path converts and publishes.
     display_window: DecodedPictureDisplayWindow,
+    /// The colour the SPS this picture was decoded under signals, matrix and
+    /// range filled for its display window.
+    decoded_picture_color_vui: crate::core::color::H273ColorVui,
     decode_order: u64,
     poc: i32,
     setup_slot: usize,
@@ -627,15 +630,27 @@ impl SimpleDecoder {
         self.decoded_picture_display_window = Some(window);
     }
 
-    /// Return the H.273 color VUI parsed from the active SPS, or `None` if
-    /// no SPS has been parsed yet or the SPS didn't carry a VUI.
+    /// The colour a picture in `display_window` decoded under the active SPS
+    /// is in: the signalled axes, with matrix and range filled by the decoded
+    /// picture defaults.
+    fn decoded_picture_color_vui(
+        &self,
+        display_window: DecodedPictureDisplayWindow,
+    ) -> crate::core::color::H273ColorVui {
+        self.signalled_color_vui()
+            .unwrap_or_default()
+            .with_decoded_picture_matrix_and_range_defaults(
+                display_window.width,
+                display_window.height,
+            )
+    }
+
+    /// The H.273 colour the active SPS's VUI signals, or `None` if no SPS has
+    /// been parsed yet or it carried no VUI.
     ///
     /// Each axis is `Some(byte)` only if the bitstream actually carried it
-    /// AND it isn't the H.273 "Unspecified" enumerant (value `2`); axes
-    /// that the bitstream omitted or marked Unspecified come back as
-    /// `None`. Callers translate these byte values to their domain
-    /// `ColorInfo` at the codec-processor seam.
-    pub fn current_color_vui(&self) -> Option<crate::core::color::H273ColorVui> {
+    /// AND it isn't the H.273 "Unspecified" enumerant (value `2`).
+    fn signalled_color_vui(&self) -> Option<crate::core::color::H273ColorVui> {
         match self.config.codec {
             crate::vulkan::video::encode::Codec::H264 => {
                 let parser = self.h264_parser.as_ref()?;
@@ -914,13 +929,12 @@ impl SimpleDecoder {
 
         // RGBA path: run NV12→RGBA GPU compute conversion, then readback RGBA
         if self.nv12_converter.is_some() {
-            let vk_dec = self.vk_decoder.as_ref().ok_or_else(|| {
-                VideoError::BitstreamError("VkVideoDecoder not initialized".into())
-            })?;
-            let dpb_image = vk_dec.dpb_image();
-
-            // Run GPU NV12→RGBA conversion
-            let converter = self.nv12_converter.as_mut().unwrap();
+            let dpb_image = self
+                .vk_decoder
+                .as_ref()
+                .ok_or_else(|| VideoError::BitstreamError("VkVideoDecoder not initialized".into()))?
+                .dpb_image();
+            let converter = self.nv12_converter_for(&pending.decoded_picture_color_vui)?;
             let (rgba_img, _) = unsafe {
                 converter.convert(
                     dpb_image,
@@ -1026,6 +1040,7 @@ impl SimpleDecoder {
                 decode_order: pending.decode_order,
                 picture_order_count: pending.poc,
                 is_rgba: true,
+                decoded_picture_color_vui: pending.decoded_picture_color_vui,
             }));
         }
 
@@ -1045,6 +1060,7 @@ impl SimpleDecoder {
             decode_order: pending.decode_order,
             picture_order_count: pending.poc,
             is_rgba: false,
+            decoded_picture_color_vui: pending.decoded_picture_color_vui,
         }))
     }
 
@@ -1072,7 +1088,7 @@ impl SimpleDecoder {
 /// Map an H.273 byte parsed from the bitstream to `Some(byte)` if it is a
 /// real value, or `None` if it is the H.273 "Unspecified" enumerant
 /// (value `2`) or out-of-range. Returning `None` for `Unspecified` means
-/// `current_color_vui()` axes match the on-wire ColorInfo semantics ("absent
+/// `signalled_color_vui()` axes match the on-wire ColorInfo semantics ("absent
 /// IS unknown").
 fn decoded_byte_to_option(value: i32) -> Option<u8> {
     if value <= 0 || value > 255 {

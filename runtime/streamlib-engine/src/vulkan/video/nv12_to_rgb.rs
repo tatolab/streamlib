@@ -8,7 +8,8 @@
 //! Uses a `VkSamplerYcbcrConversion` combined image sampler baked into the
 //! descriptor-set layout via `pImmutableSamplers` so the hardware handles
 //! plane separation, chroma upsampling (4:2:0 → 4:4:4), and YCbCr→RGB
-//! conversion automatically (BT.709 / ITU narrow range).
+//! conversion automatically, with the matrix and range the decoded picture
+//! signals.
 //!
 //! The converter creates an RGBA output image with `STORAGE` usage for compute
 //! writes and `TRANSFER_SRC` for CPU readback, using `CONCURRENT` sharing
@@ -24,6 +25,8 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma::{self as vma, Alloc};
 
+use crate::core::color::H273ColorVui;
+use crate::core::color::h273_color_vui::matrix;
 use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor};
 use crate::vulkan::rhi::VulkanComputeKernel;
 use crate::vulkan::video::video_context::{VideoContext, VideoError};
@@ -55,6 +58,43 @@ const RECONSTRUCTED_X_CHROMA_OFFSET: vk::ChromaLocation = vk::ChromaLocation::CO
 /// 0 is midpoint on this axis, which is what `rgb_to_nv12.comp` downsamples to.
 const RECONSTRUCTED_Y_CHROMA_OFFSET: vk::ChromaLocation = vk::ChromaLocation::MIDPOINT;
 
+/// The sampler YCbCr model and range a decoded picture's matrix and range select.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Nv12SamplerYcbcrModelAndRange {
+    /// The YCbCr → RGB matrix the sampler applies.
+    pub ycbcr_model: vk::SamplerYcbcrModelConversion,
+    /// The quantization range the sampler expands from.
+    pub ycbcr_range: vk::SamplerYcbcrRange,
+}
+
+impl Nv12SamplerYcbcrModelAndRange {
+    /// The model and range that convert a picture in `decoded_picture_color_vui`,
+    /// refusing a matrix no sampler YCbCr model represents.
+    pub fn for_decoded_picture_color_vui(
+        decoded_picture_color_vui: &H273ColorVui,
+    ) -> Result<Self, VideoError> {
+        let ycbcr_model = match decoded_picture_color_vui.matrix_byte() {
+            matrix::BT709 => vk::SamplerYcbcrModelConversion::YCBCR_709,
+            matrix::BT470_BG | matrix::SMPTE170M => vk::SamplerYcbcrModelConversion::YCBCR_601,
+            matrix::BT2020_NCL => vk::SamplerYcbcrModelConversion::YCBCR_2020,
+            matrix_coefficients => {
+                return Err(VideoError::MatrixCoefficientsNotConvertible(
+                    matrix_coefficients,
+                ));
+            }
+        };
+        let ycbcr_range = if decoded_picture_color_vui.full_range_bit() == 1 {
+            vk::SamplerYcbcrRange::ITU_FULL
+        } else {
+            vk::SamplerYcbcrRange::ITU_NARROW
+        };
+        Ok(Self {
+            ycbcr_model,
+            ycbcr_range,
+        })
+    }
+}
+
 /// Push constants passed to the compute shader.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -76,6 +116,7 @@ pub struct Nv12ToRgbConverter {
     // YCbCr conversion objects — `sampler` is baked into the kernel's
     // descriptor-set layout via `pImmutableSamplers` and must outlive the
     // kernel.
+    ycbcr_model_and_range: Nv12SamplerYcbcrModelAndRange,
     ycbcr_conversion: vk::SamplerYcbcrConversion,
     sampler: vk::Sampler,
 
@@ -118,6 +159,7 @@ impl Nv12ToRgbConverter {
     /// * `compute_queue_family` - Queue family index with COMPUTE support
     /// * `compute_queue` - Queue from the compute family
     /// * `decode_queue_family` - Queue family index for video decode (for CONCURRENT sharing)
+    /// * `ycbcr_model_and_range` - The conversion baked into the immutable sampler
     pub unsafe fn new(
         ctx: &Arc<VideoContext>,
         width: u32,
@@ -125,13 +167,14 @@ impl Nv12ToRgbConverter {
         compute_queue_family: u32,
         compute_queue: vk::Queue,
         decode_queue_family: u32,
+        ycbcr_model_and_range: Nv12SamplerYcbcrModelAndRange,
     ) -> Result<Self, VideoError> {
         unsafe {
             let device = ctx.device().clone();
             let allocator = ctx.allocator().clone();
             let host_device = ctx.host_device().clone();
 
-            // --- 1. YCbCr conversion (BT.709, ITU narrow range) ---
+            // --- 1. YCbCr conversion ---
             // VUID-VkSamplerYcbcrConversionCreateInfo-xChromaOffset-01651 and -01652: a
             // chroma location is legal only when the format advertises its matching
             // feature bit. This conversion sites the two axes differently, so it needs
@@ -166,8 +209,8 @@ impl Nv12ToRgbConverter {
             let ycbcr_conversion = device.create_sampler_ycbcr_conversion(
                 &vk::SamplerYcbcrConversionCreateInfo::builder()
                     .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-                    .ycbcr_model(vk::SamplerYcbcrModelConversion::YCBCR_709)
-                    .ycbcr_range(vk::SamplerYcbcrRange::ITU_NARROW)
+                    .ycbcr_model(ycbcr_model_and_range.ycbcr_model)
+                    .ycbcr_range(ycbcr_model_and_range.ycbcr_range)
                     .components(vk::ComponentMapping {
                         r: vk::ComponentSwizzle::IDENTITY,
                         g: vk::ComponentSwizzle::IDENTITY,
@@ -292,6 +335,7 @@ impl Nv12ToRgbConverter {
             Ok(Self {
                 device,
                 allocator,
+                ycbcr_model_and_range,
                 ycbcr_conversion,
                 sampler,
                 kernel,
@@ -483,6 +527,11 @@ impl Nv12ToRgbConverter {
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
+
+    /// The conversion this converter's immutable sampler applies.
+    pub fn ycbcr_model_and_range(&self) -> Nv12SamplerYcbcrModelAndRange {
+        self.ycbcr_model_and_range
+    }
 }
 
 impl Drop for Nv12ToRgbConverter {
@@ -579,6 +628,82 @@ mod tests {
             vk::ChromaLocation::MIDPOINT,
             "type 0 is midpoint vertically"
         );
+    }
+
+    fn color_vui_with_matrix_and_range(matrix_coefficients: u8, full_range: bool) -> H273ColorVui {
+        H273ColorVui {
+            matrix: Some(matrix_coefficients),
+            full_range: Some(full_range),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn each_convertible_matrix_selects_its_sampler_model() {
+        for (matrix_coefficients, ycbcr_model) in [
+            (matrix::BT709, vk::SamplerYcbcrModelConversion::YCBCR_709),
+            (matrix::BT470_BG, vk::SamplerYcbcrModelConversion::YCBCR_601),
+            (
+                matrix::SMPTE170M,
+                vk::SamplerYcbcrModelConversion::YCBCR_601,
+            ),
+            (
+                matrix::BT2020_NCL,
+                vk::SamplerYcbcrModelConversion::YCBCR_2020,
+            ),
+        ] {
+            let selected = Nv12SamplerYcbcrModelAndRange::for_decoded_picture_color_vui(
+                &color_vui_with_matrix_and_range(matrix_coefficients, false),
+            )
+            .expect("a convertible matrix");
+            assert_eq!(
+                selected.ycbcr_model, ycbcr_model,
+                "matrix {matrix_coefficients}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_signalled_range_selects_the_sampler_range() {
+        let full_range = Nv12SamplerYcbcrModelAndRange::for_decoded_picture_color_vui(
+            &color_vui_with_matrix_and_range(matrix::BT709, true),
+        )
+        .expect("BT.709 converts");
+        let limited_range = Nv12SamplerYcbcrModelAndRange::for_decoded_picture_color_vui(
+            &color_vui_with_matrix_and_range(matrix::BT709, false),
+        )
+        .expect("BT.709 converts");
+        assert_eq!(full_range.ycbcr_range, vk::SamplerYcbcrRange::ITU_FULL);
+        assert_eq!(limited_range.ycbcr_range, vk::SamplerYcbcrRange::ITU_NARROW);
+    }
+
+    #[test]
+    fn a_matrix_no_sampler_model_represents_is_refused_by_its_value() {
+        for matrix_coefficients in [
+            matrix::IDENTITY,
+            matrix::UNSPECIFIED,
+            matrix::FCC,
+            matrix::SMPTE240M,
+            matrix::YCGCO,
+            matrix::BT2020_CL,
+            matrix::SMPTE2085,
+            matrix::CHROMA_NCL,
+            matrix::CHROMA_CL,
+            matrix::ICTCP,
+            200,
+        ] {
+            let refusal = Nv12SamplerYcbcrModelAndRange::for_decoded_picture_color_vui(
+                &color_vui_with_matrix_and_range(matrix_coefficients, false),
+            )
+            .expect_err("no sampler model represents this matrix");
+            assert!(
+                matches!(
+                    refusal,
+                    VideoError::MatrixCoefficientsNotConvertible(refused) if refused == matrix_coefficients
+                ),
+                "matrix {matrix_coefficients} refused as {refusal}"
+            );
+        }
     }
 
     #[test]
