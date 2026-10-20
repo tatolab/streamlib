@@ -23,6 +23,8 @@ use streamlib::sdk::runtime::{
     raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
+use streamlib_relay_adapter_cloudflare::CloudflareRelayAdapterInstanceMaker;
+use streamlib_relay_adapter_moqpro::MoqProRelayAdapterInstanceMaker;
 use streamlib_relay_adapter_sdk::RelayAdapterInstanceMaker;
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
@@ -30,7 +32,9 @@ use crate::exposed_port_publisher::start_the_exposed_port_publisher;
 use crate::local_relay_adapter_of_this_runtime::the_local_relay_adapter_of_this_runtime;
 use crate::loopback_http_listener_of_this_runtime::serve_the_loopback_http_listener_of_this_runtime;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
-use crate::relay_instances_of_this_runtime::RelayInstancesOfThisRuntime;
+use crate::relay_instances_of_this_runtime::{
+    A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY, RelayInstancesOfThisRuntime,
+};
 use crate::relay_instances_record::RelayInstancesRecordFile;
 use crate::relay_secret_store::the_relay_secret_store_of_this_machine;
 
@@ -91,6 +95,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     let mut loopback_http_listener = None;
     let mut relay_instances = None;
     let mut exposed_port_publisher = None;
+    let mut dial_credential_renewal = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
             let joined_relay_instances = Arc::new(join_every_relay_instance_of_this_runtime(
@@ -108,6 +113,12 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                 &engine,
                 joined_relay_instances.relays_the_publisher_dials(),
             );
+            dial_credential_renewal = Some(engine.tokio_handle().spawn(
+                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(
+                    Arc::downgrade(&joined_relay_instances),
+                    A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
+                ),
+            ));
             log_the_kept_streams_reloaded_at_the_start(
                 &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
             );
@@ -119,6 +130,9 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             drop(local_api_served_for_the_engine.take());
             drop(loopback_http_listener.take());
             drop(exposed_port_publisher.take());
+            if let Some(dial_credential_renewal) = dial_credential_renewal.take() {
+                dial_credential_renewal.abort();
+            }
             // Inside the run: a load the local API began gives itself up only
             // on reading the machine's shutdown, which the run's end clears.
             if !engine.wait_until_this_reference_alone_holds_the_engine(
@@ -174,8 +188,9 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
 }
 
 /// Every relay instance this runtime holds, each joined: the local relay's
-/// two built in, then each `relays.json` records. A test build adds the
-/// secret-holding test relay's adapter.
+/// two built in, then each `relays.json` records, through the local,
+/// Cloudflare and moq.pro adapters. A test build adds the secret-holding test
+/// relay's adapter.
 fn join_every_relay_instance_of_this_runtime(
     engine: &Runner,
     tatolab_state_directory: &TatolabStateDirectory,
@@ -184,8 +199,13 @@ fn join_every_relay_instance_of_this_runtime(
         not(feature = "machine-directories-under-a-test-root"),
         expect(unused_mut, reason = "a test build adds an adapter")
     )]
-    let mut adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> =
-        vec![Box::new(the_local_relay_adapter_of_this_runtime(engine))];
+    let mut adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> = vec![
+        Box::new(the_local_relay_adapter_of_this_runtime(engine)),
+        Box::new(CloudflareRelayAdapterInstanceMaker),
+        Box::new(MoqProRelayAdapterInstanceMaker::for_the_machine(
+            engine.machine_name().clone(),
+        )),
+    ];
     #[cfg(feature = "machine-directories-under-a-test-root")]
     adapter_makers.push(Box::new(
         crate::secret_holding_test_relay_adapter::SecretHoldingTestRelayAdapterInstanceMaker,

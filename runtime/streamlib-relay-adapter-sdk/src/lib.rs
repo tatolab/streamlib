@@ -9,7 +9,7 @@ mod relay_instances_of_this_machine;
 mod relay_secret_setting;
 
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
@@ -89,34 +89,88 @@ pub struct JoinedRelay {
     pub dial_url: Url,
 }
 
-/// The credential the runtime presents when it dials a relay.
-pub enum RelayDialCredential {
-    /// A token carried as the [`RELAY_DIAL_TOKEN_QUERY_PARAMETER`] query
-    /// parameter, the shape every moq-auth server reads.
-    TokenInTheDialUrlQuery(SecretString),
+/// Where a [`RelayDialCredential`]'s token rides in the dial URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayDialTokenPlacement {
+    /// The [`RELAY_DIAL_TOKEN_QUERY_PARAMETER`] query parameter, the shape
+    /// every moq-auth server reads.
+    InTheQuery,
+    /// One path segment after the dial URL's path, the shape a relay that
+    /// reads the token from the path takes.
+    AsThePathSegment,
+}
+
+/// The credential the runtime presents when it dials a relay: a token, where
+/// it rides in the dial URL, and when it must be renewed, if ever.
+#[derive(Clone)]
+pub struct RelayDialCredential {
+    token: SecretString,
+    placement: RelayDialTokenPlacement,
+    renew_by: Option<Instant>,
 }
 
 impl RelayDialCredential {
+    /// `token` carried as the [`RELAY_DIAL_TOKEN_QUERY_PARAMETER`] query
+    /// parameter.
+    pub fn token_in_the_dial_url_query(token: SecretString) -> Self {
+        Self {
+            token,
+            placement: RelayDialTokenPlacement::InTheQuery,
+            renew_by: None,
+        }
+    }
+
+    /// `token` carried as one path segment after the dial URL's path.
+    pub fn token_as_the_dial_url_path_segment(token: SecretString) -> Self {
+        Self {
+            token,
+            placement: RelayDialTokenPlacement::AsThePathSegment,
+            renew_by: None,
+        }
+    }
+
+    /// This credential, asked for again by `renew_by`: the adapter answers
+    /// [`RelayAdapter::credential_for_dial`] with a fresh one then, and the
+    /// runtime dials with it.
+    pub fn renewed_by(mut self, renew_by: Instant) -> Self {
+        self.renew_by = Some(renew_by);
+        self
+    }
+
+    /// When this credential must be replaced by a fresh one, if ever.
+    pub fn renew_by(&self) -> Option<Instant> {
+        self.renew_by
+    }
+
     /// `dial_url` carrying this credential. The whole URL is the secret once
     /// it carries a token.
     pub fn dial_url_carrying_the_credential(&self, dial_url: &Url) -> SecretString {
-        match self {
-            Self::TokenInTheDialUrlQuery(token) => {
-                let mut carrying = dial_url.clone();
+        let mut carrying = dial_url.clone();
+        match self.placement {
+            RelayDialTokenPlacement::InTheQuery => {
                 carrying
                     .query_pairs_mut()
-                    .append_pair(RELAY_DIAL_TOKEN_QUERY_PARAMETER, token.expose_secret());
-                SecretString::from(String::from(carrying))
+                    .append_pair(RELAY_DIAL_TOKEN_QUERY_PARAMETER, self.token.expose_secret());
+            }
+            RelayDialTokenPlacement::AsThePathSegment => {
+                if let Ok(mut path_segments) = carrying.path_segments_mut() {
+                    path_segments
+                        .pop_if_empty()
+                        .push(self.token.expose_secret());
+                }
             }
         }
+        SecretString::from(String::from(carrying))
     }
 }
 
 impl fmt::Debug for RelayDialCredential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TokenInTheDialUrlQuery(_) => f.write_str("TokenInTheDialUrlQuery([REDACTED])"),
-        }
+        f.debug_struct("RelayDialCredential")
+            .field("token", &"[REDACTED]")
+            .field("placement", &self.placement)
+            .field("renew_by", &self.renew_by)
+            .finish()
     }
 }
 
@@ -175,6 +229,16 @@ pub enum RelayAdapterRefusal {
     },
 }
 
+impl RelayAdapterRefusal {
+    /// The settings of `relay_id` refused for `why`.
+    pub fn settings_refused(relay_id: &RelayInstanceId, why: impl fmt::Display) -> Self {
+        Self::SettingsRefused {
+            relay_id: relay_id.clone(),
+            why: why.to_string(),
+        }
+    }
+}
+
 /// An adapter's settings type: read from an instance's JSON, described by its
 /// JSON Schema.
 pub trait RelayInstanceSettings:
@@ -189,10 +253,8 @@ pub fn relay_instance_settings_from_json<S: RelayInstanceSettings>(
     relay_id: &RelayInstanceId,
     settings: serde_json::Value,
 ) -> Result<S, RelayAdapterRefusal> {
-    serde_json::from_value(settings).map_err(|unreadable| RelayAdapterRefusal::SettingsRefused {
-        relay_id: relay_id.clone(),
-        why: unreadable.to_string(),
-    })
+    serde_json::from_value(settings)
+        .map_err(|unreadable| RelayAdapterRefusal::settings_refused(relay_id, unreadable))
 }
 
 /// One relay instance, joined and left by `tatolabd`.
@@ -230,11 +292,20 @@ pub trait RelayAdapter: Send {
     fn broadcast_root(&self, machine: &MachineName) -> BroadcastPath;
 
     /// What the runtime presents when it dials this relay, or `None` when it
-    /// dials with nothing.
+    /// dials with nothing; asked again once the credential's
+    /// [`renew_by`](RelayDialCredential::renew_by) passes.
     fn credential_for_dial(&self) -> Option<RelayDialCredential>;
 
     /// This instance's connection state, as it changes.
     fn events(&self) -> RelayConnectionStateReceiver;
+
+    /// How often each broadcast's catalog is written again whole at this
+    /// relay, or `None` for a relay that hands a subscriber joining late the
+    /// latest group: one that hands it only objects written after it
+    /// subscribed would otherwise never show it a catalog left unchanged.
+    fn the_catalog_is_rewritten_whole_every(&self) -> Option<Duration> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -243,8 +314,9 @@ mod tests {
 
     #[test]
     fn a_token_rides_the_dial_urls_query_as_the_moq_auth_parameter() {
-        let credential =
-            RelayDialCredential::TokenInTheDialUrlQuery(SecretString::from("abc 123".to_string()));
+        let credential = RelayDialCredential::token_in_the_dial_url_query(SecretString::from(
+            "abc 123".to_string(),
+        ));
         let dial_url = Url::parse("http://127.0.0.1:4443/").unwrap();
         assert_eq!(
             credential
@@ -255,10 +327,51 @@ mod tests {
     }
 
     #[test]
+    fn a_token_rides_as_one_path_segment_after_the_dial_urls_path() {
+        let credential = RelayDialCredential::token_as_the_dial_url_path_segment(
+            SecretString::from("Tk-123_abc".to_string()),
+        );
+        for dial_url in [
+            "https://draft-16.relay.example/",
+            "https://draft-16.relay.example",
+        ] {
+            assert_eq!(
+                credential
+                    .dial_url_carrying_the_credential(&Url::parse(dial_url).unwrap())
+                    .expose_secret(),
+                "https://draft-16.relay.example/Tk-123_abc"
+            );
+        }
+    }
+
+    #[test]
     fn a_credential_never_prints_its_token() {
-        let credential =
-            RelayDialCredential::TokenInTheDialUrlQuery(SecretString::from("abc123".to_string()));
-        assert!(!format!("{credential:?}").contains("abc123"));
+        for credential in [
+            RelayDialCredential::token_in_the_dial_url_query(SecretString::from(
+                "abc123".to_string(),
+            )),
+            RelayDialCredential::token_as_the_dial_url_path_segment(SecretString::from(
+                "abc123".to_string(),
+            )),
+        ] {
+            assert!(!format!("{credential:?}").contains("abc123"));
+        }
+    }
+
+    #[test]
+    fn a_credential_names_when_it_is_renewed_or_none() {
+        let token = || SecretString::from("abc".to_string());
+        assert_eq!(
+            RelayDialCredential::token_in_the_dial_url_query(token()).renew_by(),
+            None
+        );
+        let renew_by = Instant::now() + Duration::from_secs(60);
+        assert_eq!(
+            RelayDialCredential::token_in_the_dial_url_query(token())
+                .renewed_by(renew_by)
+                .renew_by(),
+            Some(renew_by)
+        );
     }
 
     #[test]

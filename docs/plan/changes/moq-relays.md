@@ -177,7 +177,9 @@ reads them). Consumers (`examples/camera-audio-recorder`, `camera-webrtc-publish
   zero), a new group at `StartsGroup`. Under backpressure (the forwarder full) it abandons the
   rest of the current group and resumes at the next `StartsGroup`. The catalog is a
   `hang::catalog::Catalog` assembled from the ports' entries by section under their track names,
-  re-published as `catalog.json` and `catalog.json.z` when an entry or the exposed set changes;
+  re-published as `catalog.json` and `catalog.json.z` when an entry or the exposed set changes,
+  and written again whole as a fresh group on the period a relay's adapter names (owner,
+  2026-10-20);
   a port with no entry is a track the catalog does not list. Every exposed port is forwarded; no predicate chooses which.
 - **The adapter SDK** `runtime/streamlib-relay-adapter-sdk`: `trait RelayAdapter { fn kind(); fn
   settings_schema(); fn join(&mut self, settings) -> Result<Joined>; fn levels_served(); fn
@@ -215,8 +217,10 @@ reads them). Consumers (`examples/camera-audio-recorder`, `camera-webrtc-publish
   `moq-net 0.3.x`, `moq-tokio 0.19.x`, `hang 0.21.x`, `moq-auth 0.2.x`, `moq-relay 0.17.x` pinned exact.
 - **Hosted adapters.** `-cloudflare`: IETF drafts 14/16 through `moq-net`, a per-relay token in the
   settings (it rides the URL path, so the whole URL is a secret), no root — the adapter names
-  `<machine>/<stream>.hang` under the relay; `-moqpro`: the project's signing key in the store, JWTs
-  minted with `root`, `publish`, `exp`. Both ship; the live proof is rig-only, cannot-run without credentials.
+  `<machine>/<stream>.hang` under the relay, its catalogs written again whole every second
+  since a drafts subscriber receives only objects written after it subscribed (owner,
+  2026-10-20); `-moqpro`: the project's signing key in the store, JWTs minted with `root`,
+  `publish`, `exp`. Both ship; the live proof is rig-only, cannot-run without credentials.
 Rejected: a hand-edited settings file as the only way to join; the app as the only way; a
 plaintext credentials file where a store answers (owner, 2026-10-16); a secret as a CLI argument
 (owner, 2026-10-17, from the 2026-10-16 review).

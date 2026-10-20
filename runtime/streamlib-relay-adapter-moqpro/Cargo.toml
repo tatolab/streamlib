@@ -1,0 +1,28 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-relay-adapter-moqpro"
+description = "moq.pro's hosted MoQ relays: one project per instance, its signing key held in the OS secret store, each dial carrying a JWT the adapter mints for the machine's own broadcasts and renews before it expires."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
+# The signing key, the claims and the JWT a moq-auth relay verifies.
+moq-auth = { version = "=0.2.1", default-features = false }
+schemars = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+base64 = "0.22"
+
+[lints]
+workspace = true

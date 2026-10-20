@@ -17,7 +17,7 @@ use serde_json::json;
 
 use common::{
     SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, call_a_tool_over_the_local_api,
-    the_mode_of,
+    every_file_under, the_mode_of, the_relay_listed, the_relays_listed,
 };
 
 /// The secret every test looks for where it must not be.
@@ -25,27 +25,6 @@ const RELAY_SECRET: &str = "relay-secret-5f1c9a7e";
 
 /// The adapter a test build compiles in whose settings hold a secret.
 const SECRET_HOLDING_TEST_RELAY_ADAPTER: &str = "test-secret-holder";
-
-fn the_relays_listed(machine_root: &TatolabTestMachineRoot) -> serde_json::Value {
-    call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "list_relays",
-        json!({}),
-    )
-    .json()
-}
-
-fn the_relay_listed<'listing>(
-    listing: &'listing serde_json::Value,
-    relay_id: &str,
-) -> &'listing serde_json::Value {
-    listing["relays"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|relay| relay["relay_id"] == relay_id)
-        .unwrap_or_else(|| panic!("`{relay_id}` is not listed: {listing}"))
-}
 
 /// `process_id`'s environment as the kernel holds it.
 #[cfg(target_os = "linux")]
@@ -163,24 +142,6 @@ fn the_local_relays_two_instances_are_built_in_never_removed_and_never_added_to(
     runtime.interrupt_and_expect_a_clean_exit();
 }
 
-/// Every file under `directory`, read as text.
-fn every_file_under(directory: &std::path::Path) -> String {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return String::new();
-    };
-    entries
-        .filter_map(Result::ok)
-        .map(|entry| {
-            let path = entry.path();
-            if path.is_dir() {
-                every_file_under(&path)
-            } else {
-                String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default()).into_owned()
-            }
-        })
-        .collect()
-}
-
 #[test]
 fn a_relays_secret_reaches_no_log_line_even_where_rust_log_admits_trace() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
@@ -215,6 +176,116 @@ fn a_relays_secret_reaches_no_log_line_even_where_rust_log_admits_trace() {
     let runtime_log = every_file_under(&machine_root.runtime_log_directory());
     assert!(!runtime_log.is_empty(), "the runtime's own log is read");
     assert!(!runtime_log.contains(RELAY_SECRET), "{runtime_log}");
+}
+
+/// The token a Cloudflare relay's URL carries in its path.
+const CLOUDFLARE_URL_BORNE_TOKEN: &str = "cf-token-8a3d61b2";
+
+/// A local port nothing answers, so each hosted relay is dialed and redialed.
+fn a_port_nothing_answers() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+#[test]
+fn a_hosted_relays_token_and_signing_key_reach_no_log_line_listing_or_file_at_trace() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
+    tatolabd_command.env("RUST_LOG", "trace");
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
+    let unanswered_port = a_port_nothing_answers();
+    let project_key = moq_auth::Key::generate(
+        moq_auth::Algorithm::ES256,
+        Some(moq_auth::KeyId::decode("pb1test-default").unwrap()),
+    )
+    .unwrap();
+    let project_key_jwk = serde_json::to_value(&project_key).unwrap();
+    let private_scalar = project_key_jwk["d"].as_str().unwrap().to_string();
+
+    let added = |adapter: &str, settings: serde_json::Value| {
+        call_a_tool_over_the_local_api(
+            &machine_root.local_api_socket_path(),
+            "add_relay",
+            json!({"adapter": adapter, "settings": settings}),
+        )
+        .json()
+    };
+    assert_eq!(
+        added(
+            "cloudflare",
+            json!({"relay_url": format!("https://127.0.0.1:{unanswered_port}/{CLOUDFLARE_URL_BORNE_TOKEN}")})
+        )["relay_id"],
+        "cloudflare-1"
+    );
+    assert_eq!(
+        added(
+            "moqpro",
+            json!({
+                "project_id": "pb1test",
+                "signing_key": project_key_jwk.to_string(),
+                "relay_url": format!("https://127.0.0.1:{unanswered_port}"),
+            })
+        )["relay_id"],
+        "moqpro-1"
+    );
+    std::thread::sleep(std::time::Duration::from_secs(4));
+
+    let listing = the_relays_listed(&machine_root);
+    let cloudflare = the_relay_listed(&listing, "cloudflare-1");
+    assert_eq!(cloudflare["settings"], json!({}));
+    assert_eq!(cloudflare["secrets"], json!({"relay_url": "set"}));
+    let moqpro = the_relay_listed(&listing, "moqpro-1");
+    assert_eq!(
+        moqpro["settings"],
+        json!({"project_id": "pb1test", "relay_url": format!("https://127.0.0.1:{unanswered_port}")})
+    );
+    assert_eq!(moqpro["secrets"], json!({"signing_key": "set"}));
+    for listed in [cloudflare, moqpro] {
+        assert_ne!(
+            listed["connection_state"]["state"], "joined",
+            "no session of the publisher's connects to a port nothing answers: {listed}"
+        );
+    }
+    let graph =
+        call_a_tool_over_the_local_api(&machine_root.local_api_socket_path(), "graph", json!({}));
+    let relays_record =
+        std::fs::read_to_string(machine_root.state_directory().join("relays.json")).unwrap();
+    #[cfg(target_os = "linux")]
+    let environment = the_environment_of(runtime.process_id());
+    #[cfg(not(target_os = "linux"))]
+    let environment = String::new();
+    runtime.interrupt_and_expect_a_clean_exit();
+
+    let standard_error = runtime.standard_error();
+    assert!(
+        standard_error.contains("cloudflare-1") && standard_error.contains("moqpro-1"),
+        "the log is read: {standard_error}"
+    );
+    assert!(
+        standard_error.contains("the publisher dials the relay"),
+        "each hosted relay is dialed: {standard_error}"
+    );
+    let runtime_log = every_file_under(&machine_root.runtime_log_directory());
+    assert!(!runtime_log.is_empty(), "the runtime's own log is read");
+    for (shown_in, text) in [
+        ("list_relays", listing.to_string()),
+        ("graph", graph.text),
+        ("relays.json", relays_record),
+        ("the runtime's environment", environment),
+        ("the standard error", standard_error),
+        ("the runtime log", runtime_log),
+    ] {
+        for secret in [CLOUDFLARE_URL_BORNE_TOKEN, private_scalar.as_str(), "jwt="] {
+            assert!(
+                !text.contains(secret),
+                "`{secret}` is in {shown_in}:\n{text}"
+            );
+        }
+    }
 }
 
 /// One `/mcp/stdio` connection to the runtime, carrying JSON-RPC lines raw.
@@ -326,5 +397,6 @@ fn a_relays_secret_sent_over_mcp_stdio_in_any_shape_reaches_no_log_line_at_trace
     let standard_error = runtime.standard_error();
     assert!(!standard_error.contains(RELAY_SECRET), "{standard_error}");
     let runtime_log = every_file_under(&machine_root.runtime_log_directory());
+    assert!(!runtime_log.is_empty(), "the runtime's own log is read");
     assert!(!runtime_log.contains(RELAY_SECRET), "{runtime_log}");
 }

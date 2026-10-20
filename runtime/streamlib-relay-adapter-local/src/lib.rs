@@ -416,7 +416,7 @@ impl RelayAdapter for LocalRelayAdapter {
     }
 
     fn credential_for_dial(&self) -> Option<RelayDialCredential> {
-        Some(RelayDialCredential::TokenInTheDialUrlQuery(
+        Some(RelayDialCredential::token_in_the_dial_url_query(
             self.shared.runtime_publish_token.clone(),
         ))
     }

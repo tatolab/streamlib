@@ -2560,14 +2560,15 @@ entry reads as **message** (the glossary).
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
-  Wall clock is permitted on exactly four surfaces and nowhere else: log record `host_ts`
-  and `source_ts`, log file naming, and the local relay certificate's validity — its UTC
+  Wall clock is permitted on exactly five surfaces and nowhere else: log record `host_ts`
+  and `source_ts`, log file naming, the local relay certificate's validity — its UTC
   `notBefore` / `notAfter`, issued and aged by the one file that writes the certificate
-  (owner, 2026-10-17) — their job is correlating with the outside world, which monotonic
-  time cannot do. A wall-clock value never enters the data plane and is never compared
+  (owner, 2026-10-17) — and a relay token's expiry — the UTC `iat` / `exp` of the moq.pro
+  JWTs the moq.pro adapter and the live proof's subscribe minter sign (owner, 2026-10-20) —
+  their job is correlating with the outside world, which monotonic time cannot do. A wall-clock value never enters the data plane and is never compared
   against a media timestamp; another surface is a plan change, not a judgement call. The
   list is mechanically enforced, with no per-line pragma and no opt-out attribute: the
-  permitted surfaces are a closed set in the gate, so a fifth is a source change that
+  permitted surfaces are a closed set in the gate, so a sixth is a source change that
   surfaces in review rather than a line quietly appended, and an
   entry whose file stops reading a wall clock is a licence the gate makes you hand back. The
   allowlist is per-file, which is why a data-plane file never joins it — a machine-global
@@ -3758,8 +3759,11 @@ entry reads as **message** (the glossary).
   implements it: the local relay, Cloudflare and moq.pro; Red5 waits on its cost. What differs
   is the MoQ dialect the relay speaks (`moq-net` negotiates moq-lite and the IETF drafts;
   Cloudflare's relays are on the drafts, `moq-relay` on moq-lite), how a machine
-  authenticates and refreshes its credential, and the root the relay assigns the machine or
-  leaves the adapter to name. Every adapter is compiled into `tatolabd`, so a headless machine
+  authenticates and refreshes its credential, the root the relay assigns the machine or
+  leaves the adapter to name, and how often each broadcast's catalog is written again whole
+  for a relay that hands a subscriber joining late only the objects written after it
+  subscribed — Cloudflare's, every second — which the publisher does when its adapter says
+  so (owner, 2026-10-20). Every adapter is compiled into `tatolabd`, so a headless machine
   has them all, and any number of instances of each is added and configured through
   `tatolabd`, by the app or at the CLI; `relays.json` holds the instances, each with its own
   settings and whatever credential its provider's SDK needs, held in the OS secret store and

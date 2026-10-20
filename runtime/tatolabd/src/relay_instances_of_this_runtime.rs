@@ -8,7 +8,8 @@
 //! a listing or a log line.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
@@ -22,8 +23,16 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use tokio::sync::watch;
 
 use crate::exposed_port_publisher::RelayTheExposedPortPublisherDials;
+use crate::exposed_port_publisher_session_state::{
+    ExposedPortPublisherSessionStateSender, a_relay_instances_session_state_not_dialed,
+};
 use crate::relay_instances_record::{RecordedRelayInstance, RelayInstancesRecordFile};
 use crate::relay_secret_store::RelaySecretStore;
+
+/// The longest a renewing relay's credential goes unchecked: a session its
+/// relay ended, or a renewal a machine's sleep let pass, is renewed within it.
+pub(crate) const A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY: Duration =
+    Duration::from_secs(30);
 
 /// The relays the publisher dials, as they change.
 pub(crate) type RelaysThePublisherDialsReceiver =
@@ -36,14 +45,37 @@ struct RelayAdapterOfThisRuntime {
     maker: Box<dyn RelayAdapterInstanceMaker>,
 }
 
+/// One join of a relay instance: where its adapter said to dial it, and how
+/// the publisher dials it, its credential asked for once per join and again
+/// once due.
+struct JoinOfARelayInstance {
+    joined: JoinedRelay,
+    dialed_as: Option<RelayTheExposedPortPublisherDials>,
+}
+
+impl JoinOfARelayInstance {
+    fn just_joined(joined: JoinedRelay) -> Self {
+        Self {
+            joined,
+            dialed_as: None,
+        }
+    }
+}
+
 /// One relay instance this runtime holds.
 struct HeldRelayInstance {
     recorded: RecordedRelayInstance,
     built_in: bool,
     secret_settings_set: BTreeSet<String>,
     adapter: Option<Box<dyn RelayAdapter>>,
-    joined: Option<JoinedRelay>,
+    join: Option<JoinOfARelayInstance>,
     why_not_joined: Option<String>,
+    session_state: ExposedPortPublisherSessionStateSender,
+}
+
+/// Whether `adapter` carries any exposed port, so has something to publish.
+fn serves_a_level(adapter: &dyn RelayAdapter) -> bool {
+    !adapter.levels_served().is_empty()
 }
 
 impl HeldRelayInstance {
@@ -57,8 +89,9 @@ impl HeldRelayInstance {
             built_in,
             secret_settings_set,
             adapter: None,
-            joined: None,
+            join: None,
             why_not_joined: None,
+            session_state: a_relay_instances_session_state_not_dialed(),
         }
     }
 
@@ -66,7 +99,53 @@ impl HeldRelayInstance {
         if let Some(adapter) = &mut self.adapter {
             adapter.leave();
         }
-        self.joined = None;
+        self.join = None;
+    }
+
+    /// How the publisher dials this instance, or `None` while it is not
+    /// joined or serves no level, so has nothing to publish: the one asked
+    /// for at its join, or a fresh one once its credential is due at `now` —
+    /// its renewal passed, or the session it opened ended.
+    fn dialed_as_at(
+        &mut self,
+        machine: &MachineName,
+        now: Instant,
+    ) -> Option<RelayTheExposedPortPublisherDials> {
+        let adapter = self
+            .adapter
+            .as_deref()
+            .filter(|adapter| serves_a_level(*adapter))?;
+        let join = self.join.as_mut()?;
+        let due = join
+            .dialed_as
+            .as_ref()
+            .is_none_or(|dialed_as| dialed_as.its_credential_is_due_at(now));
+        if due {
+            join.dialed_as = Some(RelayTheExposedPortPublisherDials::of_a_joined_relay(
+                adapter,
+                &join.joined,
+                machine,
+                self.session_state.clone(),
+            ));
+        }
+        join.dialed_as.clone()
+    }
+
+    /// Where this instance stands, its adapter's state and, once joined, the
+    /// publisher's session with it if it serves a level.
+    fn connection_state_as_listed(&self) -> ListedRelayConnectionState {
+        match (&self.why_not_joined, &self.adapter) {
+            (Some(why), _) => ListedRelayConnectionState::NotJoined {
+                why: Some(why.clone()),
+            },
+            (None, Some(adapter)) => match adapter.events().borrow().as_listed() {
+                ListedRelayConnectionState::Joined if serves_a_level(adapter.as_ref()) => {
+                    self.session_state.borrow().as_listed_for_a_joined_relay()
+                }
+                not_joined => not_joined,
+            },
+            (None, None) => ListedRelayConnectionState::NotJoined { why: None },
+        }
     }
 }
 
@@ -177,6 +256,63 @@ impl RelayInstancesOfThisRuntime {
         self.relays_the_publisher_dials.subscribe()
     }
 
+    /// Hand the publisher a fresh credential for each relay whose credential
+    /// falls due — its renewal passed, or the session it opened ended — until
+    /// `relay_instances` is dropped. A renewing relay is checked at least every
+    /// `checked_at_least_every` — [`A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY`]
+    /// in the runtime — since its renewal is timed on a clock that stops while
+    /// the machine sleeps and its token's expiry on one that does not.
+    pub(crate) async fn renew_each_dial_credential_once_due(
+        relay_instances: Weak<Self>,
+        checked_at_least_every: Duration,
+    ) {
+        let Some(mut relays) = relay_instances
+            .upgrade()
+            .map(|relay_instances| relay_instances.relays_the_publisher_dials())
+        else {
+            return;
+        };
+        loop {
+            let next_check = relays
+                .borrow_and_update()
+                .iter()
+                .filter_map(|relay| relay.renew_by)
+                .min()
+                .map(|renew_by| renew_by.min(Instant::now() + checked_at_least_every));
+            let a_check_is_due = async {
+                match next_check {
+                    Some(check_at) => tokio::time::sleep_until(check_at.into()).await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                changed = relays.changed() => if changed.is_err() {
+                    return;
+                },
+                () = a_check_is_due => {
+                    let now = Instant::now();
+                    let relays_due = relays
+                        .borrow()
+                        .iter()
+                        .filter(|relay| relay.its_credential_is_due_at(now))
+                        .map(|relay| relay.relay_id.to_string())
+                        .collect::<Vec<_>>();
+                    if relays_due.is_empty() {
+                        continue;
+                    }
+                    let Some(relay_instances) = relay_instances.upgrade() else {
+                        return;
+                    };
+                    tracing::info!(
+                        relays = %relays_due.join(", "),
+                        "a dial credential is due; the publisher is handed a fresh one"
+                    );
+                    relay_instances.hand_the_publisher_every_joined_relay();
+                }
+            }
+        }
+    }
+
     /// Leave every relay; the publisher dials none afterwards.
     pub(crate) fn leave_every_relay(&self) {
         for held in self.lock_the_held_instances().iter_mut() {
@@ -276,12 +412,12 @@ impl RelayInstancesOfThisRuntime {
         match joined {
             Ok(joined) => {
                 tracing::info!(relay = %held.recorded.relay_id, "the relay is joined");
-                held.joined = Some(joined);
+                held.join = Some(JoinOfARelayInstance::just_joined(joined));
                 held.why_not_joined = None;
                 Ok(())
             }
             Err(refusal) => {
-                held.joined = None;
+                held.join = None;
                 held.why_not_joined = Some(refusal.to_string());
                 Err(refusal.into())
             }
@@ -416,18 +552,11 @@ impl RelayInstancesOfThisRuntime {
     }
 
     fn hand_the_publisher_every_joined_relay(&self) {
+        let now = Instant::now();
         let relays: Vec<RelayTheExposedPortPublisherDials> = self
             .lock_the_held_instances()
-            .iter()
-            .filter_map(|held| {
-                let adapter = held.adapter.as_deref()?;
-                let joined = held.joined.as_ref()?;
-                Some(RelayTheExposedPortPublisherDials::of_a_joined_relay(
-                    adapter,
-                    joined,
-                    &self.machine_name,
-                ))
-            })
+            .iter_mut()
+            .filter_map(|held| held.dialed_as_at(&self.machine_name, now))
             .collect();
         self.relays_the_publisher_dials.send_replace(relays);
     }
@@ -697,13 +826,7 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
                         (setting.clone(), presence)
                     })
                     .collect(),
-                connection_state: match (&held.why_not_joined, &held.adapter) {
-                    (Some(why), _) => ListedRelayConnectionState::NotJoined {
-                        why: Some(why.clone()),
-                    },
-                    (None, Some(adapter)) => adapter.events().borrow().as_listed(),
-                    (None, None) => ListedRelayConnectionState::NotJoined { why: None },
-                },
+                connection_state: held.connection_state_as_listed(),
             })
             .collect()
     }
@@ -717,7 +840,9 @@ impl Drop for RelayInstancesOfThisRuntime {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::Duration;
 
     use serde::Deserialize;
     use serde_json::json;
@@ -729,6 +854,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::exposed_port_publisher_session_state::ExposedPortPublisherSessionState;
     use crate::relay_secret_store::RelaySecretsFallbackFile;
 
     /// The token a provider's relay URL carries in its path.
@@ -753,6 +879,8 @@ mod tests {
         relay_id: RelayInstanceId,
         joins_seen: JoinsSeenByTheProvider,
         connection_state: watch::Sender<RelayConnectionState>,
+        credential_renewed_every: Option<Duration>,
+        credentials_minted: Arc<AtomicUsize>,
     }
 
     impl RelayAdapter for ProviderRelayAdapter {
@@ -805,7 +933,14 @@ mod tests {
         }
 
         fn credential_for_dial(&self) -> Option<RelayDialCredential> {
-            None
+            let renewed_every = self.credential_renewed_every?;
+            let minted = self.credentials_minted.fetch_add(1, Ordering::SeqCst) + 1;
+            Some(
+                RelayDialCredential::token_in_the_dial_url_query(SecretString::from(format!(
+                    "minted-{minted}"
+                )))
+                .renewed_by(Instant::now() + renewed_every),
+            )
         }
 
         fn events(&self) -> RelayConnectionStateReceiver {
@@ -815,6 +950,8 @@ mod tests {
 
     struct ProviderRelayAdapterInstanceMaker {
         joins_seen: JoinsSeenByTheProvider,
+        credential_renewed_every: Option<Duration>,
+        credentials_minted: Arc<AtomicUsize>,
     }
 
     impl RelayAdapterInstanceMaker for ProviderRelayAdapterInstanceMaker {
@@ -830,6 +967,8 @@ mod tests {
                 relay_id: relay_id.clone(),
                 joins_seen: Arc::clone(&self.joins_seen),
                 connection_state: watch::channel(RelayConnectionState::NotJoined).0,
+                credential_renewed_every: self.credential_renewed_every,
+                credentials_minted: Arc::clone(&self.credentials_minted),
             }))
         }
     }
@@ -873,6 +1012,8 @@ mod tests {
     struct RelayInstancesOverAStateDirectory {
         state_directory: tempfile::TempDir,
         joins_seen: JoinsSeenByTheProvider,
+        credential_renewed_every: Option<Duration>,
+        credentials_minted: Arc<AtomicUsize>,
     }
 
     impl RelayInstancesOverAStateDirectory {
@@ -880,6 +1021,17 @@ mod tests {
             Self {
                 state_directory: tempfile::tempdir().unwrap(),
                 joins_seen: Arc::default(),
+                credential_renewed_every: None,
+                credentials_minted: Arc::default(),
+            }
+        }
+
+        /// A machine whose provider relays dial with a credential minted
+        /// fresh at each ask and renewed every `renewed_every`.
+        fn whose_provider_renews_its_credential_every(renewed_every: Duration) -> Self {
+            Self {
+                credential_renewed_every: Some(renewed_every),
+                ..Self::new()
             }
         }
 
@@ -897,6 +1049,8 @@ mod tests {
                     Box::new(BuiltInOnlyRelayAdapterInstanceMaker),
                     Box::new(ProviderRelayAdapterInstanceMaker {
                         joins_seen: Arc::clone(&self.joins_seen),
+                        credential_renewed_every: self.credential_renewed_every,
+                        credentials_minted: Arc::clone(&self.credentials_minted),
                     }),
                 ],
                 RelayInstancesRecordFile::at(self.record_path()),
@@ -939,6 +1093,227 @@ mod tests {
             .unwrap_or_else(|| panic!("`{relay_id}` is not listed: {listing:?}"))
     }
 
+    /// The publisher's session with each relay handed over connects.
+    fn the_publishers_session_connects_to_every_relay_handed_over(
+        relay_instances: &RelayInstancesOfThisRuntime,
+    ) {
+        report_the_publishers_session_with(
+            relay_instances,
+            ExposedPortPublisherSessionState::Connected,
+        );
+    }
+
+    fn report_the_publishers_session_with(
+        relay_instances: &RelayInstancesOfThisRuntime,
+        session_state: ExposedPortPublisherSessionState,
+    ) {
+        for relay in relay_instances.relays_the_publisher_dials().borrow().iter() {
+            relay.session_state.send_replace(session_state.clone());
+        }
+    }
+
+    fn the_dial_url_handed_over_for(
+        relay_instances: &RelayInstancesOfThisRuntime,
+        relay_id: &str,
+    ) -> String {
+        relay_instances
+            .relays_the_publisher_dials()
+            .borrow()
+            .iter()
+            .find(|relay| relay.relay_id.0 == relay_id)
+            .map(|relay| {
+                relay
+                    .dial_url_carrying_the_credential
+                    .expose_secret()
+                    .to_string()
+            })
+            .unwrap_or_else(|| panic!("`{relay_id}` is not handed to the publisher"))
+    }
+
+    #[test]
+    fn a_joined_relay_is_listed_as_the_publishers_session_with_it_stands() {
+        let machine = RelayInstancesOverAStateDirectory::new();
+        let relay_instances = machine.start_a_runtime();
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("a")))
+            .unwrap();
+        let state_listed = || {
+            listed(&relay_instances.list_relays(), "provider-1")
+                .connection_state
+                .clone()
+        };
+        assert_eq!(state_listed(), ListedRelayConnectionState::Joining);
+        the_publishers_session_connects_to_every_relay_handed_over(&relay_instances);
+        assert_eq!(state_listed(), ListedRelayConnectionState::Joined);
+        report_the_publishers_session_with(
+            &relay_instances,
+            ExposedPortPublisherSessionState::Redialing,
+        );
+        assert!(
+            matches!(state_listed(), ListedRelayConnectionState::Lost { .. }),
+            "{:?}",
+            state_listed()
+        );
+        report_the_publishers_session_with(
+            &relay_instances,
+            ExposedPortPublisherSessionState::Ended {
+                why: "unauthorized".to_string(),
+            },
+        );
+        assert_eq!(
+            state_listed(),
+            ListedRelayConnectionState::NotJoined {
+                why: Some("the relay ended the publisher's session: unauthorized".to_string())
+            }
+        );
+        assert_eq!(
+            listed(&relay_instances.list_relays(), "built-in-only-relay").connection_state,
+            ListedRelayConnectionState::NotJoined {
+                why: Some(
+                    "the relay `built-in-only-relay` could not be joined: no relay program on \
+                     this machine"
+                        .to_string()
+                )
+            },
+            "an instance its adapter never joined is listed by its adapter's refusal"
+        );
+    }
+
+    #[test]
+    fn a_credential_not_yet_due_is_kept_through_another_relays_change() {
+        let machine = RelayInstancesOverAStateDirectory::whose_provider_renews_its_credential_every(
+            Duration::from_secs(3600),
+        );
+        let relay_instances = machine.start_a_runtime();
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("a")))
+            .unwrap();
+        let first_dial_url = the_dial_url_handed_over_for(&relay_instances, "provider-1");
+        assert_eq!(first_dial_url, "https://relay.example/?jwt=minted-1");
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("b")))
+            .unwrap();
+        assert_eq!(
+            the_dial_url_handed_over_for(&relay_instances, "provider-1"),
+            first_dial_url,
+            "a hand-over for another relay asks no fresh credential of one not yet due"
+        );
+        relay_instances
+            .configure_relay(
+                "provider-1",
+                json!({"region": "eu"}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        assert_ne!(
+            the_dial_url_handed_over_for(&relay_instances, "provider-1"),
+            first_dial_url,
+            "joining again asks for a fresh credential"
+        );
+    }
+
+    /// A renewing relay's session ended long before its renewal: the loop's
+    /// own check, not a renewal, mints it again — what a machine waking from a
+    /// sleep its renewal clock did not count needs.
+    #[test]
+    fn the_renewal_loop_mints_again_a_renewing_relay_whose_session_ended_before_its_renewal() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let machine = RelayInstancesOverAStateDirectory::whose_provider_renews_its_credential_every(
+            Duration::from_secs(3600),
+        );
+        let relay_instances = Arc::new(machine.start_a_runtime());
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("a")))
+            .unwrap();
+        let first_dial_url = the_dial_url_handed_over_for(&relay_instances, "provider-1");
+        let mut relays = relay_instances.relays_the_publisher_dials();
+        relays.borrow_and_update();
+        async_runtime.block_on(async {
+            let renewing = tokio::spawn(
+                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(
+                    Arc::downgrade(&relay_instances),
+                    Duration::from_millis(200),
+                ),
+            );
+            tokio::task::yield_now().await;
+            report_the_publishers_session_with(
+                &relay_instances,
+                ExposedPortPublisherSessionState::Ended {
+                    why: "unauthorized".to_string(),
+                },
+            );
+            tokio::time::timeout(Duration::from_secs(5), relays.changed())
+                .await
+                .expect("the loop's check hands a fresh credential, with no renewal due")
+                .unwrap();
+            renewing.abort();
+        });
+        assert_ne!(
+            the_dial_url_handed_over_for(&relay_instances, "provider-1"),
+            first_dial_url
+        );
+    }
+
+    #[test]
+    fn a_renewing_relay_whose_session_ended_is_handed_a_fresh_credential() {
+        let machine = RelayInstancesOverAStateDirectory::whose_provider_renews_its_credential_every(
+            Duration::from_secs(3600),
+        );
+        let relay_instances = machine.start_a_runtime();
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("a")))
+            .unwrap();
+        let first_dial_url = the_dial_url_handed_over_for(&relay_instances, "provider-1");
+        report_the_publishers_session_with(
+            &relay_instances,
+            ExposedPortPublisherSessionState::Ended {
+                why: "unauthorized".to_string(),
+            },
+        );
+        relay_instances.hand_the_publisher_every_joined_relay();
+        assert_ne!(
+            the_dial_url_handed_over_for(&relay_instances, "provider-1"),
+            first_dial_url,
+            "a token the relay refused, or let expire, is minted again"
+        );
+    }
+
+    #[test]
+    fn a_credential_falling_due_is_renewed_and_handed_to_the_publisher() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let machine = RelayInstancesOverAStateDirectory::whose_provider_renews_its_credential_every(
+            Duration::from_millis(200),
+        );
+        let relay_instances = Arc::new(machine.start_a_runtime());
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("a")))
+            .unwrap();
+        let first_dial_url = the_dial_url_handed_over_for(&relay_instances, "provider-1");
+        let mut relays = relay_instances.relays_the_publisher_dials();
+        relays.borrow_and_update();
+        async_runtime.block_on(async {
+            let renewing = tokio::spawn(
+                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(
+                    Arc::downgrade(&relay_instances),
+                    A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
+                ),
+            );
+            tokio::time::timeout(Duration::from_secs(5), relays.changed())
+                .await
+                .expect("the credential is renewed once due")
+                .unwrap();
+            renewing.abort();
+        });
+        let renewed_dial_url = the_dial_url_handed_over_for(&relay_instances, "provider-1");
+        assert_ne!(renewed_dial_url, first_dial_url);
+        assert!(renewed_dial_url.starts_with("https://relay.example/?jwt=minted-"));
+    }
+
     #[test]
     fn a_second_instance_of_an_adapter_is_added_from_its_settings_alone_and_listed() {
         let machine = RelayInstancesOverAStateDirectory::new();
@@ -967,6 +1342,14 @@ mod tests {
                 ("provider-2", false)
             ]
         );
+        let second_listed = listed(&listing, "provider-2");
+        assert_eq!(
+            second_listed.connection_state,
+            ListedRelayConnectionState::Joining,
+            "joined by its adapter, and no session of the publisher's connected yet"
+        );
+        the_publishers_session_connects_to_every_relay_handed_over(&relay_instances);
+        let listing = relay_instances.list_relays();
         let second_listed = listed(&listing, "provider-2");
         assert_eq!(second_listed.adapter, "provider");
         assert_eq!(
@@ -1140,6 +1523,7 @@ mod tests {
             a_relay_url_carrying("kept"),
             "it joined again with what it had"
         );
+        the_publishers_session_connects_to_every_relay_handed_over(&relay_instances);
         assert_eq!(
             listed(&relay_instances.list_relays(), "provider-1").connection_state,
             ListedRelayConnectionState::Joined
@@ -1331,6 +1715,7 @@ mod tests {
             ),
             "it joined again with what it had"
         );
+        the_publishers_session_connects_to_every_relay_handed_over(&relay_instances);
         let listing = relay_instances.list_relays();
         let held = listed(&listing, "provider-1");
         assert_eq!(
@@ -1373,6 +1758,8 @@ mod tests {
         let relay_instances = RelayInstancesOfThisRuntime::join_every_relay_instance(
             vec![Box::new(ProviderRelayAdapterInstanceMaker {
                 joins_seen: Arc::clone(&machine.joins_seen),
+                credential_renewed_every: None,
+                credentials_minted: Arc::default(),
             })],
             RelayInstancesRecordFile::at(machine.record_path()),
             Box::new(SecretStoreRefusingEveryWrite),

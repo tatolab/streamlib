@@ -6,7 +6,8 @@
 //! first `N` objects into `<dir>` — one file each, an index of their groups,
 //! timestamps and payload form, and the track's catalog entry. A stream's exposed port is the
 //! track `<node>/<port>` of the broadcast `<machine>/<stream>.hang`; the
-//! machine's local relay answers at `http://127.0.0.1:4443`.
+//! machine's local relay answers at `http://127.0.0.1:4443`. A relay URL
+//! carrying a credential is read from stdin with `-`, never an argument.
 
 // stderr is this tool's progress and refusal channel, as it is the CLI's.
 #![allow(clippy::disallowed_macros)]
@@ -26,9 +27,9 @@ use relay_track_object_dump::{
 };
 
 /// How long the broadcast's catalog is read for a snapshot listing the track
-/// before the track is written as sent: a port's entry may join the catalog
-/// only once its first message is written.
-const THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR: Duration = Duration::from_secs(5);
+/// before the track is written as sent, unless `--catalog-wait-at-most` says:
+/// a port's entry may join the catalog only once its first message is written.
+const THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR_SECONDS: u64 = 5;
 
 /// How old a group may grow behind a newer one before the read gives it up.
 /// The stack's default gives up at once, which suits a player; a dump wants
@@ -43,7 +44,8 @@ const THE_RELAY_IS_TOLD_THE_SESSION_CLOSED_WITHIN: Duration = Duration::from_sec
 #[command(name = "tatolab-read-track")]
 struct ReadTrackArguments {
     /// The relay's URL; `http://` dials it with the certificate fingerprint the
-    /// relay serves.
+    /// relay serves. `-` reads it from stdin, for a URL carrying a credential,
+    /// which is then named by its scheme, host and port alone.
     relay_url: String,
     /// The broadcast's path at the relay, e.g. `<machine>/<stream>.hang`.
     broadcast: String,
@@ -58,6 +60,14 @@ struct ReadTrackArguments {
     /// How long to wait for every object before ending without them.
     #[arg(long = "wait-at-most", value_name = "SECONDS", default_value_t = 30)]
     wait_at_most_seconds: u64,
+    /// How long to read the broadcast's catalog for an entry listing the track
+    /// before writing its objects as sent.
+    #[arg(
+        long = "catalog-wait-at-most",
+        value_name = "SECONDS",
+        default_value_t = THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR_SECONDS
+    )]
+    catalog_wait_at_most_seconds: u64,
 }
 
 fn main() -> ExitCode {
@@ -83,13 +93,39 @@ fn main() -> ExitCode {
     }
 }
 
+/// What a relay URL argument of `-` names: the URL is read from stdin.
+const RELAY_URL_READ_FROM_STDIN: &str = "-";
+
+/// The relay URL `relay_url_argument` names, and how a message names it: as
+/// written, or by its scheme, host and port alone when it was read from stdin
+/// and may carry a credential anywhere else in it.
+fn the_relay_url_and_how_it_is_named(relay_url_argument: &str) -> Result<(url::Url, String)> {
+    if relay_url_argument != RELAY_URL_READ_FROM_STDIN {
+        let relay_url = relay_url_argument
+            .parse()
+            .with_context(|| format!("`{relay_url_argument}` is not a URL"))?;
+        return Ok((relay_url, relay_url_argument.to_string()));
+    }
+    let mut relay_url_read = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut relay_url_read)
+        .context("the relay URL could not be read from stdin")?;
+    let relay_url: url::Url = relay_url_read
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("the relay URL read from stdin is not a URL"))?;
+    let relay_as_named = the_relay_named_by_its_origin_alone(&relay_url);
+    Ok((relay_url, relay_as_named))
+}
+
+/// `relay_url` as `scheme://host[:port]`, nothing of its path or query.
+fn the_relay_named_by_its_origin_alone(relay_url: &url::Url) -> String {
+    relay_url.origin().ascii_serialization()
+}
+
 /// Read `arguments.object_count` objects of the track into the output
 /// directory, or refuse naming how many arrived in the time allowed.
 async fn read_the_track(arguments: &ReadTrackArguments) -> Result<u64> {
-    let relay_url: url::Url = arguments
-        .relay_url
-        .parse()
-        .with_context(|| format!("`{}` is not a URL", arguments.relay_url))?;
+    let (relay_url, relay_as_named) = the_relay_url_and_how_it_is_named(&arguments.relay_url)?;
     let moq_client = moq_tokio::connect::Config::default()
         .init(moq_tokio::quic::Config::default())
         .context("no MoQ client builds")?
@@ -106,7 +142,7 @@ async fn read_the_track(arguments: &ReadTrackArguments) -> Result<u64> {
     let read = tokio::time::timeout(wait_at_most, async {
         let broadcast = tokio::select! {
             ended = connection.closed() => {
-                return Err(anyhow!("the session with {} ended before the broadcast was announced: {ended:?}", arguments.relay_url));
+                return Err(anyhow!("the session with {relay_as_named} ended before the broadcast was announced: {ended:?}"));
             }
             broadcast = announced_broadcasts.routed_broadcast(arguments.broadcast.as_str()) => {
                 broadcast.with_context(|| format!("the broadcast `{}` was refused", arguments.broadcast))?
@@ -153,14 +189,19 @@ async fn read_the_tracks_objects(
         .await
         .with_context(|| format!("the track `{}` was refused", arguments.track))?
         .ordered();
-    let (payload_form, catalog_entry) =
-        match the_tracks_catalog_entry(broadcast, &arguments.track).await {
-            Ok(catalog_entry) => (catalog_entry.payload_form()?, Some(catalog_entry)),
-            Err(why_not) => {
-                eprintln!("tatolab-read-track: {why_not}; its objects are written as sent");
-                (RelayTrackObjectPayloadForm::AsSent, None)
-            }
-        };
+    let (payload_form, catalog_entry) = match the_tracks_catalog_entry(
+        broadcast,
+        &arguments.track,
+        Duration::from_secs(arguments.catalog_wait_at_most_seconds),
+    )
+    .await
+    {
+        Ok(catalog_entry) => (catalog_entry.payload_form()?, Some(catalog_entry)),
+        Err(why_not) => {
+            eprintln!("tatolab-read-track: {why_not}; its objects are written as sent");
+            (RelayTrackObjectPayloadForm::AsSent, None)
+        }
+    };
     let mut dump =
         RelayTrackObjectDumpDirectory::create(&arguments.output_directory, payload_form)?;
     if let Some(catalog_entry) = &catalog_entry {
@@ -180,6 +221,16 @@ async fn read_the_tracks_objects(
             ));
         };
         let group_sequence = group.sequence;
+        // A relay on the IETF drafts may hand a late subscriber the group it
+        // joined from the next object on; a dump opens where a decoder can.
+        if dump.objects_written() == 0 && group.index() > 0 {
+            eprintln!(
+                "tatolab-read-track: group {group_sequence} was joined at object {}; its \
+                 objects are skipped for the next group's start",
+                group.index()
+            );
+            continue;
+        }
         let mut starts_group = true;
         while dump.objects_written() < arguments.object_count {
             let object = match group.read_frame().await {
@@ -206,12 +257,13 @@ async fn read_the_tracks_objects(
 }
 
 /// The track's entry in the broadcast's catalog, read from the first snapshot
-/// that lists it within [`THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR`], or why
-/// none did.
+/// that lists it within `wait_at_most`, or why none did.
 async fn the_tracks_catalog_entry(
     broadcast: &moq_net::broadcast::Consumer,
     track_name: &str,
+    wait_at_most: Duration,
 ) -> Result<RelayTrackCatalogEntry> {
+    let awaited_from = std::time::Instant::now();
     let catalog_track = broadcast
         .track(hang::Catalog::DEFAULT_NAME)?
         .subscribe(None)
@@ -221,7 +273,7 @@ async fn the_tracks_catalog_entry(
         catalog_track,
         moq_json::snapshot::consumer::Config::default(),
     );
-    tokio::time::timeout(THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR, async {
+    tokio::time::timeout(wait_at_most, async {
         loop {
             let Some(snapshot) = catalog.next().await.context("the catalog does not read")? else {
                 return Err(anyhow!("the catalog ended without listing `{track_name}`"));
@@ -229,14 +281,49 @@ async fn the_tracks_catalog_entry(
             if let Some(catalog_entry) =
                 RelayTrackCatalogEntry::of_the_track_named(&snapshot, track_name)
             {
+                eprintln!(
+                    "tatolab-read-track: the catalog listed `{track_name}` after {:.1?}",
+                    awaited_from.elapsed()
+                );
                 return Ok(catalog_entry);
             }
         }
     })
     .await
     .map_err(|_elapsed| {
-        anyhow!(
-            "the catalog did not list `{track_name}` within {THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR:?}"
-        )
+        anyhow!("the catalog did not list `{track_name}` within {wait_at_most:?}")
     })?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_relay_read_from_stdin_is_named_by_its_origin_and_never_its_path_or_query() {
+        for (relay_url, named) in [
+            (
+                "https://draft-16.relay.example/sub-token-91c2",
+                "https://draft-16.relay.example",
+            ),
+            (
+                "https://cdn.relay.example/pb1test?jwt=eyJ.secret.sig",
+                "https://cdn.relay.example",
+            ),
+            ("http://127.0.0.1:4443/?jwt=abc", "http://127.0.0.1:4443"),
+        ] {
+            assert_eq!(
+                the_relay_named_by_its_origin_alone(&relay_url.parse().unwrap()),
+                named
+            );
+        }
+    }
+
+    #[test]
+    fn a_relay_url_given_as_an_argument_is_named_as_written() {
+        let (relay_url, named) =
+            the_relay_url_and_how_it_is_named("http://127.0.0.1:4443").unwrap();
+        assert_eq!(relay_url.as_str(), "http://127.0.0.1:4443/");
+        assert_eq!(named, "http://127.0.0.1:4443");
+    }
 }

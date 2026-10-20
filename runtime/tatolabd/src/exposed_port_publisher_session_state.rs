@@ -1,0 +1,201 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Where the publisher's session with each relay stands, reported from the
+//! session's own status as it changes, and read by `list_relays` beside the
+//! adapter's own state.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use streamlib_relay_adapter_sdk::RelayInstanceId;
+use streamlib_runtime_client_contract::local_api_wire_contract::ListedRelayConnectionState;
+use tokio::sync::watch;
+
+/// The first wait before the publisher redials a relay whose session failed or
+/// dropped, doubling to [`A_RELAY_IS_REDIALED_AT_LEAST_EVERY`].
+pub(crate) const A_RELAY_IS_FIRST_REDIALED_AFTER: Duration = Duration::from_secs(1);
+
+/// The longest the publisher waits between two dials of a relay it cannot
+/// reach; it never stops redialing one that refuses no credential.
+pub(crate) const A_RELAY_IS_REDIALED_AT_LEAST_EVERY: Duration = Duration::from_secs(10);
+
+/// The backoff timeout moq-tokio reads as never giving a reconnecting session
+/// up: a timeout of zero is its spelling for retrying without end.
+pub(crate) const MOQ_TOKIO_BACKOFF_TIMEOUT_THAT_NEVER_GIVES_UP: Duration = Duration::ZERO;
+
+/// Where the publisher's session with one relay stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExposedPortPublisherSessionState {
+    /// The publisher holds no session with the relay.
+    NotDialed,
+    /// Dialed, and no session has connected yet.
+    Dialing,
+    /// A session is connected.
+    Connected,
+    /// The session dropped or could not be opened; the relay is redialed with
+    /// backoff.
+    Redialing,
+    /// The relay refused the session for good — its credential refused, or an
+    /// answer no redial changes — and the publisher dials it no more until the
+    /// relay is handed over again.
+    Ended { why: String },
+}
+
+/// The publisher's session state of one relay instance, its sender handed to
+/// the publisher with the relay and kept for the instance's whole life.
+pub(crate) type ExposedPortPublisherSessionStateSender =
+    watch::Sender<ExposedPortPublisherSessionState>;
+
+/// A fresh session state for one relay instance, not dialed.
+pub(crate) fn a_relay_instances_session_state_not_dialed() -> ExposedPortPublisherSessionStateSender
+{
+    watch::channel(ExposedPortPublisherSessionState::NotDialed).0
+}
+
+impl ExposedPortPublisherSessionState {
+    /// The state `list_relays` reports for a relay its adapter has joined,
+    /// where this is the publisher's session with it.
+    pub(crate) fn as_listed_for_a_joined_relay(&self) -> ListedRelayConnectionState {
+        match self {
+            Self::NotDialed | Self::Dialing => ListedRelayConnectionState::Joining,
+            Self::Connected => ListedRelayConnectionState::Joined,
+            Self::Redialing => ListedRelayConnectionState::Lost {
+                why: "the publisher's session with the relay is not connected".to_string(),
+                rejoining_after_ms: u64::try_from(A_RELAY_IS_REDIALED_AT_LEAST_EVERY.as_millis())
+                    .unwrap_or(u64::MAX),
+            },
+            Self::Ended { why } => ListedRelayConnectionState::NotJoined {
+                why: Some(format!("the relay ended the publisher's session: {why}")),
+            },
+        }
+    }
+}
+
+/// One dial's reports into its relay instance's session state, refused once
+/// the dial is hung up so none lands after the hang-up's own report.
+#[derive(Clone)]
+pub(crate) struct ExposedPortPublisherSessionStateOfOneDial {
+    session_state: ExposedPortPublisherSessionStateSender,
+    hung_up: Arc<AtomicBool>,
+}
+
+impl ExposedPortPublisherSessionStateOfOneDial {
+    /// The reports of a dial starting now into `session_state`.
+    pub(crate) fn of_a_dial_starting_now(
+        session_state: ExposedPortPublisherSessionStateSender,
+    ) -> Self {
+        Self {
+            session_state,
+            hung_up: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Report `state`, unless the dial is hung up; checked under the channel's
+    /// own lock, so it is ordered against the hang-up's report.
+    fn report(&self, state: ExposedPortPublisherSessionState) {
+        self.session_state.send_if_modified(|current| {
+            if self.hung_up.load(Ordering::SeqCst) {
+                return false;
+            }
+            *current = state;
+            true
+        });
+    }
+
+    /// Hang the dial up: report it not dialed, and nothing of it afterwards.
+    pub(crate) fn hang_up(&self) {
+        self.hung_up.store(true, Ordering::SeqCst);
+        self.session_state
+            .send_replace(ExposedPortPublisherSessionState::NotDialed);
+    }
+}
+
+/// The session state `connection` reports, reported for its dial as it
+/// changes, until the session ends or the dial is hung up.
+pub(crate) async fn report_the_session_state_as_it_changes(
+    relay_id: RelayInstanceId,
+    mut connection: moq_tokio::Connection,
+    reports: ExposedPortPublisherSessionStateOfOneDial,
+) {
+    reports.report(ExposedPortPublisherSessionState::Dialing);
+    loop {
+        match connection.status().await {
+            Ok(moq_tokio::Status::Connected) => {
+                tracing::info!(relay = %relay_id, "the publisher's session with the relay is connected");
+                reports.report(ExposedPortPublisherSessionState::Connected);
+            }
+            Ok(moq_tokio::Status::Migrating) => {}
+            Ok(_) => {
+                tracing::warn!(relay = %relay_id, "the publisher's session with the relay dropped; it is redialed");
+                reports.report(ExposedPortPublisherSessionState::Redialing);
+            }
+            Err(ended) => {
+                let why = ended.to_string();
+                tracing::error!(relay = %relay_id, "the relay ended the publisher's session: {why}");
+                reports.report(ExposedPortPublisherSessionState::Ended { why });
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dial_hung_up_reports_nothing_after_its_hang_up() {
+        let session_state = a_relay_instances_session_state_not_dialed();
+        let reports = ExposedPortPublisherSessionStateOfOneDial::of_a_dial_starting_now(
+            session_state.clone(),
+        );
+        reports.report(ExposedPortPublisherSessionState::Connected);
+        assert_eq!(
+            *session_state.borrow(),
+            ExposedPortPublisherSessionState::Connected
+        );
+        reports.hang_up();
+        reports.report(ExposedPortPublisherSessionState::Redialing);
+        assert_eq!(
+            *session_state.borrow(),
+            ExposedPortPublisherSessionState::NotDialed
+        );
+        ExposedPortPublisherSessionStateOfOneDial::of_a_dial_starting_now(session_state.clone())
+            .report(ExposedPortPublisherSessionState::Dialing);
+        assert_eq!(
+            *session_state.borrow(),
+            ExposedPortPublisherSessionState::Dialing,
+            "a fresh dial of the same instance reports again"
+        );
+    }
+
+    #[test]
+    fn a_joined_relay_is_listed_joined_only_once_the_publishers_session_connects() {
+        assert_eq!(
+            ExposedPortPublisherSessionState::Dialing.as_listed_for_a_joined_relay(),
+            ListedRelayConnectionState::Joining
+        );
+        assert_eq!(
+            ExposedPortPublisherSessionState::Connected.as_listed_for_a_joined_relay(),
+            ListedRelayConnectionState::Joined
+        );
+        assert!(matches!(
+            ExposedPortPublisherSessionState::Redialing.as_listed_for_a_joined_relay(),
+            ListedRelayConnectionState::Lost {
+                rejoining_after_ms: 10_000,
+                ..
+            }
+        ));
+        assert_eq!(
+            ExposedPortPublisherSessionState::Ended {
+                why: "unauthorized".to_string()
+            }
+            .as_listed_for_a_joined_relay(),
+            ListedRelayConnectionState::NotJoined {
+                why: Some("the relay ended the publisher's session: unauthorized".to_string())
+            }
+        );
+    }
+}

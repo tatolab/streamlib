@@ -1,0 +1,22 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-relay-adapter-cloudflare"
+description = "Cloudflare's hosted MoQ relays: one relay per instance, dialed at its publish-and-subscribe URL, whose token rides the URL's path so the whole URL is a secret held in the OS secret store."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
+schemars = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true
