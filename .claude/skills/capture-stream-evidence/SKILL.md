@@ -1,11 +1,11 @@
 ---
 name: capture-stream-evidence
-description: Freeze a verifiable record of a running StreamLib stream — a live graph snapshot, N tapped bags from one or more channels on disk, and its log records — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around a stream-code change. Wraps `tatolab graph`, `tatolab tap`, and `tatolab logs` with shell redirection.
+description: Freeze a verifiable record of a running StreamLib stream — a live graph snapshot, N objects read off one or more exposed ports on disk, and its log records — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around a stream-code change. Wraps `tatolab graph`, `tatolab-read-track`, and `tatolab logs`.
 ---
 
 # capture-stream-evidence
 
-Turns a live stream into on-disk artifacts nothing else touches. All three verbs print to stdout; none has an `--output` flag, so redirect stdout to files in a directory you control. Capture the same bundle twice (before and after a change) to produce a diffable comparison.
+Turns a live stream into on-disk artifacts nothing else touches. `graph` and `logs` print to stdout and have no `--output` flag, so redirect them into a directory you control; `tatolab-read-track` writes its own directory with `--out`. Capture the same bundle twice (before and after a change) to produce a diffable comparison.
 
 ## Steps
 
@@ -20,15 +20,17 @@ mkdir -p "$EVIDENCE_DIR"
 ```bash
 tatolab graph --stream <stream> > "$EVIDENCE_DIR/graph.json"
 ```
-Read the channel addresses you want to tap out of this snapshot (`<stream>/<node>/<port>` — see `inspect-live-graph`). A graph whose nodes carry secrets in their config (WHIP / WHEP endpoints) is never saved — read it in a pipe instead.
+Read the addresses of the ports you want to read out of this snapshot — the `machine`, the `stream`, and each node's `name` and output port (see `inspect-live-graph`). A graph whose nodes carry secrets in their config (WHIP / WHEP endpoints) is never saved — read it in a pipe instead.
 
-### 3. Tap N bags per channel to disk
-Repeat per channel:
+### 3. Read N objects per port to disk
+Repeat per port, exposing an internal one first (`read-live-track`):
 ```bash
-tatolab tap <stream>/camera/video --count 30 > "$EVIDENCE_DIR/bags-camera-video.json"
-tatolab tap <stream>/effect/video --count 30 > "$EVIDENCE_DIR/bags-effect-video.json"
+target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang encoder/encoded_video \
+  --count 30 --out "$EVIDENCE_DIR/track-encoder-encoded_video"
+target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang microphonesource/audio \
+  --count 30 --out "$EVIDENCE_DIR/track-microphonesource-audio"
 ```
-Each file holds the hex-plus-byte-length sample for that port (bytes-flowing proof, not decoded pixels). For pixels, `tatolab exchange --channel <stream>/<node>/<port> --out "$EVIDENCE_DIR" --count N` writes PNGs and prints their paths (`verify-live`).
+Each directory holds the objects, `objects.jsonl` indexing them with their timestamps and sizes on disk, and the track's catalog entry. An encoded video track decodes to PNGs with ffmpeg (`verify-live` § Reading pixels); any other holds the records as the node wrote them.
 
 ### 4. Capture the stream's log records
 ```bash
@@ -40,9 +42,9 @@ Reads the records the runtime holds for that loaded stream, by sequence number, 
 ```bash
 ls -l "$EVIDENCE_DIR"
 ```
-You now have `graph.json`, one `bags-<channel>.json` per tapped channel, and `logs.txt`. Attach them to the PR / issue (upload with the `attach-artifact` skill), or diff a `-before` directory against an `-after` one to show a change's effect.
+You now have `graph.json`, one `track-<node>-<port>/` per port read, and `logs.txt`. Attach them to the PR / issue (upload with the `attach-artifact` skill), or diff a `-before` directory against an `-after` one to show a change's effect.
 
 ## Notes
 - Every verb names the stream; there is no runtime to pick — the machine has one.
-- All three are read-only — capturing evidence never mutates the graph.
-- Do not invent an `--output` flag on `tap`, `graph` or `logs`; redirection is the mechanism.
+- Capturing evidence never mutates the graph; exposing a port to read it is the one change, and `read-live-track` says how to undo it.
+- Do not invent an `--output` flag on `graph` or `logs`; redirection is the mechanism.
