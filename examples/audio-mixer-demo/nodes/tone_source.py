@@ -1,28 +1,32 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
-"""One voice of the chord: a sine wave published as `AudioBlock` bags.
 
-Each voice is added three times with a different frequency, rate, channel
-count and block size, so what reaches the mixer is three genuinely different
-audio streams. Normalising them is the window contract's job, not this
-processor's — a voice publishes whatever shape it was configured with and
-knows nothing about its consumer.
+"""One voice of the chord: a sine wave published as `AudioBlock` messages.
+
+Importable as `nodes.tone_source:ToneSource`, which is the name the engine
+spawns this node's child interpreter with. A voice publishes whatever rate,
+channel count and block size it is configured with and knows nothing about its
+consumer — converting it is the consumer's window contract's job.
 """
 
 import math
 from dataclasses import dataclass
 
 import numpy
-
-from streamlib import RuntimeContextLimitedAccess, log, output, processor
+from tatolab.stream import (
+    AudioBlock,
+    RuntimeContextLimitedAccess,
+    catalog,
+    log,
+    node,
+)
 
 VOICE_OUTPUT_PORT = "voice_to_downstream"
 
 # How far behind real time a voice may fall before it starts a new run rather
-# than emitting the whole backlog. A burst that large outruns any mailbox, and
-# carrying the debt forever would drift; re-anchoring puts the stamps back on
-# real time, and the windowing stage downstream flushes on the discontinuity
-# instead of blending audio across it.
+# than emitting the whole backlog: a burst that large outruns any mailbox, and
+# the windowing stage downstream flushes on the discontinuity instead of
+# blending audio across it.
 MAXIMUM_BLOCKS_OF_CATCH_UP = 4
 
 NANOSECONDS_PER_SECOND = 1_000_000_000
@@ -30,7 +34,7 @@ NANOSECONDS_PER_SECOND = 1_000_000_000
 
 @dataclass
 class ToneSourceConfig:
-    """ToneSource's settings, as `rt.add(..., config={...})` spells them."""
+    """ToneSource's settings, as `stream_builder.add(ToneSource, config={...})` spells them."""
 
     frequency_hz: float = 440.0
     sample_rate: int = 48_000
@@ -39,31 +43,30 @@ class ToneSourceConfig:
     amplitude: float = 0.3
 
 
-@processor(execution="continuous", interval_ms=5, description="A sine-wave voice")
+@node(execution="continuous", interval_ms=5)
 class ToneSource:
     """A phase-continuous sine wave, paced by the monotonic clock.
 
-    The tick interval is deliberately shorter than one block's duration: each
-    `process()` emits however many whole blocks elapsed time owes, which keeps
-    the stream locked to real time at any rate and block size rather than to a
-    tick the engine cannot express as an integer millisecond.
+    The tick is shorter than any block: each `process()` emits however many
+    whole blocks elapsed time owes, so the stream stays locked to real time at
+    any rate and block size.
     """
 
-    def __init__(self, config: ToneSourceConfig) -> None:
-        frequency_hz = config.frequency_hz
-        sample_rate = config.sample_rate
-        channels = config.channels
-        block_size = config.block_size
-        amplitude = config.amplitude
-        self.frequency_hz = float(frequency_hz)
-        self.sample_rate = int(sample_rate)
-        self.channels = int(channels)
-        self.block_size = int(block_size)
-        self.amplitude = float(amplitude)
+    @node.output(
+        description="This voice's sine wave, as AudioBlock messages",
+        catalog=catalog.BinaryEntry(mode="snapshot", mime="application/msgpack"),
+    )
+    def voice_to_downstream(self) -> AudioBlock: ...
 
-        # Refused here rather than left to surface downstream: a block_size of
-        # zero never advances the emitted-sample counter, so `process()` would
-        # publish empty blocks forever without ever catching up to the clock.
+    def __init__(self, config: ToneSourceConfig) -> None:
+        self.frequency_hz = float(config.frequency_hz)
+        self.sample_rate = int(config.sample_rate)
+        self.channels = int(config.channels)
+        self.block_size = int(config.block_size)
+        self.amplitude = float(config.amplitude)
+
+        # A block_size of zero never advances the emitted-sample counter, so
+        # `process()` would publish empty blocks forever.
         for field_name, value in (
             ("sample_rate", self.sample_rate),
             ("channels", self.channels),
@@ -108,17 +111,18 @@ class ToneSource:
 
     def _publish_one_block(self, ctx: RuntimeContextLimitedAccess) -> None:
         first_sample_timestamp_ns = self._stamp_for_the_next_block()
+        voice_block = AudioBlock(
+            samples=self._next_interleaved_sample_bytes(),
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            sample_count=self.block_size,
+            dtype="f32",
+            first_sample_timestamp_ns=first_sample_timestamp_ns,
+        )
         ctx.outputs.write(
             VOICE_OUTPUT_PORT,
-            {
-                "samples": self._next_interleaved_sample_bytes(),
-                "sample_rate": self.sample_rate,
-                "channels": self.channels,
-                "sample_count": self.block_size,
-                "dtype": "f32",
-                "first_sample_timestamp_ns": first_sample_timestamp_ns,
-            },
-            first_sample_timestamp_ns,
+            voice_block.to_bytes(),
+            timestamp_ns=first_sample_timestamp_ns,
         )
         self.samples_emitted_in_this_run += self.block_size
 
@@ -129,9 +133,11 @@ class ToneSource:
         rates where a block's duration is not a whole number of nanoseconds.
         """
         assert self.run_anchor_timestamp_ns is not None
-        return self.run_anchor_timestamp_ns + (
-            self.samples_emitted_in_this_run * NANOSECONDS_PER_SECOND
-        ) // self.sample_rate
+        return (
+            self.run_anchor_timestamp_ns
+            + (self.samples_emitted_in_this_run * NANOSECONDS_PER_SECOND)
+            // self.sample_rate
+        )
 
     def _next_interleaved_sample_bytes(self) -> bytes:
         phase_step_radians = 2.0 * math.pi * self.frequency_hz / self.sample_rate
@@ -141,14 +147,11 @@ class ToneSource:
         # Carried across blocks and wrapped, so a voice never clicks at a block
         # edge and the phase stays exact over a long run.
         self.next_phase_radians = math.fmod(
-            self.next_phase_radians + phase_step_radians * self.block_size, 2.0 * math.pi
+            self.next_phase_radians + phase_step_radians * self.block_size,
+            2.0 * math.pi,
         )
-        # Spelled little-endian at the source: the payload is little-endian by
-        # contract, not by the platform's luck.
+        # The payload is little-endian by contract, not by the platform's luck.
         one_channel = (self.amplitude * numpy.sin(phases)).astype("<f4")
         if self.channels == 1:
             return one_channel.tobytes()
         return numpy.repeat(one_channel, self.channels).tobytes()
-
-    @output(description="This voice's sine wave, as AudioBlock bags")
-    def voice_to_downstream(self) -> None: ...
