@@ -372,10 +372,12 @@ class OpusDecoder(BuiltInNode[OpusDecoderConfig]):
 
     The entry is read as it stands when each packet decodes, and no packet names the
     entry it was written under. When the upstream re-mints for a new channel count,
-    packets still queued on the link decode under the new entry: between one and two
-    channels they decode as written, but across two and three or more libopus refuses
-    them or they decode as noise, until the first packet written in the new count
-    arrives.
+    packets still queued on the link decode under the new entry until the first packet
+    written in the new count arrives. Between one and two channels they decode, down- or
+    up-mixed into the new count; across any other change libopus refuses them, decodes
+    them as noise, or places their channels on the wrong speakers. When a queued packet
+    does decode, the re-entry's `pre_skip` trim lands on it, so the new encoder's
+    lookahead plays rather than being trimmed.
 
     It enters the stream at any packet, since every Opus packet opens a group, and trims
     the encoder's `pre_skip` lookahead at entry — so the first block after entry is
