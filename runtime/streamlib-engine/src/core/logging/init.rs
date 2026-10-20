@@ -325,7 +325,8 @@ pub(crate) fn init_for_tests_intercepting_nothing_yet(
 ///
 /// `rmcp` records each MCP request's service start and finish at `info`; held
 /// to `warn` here, a host polling a node's control plane stays out of the app's
-/// own log. `RUST_LOG=info,rmcp=info` brings them back.
+/// own log. Below `warn` it prints messages whole, so the engine never admits
+/// it there whatever `RUST_LOG` says.
 pub const ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES: &str = "info,rmcp=warn";
 
 /// The level and target filtering every engine process runs at: `RUST_LOG`,
@@ -338,9 +339,9 @@ pub(crate) fn the_engines_configured_tracing_filter() -> EnvFilter {
         .unwrap_or_else(|_| EnvFilter::new(ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES))
 }
 
-/// The crate whose `debug` and `trace` events print MCP messages whole — a
-/// tool call's arguments, a relay's secret among them — from its service and
-/// from each transport.
+/// The crate whose `info`, `debug` and `trace` records print MCP messages
+/// whole — a tool call's arguments, a relay's secret among them — from its
+/// service and from each transport.
 const RMCP_CRATE_TARGET: &str = "rmcp";
 
 /// Whether `target` is the `rmcp` crate's or one of its modules'.
@@ -350,11 +351,11 @@ fn is_an_rmcp_target(target: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
 }
 
-/// Drops every `debug` and `trace` record of the `rmcp` crate, whatever
-/// `RUST_LOG` admits, so a secret handed over the local API reaches no log line.
+/// Drops every record of the `rmcp` crate below `warn`, whatever `RUST_LOG`
+/// admits, so a secret handed over the local API reaches no log line.
 pub(crate) fn mcp_message_contents_kept_off_the_log() -> FilterFn<fn(&Metadata<'_>) -> bool> {
     filter_fn(|metadata| {
-        !(matches!(*metadata.level(), Level::DEBUG | Level::TRACE)
+        !(matches!(*metadata.level(), Level::INFO | Level::DEBUG | Level::TRACE)
             && is_an_rmcp_target(metadata.target()))
     })
 }
@@ -449,33 +450,34 @@ mod mcp_message_contents_tests {
         }
     }
 
-    fn make_one_debug_trace_and_info_event_at_rmcp_targets_and_another_crates() {
+    fn make_one_event_at_each_level_at_rmcp_targets_and_another_crates() {
         tracing::trace!(target: "rmcp::service", "a message whole");
         tracing::debug!(target: "rmcp::service", "a message whole");
         tracing::trace!(target: "rmcp::transport::streamable_http_server::tower", "a message whole");
         tracing::debug!(target: "rmcp::transport::async_rw", "a line whole");
         tracing::debug!(target: "rmcp", "a message whole");
-        tracing::info!(target: "rmcp::service", "a service started");
+        tracing::info!(target: "rmcp::service", "a notification whole");
+        tracing::warn!(target: "rmcp::service", "a service failed");
         tracing::debug!(target: "rmcpx", "another crate");
     }
 
     #[test]
-    fn rmcp_prints_no_message_whole_even_where_rust_log_admits_trace() {
+    fn rmcp_reaches_the_log_at_warn_alone_even_where_rust_log_admits_trace() {
         let captured = CapturedEventTargets::default();
         let subscriber = Registry::default()
             .with(EnvFilter::new("trace"))
             .with(mcp_message_contents_kept_off_the_log())
             .with(captured.clone());
         tracing::subscriber::with_default(subscriber, || {
-            make_one_debug_trace_and_info_event_at_rmcp_targets_and_another_crates();
+            make_one_event_at_each_level_at_rmcp_targets_and_another_crates();
             tracing::callsite::rebuild_interest_cache();
             captured.0.lock().unwrap().clear();
-            make_one_debug_trace_and_info_event_at_rmcp_targets_and_another_crates();
+            make_one_event_at_each_level_at_rmcp_targets_and_another_crates();
         });
         assert_eq!(
             *captured.0.lock().unwrap(),
             [
-                ("rmcp::service".to_string(), Level::INFO),
+                ("rmcp::service".to_string(), Level::WARN),
                 ("rmcpx".to_string(), Level::DEBUG),
             ]
         );

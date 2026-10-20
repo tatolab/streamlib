@@ -216,3 +216,114 @@ fn a_relays_secret_reaches_no_log_line_even_where_rust_log_admits_trace() {
     assert!(!runtime_log.is_empty(), "the runtime's own log is read");
     assert!(!runtime_log.contains(RELAY_SECRET), "{runtime_log}");
 }
+
+/// One `/mcp/stdio` connection to the runtime, carrying JSON-RPC lines raw.
+struct McpStdioConnection {
+    to_the_runtime: std::os::unix::net::UnixStream,
+    from_the_runtime: std::io::BufReader<std::os::unix::net::UnixStream>,
+}
+
+impl McpStdioConnection {
+    fn upgraded_at(local_api_socket_path: &std::path::Path) -> Self {
+        use std::io::{BufRead as _, Write as _};
+
+        let mut to_the_runtime =
+            std::os::unix::net::UnixStream::connect(local_api_socket_path).unwrap();
+        to_the_runtime
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        to_the_runtime
+            .write_all(
+                b"GET /mcp/stdio HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n\
+                  Upgrade: mcp-stdio\r\n\r\n",
+            )
+            .unwrap();
+        let mut from_the_runtime = std::io::BufReader::new(to_the_runtime.try_clone().unwrap());
+        let mut head_line = String::new();
+        loop {
+            head_line.clear();
+            from_the_runtime.read_line(&mut head_line).unwrap();
+            if head_line == "\r\n" {
+                break;
+            }
+        }
+        Self {
+            to_the_runtime,
+            from_the_runtime,
+        }
+    }
+
+    fn send_line(&mut self, line: &str) {
+        use std::io::Write as _;
+        self.to_the_runtime
+            .write_all(format!("{line}\n").as_bytes())
+            .unwrap();
+    }
+
+    fn the_next_line(&mut self) -> String {
+        use std::io::BufRead as _;
+        let mut line = String::new();
+        self.from_the_runtime.read_line(&mut line).unwrap();
+        line
+    }
+}
+
+/// A request's `_meta`, as a client at the latest revision sends it.
+fn request_meta() -> serde_json::Value {
+    serde_json::to_value(rmcp::model::RequestMetaObject::with_client_context(
+        rmcp::model::ProtocolVersion::LATEST,
+        rmcp::model::Implementation::new("relay-secret-test", "0"),
+        rmcp::model::ClientCapabilities::default(),
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_relays_secret_sent_over_mcp_stdio_in_any_shape_reaches_no_log_line_at_trace() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
+    tatolabd_command.env("RUST_LOG", "trace");
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
+    let add_relay_params = json!({
+        "name": "add_relay",
+        "arguments": {
+            "adapter": SECRET_HOLDING_TEST_RELAY_ADAPTER,
+            "settings": {"token": RELAY_SECRET}
+        },
+        "_meta": request_meta()
+    });
+
+    let mut first_message_a_notification =
+        McpStdioConnection::upgraded_at(&machine_root.local_api_socket_path());
+    first_message_a_notification.send_line(
+        &json!({"jsonrpc": "2.0", "method": "tools/call", "params": add_relay_params}).to_string(),
+    );
+    drop(first_message_a_notification);
+
+    let mut connection = McpStdioConnection::upgraded_at(&machine_root.local_api_socket_path());
+    connection.send_line(
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"_meta": request_meta()}})
+            .to_string(),
+    );
+    assert!(connection.the_next_line().contains("\"id\":1"));
+    for line_carrying_the_secret in [
+        json!({"jsonrpc": "2.0", "method": "tools/call", "params": add_relay_params}),
+        json!({"jsonrpc": "1.0", "id": 2, "method": "tools/call", "params": add_relay_params}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": [RELAY_SECRET]}),
+    ] {
+        connection.send_line(&line_carrying_the_secret.to_string());
+    }
+    connection.send_line(
+        &json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {"_meta": request_meta()}})
+            .to_string(),
+    );
+    while !connection.the_next_line().contains("\"id\":4") {}
+    drop(connection);
+    runtime.interrupt_and_expect_a_clean_exit();
+
+    let standard_error = runtime.standard_error();
+    assert!(!standard_error.contains(RELAY_SECRET), "{standard_error}");
+    let runtime_log = every_file_under(&machine_root.runtime_log_directory());
+    assert!(!runtime_log.contains(RELAY_SECRET), "{runtime_log}");
+}

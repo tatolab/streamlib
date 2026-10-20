@@ -25,6 +25,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get};
 use hyper_util::rt::TokioIo;
 use rmcp::ServiceExt;
+use rmcp::service::ServerInitializeError;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     MCP_STDIO_UPGRADE_PROTOCOL_TOKEN, MCP_STDIO_UPGRADE_REQUEST_TARGET,
 };
@@ -143,13 +144,34 @@ async fn serve_local_api_mcp_over_the_upgraded_stream(
             }
         }
         Some(Err(error)) => {
-            tracing::debug!(%error, "an MCP stdio stream ended before serving a request");
+            tracing::debug!(
+                "an MCP stdio stream ended before serving a request: {}",
+                why_an_mcp_stdio_stream_ended_before_serving(&error)
+            );
         }
         None => {}
     }
     streams_attached_to_this_connection
         .close_and_unload_every_attached_stream(&operations_on_the_loaded_streams)
         .await;
+}
+
+/// Why `error` ended a stream before it served a request, naming no message:
+/// `rmcp`'s own rendering carries the message it received whole.
+fn why_an_mcp_stdio_stream_ended_before_serving(error: &ServerInitializeError) -> &'static str {
+    match error {
+        ServerInitializeError::ExpectedInitializeRequest(_) => {
+            "its first message opened no lifecycle"
+        }
+        ServerInitializeError::ConnectionClosed(_) => "the connection closed",
+        ServerInitializeError::UnexpectedInitializeResponse(_) => {
+            "it answered with a result the server did not expect"
+        }
+        ServerInitializeError::InitializeFailed(_) => "its initialize failed",
+        ServerInitializeError::TransportError { .. } => "its transport failed",
+        ServerInitializeError::Cancelled => "the local API stopped",
+        _ => "rmcp refused it",
+    }
 }
 
 #[cfg(test)]
