@@ -14,6 +14,7 @@ use crate::h264_rtp_depacketiser::{
     H264RtpDepacketiser, NAL_TYPE_IDR_SLICE, NAL_TYPE_SEQUENCE_PARAMETER_SET,
 };
 use crate::h264_sequence_parameter_set::{SequenceParameterSet, parse_sequence_parameter_set};
+use crate::hang_legacy_container_media_frame::hang_legacy_container_media_frame_bytes;
 use crate::monotonic_clock::RtpClockAnchoredToMonotonic;
 use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, OpusRtpChannelLayout, describe_opus_packet};
 use bytes::Bytes;
@@ -30,12 +31,26 @@ pub(crate) struct ReceivedVideoAccessUnit {
     pub timestamp_ns: i64,
 }
 
+impl ReceivedVideoAccessUnit {
+    /// The access unit as one media frame, behind the varint of its stamp.
+    pub(crate) fn media_frame_bytes(&self) -> Result<Vec<u8>> {
+        hang_legacy_container_media_frame_bytes(self.timestamp_ns, &self.annex_b_access_unit)
+    }
+}
+
 /// One Opus packet, with the stream's declared channel layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReceivedOpusPacket {
     pub opus_packet: Bytes,
     pub channel_layout: OpusRtpChannelLayout,
     pub timestamp_ns: i64,
+}
+
+impl ReceivedOpusPacket {
+    /// The packet as one media frame, behind the varint of its stamp.
+    pub(crate) fn media_frame_bytes(&self) -> Result<Vec<u8>> {
+        hang_legacy_container_media_frame_bytes(self.timestamp_ns, &self.opus_packet)
+    }
 }
 
 /// Collects RTP payloads into whole access units.
@@ -334,6 +349,50 @@ mod tests {
             ),
             (320, 192)
         );
+    }
+
+    #[test]
+    fn a_played_access_unit_is_one_media_frame_stamped_in_microseconds() {
+        let mut assembler = VideoAccessUnitAssembler::new();
+        let sps = constrained_baseline_320x180_sequence_parameter_set();
+        let unit = feed_a_keyframe(&mut assembler, &sps, 3000, 1).unwrap();
+
+        let media_frame = unit.media_frame_bytes().unwrap();
+        let read =
+            crate::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame(
+                &media_frame,
+            )
+            .unwrap();
+
+        assert_eq!(
+            read.timestamp_microseconds,
+            (unit.timestamp_ns / 1_000) as u64
+        );
+        assert_eq!(
+            read.codec_payload_bytes,
+            annex_b_of(&[&sps, PICTURE_PARAMETER_SET, IDR_SLICE])
+        );
+    }
+
+    #[test]
+    fn a_played_opus_packet_is_one_media_frame_stamped_in_microseconds() {
+        let mut assembler = OpusPacketAssembler::new(None);
+        let packet = assembler
+            .accept_rtp_packet(opus_packet(1, true), 960)
+            .unwrap();
+
+        let media_frame = packet.media_frame_bytes().unwrap();
+        let read =
+            crate::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame(
+                &media_frame,
+            )
+            .unwrap();
+
+        assert_eq!(
+            read.timestamp_microseconds,
+            (packet.timestamp_ns / 1_000) as u64
+        );
+        assert_eq!(read.codec_payload_bytes, &packet.opus_packet[..]);
     }
 
     #[test]

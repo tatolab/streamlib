@@ -10,6 +10,7 @@
 //! read and write.
 
 use crate::error::{Result, WebRtcExtensionError};
+use bytes::Bytes;
 
 /// The largest value a QUIC varint carries, 2^62 - 1.
 const QUIC_VARINT_LARGEST_VALUE: u64 = (1 << 62) - 1;
@@ -50,6 +51,12 @@ pub(crate) fn read_hang_legacy_container_media_frame(
         timestamp_microseconds,
         codec_payload_bytes,
     })
+}
+
+/// The codec payload `media_frame` carries after its varint, sharing its buffer.
+pub(crate) fn codec_payload_of_media_frame(media_frame: &Bytes) -> Result<Bytes> {
+    let read = read_hang_legacy_container_media_frame(media_frame)?;
+    Ok(media_frame.slice_ref(read.codec_payload_bytes))
 }
 
 /// `codec_payload_bytes` behind the varint `timestamp_ns` truncates to, as one
@@ -146,6 +153,18 @@ mod tests {
 
         assert_eq!(read.timestamp_microseconds, 1_234_567_891);
         assert_eq!(read.codec_payload_bytes, access_unit);
+    }
+
+    #[test]
+    fn the_codec_payload_of_a_media_frame_is_what_follows_its_varint() {
+        let media_frame = Bytes::from_static(&[0x7b, 0xbd, 0x00, 0x00, 0x00, 0x01, 0x65]);
+
+        let codec_payload = codec_payload_of_media_frame(&media_frame).unwrap();
+
+        assert_eq!(
+            codec_payload,
+            Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x65])
+        );
     }
 
     #[test]

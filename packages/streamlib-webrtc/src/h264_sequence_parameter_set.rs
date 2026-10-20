@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn a_colour_description_in_the_vui_is_not_read_at_all() {
+    fn an_sps_carrying_a_vui_colour_description_parses_to_its_coded_extent() {
         let mut writer = RawBitstreamWriter::default();
         writer
             .bits(66, 8)

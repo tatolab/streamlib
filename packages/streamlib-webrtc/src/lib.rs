@@ -31,9 +31,6 @@ mod whip_publish_loopback;
 pub mod whip_session;
 
 use crate::error::WebRtcExtensionError;
-use crate::hang_legacy_container_media_frame::{
-    hang_legacy_container_media_frame_bytes, read_hang_legacy_container_media_frame,
-};
 use crate::opus_identification_header::hex_encoded_opus_identification_header_for_rtp_stream;
 use crate::received_media_assembly::{ReceivedOpusPacket, ReceivedVideoAccessUnit};
 use crate::whep_session::{ReceivedMedia, WhepPlayingSession};
@@ -127,9 +124,7 @@ impl WhipSession {
         timestamp_ns: i64,
     ) -> PyResult<()> {
         // Copied while the GIL is held: the slice borrows Python's buffer.
-        let access_unit = bytes::Bytes::copy_from_slice(
-            read_hang_legacy_container_media_frame(media_frame)?.codec_payload_bytes,
-        );
+        let media_frame = bytes::Bytes::copy_from_slice(media_frame);
 
         python.detach(|| {
             let mut publishing = self.locked_state()?;
@@ -141,7 +136,7 @@ impl WhipSession {
             };
             let session = connected(publishing.session.as_ref())?;
             transport_stack::transport_runtime()?
-                .block_on(session.write_video_access_unit(access_unit, duration))?;
+                .block_on(session.write_video_media_frame(media_frame, duration))?;
             // Only after the write landed: a frame the track never saw must not
             // move the anchor, or the clock stays short by that frame's gap for
             // the rest of the stream.
@@ -155,19 +150,14 @@ impl WhipSession {
     /// timestamp, its RTP advance taken from the packet's own TOC rather than
     /// from an assumed 20 ms frame.
     fn write_audio_media_frame(&self, python: Python<'_>, media_frame: &[u8]) -> PyResult<()> {
-        let opus_packet = read_hang_legacy_container_media_frame(media_frame)?.codec_payload_bytes;
-        let sample_count = opus_packet::describe_opus_packet(opus_packet)?.sample_count;
-        let duration = Duration::from_nanos(
-            u64::from(sample_count) * 1_000_000_000
-                / u64::from(opus_packet::OPUS_WIRE_SAMPLE_RATE_HZ),
-        );
-        let packet = bytes::Bytes::copy_from_slice(opus_packet);
+        // Copied while the GIL is held: the slice borrows Python's buffer.
+        let media_frame = bytes::Bytes::copy_from_slice(media_frame);
 
         python.detach(|| {
             let publishing = self.locked_state()?;
             let session = connected(publishing.session.as_ref())?;
             transport_stack::transport_runtime()?
-                .block_on(session.write_audio_packet(packet, duration))
+                .block_on(session.write_audio_media_frame(media_frame))
         })?;
         Ok(())
     }
@@ -333,11 +323,7 @@ impl PlayedVideoAccessUnit {
     /// The access unit as one media frame, behind the varint of its stamp.
     #[getter]
     fn media_frame<'python>(&self, python: Python<'python>) -> PyResult<Bound<'python, PyBytes>> {
-        media_frame_as_python_bytes(
-            python,
-            self.inner.timestamp_ns,
-            &self.inner.annex_b_access_unit,
-        )
+        Ok(PyBytes::new(python, &self.inner.media_frame_bytes()?))
     }
     #[getter]
     fn is_sync_point(&self) -> bool {
@@ -379,7 +365,7 @@ impl PlayedOpusPacket {
     /// The packet as one media frame, behind the varint of its stamp.
     #[getter]
     fn media_frame<'python>(&self, python: Python<'python>) -> PyResult<Bound<'python, PyBytes>> {
-        media_frame_as_python_bytes(python, self.inner.timestamp_ns, &self.inner.opus_packet)
+        Ok(PyBytes::new(python, &self.inner.media_frame_bytes()?))
     }
     #[getter]
     fn channels(&self) -> u8 {
@@ -393,15 +379,6 @@ impl PlayedOpusPacket {
     fn timestamp_ns(&self) -> i64 {
         self.inner.timestamp_ns
     }
-}
-
-fn media_frame_as_python_bytes<'python>(
-    python: Python<'python>,
-    timestamp_ns: i64,
-    codec_payload_bytes: &[u8],
-) -> PyResult<Bound<'python, PyBytes>> {
-    let media_frame = hang_legacy_container_media_frame_bytes(timestamp_ns, codec_payload_bytes)?;
-    Ok(PyBytes::new(python, &media_frame))
 }
 
 /// Nanoseconds on the clock this wheel stamps media frames with, which is the

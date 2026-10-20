@@ -964,20 +964,6 @@ def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session
     ]
 
 
-def test_the_native_session_refuses_a_message_that_is_not_a_media_frame_by_name():
-    """The real `_native.WhipSession`: the frame is read before the session is
-    asked whether it is connected, so a wrong payload is a `ValueError` about
-    the payload and never a transport error."""
-    session = _native.WhipSession("https://example.invalid/whip")
-
-    with pytest.raises(ValueError, match="is not a media frame"):
-        session.write_video_media_frame(b"", 0)
-    with pytest.raises(ValueError, match="is not a media frame"):
-        session.write_audio_media_frame(b"\x40")
-    with pytest.raises(RuntimeError, match="not connected"):
-        session.write_video_media_frame(MEDIA_FRAME_OF_AN_ACCESS_UNIT, 0)
-
-
 class RecordingWhepSession:
     """A `_native.WhepSession` stand-in whose connect outcome is scripted.
 
@@ -1030,10 +1016,7 @@ def scripted_whep_session(monkeypatch):
 
 
 def _player_for_a_drain_that_returns_immediately() -> WhepPlayer:
-    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
-    # The drain would otherwise spin on `next_media` returning None; stopping
-    # the player makes each attempt reach the backoff at once.
-    return player
+    return WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
 
 
 def test_a_refused_connect_is_retried_rather_than_ending_the_stream(
@@ -1265,9 +1248,9 @@ def test_every_opus_packet_opens_a_group_on_the_audio_port(
 def test_each_port_states_its_entry_in_hangs_own_field_names(
     player_wired_to_both_decoders: PlayerWiredToBothDecoders,
 ):
-    """What reaches the parent is what hang's catalog types parse and what the
-    decoders read: the codec string and coded extent for video, and the codec,
-    rate, channel count and `OpusHead` for audio."""
+    """What reaches the parent is spelled in hang's catalog field names — the
+    codec string and coded extent for video, and the codec, rate, channel count
+    and `OpusHead` for audio — which the parent parses with hang's types."""
     player_wired_to_both_decoders.play(
         [AccessUnitTheSessionPlayed(), OpusPacketTheSessionPlayed()]
     )
