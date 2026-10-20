@@ -27,9 +27,9 @@ use relay_track_object_dump::{
 };
 
 /// How long the broadcast's catalog is read for a snapshot listing the track
-/// before the track is written as sent: a port's entry may join the catalog
-/// only once its first message is written.
-const THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR: Duration = Duration::from_secs(5);
+/// before the track is written as sent, unless `--catalog-wait-at-most` says:
+/// a port's entry may join the catalog only once its first message is written.
+const THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR_SECONDS: u64 = 5;
 
 /// How old a group may grow behind a newer one before the read gives it up.
 /// The stack's default gives up at once, which suits a player; a dump wants
@@ -60,6 +60,14 @@ struct ReadTrackArguments {
     /// How long to wait for every object before ending without them.
     #[arg(long = "wait-at-most", value_name = "SECONDS", default_value_t = 30)]
     wait_at_most_seconds: u64,
+    /// How long to read the broadcast's catalog for an entry listing the track
+    /// before writing its objects as sent.
+    #[arg(
+        long = "catalog-wait-at-most",
+        value_name = "SECONDS",
+        default_value_t = THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR_SECONDS
+    )]
+    catalog_wait_at_most_seconds: u64,
 }
 
 fn main() -> ExitCode {
@@ -185,14 +193,19 @@ async fn read_the_tracks_objects(
         .await
         .with_context(|| format!("the track `{}` was refused", arguments.track))?
         .ordered();
-    let (payload_form, catalog_entry) =
-        match the_tracks_catalog_entry(broadcast, &arguments.track).await {
-            Ok(catalog_entry) => (catalog_entry.payload_form()?, Some(catalog_entry)),
-            Err(why_not) => {
-                eprintln!("tatolab-read-track: {why_not}; its objects are written as sent");
-                (RelayTrackObjectPayloadForm::AsSent, None)
-            }
-        };
+    let (payload_form, catalog_entry) = match the_tracks_catalog_entry(
+        broadcast,
+        &arguments.track,
+        Duration::from_secs(arguments.catalog_wait_at_most_seconds),
+    )
+    .await
+    {
+        Ok(catalog_entry) => (catalog_entry.payload_form()?, Some(catalog_entry)),
+        Err(why_not) => {
+            eprintln!("tatolab-read-track: {why_not}; its objects are written as sent");
+            (RelayTrackObjectPayloadForm::AsSent, None)
+        }
+    };
     let mut dump =
         RelayTrackObjectDumpDirectory::create(&arguments.output_directory, payload_form)?;
     if let Some(catalog_entry) = &catalog_entry {
@@ -238,12 +251,13 @@ async fn read_the_tracks_objects(
 }
 
 /// The track's entry in the broadcast's catalog, read from the first snapshot
-/// that lists it within [`THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR`], or why
-/// none did.
+/// that lists it within `wait_at_most`, or why none did.
 async fn the_tracks_catalog_entry(
     broadcast: &moq_net::broadcast::Consumer,
     track_name: &str,
+    wait_at_most: Duration,
 ) -> Result<RelayTrackCatalogEntry> {
+    let awaited_from = std::time::Instant::now();
     let catalog_track = broadcast
         .track(hang::Catalog::DEFAULT_NAME)?
         .subscribe(None)
@@ -253,7 +267,7 @@ async fn the_tracks_catalog_entry(
         catalog_track,
         moq_json::snapshot::consumer::Config::default(),
     );
-    tokio::time::timeout(THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR, async {
+    tokio::time::timeout(wait_at_most, async {
         loop {
             let Some(snapshot) = catalog.next().await.context("the catalog does not read")? else {
                 return Err(anyhow!("the catalog ended without listing `{track_name}`"));
@@ -261,15 +275,17 @@ async fn the_tracks_catalog_entry(
             if let Some(catalog_entry) =
                 RelayTrackCatalogEntry::of_the_track_named(&snapshot, track_name)
             {
+                eprintln!(
+                    "tatolab-read-track: the catalog listed `{track_name}` after {:.1?}",
+                    awaited_from.elapsed()
+                );
                 return Ok(catalog_entry);
             }
         }
     })
     .await
     .map_err(|_elapsed| {
-        anyhow!(
-            "the catalog did not list `{track_name}` within {THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR:?}"
-        )
+        anyhow!("the catalog did not list `{track_name}` within {wait_at_most:?}")
     })?
 }
 

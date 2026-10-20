@@ -57,6 +57,8 @@
 #   OBJECT_COUNT              encoded frames read back and measured (default 20)
 #   JOIN_DEADLINE_SECONDS     how long a relay has to be listed joined (default 60)
 #   READ_WAIT_SECONDS         how long a read back waits for its objects (default 60)
+#   CATALOG_WAIT_SECONDS      how long it waits for the catalog to list the track
+#                             (default 30)
 #   RUN_SECONDS               the sender's budget (default 240)
 #   TOLERANCE                 abs per-bar channel drift bound (default 0.05)
 #
@@ -82,6 +84,8 @@ RUN_SECONDS="${RUN_SECONDS:-240}"
 TOLERANCE="${TOLERANCE:-0.05}"
 # How long a read of the private track at a hosted relay is given to find it.
 PRIVATE_TRACK_READ_WAIT_SECONDS=15
+# How long a read back waits for the broadcast's catalog to list the track.
+CATALOG_WAIT_SECONDS="${CATALOG_WAIT_SECONDS:-30}"
 
 SENDER_STREAM_NAME="hosted_relays_sender"
 PUBLIC_TRACK="encoder/encoded_video"
@@ -341,7 +345,8 @@ say "Private track:     reads at the loopback listener"
 read_the_track_at_the_relay_on_stdin() {
     local track="$1" object_count="$2" dump_directory="$3" wait_at_most="$4"
     "$TATOLAB_READ_TRACK_EXECUTABLE" - "$SENDER_BROADCAST" "$track" \
-        --count "$object_count" --out "$dump_directory" --wait-at-most "$wait_at_most"
+        --count "$object_count" --out "$dump_directory" --wait-at-most "$wait_at_most" \
+        --catalog-wait-at-most "$CATALOG_WAIT_SECONDS"
 }
 # Writes the subscribe-only URL of <arm>'s relay to stdout.
 the_subscribe_url_of() {
@@ -379,6 +384,7 @@ prove_the_arm() {
         arm_failed "$arm" "the public track did not read off the hosted relay: $(tail -3 "$arm_dir/read_track.log")"
         return
     fi
+    grep "the catalog" "$arm_dir/read_track.log" | sed "s/^/[hosted-relays] $arm: /"
     say "$arm: $(tail -1 "$arm_dir/read_track.log")"
     # Without the catalog the reader writes each object as sent: the legacy
     # container, a QUIC varint timestamp before the codec payload. The rest of
@@ -392,7 +398,7 @@ prove_the_arm() {
                     "$PRIVATE_TRACK_READ_WAIT_SECONDS" 2> "$arm_dir/catalog_track_read.log"; then
             catalog_track_read="it read as a track when subscribed to directly"
         fi
-        why_the_catalog_failed="the track read back as sent, not as its codec payload: the broadcast's catalog did not reach the reader within 5s ($catalog_track_read)"
+        why_the_catalog_failed="the track read back as sent, not as its codec payload: the broadcast's catalog did not list it to the reader within ${CATALOG_WAIT_SECONDS}s ($catalog_track_read)"
         say "$arm: FINDING: $why_the_catalog_failed"
     fi
 
