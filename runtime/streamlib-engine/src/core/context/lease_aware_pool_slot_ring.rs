@@ -33,6 +33,12 @@ pub(crate) trait LeaseAwarePoolSlotResource {
     fn is_in_use_per_the_platform(&self) -> bool {
         false
     }
+
+    /// Whether the resource is flagged to be freed once unheld, so a hand-off
+    /// reuses it only when no other unheld slot is left.
+    fn is_flagged_to_be_freed_once_unheld(&self) -> bool {
+        false
+    }
 }
 
 /// One slot of a lease-aware ring: its resource and how many frames it has
@@ -366,8 +372,9 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         self.slots.len() - 1
     }
 
-    /// Hand out the unheld slot whose frame was published longest ago,
-    /// minting and publishing its next generation; `None` when fewer than
+    /// Hand out the unheld slot whose frame was published longest ago — one
+    /// flagged to be freed only when no other is unheld — minting and
+    /// publishing its next generation; `None` when fewer than
     /// `unheld_slots_a_reuse_needs` slots are unheld.
     ///
     /// The whole scan and the publish run under one hold of the lease table
@@ -383,8 +390,13 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         let mut reuse = PoolSlotReuse::over(check_out_leases);
         let mut minted_frame_generations_held = minted_frame_generations.held_for_a_hand_off();
         let mut slot_indices_oldest_hand_off_first: Vec<usize> = (0..self.slots.len()).collect();
-        slot_indices_oldest_hand_off_first
-            .sort_by_key(|&slot_index| self.slots[slot_index].ring_hand_off_order);
+        slot_indices_oldest_hand_off_first.sort_by_key(|&slot_index| {
+            let slot = &self.slots[slot_index];
+            (
+                slot.resource.is_flagged_to_be_freed_once_unheld(),
+                slot.ring_hand_off_order,
+            )
+        });
         let mut unheld_slot_indices_oldest_first = slot_indices_oldest_hand_off_first
             .into_iter()
             .filter(|&slot_index| self.slots[slot_index].is_unheld(&reuse))

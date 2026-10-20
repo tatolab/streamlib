@@ -93,6 +93,10 @@ impl LeaseAwarePoolSlotResource for PixelBufferPoolSlot {
         self.buffer.strong_count() > 2
     }
 
+    fn is_flagged_to_be_freed_once_unheld(&self) -> bool {
+        self.freeing_record.is_flagged_freed_as_soon_as_unheld()
+    }
+
     /// Whether the kernel reports the slot's IOSurface in use by any
     /// process: a Mach port to it still in flight, or a use count a helper
     /// holds. Kernel-truthful, and cleared by the kernel when that process

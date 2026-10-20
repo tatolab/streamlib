@@ -111,6 +111,11 @@ impl SharedPoolEntryFreeingRecord {
         self.freed_as_soon_as_unheld = true;
     }
 
+    /// Whether the entry is flagged to be freed as soon as it is unheld.
+    pub(crate) fn is_flagged_freed_as_soon_as_unheld(&self) -> bool {
+        self.freed_as_soon_as_unheld
+    }
+
     /// Whether `stream` is the stream that last acquired the entry.
     pub(crate) fn was_last_acquired_by(&self, stream: LoadedStreamTag) -> bool {
         self.stream_that_last_acquired_the_entry == Some(stream)
