@@ -48,7 +48,7 @@ mechanisms each lose a whole group:
   stepped over for good, **at any budget**, including the 5 s stopgap.
   - **Why inversions happen:** moq-lite's group order is fixed newest-first, so when two
     groups are ready together the newer one's stream is sent first.
-  - **How often:** in steady state, 0.4–5 % of arrivals were inverted, all adjacent pairs.
+  - **How often:** in steady state, 0.4–5 % of arrivals were inverted, almost all adjacent pairs.
     Inside a join's history burst the share is far higher.
   - **What was observed:** at the relay, this mechanism lost groups only inside join bursts.
     A 5 s `ordered` read lost nothing over ~240 steady-state groups. A steady-state loss
@@ -190,8 +190,8 @@ noted.
   steady-state groups.
 - **Arrival timing**, in `arrival` reads more than 200 ms after the first delivery (past the
   join burst):
-  - **Inversions:** 0.4 % (Opus) to 5.0 % of arrivals (`dec-arrival5`, 7 of 238; the four
-    join runs, 4 of 141, 6 of 377 and 3 of 374; Opus, 1 of 234; the read beside a 0-budget
+  - **Inversions:** 0.4 % (Opus) to 5.0 % of arrivals (`dec-arrival5`, the first join, 7 of 238; the
+    other three joins, 4 of 141, 6 of 377 and 3 of 374; Opus, 1 of 234; the read beside a 0-budget
     reader, 22 of 442).
   - **Gaps:** in `dec-arrival5`, 158 of 238 gaps were 20 ms and 21 were 0 ms (two groups in
     one burst). The rest scatter around 20 and 40 ms.
@@ -336,8 +336,9 @@ These are recommendations, not decisions. Items 2–4 change what the plan says.
    - **The clock arm (d):** the content-time rule (c) fires only on newer data arriving, so
      it never sleeps. Without (d), groups already buffered above a hole are held for as long
      as the publisher is paused, and are released only when content resumes or the track
-     ends. moq-dev keeps (d) for exactly that case. The owner's "waits and sleeps are never
-     fixed in realtime streaming" points to (c) alone, at the cost of that held tail.
+     ends. moq-dev keeps (d) for exactly that case. If the ticket's "waits and sleeps are never
+     fixed in realtime streaming" covers giving up on a hole, it means (c) alone, at the cost
+     of that held tail. That reading is the owner's to make.
 4. **The `AudioBlock` catalog entry.** This reopens the DECIDED catalog entry
    (ARCHITECTURE.md §The catalog is assembled from port descriptions, `:3735`): "a built-in
    whose payload is a msgpack record declares `binary`, `mode: snapshot`, `mime:
