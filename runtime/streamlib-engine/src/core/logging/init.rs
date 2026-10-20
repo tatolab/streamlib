@@ -338,20 +338,24 @@ pub(crate) fn the_engines_configured_tracing_filter() -> EnvFilter {
         .unwrap_or_else(|_| EnvFilter::new(ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES))
 }
 
-/// The `rmcp` targets whose `debug` and `trace` events print each MCP message
-/// whole: a tool call's arguments, a relay's secret among them.
-const RMCP_TARGETS_PRINTING_EACH_MCP_MESSAGE_WHOLE: [&str; 2] = [
-    "rmcp::service",
-    "rmcp::transport::streamable_http_server::tower",
-];
+/// The crate whose `debug` and `trace` events print MCP messages whole — a
+/// tool call's arguments, a relay's secret among them — from its service and
+/// from each transport.
+const RMCP_CRATE_TARGET: &str = "rmcp";
 
-/// Drops every `debug` and `trace` record of the targets in
-/// [`RMCP_TARGETS_PRINTING_EACH_MCP_MESSAGE_WHOLE`], whatever `RUST_LOG`
-/// admits, so a secret handed over the local API reaches no log line.
+/// Whether `target` is the `rmcp` crate's or one of its modules'.
+fn is_an_rmcp_target(target: &str) -> bool {
+    target
+        .strip_prefix(RMCP_CRATE_TARGET)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+}
+
+/// Drops every `debug` and `trace` record of the `rmcp` crate, whatever
+/// `RUST_LOG` admits, so a secret handed over the local API reaches no log line.
 pub(crate) fn mcp_message_contents_kept_off_the_log() -> FilterFn<fn(&Metadata<'_>) -> bool> {
     filter_fn(|metadata| {
         !(matches!(*metadata.level(), Level::DEBUG | Level::TRACE)
-            && RMCP_TARGETS_PRINTING_EACH_MCP_MESSAGE_WHOLE.contains(&metadata.target()))
+            && is_an_rmcp_target(metadata.target()))
     })
 }
 
@@ -445,26 +449,14 @@ mod mcp_message_contents_tests {
         }
     }
 
-    fn make_one_event_per_level_at_each_rmcp_target() {
-        for target in RMCP_TARGETS_PRINTING_EACH_MCP_MESSAGE_WHOLE {
-            match target {
-                "rmcp::service" => {
-                    tracing::trace!(target: "rmcp::service", "a message whole");
-                    tracing::debug!(target: "rmcp::service", "a message whole");
-                    tracing::info!(target: "rmcp::service", "a service started");
-                }
-                _ => {
-                    tracing::trace!(
-                        target: "rmcp::transport::streamable_http_server::tower",
-                        "a message whole"
-                    );
-                    tracing::info!(
-                        target: "rmcp::transport::streamable_http_server::tower",
-                        "a request served"
-                    );
-                }
-            }
-        }
+    fn make_one_debug_trace_and_info_event_at_rmcp_targets_and_another_crates() {
+        tracing::trace!(target: "rmcp::service", "a message whole");
+        tracing::debug!(target: "rmcp::service", "a message whole");
+        tracing::trace!(target: "rmcp::transport::streamable_http_server::tower", "a message whole");
+        tracing::debug!(target: "rmcp::transport::async_rw", "a line whole");
+        tracing::debug!(target: "rmcp", "a message whole");
+        tracing::info!(target: "rmcp::service", "a service started");
+        tracing::debug!(target: "rmcpx", "another crate");
     }
 
     #[test]
@@ -475,19 +467,16 @@ mod mcp_message_contents_tests {
             .with(mcp_message_contents_kept_off_the_log())
             .with(captured.clone());
         tracing::subscriber::with_default(subscriber, || {
-            make_one_event_per_level_at_each_rmcp_target();
+            make_one_debug_trace_and_info_event_at_rmcp_targets_and_another_crates();
             tracing::callsite::rebuild_interest_cache();
             captured.0.lock().unwrap().clear();
-            make_one_event_per_level_at_each_rmcp_target();
+            make_one_debug_trace_and_info_event_at_rmcp_targets_and_another_crates();
         });
         assert_eq!(
             *captured.0.lock().unwrap(),
             [
                 ("rmcp::service".to_string(), Level::INFO),
-                (
-                    "rmcp::transport::streamable_http_server::tower".to_string(),
-                    Level::INFO
-                ),
+                ("rmcpx".to_string(), Level::DEBUG),
             ]
         );
     }

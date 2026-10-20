@@ -149,7 +149,7 @@ impl RelayInstancesOfThisRuntime {
                         adapter: adapter.catalog_entry.kind.clone(),
                         settings: built_in.settings,
                     });
-                held_instances.push(relay_instances.held_instance(recorded, true));
+                held_instances.push(HeldRelayInstance::unjoined(recorded, true, BTreeSet::new()));
             }
         }
         for recorded in recorded_instances {
@@ -157,7 +157,11 @@ impl RelayInstancesOfThisRuntime {
                 .iter()
                 .any(|held| held.recorded.relay_id == recorded.relay_id)
             {
-                held_instances.push(relay_instances.held_instance(recorded, false));
+                held_instances.push(HeldRelayInstance::unjoined(
+                    recorded,
+                    false,
+                    BTreeSet::new(),
+                ));
             }
         }
         for held in &mut held_instances {
@@ -199,27 +203,13 @@ impl RelayInstancesOfThisRuntime {
             .unwrap_or_default()
     }
 
-    fn held_instance(&self, recorded: RecordedRelayInstance, built_in: bool) -> HeldRelayInstance {
-        let secret_settings_set = self
-            .secret_setting_names_of(&recorded.adapter)
-            .iter()
-            .filter(|setting| {
-                matches!(
-                    self.secret_store.read(&recorded.relay_id, setting),
-                    Ok(Some(_))
-                )
-            })
-            .cloned()
-            .collect();
-        HeldRelayInstance::unjoined(recorded, built_in, secret_settings_set)
-    }
-
     /// `held` joined with its recorded settings and its stored secrets, or
     /// held unjoined saying why.
     fn join_with_its_held_settings(&self, held: &mut HeldRelayInstance) {
         let joined = self
             .the_stored_secrets_of(&held.recorded)
             .and_then(|secrets| {
+                held.secret_settings_set = secrets.keys().cloned().collect();
                 let settings = held.recorded.settings.clone();
                 self.join(held, &settings, &secrets)
             });
@@ -438,11 +428,11 @@ impl RelayInstancesOfThisRuntime {
             .position(|held| held.recorded.relay_id == relay_id)
             .ok_or_else(|| RelayInstanceControlRefusal::UnknownRelay {
                 relay_id: relay_id.to_string(),
-                known: held_instances
-                    .iter()
-                    .map(|held| format!("`{}`", held.recorded.relay_id))
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                known: names_in_backticks(
+                    held_instances
+                        .iter()
+                        .map(|held| held.recorded.relay_id.as_str()),
+                ),
             })
     }
 
@@ -494,6 +484,15 @@ impl RelayInstancesOfThisRuntime {
     }
 }
 
+/// `names`, each in backticks, comma-separated.
+fn names_in_backticks<'name>(names: impl IntoIterator<Item = &'name str>) -> String {
+    names
+        .into_iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// `settings` with each of `secrets` put among them, as the adapter reads them.
 fn settings_with_the_secrets_among_them(
     settings: &Map<String, Value>,
@@ -525,12 +524,11 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
         let Some(adapter_of_this_runtime) = self.adapter_named(adapter) else {
             return Err(RelayInstanceControlRefusal::UnknownAdapter {
                 adapter: adapter.to_string(),
-                known: self
-                    .adapters
-                    .iter()
-                    .map(|adapter| format!("`{}`", adapter.catalog_entry.kind))
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                known: names_in_backticks(
+                    self.adapters
+                        .iter()
+                        .map(|adapter| adapter.catalog_entry.kind.as_str()),
+                ),
             });
         };
         if let Some(why) = adapter_of_this_runtime.maker.why_no_instance_is_added() {

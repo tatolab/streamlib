@@ -31,8 +31,6 @@ pub(crate) trait RelaySecretStore: Send + Sync {
 pub(crate) fn the_relay_secret_store_of_this_machine(
     fallback_file_path: PathBuf,
 ) -> Box<dyn RelaySecretStore> {
-    #[cfg(not(feature = "machine-directories-under-a-test-root"))]
-    use crate::os_relay_secret_store::the_os_secret_store_answering_now;
     match the_os_secret_store_answering_now() {
         Ok(os_secret_store) => {
             tracing::info!("relay secrets are kept in the OS secret store");
@@ -56,6 +54,9 @@ pub(crate) fn the_relay_secret_store_of_this_machine(
         }
     }
 }
+
+#[cfg(not(feature = "machine-directories-under-a-test-root"))]
+use crate::os_relay_secret_store::the_os_secret_store_answering_now;
 
 /// A test build never reaches the user's own secret store.
 #[cfg(feature = "machine-directories-under-a-test-root")]

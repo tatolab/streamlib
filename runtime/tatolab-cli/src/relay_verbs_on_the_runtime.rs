@@ -26,6 +26,43 @@ use crate::verb_standard_output::write_verb_standard_output;
 /// provider before it answers.
 const RELAY_ACTION_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// A local API tool that lists, adds, configures or removes the runtime's relays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayActionTool {
+    ListRelays,
+    AddRelay,
+    ConfigureRelay,
+    RemoveRelay,
+}
+
+impl RelayActionTool {
+    fn tool_name(self) -> &'static str {
+        match self {
+            RelayActionTool::ListRelays => "list_relays",
+            RelayActionTool::AddRelay => "add_relay",
+            RelayActionTool::ConfigureRelay => "configure_relay",
+            RelayActionTool::RemoveRelay => "remove_relay",
+        }
+    }
+
+    fn tool_call_timeout(self) -> Duration {
+        match self {
+            RelayActionTool::ListRelays => OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            RelayActionTool::AddRelay
+            | RelayActionTool::ConfigureRelay
+            | RelayActionTool::RemoveRelay => RELAY_ACTION_TOOL_CALL_TIMEOUT,
+        }
+    }
+
+    /// Call this tool once with `tool_arguments` and read its result as `ToolResult`.
+    fn call<ToolResult: serde::de::DeserializeOwned>(
+        self,
+        tool_arguments: Map<String, Value>,
+    ) -> Result<ToolResult, TatolabCommandFailure> {
+        call_one_tool_reading_its_result(self.tool_name(), tool_arguments, self.tool_call_timeout())
+    }
+}
+
 /// What `relays` prints when the runtime holds no relay.
 const NO_RELAYS_IN_THIS_RUNTIME_LINE: &str = "no relays\n";
 
@@ -111,7 +148,7 @@ enum SecretSource {
 impl SecretSource {
     /// The secret, read once, its one trailing line ending dropped.
     fn read_the_secret(&self) -> Result<String, TatolabCommandFailure> {
-        let mut secret = match self {
+        let secret = match self {
             SecretSource::File(path) => std::fs::read_to_string(path).map_err(|not_read| {
                 TatolabCommandFailure::refused(format!(
                     "the secret cannot be read from {}: {not_read}",
@@ -130,12 +167,11 @@ impl SecretSource {
                 secret
             }
         };
-        for line_ending in ["\r\n", "\n"] {
-            if secret.ends_with(line_ending) {
-                secret.truncate(secret.len() - line_ending.len());
-                break;
-            }
-        }
+        let secret = secret
+            .strip_suffix("\r\n")
+            .or_else(|| secret.strip_suffix('\n'))
+            .unwrap_or(&secret)
+            .to_owned();
         if secret.is_empty() {
             return Err(TatolabCommandFailure::refused(
                 "the secret read is empty".to_owned(),
@@ -146,11 +182,7 @@ impl SecretSource {
 }
 
 fn listed_relays() -> Result<Vec<ListedRelayInstance>, TatolabCommandFailure> {
-    let list_relays_result: ListRelaysToolResult = call_one_tool_reading_its_result(
-        "list_relays",
-        Map::new(),
-        OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
-    )?;
+    let list_relays_result: ListRelaysToolResult = RelayActionTool::ListRelays.call(Map::new())?;
     Ok(list_relays_result.relays)
 }
 
@@ -168,11 +200,7 @@ fn add_relay(adapter: &str, settings_file: Option<&Path>) -> Result<u8, TatolabC
     let mut add_relay_arguments = Map::new();
     add_relay_arguments.insert("adapter".to_owned(), adapter.into());
     add_relay_arguments.insert("settings".to_owned(), Value::Object(settings));
-    let added: AddRelayToolResult = call_one_tool_reading_its_result(
-        "add_relay",
-        add_relay_arguments,
-        RELAY_ACTION_TOOL_CALL_TIMEOUT,
-    )?;
+    let added: AddRelayToolResult = RelayActionTool::AddRelay.call(add_relay_arguments)?;
     write_verb_standard_output(&format!("{} added (adapter {adapter})\n", added.relay_id))
 }
 
@@ -239,11 +267,8 @@ fn configure_relay(
     let mut configure_relay_arguments = Map::new();
     configure_relay_arguments.insert("relay_id".to_owned(), relay_id.into());
     configure_relay_arguments.insert("settings".to_owned(), Value::Object(settings));
-    let configured: ConfigureRelayToolResult = call_one_tool_reading_its_result(
-        "configure_relay",
-        configure_relay_arguments,
-        RELAY_ACTION_TOOL_CALL_TIMEOUT,
-    )?;
+    let configured: ConfigureRelayToolResult =
+        RelayActionTool::ConfigureRelay.call(configure_relay_arguments)?;
     write_verb_standard_output(&format!("{} configured\n", configured.relay_id))
 }
 
@@ -287,11 +312,8 @@ fn refuse_a_secret_as_an_argument_or_a_setting_as_a_secret(
 fn remove_relay(relay_id: &str) -> Result<u8, TatolabCommandFailure> {
     let mut remove_relay_arguments = Map::new();
     remove_relay_arguments.insert("relay_id".to_owned(), relay_id.into());
-    let removed: RemoveRelayToolResult = call_one_tool_reading_its_result(
-        "remove_relay",
-        remove_relay_arguments,
-        RELAY_ACTION_TOOL_CALL_TIMEOUT,
-    )?;
+    let removed: RemoveRelayToolResult =
+        RelayActionTool::RemoveRelay.call(remove_relay_arguments)?;
     write_verb_standard_output(&format!("{} removed\n", removed.relay_id))
 }
 
