@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use parking_lot::Mutex;
-use tracing::Dispatch;
+use tracing::{Dispatch, Level, Metadata};
+use tracing_subscriber::filter::{FilterFn, filter_fn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
@@ -337,6 +338,23 @@ pub(crate) fn the_engines_configured_tracing_filter() -> EnvFilter {
         .unwrap_or_else(|_| EnvFilter::new(ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES))
 }
 
+/// The `rmcp` targets whose `debug` and `trace` events print each MCP message
+/// whole: a tool call's arguments, a relay's secret among them.
+const RMCP_TARGETS_PRINTING_EACH_MCP_MESSAGE_WHOLE: [&str; 2] = [
+    "rmcp::service",
+    "rmcp::transport::streamable_http_server::tower",
+];
+
+/// Drops every `debug` and `trace` record of the targets in
+/// [`RMCP_TARGETS_PRINTING_EACH_MCP_MESSAGE_WHOLE`], whatever `RUST_LOG`
+/// admits, so a secret handed over the local API reaches no log line.
+pub(crate) fn mcp_message_contents_kept_off_the_log() -> FilterFn<fn(&Metadata<'_>) -> bool> {
+    filter_fn(|metadata| {
+        !(matches!(*metadata.level(), Level::DEBUG | Level::TRACE)
+            && RMCP_TARGETS_PRINTING_EACH_MCP_MESSAGE_WHOLE.contains(&metadata.target()))
+    })
+}
+
 /// The drain worker and the dispatcher feeding it. With `mirror_past_an_interceptor`,
 /// the pretty mirror writes to copies of the real fds 1/2 taken now, so it
 /// writes past any interception installed later instead of feeding it.
@@ -389,6 +407,7 @@ fn build_components(
     );
     let subscriber = Registry::default()
         .with(the_engines_configured_tracing_filter())
+        .with(mcp_message_contents_kept_off_the_log())
         .with(layer);
     (worker, Dispatch::new(subscriber))
 }
@@ -404,4 +423,72 @@ fn install_panic_hook(record_queue: &DrainWorkerRecordQueue) {
         std::thread::sleep(std::time::Duration::from_millis(50));
         previous(info);
     }));
+}
+
+#[cfg(test)]
+mod mcp_message_contents_tests {
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    use tracing_subscriber::layer::Context;
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct CapturedEventTargets(Arc<StdMutex<Vec<(String, Level)>>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedEventTargets {
+        fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
+            self.0.lock().unwrap().push((
+                event.metadata().target().to_string(),
+                *event.metadata().level(),
+            ));
+        }
+    }
+
+    fn make_one_event_per_level_at_each_rmcp_target() {
+        for target in RMCP_TARGETS_PRINTING_EACH_MCP_MESSAGE_WHOLE {
+            match target {
+                "rmcp::service" => {
+                    tracing::trace!(target: "rmcp::service", "a message whole");
+                    tracing::debug!(target: "rmcp::service", "a message whole");
+                    tracing::info!(target: "rmcp::service", "a service started");
+                }
+                _ => {
+                    tracing::trace!(
+                        target: "rmcp::transport::streamable_http_server::tower",
+                        "a message whole"
+                    );
+                    tracing::info!(
+                        target: "rmcp::transport::streamable_http_server::tower",
+                        "a request served"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rmcp_prints_no_message_whole_even_where_rust_log_admits_trace() {
+        let captured = CapturedEventTargets::default();
+        let subscriber = Registry::default()
+            .with(EnvFilter::new("trace"))
+            .with(mcp_message_contents_kept_off_the_log())
+            .with(captured.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            make_one_event_per_level_at_each_rmcp_target();
+            tracing::callsite::rebuild_interest_cache();
+            captured.0.lock().unwrap().clear();
+            make_one_event_per_level_at_each_rmcp_target();
+        });
+        assert_eq!(
+            *captured.0.lock().unwrap(),
+            [
+                ("rmcp::service".to_string(), Level::INFO),
+                (
+                    "rmcp::transport::streamable_http_server::tower".to_string(),
+                    Level::INFO
+                ),
+            ]
+        );
+    }
 }

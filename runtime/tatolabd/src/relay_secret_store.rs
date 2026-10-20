@@ -36,6 +36,14 @@ pub(crate) fn the_relay_secret_store_of_this_machine(
     match the_os_secret_store_answering_now() {
         Ok(os_secret_store) => {
             tracing::info!("relay secrets are kept in the OS secret store");
+            if fallback_file_path.exists() {
+                tracing::warn!(
+                    "{} holds relay secrets from a start with no OS secret store, and is not \
+                     read while the OS secret store answers; a relay whose secret is there \
+                     lists it unset",
+                    fallback_file_path.display()
+                );
+            }
             os_secret_store
         }
         Err(why_no_store_answers) => {

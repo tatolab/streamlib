@@ -16,7 +16,7 @@ use streamlib_relay_adapter_local::{
 };
 
 /// The maker of the local relay's two instances on `engine`'s machine; when
-/// none can run, both are still listed and the reason is said once.
+/// none can run, both are still listed and each says why as it fails to join.
 pub(crate) fn the_local_relay_adapter_of_this_runtime(
     engine: &Runner,
 ) -> LocalRelayAdapterInstanceMaker {
@@ -24,10 +24,7 @@ pub(crate) fn the_local_relay_adapter_of_this_runtime(
         Ok((shared, settings_of_each_listener)) => {
             LocalRelayAdapterInstanceMaker::sharing(shared, settings_of_each_listener)
         }
-        Err(why_not) => {
-            tracing::warn!("no local relay runs, so no exposed port reaches it: {why_not}");
-            LocalRelayAdapterInstanceMaker::running_no_local_relay(why_not)
-        }
+        Err(why_not) => LocalRelayAdapterInstanceMaker::running_no_local_relay(why_not),
     }
 }
 

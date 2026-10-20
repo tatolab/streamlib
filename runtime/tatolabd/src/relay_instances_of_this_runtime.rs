@@ -1258,4 +1258,127 @@ mod tests {
         assert!(!log.contains(URL_BORNE_TOKEN), "{log}");
         assert!(!log.contains("relay.example"), "{log}");
     }
+
+    /// Makes `relays.json` a directory, which no write can replace.
+    fn make_the_record_unwritable(machine: &RelayInstancesOverAStateDirectory) {
+        std::fs::remove_file(machine.record_path()).unwrap();
+        std::fs::create_dir(machine.record_path()).unwrap();
+    }
+
+    #[test]
+    fn a_change_that_cannot_be_recorded_leaves_every_relay_and_secret_as_it_was() {
+        let machine = RelayInstancesOverAStateDirectory::new();
+        let relay_instances = machine.start_a_runtime();
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("held")))
+            .unwrap();
+        make_the_record_unwritable(&machine);
+
+        let refusal = relay_instances
+            .add_relay(
+                "provider",
+                provider_settings(&a_relay_url_carrying("added")),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(refusal, RelayInstanceControlRefusal::NotRecorded { .. }),
+            "{refusal}"
+        );
+        assert_eq!(relay_instances.list_relays().len(), 2);
+        assert!(
+            !machine.every_file_written().contains("added"),
+            "no secret is left behind"
+        );
+
+        let refusal = relay_instances
+            .configure_relay(
+                "provider-1",
+                json!({"relay_url_carrying_a_token": a_relay_url_carrying("rotated"), "region": "eu"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(refusal, RelayInstanceControlRefusal::NotRecorded { .. }),
+            "{refusal}"
+        );
+        let written = machine.every_file_written();
+        assert!(
+            written.contains("held") && !written.contains("rotated"),
+            "{written}"
+        );
+        assert_eq!(
+            machine.last_join_seen(),
+            (
+                "provider-1".to_string(),
+                a_relay_url_carrying("held"),
+                Some("us".to_string())
+            ),
+            "it joined again with what it had"
+        );
+        let listing = relay_instances.list_relays();
+        let held = listed(&listing, "provider-1");
+        assert_eq!(
+            held.settings,
+            json!({"region": "us"}).as_object().unwrap().clone()
+        );
+        assert_eq!(held.connection_state, ListedRelayConnectionState::Joined);
+
+        assert!(matches!(
+            relay_instances.remove_relay("provider-1").unwrap_err(),
+            RelayInstanceControlRefusal::NotRecorded { .. }
+        ));
+        assert_eq!(relay_instances.list_relays().len(), 2);
+        assert_eq!(
+            relay_instances.relays_the_publisher_dials().borrow().len(),
+            1
+        );
+    }
+
+    /// A store that answers reads and refuses every write.
+    struct SecretStoreRefusingEveryWrite;
+
+    impl RelaySecretStore for SecretStoreRefusingEveryWrite {
+        fn read(&self, _: &str, _: &str) -> Result<Option<SecretString>, String> {
+            Ok(None)
+        }
+
+        fn write(&self, _: &str, _: &str, _: &SecretString) -> Result<(), String> {
+            Err("the store is locked".to_string())
+        }
+
+        fn delete(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_relay_whose_secret_cannot_be_stored_is_not_added() {
+        let machine = RelayInstancesOverAStateDirectory::new();
+        let relay_instances = RelayInstancesOfThisRuntime::join_every_relay_instance(
+            vec![Box::new(ProviderRelayAdapterInstanceMaker {
+                joins_seen: Arc::clone(&machine.joins_seen),
+            })],
+            RelayInstancesRecordFile::at(machine.record_path()),
+            Box::new(SecretStoreRefusingEveryWrite),
+            MachineName::from_a_hostname("desk").unwrap(),
+        );
+        let refusal = relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("lost")))
+            .unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            "the secret `relay_url_carrying_a_token` of the relay `provider-1` was not stored: \
+             the store is locked"
+        );
+        assert!(relay_instances.list_relays().is_empty());
+        assert!(
+            relay_instances
+                .relays_the_publisher_dials()
+                .borrow()
+                .is_empty()
+        );
+        assert!(!machine.record_path().exists());
+    }
 }

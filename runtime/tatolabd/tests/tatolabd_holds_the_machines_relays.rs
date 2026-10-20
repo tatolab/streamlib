@@ -162,3 +162,57 @@ fn the_local_relays_two_instances_are_built_in_never_removed_and_never_added_to(
     );
     runtime.interrupt_and_expect_a_clean_exit();
 }
+
+/// Every file under `directory`, read as text.
+fn every_file_under(directory: &std::path::Path) -> String {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return String::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                every_file_under(&path)
+            } else {
+                String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default()).into_owned()
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn a_relays_secret_reaches_no_log_line_even_where_rust_log_admits_trace() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
+    tatolabd_command.env("RUST_LOG", "trace");
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
+
+    call_a_tool_over_the_local_api(
+        &machine_root.local_api_socket_path(),
+        "add_relay",
+        json!({
+            "adapter": SECRET_HOLDING_TEST_RELAY_ADAPTER,
+            "settings": {"token": RELAY_SECRET}
+        }),
+    )
+    .json();
+    call_a_tool_over_the_local_api(
+        &machine_root.local_api_socket_path(),
+        "configure_relay",
+        json!({"relay_id": "test-secret-holder-1", "settings": {"token": RELAY_SECRET}}),
+    )
+    .json();
+    runtime.interrupt_and_expect_a_clean_exit();
+
+    let standard_error = runtime.standard_error();
+    assert!(
+        standard_error.contains("test-secret-holder-1"),
+        "the log is read: {standard_error}"
+    );
+    assert!(!standard_error.contains(RELAY_SECRET), "{standard_error}");
+    let runtime_log = every_file_under(&machine_root.runtime_log_directory());
+    assert!(!runtime_log.is_empty(), "the runtime's own log is read");
+    assert!(!runtime_log.contains(RELAY_SECRET), "{runtime_log}");
+}

@@ -1081,4 +1081,126 @@ mod tests {
         assert_ne!(replaced, added_again);
         assert_eq!(replaced.track_name(), added_again.track_name());
     }
+
+    fn a_relay_dialed_at(relay_id: &str, port: u16) -> RelayTheExposedPortPublisherDials {
+        RelayTheExposedPortPublisherDials {
+            relay_id: RelayInstanceId(relay_id.to_string()),
+            dial_url_carrying_the_credential: SecretString::from(format!(
+                "http://127.0.0.1:{port}/"
+            )),
+            levels_served: vec![OutputPortExposureLevel::Public],
+            broadcast_root: BroadcastPath::of_the_machine_under_the_root(
+                "",
+                &MachineName::from_a_hostname("desk").unwrap(),
+            ),
+        }
+    }
+
+    fn the_relays_dialed(publisher: &ExposedPortPublisher) -> Vec<(String, String)> {
+        publisher
+            .relays
+            .iter()
+            .map(|relay| {
+                (
+                    relay.dialed_as.relay_id.0.clone(),
+                    relay
+                        .dialed_as
+                        .dial_url_carrying_the_credential
+                        .expose_secret()
+                        .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// A relay no longer among those handed over, or handed over dialed
+    /// another way, is hung up on — its broadcasts and its tracks withdrawn —
+    /// and every other is kept as it was.
+    #[test]
+    fn dial_exactly_hangs_up_on_a_relay_gone_or_dialed_another_way_and_keeps_the_rest() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = async_runtime.enter();
+        let mut publisher = ExposedPortPublisher {
+            relays: Vec::new(),
+            broadcasts: HashMap::new(),
+            forwarded_ports: HashMap::new(),
+            why_each_port_is_not_forwarded_yet: HashMap::new(),
+        };
+        publisher.dial_exactly(vec![
+            a_relay_dialed_at("kept", 9),
+            a_relay_dialed_at("moved", 9),
+        ]);
+        assert_eq!(
+            the_relays_dialed(&publisher),
+            [
+                ("kept".to_string(), "http://127.0.0.1:9/".to_string()),
+                ("moved".to_string(), "http://127.0.0.1:9/".to_string())
+            ]
+        );
+
+        let track_writer = Arc::new(Mutex::new(ExposedPortTrackWriter::new()));
+        for relay in &publisher.relays {
+            let broadcast = BroadcastOfAStreamAtARelay::announced_at(relay, "desk").unwrap();
+            let track = broadcast
+                .broadcast
+                .create_track("camera/video", track_info_of_an_exposed_port())
+                .unwrap();
+            lock_the_writer(&track_writer).add_the_track_at(
+                relay.dialed_as.relay_id.clone(),
+                relay.dialed_as.levels_served.clone(),
+                track,
+            );
+            publisher.broadcasts.insert(
+                (relay.dialed_as.relay_id.clone(), "desk".to_string()),
+                broadcast,
+            );
+        }
+        publisher.forwarded_ports.insert(
+            ExposedOutputPortAddress {
+                stream_name: "desk".to_string(),
+                node_name: "camera".to_string(),
+                port_name: "video".to_string(),
+                node_id: ProcessorUniqueId::new(),
+            },
+            ForwardedExposedPort {
+                catalog_entry: None,
+                track_writer: Arc::clone(&track_writer),
+                reading: tokio::spawn(std::future::pending()),
+            },
+        );
+
+        publisher.dial_exactly(vec![
+            a_relay_dialed_at("kept", 9),
+            a_relay_dialed_at("moved", 10),
+        ]);
+        assert_eq!(
+            the_relays_dialed(&publisher),
+            [
+                ("kept".to_string(), "http://127.0.0.1:9/".to_string()),
+                ("moved".to_string(), "http://127.0.0.1:10/".to_string())
+            ]
+        );
+        let kept = RelayInstanceId("kept".to_string());
+        let moved = RelayInstanceId("moved".to_string());
+        assert!(lock_the_writer(&track_writer).reaches(&kept));
+        assert!(!lock_the_writer(&track_writer).reaches(&moved));
+        assert!(
+            publisher
+                .broadcasts
+                .contains_key(&(kept.clone(), "desk".to_string()))
+        );
+        assert!(
+            !publisher
+                .broadcasts
+                .contains_key(&(moved, "desk".to_string()))
+        );
+
+        publisher.dial_exactly(Vec::new());
+        assert!(publisher.relays.is_empty());
+        assert!(!lock_the_writer(&track_writer).reaches(&kept));
+        assert!(publisher.broadcasts.is_empty());
+    }
 }
