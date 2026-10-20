@@ -100,8 +100,7 @@ impl std::fmt::Display for VideoError {
             Self::MatrixCoefficientsNotConvertible(matrix_coefficients) => write!(
                 f,
                 "the stream signals matrix_coefficients {matrix_coefficients}, which no Vulkan \
-                 sampler YCbCr model converts; the decoder converts BT.709 (1), BT.601 (5, 6) \
-                 and BT.2020 non-constant-luminance (9)"
+                 sampler YCbCr model converts"
             ),
         }
     }

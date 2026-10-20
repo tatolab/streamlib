@@ -63,24 +63,26 @@ impl SimpleDecoder {
         let ycbcr_model_and_range = Nv12SamplerYcbcrModelAndRange::for_decoded_picture_color_vui(
             decoded_picture_color_vui,
         )?;
-        let held = self.nv12_converter.as_ref().ok_or_else(|| {
-            VideoError::Engine("the NV12 → RGBA converter was not created".into())
-        })?;
-        if held.ycbcr_model_and_range() != ycbcr_model_and_range {
-            let (width, height) = held.dimensions();
-            info!(
-                ?decoded_picture_color_vui,
-                ?ycbcr_model_and_range,
-                "the stream's colour selects another sampler conversion; rebuilding the NV12 → \
-                 RGBA converter"
-            );
-            self.nv12_converter = None;
-            self.nv12_converter =
-                Some(self.create_nv12_converter(width, height, ycbcr_model_and_range)?);
+        let (held_ycbcr_model_and_range, (width, height)) = self
+            .nv12_converter
+            .as_ref()
+            .map(|held| (held.ycbcr_model_and_range(), held.dimensions()))
+            .ok_or_else(nv12_converter_not_created)?;
+        if held_ycbcr_model_and_range == ycbcr_model_and_range {
+            return self
+                .nv12_converter
+                .as_mut()
+                .ok_or_else(nv12_converter_not_created);
         }
-        self.nv12_converter
-            .as_mut()
-            .ok_or_else(|| VideoError::Engine("the NV12 → RGBA converter was not created".into()))
+        info!(
+            ?decoded_picture_color_vui,
+            ?ycbcr_model_and_range,
+            "the stream's colour selects another sampler conversion; rebuilding the NV12 → \
+             RGBA converter"
+        );
+        self.nv12_converter = None;
+        let rebuilt = self.create_nv12_converter(width, height, ycbcr_model_and_range)?;
+        Ok(self.nv12_converter.insert(rebuilt))
     }
 
     fn create_nv12_converter(
@@ -280,10 +282,19 @@ impl SimpleDecoder {
             // extent (`shaders/nv12_to_rgb.comp`), so a converter sized to
             // anything else rescales the picture instead of converting it.
             // The window is applied by the readback's copy region, never here.
+            // The SPS is parsed by now, so the converter starts on the colour it
+            // signals; a matrix the sampler refuses is refused per picture.
+            let first_picture_ycbcr_model_and_range =
+                Nv12SamplerYcbcrModelAndRange::for_decoded_picture_color_vui(
+                    &self.decoded_picture_color_vui(
+                        self.decoded_picture_display_window_or_whole_picture(),
+                    ),
+                )
+                .or_else(|_| unsignalled_picture_ycbcr_model_and_range(width, height))?;
             self.nv12_converter = Some(self.create_nv12_converter(
                 width,
                 height,
-                unsignalled_picture_ycbcr_model_and_range(width, height)?,
+                first_picture_ycbcr_model_and_range,
             )?);
             info!(width, height, rgba_output = true, "Session configured");
         } else {
@@ -986,4 +997,8 @@ fn unsignalled_picture_ycbcr_model_and_range(
     Nv12SamplerYcbcrModelAndRange::for_decoded_picture_color_vui(
         &H273ColorVui::default().with_decoded_picture_matrix_and_range_defaults(width, height),
     )
+}
+
+fn nv12_converter_not_created() -> VideoError {
+    VideoError::Engine("the NV12 → RGBA converter was not created".into())
 }

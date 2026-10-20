@@ -83,7 +83,7 @@ impl Nv12SamplerYcbcrModelAndRange {
                 ));
             }
         };
-        let ycbcr_range = if decoded_picture_color_vui.full_range_bit() == 1 {
+        let ycbcr_range = if decoded_picture_color_vui.full_range == Some(true) {
             vk::SamplerYcbcrRange::ITU_FULL
         } else {
             vk::SamplerYcbcrRange::ITU_NARROW
