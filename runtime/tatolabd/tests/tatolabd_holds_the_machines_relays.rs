@@ -263,7 +263,8 @@ impl McpStdioConnection {
     fn the_next_line(&mut self) -> String {
         use std::io::BufRead as _;
         let mut line = String::new();
-        self.from_the_runtime.read_line(&mut line).unwrap();
+        let read = self.from_the_runtime.read_line(&mut line).unwrap();
+        assert_ne!(read, 0, "the runtime closed the connection");
         line
     }
 }
