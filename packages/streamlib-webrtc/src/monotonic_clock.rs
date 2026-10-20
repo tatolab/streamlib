@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The one clock a bag's timestamp is on.
+//! The one clock a media frame's timestamp is on.
 //!
 //! The engine's `MediaClock` domain, read and converted exactly as the engine
-//! reads it, because a stamp this wheel writes onto a bag is compared against
+//! reads it, because a stamp this wheel writes onto a message is compared against
 //! stamps the engine wrote. This wheel links no engine crate, so it reads the
 //! platform clock itself: `mach_absolute_time` on macOS, which stops while the
 //! machine sleeps, and `CLOCK_MONOTONIC` everywhere else. macOS's own

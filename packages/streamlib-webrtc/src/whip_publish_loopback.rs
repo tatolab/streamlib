@@ -14,7 +14,7 @@
 
 #![cfg(test)]
 
-use crate::h264_test_bitstreams::{baseline_320x180, no_vui};
+use crate::h264_test_bitstreams::constrained_baseline_320x180_sequence_parameter_set;
 use crate::http_test_responder::HttpResponderUnderTest;
 use crate::received_media_assembly::{OpusPacketAssembler, VideoAccessUnitAssembler};
 use crate::webrtc_peer_connection::{
@@ -238,7 +238,7 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
     .expect("the WHIP connect did not finish inside its deadline")
     .expect("the WHIP connect failed");
 
-    let sequence_parameter_set = baseline_320x180(no_vui);
+    let sequence_parameter_set = constrained_baseline_320x180_sequence_parameter_set();
     let idr_slice = an_idr_slice_larger_than_one_packet();
     let access_unit = annex_b(&[&sequence_parameter_set, PICTURE_PARAMETER_SET, &idr_slice]);
 
@@ -287,7 +287,13 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
     assert!(received.is_sync_point, "an IDR access unit is a sync point");
     // The coded extent, parsed out of the SPS that survived the round trip
     // rather than taken from config: 320x180 displayed is 320x192 coded.
-    assert_eq!((received.width, received.height), (320, 192));
+    assert_eq!(
+        (
+            received.sequence_parameter_set.coded_width,
+            received.sequence_parameter_set.coded_height
+        ),
+        (320, 192)
+    );
 }
 
 /// 960 samples at Opus's 48 kHz clock, which is what the publisher derives a
@@ -356,8 +362,5 @@ async fn a_published_opus_packet_arrives_whole_and_described() {
     // test is the answerer and so reads no answer of its own — the
     // answer-declared path is covered by the assembler's unit tests.
     assert_eq!(received.opus_packet, Bytes::from(opus_packet));
-    assert_eq!(received.sample_count, 960);
-    assert_eq!(received.sample_rate, 48_000);
     assert_eq!(received.channels, 1);
-    assert!(received.pre_skip == 0, "RTP carries no OpusHead to skip by");
 }

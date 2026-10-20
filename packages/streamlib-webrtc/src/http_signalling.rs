@@ -18,7 +18,7 @@ type SignallingHttpClient = hyper_util::client::legacy::Client<
 >;
 
 /// How long a signalling request may take. Bounded well under the helper's
-/// 60 s registration budget, which a connect on the first bag sits outside but
+/// 60 s registration budget, which a connect on the first media frame sits outside but
 /// a stalled relay would otherwise hold a processor in indefinitely.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 

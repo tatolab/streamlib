@@ -29,7 +29,7 @@ const PROTOCOL: &str = "WHIP";
 pub(crate) struct PublishedMediaSet {
     pub video: bool,
     pub audio: bool,
-    /// The channel count the first audio bag declared, when one arrived before
+    /// The channel count the audio track's catalog entry names, when one arrived before
     /// the connect. Absent leaves the sender's hint at stereo, which RFC 7587
     /// §3.1.1 makes a hint and not a promise.
     pub audio_channels: Option<u32>,
@@ -121,7 +121,7 @@ impl WhipPublishingSession {
     }
 
     /// Hand one Opus packet to the audio track, its duration taken from the
-    /// bag's own sample count rather than assumed to be one 20 ms frame.
+    /// packet's own sample count rather than assumed to be one 20 ms frame.
     pub(crate) async fn write_audio_packet(
         &self,
         opus_packet: Bytes,

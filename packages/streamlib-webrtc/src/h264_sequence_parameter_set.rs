@@ -3,43 +3,35 @@
 
 //! What the SPS a stream carries says about its pictures.
 //!
-//! RTP carries neither extent nor colour, so the sequence parameter set is the
-//! only place a WHEP player can learn them — which is why this parses the
-//! bitstream rather than taking either from config.
+//! RTP carries neither the codec's profile and level nor the extent, so the
+//! sequence parameter set is the only place a WHEP player can learn them for
+//! its port's catalog entry.
 
 use crate::error::{Result, WebRtcExtensionError};
 
-/// The extent and colour one SPS declares.
+/// The profile, level and coded extent one SPS declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SequenceParameterSet {
-    /// Coded width before the conformance crop — the codec-aligned extent,
-    /// which is what the encoded-video wire contract's `width` means and what
-    /// the engine's own encoder writes. A player that published the cropped
-    /// display extent would disagree with `H264Encoder` about the same stream,
-    /// and `Mp4Sink` copies these straight into `tkhd`.
-    pub width: u32,
-    /// Coded height before the conformance crop.
-    pub height: u32,
-    /// Absent when the VUI described no colour axis at all, which is distinct
-    /// from a VUI that described one and left the rest unspecified.
-    pub color: Option<ColorDescription>,
+    pub profile_idc: u8,
+    /// `constraint_set0_flag` through `constraint_set5_flag` and the two
+    /// reserved bits, as the SPS's second byte carries them.
+    pub constraint_set_flags: u8,
+    pub level_idc: u8,
+    /// Width before the conformance crop — the codec-aligned extent a catalog
+    /// entry's `codedWidth` means and `H264Encoder` writes.
+    pub coded_width: u32,
+    /// Height before the conformance crop.
+    pub coded_height: u32,
 }
 
-/// The bag's `color` sub-map, in the wire's own string spelling.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ColorDescription {
-    pub primaries: Option<&'static str>,
-    pub transfer: Option<&'static str>,
-    pub matrix: Option<&'static str>,
-    pub range: Option<&'static str>,
-}
-
-impl ColorDescription {
-    fn describes_nothing(&self) -> bool {
-        self.primaries.is_none()
-            && self.transfer.is_none()
-            && self.matrix.is_none()
-            && self.range.is_none()
+impl SequenceParameterSet {
+    /// The WebCodecs codec string hang's catalog spells this stream as —
+    /// `avc1.PPCCLL` in lowercase hex.
+    pub(crate) fn avc1_codec_string(&self) -> String {
+        format!(
+            "avc1.{:02x}{:02x}{:02x}",
+            self.profile_idc, self.constraint_set_flags, self.level_idc
+        )
     }
 }
 
@@ -68,8 +60,8 @@ pub(crate) fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequencePa
     let mut bits = RawBitstreamReader::new(&raw_byte_sequence);
 
     let profile_idc = bits.read_bits(8)? as u8;
-    bits.skip_bits(8)?; // constraint flags and reserved bits
-    bits.skip_bits(8)?; // level_idc
+    let constraint_set_flags = bits.read_bits(8)? as u8;
+    let level_idc = bits.read_bits(8)? as u8;
     bits.read_unsigned_exp_golomb()?; // seq_parameter_set_id
 
     // Absent means 4:2:0 — H.264 §7.4.2.1.1.
@@ -133,12 +125,6 @@ pub(crate) fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequencePa
         crop_bottom = bits.read_unsigned_exp_golomb()?;
     }
 
-    let color = if bits.read_flag()? {
-        parse_video_usability_information(&mut bits)?
-    } else {
-        None
-    };
-
     // H.264 §7.4.2.1.1: a field-coded stream stores half a frame per map unit,
     // so the map units count twice.
     let field_multiplier = if frame_macroblocks_only { 1 } else { 2 };
@@ -163,8 +149,8 @@ pub(crate) fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequencePa
         _ => (1, field_multiplier),
     };
 
-    // The crop is parsed but not applied: the bag carries the coded extent. It
-    // is still read, because a crop that removes the whole picture is a
+    // The crop is parsed but not applied: the entry carries the coded extent.
+    // It is still read, because a crop that removes the whole picture is a
     // bitstream to refuse rather than one to publish an extent for.
     let cropped_width = crop_unit_width.saturating_mul(crop_left.saturating_add(crop_right));
     let cropped_height = crop_unit_height.saturating_mul(crop_top.saturating_add(crop_bottom));
@@ -178,9 +164,11 @@ pub(crate) fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequencePa
     }
 
     Ok(SequenceParameterSet {
-        width: coded_width,
-        height: coded_height,
-        color,
+        profile_idc,
+        constraint_set_flags,
+        level_idc,
+        coded_width,
+        coded_height,
     })
 }
 
@@ -199,41 +187,6 @@ fn macroblocks_to_luma_samples(macroblocks: u32, field_multiplier: u32) -> Resul
         .ok_or_else(|| WebRtcExtensionError::MalformedBitstream {
             what: format!("{macroblocks} macroblocks is not a picture extent this can express"),
         })
-}
-
-/// H.264 §E.1.1. Read only as far as the colour description — everything after
-/// it is timing and bitstream-restriction data no bag key needs.
-fn parse_video_usability_information(
-    bits: &mut RawBitstreamReader<'_>,
-) -> Result<Option<ColorDescription>> {
-    if bits.read_flag()? {
-        // Extended_SAR — §E.2.1 spells the aspect ratio out inline.
-        const EXTENDED_SAMPLE_ASPECT_RATIO: u32 = 255;
-        if bits.read_bits(8)? == EXTENDED_SAMPLE_ASPECT_RATIO {
-            bits.skip_bits(32)?;
-        }
-    }
-    if bits.read_flag()? {
-        bits.skip_bits(1)?; // overscan_appropriate_flag
-    }
-    if !bits.read_flag()? {
-        return Ok(None);
-    }
-
-    bits.skip_bits(3)?; // video_format
-    let full_range = bits.read_flag()?;
-    let mut color = ColorDescription {
-        range: Some(if full_range { "full" } else { "limited" }),
-        ..Default::default()
-    };
-
-    if bits.read_flag()? {
-        color.primaries = primaries_from_h273_byte(bits.read_bits(8)? as u8);
-        color.transfer = transfer_from_h273_byte(bits.read_bits(8)? as u8);
-        color.matrix = matrix_from_h273_byte(bits.read_bits(8)? as u8);
-    }
-
-    Ok((!color.describes_nothing()).then_some(color))
 }
 
 fn skip_scaling_list(bits: &mut RawBitstreamReader<'_>, coefficient_count: usize) -> Result<()> {
@@ -347,138 +300,66 @@ impl<'a> RawBitstreamReader<'a> {
     }
 }
 
-/// H.273 §8.1 → the bag's spelling. An enumerant the bag vocabulary does not
-/// model reads as absent, which is the decode-direction posture the engine's
-/// own VUI translation takes rather than fabricating a variant.
-fn primaries_from_h273_byte(byte: u8) -> Option<&'static str> {
-    Some(match byte {
-        1 => "bt709",
-        4 => "bt470_m",
-        5 => "bt470_bg",
-        6 => "smpte170m",
-        7 => "smpte240m",
-        8 => "film",
-        9 => "bt2020",
-        10 => "smpte428",
-        11 => "smpte431",
-        12 => "smpte432",
-        22 => "ebu3213",
-        _ => return None,
-    })
-}
-
-/// H.273 §8.2 → the bag's spelling.
-fn transfer_from_h273_byte(byte: u8) -> Option<&'static str> {
-    Some(match byte {
-        1 => "bt709",
-        4 => "gamma22",
-        5 => "gamma28",
-        6 => "smpte170m",
-        7 => "smpte240m",
-        8 => "linear",
-        9 => "log100",
-        10 => "log100_sqrt10",
-        11 => "xvycc",
-        12 => "bt1361",
-        13 => "srgb",
-        14 => "bt2020_ten_bit",
-        15 => "bt2020_twelve_bit",
-        16 => "smpte2084",
-        17 => "smpte428",
-        18 => "arib_std_b67",
-        _ => return None,
-    })
-}
-
-/// H.273 §8.3 → the bag's spelling.
-fn matrix_from_h273_byte(byte: u8) -> Option<&'static str> {
-    Some(match byte {
-        0 => "identity",
-        1 => "bt709",
-        4 => "fcc",
-        5 => "bt470_bg",
-        6 => "smpte170m",
-        7 => "smpte240m",
-        8 => "ycgco",
-        9 => "bt2020_ncl",
-        10 => "bt2020_cl",
-        11 => "smpte2085",
-        12 => "chroma_ncl",
-        13 => "chroma_cl",
-        14 => "ictcp",
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::h264_test_bitstreams::{
-        RawBitstreamWriter, baseline_320x180, no_vui, vui_with_colour,
+        RawBitstreamWriter, constrained_baseline_320x180_sequence_parameter_set,
     };
 
     #[test]
-    fn the_extent_is_the_coded_one_the_wire_contract_asks_for() {
+    fn the_extent_is_the_coded_one_a_catalog_entry_names() {
         // 320x180 displayed, coded at 320x192 with the bottom 12 rows cropped.
-        // The bag carries the coded extent, which is what `H264Encoder` writes
-        // for the same stream and what `Mp4Sink` copies into `tkhd`.
-        let parsed = parse_sequence_parameter_set(&baseline_320x180(no_vui)).unwrap();
+        // The entry carries the coded extent, which is what `H264Encoder`
+        // writes for the same stream.
+        let parsed =
+            parse_sequence_parameter_set(&constrained_baseline_320x180_sequence_parameter_set())
+                .unwrap();
 
-        assert_eq!((parsed.width, parsed.height), (320, 192));
-        assert_eq!(parsed.color, None);
+        assert_eq!((parsed.coded_width, parsed.coded_height), (320, 192));
     }
 
     #[test]
-    fn a_colour_description_lands_in_the_bags_own_spelling() {
-        let sps = baseline_320x180(vui_with_colour(1, 13, 1, 0));
+    fn the_codec_string_spells_profile_constraints_and_level_as_hang_does() {
+        let parsed =
+            parse_sequence_parameter_set(&constrained_baseline_320x180_sequence_parameter_set())
+                .unwrap();
 
-        let parsed = parse_sequence_parameter_set(&sps).unwrap();
-
-        assert_eq!(
-            parsed.color,
-            Some(ColorDescription {
-                primaries: Some("bt709"),
-                transfer: Some("srgb"),
-                matrix: Some("bt709"),
-                range: Some("limited"),
-            })
-        );
+        assert_eq!(parsed.avc1_codec_string(), "avc1.42e01e");
     }
 
     #[test]
-    fn a_full_range_flag_alone_still_describes_the_range() {
-        let sps = baseline_320x180(|writer| {
-            writer
-                .bit(1) // vui_parameters_present_flag
-                .bit(0) // aspect_ratio_info_present_flag
-                .bit(0) // overscan_info_present_flag
-                .bit(1) // video_signal_type_present_flag
-                .bits(5, 3)
-                .bit(1) // video_full_range_flag
-                .bit(0); // colour_description_present_flag
-        });
+    fn a_colour_description_in_the_vui_is_not_read_at_all() {
+        let mut writer = RawBitstreamWriter::default();
+        writer
+            .bits(66, 8)
+            .bits(0xE0, 8)
+            .bits(30, 8)
+            .unsigned_exp_golomb(0)
+            .unsigned_exp_golomb(0)
+            .unsigned_exp_golomb(2)
+            .unsigned_exp_golomb(1)
+            .bit(0)
+            .unsigned_exp_golomb(19)
+            .unsigned_exp_golomb(11)
+            .bit(1)
+            .bit(1)
+            .bit(0) // frame_cropping_flag
+            .bit(1) // vui_parameters_present_flag
+            .bit(0) // aspect_ratio_info_present_flag
+            .bit(0) // overscan_info_present_flag
+            .bit(1) // video_signal_type_present_flag
+            .bits(5, 3)
+            .bit(1) // video_full_range_flag
+            .bit(1) // colour_description_present_flag
+            .bits(1, 8)
+            .bits(13, 8)
+            .bits(1, 8);
+        let sps = writer.finish(0x67);
 
         let parsed = parse_sequence_parameter_set(&sps).unwrap();
 
-        assert_eq!(
-            parsed.color,
-            Some(ColorDescription {
-                range: Some("full"),
-                ..Default::default()
-            })
-        );
-    }
-
-    #[test]
-    fn an_enumerant_the_bag_does_not_model_reads_as_absent_not_as_a_guess() {
-        // 23 is past EBU3213, the last primaries value the vocabulary carries.
-        let sps = baseline_320x180(vui_with_colour(23, 13, 1, 0));
-
-        let parsed = parse_sequence_parameter_set(&sps).unwrap();
-
-        let color = parsed.color.unwrap();
-        assert_eq!(color.primaries, None);
-        assert_eq!(color.transfer, Some("srgb"));
+        assert_eq!((parsed.coded_width, parsed.coded_height), (320, 192));
     }
 
     #[test]
@@ -512,8 +393,9 @@ mod tests {
 
         let parsed = parse_sequence_parameter_set(&sps).unwrap();
 
-        // Coded at 1088 with 8 rows cropped for display; the bag says 1088.
-        assert_eq!((parsed.width, parsed.height), (1920, 1088));
+        // Coded at 1088 with 8 rows cropped for display; the entry says 1088.
+        assert_eq!((parsed.coded_width, parsed.coded_height), (1920, 1088));
+        assert_eq!(parsed.avc1_codec_string(), "avc1.64001f");
     }
 
     #[test]
@@ -539,7 +421,7 @@ mod tests {
 
         let parsed = parse_sequence_parameter_set(&sps).unwrap();
 
-        assert_eq!((parsed.width, parsed.height), (640, 480));
+        assert_eq!((parsed.coded_width, parsed.coded_height), (640, 480));
     }
 
     #[test]
@@ -554,7 +436,7 @@ mod tests {
 
     #[test]
     fn a_truncated_sequence_parameter_set_is_refused_rather_than_read_as_zeroes() {
-        let truncated = &baseline_320x180(no_vui)[..4];
+        let truncated = &constrained_baseline_320x180_sequence_parameter_set()[..4];
 
         let refusal = parse_sequence_parameter_set(truncated).unwrap_err();
 
@@ -645,7 +527,7 @@ mod tests {
 
     #[test]
     fn an_escaped_sequence_parameter_set_parses_to_the_same_extent() {
-        let sps = baseline_320x180(no_vui);
+        let sps = constrained_baseline_320x180_sequence_parameter_set();
         let mut escaped = vec![sps[0]];
         // Re-insert the escapes a real encoder would have written.
         let mut zero_run = 0;
