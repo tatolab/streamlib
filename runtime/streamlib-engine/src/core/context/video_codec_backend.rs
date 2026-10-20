@@ -55,8 +55,9 @@ pub struct VideoEncodeSessionRequest {
     pub frames_per_second: u32,
     /// The knobs the block's config set.
     pub knobs: VideoEncodeKnobs,
-    /// The colour the parameter sets' VUI signals. `None` emits no colour
-    /// description block.
+    /// The source frames' colour. The parameter sets' VUI signals its primaries
+    /// and transfer, and the matrix and range the backend's RGB → NV12
+    /// conversion writes.
     pub color_vui: Option<H273ColorVui>,
 }
 

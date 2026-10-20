@@ -196,6 +196,7 @@ fn matrix_id_from_h273_byte(byte: u8) -> Option<MatrixId> {
 
 /// The H.273 `MatrixCoefficients` byte that names `matrix_id` — the inverse
 /// of the byte → id table, so a producer can signal the matrix it converted with.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn h273_matrix_byte_of(matrix_id: MatrixId) -> u8 {
     match matrix_id {
         MatrixId::Identity => matrix::IDENTITY,
