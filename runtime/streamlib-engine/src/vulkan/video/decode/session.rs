@@ -80,7 +80,6 @@ impl SimpleDecoder {
             "the stream's colour selects another sampler conversion; rebuilding the NV12 → \
              RGBA converter"
         );
-        self.nv12_converter = None;
         let rebuilt = self.create_nv12_converter(width, height, ycbcr_model_and_range)?;
         Ok(self.nv12_converter.insert(rebuilt))
     }

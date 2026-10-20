@@ -671,9 +671,7 @@ impl SimpleDecoder {
             }
             crate::vulkan::video::encode::Codec::H265 => {
                 let parser = self.h265_parser.as_ref()?;
-                // Find the first populated SPS slot — streamlib's encoder
-                // only emits sps_id=0, and decoders typically only see one.
-                let sps = parser.spss.iter().filter_map(|s| s.as_ref()).next()?;
+                let sps = parser.active_sps[0].as_ref()?;
                 if !sps.flags.vui_parameters_present_flag {
                     return None;
                 }
