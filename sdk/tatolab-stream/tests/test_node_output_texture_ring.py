@@ -103,5 +103,5 @@ def test_a_fractional_or_boolean_depth_is_refused_at_construction() -> None:
         NodeOutputTextureRing(RING_FORMAT, RING_USAGE, depth=True)
 
 
-def test_the_standard_depth_matches_the_engines_own_ring() -> None:
-    assert NodeOutputTextureRing(RING_FORMAT, RING_USAGE).depth == 2
+def test_the_standard_depth_keeps_an_unclaimed_frame_through_two_newer_publishes() -> None:
+    assert NodeOutputTextureRing(RING_FORMAT, RING_USAGE).depth == 3

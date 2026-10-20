@@ -33,7 +33,7 @@ from ._gpu_protocols import (
 
 __all__ = ["NodeOutputTextureRing"]
 
-STANDARD_RING_DEPTH = 2
+STANDARD_RING_DEPTH = 3
 
 _GpuContextWithAcquireTexture = Union[GpuContextLimitedAccess, GpuContextFullAccess]
 
