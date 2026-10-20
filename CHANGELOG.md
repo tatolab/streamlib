@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.3](https://github.com/tatolab/streamlib/compare/v0.54.2...v0.54.3) (2026-10-20)
+
+
+### Features
+
+* **runtime:** the Cloudflare and moq.pro relay adapters — a public port is a track at a hosted relay, its credential in the OS secret store and in no log line ([#2873](https://github.com/tatolab/streamlib/issues/2873)) ([03d1c04](https://github.com/tatolab/streamlib/commit/03d1c0438402d11ce5e025f48b8fb7bb4805d4c6))
+
 ## [0.54.2](https://github.com/tatolab/streamlib/compare/v0.54.1...v0.54.2) (2026-10-20)
 
 

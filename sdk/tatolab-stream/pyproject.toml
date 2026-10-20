@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 name = "tatolab-stream"
 # The one version everything this repository releases carries; release-please
 # bumps it with the rest.
-version = "0.54.2"
+version = "0.54.3"
 description = "The Python SDK for Tatolab streams. To get started, install the Tatolab app: see tatolab.com/docs/install"
 readme = "README.md"
 requires-python = ">=3.10"
