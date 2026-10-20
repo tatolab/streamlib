@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.8](https://github.com/tatolab/streamlib/compare/v0.54.7...v0.54.8) (2026-10-20)
+
+
+### Bug Fixes
+
+* **webrtc:** the live WHIP/WHEP round trip opens no window — the decoder's video port is exposed instead ([#2886](https://github.com/tatolab/streamlib/issues/2886)) ([95bcb67](https://github.com/tatolab/streamlib/commit/95bcb6708681113e248e19f4a3357c3902db5fb5))
+
 ## [0.54.7](https://github.com/tatolab/streamlib/compare/v0.54.6...v0.54.7) (2026-10-20)
 
 
