@@ -245,6 +245,14 @@ name = "a_forced_sync_point_lands_on_the_frame_that_asked_for_it"
 path = "tests/a_forced_sync_point_lands_on_the_frame_that_asked_for_it.rs"
 required-features = ["hardware-tests"]
 
+# The Vulkan Video encoder barriering a frame published in a layout it cannot
+# sample into one it can. Rig tier — it needs Vulkan Video encode and decode
+# queues — so it builds only under `hardware-tests`.
+[[test]]
+name = "vulkan_video_encodes_a_frame_published_in_any_layout_a_barrier_keeps"
+path = "tests/vulkan_video_encodes_a_frame_published_in_any_layout_a_barrier_keeps.rs"
+required-features = ["hardware-tests"]
+
 # The AVFoundation arm capturing from a real camera through the video device
 # seam. Rig tier — a camera, the GPU, and camera access allowed for the
 # terminal running it — so it builds only under `hardware-tests`. Empty off

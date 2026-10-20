@@ -451,31 +451,40 @@ impl SimpleEncoder {
         }
     }
 
-    /// Internal implementation of encode_image (GPU-resident RGBA path).
-    pub(crate) unsafe fn encode_image_internal(
+    /// Convert a GPU-resident RGBA source into the encode-src NV12 image,
+    /// barriering it into `rgba_image_layout` first when `rgba_source_barrier`
+    /// names the layout it was published in.
+    pub(crate) unsafe fn convert_rgba_source_to_nv12(
         &mut self,
         rgba_image_view: vk::ImageView,
         rgba_image_layout: crate::vulkan::rhi::SampledImageReadLayout,
+        rgba_source_barrier: Option<
+            crate::vulkan::video::rgb_to_nv12::RgbaSourceImageBarrierIntoItsSampledLayout,
+        >,
         source_width: u32,
         source_height: u32,
+    ) -> Result<(vk::Image, vk::ImageView), VideoError> {
+        let converter = self.rgb_to_nv12_converter_prepared_on_first_use()?;
+        unsafe {
+            converter.convert(
+                rgba_image_view,
+                rgba_image_layout,
+                rgba_source_barrier,
+                source_width,
+                source_height,
+            )
+        }
+    }
+
+    /// Encode the NV12 picture [`Self::convert_rgba_source_to_nv12`] left in
+    /// `VIDEO_ENCODE_SRC_KHR`.
+    pub(crate) unsafe fn encode_converted_nv12(
+        &mut self,
+        nv12_image: vk::Image,
+        nv12_view: vk::ImageView,
         timestamp_ns: Option<i64>,
     ) -> Result<Vec<EncodePacket>, VideoError> {
         unsafe {
-            // Lazily create the RGB→NV12 converter on first call, unless the caller
-            // pre-allocated it via `prepare_gpu_encode_resources()`.
-            if self.rgb_to_nv12.is_none() {
-                self.prepare_gpu_encode_resources_impl()?;
-            }
-
-            // Run RGB→NV12 conversion on the GPU.
-            let converter = self.rgb_to_nv12.as_mut().unwrap();
-            let (nv12_image, nv12_view) = converter.convert(
-                rgba_image_view,
-                rgba_image_layout,
-                source_width,
-                source_height,
-            )?;
-
             // Determine frame type via GOP (B-frames not supported for GPU
             // image path since we can't buffer GPU images; promote to P).
             let mut frame_type = self.decide_frame_type();

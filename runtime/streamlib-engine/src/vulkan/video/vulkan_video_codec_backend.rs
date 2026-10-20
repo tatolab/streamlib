@@ -12,7 +12,7 @@ use crate::core::context::{
     VideoCodecBackend, VideoCodecElementaryStream, VideoDecodeSession, VideoDecodeSessionRequest,
     VideoEncodeKnobs, VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
 };
-use crate::core::rhi::PixelFormat;
+use crate::core::rhi::{PixelFormat, VulkanLayout};
 use crate::core::{Error, Result};
 
 use super::decode::{SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig};
@@ -109,6 +109,32 @@ struct VulkanVideoEncodeSession {
     gpu_context: GpuContextLimitedAccess,
 }
 
+impl VulkanVideoEncodeSession {
+    /// A source imported from another process resolves to a registration of
+    /// its own on every call, so the layout the encoder barriered it into
+    /// reaches the next holder only through the surface-share record. A
+    /// same-process source the service does not hold is already republished
+    /// on its shared registration, and the service's refusal is expected.
+    fn publish_the_layout_the_encoder_left_a_cross_process_source_in(
+        &self,
+        surface_id: &str,
+        layout_the_encoder_left_the_source_in: VulkanLayout,
+    ) {
+        let Some(surface_store) = self.gpu_context.surface_store() else {
+            return;
+        };
+        if let Err(publish_failure) =
+            surface_store.update_image_layout(surface_id, layout_the_encoder_left_the_source_in)
+        {
+            tracing::debug!(
+                surface_id,
+                %publish_failure,
+                "the encoder's source layout was not published to surface-share"
+            );
+        }
+    }
+}
+
 impl VideoEncodeSession for VulkanVideoEncodeSession {
     fn coded_extent(&self) -> (u32, u32) {
         self.encoder.aligned_extent()
@@ -118,8 +144,6 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
         &mut self,
         source: &VideoEncodeSourceSurface<'_>,
     ) -> Result<Vec<EncodedVideoAccessUnitFromSession>> {
-        // The registration's tracked layout is what the submit checks against
-        // its sampling contract.
         let source_registration = self
             .gpu_context
             .resolve_texture_registration_by_surface_id(
@@ -131,12 +155,18 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
         if source.force_sync_point {
             self.encoder.force_idr();
         }
-        let packets = self.encoder.encode_source_texture(
-            source_registration.texture(),
-            source_registration.current_layout(),
-            Some(source.timestamp_ns),
-        )?;
-        Ok(packets
+        let layout_the_source_was_published_in = source_registration.current_layout();
+        let encoded = self
+            .encoder
+            .encode_source_texture(&source_registration, Some(source.timestamp_ns));
+        let layout_the_encoder_left_the_source_in = source_registration.current_layout();
+        if layout_the_encoder_left_the_source_in != layout_the_source_was_published_in {
+            self.publish_the_layout_the_encoder_left_a_cross_process_source_in(
+                source.surface_id,
+                layout_the_encoder_left_the_source_in,
+            );
+        }
+        Ok(encoded?
             .into_iter()
             .map(|packet| EncodedVideoAccessUnitFromSession {
                 annex_b_access_unit_bytes: packet.data,
@@ -265,5 +295,129 @@ mod tests {
         assert_eq!(config.effort_level, Some(2));
         assert_eq!(config.qp, None);
         assert_eq!(config.preset, Preset::Medium);
+    }
+
+    /// A source imported from another process is barriered into the layout
+    /// the encoder samples it in, and that layout reaches the surface-share
+    /// record the next import's acquire barrier starts from.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_cross_process_source_the_encoder_barriered_publishes_its_new_layout_to_surface_share() {
+        use crate::core::context::GpuContext;
+        use crate::core::rhi::TextureFormat;
+        use crate::core::test_support::LiveSurfaceShareServiceForATest;
+        use crate::core::test_support::rig_only_capability_skip::{
+            RigOnlyCapability, skip_unless_this_machine_has,
+        };
+        use crate::host_rhi::{HostGpuDeviceExt as _, HostSurfaceStoreExt as _};
+        use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+
+        const SOURCE_WIDTH: u32 = 320;
+        const SOURCE_HEIGHT: u32 = 180;
+        const SURFACE_ID: &str = "cross-process-colour-attachment-source";
+
+        let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+            println!("Skipping - no GPU device available");
+            return;
+        };
+        let vulkan_device = gpu.device().vulkan_device();
+        if skip_unless_this_machine_has(
+            RigOnlyCapability::VulkanVideo,
+            vulkan_device.supports_video_encode(),
+        ) || skip_unless_this_machine_has(
+            RigOnlyCapability::DmaBufModifiers,
+            vulkan_device.has_render_target_modifier_for_texture_format(TextureFormat::Rgba8Unorm),
+        ) {
+            return;
+        }
+        let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let sandbox = GpuContextLimitedAccess::new(gpu);
+
+        let (mut encode_session, _render_target) = sandbox
+            .escalate(|full| {
+                let render_target = full.acquire_render_target_dma_buf_image(
+                    SOURCE_WIDTH,
+                    SOURCE_HEIGHT,
+                    TextureFormat::Rgba8Unorm,
+                )?;
+                let mut recorder = full.create_command_recorder("a draw's end state")?;
+                recorder.begin()?;
+                recorder.record_image_barrier(
+                    &render_target,
+                    VulkanLayout::UNDEFINED,
+                    VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    VulkanStage::ALL_COMMANDS,
+                    VulkanStage::COLOR_ATTACHMENT_OUTPUT,
+                    VulkanAccess::NONE,
+                    VulkanAccess::COLOR_ATTACHMENT_WRITE,
+                )?;
+                recorder.submit_and_wait()?;
+                full.surface_store()
+                    .expect("the live service's store is installed")
+                    .register_texture(
+                        SURFACE_ID,
+                        &render_target,
+                        None,
+                        None,
+                        VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    )?;
+                let encode_session = VulkanVideoCodecBackend.open_encode_session(
+                    full,
+                    &VideoEncodeSessionRequest {
+                        elementary_stream: VideoCodecElementaryStream::H264,
+                        width: SOURCE_WIDTH,
+                        height: SOURCE_HEIGHT,
+                        frames_per_second: 10,
+                        knobs: VideoEncodeKnobs {
+                            bitrate_bps: None,
+                            keyframe_interval_seconds: 1,
+                            effort_level: None,
+                        },
+                        color_vui: None,
+                    },
+                )?;
+                Ok((encode_session, render_target))
+            })
+            .expect("a registered cross-process source and an encode session");
+
+        let layout_the_service_holds = || {
+            live_service
+                .state
+                .get_surfaces()
+                .into_iter()
+                .find(|surface| surface.surface_id == SURFACE_ID)
+                .map(|surface| {
+                    surface
+                        .current_image_layout
+                        .load(std::sync::atomic::Ordering::Acquire)
+                })
+                .expect("the service holds the source")
+        };
+        assert_eq!(
+            layout_the_service_holds(),
+            VulkanLayout::COLOR_ATTACHMENT_OPTIMAL.0
+        );
+
+        let access_units = encode_session
+            .encode_published_surface(&VideoEncodeSourceSurface {
+                surface_id: SURFACE_ID,
+                texture_layout: None,
+                width: SOURCE_WIDTH,
+                height: SOURCE_HEIGHT,
+                timestamp_ns: 1_000_000_000,
+                force_sync_point: false,
+            })
+            .expect("a cross-process source left in COLOR_ATTACHMENT_OPTIMAL encodes");
+        assert_eq!(access_units.len(), 1);
+        assert_eq!(
+            layout_the_service_holds(),
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0,
+            "the surface-share record names the layout the encoder left the source in"
+        );
+        drop(encode_session);
+        live_service.stop();
     }
 }
