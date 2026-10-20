@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.6](https://github.com/tatolab/streamlib/compare/v0.54.5...v0.54.6) (2026-10-20)
+
+
+### Bug Fixes
+
+* **codec:** the Vulkan Video decoder converts with the range and matrix the stream signals ([#2882](https://github.com/tatolab/streamlib/issues/2882)) ([f3f77d9](https://github.com/tatolab/streamlib/commit/f3f77d9590011793703f9412f8c6447602488e7a))
+
 ## [0.54.5](https://github.com/tatolab/streamlib/compare/v0.54.4...v0.54.5) (2026-10-20)
 
 
