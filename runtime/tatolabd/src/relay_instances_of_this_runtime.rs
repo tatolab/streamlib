@@ -31,7 +31,8 @@ use crate::relay_secret_store::RelaySecretStore;
 
 /// The longest a renewing relay's credential goes unchecked: a session its
 /// relay ended, or a renewal a machine's sleep let pass, is renewed within it.
-const A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY: Duration = Duration::from_secs(30);
+pub(crate) const A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY: Duration =
+    Duration::from_secs(30);
 
 /// The relays the publisher dials, as they change.
 pub(crate) type RelaysThePublisherDialsReceiver =
@@ -258,10 +259,13 @@ impl RelayInstancesOfThisRuntime {
     /// Hand the publisher a fresh credential for each relay whose credential
     /// falls due — its renewal passed, or the session it opened ended — until
     /// `relay_instances` is dropped. A renewing relay is checked at least every
-    /// [`A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY`], since its
-    /// renewal is timed on a clock that stops while the machine sleeps and its
-    /// token's expiry on one that does not.
-    pub(crate) async fn renew_each_dial_credential_once_due(relay_instances: Weak<Self>) {
+    /// `checked_at_least_every` — [`A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY`]
+    /// in the runtime — since its renewal is timed on a clock that stops while
+    /// the machine sleeps and its token's expiry on one that does not.
+    pub(crate) async fn renew_each_dial_credential_once_due(
+        relay_instances: Weak<Self>,
+        checked_at_least_every: Duration,
+    ) {
         let Some(mut relays) = relay_instances
             .upgrade()
             .map(|relay_instances| relay_instances.relays_the_publisher_dials())
@@ -274,11 +278,7 @@ impl RelayInstancesOfThisRuntime {
                 .iter()
                 .filter_map(|relay| relay.renew_by)
                 .min()
-                .map(|renew_by| {
-                    renew_by.min(
-                        Instant::now() + A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
-                    )
-                });
+                .map(|renew_by| renew_by.min(Instant::now() + checked_at_least_every));
             let a_check_is_due = async {
                 match next_check {
                     Some(check_at) => tokio::time::sleep_until(check_at.into()).await,
@@ -1211,6 +1211,51 @@ mod tests {
         );
     }
 
+    /// A renewing relay's session ended long before its renewal: the loop's
+    /// own check, not a renewal, mints it again — what a machine waking from a
+    /// sleep its renewal clock did not count needs.
+    #[test]
+    fn the_renewal_loop_mints_again_a_renewing_relay_whose_session_ended_before_its_renewal() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let machine = RelayInstancesOverAStateDirectory::whose_provider_renews_its_credential_every(
+            Duration::from_secs(3600),
+        );
+        let relay_instances = Arc::new(machine.start_a_runtime());
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("a")))
+            .unwrap();
+        let first_dial_url = the_dial_url_handed_over_for(&relay_instances, "provider-1");
+        let mut relays = relay_instances.relays_the_publisher_dials();
+        relays.borrow_and_update();
+        async_runtime.block_on(async {
+            let renewing = tokio::spawn(
+                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(
+                    Arc::downgrade(&relay_instances),
+                    Duration::from_millis(200),
+                ),
+            );
+            tokio::task::yield_now().await;
+            report_the_publishers_session_with(
+                &relay_instances,
+                ExposedPortPublisherSessionState::Ended {
+                    why: "unauthorized".to_string(),
+                },
+            );
+            tokio::time::timeout(Duration::from_secs(5), relays.changed())
+                .await
+                .expect("the loop's check hands a fresh credential, with no renewal due")
+                .unwrap();
+            renewing.abort();
+        });
+        assert_ne!(
+            the_dial_url_handed_over_for(&relay_instances, "provider-1"),
+            first_dial_url
+        );
+    }
+
     #[test]
     fn a_renewing_relay_whose_session_ended_is_handed_a_fresh_credential() {
         let machine = RelayInstancesOverAStateDirectory::whose_provider_renews_its_credential_every(
@@ -1253,9 +1298,10 @@ mod tests {
         relays.borrow_and_update();
         async_runtime.block_on(async {
             let renewing = tokio::spawn(
-                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(Arc::downgrade(
-                    &relay_instances,
-                )),
+                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(
+                    Arc::downgrade(&relay_instances),
+                    A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
+                ),
             );
             tokio::time::timeout(Duration::from_secs(5), relays.changed())
                 .await

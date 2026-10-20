@@ -32,7 +32,9 @@ use crate::exposed_port_publisher::start_the_exposed_port_publisher;
 use crate::local_relay_adapter_of_this_runtime::the_local_relay_adapter_of_this_runtime;
 use crate::loopback_http_listener_of_this_runtime::serve_the_loopback_http_listener_of_this_runtime;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
-use crate::relay_instances_of_this_runtime::RelayInstancesOfThisRuntime;
+use crate::relay_instances_of_this_runtime::{
+    A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY, RelayInstancesOfThisRuntime,
+};
 use crate::relay_instances_record::RelayInstancesRecordFile;
 use crate::relay_secret_store::the_relay_secret_store_of_this_machine;
 
@@ -112,9 +114,10 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                 joined_relay_instances.relays_the_publisher_dials(),
             );
             dial_credential_renewal = Some(engine.tokio_handle().spawn(
-                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(Arc::downgrade(
-                    &joined_relay_instances,
-                )),
+                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(
+                    Arc::downgrade(&joined_relay_instances),
+                    A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
+                ),
             ));
             log_the_kept_streams_reloaded_at_the_start(
                 &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
