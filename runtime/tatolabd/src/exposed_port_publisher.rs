@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use moq_net::{Timescale, Timestamp};
@@ -31,6 +31,11 @@ use streamlib_relay_adapter_sdk::{
     BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter, RelayInstanceId,
 };
 
+use crate::exposed_port_publisher_session_state::{
+    A_RELAY_IS_FIRST_REDIALED_AFTER, A_RELAY_IS_REDIALED_AT_LEAST_EVERY,
+    ExposedPortPublisherSessionState, ExposedPortPublisherSessionStateSender,
+    report_the_session_state_as_it_changes,
+};
 use crate::relay_instances_of_this_runtime::RelaysThePublisherDialsReceiver;
 
 /// The suffix of a broadcast whose catalog the stack's players read.
@@ -44,16 +49,23 @@ pub(crate) struct RelayTheExposedPortPublisherDials {
     pub(crate) dial_url_carrying_the_credential: SecretString,
     pub(crate) levels_served: Vec<OutputPortExposureLevel>,
     pub(crate) broadcast_root: BroadcastPath,
+    /// When the credential in the dial URL must be replaced by a fresh one.
+    pub(crate) renew_by: Option<Instant>,
+    /// Where the publisher's session with the relay stands, reported here.
+    pub(crate) session_state: ExposedPortPublisherSessionStateSender,
 }
 
 impl RelayTheExposedPortPublisherDials {
-    /// How the publisher dials `adapter`, joined at `joined`, for `machine`.
+    /// How the publisher dials `adapter`, joined at `joined`, for `machine`,
+    /// reporting its session to `session_state`.
     pub(crate) fn of_a_joined_relay(
         adapter: &dyn RelayAdapter,
         joined: &JoinedRelay,
         machine: &MachineName,
+        session_state: ExposedPortPublisherSessionStateSender,
     ) -> Self {
-        let dial_url_carrying_the_credential = match adapter.credential_for_dial() {
+        let credential = adapter.credential_for_dial();
+        let dial_url_carrying_the_credential = match &credential {
             Some(credential) => credential.dial_url_carrying_the_credential(&joined.dial_url),
             None => SecretString::from(joined.dial_url.to_string()),
         };
@@ -62,6 +74,8 @@ impl RelayTheExposedPortPublisherDials {
             dial_url_carrying_the_credential,
             levels_served: adapter.levels_served().to_vec(),
             broadcast_root: adapter.broadcast_root(machine),
+            renew_by: credential.and_then(|credential| credential.renew_by()),
+            session_state,
         }
     }
 
@@ -72,6 +86,7 @@ impl RelayTheExposedPortPublisherDials {
                 == other.dial_url_carrying_the_credential.expose_secret()
             && self.levels_served == other.levels_served
             && self.broadcast_root == other.broadcast_root
+            && self.session_state.same_channel(&other.session_state)
     }
 }
 
@@ -180,11 +195,33 @@ const A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER: Duration = Duration::from_m
 /// doubling from [`A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER`].
 const A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY: Duration = Duration::from_secs(10);
 
-/// One relay's session, through which every broadcast at it is published.
+/// One relay's session, through which every broadcast at it is published;
+/// dropping it hangs up and reports the relay not dialed.
 struct RelayDialedByThePublisher {
     dialed_as: RelayTheExposedPortPublisherDials,
     origin: moq_net::origin::Producer,
     _session: moq_tokio::Connection,
+    session_state_reporting: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for RelayDialedByThePublisher {
+    fn drop(&mut self) {
+        self.session_state_reporting.abort();
+        self.dialed_as
+            .session_state
+            .send_replace(ExposedPortPublisherSessionState::NotDialed);
+    }
+}
+
+/// How the publisher's sessions are redialed: with backoff from
+/// [`A_RELAY_IS_FIRST_REDIALED_AFTER`] to [`A_RELAY_IS_REDIALED_AT_LEAST_EVERY`],
+/// and never given up on but for a refusal no redial changes.
+fn the_publishers_dial_configuration() -> moq_tokio::connect::Config {
+    let mut configuration = moq_tokio::connect::Config::default();
+    configuration.backoff.initial = A_RELAY_IS_FIRST_REDIALED_AFTER;
+    configuration.backoff.max = A_RELAY_IS_REDIALED_AT_LEAST_EVERY;
+    configuration.backoff.timeout = Duration::ZERO;
+    configuration
 }
 
 impl RelayDialedByThePublisher {
@@ -203,7 +240,7 @@ impl RelayDialedByThePublisher {
                 return None;
             }
         };
-        let client = match moq_tokio::connect::Config::default()
+        let client = match the_publishers_dial_configuration()
             .init(moq_tokio::quic::Config::default())
         {
             Ok(client) => client,
@@ -221,10 +258,16 @@ impl RelayDialedByThePublisher {
             .with_reconnect(true)
             .connect(dial_url);
         tracing::info!(relay = %relay.relay_id, "the publisher dials the relay");
+        let session_state_reporting = tokio::spawn(report_the_session_state_as_it_changes(
+            relay.relay_id.clone(),
+            session.clone(),
+            relay.session_state.clone(),
+        ));
         Some(Self {
             dialed_as: relay,
             origin,
             _session: session,
+            session_state_reporting,
         })
     }
 
@@ -802,6 +845,7 @@ async fn the_source_opened_its_end(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exposed_port_publisher_session_state::a_relay_instances_session_state_not_dialed;
     use streamlib::sdk::descriptors::{BinaryEntry, CatalogDataTrackMode};
 
     use MessageGroupBoundary::{ContinuesGroup, StartsGroup};
@@ -1093,6 +1137,8 @@ mod tests {
                 "",
                 &MachineName::from_a_hostname("desk").unwrap(),
             ),
+            renew_by: None,
+            session_state: a_relay_instances_session_state_not_dialed(),
         }
     }
 
@@ -1129,10 +1175,9 @@ mod tests {
             forwarded_ports: HashMap::new(),
             why_each_port_is_not_forwarded_yet: HashMap::new(),
         };
-        publisher.dial_exactly(vec![
-            a_relay_dialed_at("kept", 9),
-            a_relay_dialed_at("moved", 9),
-        ]);
+        let kept_relay = a_relay_dialed_at("kept", 9);
+        let moved_relay = a_relay_dialed_at("moved", 9);
+        publisher.dial_exactly(vec![kept_relay.clone(), moved_relay.clone()]);
         assert_eq!(
             the_relays_dialed(&publisher),
             [
@@ -1173,8 +1218,13 @@ mod tests {
         );
 
         publisher.dial_exactly(vec![
-            a_relay_dialed_at("kept", 9),
-            a_relay_dialed_at("moved", 10),
+            kept_relay.clone(),
+            RelayTheExposedPortPublisherDials {
+                dial_url_carrying_the_credential: SecretString::from(
+                    "http://127.0.0.1:10/".to_string(),
+                ),
+                ..moved_relay.clone()
+            },
         ]);
         assert_eq!(
             the_relays_dialed(&publisher),
@@ -1202,5 +1252,42 @@ mod tests {
         assert!(publisher.relays.is_empty());
         assert!(!lock_the_writer(&track_writer).reaches(&kept));
         assert!(publisher.broadcasts.is_empty());
+    }
+
+    /// moq-tokio gives a reconnecting session up after ten seconds of failed
+    /// dials unless told otherwise; the publisher's never is, and says so.
+    #[test]
+    fn a_relay_not_answering_is_still_redialed_long_after_moq_tokios_own_give_up() {
+        let async_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let unanswered_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let relay = a_relay_dialed_at("unanswered", unanswered_port);
+        let mut session_state = relay.session_state.subscribe();
+        async_runtime.block_on(async {
+            let dialed = RelayDialedByThePublisher::dial(relay.clone()).unwrap();
+            tokio::time::sleep(Duration::from_secs(13)).await;
+            assert!(
+                matches!(
+                    *session_state.borrow_and_update(),
+                    ExposedPortPublisherSessionState::Dialing
+                        | ExposedPortPublisherSessionState::Redialing
+                ),
+                "{:?}",
+                *session_state.borrow()
+            );
+            drop(dialed);
+        });
+        assert_eq!(
+            *relay.session_state.borrow(),
+            ExposedPortPublisherSessionState::NotDialed,
+            "a relay hung up on is reported not dialed"
+        );
     }
 }

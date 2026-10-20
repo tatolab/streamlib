@@ -10,6 +10,7 @@ mod bundled_vulkan_driver_environment;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 mod crash_on_demand_test_node;
 mod exposed_port_publisher;
+mod exposed_port_publisher_session_state;
 mod local_relay_adapter_of_this_runtime;
 mod loopback_http_listener_of_this_runtime;
 mod machine_stream_hosting;

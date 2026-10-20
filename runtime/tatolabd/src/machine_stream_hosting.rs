@@ -91,6 +91,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     let mut loopback_http_listener = None;
     let mut relay_instances = None;
     let mut exposed_port_publisher = None;
+    let mut dial_credential_renewal = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
             let joined_relay_instances = Arc::new(join_every_relay_instance_of_this_runtime(
@@ -108,6 +109,11 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                 &engine,
                 joined_relay_instances.relays_the_publisher_dials(),
             );
+            dial_credential_renewal = Some(engine.tokio_handle().spawn(
+                RelayInstancesOfThisRuntime::renew_each_dial_credential_once_due(Arc::downgrade(
+                    &joined_relay_instances,
+                )),
+            ));
             log_the_kept_streams_reloaded_at_the_start(
                 &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
             );
@@ -119,6 +125,9 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             drop(local_api_served_for_the_engine.take());
             drop(loopback_http_listener.take());
             drop(exposed_port_publisher.take());
+            if let Some(dial_credential_renewal) = dial_credential_renewal.take() {
+                dial_credential_renewal.abort();
+            }
             // Inside the run: a load the local API began gives itself up only
             // on reading the machine's shutdown, which the run's end clears.
             if !engine.wait_until_this_reference_alone_holds_the_engine(
