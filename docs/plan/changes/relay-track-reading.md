@@ -1,6 +1,7 @@
 # relay-track-reading
 
-> **Approved by the owner, 2026-10-20**, as written, with its stated assumptions.
+> **Approved by the owner, 2026-10-20**, as written, with its stated assumptions. Tickets derived
+> 2026-10-20 (below).
 
 The build of the §Networking align of 2026-10-20 (`ARCHITECTURE.md:3825-3843`, ADR
 `docs/decisions/relay-track-reading.md`, evidence `docs/research/2026-10-20-audio-groups-over-moq.md`).
@@ -232,6 +233,16 @@ The entries' text stands. Each gains `<!-- verify: -->` lines naming the tests b
 
 The adaptive jitter buffer and decoded audio as `audio`/`pcm` are both OPEN
 (`:3565-3568`, `:3761-3764`). Nothing here builds toward them.
+
+## Tickets
+
+Derived 2026-10-20; milestone *Streams shared through MoQ relays*.
+
+1. #2895: a reader at a relay keeps every group that arrived within its `max_age`, through
+   one relay-track reader (slice 1). Independent; needs the audio rig. It carries the REMOVED
+   bullets.
+2. #2896: a group a relay source gives up reaches its readers as `lost_since_last_read` and
+   is counted on the relay source (slice 2). Blocked by #2895; needs no rig.
 
 ## REMOVED
 
