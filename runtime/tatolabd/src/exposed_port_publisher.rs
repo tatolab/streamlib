@@ -33,8 +33,9 @@ use streamlib_relay_adapter_sdk::{
 
 use crate::exposed_port_publisher_session_state::{
     A_RELAY_IS_FIRST_REDIALED_AFTER, A_RELAY_IS_REDIALED_AT_LEAST_EVERY,
-    ExposedPortPublisherSessionStateOfOneDial, ExposedPortPublisherSessionStateSender,
-    MOQ_TOKIO_BACKOFF_TIMEOUT_THAT_NEVER_GIVES_UP, report_the_session_state_as_it_changes,
+    ExposedPortPublisherSessionState, ExposedPortPublisherSessionStateOfOneDial,
+    ExposedPortPublisherSessionStateSender, MOQ_TOKIO_BACKOFF_TIMEOUT_THAT_NEVER_GIVES_UP,
+    report_the_session_state_as_it_changes,
 };
 use crate::relay_instances_of_this_runtime::RelaysThePublisherDialsReceiver;
 
@@ -77,6 +78,21 @@ impl RelayTheExposedPortPublisherDials {
             renew_by: credential.and_then(|credential| credential.renew_by()),
             session_state,
         }
+    }
+
+    /// Whether the relay ended the publisher's session with it for good.
+    pub(crate) fn its_session_ended(&self) -> bool {
+        matches!(
+            *self.session_state.borrow(),
+            ExposedPortPublisherSessionState::Ended { .. }
+        )
+    }
+
+    /// Whether its credential must be replaced by a fresh one at `now`: its
+    /// renewal is due, or the relay ended the session the credential opened.
+    pub(crate) fn its_credential_is_due_at(&self, now: Instant) -> bool {
+        self.renew_by
+            .is_some_and(|renew_by| renew_by <= now || self.its_session_ended())
     }
 
     /// Whether `other` is dialed exactly as this is.
@@ -592,16 +608,17 @@ struct ExposedPortPublisher {
 }
 
 impl ExposedPortPublisher {
-    /// Dial exactly `relays`: hang up on each relay no longer among them or
-    /// dialed another way now, withdrawing its broadcasts and tracks, and
-    /// dial each not yet dialed.
+    /// Dial exactly `relays`: hang up on each relay no longer among them,
+    /// dialed another way now, or whose session it ended, withdrawing its
+    /// broadcasts and tracks, and dial each not yet dialed.
     fn dial_exactly(&mut self, relays: Vec<RelayTheExposedPortPublisherDials>) {
         let (kept, hung_up): (Vec<_>, Vec<_>) = std::mem::take(&mut self.relays)
             .into_iter()
             .partition(|dialed| {
-                relays
-                    .iter()
-                    .any(|relay| relay.is_dialed_as(&dialed.dialed_as))
+                !dialed.dialed_as.its_session_ended()
+                    && relays
+                        .iter()
+                        .any(|relay| relay.is_dialed_as(&dialed.dialed_as))
             });
         self.relays = kept;
         for relay in hung_up {
@@ -847,9 +864,7 @@ async fn the_source_opened_its_end(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exposed_port_publisher_session_state::{
-        ExposedPortPublisherSessionState, a_relay_instances_session_state_not_dialed,
-    };
+    use crate::exposed_port_publisher_session_state::a_relay_instances_session_state_not_dialed;
     use streamlib::sdk::descriptors::{BinaryEntry, CatalogDataTrackMode};
 
     use MessageGroupBoundary::{ContinuesGroup, StartsGroup};
@@ -1293,5 +1308,46 @@ mod tests {
             ExposedPortPublisherSessionState::NotDialed,
             "a relay hung up on is reported not dialed"
         );
+    }
+
+    /// A relay that ended the publisher's session is dialed again when it is
+    /// handed over again, its settings unchanged.
+    #[test]
+    fn a_relay_whose_session_ended_is_dialed_again_when_handed_over_again() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = async_runtime.enter();
+        let mut publisher = ExposedPortPublisher {
+            relays: Vec::new(),
+            broadcasts: HashMap::new(),
+            forwarded_ports: HashMap::new(),
+            why_each_port_is_not_forwarded_yet: HashMap::new(),
+        };
+        let relay = a_relay_dialed_at("refused", 9);
+        publisher.dial_exactly(vec![relay.clone()]);
+        relay
+            .session_state
+            .send_replace(ExposedPortPublisherSessionState::Connected);
+        publisher.dial_exactly(vec![relay.clone()]);
+        assert_eq!(
+            *relay.session_state.borrow(),
+            ExposedPortPublisherSessionState::Connected,
+            "a connected relay handed over unchanged is kept"
+        );
+
+        relay
+            .session_state
+            .send_replace(ExposedPortPublisherSessionState::Ended {
+                why: "unauthorized".to_string(),
+            });
+        publisher.dial_exactly(vec![relay.clone()]);
+        assert_eq!(
+            *relay.session_state.borrow(),
+            ExposedPortPublisherSessionState::NotDialed,
+            "the ended dial is hung up"
+        );
+        assert_eq!(publisher.relays.len(), 1, "and the relay dialed again");
     }
 }

@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Bans wall-clock reads outside the surfaces the plan permits them on: three
-//! observability surfaces and the local relay's certificate validity
-//! (`docs/plan/ARCHITECTURE.md` §Media I/O `[one-monotonic-clock]`; rationale
-//! in `docs/decisions/one-monotonic-clock.md`).
+//! observability surfaces, the local relay's certificate validity and a moq.pro
+//! token's expiry (`docs/plan/ARCHITECTURE.md` §Media I/O `[one-monotonic-clock]`;
+//! rationale in `docs/decisions/one-monotonic-clock.md`).
 //!
 //! Monotonic is the only legal clock on the data plane. A wall-clock value and a
 //! media timestamp share a unit and are different quantities, so a subtraction
 //! across them is always a bug — and it is an easy bug to write, because
 //! `SystemTime::now()` is the reflexive spelling for "what time is it". The
 //! surfaces that keep wall clock correlate StreamLib with the outside world —
-//! other hosts' logs, and a browser checking a certificate's UTC validity — a
-//! job monotonic time cannot do.
+//! other hosts' logs, a browser checking a certificate's UTC validity, and a
+//! relay checking a token's UTC expiry — a job monotonic time cannot do.
 //!
 //! There is no per-line pragma and no opt-out attribute. The file allowlist is
 //! the only way past this gate, every entry names one of the
@@ -129,7 +129,12 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
     PermittedWallClockSurface {
         path: "runtime/streamlib-relay-adapter-moqpro/src/moqpro_relay_token.rs",
         surface: PermittedWallClockSurfaceKind::TokenExpiry,
-        reason: "sets a moq.pro JWT's UTC `iat` / `exp`, which the relay checks against its own clock",
+        reason: "sets a moq.pro publish JWT's UTC `iat` / `exp`, which the relay checks against its own clock",
+    },
+    PermittedWallClockSurface {
+        path: "runtime/streamlib-relay-adapter-moqpro/examples/mint_a_moqpro_subscribe_url.rs",
+        surface: PermittedWallClockSurfaceKind::TokenExpiry,
+        reason: "sets the live proof's subscribe-only moq.pro JWT's UTC `iat` / `exp`, which the relay checks against its own clock",
     },
 ];
 

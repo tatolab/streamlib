@@ -91,7 +91,7 @@ pub struct JoinedRelay {
 
 /// Where a [`RelayDialCredential`]'s token rides in the dial URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelayDialTokenPlacement {
+enum RelayDialTokenPlacement {
     /// The [`RELAY_DIAL_TOKEN_QUERY_PARAMETER`] query parameter, the shape
     /// every moq-auth server reads.
     InTheQuery,
@@ -140,11 +140,6 @@ impl RelayDialCredential {
     /// When this credential must be replaced by a fresh one, if ever.
     pub fn renew_by(&self) -> Option<Instant> {
         self.renew_by
-    }
-
-    /// Where the token rides in the dial URL.
-    pub fn placement(&self) -> RelayDialTokenPlacement {
-        self.placement
     }
 
     /// `dial_url` carrying this credential. The whole URL is the secret once

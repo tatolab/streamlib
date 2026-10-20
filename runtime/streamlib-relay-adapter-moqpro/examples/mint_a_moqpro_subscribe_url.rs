@@ -8,11 +8,9 @@
 
 use std::io::{Read, Write};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use streamlib_relay_adapter_moqpro::{
-    MoqProProjectId, MoqProProjectSigningKey, MoqProRelayInstanceSettings,
-};
+use streamlib_relay_adapter_moqpro::{MoqProProjectId, MoqProRelayInstanceSettings};
 use streamlib_relay_adapter_sdk::RelayDialCredential;
 use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
 
@@ -54,15 +52,19 @@ fn write_the_subscribe_url() -> Result<(), String> {
     let dial_url = settings
         .the_projects_dial_url()
         .map_err(|refusal| refusal.to_string())?;
-    let token = MoqProProjectSigningKey::read_from(settings.signing_key.expose_secret())
-        .and_then(|signing_key| {
-            signing_key.mint_a_subscribe_only_token(
-                &settings.project_id,
-                &broadcast,
-                A_SUBSCRIBE_URL_IS_VALID_FOR,
-            )
-        })
-        .map_err(|refusal| refusal.to_string())?;
+    let issued_at = SystemTime::now();
+    let claims = moq_auth::Claims::default()
+        .with_root(settings.project_id.as_str())
+        .with_subscribe([broadcast
+            .parse::<moq_auth::Pattern>()
+            .map_err(|_| format!("`{broadcast}` is not a broadcast a token can grant"))?])
+        .with_issued(issued_at)
+        .with_expires(issued_at + A_SUBSCRIBE_URL_IS_VALID_FOR);
+    let token = moq_auth::Key::from_str(settings.signing_key.expose_secret())
+        .map_err(|_| "the signing key on stdin is not a JWK".to_string())?
+        .sign(&claims)
+        .map(SecretString::from)
+        .map_err(|refusal| format!("the signing key refused to sign: {refusal}"))?;
     let subscribe_url = RelayDialCredential::token_in_the_dial_url_query(token)
         .dial_url_carrying_the_credential(&dial_url);
     writeln!(std::io::stdout(), "{}", subscribe_url.expose_secret())

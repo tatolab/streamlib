@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
@@ -28,6 +28,10 @@ use crate::exposed_port_publisher_session_state::{
 };
 use crate::relay_instances_record::{RecordedRelayInstance, RelayInstancesRecordFile};
 use crate::relay_secret_store::RelaySecretStore;
+
+/// The longest a renewing relay's credential goes unchecked: a session its
+/// relay ended, or a renewal a machine's sleep let pass, is renewed within it.
+const A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY: Duration = Duration::from_secs(30);
 
 /// The relays the publisher dials, as they change.
 pub(crate) type RelaysThePublisherDialsReceiver =
@@ -99,7 +103,8 @@ impl HeldRelayInstance {
 
     /// How the publisher dials this instance, or `None` while it is not
     /// joined or serves no level, so has nothing to publish: the one asked
-    /// for at its join, or a fresh one once its credential is due at `now`.
+    /// for at its join, or a fresh one once its credential is due at `now` —
+    /// its renewal passed, or the session it opened ended.
     fn dialed_as_at(
         &mut self,
         machine: &MachineName,
@@ -113,7 +118,7 @@ impl HeldRelayInstance {
         let due = join
             .dialed_as
             .as_ref()
-            .is_none_or(|dialed_as| dialed_as.renew_by.is_some_and(|renew_by| renew_by <= now));
+            .is_none_or(|dialed_as| dialed_as.its_credential_is_due_at(now));
         if due {
             join.dialed_as = Some(RelayTheExposedPortPublisherDials::of_a_joined_relay(
                 adapter,
@@ -251,7 +256,11 @@ impl RelayInstancesOfThisRuntime {
     }
 
     /// Hand the publisher a fresh credential for each relay whose credential
-    /// falls due, until `relay_instances` is dropped.
+    /// falls due — its renewal passed, or the session it opened ended — until
+    /// `relay_instances` is dropped. A renewing relay is checked at least every
+    /// [`A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY`], since its
+    /// renewal is timed on a clock that stops while the machine sleeps and its
+    /// token's expiry on one that does not.
     pub(crate) async fn renew_each_dial_credential_once_due(relay_instances: Weak<Self>) {
         let Some(mut relays) = relay_instances
             .upgrade()
@@ -260,14 +269,19 @@ impl RelayInstancesOfThisRuntime {
             return;
         };
         loop {
-            let next_renewal = relays
+            let next_check = relays
                 .borrow_and_update()
                 .iter()
                 .filter_map(|relay| relay.renew_by)
-                .min();
-            let a_credential_is_due = async {
-                match next_renewal {
-                    Some(renew_by) => tokio::time::sleep_until(renew_by.into()).await,
+                .min()
+                .map(|renew_by| {
+                    renew_by.min(
+                        Instant::now() + A_RENEWING_RELAYS_CREDENTIAL_IS_CHECKED_AT_LEAST_EVERY,
+                    )
+                });
+            let a_check_is_due = async {
+                match next_check {
+                    Some(check_at) => tokio::time::sleep_until(check_at.into()).await,
                     None => std::future::pending().await,
                 }
             };
@@ -275,20 +289,22 @@ impl RelayInstancesOfThisRuntime {
                 changed = relays.changed() => if changed.is_err() {
                     return;
                 },
-                () = a_credential_is_due => {
-                    let Some(relay_instances) = relay_instances.upgrade() else {
-                        return;
-                    };
+                () = a_check_is_due => {
                     let now = Instant::now();
                     let relays_due = relays
                         .borrow()
                         .iter()
-                        .filter(|relay| relay.renew_by.is_some_and(|renew_by| renew_by <= now))
+                        .filter(|relay| relay.its_credential_is_due_at(now))
                         .map(|relay| relay.relay_id.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                        .collect::<Vec<_>>();
+                    if relays_due.is_empty() {
+                        continue;
+                    }
+                    let Some(relay_instances) = relay_instances.upgrade() else {
+                        return;
+                    };
                     tracing::info!(
-                        relays = %relays_due,
+                        relays = %relays_due.join(", "),
                         "a dial credential is due; the publisher is handed a fresh one"
                     );
                     relay_instances.hand_the_publisher_every_joined_relay();
@@ -1192,6 +1208,30 @@ mod tests {
             the_dial_url_handed_over_for(&relay_instances, "provider-1"),
             first_dial_url,
             "joining again asks for a fresh credential"
+        );
+    }
+
+    #[test]
+    fn a_renewing_relay_whose_session_ended_is_handed_a_fresh_credential() {
+        let machine = RelayInstancesOverAStateDirectory::whose_provider_renews_its_credential_every(
+            Duration::from_secs(3600),
+        );
+        let relay_instances = machine.start_a_runtime();
+        relay_instances
+            .add_relay("provider", provider_settings(&a_relay_url_carrying("a")))
+            .unwrap();
+        let first_dial_url = the_dial_url_handed_over_for(&relay_instances, "provider-1");
+        report_the_publishers_session_with(
+            &relay_instances,
+            ExposedPortPublisherSessionState::Ended {
+                why: "unauthorized".to_string(),
+            },
+        );
+        relay_instances.hand_the_publisher_every_joined_relay();
+        assert_ne!(
+            the_dial_url_handed_over_for(&relay_instances, "provider-1"),
+            first_dial_url,
+            "a token the relay refused, or let expire, is minted again"
         );
     }
 

@@ -108,23 +108,6 @@ impl MoqProProjectSigningKey {
         )
     }
 
-    /// A token rooted at `project_id` granting subscribe to `broadcast` alone,
-    /// valid for `lifetime` from now.
-    pub fn mint_a_subscribe_only_token(
-        &self,
-        project_id: &MoqProProjectId,
-        broadcast: &str,
-        lifetime: Duration,
-    ) -> Result<SecretString, MoqProSigningKeyRefusal> {
-        let issued_at = SystemTime::now();
-        let claims = Claims::default()
-            .with_root(project_id.as_str())
-            .with_subscribe([broadcast_pattern(broadcast)?])
-            .with_issued(issued_at)
-            .with_expires(issued_at + lifetime);
-        self.sign(&claims)
-    }
-
     fn sign(&self, claims: &Claims) -> Result<SecretString, MoqProSigningKeyRefusal> {
         self.0
             .sign(claims)
@@ -246,28 +229,6 @@ mod tests {
             .unwrap();
         assert!(renew_by >= minted_after + MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER);
         assert!(renew_by <= Instant::now() + MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER);
-    }
-
-    #[test]
-    fn a_subscribe_only_token_grants_the_one_broadcast_and_no_publish() {
-        let key = a_project_key(Algorithm::ES256);
-        let signing_key = MoqProProjectSigningKey::read_from(&the_jwk_json_of(&key)).unwrap();
-        let token = signing_key
-            .mint_a_subscribe_only_token(
-                &the_project(),
-                "desk/sample.hang",
-                Duration::from_secs(600),
-            )
-            .unwrap();
-        let claims = key.verify(token.expose_secret()).unwrap();
-        assert_eq!(claims.root, "pb1test");
-        assert!(claims.publish.is_empty());
-        assert_eq!(
-            claims.subscribe,
-            ["desk/sample.hang".parse::<Pattern>().unwrap()]
-                .into_iter()
-                .collect()
-        );
     }
 
     #[test]
