@@ -33,7 +33,8 @@ def outward_facing_fraction(mesh: numpy.ndarray) -> float:
 
 
 @pytest.mark.parametrize(
-    "mesh_builder", [unit_box_mesh, prism_mesh, sphere_mesh],
+    "mesh_builder",
+    [unit_box_mesh, prism_mesh, sphere_mesh],
     ids=["box", "prism", "sphere"],
 )
 def test_every_facet_normal_points_outward(mesh_builder) -> None:
@@ -42,7 +43,8 @@ def test_every_facet_normal_points_outward(mesh_builder) -> None:
 
 
 @pytest.mark.parametrize(
-    "mesh_builder", [unit_box_mesh, prism_mesh, sphere_mesh],
+    "mesh_builder",
+    [unit_box_mesh, prism_mesh, sphere_mesh],
     ids=["box", "prism", "sphere"],
 )
 def test_every_normal_is_unit_length_and_finite(mesh_builder) -> None:
@@ -91,7 +93,7 @@ def test_the_smoother_converges_and_never_overshoots_alpha() -> None:
     smoother = SmoothedPose()
     start = {name: numpy.zeros(3) for name in JOINT_NAMES}
     target = {name: numpy.ones(3) for name in JOINT_NAMES}
-    smoother.settle(start, 0.033)
+    settled = smoother.settle(start, 0.033)
     for _ in range(120):
         settled = smoother.settle(
             {name: joint.copy() for name, joint in target.items()}, 0.033
@@ -102,9 +104,7 @@ def test_the_smoother_converges_and_never_overshoots_alpha() -> None:
 def test_the_smoother_holds_depth_back_harder_than_the_plane() -> None:
     smoother = SmoothedPose()
     smoother.settle({name: numpy.zeros(3) for name in JOINT_NAMES}, 0.033)
-    settled = smoother.settle(
-        {name: numpy.ones(3) for name in JOINT_NAMES}, 0.033
-    )
+    settled = smoother.settle({name: numpy.ones(3) for name in JOINT_NAMES}, 0.033)
     assert settled["nose"][0] > settled["nose"][2]
 
 
@@ -135,15 +135,23 @@ def test_unseen_legs_stand_instead_of_kneeling() -> None:
     joints["left_ankle"] = numpy.array([0.3, 0.85, 0.1])
     joints["right_ankle"] = numpy.array([-0.3, 0.8, 0.1])
     visibility = {name: 0.95 for name in JOINT_NAMES}
-    for hallucinated in ("left_knee", "right_knee", "left_ankle", "right_ankle",
-                         "left_foot", "right_foot"):
+    for hallucinated in (
+        "left_knee",
+        "right_knee",
+        "left_ankle",
+        "right_ankle",
+        "left_foot",
+        "right_foot",
+    ):
         visibility[hallucinated] = 0.1
 
     resolved = resolve_pose_with_fallbacks(joints, visibility)
     assert resolved is not None
     for side in ("left", "right"):
         hip, knee, ankle = (
-            resolved[f"{side}_hip"], resolved[f"{side}_knee"], resolved[f"{side}_ankle"]
+            resolved[f"{side}_hip"],
+            resolved[f"{side}_knee"],
+            resolved[f"{side}_ankle"],
         )
         # Standing: each leg joint clearly below the one above it.
         assert knee[1] < hip[1] - 0.25
@@ -177,8 +185,16 @@ def test_unseen_hips_do_not_disqualify_a_tracked_upper_body() -> None:
 
     joints = idle_joints(1.0)
     visibility = {name: 0.95 for name in JOINT_NAMES}
-    for occluded in ("left_hip", "right_hip", "left_knee", "right_knee",
-                     "left_ankle", "right_ankle", "left_foot", "right_foot"):
+    for occluded in (
+        "left_hip",
+        "right_hip",
+        "left_knee",
+        "right_knee",
+        "left_ankle",
+        "right_ankle",
+        "left_foot",
+        "right_foot",
+    ):
         visibility[occluded] = 0.2
 
     resolved = resolve_pose_with_fallbacks(joints, visibility)
@@ -211,13 +227,13 @@ def test_a_camera_facing_person_faces_the_viewer() -> None:
     # side at +x, y down (shoulders above hips = more negative), the nose
     # nearer the camera (more negative z).
     landmarks = [LandmarkStandIn(0.0, 0.0, 0.0) for _ in range(33)]
-    landmarks[0] = LandmarkStandIn(0.0, -0.62, -0.12)     # nose
-    landmarks[7] = LandmarkStandIn(0.08, -0.60, -0.03)    # left ear
-    landmarks[8] = LandmarkStandIn(-0.08, -0.60, -0.03)   # right ear
-    landmarks[11] = LandmarkStandIn(0.18, -0.50, -0.02)   # left shoulder
+    landmarks[0] = LandmarkStandIn(0.0, -0.62, -0.12)  # nose
+    landmarks[7] = LandmarkStandIn(0.08, -0.60, -0.03)  # left ear
+    landmarks[8] = LandmarkStandIn(-0.08, -0.60, -0.03)  # right ear
+    landmarks[11] = LandmarkStandIn(0.18, -0.50, -0.02)  # left shoulder
     landmarks[12] = LandmarkStandIn(-0.18, -0.50, -0.02)  # right shoulder
-    landmarks[23] = LandmarkStandIn(0.10, 0.0, 0.0)       # left hip
-    landmarks[24] = LandmarkStandIn(-0.10, 0.0, 0.0)      # right hip
+    landmarks[23] = LandmarkStandIn(0.10, 0.0, 0.0)  # left hip
+    landmarks[24] = LandmarkStandIn(-0.10, 0.0, 0.0)  # right hip
 
     joints = joints_from_world_landmarks(landmarks)
     chest = (joints["left_shoulder"] + joints["right_shoulder"]) / 2.0

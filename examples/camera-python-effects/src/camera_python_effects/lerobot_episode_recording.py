@@ -20,8 +20,8 @@ The schema, per frame:
 - `action` — the same pose vector: the target a retargeting consumer servos
   toward, which is what a teleoperation recording means by action
 
-Kept streamlib-free so the format contract is testable with nothing but a
-temporary directory.
+Kept free of `tatolab.stream` so the format contract is testable with nothing
+but a temporary directory.
 """
 
 from __future__ import annotations
@@ -31,22 +31,23 @@ from pathlib import Path
 import numpy
 
 from .avatar_rig import JOINT_NAMES
+from .solved_pose_record import SolvedPoseRecord
 
-__all__ = ["LeRobotEpisodeRecording", "pose_bag_to_vectors"]
+__all__ = ["LeRobotEpisodeRecording", "solved_pose_record_to_vectors"]
 
 AXES = ("x", "y", "z")
 
 
-def pose_bag_to_vectors(
-    pose_bag: "dict",
-) -> "tuple[numpy.ndarray, numpy.ndarray]":
-    """A pose bag's joints and visibility as fixed-layout float32 vectors.
+def solved_pose_record_to_vectors(
+    solved_pose_record: SolvedPoseRecord,
+) -> tuple[numpy.ndarray, numpy.ndarray]:
+    """A solved-pose record's joints and visibility as fixed-layout float32 vectors.
 
     Layout is `JOINT_NAMES` order, xyz per joint — the order the feature
     names in the dataset schema promise.
     """
-    joints = pose_bag["joints"]
-    visibility = pose_bag.get("visibility", {})
+    joints = solved_pose_record["joints"]
+    visibility = solved_pose_record.get("visibility", {})
     state = numpy.array(
         [axis for name in JOINT_NAMES for axis in joints[name]],
         dtype=numpy.float32,
@@ -63,7 +64,7 @@ class LeRobotEpisodeRecording:
 
     def __init__(
         self,
-        root: "str | Path",
+        root: str | Path,
         repo_id: str,
         fps: int,
         camera_height: int,
@@ -71,9 +72,12 @@ class LeRobotEpisodeRecording:
         task: str,
         record_stylized: bool = True,
     ) -> None:
-        # Imported here, not at module top: the wheel-heavy dependency loads
-        # in the recorder's own helper process and nowhere else.
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        # Imported here, not at module top: the heavy dependency loads in the
+        # recorder's own child process and nowhere else. It is the `lerobot`
+        # extra, so a venv synced without it does not resolve it.
+        from lerobot.datasets.lerobot_dataset import (  # pyright: ignore[reportMissingImports]
+            LeRobotDataset,
+        )
 
         self.task = task
         self.record_stylized = record_stylized
@@ -82,10 +86,14 @@ class LeRobotEpisodeRecording:
         image_axis_names = ["height", "width", "channels"]
         features = {
             "observation.images.camera": {
-                "dtype": "video", "shape": image_shape, "names": image_axis_names,
+                "dtype": "video",
+                "shape": image_shape,
+                "names": image_axis_names,
             },
             "observation.state": {
-                "dtype": "float32", "shape": (len(state_names),), "names": state_names,
+                "dtype": "float32",
+                "shape": (len(state_names),),
+                "names": state_names,
             },
             "observation.pose_visibility": {
                 "dtype": "float32",
@@ -93,15 +101,21 @@ class LeRobotEpisodeRecording:
                 "names": list(JOINT_NAMES),
             },
             "observation.capture_timestamp_ns": {
-                "dtype": "int64", "shape": (1,), "names": ["monotonic_ns"],
+                "dtype": "int64",
+                "shape": (1,),
+                "names": ["monotonic_ns"],
             },
             "action": {
-                "dtype": "float32", "shape": (len(state_names),), "names": state_names,
+                "dtype": "float32",
+                "shape": (len(state_names),),
+                "names": state_names,
             },
         }
         if record_stylized:
             features["observation.images.stylized"] = {
-                "dtype": "video", "shape": image_shape, "names": image_axis_names,
+                "dtype": "video",
+                "shape": image_shape,
+                "names": image_axis_names,
             }
         # A root that already holds a dataset is a session to continue, not a
         # refusal: `create` on it raises, and a recorder that dies on its own
@@ -118,17 +132,18 @@ class LeRobotEpisodeRecording:
 
     def add(
         self,
-        pose_bag: "dict",
+        solved_pose_record: SolvedPoseRecord,
         camera_rgb: numpy.ndarray,
-        stylized_rgb: "numpy.ndarray | None",
+        stylized_rgb: numpy.ndarray | None,
     ) -> None:
-        state, seen = pose_bag_to_vectors(pose_bag)
+        """Append one frame: the solved pose and the pictures captured with it."""
+        state, seen = solved_pose_record_to_vectors(solved_pose_record)
         frame = {
             "observation.images.camera": camera_rgb,
             "observation.state": state,
             "observation.pose_visibility": seen,
             "observation.capture_timestamp_ns": numpy.array(
-                [pose_bag["timestamp_ns"]], dtype=numpy.int64
+                [solved_pose_record["timestamp_ns"]], dtype=numpy.int64
             ),
             # A teleoperation recording's action is the pose the operator is
             # commanding — for a pure pose pilot, the state itself.

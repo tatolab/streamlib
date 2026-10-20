@@ -3,7 +3,7 @@
 
 // Intermittent glitch flash stacked under a continuous cyberpunk grade.
 //
-// Pass 1 fires only while the processor's state machine says a glitch is
+// Pass 1 fires only while the node's state machine says a glitch is
 // running: chromatic aberration and sparse slice displacement in the subtle
 // mode, a wide horizontal slice tear plus multi-octave grain in the dramatic
 // one. Pass 2 always runs — the teal/magenta cross-channel grade, a light

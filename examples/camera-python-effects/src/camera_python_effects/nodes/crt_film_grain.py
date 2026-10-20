@@ -4,8 +4,8 @@
 """CRT tube simulation and film grain, as one fullscreen pass.
 
 Every dial is a `CrtFilmGrainConfig` field with an ordinary Python default, so
-`rt.add(CrtFilmGrain, config={"barrel_curve": 0.0})` flattens the tube without
-touching the shader.
+`stream_builder.add(CrtFilmGrain, config={"barrel_curve": 0.0})` flattens the
+tube without touching the shader.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-from streamlib import VideoFrame, processor
+from tatolab.stream import VideoFrame, node
 
 from ..single_pass_video_effect import SinglePassVideoEffect
 
@@ -24,7 +24,7 @@ CRT_PUSH_CONSTANT_SIZE = struct.calcsize(CRT_PUSH_CONSTANT_FORMAT)
 
 @dataclass
 class CrtFilmGrainConfig:
-    """CrtFilmGrain's settings, as `rt.add(..., config={...})` spells them."""
+    """CrtFilmGrain's settings, as `stream_builder.add(..., config={...})` spells them."""
 
     barrel_curve: float = 0.35
     scanline_intensity: float = 0.5
@@ -35,7 +35,7 @@ class CrtFilmGrainConfig:
     brightness: float = 1.05
 
 
-@processor(description="80s CRT tube and film grain over the whole frame")
+@node(description="80s CRT tube and film grain over the whole frame")
 class CrtFilmGrain(SinglePassVideoEffect):
     """Barrel curve, scanlines, aberration, vignette and 24 fps grain."""
 
@@ -43,32 +43,20 @@ class CrtFilmGrain(SinglePassVideoEffect):
     push_constant_size = CRT_PUSH_CONSTANT_SIZE
 
     def __init__(self, config: CrtFilmGrainConfig) -> None:
-        barrel_curve = config.barrel_curve
-        scanline_intensity = config.scanline_intensity
-        chromatic_aberration = config.chromatic_aberration
-        grain_intensity = config.grain_intensity
-        grain_speed = config.grain_speed
-        vignette_intensity = config.vignette_intensity
-        brightness = config.brightness
-        self.barrel_curve = barrel_curve
-        self.scanline_intensity = scanline_intensity
-        self.chromatic_aberration = chromatic_aberration
-        self.grain_intensity = grain_intensity
-        self.grain_speed = grain_speed
-        self.vignette_intensity = vignette_intensity
-        self.brightness = brightness
+        self.crt_film_grain_config = config
 
     def push_constants_for(self, frame: VideoFrame, elapsed_seconds: float) -> bytes:
+        dials = self.crt_film_grain_config
         return struct.pack(
             CRT_PUSH_CONSTANT_FORMAT,
             float(frame.width),
             float(frame.height),
             elapsed_seconds,
-            self.barrel_curve,
-            self.scanline_intensity,
-            self.chromatic_aberration,
-            self.grain_intensity,
-            self.grain_speed,
-            self.vignette_intensity,
-            self.brightness,
+            dials.barrel_curve,
+            dials.scanline_intensity,
+            dials.chromatic_aberration,
+            dials.grain_intensity,
+            dials.grain_speed,
+            dials.vignette_intensity,
+            dials.brightness,
         )

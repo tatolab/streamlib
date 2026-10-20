@@ -13,7 +13,7 @@ from __future__ import annotations
 import random
 import struct
 
-from streamlib import RuntimeContextFullAccess, VideoFrame, processor
+from tatolab.stream import RuntimeContextFullAccess, VideoFrame, node
 
 from ..single_pass_video_effect import SinglePassVideoEffect
 
@@ -78,7 +78,7 @@ class GlitchFlashSchedule:
             self.intensity = random.uniform(0.3, 0.6)
 
 
-@processor(description="Cyberpunk colour grade with intermittent glitch flashes")
+@node(description="Cyberpunk colour grade with intermittent glitch flashes")
 class CyberpunkGlitch(SinglePassVideoEffect):
     """The grade is always on; the glitch is not."""
 

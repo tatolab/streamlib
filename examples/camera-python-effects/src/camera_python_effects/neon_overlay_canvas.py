@@ -10,10 +10,10 @@ sweeping the panel. Four clusters: the N54 lower third (bottom-left), a
 scrolling news ticker (bottom edge), a REC/status HUD (top-left, clear of the
 picture-in-picture), and the circuit-trace CL tag (bottom-right).
 
-Kept clear of streamlib on purpose: this is ordinary 2D drawing code with a
-canvas and a clock, so it runs — and is tested — without a GPU, an engine, or a
-graph. `processors/neon_overlay_source.py` is the part that knows where the
-pixels go.
+Kept clear of `tatolab.stream` on purpose: this is ordinary 2D drawing code
+with a canvas and a clock, so it runs — and is tested — without a GPU, a
+runtime, or a graph. `nodes/neon_overlay_source.py` is the part that knows
+where the pixels go.
 """
 
 from __future__ import annotations
@@ -139,8 +139,12 @@ def _draw_lower_third(
     # Channel logo box — red, chamfered on its outer corners.
     canvas.drawPath(
         _chamfered_panel(
-            panel_x, panel_y, logo_width, panel_height,
-            cut_top_left=logo_cut, cut_bottom_left=logo_cut,
+            panel_x,
+            panel_y,
+            logo_width,
+            panel_height,
+            cut_top_left=logo_cut,
+            cut_bottom_left=logo_cut,
         ),
         skia.Paint(AntiAlias=True, Color=CYBER_RED),
     )
@@ -168,8 +172,12 @@ def _draw_lower_third(
     main_width = panel_width - logo_width - 3.0 * scale
     canvas.drawPath(
         _chamfered_panel(
-            main_x, panel_y, main_width, panel_height,
-            cut_top_right=main_cut, cut_bottom_right=main_cut,
+            main_x,
+            panel_y,
+            main_width,
+            panel_height,
+            cut_top_right=main_cut,
+            cut_bottom_right=main_cut,
         ),
         skia.Paint(AntiAlias=True, Color=CYBER_YELLOW),
     )
@@ -209,8 +217,10 @@ def _draw_lower_third(
     canvas.drawPath(
         bracket,
         skia.Paint(
-            AntiAlias=True, Color=CYBER_DARK,
-            Style=skia.Paint.kStroke_Style, StrokeWidth=2.0 * scale,
+            AntiAlias=True,
+            Color=CYBER_DARK,
+            Style=skia.Paint.kStroke_Style,
+            StrokeWidth=2.0 * scale,
         ),
     )
     dot_paint = skia.Paint(AntiAlias=True, Color=CYBER_DARK)
@@ -222,7 +232,9 @@ def _draw_lower_third(
             dot_paint,
         )
     for bar in range(4):
-        bar_alpha = max(0, min(255, int(100 + 155 * math.sin(elapsed_seconds * 3.0 + bar * 0.8))))
+        bar_alpha = max(
+            0, min(255, int(100 + 155 * math.sin(elapsed_seconds * 3.0 + bar * 0.8)))
+        )
         canvas.drawRect(
             skia.Rect.MakeXYWH(
                 main_x + main_width - (100.0 - bar * 18.0) * scale,
@@ -236,7 +248,9 @@ def _draw_lower_third(
     # Scan line sweeping the yellow panel.
     scan_x = main_x + ((elapsed_seconds * 200.0 * scale) % main_width)
     canvas.drawRect(
-        skia.Rect.MakeXYWH(scan_x, panel_y + 5.0 * scale, 3.0 * scale, panel_height - 10.0 * scale),
+        skia.Rect.MakeXYWH(
+            scan_x, panel_y + 5.0 * scale, 3.0 * scale, panel_height - 10.0 * scale
+        ),
         skia.Paint(AntiAlias=True, Color=skia.Color(255, 255, 255, 80)),
     )
 
@@ -244,8 +258,12 @@ def _draw_lower_third(
     info_y = panel_y + panel_height + 2.0 * scale
     canvas.drawPath(
         _chamfered_panel(
-            main_x, info_y, main_width * 0.6, info_bar_height,
-            cut_top_right=10.0 * scale, cut_bottom_right=10.0 * scale,
+            main_x,
+            info_y,
+            main_width * 0.6,
+            info_bar_height,
+            cut_top_right=10.0 * scale,
+            cut_bottom_right=10.0 * scale,
         ),
         skia.Paint(AntiAlias=True, Color=CYBER_DARK_TRANS),
     )
@@ -255,7 +273,10 @@ def _draw_lower_third(
         main_x + 12.0 * scale,
         info_y + info_bar_height * 0.52,
         4.0 * scale,
-        skia.Paint(AntiAlias=True, Color=CYBER_RED if live_dot_on else skia.Color(90, 20, 30, 255)),
+        skia.Paint(
+            AntiAlias=True,
+            Color=CYBER_RED if live_dot_on else skia.Color(90, 20, 30, 255),
+        ),
     )
     canvas.drawString(
         INFO_BAR_TEXT,
@@ -283,11 +304,17 @@ def _draw_bottom_ticker(
     ticker_font = _overlay_font(strip_height * 0.55, bold=True)
     ticker_width = ticker_font.measureText(TICKER_TEXT)
     # Two copies chase each other so the loop never shows a gap.
-    scrolled = (elapsed_seconds * TICKER_SCROLL_PIXELS_PER_SECOND * scale) % ticker_width
+    scrolled = (
+        elapsed_seconds * TICKER_SCROLL_PIXELS_PER_SECOND * scale
+    ) % ticker_width
     text_paint = skia.Paint(AntiAlias=True, Color=CYBER_YELLOW)
     baseline = strip_top + strip_height * 0.72
-    canvas.drawString(TICKER_TEXT, width * 0.0 - scrolled, baseline, ticker_font, text_paint)
-    canvas.drawString(TICKER_TEXT, ticker_width - scrolled, baseline, ticker_font, text_paint)
+    canvas.drawString(
+        TICKER_TEXT, width * 0.0 - scrolled, baseline, ticker_font, text_paint
+    )
+    canvas.drawString(
+        TICKER_TEXT, ticker_width - scrolled, baseline, ticker_font, text_paint
+    )
 
 
 def _draw_top_left_hud(
@@ -304,8 +331,10 @@ def _draw_top_left_hud(
     canvas.drawPath(
         bracket,
         skia.Paint(
-            AntiAlias=True, Color=CYBER_CYAN,
-            Style=skia.Paint.kStroke_Style, StrokeWidth=2.0 * scale,
+            AntiAlias=True,
+            Color=CYBER_CYAN,
+            Style=skia.Paint.kStroke_Style,
+            StrokeWidth=2.0 * scale,
         ),
     )
 
@@ -315,7 +344,9 @@ def _draw_top_left_hud(
         origin_x + 7.0 * scale,
         origin_y + 3.0 * scale,
         6.0 * scale,
-        skia.Paint(AntiAlias=True, Color=CYBER_RED if rec_on else skia.Color(80, 16, 26, 255)),
+        skia.Paint(
+            AntiAlias=True, Color=CYBER_RED if rec_on else skia.Color(80, 16, 26, 255)
+        ),
     )
     canvas.drawString(
         "REC",
@@ -402,8 +433,14 @@ def _draw_circuit_watermark(
         StrokeWidth=3.0,
         StrokeCap=skia.Paint.kRound_Cap,
     )
-    for start_x, speed, phase, longest in ((25, 2.0, 0.0, 25), (65, 2.5, 1.0, 28), (75, 3.0, 2.0, 13)):
-        drip_length = longest * 0.6 + longest * 0.4 * math.sin(elapsed_seconds * speed + phase)
+    for start_x, speed, phase, longest in (
+        (25, 2.0, 0.0, 25),
+        (65, 2.5, 1.0, 28),
+        (75, 3.0, 2.0, 13),
+    ):
+        drip_length = longest * 0.6 + longest * 0.4 * math.sin(
+            elapsed_seconds * speed + phase
+        )
         drip = skia.Path()
         drip.moveTo(start_x, 50)
         drip.quadTo(start_x + 1, 50 + drip_length * 0.5, start_x - 1, 50 + drip_length)
@@ -411,7 +448,13 @@ def _draw_circuit_watermark(
 
     # Magenta splatter with pulsing alpha.
     splatter_paint = skia.Paint(AntiAlias=True)
-    for dot_x, dot_y, radius in ((5, 25, 2.0), (85, 15, 2.5), (88, 45, 1.5), (3, 48, 2.0), (45, 5, 1.5)):
+    for dot_x, dot_y, radius in (
+        (5, 25, 2.0),
+        (85, 15, 2.5),
+        (88, 45, 1.5),
+        (3, 48, 2.0),
+        (45, 5, 1.5),
+    ):
         splatter_alpha = int(150 + 50 * math.sin(elapsed_seconds * 4.0 + dot_x))
         splatter_paint.setColor(skia.Color(255, 0, 255, splatter_alpha))
         canvas.drawCircle(dot_x, dot_y, radius, splatter_paint)

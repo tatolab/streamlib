@@ -3,7 +3,7 @@
 
 """Reads a shader's `push_constant` block back out of its GLSL.
 
-The tests use it to hold each processor's `struct.pack` against the block the
+The tests use it to hold each node's `struct.pack` against the block the
 shader actually declares. Nothing at run time reads a shader this way — the
 engine reflects the compiled SPIR-V — but a mismatch there surfaces as garbled
 pixels or a refused draw at run time, and here it surfaces as a failing test.

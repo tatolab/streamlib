@@ -3,7 +3,7 @@
 
 """Blends the graded video, the skia overlay and the avatar stage into one frame.
 
-The fan-in of the graph, and the one processor with more than one input. It
+The fan-in of the graph, and the one node with more than one input. It
 paces on the video: the overlay and the skeleton arrive on their own cadences
 and each is held until something newer turns up, so an avatar rendered at a
 third of the camera's rate shows its last frame rather than a gap.
@@ -13,27 +13,22 @@ from __future__ import annotations
 
 import struct
 
-from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
-    ProcessorOutputTextureRing,
+from tatolab.stream import (
+    NodeOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
-    output,
-    processor,
+    node,
 )
 
+from ..elapsed_seconds_since_first_process import ElapsedSecondsSinceFirstProcess
 from ..gpu_surface_conventions import (
     COLOR_TARGET_TEXTURE_USAGE,
     TEXTURE_FORMAT,
     read_shader_source,
-    video_frame_bag_naming,
 )
 from ..neon_overlay_canvas import ease_out_back
-from ..single_pass_video_effect import (
-    NANOSECONDS_PER_SECOND,
-    SHARED_VERTEX_SHADER_FILE_NAME,
-)
+from ..single_pass_video_effect import SHARED_VERTEX_SHADER_FILE_NAME
 
 # `vec2 frame_extent_in_pixels; uint present_layer_mask;
 #  float pip_slide_progress; float elapsed_seconds;`
@@ -45,7 +40,7 @@ OVERLAY_LAYER_BIT = 2
 POSE_LAYER_BIT = 4
 
 # One word per layer, serving both its input port and the binding the fragment
-# shader samples it at — see `single_pass_video_effect` for why.
+# shader samples it at.
 VIDEO_FROM_UPSTREAM = "video_from_upstream"
 OVERLAY_FROM_NEON_SOURCE = "overlay_from_neon_source"
 AVATAR_FROM_POSE_SCENE = "avatar_from_pose_scene"
@@ -69,20 +64,20 @@ def pip_slide_progress_at(elapsed_seconds: float) -> float:
     return ease_out_back(clamped, overshoot=1.9)
 
 
-@processor(description="Three-layer compositor with a sliding picture-in-picture")
+@node(description="Three-layer compositor with a sliding picture-in-picture")
 class BreakingNewsCompositor:
     """Video underneath, overlay over it, the android's stage inside the PiP."""
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def overlay_from_neon_source(self) -> VideoFrame: ...
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def avatar_from_pose_scene(self) -> VideoFrame: ...
 
-    @output()
+    @node.output()
     def video_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -102,8 +97,8 @@ class BreakingNewsCompositor:
         # that has not been replaced is still the newest one there is.
         self.latest_overlay: VideoFrame | None = None
         self.latest_avatar_scene: VideoFrame | None = None
-        self.first_process_at_ns: int | None = None
-        self.output_ring = ProcessorOutputTextureRing(
+        self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
+        self.output_ring = NodeOutputTextureRing(
             TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
         )
 
@@ -111,9 +106,7 @@ class BreakingNewsCompositor:
         video = ctx.inputs.read(VIDEO_FROM_UPSTREAM, into=VideoFrame)
         if video is None:
             return
-        if self.first_process_at_ns is None:
-            self.first_process_at_ns = ctx.time
-        elapsed_seconds = (ctx.time - self.first_process_at_ns) / NANOSECONDS_PER_SECOND
+        elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
 
         newer_overlay = ctx.inputs.read(OVERLAY_FROM_NEON_SOURCE, into=VideoFrame)
         if newer_overlay is not None:
@@ -158,7 +151,12 @@ class BreakingNewsCompositor:
         )
         ctx.outputs.write(
             "video_to_downstream",
-            video_frame_bag_naming(
-                composited.surface_id, video.width, video.height, video.timestamp_ns
-            ),
+            VideoFrame(
+                surface_id=composited.surface_id,
+                width=video.width,
+                height=video.height,
+                timestamp_ns=video.timestamp_ns,
+                color_info=video.color_info,
+            ).to_bytes(),
+            timestamp_ns=video.timestamp_ns,
         )

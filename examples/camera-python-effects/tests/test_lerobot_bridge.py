@@ -15,6 +15,7 @@ import numpy
 import pytest
 
 from camera_python_effects.avatar_rig import JOINT_NAMES, idle_joints
+from camera_python_effects.solved_pose_record import SolvedPoseRecord
 from camera_python_effects.timestamp_stream_join import TimestampStreamJoin
 
 
@@ -57,7 +58,7 @@ def test_a_single_stream_join_is_refused() -> None:
         TimestampStreamJoin(("pose",))
 
 
-def _pose_bag(timestamp_ns: int) -> dict:
+def _solved_pose_record(timestamp_ns: int) -> SolvedPoseRecord:
     joints = idle_joints(1.0)
     return {
         "timestamp_ns": timestamp_ns,
@@ -68,16 +69,20 @@ def _pose_bag(timestamp_ns: int) -> dict:
 
 
 def test_pose_vectors_keep_the_promised_layout() -> None:
-    from camera_python_effects.lerobot_episode_recording import pose_bag_to_vectors
+    from camera_python_effects.lerobot_episode_recording import (
+        solved_pose_record_to_vectors,
+    )
 
-    bag = _pose_bag(7)
-    state, seen = pose_bag_to_vectors(bag)
+    solved_pose_record = _solved_pose_record(7)
+    state, seen = solved_pose_record_to_vectors(solved_pose_record)
     assert state.shape == (len(JOINT_NAMES) * 3,)
     assert seen.shape == (len(JOINT_NAMES),)
     # Spot-check the layout promise: joint i occupies [3i, 3i+3).
     nose_index = JOINT_NAMES.index("nose")
     assert numpy.allclose(
-        state[nose_index * 3 : nose_index * 3 + 3], bag["joints"]["nose"], atol=1e-6
+        state[nose_index * 3 : nose_index * 3 + 3],
+        solved_pose_record["joints"]["nose"],
+        atol=1e-6,
     )
 
 
@@ -96,10 +101,12 @@ def test_the_dataset_round_trips_through_lerobots_own_loader(tmp_path) -> None:
     frames_per_episode = 8
     for episode in range(2):
         for i in range(frames_per_episode):
-            bag = _pose_bag(1_000_000 * (episode * frames_per_episode + i))
+            solved_pose_record = _solved_pose_record(
+                1_000_000 * (episode * frames_per_episode + i)
+            )
             camera = numpy.full((48, 64, 3), 10 + i * 15, numpy.uint8)
             stylized = numpy.full((48, 64, 3), 200 - i * 15, numpy.uint8)
-            recording.add(bag, camera, stylized)
+            recording.add(solved_pose_record, camera, stylized)
         recording.save_episode()
     recording.close()
 
@@ -138,7 +145,7 @@ def test_a_second_session_resumes_the_dataset_instead_of_refusing(tmp_path) -> N
         )
         for i in range(frames):
             recording.add(
-                _pose_bag(1_000_000 * i),
+                _solved_pose_record(1_000_000 * i),
                 numpy.full((48, 64, 3), 60, numpy.uint8),
                 numpy.full((48, 64, 3), 120, numpy.uint8),
             )
@@ -160,7 +167,7 @@ class _HostSideOnlyFrame:
     def __init__(self, pixels: numpy.ndarray) -> None:
         self.pixels = pixels
 
-    def __dlpack_device__(self) -> "tuple[int, int]":
+    def __dlpack_device__(self) -> tuple[int, int]:
         return self.pixels.__dlpack_device__()
 
     def __dlpack__(self, *, dl_device=None, **negotiated):
@@ -169,7 +176,7 @@ class _HostSideOnlyFrame:
 
 
 class _RecycledFrame:
-    def __dlpack_device__(self) -> "tuple[int, int]":
+    def __dlpack_device__(self) -> tuple[int, int]:
         return (1, 0)
 
     def __dlpack__(self, **negotiated):
@@ -177,7 +184,7 @@ class _RecycledFrame:
 
 
 def _recorder():
-    from camera_python_effects.processors.lerobot_recorder import (
+    from camera_python_effects.nodes.lerobot_recorder import (
         LeRobotRecorder,
         LeRobotRecorderConfig,
     )
@@ -186,7 +193,7 @@ def _recorder():
 
 
 def test_recorded_pixels_are_a_decimated_rgb_copy_that_outlives_the_frame() -> None:
-    from camera_python_effects.processors.lerobot_recorder import (
+    from camera_python_effects.nodes.lerobot_recorder import (
         RECORDING_DECIMATION_STRIDE,
     )
 

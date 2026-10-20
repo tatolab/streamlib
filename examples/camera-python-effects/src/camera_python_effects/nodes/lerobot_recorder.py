@@ -1,37 +1,33 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Records the pipeline into a LeRobotDataset, as one more helper process.
+"""Records the camera, the composited picture and the solved pose into a LeRobotDataset.
 
-The physical-AI claim, made concrete: the same graph that entertains is a
-data-collection rig. This processor taps three streams that all descend from
-one camera frame — the raw view, the composited output, and the solved pose —
-joins them on the frame's own timestamp, and writes imitation-learning
-episodes through LeRobot's official writer.
-
-Isolation is what makes it safe to bolt on: episode saves video-encode for
-whole seconds, and those seconds stall exactly one process — this one. The
-camera keeps capturing, the effects keep running, the window stays at vsync,
-and the recorder catches back up on the frames its channels held.
+Reads `video_from_camera`, `stylized_from_compositor` and `pose_from_avatar`,
+all descended from one camera frame, joins them on that frame's
+`timestamp_ns`, and writes episodes through LeRobot's own writer. Publishes
+one record per saved episode on `episodes_to_downstream`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy
-
-from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
     log,
-    output,
-    processor,
+    msgpack,
+    msgpack_typed_dict_cast,
+    node,
 )
 
+from ..elapsed_seconds_since_first_process import NANOSECONDS_PER_SECOND
 from ..lerobot_episode_recording import LeRobotEpisodeRecording
+from ..solved_pose_record import SolvedPoseRecord
 from ..timestamp_stream_join import TimestampStreamJoin
 
 # 1080p decimated by four — 480x270, the frame size the dataset stores.
@@ -44,10 +40,12 @@ POSE_STREAM = "pose"
 CAMERA_STREAM = "camera"
 STYLIZED_STREAM = "stylized"
 
+SOLVED_POSE_RECORD_CAST = msgpack_typed_dict_cast(SolvedPoseRecord)
+
 
 @dataclass
 class LeRobotRecorderConfig:
-    """LeRobotRecorder's settings, as `rt.add(..., config={...})` spells them."""
+    """LeRobotRecorder's settings, as `stream_builder.add(..., config={...})` spells them."""
 
     dataset_root: str
     repo_id: str = "tatolab/camera-python-effects-poses"
@@ -57,40 +55,32 @@ class LeRobotRecorderConfig:
     record_stylized: bool = True
 
 
-@processor(description="Writes camera, stylized view and pose into a LeRobotDataset")
+@node(description="Writes camera, stylized view and pose into a LeRobotDataset")
 class LeRobotRecorder:
-    """Three timestamp-joined streams in, imitation-learning episodes out."""
+    """Three timestamp-joined ports in, imitation-learning episodes out."""
 
     def __init__(self, config: LeRobotRecorderConfig) -> None:
-        dataset_root = config.dataset_root
-        repo_id = config.repo_id
-        fps = config.fps
-        episode_seconds = config.episode_seconds
-        task = config.task
-        record_stylized = config.record_stylized
-        self.dataset_root = dataset_root
-        self.repo_id = repo_id
-        self.fps = fps
-        self.frames_per_episode = max(int(episode_seconds * fps), 1)
-        self.task = task
-        self.record_stylized = record_stylized
+        self.dataset_root = config.dataset_root
+        self.repo_id = config.repo_id
+        self.fps = config.fps
+        self.frames_per_episode = max(int(config.episode_seconds * config.fps), 1)
+        self.task = config.task
+        self.record_stylized = config.record_stylized
 
-    # `newest`, not `ordered`, and not by preference: a channel's one
-    # publisher shares a single ring config across subscribers, and both of
-    # these channels already feed `newest` consumers (the effects chain, the
-    # window). At camera cadence the drain below still catches essentially
-    # every frame; what a long episode-encode stall costs is dropped rows,
-    # counted, never a wedged pipeline.
-    @input(delivery_profile="newest")
+    # `ordered` on every port: a recorder wants each frame, not the latest one.
+    # A frame whose surface was recycled before this lagging reader reached it
+    # is counted and skipped; a long episode-encode stall costs dropped rows,
+    # never a wedged pipeline.
+    @node.input(delivery_profile="ordered")
     def video_from_camera(self) -> VideoFrame: ...
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="ordered")
     def stylized_from_compositor(self) -> VideoFrame: ...
 
-    @input(delivery_profile="ordered")
-    def pose_from_avatar(self) -> None: ...
+    @node.input(delivery_profile="ordered")
+    def pose_from_avatar(self) -> SolvedPoseRecord: ...
 
-    @output(description="One bag per saved episode, for observability")
+    @node.output(description="One record per saved episode, for observability")
     def episodes_to_downstream(self) -> None: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -107,19 +97,19 @@ class LeRobotRecorder:
             (STYLIZED_STREAM,) if self.record_stylized else ()
         )
         self.stream_join = TimestampStreamJoin(streams)
-        self._completed_rows: "list[dict]" = []
+        self._completed_rows: list[dict[str, Any]] = []
         self.frames_recorded = 0
         self.frames_skipped_idle = 0
         self.frames_unreadable = 0
 
-    def _frame_pixels(self, frame: VideoFrame) -> "numpy.ndarray | None":
+    def _frame_pixels(self, frame: VideoFrame) -> numpy.ndarray | None:
         """The frame decimated to recording size, on the CPU, or None.
 
         Read from the frame's host side and copied out, because the rows
         outlive the frame: a view would hold its pool slot until the episode
-        saves. A frame whose surface was recycled before this
-        lagging consumer reached it is skipped and counted, never raised —
-        recording must not be able to take the pipeline down.
+        saves. A frame whose surface was recycled before this lagging reader
+        reached it is skipped and counted, never raised — recording must not
+        be able to take the pipeline down.
         """
         try:
             return numpy.ascontiguousarray(
@@ -132,37 +122,36 @@ class LeRobotRecorder:
             return None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        while ctx.inputs.has_data("video_from_camera"):
-            frame = ctx.inputs.read("video_from_camera", into=VideoFrame)
-            if frame is None:
-                break
-            pixels = self._frame_pixels(frame)
-            if pixels is not None:
-                self._offer(CAMERA_STREAM, frame.timestamp_ns, pixels)
-
+        self._drain_video_port(ctx, "video_from_camera", CAMERA_STREAM)
         if self.record_stylized:
-            while ctx.inputs.has_data("stylized_from_compositor"):
-                frame = ctx.inputs.read("stylized_from_compositor", into=VideoFrame)
-                if frame is None:
-                    break
-                pixels = self._frame_pixels(frame)
-                if pixels is not None:
-                    self._offer(STYLIZED_STREAM, frame.timestamp_ns, pixels)
+            self._drain_video_port(ctx, "stylized_from_compositor", STYLIZED_STREAM)
 
-        while ctx.inputs.has_data("pose_from_avatar"):
-            pose_bag = ctx.inputs.read("pose_from_avatar")
-            if pose_bag is None:
-                break
+        while (
+            solved_pose_record := ctx.inputs.read(
+                "pose_from_avatar", into=SOLVED_POSE_RECORD_CAST
+            )
+        ) is not None:
             # Idle frames are the stage running without a person; a dataset
             # of them would teach a policy to stand still.
-            if pose_bag.get("provenance") == "idle":
+            if solved_pose_record["provenance"] == "idle":
                 self.frames_skipped_idle += 1
                 continue
-            self._offer(POSE_STREAM, int(pose_bag["timestamp_ns"]), pose_bag)
+            self._offer(
+                POSE_STREAM, solved_pose_record["timestamp_ns"], solved_pose_record
+            )
 
         self._flush_completed_rows(ctx)
 
-    def _offer(self, stream: str, timestamp_ns: int, value) -> None:
+    def _drain_video_port(
+        self, ctx: RuntimeContextLimitedAccess, port_name: str, stream_name: str
+    ) -> None:
+        """Offer every frame queued on `port_name` to the join as `stream_name`."""
+        while (frame := ctx.inputs.read(port_name, into=VideoFrame)) is not None:
+            pixels = self._frame_pixels(frame)
+            if pixels is not None:
+                self._offer(stream_name, frame.timestamp_ns, pixels)
+
+    def _offer(self, stream: str, timestamp_ns: int, value: Any) -> None:
         completed = self.stream_join.offer(stream, timestamp_ns, value)
         if completed is not None:
             self._completed_rows.append(completed)
@@ -182,7 +171,7 @@ class LeRobotRecorder:
     def _save_episode(self, ctx: RuntimeContextLimitedAccess) -> None:
         saving_began = ctx.time
         self.recording.save_episode()
-        seconds_encoding = (ctx.time - saving_began) / 1_000_000_000
+        seconds_encoding = (ctx.time - saving_began) / NANOSECONDS_PER_SECOND
         log.info(
             "episode saved",
             episode=self.recording.episodes_saved,
@@ -193,11 +182,13 @@ class LeRobotRecorder:
         )
         ctx.outputs.write(
             "episodes_to_downstream",
-            {
-                "episode": self.recording.episodes_saved,
-                "frames_recorded": self.frames_recorded,
-                "seconds_encoding": seconds_encoding,
-            },
+            msgpack.pack(
+                {
+                    "episode": self.recording.episodes_saved,
+                    "frames_recorded": self.frames_recorded,
+                    "seconds_encoding": seconds_encoding,
+                }
+            ),
         )
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:

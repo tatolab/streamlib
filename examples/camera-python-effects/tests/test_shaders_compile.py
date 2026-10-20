@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Every shader in this app compiles to SPIR-V.
+"""Every shader in this stream compiles to SPIR-V.
 
-Authoring a kernel needs no shader toolchain — the compiler is in the wheel —
-so this is not how the app builds its kernels. It is how a typo in a shader
+Authoring a kernel needs no shader toolchain — the runtime compiles GLSL —
+so this is not how the stream builds its kernels. It is how a typo in a shader
 fails here, in a second, instead of at `setup()` on a rig with a camera plugged
 into it. Skipped where no compiler is installed, which is most machines.
 """
@@ -20,6 +20,13 @@ from camera_python_effects.gpu_surface_conventions import read_shader_source
 
 GLSL_COMPILER = shutil.which("glslangValidator")
 
+
+def glsl_compiler_on_path() -> str:
+    """The compiler a test the `skipif` let through runs."""
+    assert GLSL_COMPILER is not None
+    return GLSL_COMPILER
+
+
 EVERY_SHADER = [
     pytest.param("fullscreen_triangle.vert", "vert", id="fullscreen_triangle"),
     pytest.param("cyberpunk_glitch.frag", "frag", id="cyberpunk_glitch"),
@@ -32,7 +39,7 @@ EVERY_SHADER = [
 @pytest.mark.parametrize(("shader_file_name", "stage"), EVERY_SHADER)
 def test_the_shader_compiles_for_vulkan(shader_file_name: str, stage: str) -> None:
     compilation = subprocess.run(
-        [GLSL_COMPILER, "-V", "--stdin", "-S", stage, "-o", "/dev/null"],
+        [glsl_compiler_on_path(), "-V", "--stdin", "-S", stage, "-o", "/dev/null"],
         input=read_shader_source(shader_file_name),
         capture_output=True,
         text=True,
@@ -47,7 +54,7 @@ def test_the_shader_compiles_for_vulkan(shader_file_name: str, stage: str) -> No
 def test_the_compiler_check_is_not_vacuous() -> None:
     """A compiler that accepted anything would pass every test above."""
     compilation = subprocess.run(
-        [GLSL_COMPILER, "-V", "--stdin", "-S", "frag", "-o", "/dev/null"],
+        [glsl_compiler_on_path(), "-V", "--stdin", "-S", "frag", "-o", "/dev/null"],
         input="#version 450\nvoid main() { this is not glsl }\n",
         capture_output=True,
         text=True,

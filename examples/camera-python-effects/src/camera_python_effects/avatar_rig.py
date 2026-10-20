@@ -9,7 +9,7 @@ rig retargeting — just a position, an orientation and a length per segment.
 Cylindrical limbs are symmetric about their own axis, which makes the roll
 ambiguity a 2D detector's depth cannot resolve simply invisible.
 
-Pure numpy, streamlib-free and GL-free: given joints it answers matrices, so
+Pure numpy, free of `tatolab.stream` and of GL: given joints it answers matrices, so
 every pose the solver can strike is testable without a camera or a context.
 """
 
@@ -22,9 +22,9 @@ import numpy
 
 __all__ = [
     "JOINT_NAMES",
+    "PoseMemory",
     "SegmentPlacement",
     "SmoothedPose",
-    "PoseMemory",
     "idle_joints",
     "resolve_pose_with_fallbacks",
     "solve_segment_placements",
@@ -66,7 +66,7 @@ class SegmentPlacement:
 
     primitive: str  # "prism" | "sphere" | "box"
     model_matrix: numpy.ndarray  # 4x4, column-major-ready
-    base_colour: "tuple[float, float, float]"
+    base_colour: tuple[float, float, float]
     emissive: float
 
 
@@ -98,10 +98,10 @@ def _placement(
     start: numpy.ndarray,
     end: numpy.ndarray,
     thickness: float,
-    colour: "tuple[float, float, float]",
+    colour: tuple[float, float, float],
     emissive: float,
     forward_hint: numpy.ndarray,
-    depth: "float | None" = None,
+    depth: float | None = None,
 ) -> SegmentPlacement:
     """A primitive stretched from `start` to `end`, `thickness` across."""
     along = end - start
@@ -116,7 +116,7 @@ def _placement(
 def _orb(
     centre: numpy.ndarray,
     radius: float,
-    colour: "tuple[float, float, float]",
+    colour: tuple[float, float, float],
     emissive: float,
 ) -> SegmentPlacement:
     model = numpy.identity(4)
@@ -136,11 +136,11 @@ class SmoothedPose:
     def __init__(self, plane_hz: float = 12.0, depth_hz: float = 4.0) -> None:
         self._plane_hz = plane_hz
         self._depth_hz = depth_hz
-        self._state: "dict[str, numpy.ndarray] | None" = None
+        self._state: dict[str, numpy.ndarray] | None = None
 
     def settle(
-        self, joints: "dict[str, numpy.ndarray]", dt_seconds: float
-    ) -> "dict[str, numpy.ndarray]":
+        self, joints: dict[str, numpy.ndarray], dt_seconds: float
+    ) -> dict[str, numpy.ndarray]:
         if self._state is None:
             self._state = {name: joint.copy() for name, joint in joints.items()}
             return self._state
@@ -166,14 +166,14 @@ class PoseMemory:
 
     def __init__(self, hold_seconds: float = 1.0) -> None:
         self._hold_seconds = hold_seconds
-        self._held_joints: "dict[str, numpy.ndarray] | None" = None
+        self._held_joints: dict[str, numpy.ndarray] | None = None
         self._held_at_seconds = float("-inf")
 
     def target_for(
         self,
-        resolved_joints: "dict[str, numpy.ndarray] | None",
+        resolved_joints: dict[str, numpy.ndarray] | None,
         elapsed_seconds: float,
-    ) -> "dict[str, numpy.ndarray] | None":
+    ) -> dict[str, numpy.ndarray] | None:
         """The pose to aim at now, or None once idle is the honest answer."""
         if resolved_joints is not None:
             self._held_joints = resolved_joints
@@ -185,11 +185,11 @@ class PoseMemory:
         return None
 
 
-def idle_joints(elapsed_seconds: float) -> "dict[str, numpy.ndarray]":
+def idle_joints(elapsed_seconds: float) -> dict[str, numpy.ndarray]:
     """A standing pose with a slow breathing sway, for when nobody is in frame."""
     sway = math.sin(elapsed_seconds * 0.9) * 0.02
     breathe = math.sin(elapsed_seconds * 1.7) * 0.008
-    j: "dict[str, numpy.ndarray]" = {}
+    j: dict[str, numpy.ndarray] = {}
 
     def at(name: str, x: float, y: float, z: float) -> None:
         j[name] = numpy.array([x + sway, y + breathe, z])
@@ -214,7 +214,7 @@ def idle_joints(elapsed_seconds: float) -> "dict[str, numpy.ndarray]":
     return j
 
 
-def joints_from_world_landmarks(landmarks) -> "dict[str, numpy.ndarray]":
+def joints_from_world_landmarks(landmarks) -> dict[str, numpy.ndarray]:
     """MediaPipe world landmarks → this rig's joint set, mirrored.
 
     World landmarks are metres with y down; the scene is y up. The mirroring
@@ -230,7 +230,7 @@ def joints_from_world_landmarks(landmarks) -> "dict[str, numpy.ndarray]":
     }
 
 
-def visibilities_from_world_landmarks(landmarks) -> "dict[str, float]":
+def visibilities_from_world_landmarks(landmarks) -> dict[str, float]:
     """Per-joint confidence that the joint is genuinely in the picture.
 
     The detector answers a position for every landmark whether or not the
@@ -258,7 +258,7 @@ _FALLBACK_NO_TRUST_VISIBILITY = 0.4
 _IDLE_TORSO_LENGTH = 0.5
 
 
-def _torso_local_idle_offsets() -> "dict[str, numpy.ndarray]":
+def _torso_local_idle_offsets() -> dict[str, numpy.ndarray]:
     """Each idle joint as an offset from the idle pelvis, torso-local.
 
     The idle pose stands axis-aligned — shoulders along x, spine up y, facing
@@ -274,9 +274,9 @@ _IDLE_OFFSETS_FROM_PELVIS = _torso_local_idle_offsets()
 
 
 def resolve_pose_with_fallbacks(
-    joints: "dict[str, numpy.ndarray]",
-    visibility: "dict[str, float]",
-) -> "dict[str, numpy.ndarray] | None":
+    joints: dict[str, numpy.ndarray],
+    visibility: dict[str, float],
+) -> dict[str, numpy.ndarray] | None:
     """The detected pose, with unseen joints standing in a neutral pose.
 
     A desk camera sees head and torso; the detector hallucinates the rest and
@@ -310,7 +310,7 @@ def resolve_pose_with_fallbacks(
     torso_basis = numpy.stack([across, spine_up, forward], axis=1)
 
     trust_band = _FALLBACK_FULL_TRUST_VISIBILITY - _FALLBACK_NO_TRUST_VISIBILITY
-    resolved: "dict[str, numpy.ndarray]" = {}
+    resolved: dict[str, numpy.ndarray] = {}
     for name, detected in joints.items():
         trust = (visibility[name] - _FALLBACK_NO_TRUST_VISIBILITY) / trust_band
         trust = min(max(trust, 0.0), 1.0)
@@ -319,7 +319,7 @@ def resolve_pose_with_fallbacks(
     return resolved
 
 
-def _grounded(joints: "dict[str, numpy.ndarray]") -> "dict[str, numpy.ndarray]":
+def _grounded(joints: dict[str, numpy.ndarray]) -> dict[str, numpy.ndarray]:
     """Pelvis over the origin, feet on the floor — the stage is the frame."""
     pelvis = (joints["left_hip"] + joints["right_hip"]) / 2.0
     floor = min(float(joints[name][1]) for name in ("left_ankle", "right_ankle"))
@@ -328,8 +328,8 @@ def _grounded(joints: "dict[str, numpy.ndarray]") -> "dict[str, numpy.ndarray]":
 
 
 def solve_segment_placements(
-    joints: "dict[str, numpy.ndarray]",
-) -> "list[SegmentPlacement]":
+    joints: dict[str, numpy.ndarray],
+) -> list[SegmentPlacement]:
     """The full android, as rigid primitives posed over the joint set."""
     j = _grounded(joints)
 
@@ -345,24 +345,62 @@ def solve_segment_placements(
 
     placements = [
         # Torso: a chest plate over a narrower waist block.
-        _placement("box", pelvis + spine_up * 0.16, chest + spine_up * 0.05,
-                   0.30, GUNMETAL, 0.0, torso_forward, depth=0.17),
-        _placement("box", pelvis - spine_up * 0.08, pelvis + spine_up * 0.18,
-                   0.24, DARK_PLATE, 0.0, torso_forward, depth=0.15),
+        _placement(
+            "box",
+            pelvis + spine_up * 0.16,
+            chest + spine_up * 0.05,
+            0.30,
+            GUNMETAL,
+            0.0,
+            torso_forward,
+            depth=0.17,
+        ),
+        _placement(
+            "box",
+            pelvis - spine_up * 0.08,
+            pelvis + spine_up * 0.18,
+            0.24,
+            DARK_PLATE,
+            0.0,
+            torso_forward,
+            depth=0.15,
+        ),
         # Chest core — the arc-reactor-ish glow — and the yellow service badge.
         _orb(chest - spine_up * 0.10 + torso_forward * 0.105, 0.05, CORE_CYAN, 1.0),
-        _placement("box",
-                   chest + across_shoulders * 0.10 - spine_up * 0.28 + torso_forward * 0.088,
-                   chest + across_shoulders * 0.10 - spine_up * 0.21 + torso_forward * 0.088,
-                   0.05, ACCENT_YELLOW, 0.85, torso_forward, depth=0.012),
+        _placement(
+            "box",
+            chest + across_shoulders * 0.10 - spine_up * 0.28 + torso_forward * 0.088,
+            chest + across_shoulders * 0.10 - spine_up * 0.21 + torso_forward * 0.088,
+            0.05,
+            ACCENT_YELLOW,
+            0.85,
+            torso_forward,
+            depth=0.012,
+        ),
         # Neck and head; the visor is a thin emissive slab across the face.
-        _placement("prism", neck_base, head_centre, 0.06, DARK_PLATE, 0.0, torso_forward),
-        _placement("box", head_centre - head_up * 0.075, head_centre + head_up * 0.135,
-                   0.19, GUNMETAL, 0.0, torso_forward, depth=0.21),
-        _placement("box",
-                   head_centre + head_up * 0.005 + torso_forward * 0.107,
-                   head_centre + head_up * 0.062 + torso_forward * 0.107,
-                   0.15, VISOR_MAGENTA, 1.0, torso_forward, depth=0.02),
+        _placement(
+            "prism", neck_base, head_centre, 0.06, DARK_PLATE, 0.0, torso_forward
+        ),
+        _placement(
+            "box",
+            head_centre - head_up * 0.075,
+            head_centre + head_up * 0.135,
+            0.19,
+            GUNMETAL,
+            0.0,
+            torso_forward,
+            depth=0.21,
+        ),
+        _placement(
+            "box",
+            head_centre + head_up * 0.005 + torso_forward * 0.107,
+            head_centre + head_up * 0.062 + torso_forward * 0.107,
+            0.15,
+            VISOR_MAGENTA,
+            1.0,
+            torso_forward,
+            depth=0.02,
+        ),
     ]
 
     for side in ("left", "right"):
@@ -381,13 +419,30 @@ def solve_segment_placements(
             _orb(elbow, 0.048, DARK_PLATE, 0.0),
             _orb(elbow, 0.022, CORE_CYAN, 1.0),
             _placement("prism", elbow, wrist, 0.052, GUNMETAL, 0.0, torso_forward),
-            _placement("box", wrist, hand_tip, 0.055, DARK_PLATE, 0.0, torso_forward, depth=0.09),
+            _placement(
+                "box",
+                wrist,
+                hand_tip,
+                0.055,
+                DARK_PLATE,
+                0.0,
+                torso_forward,
+                depth=0.09,
+            ),
             _placement("prism", hip, knee, 0.088, GUNMETAL, 0.0, torso_forward),
             _orb(knee, 0.055, DARK_PLATE, 0.0),
             _orb(knee, 0.024, CORE_CYAN, 1.0),
             _placement("prism", knee, ankle, 0.068, GUNMETAL, 0.0, torso_forward),
-            _placement("box", ankle, foot + numpy.array([0.0, -0.01, 0.0]),
-                       0.06, DARK_PLATE, 0.0, numpy.array([0.0, 1.0, 0.0]), depth=0.05),
+            _placement(
+                "box",
+                ankle,
+                foot + numpy.array([0.0, -0.01, 0.0]),
+                0.06,
+                DARK_PLATE,
+                0.0,
+                numpy.array([0.0, 1.0, 0.0]),
+                depth=0.05,
+            ),
         ]
 
     return placements
