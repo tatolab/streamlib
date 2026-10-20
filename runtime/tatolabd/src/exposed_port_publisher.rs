@@ -42,6 +42,10 @@ use crate::relay_instances_of_this_runtime::RelaysThePublisherDialsReceiver;
 /// The suffix of a broadcast whose catalog the stack's players read.
 const BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ: &str = ".hang";
 
+/// The shortest period a broadcast's catalog is written again whole on,
+/// whatever an adapter asks, so a catalog rewrite never spins the publisher.
+const A_CATALOG_IS_REWRITTEN_WHOLE_AT_MOST_EVERY: Duration = Duration::from_millis(250);
+
 /// One joined relay as the publisher dials it.
 #[derive(Clone)]
 pub(crate) struct RelayTheExposedPortPublisherDials {
@@ -78,7 +82,9 @@ impl RelayTheExposedPortPublisherDials {
             levels_served: adapter.levels_served().to_vec(),
             broadcast_root: adapter.broadcast_root(machine),
             renew_by: credential.and_then(|credential| credential.renew_by()),
-            catalog_rewritten_whole_every: adapter.the_catalog_is_rewritten_whole_every(),
+            catalog_rewritten_whole_every: adapter
+                .the_catalog_is_rewritten_whole_every()
+                .map(|every| every.max(A_CATALOG_IS_REWRITTEN_WHOLE_AT_MOST_EVERY)),
             session_state,
         }
     }
@@ -436,7 +442,7 @@ impl BroadcastOfAStreamAtARelay {
 
     /// Write the catalog last published again, whole, as the first frame of a
     /// fresh group on both spellings: what a subscriber joining now reads.
-    fn rewrite_the_catalog_whole(&mut self) {
+    fn rewrite_the_catalog_whole(&mut self, relay_id: &RelayInstanceId, stream_name: &str) {
         for (catalog_track, producer) in [
             (hang::Catalog::DEFAULT_NAME, &mut self.catalog),
             (hang::Catalog::COMPRESSED_NAME, &mut self.compressed_catalog),
@@ -446,7 +452,9 @@ impl BroadcastOfAStreamAtARelay {
                 .and_then(|()| producer.update(&self.catalog_published_last).map(|_| ()))
             {
                 tracing::warn!(
-                    "the catalog track `{catalog_track}` was not written again whole: {refusal}"
+                    relay = %relay_id,
+                    "the catalog track `{catalog_track}` of the stream `{stream_name}` was not \
+                     written again whole: {refusal}"
                 );
             }
         }
@@ -671,17 +679,15 @@ impl ExposedPortPublisher {
     /// Write again whole the catalog of each broadcast at a relay whose
     /// catalogs are due at `now`.
     fn rewrite_each_catalog_due_whole(&mut self, now: Instant) {
-        for relay in &mut self.relays {
-            if !relay
+        for relay in self.relays.iter_mut().filter(|relay| {
+            relay
                 .catalogs_next_rewritten_whole_at()
                 .is_some_and(|due_at| due_at <= now)
-            {
-                continue;
-            }
+        }) {
             relay.catalogs_last_rewritten_whole_at = now;
-            for ((relay_id, _), broadcast) in &mut self.broadcasts {
+            for ((relay_id, stream_name), broadcast) in &mut self.broadcasts {
                 if relay_id == &relay.dialed_as.relay_id {
-                    broadcast.rewrite_the_catalog_whole();
+                    broadcast.rewrite_the_catalog_whole(relay_id, stream_name);
                 }
             }
         }
@@ -1466,7 +1472,7 @@ mod tests {
             "the entries ride as deltas after the announce's empty snapshot"
         );
 
-        broadcast.rewrite_the_catalog_whole();
+        broadcast.rewrite_the_catalog_whole(&RelayInstanceId("ietf".to_string()), "desk");
         assert_eq!(newest_first_frame(&broadcast), (1, whole_catalog));
     }
 

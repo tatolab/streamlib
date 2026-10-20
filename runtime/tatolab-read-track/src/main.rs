@@ -221,6 +221,16 @@ async fn read_the_tracks_objects(
             ));
         };
         let group_sequence = group.sequence;
+        // A relay on the IETF drafts may hand a late subscriber the group it
+        // joined from the next object on; a dump opens where a decoder can.
+        if dump.objects_written() == 0 && group.index() > 0 {
+            eprintln!(
+                "tatolab-read-track: group {group_sequence} was joined at object {}; its \
+                 objects are skipped for the next group's start",
+                group.index()
+            );
+            continue;
+        }
         let mut starts_group = true;
         while dump.objects_written() < arguments.object_count {
             let object = match group.read_frame().await {
