@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.7](https://github.com/tatolab/streamlib/compare/v0.54.6...v0.54.7) (2026-10-20)
+
+
+### Bug Fixes
+
+* **engine:** a node output frame stays readable by its encoder — the encoder claims it from the read, held slots never shrink the unclaimed window, and the standard ring depth is 3 ([#2883](https://github.com/tatolab/streamlib/issues/2883)) ([c9eb702](https://github.com/tatolab/streamlib/commit/c9eb70280b23a072ecf96bf3f6abc539163d2960))
+
 ## [0.54.6](https://github.com/tatolab/streamlib/compare/v0.54.5...v0.54.6) (2026-10-20)
 
 
