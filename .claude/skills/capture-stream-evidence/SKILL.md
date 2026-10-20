@@ -17,17 +17,19 @@ mkdir -p "$EVIDENCE_DIR"
 (Use a `-before` and an `-after` directory around a change.)
 
 ### 2. Snapshot the live graph
+`graph` renders every node's config, so a stream whose nodes carry secrets (a WHIP or WHEP endpoint carries its key in the URL) never has its graph saved: read it in a pipe (`tatolab graph --stream <stream> | jq '.nodes[] | {name, ports}'`), record what you need by hand, and leave `graph.json` out of the bundle. Any other stream's graph is saved:
 ```bash
 tatolab graph --stream <stream> > "$EVIDENCE_DIR/graph.json"
 ```
-Read the addresses of the ports you want to read out of this snapshot — the `machine`, the `stream`, and each node's `name` and output port (see `inspect-live-graph`). A graph whose nodes carry secrets in their config (WHIP / WHEP endpoints) is never saved — read it in a pipe instead.
+Read the addresses of the ports you want to read out of it — the `machine`, the `stream`, and each node's `name` and output port (see `inspect-live-graph`).
 
 ### 3. Read N objects per port to disk
-Repeat per port, exposing an internal one first (`read-live-track`):
+Repeat per port, exposing an internal one first (`read-live-track`). `RELAY_URL` is the local relay's loopback listener of the runtime the stream runs on: `http://127.0.0.1:4443` for the machine's runtime, the `TATOLAB_TEST_LOCAL_RELAY_LOOPBACK_PORT` its `tatolabd` was given for a runtime of the session's own (`drive-running-stream`):
 ```bash
-target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang <encoder>/encoded_video \
+RELAY_URL=http://127.0.0.1:4443
+target/release/tatolab-read-track "$RELAY_URL" <machine>/<stream>.hang <encoder>/encoded_video \
   --count 30 --out "$EVIDENCE_DIR/track-<encoder>-encoded_video"
-target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang microphonesource/audio \
+target/release/tatolab-read-track "$RELAY_URL" <machine>/<stream>.hang microphonesource/audio \
   --count 30 --out "$EVIDENCE_DIR/track-microphonesource-audio"
 ```
 Each directory holds one file per object, `objects.jsonl` indexing each file with its group and timestamp — an object's size is its file's — and the track's catalog entry. An encoded video track decodes to PNGs with ffmpeg (`verify-live` § Reading pixels); any other holds the records as the node wrote them.
@@ -42,7 +44,7 @@ Reads the records the runtime holds for that loaded stream, by sequence number, 
 ```bash
 ls -l "$EVIDENCE_DIR"
 ```
-You now have `graph.json`, one `track-<node>-<port>/` per port read, and `logs.txt`. Attach them to the PR / issue (upload with the `attach-artifact` skill), or diff a `-before` directory against an `-after` one to show a change's effect.
+You now have `graph.json` (unless the stream carries secrets), one `track-<node>-<port>/` per port read, and `logs.txt`. Attach them to the PR / issue (upload with the `attach-artifact` skill), or diff a `-before` directory against an `-after` one to show a change's effect.
 
 ## Notes
 - Every verb names the stream; there is no runtime to pick — the machine has one.

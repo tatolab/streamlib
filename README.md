@@ -413,10 +413,11 @@ reads its tracks — this repository's `tatolab-read-track` writes a track's obj
 $ cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/main.hang h264encoder/encoded_video --count 30 --out frames/
 ```
 
-An encoded video track's files, concatenated, are an H.264 stream any decoder plays. A port that
-is not exposed is internal to its stream: `tatolab expose main <node> <port>` makes it a track on
-this machine. A raw frame's port carries a GPU surface's id, which means nothing outside the
-runtime, so to see a mid-graph frame, connect an encoder to it and expose the encoder.
+An `H264Encoder`'s track files, concatenated, are an H.264 stream any decoder plays; an
+`H265Encoder`'s are an HEVC one. A port that is not exposed is internal to its stream: `tatolab
+expose main <node> <port>` makes it a track on this machine. A raw frame's port carries a GPU
+surface's id, which means nothing outside the runtime, so to see a mid-graph frame, connect an
+encoder to it and expose the encoder.
 
 <details>
 <summary><b>The same operations speak MCP, so an agent can do this itself</b></summary>

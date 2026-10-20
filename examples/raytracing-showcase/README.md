@@ -262,10 +262,11 @@ cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang
     <encoder>/encoded_video --count 30 --out /tmp/traced
 ```
 
-Swap the port for `rasterized_frame_to_downstream` or
-`split_screen_frame_to_downstream` to see the other two. Reading twice, several
-seconds apart, is also how you check the light is really orbiting rather than
-the picture being static.
+To see the other two, connect an encoder of its own to
+`rasterized_frame_to_downstream` or `split_screen_frame_to_downstream` and read
+that encoder's `encoded_video` the same way; reading either frame port directly
+gives its records, not pictures. Reading twice, several seconds apart, is also
+how you check the light is really orbiting rather than the picture being static.
 
 `graph` renders per-link drop counts under a node's `metrics`, but only for a
 destination that lives in the app process — here, the window. Every Python
