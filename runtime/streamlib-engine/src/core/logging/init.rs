@@ -339,24 +339,39 @@ pub(crate) fn the_engines_configured_tracing_filter() -> EnvFilter {
         .unwrap_or_else(|_| EnvFilter::new(ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES))
 }
 
-/// The crate whose `info`, `debug` and `trace` records print MCP messages
-/// whole — a tool call's arguments, a relay's secret among them — from its
-/// service and from each transport.
-const RMCP_CRATE_TARGET: &str = "rmcp";
+/// The crates whose `info`, `debug` and `trace` records print a secret whole:
+/// `rmcp` each MCP message, a tool call's arguments and a relay's secret among
+/// them; `web_transport_moq` each WebTransport CONNECT request, `tungstenite`
+/// and `tokio_tungstenite` each WebSocket request and URI, and `reqwest` each
+/// redirect, all carrying a relay's dial URL with the token in its path or
+/// query.
+const CRATE_TARGETS_PRINTING_A_SECRET_BELOW_WARN: [&str; 5] = [
+    "rmcp",
+    "web_transport_moq",
+    "tungstenite",
+    "tokio_tungstenite",
+    "reqwest",
+];
 
-/// Whether `target` is the `rmcp` crate's or one of its modules'.
-fn is_an_rmcp_target(target: &str) -> bool {
-    target
-        .strip_prefix(RMCP_CRATE_TARGET)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+/// Whether `target` is one of [`CRATE_TARGETS_PRINTING_A_SECRET_BELOW_WARN`]
+/// or one of its modules'.
+fn is_a_target_printing_a_secret_below_warn(target: &str) -> bool {
+    CRATE_TARGETS_PRINTING_A_SECRET_BELOW_WARN
+        .iter()
+        .any(|crate_target| {
+            target
+                .strip_prefix(crate_target)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+        })
 }
 
-/// Drops every record of the `rmcp` crate below `warn`, whatever `RUST_LOG`
-/// admits, so a secret handed over the local API reaches no log line.
-pub(crate) fn mcp_message_contents_kept_off_the_log() -> FilterFn<fn(&Metadata<'_>) -> bool> {
+/// Drops every record of [`CRATE_TARGETS_PRINTING_A_SECRET_BELOW_WARN`] below
+/// `warn`, whatever `RUST_LOG` admits, so a secret handed over the local API or
+/// carried in a relay's dial URL reaches no log line.
+pub(crate) fn secret_carrying_records_kept_off_the_log() -> FilterFn<fn(&Metadata<'_>) -> bool> {
     filter_fn(|metadata| {
         !(matches!(*metadata.level(), Level::INFO | Level::DEBUG | Level::TRACE)
-            && is_an_rmcp_target(metadata.target()))
+            && is_a_target_printing_a_secret_below_warn(metadata.target()))
     })
 }
 
@@ -412,7 +427,7 @@ fn build_components(
     );
     let subscriber = Registry::default()
         .with(the_engines_configured_tracing_filter())
-        .with(mcp_message_contents_kept_off_the_log())
+        .with(secret_carrying_records_kept_off_the_log())
         .with(layer);
     (worker, Dispatch::new(subscriber))
 }
@@ -431,7 +446,7 @@ fn install_panic_hook(record_queue: &DrainWorkerRecordQueue) {
 }
 
 #[cfg(test)]
-mod mcp_message_contents_tests {
+mod secret_carrying_records_tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
     use tracing_subscriber::layer::Context;
@@ -450,7 +465,7 @@ mod mcp_message_contents_tests {
         }
     }
 
-    fn make_one_event_at_each_level_at_rmcp_targets_and_another_crates() {
+    fn make_one_event_at_each_level_at_secret_printing_targets_and_another_crates() {
         tracing::trace!(target: "rmcp::service", "a message whole");
         tracing::debug!(target: "rmcp::service", "a message whole");
         tracing::trace!(target: "rmcp::transport::streamable_http_server::tower", "a message whole");
@@ -458,27 +473,35 @@ mod mcp_message_contents_tests {
         tracing::debug!(target: "rmcp", "a message whole");
         tracing::info!(target: "rmcp::service", "a notification whole");
         tracing::warn!(target: "rmcp::service", "a service failed");
+        tracing::debug!(target: "web_transport_moq::connect", "a CONNECT request whole");
+        tracing::trace!(target: "tungstenite::handshake::client", "a request whole");
+        tracing::debug!(target: "tokio_tungstenite", "a URI whole");
+        tracing::debug!(target: "reqwest::async_impl::client", "a redirect whole");
+        tracing::warn!(target: "web_transport_moq::session", "a session failed");
         tracing::debug!(target: "rmcpx", "another crate");
+        tracing::debug!(target: "web_transport_moqx", "another crate");
     }
 
     #[test]
-    fn rmcp_reaches_the_log_at_warn_alone_even_where_rust_log_admits_trace() {
+    fn a_secret_printing_crate_reaches_the_log_at_warn_alone_even_where_rust_log_admits_trace() {
         let captured = CapturedEventTargets::default();
         let subscriber = Registry::default()
             .with(EnvFilter::new("trace"))
-            .with(mcp_message_contents_kept_off_the_log())
+            .with(secret_carrying_records_kept_off_the_log())
             .with(captured.clone());
         tracing::subscriber::with_default(subscriber, || {
-            make_one_event_at_each_level_at_rmcp_targets_and_another_crates();
+            make_one_event_at_each_level_at_secret_printing_targets_and_another_crates();
             tracing::callsite::rebuild_interest_cache();
             captured.0.lock().unwrap().clear();
-            make_one_event_at_each_level_at_rmcp_targets_and_another_crates();
+            make_one_event_at_each_level_at_secret_printing_targets_and_another_crates();
         });
         assert_eq!(
             *captured.0.lock().unwrap(),
             [
                 ("rmcp::service".to_string(), Level::WARN),
+                ("web_transport_moq::session".to_string(), Level::WARN),
                 ("rmcpx".to_string(), Level::DEBUG),
+                ("web_transport_moqx".to_string(), Level::DEBUG),
             ]
         );
     }
