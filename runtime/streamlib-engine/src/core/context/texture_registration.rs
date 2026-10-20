@@ -97,6 +97,21 @@ impl TextureRegistration {
         unsafe { &*(self.handle as *const TextureRegistrationInner) }
     }
 
+    /// How many shares of this registration exist — the texture cache's and
+    /// every resolver's.
+    ///
+    /// Engine-internal — a lease-aware pool reads it to tell whether a holder
+    /// in this process still has the slot.
+    pub(crate) fn strong_count(&self) -> usize {
+        // SAFETY: `handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`
+        // (see `from_arc_into_raw`), its count held until Drop.
+        unsafe {
+            crate::core::rhi::leaked_arc_strong_count::strong_count_of_leaked_arc::<
+                TextureRegistrationInner,
+            >(self.handle)
+        }
+    }
+
     /// Borrow the underlying texture. The returned reference is valid
     /// for the lifetime of `self` — the `Arc` keeps the inner alive.
     pub fn texture(&self) -> &Texture {

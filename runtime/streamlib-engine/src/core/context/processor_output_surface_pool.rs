@@ -11,8 +11,8 @@
 
 use super::SurfaceCheckOutLeaseRegistry;
 use super::lease_aware_pool_slot_ring::{
-    LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
-    LeaseAwarePoolSlotRing,
+    ANY_ONE_UNHELD_SLOT_IS_REUSABLE, LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot,
+    LeaseAwarePoolSlotResource, LeaseAwarePoolSlotRing,
 };
 use crate::core::{Error, Result};
 
@@ -25,8 +25,8 @@ pub(crate) const PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY: usize = 16;
 pub(crate) enum ProcessorOutputSurfacePoolHandOff<'pool, Resource> {
     /// An unheld slot, republished under a freshly minted generation.
     ReusedSlot(&'pool LeaseAwarePoolSlot<Resource>),
-    /// Every slot is held or the pool is short of its rotation depth: the
-    /// caller allocates one and hands it to
+    /// Fewer than the rotation depth's slots are unheld: the caller
+    /// allocates one and hands it to
     /// [`ProcessorOutputSurfacePool::hand_off_a_fresh_slot`].
     NeedsAFreshSlot,
 }
@@ -64,10 +64,13 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
     /// one: an unheld slot republished under a freshly minted
     /// `<slot>#<generation>`.
     ///
-    /// The pool first grows to `rotation_depth` slots, so an unheld frame
-    /// stays resolvable for that many publishes behind the newest. Past that it
-    /// reuses the next slot nobody holds, asks for a fresh slot when every slot
-    /// is held, and refuses at [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`].
+    /// The pool keeps `rotation_depth` slots nobody holds, so a frame nobody
+    /// claimed stays resolvable for that many publishes behind the newest
+    /// however many frames consumers hold. It reuses the unheld slot published
+    /// longest ago while that many are unheld and otherwise asks for a fresh
+    /// slot; at
+    /// [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`] it reuses any unheld slot,
+    /// and refuses when none is.
     pub(crate) fn hand_off_a_reusable_frame(
         &mut self,
         rotation_depth: usize,
@@ -83,16 +86,24 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
             )));
         }
         let slot_count = self.ring.slot_count();
+        let pool_is_at_its_cap = slot_count >= PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
+        let unheld_slots_a_reuse_needs = if pool_is_at_its_cap {
+            ANY_ONE_UNHELD_SLOT_IS_REUSABLE
+        } else {
+            rotation_depth
+        };
         if slot_count >= rotation_depth
-            && let Some(slot_index) = self
-                .ring
-                .hand_off_a_reusable_slot(check_out_leases, minted_frame_generations)
+            && let Some(slot_index) = self.ring.hand_off_a_reusable_slot(
+                unheld_slots_a_reuse_needs,
+                check_out_leases,
+                minted_frame_generations,
+            )
         {
             return Ok(ProcessorOutputSurfacePoolHandOff::ReusedSlot(
                 self.ring.slot(slot_index),
             ));
         }
-        if slot_count >= PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
+        if pool_is_at_its_cap {
             return Err(self.every_slot_in_use_refusal());
         }
         Ok(ProcessorOutputSurfacePoolHandOff::NeedsAFreshSlot)

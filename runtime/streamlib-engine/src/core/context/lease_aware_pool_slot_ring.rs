@@ -13,11 +13,15 @@
 //! business; the ring decides only reuse.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use super::{SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseRegistry};
 use crate::core::rhi::published_frame_id_of_pool_slot;
 use crate::core::{Error, Result};
+
+/// The `unheld_slots_a_reuse_needs` of a ring that reuses any slot nobody
+/// holds.
+pub(crate) const ANY_ONE_UNHELD_SLOT_IS_REUSABLE: usize = 1;
 
 /// What a lease-aware ring needs to know about one slot's resource.
 pub(crate) trait LeaseAwarePoolSlotResource {
@@ -27,6 +31,12 @@ pub(crate) trait LeaseAwarePoolSlotResource {
     /// Whether the platform itself reports the resource in use by some process
     /// — a signal that holds a slot even where no checkout lease was taken.
     fn is_in_use_per_the_platform(&self) -> bool {
+        false
+    }
+
+    /// Whether the resource is flagged to be freed once unheld, so a hand-off
+    /// reuses it only when no other unheld slot is left.
+    fn is_flagged_freed_as_soon_as_unheld(&self) -> bool {
         false
     }
 }
@@ -39,6 +49,9 @@ pub(crate) struct LeaseAwarePoolSlot<Resource> {
     /// The generation of the id the most recent hand-off published; 0 before
     /// the first.
     published_frame_generation: u64,
+    /// Where the most recent hand-off falls in its ring's hand-offs; 0 before
+    /// the first, so a slot never published is the oldest.
+    ring_hand_off_order: u64,
 }
 
 impl<Resource> LeaseAwarePoolSlot<Resource> {
@@ -112,11 +125,17 @@ pub(crate) struct LeaseAwarePoolMintedFrameGenerations {
 }
 
 impl LeaseAwarePoolMintedFrameGenerations {
-    fn record<Resource>(&self, slot: &LeaseAwarePoolSlot<Resource>) {
-        self.minted_frame_generation_by_pool_slot
-            .lock()
-            .unwrap()
-            .insert(slot.pool_slot_key.clone(), slot.published_frame_generation);
+    /// The index held across one availability test and the publish or retire
+    /// it decides.
+    pub(crate) fn held_for_a_hand_off(
+        &self,
+    ) -> LeaseAwarePoolMintedFrameGenerationsHeldForAHandOff<'_> {
+        LeaseAwarePoolMintedFrameGenerationsHeldForAHandOff {
+            minted_frame_generation_by_pool_slot: self
+                .minted_frame_generation_by_pool_slot
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        }
     }
 
     /// The generation most recently minted over `pool_slot_key`, if a
@@ -124,25 +143,9 @@ impl LeaseAwarePoolMintedFrameGenerations {
     pub(crate) fn minted_frame_generation_of_slot(&self, pool_slot_key: &str) -> Option<u64> {
         self.minted_frame_generation_by_pool_slot
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .get(pool_slot_key)
             .copied()
-    }
-
-    /// Retire every frame `pool_slot_key` has published by recording a
-    /// generation none of them carries — for a slot leaving its ring.
-    pub(crate) fn retire_every_published_frame_of_slot(
-        &self,
-        pool_slot_key: &str,
-        generation_past_every_published_frame: u64,
-    ) {
-        self.minted_frame_generation_by_pool_slot
-            .lock()
-            .unwrap()
-            .insert(
-                pool_slot_key.to_string(),
-                generation_past_every_published_frame,
-            );
     }
 
     /// Drop the record of a slot whose resource is gone. A slot freed out of
@@ -151,7 +154,7 @@ impl LeaseAwarePoolMintedFrameGenerations {
     pub(crate) fn forget_slot(&self, pool_slot_key: &str) {
         self.minted_frame_generation_by_pool_slot
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .remove(pool_slot_key);
     }
 
@@ -175,6 +178,37 @@ impl LeaseAwarePoolMintedFrameGenerations {
                 current_generation: minted,
             })
         })
+    }
+}
+
+/// The minted-generation index held from an availability test through the
+/// publish or retire it decides.
+///
+/// A claim takes its share of a slot's backing and then checks the frame's
+/// generation under this same lock, so the check lands wholly before the test
+/// — which then sees the share and keeps the slot — or wholly after the
+/// publish, and refuses the retired id.
+pub(crate) struct LeaseAwarePoolMintedFrameGenerationsHeldForAHandOff<'index> {
+    minted_frame_generation_by_pool_slot: MutexGuard<'index, HashMap<String, u64>>,
+}
+
+impl LeaseAwarePoolMintedFrameGenerationsHeldForAHandOff<'_> {
+    fn record<Resource>(&mut self, slot: &LeaseAwarePoolSlot<Resource>) {
+        self.minted_frame_generation_by_pool_slot
+            .insert(slot.pool_slot_key.clone(), slot.published_frame_generation);
+    }
+
+    /// Retire every frame `pool_slot_key` has published by recording a
+    /// generation none of them carries — for a slot leaving its ring.
+    pub(crate) fn retire_every_published_frame_of_slot(
+        &mut self,
+        pool_slot_key: &str,
+        generation_past_every_published_frame: u64,
+    ) {
+        self.minted_frame_generation_by_pool_slot.insert(
+            pool_slot_key.to_string(),
+            generation_past_every_published_frame,
+        );
     }
 }
 
@@ -258,7 +292,7 @@ impl<'leases> PoolSlotReuse<'leases> {
     pub(crate) fn retire_every_frame_a_slot_being_freed_published<Resource>(
         &mut self,
         slot: &LeaseAwarePoolSlot<Resource>,
-        minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
+        minted_frame_generations: &mut LeaseAwarePoolMintedFrameGenerationsHeldForAHandOff<'_>,
     ) {
         let generation_past_every_published_frame = slot.published_frame_generation + 1;
         self.publish_frame_generation(&slot.pool_slot_key, generation_past_every_published_frame);
@@ -269,18 +303,18 @@ impl<'leases> PoolSlotReuse<'leases> {
     }
 }
 
-/// The slots one producer (or one pool key) publishes frames from, handed out
-/// in ring order with held slots skipped.
+/// The slots one producer (or one pool key) publishes frames from, the unheld
+/// one published longest ago handed out next.
 pub(crate) struct LeaseAwarePoolSlotRing<Resource> {
     slots: Vec<LeaseAwarePoolSlot<Resource>>,
-    next_slot_index: usize,
+    hand_offs_so_far: u64,
 }
 
 impl<Resource> Default for LeaseAwarePoolSlotRing<Resource> {
     fn default() -> Self {
         Self {
             slots: Vec::new(),
-            next_slot_index: 0,
+            hand_offs_so_far: 0,
         }
     }
 }
@@ -312,24 +346,18 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
             pool_slot_key,
             resource,
             published_frame_generation: 0,
+            ring_hand_off_order: 0,
         });
         self.slots.len() - 1
     }
 
     /// Take one slot out of the ring, its published generation with it; the
-    /// slots left keep their ring order.
+    /// slots left keep their generations and hand-off order.
     pub(crate) fn take_out_the_slot_at(
         &mut self,
         slot_index: usize,
     ) -> LeaseAwarePoolSlot<Resource> {
-        let taken_out = self.slots.remove(slot_index);
-        if slot_index < self.next_slot_index {
-            self.next_slot_index -= 1;
-        }
-        if self.next_slot_index >= self.slots.len() {
-            self.next_slot_index = 0;
-        }
-        taken_out
+        self.slots.remove(slot_index)
     }
 
     /// Add a slot another ring published from, keeping its generation, so its
@@ -337,43 +365,60 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
     /// index.
     pub(crate) fn push_a_slot_keeping_its_published_frame_generation(
         &mut self,
-        slot: LeaseAwarePoolSlot<Resource>,
+        mut slot: LeaseAwarePoolSlot<Resource>,
     ) -> usize {
+        slot.ring_hand_off_order = self.next_ring_hand_off_order();
         self.slots.push(slot);
         self.slots.len() - 1
     }
 
-    /// Hand out the next slot in ring order that nobody holds, minting and
-    /// publishing its next generation; `None` when every slot is held.
+    /// Hand out the unheld slot whose frame was published longest ago — one
+    /// flagged to be freed only when no other is unheld — minting and
+    /// publishing its next generation; `None` when fewer than
+    /// `unheld_slots_a_reuse_needs` slots are unheld.
     ///
-    /// The whole scan and the retire step run under one hold of the lease
-    /// table, so a checkout lands strictly before the test or strictly after
-    /// the retire, never between them where it would lease a frame already
-    /// promised back to the producer.
+    /// The whole scan and the publish run under one hold of the lease table
+    /// and of the minted-generation index, so a checkout or a claim lands
+    /// strictly before the test or strictly after the publish, never between
+    /// them where it would hold a frame already promised back to the producer.
     pub(crate) fn hand_off_a_reusable_slot(
         &mut self,
+        unheld_slots_a_reuse_needs: usize,
         check_out_leases: Option<&SurfaceCheckOutLeaseRegistry>,
         minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
     ) -> Option<usize> {
-        let slot_count = self.slots.len();
-        if slot_count == 0 {
+        let mut reuse = PoolSlotReuse::over(check_out_leases);
+        let mut minted_frame_generations_held = minted_frame_generations.held_for_a_hand_off();
+        let mut slot_indices_oldest_hand_off_first: Vec<usize> = (0..self.slots.len()).collect();
+        slot_indices_oldest_hand_off_first.sort_by_key(|&slot_index| {
+            let slot = &self.slots[slot_index];
+            (
+                slot.resource.is_flagged_freed_as_soon_as_unheld(),
+                slot.ring_hand_off_order,
+            )
+        });
+        let mut unheld_slot_indices_oldest_first = slot_indices_oldest_hand_off_first
+            .into_iter()
+            .filter(|&slot_index| self.slots[slot_index].is_unheld(&reuse))
+            .take(unheld_slots_a_reuse_needs.max(1));
+        let oldest_unheld_slot_index = unheld_slot_indices_oldest_first.next()?;
+        let unheld_slot_count = 1 + unheld_slot_indices_oldest_first.count();
+        if unheld_slot_count < unheld_slots_a_reuse_needs {
             return None;
         }
-        let mut reuse = PoolSlotReuse::over(check_out_leases);
-        for _ in 0..slot_count {
-            let slot_index = self.next_slot_index % slot_count;
-            self.next_slot_index = (self.next_slot_index + 1) % slot_count;
 
-            let slot = &mut self.slots[slot_index];
-            if !slot.is_unheld(&reuse) {
-                continue;
-            }
-            let frame_generation = slot.mint_next_frame_generation();
-            reuse.publish_frame_generation(&slot.pool_slot_key, frame_generation);
-            minted_frame_generations.record(slot);
-            return Some(slot_index);
-        }
-        None
+        let ring_hand_off_order = self.next_ring_hand_off_order();
+        let slot = &mut self.slots[oldest_unheld_slot_index];
+        slot.ring_hand_off_order = ring_hand_off_order;
+        let frame_generation = slot.mint_next_frame_generation();
+        reuse.publish_frame_generation(&slot.pool_slot_key, frame_generation);
+        minted_frame_generations_held.record(slot);
+        Some(oldest_unheld_slot_index)
+    }
+
+    fn next_ring_hand_off_order(&mut self) -> u64 {
+        self.hand_offs_so_far += 1;
+        self.hand_offs_so_far
     }
 
     /// Every slot, for bookkeeping the ring does not read.
@@ -393,6 +438,7 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
         mut choose: impl FnMut(&mut LeaseAwarePoolSlot<Resource>, bool) -> bool,
     ) -> Vec<LeaseAwarePoolSlot<Resource>> {
+        let mut minted_frame_generations_held = minted_frame_generations.held_for_a_hand_off();
         let mut chosen_slot_indices = Vec::new();
         for slot_index in slot_indices_to_observe {
             let slot = &mut self.slots[slot_index];
@@ -408,7 +454,7 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
                 let slot = self.take_out_the_slot_at(slot_index);
                 cross_process_holders.retire_every_frame_a_slot_being_freed_published(
                     &slot,
-                    minted_frame_generations,
+                    &mut minted_frame_generations_held,
                 );
                 slot
             })
@@ -430,9 +476,11 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
         check_out_leases: Option<&SurfaceCheckOutLeaseRegistry>,
         minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
     ) {
+        let ring_hand_off_order = self.next_ring_hand_off_order();
         let slot = &mut self.slots[slot_index];
+        slot.ring_hand_off_order = ring_hand_off_order;
         let frame_generation = slot.mint_next_frame_generation();
-        minted_frame_generations.record(slot);
+        minted_frame_generations.held_for_a_hand_off().record(slot);
         if let Some(leases) = check_out_leases
             && let Err(unpublishable) =
                 leases.publish_frame_generation(&slot.pool_slot_key, frame_generation)

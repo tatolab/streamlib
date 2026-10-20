@@ -46,8 +46,8 @@ impl RhiBlitter for NoOpBlitter {
 }
 
 use super::lease_aware_pool_slot_ring::{
-    LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
-    LeaseAwarePoolSlotRing, PoolSlotReuse,
+    ANY_ONE_UNHELD_SLOT_IS_REUSABLE, LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot,
+    LeaseAwarePoolSlotResource, LeaseAwarePoolSlotRing, PoolSlotReuse,
 };
 use super::shared_pool_entry_freeing::{
     LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
@@ -91,6 +91,10 @@ impl LeaseAwarePoolSlotResource for PixelBufferPoolSlot {
     /// that is a live reader.
     fn is_held_in_this_process(&self) -> bool {
         self.buffer.strong_count() > 2
+    }
+
+    fn is_flagged_freed_as_soon_as_unheld(&self) -> bool {
+        self.freeing_record.is_flagged_freed_as_soon_as_unheld()
     }
 
     /// Whether the kernel reports the slot's IOSurface in use by any
@@ -387,10 +391,11 @@ impl PixelBufferPoolManager {
         // `docs/decisions/surface-id-lifetime-contract.md` — and on macOS also
         // the kernel's own in-use answer for the slot's IOSurface.
         let check_out_leases = surface_store.and_then(SurfaceStore::check_out_lease_registry);
-        if let Some(slot_index) = ring_pool
-            .ring
-            .hand_off_a_reusable_slot(check_out_leases, &self.minted_frame_generations)
-        {
+        if let Some(slot_index) = ring_pool.ring.hand_off_a_reusable_slot(
+            ANY_ONE_UNHELD_SLOT_IS_REUSABLE,
+            check_out_leases,
+            &self.minted_frame_generations,
+        ) {
             let handed_off_slot = ring_pool.ring.slot_mut(slot_index);
             handed_off_slot
                 .resource_mut()
@@ -476,10 +481,11 @@ impl PixelBufferPoolManager {
         let surface_store = self.engines_own_surface_store.get();
         let ring_pool = self.ring_pool_for_shape(pools, shape, surface_store, acquiring_stream)?;
         let check_out_leases = surface_store.and_then(SurfaceStore::check_out_lease_registry);
-        let lent_slot_index = match ring_pool
-            .ring
-            .hand_off_a_reusable_slot(check_out_leases, &self.minted_frame_generations)
-        {
+        let lent_slot_index = match ring_pool.ring.hand_off_a_reusable_slot(
+            ANY_ONE_UNHELD_SLOT_IS_REUSABLE,
+            check_out_leases,
+            &self.minted_frame_generations,
+        ) {
             Some(reused_slot_index) => reused_slot_index,
             None => {
                 let fresh_slot_index = Self::allocate_and_register_one_more_slot(
@@ -553,14 +559,22 @@ impl PixelBufferPoolManager {
         let mut slots_taken_out = Vec::new();
         for mut lent_slot in lent_slots {
             ring_pool.note_a_lent_slot_came_back(shape);
-            let is_unheld = lent_slot.is_unheld(&cross_process_holders);
-            let freeing_record = &mut lent_slot.resource_mut().freeing_record;
-            freeing_record.flag_freed_as_soon_as_unheld();
-            if scan.observe(freeing_record, is_unheld) {
-                cross_process_holders.retire_every_frame_a_slot_being_freed_published(
-                    &lent_slot,
-                    &self.minted_frame_generations,
-                );
+            let lent_slot_is_freed = {
+                let mut minted_frame_generations_held =
+                    self.minted_frame_generations.held_for_a_hand_off();
+                let is_unheld = lent_slot.is_unheld(&cross_process_holders);
+                let freeing_record = &mut lent_slot.resource_mut().freeing_record;
+                freeing_record.flag_freed_as_soon_as_unheld();
+                let is_due_to_be_freed = scan.observe(freeing_record, is_unheld);
+                if is_due_to_be_freed {
+                    cross_process_holders.retire_every_frame_a_slot_being_freed_published(
+                        &lent_slot,
+                        &mut minted_frame_generations_held,
+                    );
+                }
+                is_due_to_be_freed
+            };
+            if lent_slot_is_freed {
                 slots_taken_out.push(self.forget_the_slot_in_its_rings_allocator_and_every_cache(
                     &mut ring_pool.pool,
                     lent_slot,

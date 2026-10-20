@@ -45,7 +45,7 @@ fn next_published_id(
     leases: Option<&SurfaceCheckOutLeaseRegistry>,
     minted: &LeaseAwarePoolMintedFrameGenerations,
 ) -> Option<String> {
-    ring.hand_off_a_reusable_slot(leases, minted)
+    ring.hand_off_a_reusable_slot(ANY_ONE_UNHELD_SLOT_IS_REUSABLE, leases, minted)
         .map(|slot_index| ring.slot(slot_index).currently_published_frame_id())
 }
 
@@ -359,4 +359,52 @@ fn only_the_slots_in_the_range_observed_are_shown_or_taken_out() {
         .map(|slot| slot.pool_slot_key().to_string())
         .collect();
     assert_eq!(slots_left, ["slot-a", "slot-d"]);
+}
+
+/// A never-held slot resource the test flags, or not, to be freed.
+struct SlotResourceTheTestFlagsToBeFreed {
+    flagged_freed_as_soon_as_unheld: bool,
+}
+
+impl LeaseAwarePoolSlotResource for SlotResourceTheTestFlagsToBeFreed {
+    fn is_held_in_this_process(&self) -> bool {
+        false
+    }
+
+    fn is_flagged_freed_as_soon_as_unheld(&self) -> bool {
+        self.flagged_freed_as_soon_as_unheld
+    }
+}
+
+#[test]
+fn a_slot_flagged_to_be_freed_is_reused_only_once_no_other_slot_is_unheld() {
+    let mut ring = LeaseAwarePoolSlotRing::default();
+    ring.push_fresh_slot(
+        "slot-flagged".to_string(),
+        SlotResourceTheTestFlagsToBeFreed {
+            flagged_freed_as_soon_as_unheld: true,
+        },
+    );
+    let unflagged_slot_index = ring.push_fresh_slot(
+        "slot-unflagged".to_string(),
+        SlotResourceTheTestFlagsToBeFreed {
+            flagged_freed_as_soon_as_unheld: false,
+        },
+    );
+    let minted = LeaseAwarePoolMintedFrameGenerations::default();
+    let mut next_published = |ring: &mut LeaseAwarePoolSlotRing<_>| {
+        let slot_index = ring
+            .hand_off_a_reusable_slot(ANY_ONE_UNHELD_SLOT_IS_REUSABLE, None, &minted)
+            .expect("an unheld slot is handed out");
+        ring.slot(slot_index).currently_published_frame_id()
+    };
+
+    let while_another_is_unheld = [next_published(&mut ring), next_published(&mut ring)];
+    assert_eq!(
+        while_another_is_unheld,
+        ["slot-unflagged#1", "slot-unflagged#2"]
+    );
+
+    ring.take_out_the_slot_at(unflagged_slot_index);
+    assert_eq!(next_published(&mut ring), "slot-flagged#1");
 }

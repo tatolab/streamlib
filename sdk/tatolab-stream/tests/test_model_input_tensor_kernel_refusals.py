@@ -25,6 +25,7 @@ from tatolab.stream import (
     ModelInputTensorGeometry,
     ModelInputTensorKernel,
 )
+from tatolab.stream.node_output_texture_ring import STANDARD_RING_DEPTH
 
 
 class ComputeKernelStandIn:
@@ -248,7 +249,7 @@ def test_the_tensor_comes_from_the_kernels_output_pool_in_its_layout(
 ) -> None:
     kernel, _ = compiled(layout=layout, dtype=dtype)
     _, gpu = apply(kernel)
-    assert gpu.tensor_requests == [(2, expected_shape, dtype)]
+    assert gpu.tensor_requests == [(STANDARD_RING_DEPTH, expected_shape, dtype)]
 
 
 @pytest.mark.parametrize("parameters", [{"width": 640}, {"height": 640}])

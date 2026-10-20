@@ -2229,6 +2229,7 @@ fn a_retired_tensor_frame_id_is_refused_and_writes_nothing() {
     sandbox
         .host_inner()
         .lease_aware_pool_minted_frame_generations()
+        .held_for_a_hand_off()
         .retire_every_published_frame_of_slot(&pool_slot, 7);
 
     let message = refusal_message(write_index_pattern_into(

@@ -22,6 +22,7 @@ pub(crate) mod shared_pool_entry_freeing;
 pub(crate) mod silent_null_audio_device_backend;
 pub(crate) mod surface_backing_resolution;
 pub(crate) mod surface_check_out_lease_registry;
+mod surface_claimed_against_producer_reuse;
 #[cfg(target_os = "linux")]
 pub(crate) mod surface_export_staging;
 pub(crate) mod surface_share_wire_verbs;
@@ -83,6 +84,7 @@ pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };
+pub use surface_claimed_against_producer_reuse::SurfaceClaimedAgainstProducerReuse;
 #[cfg(target_os = "linux")]
 pub use surface_export_staging::{SurfaceExportStaging, SurfaceExportStagingResidency};
 pub(crate) use surface_share_wire_verbs::SurfaceShareRegistrationsByRuntime;

@@ -16,6 +16,7 @@ mod graphics_kernel;
 mod host_timeline_semaphore;
 mod index_buffer;
 mod kernel_binding_names;
+pub(crate) mod leaked_arc_strong_count;
 mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;

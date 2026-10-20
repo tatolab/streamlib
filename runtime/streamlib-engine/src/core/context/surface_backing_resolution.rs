@@ -120,6 +120,22 @@ impl GpuContext {
         }
     }
 
+    /// The backing this process itself holds for `surface_id`, with no
+    /// surface-share round trip: the pooled member first, then the producer's
+    /// registered texture — a pool member is the frame, a registered texture
+    /// may be a producer's frames-in-flight transient.
+    pub(crate) fn same_process_backing_of_surface(
+        &self,
+        surface_id: &str,
+    ) -> Option<ResolvedSurfaceBacking> {
+        self.pooled_backing_held_in_this_process(surface_id)
+            .map(ResolvedSurfaceBacking::PixelBuffer)
+            .or_else(|| {
+                self.producer_registered_texture_for_surface_id(surface_id)
+                    .map(ResolvedSurfaceBacking::RegisteredTexture)
+            })
+    }
+
     /// Resolve the current blit source for `surface_id` — the surface's
     /// pooled backing whenever it has one, the registered texture only
     /// for surfaces that have none.
@@ -141,11 +157,8 @@ impl GpuContext {
         &self,
         surface_id: &str,
     ) -> Result<ResolvedSurfaceBacking> {
-        if let Some(pixel_buffer) = self.pooled_backing_held_in_this_process(surface_id) {
-            return Ok(ResolvedSurfaceBacking::PixelBuffer(pixel_buffer));
-        }
-        if let Some(registration) = self.producer_registered_texture_for_surface_id(surface_id) {
-            return Ok(ResolvedSurfaceBacking::RegisteredTexture(registration));
+        if let Some(same_process_backing) = self.same_process_backing_of_surface(surface_id) {
+            return Ok(same_process_backing);
         }
         match self.resolve_pixel_buffer_by_surface_id(surface_id) {
             Ok(pixel_buffer) => Ok(ResolvedSurfaceBacking::PixelBuffer(pixel_buffer)),

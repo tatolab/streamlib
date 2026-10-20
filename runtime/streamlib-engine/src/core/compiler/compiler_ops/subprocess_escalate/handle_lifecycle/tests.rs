@@ -473,6 +473,127 @@ fn a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it()
     assert!(refusal.contains("torn down"), "got: {refusal}");
 }
 
+/// A consumer in the parent holding a frame's resolved texture registration —
+/// what an encoder or a kernel binding resolves — holds its slot: the producer
+/// is handed another slot while it is held and the frame's id stays live.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_resolved_texture_registration_holds_its_processor_output_slot_until_dropped() {
+    use uuid::Uuid;
+
+    use super::release_processor_output_pool_slot;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::pool_slot_key_of_surface_id;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let pool_key = format!(
+        "resolved-registration-hold-test-{}",
+        Uuid::new_v4().simple()
+    );
+    let next_frame = || {
+        next_processor_output_frame_over_the_escalate_op(&sandbox, &registry, &pool_key, 1)
+            .expect("the pool hands out a frame")
+    };
+
+    let held_frame = next_frame();
+    let held_registration = sandbox
+        .resolve_texture_registration_by_surface_id(&held_frame, None, 64, 32)
+        .expect("the published frame resolves");
+
+    let published_while_held = next_frame();
+    assert_ne!(
+        pool_slot_key_of_surface_id(&published_while_held),
+        pool_slot_key_of_surface_id(&held_frame),
+        "the slot of a frame whose registration is held was rehanded"
+    );
+    sandbox
+        .host_inner()
+        .refuse_a_retired_frame_id(&held_frame)
+        .expect("a held frame's id stays live");
+
+    drop(held_registration);
+    let published_once_released = [next_frame(), next_frame()];
+    assert!(
+        published_once_released.iter().any(|published| {
+            pool_slot_key_of_surface_id(published) == pool_slot_key_of_surface_id(&held_frame)
+        }),
+        "a released slot returns to the rotation: {published_once_released:?}"
+    );
+
+    for released_slot in registry.processor_output_pools().drain_slots() {
+        release_processor_output_pool_slot(&sandbox, released_slot);
+    }
+}
+
+/// A native consumer's claim on a node output frame holds its slot until the
+/// claim drops, and a claim on a frame its pool already retired is refused as
+/// recycled.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_claim_holds_its_node_output_frame_until_dropped_and_a_retired_frame_is_refused() {
+    use uuid::Uuid;
+
+    use super::release_processor_output_pool_slot;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::pool_slot_key_of_surface_id;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let pool_key = format!("native-claim-test-{}", Uuid::new_v4().simple());
+    let next_frame = || {
+        next_processor_output_frame_over_the_escalate_op(&sandbox, &registry, &pool_key, 1)
+            .expect("the pool hands out a frame")
+    };
+
+    let claimed_frame = next_frame();
+    let claim = sandbox
+        .claim_surface_against_producer_reuse(&claimed_frame)
+        .expect("a current frame is claimable");
+    let published_while_claimed = next_frame();
+    assert_ne!(
+        pool_slot_key_of_surface_id(&published_while_claimed),
+        pool_slot_key_of_surface_id(&claimed_frame),
+        "the slot of a claimed frame was rehanded"
+    );
+    sandbox
+        .host_inner()
+        .refuse_a_retired_frame_id(&claimed_frame)
+        .expect("a claimed frame's id stays live");
+    drop(claim);
+
+    let unclaimed_frame = published_while_claimed;
+    let _ = [next_frame(), next_frame()];
+    let refusal = sandbox
+        .claim_surface_against_producer_reuse(&unclaimed_frame)
+        .err()
+        .expect("a frame its pool retired is not claimable");
+    assert!(
+        matches!(refusal, crate::core::Error::SurfaceFrameRecycled { .. }),
+        "got: {refusal}"
+    );
+
+    for released_slot in registry.processor_output_pools().drain_slots() {
+        release_processor_output_pool_slot(&sandbox, released_slot);
+    }
+}
+
 /// A slot allocated while the helper's teardown drained its pools is handed
 /// back for release rather than added to a pool nothing drains again.
 #[cfg(any(target_os = "linux", target_os = "macos"))]

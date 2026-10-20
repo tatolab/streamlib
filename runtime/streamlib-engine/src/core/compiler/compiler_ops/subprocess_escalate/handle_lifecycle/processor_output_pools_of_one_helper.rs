@@ -15,7 +15,9 @@ use crate::core::context::processor_output_surface_pool::{
     ProcessorOutputSurfacePool, ProcessorOutputSurfacePoolHandOff,
     ProcessorOutputSurfacePoolRefusedFreshSlot,
 };
-use crate::core::context::{GpuContext, SurfaceCheckOutLeaseRegistry, SurfaceStore};
+use crate::core::context::{
+    GpuContext, SurfaceCheckOutLeaseRegistry, SurfaceStore, TextureRegistration,
+};
 use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
 
@@ -44,6 +46,31 @@ pub(crate) struct ProcessorOutputPoolSlot {
     /// The resource's handle count once allocation and registration settled —
     /// every share the engine itself keeps. A count above it is a reader.
     strong_count_with_no_holder: usize,
+    /// A texture slot's registration in the parent's texture cache, which a
+    /// consumer in the parent resolves the slot to a share of.
+    texture_cache_registration: Option<TextureCacheRegistrationOfAPoolSlot>,
+}
+
+/// A texture slot's registration in the parent's texture cache, and its handle
+/// count with no reader.
+struct TextureCacheRegistrationOfAPoolSlot {
+    registration: TextureRegistration,
+    strong_count_with_no_holder: usize,
+}
+
+impl TextureCacheRegistrationOfAPoolSlot {
+    fn of_the_slot(host: &GpuContext, pool_slot_key: &str) -> Option<Self> {
+        let registration = host.producer_registered_texture_for_surface_id(pool_slot_key)?;
+        let strong_count_with_no_holder = registration.strong_count();
+        Some(Self {
+            registration,
+            strong_count_with_no_holder,
+        })
+    }
+
+    fn is_held_by_a_reader(&self) -> bool {
+        self.registration.strong_count() > self.strong_count_with_no_holder
+    }
 }
 
 /// The handle count of a pooled resource's host `Arc`; `None` for any kind of
@@ -61,6 +88,10 @@ impl LeaseAwarePoolSlotResource for ProcessorOutputPoolSlot {
     fn is_held_in_this_process(&self) -> bool {
         pooled_resource_strong_count(&self.registered_handle)
             .is_some_and(|strong_count| strong_count > self.strong_count_with_no_holder)
+            || self
+                .texture_cache_registration
+                .as_ref()
+                .is_some_and(TextureCacheRegistrationOfAPoolSlot::is_held_by_a_reader)
     }
 }
 
@@ -183,6 +214,8 @@ impl ProcessorOutputPoolsOfOneHelper {
             ));
             return refused(refusal, pool_slot_key, registered_handle);
         };
+        let texture_cache_registration =
+            TextureCacheRegistrationOfAPoolSlot::of_the_slot(host, &pool_slot_key);
         let surface_store = host.surface_store();
         self.replace_the_pool_if_its_descriptor_changed(pool_key, descriptor);
         match self.pool_under(pool_key, descriptor).hand_off_a_fresh_slot(
@@ -190,6 +223,7 @@ impl ProcessorOutputPoolsOfOneHelper {
             ProcessorOutputPoolSlot {
                 registered_handle,
                 strong_count_with_no_holder,
+                texture_cache_registration,
             },
             surface_store
                 .as_ref()
@@ -266,6 +300,7 @@ impl ProcessorOutputPoolsOfOneHelper {
                 // An unreadable lease table proves no slot free; keep them all.
                 Some(None) => return Vec::new(),
             };
+        let mut minted_frame_generations_held = minted_frame_generations.held_for_a_hand_off();
         let (unheld_slots, still_held_slots): (Vec<_>, Vec<_>) =
             std::mem::take(&mut self.retiring_slots)
                 .into_iter()
@@ -284,7 +319,7 @@ impl ProcessorOutputPoolsOfOneHelper {
                     generation_past_every_published_frame,
                 );
             }
-            minted_frame_generations.retire_every_published_frame_of_slot(
+            minted_frame_generations_held.retire_every_published_frame_of_slot(
                 slot.pool_slot_key(),
                 generation_past_every_published_frame,
             );
