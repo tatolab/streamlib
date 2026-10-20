@@ -174,7 +174,7 @@ pub(crate) mod tests {
     use crate::mcp::tests::{
         ControlPlaneMcpDispatchStubRuntime, assert_names_exactly_the_control_vocabulary,
     };
-    use crate::mcp_resources::LIVE_GRAPH_RESOURCE_URI;
+    use crate::mcp_resources::{LIVE_GRAPH_RESOURCE_URI, RELAY_ADAPTER_CATALOG_RESOURCE_URI};
 
     /// How long the stub's slow `add_node` takes to answer.
     const SLOW_ADD_NODE_ANSWERS_AFTER: Duration = Duration::from_millis(500);
@@ -356,6 +356,17 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(live_graph.contents.len(), 1, "{live_graph:?}");
+        let relay_adapter_catalog = client
+            .read_resource(ReadResourceRequestParams::new(
+                RELAY_ADAPTER_CATALOG_RESOURCE_URI,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            relay_adapter_catalog.contents.len(),
+            1,
+            "{relay_adapter_catalog:?}"
+        );
     }
 
     #[tokio::test]

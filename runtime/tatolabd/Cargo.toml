@@ -24,7 +24,6 @@ hardware-tests = ["streamlib/hardware-tests"]
 # crash-on-demand test node is registered.
 machine-directories-under-a-test-root = [
     "dep:libc",
-    "dep:serde",
     "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
     "streamlib-api-server/machine-directories-under-a-test-root",
     "streamlib/machine-directories-under-a-test-root",
@@ -46,16 +45,28 @@ moq-tokio = { version = "=0.19.28" }
 moq-json = { version = "=0.5.13" }
 hang = { version = "=0.21.16" }
 bytes = "1"
+# Relay secrets in the OS secret store: the keyring project's core API and
+# the one store each floor answers through.
+keyring-core = "=1.0.1"
 tokio = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
 tracing = { workspace = true }
 # The crash-on-demand test node, in a test build alone.
 libc = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Secret Service over pure-Rust D-Bus, so the runtime links no libdbus.
+zbus-secret-service-keyring-store = { version = "=1.0.1", features = ["rt-async-io-crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "=1.0.2", features = ["keychain"] }
 
 [dev-dependencies]
 tokio = { version = "1.48.0", features = ["rt"] }
+# The redaction tests capture what reached the log.
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 tempfile = { workspace = true }
 libc = { workspace = true }
 # The tests call the runtime's stream tools over its local API with rmcp's own client.

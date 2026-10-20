@@ -12,6 +12,8 @@ mod mcp;
 mod mcp_prompts;
 mod mcp_resources;
 mod mcp_stdio_upgrade;
+#[cfg(test)]
+mod relay_tools_tests;
 mod state;
 #[cfg(test)]
 mod stream_tools_over_a_real_engine_tests;

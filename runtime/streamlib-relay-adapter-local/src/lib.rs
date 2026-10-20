@@ -24,10 +24,10 @@ use std::time::Duration;
 use streamlib_relay_adapter_sdk::secrecy::SecretString;
 use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_adapter_sdk::{
-    BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter,
-    RelayAdapterKind, RelayAdapterRefusal, RelayConnectionState, RelayConnectionStateReceiver,
-    RelayDialCredential, RelayInstanceId, RelaySettingsJsonSchema,
-    relay_instance_settings_from_json,
+    BroadcastPath, BuiltInRelayInstance, JoinedRelay, MachineName, OutputPortExposureLevel,
+    RelayAdapter, RelayAdapterCatalogEntry, RelayAdapterInstanceMaker, RelayAdapterKind,
+    RelayAdapterRefusal, RelayConnectionState, RelayConnectionStateReceiver, RelayDialCredential,
+    RelayInstanceId, RelaySettingsJsonSchema, relay_instance_settings_from_json,
 };
 
 pub use local_relay_admission::{
@@ -106,6 +106,94 @@ pub struct LocalRelaySharedByBothInstances {
     pub runtime_publish_token: SecretString,
     /// Where the admission sockets are answered.
     pub async_runtime: tokio::runtime::Handle,
+}
+
+/// Makes the local relay's two instances, one per [`LocalRelayListener`], and
+/// never a third.
+pub struct LocalRelayAdapterInstanceMaker {
+    shared_or_why_no_local_relay_runs: Result<LocalRelaySharedByBothInstances, String>,
+    settings_of_each_listener: Vec<(
+        LocalRelayListener,
+        serde_json::Map<String, serde_json::Value>,
+    )>,
+}
+
+impl LocalRelayAdapterInstanceMaker {
+    /// The maker of instances sharing `shared`, each listener built in with
+    /// its settings in `settings_of_each_listener`.
+    pub fn sharing(
+        shared: LocalRelaySharedByBothInstances,
+        settings_of_each_listener: Vec<(
+            LocalRelayListener,
+            serde_json::Map<String, serde_json::Value>,
+        )>,
+    ) -> Self {
+        Self {
+            shared_or_why_no_local_relay_runs: Ok(shared),
+            settings_of_each_listener,
+        }
+    }
+
+    /// The maker on a machine where no local relay runs, for `why`: both
+    /// listeners are still listed, and neither joins.
+    pub fn running_no_local_relay(why: String) -> Self {
+        Self {
+            shared_or_why_no_local_relay_runs: Err(why),
+            settings_of_each_listener: LocalRelayListener::BOTH
+                .into_iter()
+                .map(|listener| (listener, serde_json::Map::new()))
+                .collect(),
+        }
+    }
+}
+
+impl RelayAdapterInstanceMaker for LocalRelayAdapterInstanceMaker {
+    fn catalog_entry(&self) -> RelayAdapterCatalogEntry {
+        RelayAdapterCatalogEntry::of_the_adapter::<LocalRelayAdapter>()
+    }
+
+    fn built_in_instances(&self) -> Vec<BuiltInRelayInstance> {
+        self.settings_of_each_listener
+            .iter()
+            .map(|(listener, settings)| BuiltInRelayInstance {
+                relay_id: listener.relay_id(),
+                settings: settings.clone(),
+            })
+            .collect()
+    }
+
+    fn why_no_instance_is_added(&self) -> Option<String> {
+        Some(format!(
+            "the local relay is built in: its listeners `{}` and `{}` are on every machine, and \
+             where a listener binds is never a setting",
+            LocalRelayListener::Loopback.relay_id(),
+            LocalRelayListener::EveryInterface.relay_id()
+        ))
+    }
+
+    fn make_the_instance(
+        &self,
+        relay_id: &RelayInstanceId,
+    ) -> Result<Box<dyn RelayAdapter>, RelayAdapterRefusal> {
+        let listener = LocalRelayListener::BOTH
+            .into_iter()
+            .find(|listener| &listener.relay_id() == relay_id)
+            .ok_or_else(|| RelayAdapterRefusal::JoinFailed {
+                relay_id: relay_id.clone(),
+                why: "the local relay has no listener by that id".to_string(),
+            })?;
+        let shared = self
+            .shared_or_why_no_local_relay_runs
+            .as_ref()
+            .map_err(|why| RelayAdapterRefusal::JoinFailed {
+                relay_id: relay_id.clone(),
+                why: format!("no local relay runs: {why}"),
+            })?;
+        Ok(Box::new(LocalRelayAdapter::for_the_listener(
+            listener,
+            shared.clone(),
+        )))
+    }
 }
 
 /// One local relay instance: one listener, one `moq-relay` child.
@@ -266,6 +354,12 @@ impl RelayAdapter for LocalRelayAdapter {
         LOCAL_RELAY_ADAPTER_KIND
     }
 
+    fn doc() -> &'static str {
+        "The machine's own relay, built in: `local-loopback` serves every exposed port to this \
+         machine alone, `local-every-interface` serves public ports to any machine that reaches \
+         it. Where each listens is never a setting."
+    }
+
     fn relay_id(&self) -> &RelayInstanceId {
         &self.relay_id
     }
@@ -280,6 +374,17 @@ impl RelayAdapter for LocalRelayAdapter {
         self.leave();
         match self.provision_the_instance_and_start_its_supervised_child(&settings) {
             Ok((joined, joined_relay)) => {
+                tracing::info!(
+                    relay = %self.relay_id,
+                    "the local relay listens at {}, serving {} ports",
+                    joined_relay.dial_url,
+                    self.listener
+                        .levels_served()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                );
                 self.joined = Some(joined);
                 Ok(joined_relay)
             }
@@ -440,6 +545,38 @@ mod tests {
     #[test]
     fn bytes_render_as_lowercase_hex_two_digits_each() {
         assert_eq!(lowercase_hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
+    }
+
+    #[test]
+    fn both_listeners_are_built_in_and_no_third_instance_is_added() {
+        let maker = LocalRelayAdapterInstanceMaker::running_no_local_relay("none".to_string());
+        assert_eq!(
+            maker
+                .built_in_instances()
+                .into_iter()
+                .map(|built_in| built_in.relay_id.0)
+                .collect::<Vec<_>>(),
+            ["local-loopback", "local-every-interface"]
+        );
+        let why_not = maker.why_no_instance_is_added().unwrap();
+        assert!(why_not.contains("built in"), "{why_not}");
+        let refusal = maker
+            .make_the_instance(&RelayInstanceId("local-loopback".to_string()))
+            .err()
+            .unwrap();
+        assert!(
+            refusal.to_string().contains("no local relay runs: none"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn the_catalog_lists_the_local_adapter_with_its_port_and_no_secret() {
+        let entry =
+            LocalRelayAdapterInstanceMaker::running_no_local_relay(String::new()).catalog_entry();
+        assert_eq!(entry.kind, "local");
+        assert!(entry.settings_schema["properties"]["port"].is_object());
+        assert!(entry.secret_setting_names().is_empty());
     }
 
     #[test]

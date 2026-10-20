@@ -213,6 +213,7 @@ mod tests {
     fn serve_the_stub_router_at(local_api_socket_path: &Path) -> RunningLocalApiSocketServer {
         serve_the_control_plane_router_at(
             a_control_plane_router_stub_runtime(),
+            crate::control_plane_stub_support::RelayInstancesOfThisMachineStub::shared(),
             local_api_socket_path,
         )
     }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolabd`: the machine's runtime. Holds the machine runtime lock, serves
-//! the local API at its fixed socket, runs the machine's local relay, hosts
+//! the local API at its fixed socket, joins the machine's relays, hosts
 //! every stream loaded into it and re-loads the kept ones at its start, in the
 //! foreground and with no Python in its process.
 
@@ -10,12 +10,16 @@ mod bundled_vulkan_driver_environment;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 mod crash_on_demand_test_node;
 mod exposed_port_publisher;
-mod local_relay_children;
+mod local_relay_adapter_of_this_runtime;
 mod loopback_http_listener_of_this_runtime;
 mod machine_stream_hosting;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 mod numbered_message_writer_test_node;
+mod owner_only_file_written_whole;
 mod refusal_on_standard_error;
+mod relay_instances_of_this_runtime;
+mod relay_instances_record;
+mod relay_secret_store;
 mod runtime_unit_lend;
 mod tatolabd_command_line;
 

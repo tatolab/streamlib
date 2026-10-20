@@ -28,13 +28,16 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
 use streamlib_relay_adapter_sdk::{
-    BroadcastPath, JoinedRelay, OutputPortExposureLevel, RelayAdapter, RelayInstanceId,
+    BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter, RelayInstanceId,
 };
+
+use crate::relay_instances_of_this_runtime::RelaysThePublisherDialsReceiver;
 
 /// The suffix of a broadcast whose catalog the stack's players read.
 const BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ: &str = ".hang";
 
 /// One joined relay as the publisher dials it.
+#[derive(Clone)]
 pub(crate) struct RelayTheExposedPortPublisherDials {
     pub(crate) relay_id: RelayInstanceId,
     /// The relay's URL with its credential in it; the whole URL is the secret.
@@ -44,12 +47,11 @@ pub(crate) struct RelayTheExposedPortPublisherDials {
 }
 
 impl RelayTheExposedPortPublisherDials {
-    /// How the publisher dials `adapter`, joined at `joined`, for the machine
-    /// `engine` runs on.
+    /// How the publisher dials `adapter`, joined at `joined`, for `machine`.
     pub(crate) fn of_a_joined_relay(
         adapter: &dyn RelayAdapter,
         joined: &JoinedRelay,
-        engine: &Runner,
+        machine: &MachineName,
     ) -> Self {
         let dial_url_carrying_the_credential = match adapter.credential_for_dial() {
             Some(credential) => credential.dial_url_carrying_the_credential(&joined.dial_url),
@@ -59,8 +61,17 @@ impl RelayTheExposedPortPublisherDials {
             relay_id: adapter.relay_id().clone(),
             dial_url_carrying_the_credential,
             levels_served: adapter.levels_served().to_vec(),
-            broadcast_root: adapter.broadcast_root(engine.machine_name()),
+            broadcast_root: adapter.broadcast_root(machine),
         }
+    }
+
+    /// Whether `other` is dialed exactly as this is.
+    fn is_dialed_as(&self, other: &Self) -> bool {
+        self.relay_id == other.relay_id
+            && self.dial_url_carrying_the_credential.expose_secret()
+                == other.dial_url_carrying_the_credential.expose_secret()
+            && self.levels_served == other.levels_served
+            && self.broadcast_root == other.broadcast_root
     }
 }
 
@@ -76,16 +87,12 @@ impl Drop for ExposedPortPublisherOfThisRuntime {
     }
 }
 
-/// Start the publisher on `engine`'s async runtime, dialing `relays`, or say
-/// why none runs.
+/// Start the publisher on `engine`'s async runtime, dialing each relay
+/// `relays` names as it changes, or say why none runs.
 pub(crate) fn start_the_exposed_port_publisher(
     engine: &Arc<Runner>,
-    relays: Vec<RelayTheExposedPortPublisherDials>,
+    relays: RelaysThePublisherDialsReceiver,
 ) -> Option<ExposedPortPublisherOfThisRuntime> {
-    if relays.is_empty() {
-        tracing::info!("no relay is joined, so no exposed port is published");
-        return None;
-    }
     let exposure_changes = match engine.exposure_changes() {
         Ok(exposure_changes) => exposure_changes,
         Err(refusal) => {
@@ -100,42 +107,60 @@ pub(crate) fn start_the_exposed_port_publisher(
     Some(ExposedPortPublisherOfThisRuntime { publishing })
 }
 
+/// What woke the publisher.
+enum ExposedPortPublisherWake {
+    TheExposedPortsChanged,
+    TheRelaysChanged,
+    ARefusedSubscriptionIsDue,
+}
+
 async fn publish_every_exposed_port(
     engine_while_it_runs: Weak<Runner>,
     mut exposure_changes: ExposureChangeReceiver,
-    relays: Vec<RelayTheExposedPortPublisherDials>,
+    mut relays: RelaysThePublisherDialsReceiver,
 ) {
     let mut publisher = ExposedPortPublisher {
-        relays: relays
-            .into_iter()
-            .filter_map(RelayDialedByThePublisher::dial)
-            .collect(),
+        relays: Vec::new(),
         broadcasts: HashMap::new(),
         forwarded_ports: HashMap::new(),
         why_each_port_is_not_forwarded_yet: HashMap::new(),
     };
+    publisher.dial_exactly(relays.borrow_and_update().clone());
     let mut latest_exposed_output_ports = Vec::new();
     let mut retried_after = A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER;
     loop {
-        let something_changed = if publisher.why_each_port_is_not_forwarded_yet.is_empty() {
-            exposure_changes.changed().await;
-            true
-        } else {
-            tokio::select! {
-                () = exposure_changes.changed() => true,
-                () = tokio::time::sleep(retried_after) => false,
+        let a_refused_subscription_is_due = async {
+            if publisher.why_each_port_is_not_forwarded_yet.is_empty() {
+                std::future::pending::<()>().await
+            } else {
+                tokio::time::sleep(retried_after).await
             }
         };
-        if something_changed {
-            let Some(exposed_output_ports) = exposure_changes.the_exposed_output_ports_now().await
-            else {
-                return;
-            };
-            latest_exposed_output_ports = exposed_output_ports;
-            retried_after = A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER;
-        } else {
-            retried_after =
-                (retried_after * 2).min(A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY);
+        let wake = tokio::select! {
+            () = exposure_changes.changed() => ExposedPortPublisherWake::TheExposedPortsChanged,
+            relays_changed = relays.changed() => match relays_changed {
+                Ok(()) => ExposedPortPublisherWake::TheRelaysChanged,
+                Err(_) => return,
+            },
+            () = a_refused_subscription_is_due => ExposedPortPublisherWake::ARefusedSubscriptionIsDue,
+        };
+        match wake {
+            ExposedPortPublisherWake::TheExposedPortsChanged => {
+                let Some(exposed_output_ports) =
+                    exposure_changes.the_exposed_output_ports_now().await
+                else {
+                    return;
+                };
+                latest_exposed_output_ports = exposed_output_ports;
+                retried_after = A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER;
+            }
+            ExposedPortPublisherWake::TheRelaysChanged => {
+                publisher.dial_exactly(relays.borrow_and_update().clone());
+            }
+            ExposedPortPublisherWake::ARefusedSubscriptionIsDue => {
+                retried_after =
+                    (retried_after * 2).min(A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY);
+            }
         }
         let Some(engine) = engine_while_it_runs.upgrade() else {
             return;
@@ -157,6 +182,7 @@ const A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY: Duration = Duration::fro
 
 /// One relay's session, through which every broadcast at it is published.
 struct RelayDialedByThePublisher {
+    dialed_as: RelayTheExposedPortPublisherDials,
     relay_id: RelayInstanceId,
     levels_served: Vec<OutputPortExposureLevel>,
     broadcast_root: BroadcastPath,
@@ -199,6 +225,7 @@ impl RelayDialedByThePublisher {
             .connect(dial_url);
         tracing::info!(relay = %relay.relay_id, "the publisher dials the relay");
         Some(Self {
+            dialed_as: relay.clone(),
             relay_id: relay.relay_id,
             levels_served: relay.levels_served,
             broadcast_root: relay.broadcast_root,
@@ -526,6 +553,41 @@ struct ExposedPortPublisher {
 }
 
 impl ExposedPortPublisher {
+    /// Dial exactly `relays`: hang up on each relay no longer among them or
+    /// dialed another way now, withdrawing its broadcasts and tracks, and
+    /// dial each not yet dialed.
+    fn dial_exactly(&mut self, relays: Vec<RelayTheExposedPortPublisherDials>) {
+        let (kept, hung_up): (Vec<_>, Vec<_>) = std::mem::take(&mut self.relays)
+            .into_iter()
+            .partition(|dialed| {
+                relays
+                    .iter()
+                    .any(|relay| relay.is_dialed_as(&dialed.dialed_as))
+            });
+        self.relays = kept;
+        for relay in hung_up {
+            for forwarded in self.forwarded_ports.values() {
+                lock_the_writer(&forwarded.track_writer)
+                    .withdraw_every_track_but_those_at(|relay_id| relay_id != &relay.relay_id);
+            }
+            self.broadcasts
+                .retain(|(relay_id, _), _| relay_id != &relay.relay_id);
+            tracing::info!(relay = %relay.relay_id, "the publisher no longer dials the relay");
+        }
+        for relay in relays {
+            if self
+                .relays
+                .iter()
+                .any(|dialed| relay.is_dialed_as(&dialed.dialed_as))
+            {
+                continue;
+            }
+            if let Some(dialed) = RelayDialedByThePublisher::dial(relay) {
+                self.relays.push(dialed);
+            }
+        }
+    }
+
     /// Forward exactly those of `exposed_output_ports` a joined relay serves:
     /// subscribe to each not yet forwarded, move each whose level changed onto
     /// the relays it now reaches, withdraw every other, and publish each
