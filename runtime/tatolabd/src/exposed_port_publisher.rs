@@ -52,6 +52,8 @@ pub(crate) struct RelayTheExposedPortPublisherDials {
     pub(crate) broadcast_root: BroadcastPath,
     /// When the credential in the dial URL must be replaced by a fresh one.
     pub(crate) renew_by: Option<Instant>,
+    /// How often each broadcast's catalog is written again whole there.
+    pub(crate) catalog_rewritten_whole_every: Option<Duration>,
     /// Where the publisher's session with the relay stands, reported here.
     pub(crate) session_state: ExposedPortPublisherSessionStateSender,
 }
@@ -76,6 +78,7 @@ impl RelayTheExposedPortPublisherDials {
             levels_served: adapter.levels_served().to_vec(),
             broadcast_root: adapter.broadcast_root(machine),
             renew_by: credential.and_then(|credential| credential.renew_by()),
+            catalog_rewritten_whole_every: adapter.the_catalog_is_rewritten_whole_every(),
             session_state,
         }
     }
@@ -104,6 +107,7 @@ impl RelayTheExposedPortPublisherDials {
                 == other.dial_url_carrying_the_credential.expose_secret()
             && self.levels_served == other.levels_served
             && self.broadcast_root == other.broadcast_root
+            && self.catalog_rewritten_whole_every == other.catalog_rewritten_whole_every
             && self.session_state.same_channel(&other.session_state)
     }
 }
@@ -145,6 +149,7 @@ enum ExposedPortPublisherWake {
     TheExposedPortsChanged,
     TheRelaysChanged,
     ARefusedSubscriptionIsDue,
+    ACatalogIsDueToBeRewrittenWhole,
 }
 
 async fn publish_every_exposed_port(
@@ -169,8 +174,16 @@ async fn publish_every_exposed_port(
                 tokio::time::sleep(retried_after).await
             }
         };
+        let next_catalog_rewrite = publisher.when_a_catalog_is_next_due_to_be_rewritten_whole();
+        let a_catalog_is_due_to_be_rewritten_whole = async {
+            match next_catalog_rewrite {
+                Some(due_at) => tokio::time::sleep_until(due_at.into()).await,
+                None => std::future::pending().await,
+            }
+        };
         let wake = tokio::select! {
             () = exposure_changes.changed() => ExposedPortPublisherWake::TheExposedPortsChanged,
+            () = a_catalog_is_due_to_be_rewritten_whole => ExposedPortPublisherWake::ACatalogIsDueToBeRewrittenWhole,
             relays_changed = relays.changed() => match relays_changed {
                 Ok(()) => ExposedPortPublisherWake::TheRelaysChanged,
                 Err(_) => return,
@@ -193,6 +206,10 @@ async fn publish_every_exposed_port(
             ExposedPortPublisherWake::ARefusedSubscriptionIsDue => {
                 retried_after =
                     (retried_after * 2).min(A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY);
+            }
+            ExposedPortPublisherWake::ACatalogIsDueToBeRewrittenWhole => {
+                publisher.rewrite_each_catalog_due_whole(Instant::now());
+                continue;
             }
         }
         let Some(engine) = engine_while_it_runs.upgrade() else {
@@ -217,6 +234,7 @@ const A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY: Duration = Duration::fro
 /// dropping it hangs up and reports the relay not dialed.
 struct RelayDialedByThePublisher {
     dialed_as: RelayTheExposedPortPublisherDials,
+    catalogs_last_rewritten_whole_at: Instant,
     origin: moq_net::origin::Producer,
     _session: moq_tokio::Connection,
     session_state_reports: ExposedPortPublisherSessionStateOfOneDial,
@@ -286,6 +304,7 @@ impl RelayDialedByThePublisher {
         ));
         Some(Self {
             dialed_as: relay,
+            catalogs_last_rewritten_whole_at: Instant::now(),
             origin,
             _session: session,
             session_state_reports,
@@ -295,6 +314,13 @@ impl RelayDialedByThePublisher {
 
     fn serves(&self, level: OutputPortExposureLevel) -> bool {
         self.dialed_as.levels_served.contains(&level)
+    }
+
+    /// When its broadcasts' catalogs are next written again whole, if ever.
+    fn catalogs_next_rewritten_whole_at(&self) -> Option<Instant> {
+        self.dialed_as
+            .catalog_rewritten_whole_every
+            .map(|every| self.catalogs_last_rewritten_whole_at + every)
     }
 }
 
@@ -334,11 +360,13 @@ impl std::fmt::Display for ExposedOutputPortAddress {
     }
 }
 
-/// One stream's broadcast at one relay, with its catalog in both spellings.
+/// One stream's broadcast at one relay, with its catalog in both spellings and
+/// the catalog last published on them.
 struct BroadcastOfAStreamAtARelay {
     broadcast: moq_net::broadcast::Producer,
     catalog: moq_json::snapshot::Producer<serde_json::Value>,
     compressed_catalog: moq_json::snapshot::Producer<serde_json::Value>,
+    catalog_published_last: serde_json::Value,
 }
 
 impl BroadcastOfAStreamAtARelay {
@@ -369,6 +397,7 @@ impl BroadcastOfAStreamAtARelay {
                 broadcast,
                 catalog,
                 compressed_catalog,
+                catalog_published_last: serde_json::json!({}),
             })
         })();
         let mut broadcast = match created {
@@ -400,6 +429,25 @@ impl BroadcastOfAStreamAtARelay {
         ] {
             if let Err(refusal) = producer.update(catalog) {
                 tracing::warn!("the catalog track `{catalog_track}` was not updated: {refusal}");
+            }
+        }
+        self.catalog_published_last = catalog.clone();
+    }
+
+    /// Write the catalog last published again, whole, as the first frame of a
+    /// fresh group on both spellings: what a subscriber joining now reads.
+    fn rewrite_the_catalog_whole(&mut self) {
+        for (catalog_track, producer) in [
+            (hang::Catalog::DEFAULT_NAME, &mut self.catalog),
+            (hang::Catalog::COMPRESSED_NAME, &mut self.compressed_catalog),
+        ] {
+            if let Err(refusal) = producer
+                .cut()
+                .and_then(|()| producer.update(&self.catalog_published_last).map(|_| ()))
+            {
+                tracing::warn!(
+                    "the catalog track `{catalog_track}` was not written again whole: {refusal}"
+                );
             }
         }
     }
@@ -612,6 +660,33 @@ struct ExposedPortPublisher {
 }
 
 impl ExposedPortPublisher {
+    /// When a dialed relay's catalogs are next written again whole, if any is.
+    fn when_a_catalog_is_next_due_to_be_rewritten_whole(&self) -> Option<Instant> {
+        self.relays
+            .iter()
+            .filter_map(RelayDialedByThePublisher::catalogs_next_rewritten_whole_at)
+            .min()
+    }
+
+    /// Write again whole the catalog of each broadcast at a relay whose
+    /// catalogs are due at `now`.
+    fn rewrite_each_catalog_due_whole(&mut self, now: Instant) {
+        for relay in &mut self.relays {
+            if !relay
+                .catalogs_next_rewritten_whole_at()
+                .is_some_and(|due_at| due_at <= now)
+            {
+                continue;
+            }
+            relay.catalogs_last_rewritten_whole_at = now;
+            for ((relay_id, _), broadcast) in &mut self.broadcasts {
+                if relay_id == &relay.dialed_as.relay_id {
+                    broadcast.rewrite_the_catalog_whole();
+                }
+            }
+        }
+    }
+
     /// Dial exactly `relays`: hang up on each relay no longer among them,
     /// dialed another way now, or whose session it ended, withdrawing its
     /// broadcasts and tracks, and dial each not yet dialed.
@@ -1161,6 +1236,7 @@ mod tests {
                 &MachineName::from_a_hostname("desk").unwrap(),
             ),
             renew_by: None,
+            catalog_rewritten_whole_every: None,
             session_state: a_relay_instances_session_state_not_dialed(),
         }
     }
@@ -1355,5 +1431,107 @@ mod tests {
             "the ended dial is hung up"
         );
         assert_eq!(publisher.relays.len(), 1, "and the relay dialed again");
+    }
+
+    /// The first frame of the newest catalog group is what a subscriber
+    /// joining a relay that hands it only later objects reads: after a
+    /// rewrite it is the whole catalog, not the empty one of the announce.
+    #[test]
+    fn a_catalog_rewritten_whole_opens_a_fresh_group_with_the_whole_catalog() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = async_runtime.enter();
+        let relay = RelayDialedByThePublisher::dial(a_relay_dialed_at("ietf", 9)).unwrap();
+        let mut broadcast = BroadcastOfAStreamAtARelay::announced_at(&relay, "desk").unwrap();
+        let whole_catalog = serde_json::json!({
+            "video": {"renditions": {"encoder/encoded_video": {"codec": "avc1.64001f"}}}
+        });
+        broadcast.publish_the_catalog(&whole_catalog);
+        let newest_first_frame = |broadcast: &BroadcastOfAStreamAtARelay| {
+            async_runtime.block_on(async {
+                let mut catalog_groups = broadcast.catalog.consume();
+                let mut newest_group = catalog_groups.recv_group().await.unwrap().unwrap();
+                let first_frame = newest_group.read_frame().await.unwrap().unwrap();
+                (
+                    newest_group.sequence,
+                    serde_json::from_slice::<serde_json::Value>(&first_frame.payload).unwrap(),
+                )
+            })
+        };
+        assert_eq!(
+            newest_first_frame(&broadcast),
+            (0, serde_json::json!({})),
+            "the entries ride as deltas after the announce's empty snapshot"
+        );
+
+        broadcast.rewrite_the_catalog_whole();
+        assert_eq!(newest_first_frame(&broadcast), (1, whole_catalog));
+    }
+
+    /// Only a relay whose adapter asks for it has its catalogs written again
+    /// whole, once due; a relay that hands a late subscriber the latest group
+    /// never wakes the publisher for it.
+    #[test]
+    fn only_a_relay_asking_for_it_has_its_catalogs_rewritten_whole_once_due() {
+        let async_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = async_runtime.enter();
+        let mut publisher = ExposedPortPublisher {
+            relays: Vec::new(),
+            broadcasts: HashMap::new(),
+            forwarded_ports: HashMap::new(),
+            why_each_port_is_not_forwarded_yet: HashMap::new(),
+        };
+        publisher.dial_exactly(vec![a_relay_dialed_at("moq-lite", 9)]);
+        assert_eq!(
+            publisher.when_a_catalog_is_next_due_to_be_rewritten_whole(),
+            None
+        );
+
+        let ietf_relay = RelayTheExposedPortPublisherDials {
+            catalog_rewritten_whole_every: Some(Duration::from_secs(1)),
+            ..a_relay_dialed_at("ietf", 9)
+        };
+        publisher.dial_exactly(vec![a_relay_dialed_at("moq-lite", 9), ietf_relay]);
+        for relay in &publisher.relays {
+            let broadcast = BroadcastOfAStreamAtARelay::announced_at(relay, "desk").unwrap();
+            publisher.broadcasts.insert(
+                (relay.dialed_as.relay_id.clone(), "desk".to_string()),
+                broadcast,
+            );
+        }
+        let due_at = publisher
+            .when_a_catalog_is_next_due_to_be_rewritten_whole()
+            .expect("the IETF relay's catalogs fall due");
+        let newest_catalog_group_at = |publisher: &ExposedPortPublisher, relay_id: &str| {
+            async_runtime.block_on(async {
+                publisher.broadcasts[&(RelayInstanceId(relay_id.to_string()), "desk".to_string())]
+                    .catalog
+                    .consume()
+                    .recv_group()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .sequence
+            })
+        };
+
+        publisher.rewrite_each_catalog_due_whole(due_at - Duration::from_millis(1));
+        assert_eq!(
+            newest_catalog_group_at(&publisher, "ietf"),
+            0,
+            "not due yet"
+        );
+        publisher.rewrite_each_catalog_due_whole(due_at);
+        assert_eq!(newest_catalog_group_at(&publisher, "ietf"), 1);
+        assert_eq!(newest_catalog_group_at(&publisher, "moq-lite"), 0);
+        assert_eq!(
+            publisher.when_a_catalog_is_next_due_to_be_rewritten_whole(),
+            Some(due_at + Duration::from_secs(1))
+        );
     }
 }

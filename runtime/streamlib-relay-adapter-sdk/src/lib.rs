@@ -298,6 +298,14 @@ pub trait RelayAdapter: Send {
 
     /// This instance's connection state, as it changes.
     fn events(&self) -> RelayConnectionStateReceiver;
+
+    /// How often each broadcast's catalog is written again whole at this
+    /// relay, or `None` for a relay that hands a subscriber joining late the
+    /// latest group: one that hands it only objects written after it
+    /// subscribed would otherwise never show it a catalog left unchanged.
+    fn the_catalog_is_rewritten_whole_every(&self) -> Option<Duration> {
+        None
+    }
 }
 
 #[cfg(test)]

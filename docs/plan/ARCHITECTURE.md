@@ -3758,8 +3758,11 @@ entry reads as **message** (the glossary).
   implements it: the local relay, Cloudflare and moq.pro; Red5 waits on its cost. What differs
   is the MoQ dialect the relay speaks (`moq-net` negotiates moq-lite and the IETF drafts;
   Cloudflare's relays are on the drafts, `moq-relay` on moq-lite), how a machine
-  authenticates and refreshes its credential, and the root the relay assigns the machine or
-  leaves the adapter to name. Every adapter is compiled into `tatolabd`, so a headless machine
+  authenticates and refreshes its credential, the root the relay assigns the machine or
+  leaves the adapter to name, and how often each broadcast's catalog is written again whole
+  for a relay that hands a subscriber joining late only the objects written after it
+  subscribed — Cloudflare's, every second — which the publisher does when its adapter says
+  so (owner, 2026-10-20). Every adapter is compiled into `tatolabd`, so a headless machine
   has them all, and any number of instances of each is added and configured through
   `tatolabd`, by the app or at the CLI; `relays.json` holds the instances, each with its own
   settings and whatever credential its provider's SDK needs, held in the OS secret store and

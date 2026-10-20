@@ -10,6 +10,8 @@
 //! A token is replaced through `configure_relay`; minting one takes an account
 //! API token, which the runtime never holds.
 
+use std::time::Duration;
+
 use streamlib_relay_adapter_sdk::secrecy::SecretString;
 use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_adapter_sdk::{
@@ -22,6 +24,12 @@ use tokio::sync::watch;
 
 /// The adapter kind every Cloudflare relay instance is joined through.
 pub const CLOUDFLARE_RELAY_ADAPTER_KIND: RelayAdapterKind = RelayAdapterKind("cloudflare");
+
+/// How often a broadcast's catalog is written again whole at a Cloudflare
+/// relay. Its relays speak the IETF drafts, where a subscriber receives only
+/// objects written after it subscribed, so a player joining late reads the
+/// catalog within this.
+const CLOUDFLARE_CATALOG_IS_REWRITTEN_WHOLE_EVERY: Duration = Duration::from_secs(1);
 
 /// A Cloudflare relay serves public ports alone.
 const LEVELS_A_CLOUDFLARE_RELAY_SERVES: [OutputPortExposureLevel; 1] =
@@ -188,6 +196,10 @@ impl RelayAdapter for CloudflareRelayAdapter {
     fn events(&self) -> RelayConnectionStateReceiver {
         self.connection_state.subscribe()
     }
+
+    fn the_catalog_is_rewritten_whole_every(&self) -> Option<Duration> {
+        Some(CLOUDFLARE_CATALOG_IS_REWRITTEN_WHOLE_EVERY)
+    }
 }
 
 /// Makes Cloudflare relay instances, as many as are added.
@@ -326,6 +338,15 @@ mod tests {
         adapter.leave();
         assert!(adapter.credential_for_dial().is_none());
         assert_eq!(*adapter.events().borrow(), RelayConnectionState::NotJoined);
+    }
+
+    #[test]
+    fn its_catalog_is_written_again_whole_every_second() {
+        let (adapter, _) = joined_instance();
+        assert_eq!(
+            adapter.the_catalog_is_rewritten_whole_every(),
+            Some(Duration::from_secs(1))
+        );
     }
 
     #[test]
