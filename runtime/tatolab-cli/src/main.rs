@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab`: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `streams` and
-//! `expose` load and manage the streams the machine's runtime holds, and `graph`, `logs` and
-//! `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
+//! `expose` load and manage the streams the machine's runtime holds; `relays` and `relay` list,
+//! add, configure and remove the relays it joins; and `graph`, `logs` and `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
 //! machine's users the virtual camera's loopback device, once. No verb starts a runtime.
 
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
@@ -17,12 +17,14 @@ mod local_api_unix_socket_http_client;
 mod machine_runtime_local_api_socket;
 mod process_signal_handling;
 mod project_source_change_watcher;
+mod relay_verbs_on_the_runtime;
 mod runtime_log_files_reader;
 mod runtime_logs_verb;
 mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
 mod stream_actions_on_the_runtime;
 mod stream_log_records_from_the_runtime;
+mod verb_output_table;
 mod verb_standard_output;
 mod virtual_camera_loopback_permission_grant;
 
@@ -165,6 +167,19 @@ enum TatolabVerb {
         #[arg(long = "remove")]
         remove: bool,
     },
+    /// List the relays the runtime joins: each one's adapter, state, settings and secrets set.
+    #[command(
+        long_about = "Every relay instance: the local relay's two built-in listeners and each \
+                      added one, with its adapter, its connection state, its settings, and each \
+                      secret setting as set or unset — never its value — then why each relay not \
+                      joined is not."
+    )]
+    Relays,
+    /// Add, configure or remove one of the relays the runtime joins.
+    Relay {
+        #[command(subcommand)]
+        relay_verb: relay_verbs_on_the_runtime::RelayVerb,
+    },
     /// Export the runtime's live graph as JSON: every stream's, or one's.
     #[command(
         long_about = "Nodes, ports, links, channel names, states and metrics, as the runtime \
@@ -267,6 +282,8 @@ fn main() -> ExitCode {
                 (false, false) => ExposePortLevel::Private,
             },
         ),
+        TatolabVerb::Relays => relay_verbs_on_the_runtime::list_relays(),
+        TatolabVerb::Relay { relay_verb } => relay_verbs_on_the_runtime::run_relay_verb(relay_verb),
         TatolabVerb::Graph { requested_stream } => {
             runtime_observation_verbs::print_local_api_tool_result_of_the_running_runtime(
                 runtime_observation_verbs::GRAPH_TOOL_NAME,

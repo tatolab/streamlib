@@ -5,11 +5,15 @@
 //! against this one, compiled into `tatolabd`; adding a relay never edits the
 //! daemon.
 
+mod relay_instances_of_this_machine;
+mod relay_secret_setting;
+
 use std::fmt;
 use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
+use streamlib_runtime_client_contract::local_api_wire_contract::ListedRelayConnectionState;
 use url::Url;
 
 pub use schemars;
@@ -18,6 +22,12 @@ pub use streamlib::sdk::graph::OutputPortExposureLevel;
 pub use streamlib::sdk::runtime::MachineName;
 pub use streamlib_processor_schema::ProcessorConfigJsonSchema as RelaySettingsJsonSchema;
 pub use url;
+
+pub use relay_instances_of_this_machine::{
+    BuiltInRelayInstance, RelayAdapterCatalogEntry, RelayAdapterInstanceMaker,
+    RelayInstanceControlRefusal, RelayInstancesOfThisMachine,
+};
+pub use relay_secret_setting::{RelaySecretSetting, secret_setting_names_in_the_schema};
 
 /// The query parameter a moq-auth server reads a session's token from.
 pub const RELAY_DIAL_TOKEN_QUERY_PARAMETER: &str = "jwt";
@@ -126,6 +136,24 @@ pub enum RelayConnectionState {
     },
 }
 
+impl RelayConnectionState {
+    /// This state as `list_relays` reports it.
+    pub fn as_listed(&self) -> ListedRelayConnectionState {
+        match self {
+            Self::NotJoined => ListedRelayConnectionState::NotJoined { why: None },
+            Self::Joining => ListedRelayConnectionState::Joining,
+            Self::Joined => ListedRelayConnectionState::Joined,
+            Self::Lost {
+                why,
+                rejoining_after,
+            } => ListedRelayConnectionState::Lost {
+                why: why.clone(),
+                rejoining_after_ms: u64::try_from(rejoining_after.as_millis()).unwrap_or(u64::MAX),
+            },
+        }
+    }
+}
+
 /// The latest [`RelayConnectionState`] of one relay instance, updated as it
 /// changes.
 pub type RelayConnectionStateReceiver = tokio::sync::watch::Receiver<RelayConnectionState>;
@@ -171,6 +199,12 @@ pub fn relay_instance_settings_from_json<S: RelayInstanceSettings>(
 pub trait RelayAdapter: Send {
     /// The adapter this instance is joined through, known with no instance.
     fn kind() -> RelayAdapterKind
+    where
+        Self: Sized;
+
+    /// What this adapter joins, one sentence, as the relay-adapter catalog
+    /// lists it.
+    fn doc() -> &'static str
     where
         Self: Sized;
 

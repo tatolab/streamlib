@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "machine-directories-under-a-test-root")]
+use crate::control_plane_stub_support::http_get_over_the_local_api_socket;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::Result;
@@ -19,8 +21,6 @@ use streamlib::sdk::runtime::{
 };
 #[cfg(feature = "machine-directories-under-a-test-root")]
 use streamlib_runtime_client_contract::machine_directories_test_root::TestMachineRoot;
-#[cfg(feature = "machine-directories-under-a-test-root")]
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::mcp::tests::{
     first_text_block_json, listed_tools, prompt_text, resource_document, tool_call_result,
@@ -367,37 +367,6 @@ fn the_instructions_say_both_ends_of_a_connect_are_in_its_stream_and_name_relay_
     }
 }
 
-/// One HTTP/1.1 GET over the socket at `local_api_socket_path`: its status
-/// line and body.
-#[cfg(feature = "machine-directories-under-a-test-root")]
-async fn http_get_over_the_local_api_socket(
-    local_api_socket_path: &std::path::Path,
-    request_target: &str,
-) -> (String, String) {
-    let mut connection = tokio::net::UnixStream::connect(local_api_socket_path)
-        .await
-        .expect("the local API socket accepts a connection");
-    connection
-        .write_all(
-            format!(
-                "GET {request_target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-            )
-            .as_bytes(),
-        )
-        .await
-        .unwrap();
-    let mut answer = Vec::new();
-    connection.read_to_end(&mut answer).await.unwrap();
-    let answer = String::from_utf8_lossy(&answer).into_owned();
-    let (head, body) = answer
-        .split_once("\r\n\r\n")
-        .expect("a complete response head");
-    (
-        head.lines().next().unwrap_or_default().to_string(),
-        body.to_string(),
-    )
-}
-
 /// The engine's local API is served at `local-api.sock`, the one fixed path
 /// in the runtime directory under this run's test machine root, and the socket
 /// is gone once the served API drops.
@@ -418,8 +387,11 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
         local_api_socket_path
     );
 
-    let served = crate::serve_the_local_api_for_an_engine(&loaded.engine)
-        .expect("the local API binds the fixed socket under this run's test machine root");
+    let served = crate::serve_the_local_api_for_an_engine(
+        &loaded.engine,
+        crate::control_plane_stub_support::RelayInstancesOfThisMachineStub::shared(),
+    )
+    .expect("the local API binds the fixed socket under this run's test machine root");
 
     let (status_line, body) =
         http_get_over_the_local_api_socket(&local_api_socket_path, "/api/graph?stream=second")

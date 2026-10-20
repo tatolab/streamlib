@@ -23,12 +23,16 @@ use streamlib::sdk::runtime::{
     raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
+use streamlib_relay_adapter_sdk::RelayAdapterInstanceMaker;
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
 use crate::exposed_port_publisher::start_the_exposed_port_publisher;
-use crate::local_relay_children::join_the_local_relay;
+use crate::local_relay_adapter_of_this_runtime::the_local_relay_adapter_of_this_runtime;
 use crate::loopback_http_listener_of_this_runtime::serve_the_loopback_http_listener_of_this_runtime;
 use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
+use crate::relay_instances_of_this_runtime::RelayInstancesOfThisRuntime;
+use crate::relay_instances_record::RelayInstancesRecordFile;
+use crate::relay_secret_store::the_relay_secret_store_of_this_machine;
 
 /// How long the end of the run waits for a stream action the local API began —
 /// a load the machine shutdown is giving up — to hand the engine back. Each
@@ -85,20 +89,24 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
     let mut loopback_http_listener = None;
-    let mut local_relay = None;
+    let mut relay_instances = None;
     let mut exposed_port_publisher = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
-            local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
+            let joined_relay_instances = Arc::new(join_every_relay_instance_of_this_runtime(
+                &engine,
+                tatolab_state_directory,
+            ));
+            relay_instances = Some(Arc::clone(&joined_relay_instances));
+            local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(
+                &engine,
+                joined_relay_instances.clone(),
+            )?);
             loopback_http_listener =
                 serve_the_loopback_http_listener_of_this_runtime(&engine, &lend_directory);
-            local_relay = join_the_local_relay(&engine);
             exposed_port_publisher = start_the_exposed_port_publisher(
                 &engine,
-                local_relay
-                    .as_ref()
-                    .map(|local_relay| local_relay.relays_the_publisher_dials(&engine))
-                    .unwrap_or_default(),
+                joined_relay_instances.relays_the_publisher_dials(),
             );
             log_the_kept_streams_reloaded_at_the_start(
                 &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
@@ -131,7 +139,10 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                 every_stream_ended_during_the_wait.streams_seen_during_the_wait,
             );
             // Once every stream has ended, inside the run's shutdown.
-            drop(local_relay.take());
+            if let Some(relay_instances) = relay_instances.take() {
+                relay_instances.leave_every_relay();
+                tracing::info!("every relay is left");
+            }
             if streams_loaded_at_or_after_the_machine_shutdown_request
                 .iter()
                 .any(|stream| stream_teardown_abandoned_by_its_watchdog(stream).is_some())
@@ -160,6 +171,33 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         write_refusal_to_standard_error(&refusal);
     }
     ExitCode::from(exit_status)
+}
+
+/// Every relay instance this runtime holds, each joined: the local relay's
+/// two built in, then each `relays.json` records. A test build adds the
+/// secret-holding test relay's adapter.
+fn join_every_relay_instance_of_this_runtime(
+    engine: &Runner,
+    tatolab_state_directory: &TatolabStateDirectory,
+) -> RelayInstancesOfThisRuntime {
+    #[cfg_attr(
+        not(feature = "machine-directories-under-a-test-root"),
+        expect(unused_mut, reason = "a test build adds an adapter")
+    )]
+    let mut adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> =
+        vec![Box::new(the_local_relay_adapter_of_this_runtime(engine))];
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    adapter_makers.push(Box::new(
+        crate::secret_holding_test_relay_adapter::SecretHoldingTestRelayAdapterInstanceMaker,
+    ));
+    RelayInstancesOfThisRuntime::join_every_relay_instance(
+        adapter_makers,
+        RelayInstancesRecordFile::at(tatolab_state_directory.relay_instances_record_path()),
+        the_relay_secret_store_of_this_machine(
+            tatolab_state_directory.relay_secrets_fallback_file_path(),
+        ),
+        engine.machine_name().clone(),
+    )
 }
 
 fn log_the_open_descriptor_soft_limit_raise(raise: &OpenDescriptorSoftLimitRaise) {

@@ -5,15 +5,13 @@
 //! stream, written whole or not at all, and the owner's exposure rulings each
 //! record carries, split around the stream's load.
 
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
+use streamlib_runtime_client_contract::owner_only_file_written_whole::write_an_owner_only_file_whole;
 
 use super::{StreamEnvironment, StreamListingState};
 use crate::core::graph::{OutputPortExposureLevel, cast_exposed_name_to_url_safe};
@@ -21,9 +19,6 @@ use crate::core::{Error, Result};
 
 /// The schema version of a kept-stream record this runtime writes and reads.
 pub const KEPT_STREAM_RECORD_SCHEMA_VERSION: u32 = 2;
-
-/// The mode a kept-stream record is written at: its owner's alone.
-pub(crate) const KEPT_STREAM_RECORD_FILE_MODE: u32 = 0o600;
 
 /// The extension every kept-stream record's file name carries.
 const KEPT_STREAM_RECORD_FILE_EXTENSION: &str = "json";
@@ -379,8 +374,7 @@ impl KeptStreamRecordsInTheStateDirectory {
             .join(format!("{stream_cast}.{KEPT_STREAM_RECORD_FILE_EXTENSION}")))
     }
 
-    /// Write `record` whole or not at all: to an owner-only temporary file
-    /// beside it, synced, then renamed over the record.
+    /// Write `record` whole or not at all, owner-only.
     pub fn write(&self, record: &KeptStreamRecord) -> Result<()> {
         let record_path = self.record_path_of(&record.stream_name)?;
         let refuse = |what_failed: String| {
@@ -394,22 +388,8 @@ impl KeptStreamRecordsInTheStateDirectory {
             .map_err(|cannot_serialize| refuse(cannot_serialize.to_string()))?;
         record_json.push(b'\n');
 
-        let temporary_path = self.a_temporary_path_beside(&record_path);
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(KEPT_STREAM_RECORD_FILE_MODE)
-            .open(&temporary_path)
-            .and_then(|mut temporary_file| {
-                temporary_file.write_all(&record_json)?;
-                temporary_file.sync_all()
-            })
-            .and_then(|()| std::fs::rename(&temporary_path, &record_path));
-        if let Err(write_failure) = written {
-            let _ = std::fs::remove_file(&temporary_path);
-            return Err(refuse(write_failure.to_string()));
-        }
-        self.sync_the_kept_streams_directory();
+        write_an_owner_only_file_whole(&record_path, &record_json)
+            .map_err(|write_failure| refuse(write_failure.to_string()))?;
         Ok(())
     }
 
@@ -489,21 +469,6 @@ impl KeptStreamRecordsInTheStateDirectory {
         if let Ok(directory) = std::fs::File::open(&self.kept_streams_directory) {
             let _ = directory.sync_all();
         }
-    }
-
-    /// A path in the records' directory no other write uses, hidden from
-    /// [`Self::read_every`].
-    fn a_temporary_path_beside(&self, record_path: &Path) -> PathBuf {
-        static TEMPORARY_RECORD_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let record_file_name = record_path
-            .file_name()
-            .map(|file_name| file_name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.kept_streams_directory.join(format!(
-            ".{record_file_name}.{}.{}.tmp",
-            std::process::id(),
-            TEMPORARY_RECORD_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ))
     }
 }
 

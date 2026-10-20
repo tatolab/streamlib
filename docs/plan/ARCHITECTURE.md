@@ -4158,7 +4158,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-api-server the_upgraded_stream_serves_the_same_tools_and_resources_as_post_mcp -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest tests/stream-on-runtime/test_live_graph_mutation.py -->
-  <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_node_catalog_and_the_live_graph -->
+  <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_node_catalog_the_live_graph_and_the_relay_adapter_catalog -->
   <!-- verify: cargo test -p streamlib-api-server every_step_of_every_prompt_calls_a_tool_the_node_serves -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth -->
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`

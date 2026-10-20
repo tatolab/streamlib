@@ -20,6 +20,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
+use crate::verb_output_table::rendered_padded_table;
 use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard_output};
 
 /// A local API tool that runs, stops or reads the streams the runtime holds.
@@ -195,15 +196,27 @@ pub(crate) fn rendered_compile_warning_lines(run_stream_result: &RunStreamToolRe
 /// The answer `tool` gave, read as `ToolResult`, or the refusal naming what it was instead, for
 /// each caller to wrap in its own failure.
 pub(crate) fn tool_result_from<ToolResult: DeserializeOwned>(
-    tool: StreamActionTool,
+    tool_name: &str,
     tool_result_text: &str,
 ) -> Result<ToolResult, String> {
     serde_json::from_str(tool_result_text).map_err(|parse_failure| {
         format!(
-            "{} answered something other than its result ({parse_failure}): {tool_result_text}",
-            tool.tool_name()
+            "{tool_name} answered something other than its result ({parse_failure}): \
+             {tool_result_text}"
         )
     })
+}
+
+/// Call `tool_name` once on the machine's running runtime, waiting at most `call_timeout`, and
+/// read its result as `ToolResult`.
+pub(crate) fn call_one_tool_reading_its_result<ToolResult: DeserializeOwned>(
+    tool_name: &str,
+    tool_arguments: serde_json::Map<String, serde_json::Value>,
+    call_timeout: Duration,
+) -> Result<ToolResult, TatolabCommandFailure> {
+    let tool_result_text =
+        call_one_tool_of_the_running_runtime(tool_name, tool_arguments, call_timeout)?;
+    tool_result_from(tool_name, &tool_result_text).map_err(TatolabCommandFailure::refused)
 }
 
 /// Call `tool` once on the machine's running runtime, bounded by its own timeout, and read its
@@ -212,12 +225,7 @@ fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
     tool: StreamActionTool,
     tool_arguments: serde_json::Map<String, serde_json::Value>,
 ) -> Result<ToolResult, TatolabCommandFailure> {
-    let tool_result_text = call_one_tool_of_the_running_runtime(
-        tool.tool_name(),
-        tool_arguments,
-        tool.tool_call_timeout(),
-    )?;
-    tool_result_from(tool, &tool_result_text).map_err(TatolabCommandFailure::refused)
+    call_one_tool_reading_its_result(tool.tool_name(), tool_arguments, tool.tool_call_timeout())
 }
 
 /// `count` followed by `noun`, plural unless it is one.
@@ -371,23 +379,7 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
         ]
     });
     let table_rows: Vec<[String; 4]> = std::iter::once(header_row).chain(stream_rows).collect();
-    let column_width = |column_index: usize| {
-        table_rows
-            .iter()
-            .map(|table_row| table_row[column_index].chars().count())
-            .max()
-            .unwrap_or_default()
-    };
-    let [name_width, state_width, nodes_width] =
-        [column_width(0), column_width(1), column_width(2)];
-    let mut rendered_table: String = table_rows
-        .iter()
-        .map(|[name, state, nodes, project]| {
-            format!(
-                "{name:<name_width$}  {state:<state_width$}  {nodes:<nodes_width$}  {project}\n"
-            )
-        })
-        .collect();
+    let mut rendered_table = rendered_padded_table(&table_rows);
     if listed_streams
         .iter()
         .any(|listed_stream| listed_stream.failed_because.is_some())
@@ -813,9 +805,11 @@ mod tests {
 
     #[test]
     fn an_answer_that_is_not_the_tools_result_is_refused_naming_the_tool() {
-        let refusal =
-            tool_result_from::<StartStreamToolResult>(StreamActionTool::StartStream, "{}")
-                .unwrap_err();
+        let refusal = tool_result_from::<StartStreamToolResult>(
+            StreamActionTool::StartStream.tool_name(),
+            "{}",
+        )
+        .unwrap_err();
 
         assert!(
             refusal.starts_with("start_stream answered something other than its result ("),

@@ -8,8 +8,10 @@
 //! graph-mutation verbs `add_node`, `remove_node`,
 //! `connect` and `disconnect`, each naming a node by its name; and the stream
 //! actions `run_stream`, `stop_stream`, `start_stream`, `remove_stream`,
-//! `list_streams` and `expose_port` — and beside them it serves the node
-//! catalog and the live graph as resources ([`crate::mcp_resources`]) and
+//! `list_streams` and `expose_port`; and the relay verbs `add_relay`,
+//! `configure_relay`, `remove_relay` and `list_relays` — and beside them it
+//! serves the node catalog, the live graph and the relay-adapter catalog as
+//! resources ([`crate::mcp_resources`]) and
 //! recipes over those tools as prompts ([`crate::mcp_prompts`]). `rmcp` owns
 //! the protocol; this module owns only what the runtime says through it.
 //!
@@ -60,9 +62,11 @@ use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest, RuntimeOperations,
     StreamListingState, StreamRunOutcome,
 };
+use streamlib_relay_adapter_sdk::{RelayInstanceControlRefusal, RelayInstancesOfThisMachine};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    ListedStreamState, LoadedStreamInstance, LogsToolResult, LogsToolResultRecord,
+    AddRelayToolResult, ConfigureRelayToolResult, ExposePortLevel, ExposePortToolResult,
+    ListRelaysToolResult, ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState,
+    LoadedStreamInstance, LogsToolResult, LogsToolResultRecord, RemoveRelayToolResult,
     RemoveStreamToolResult, RunStreamToolResult, StartStreamToolResult, StopStreamToolResult,
 };
 use tokio_util::sync::CancellationToken;
@@ -77,7 +81,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the local relay, which any MoQ client reads. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings schema; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -197,6 +201,7 @@ impl StreamsAttachedToOneMcpStdioConnection {
 #[derive(Clone)]
 pub(crate) struct LocalApiMcpServerHandler {
     pub(crate) operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    relay_instances: Arc<dyn RelayInstancesOfThisMachine>,
     local_api_stopping_token: CancellationToken,
     mcp_connection: LocalApiMcpConnection,
     tool_router: Arc<ToolRouter<Self>>,
@@ -209,10 +214,12 @@ impl LocalApiMcpServerHandler {
     /// server's graceful shutdown never waits on a host that holds one open.
     pub(crate) fn new(
         operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+        relay_instances: Arc<dyn RelayInstancesOfThisMachine>,
         local_api_stopping_token: CancellationToken,
     ) -> Self {
         Self {
             operations_on_the_loaded_streams,
+            relay_instances,
             local_api_stopping_token,
             mcp_connection: LocalApiMcpConnection::OneShotStreamableHttpRequest,
             tool_router: Arc::new(Self::tool_router()),
@@ -265,6 +272,25 @@ impl LocalApiMcpServerHandler {
             .await
             .map_err(|join_failure| format!("the stream action did not finish: {join_failure}"))?
             .map_err(|refusal: Error| refusal.to_string())
+    }
+}
+
+impl LocalApiMcpServerHandler {
+    /// Run `call` on the machine's relay instances on a blocking task; a
+    /// refusal is the runtime's own words.
+    async fn a_relay_call_off_the_async_runtime<RelayCallOutcome: Send + 'static>(
+        &self,
+        call: impl FnOnce(
+            &dyn RelayInstancesOfThisMachine,
+        ) -> Result<RelayCallOutcome, RelayInstanceControlRefusal>
+        + Send
+        + 'static,
+    ) -> Result<RelayCallOutcome, String> {
+        let relay_instances = Arc::clone(&self.relay_instances);
+        tokio::task::spawn_blocking(move || call(relay_instances.as_ref()))
+            .await
+            .map_err(|join_failure| format!("the relay call did not finish: {join_failure}"))?
+            .map_err(|refusal| refusal.to_string())
     }
 }
 
@@ -446,6 +472,45 @@ struct ExposePortToolArguments {
     )]
     level: OutputPortExposureLevelToolArgument,
 }
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct AddRelayToolArguments {
+    #[schemars(
+        description = "The adapter's kind, as the resource `streamlib://relay-adapter-catalog` lists it."
+    )]
+    adapter: String,
+    #[schemars(
+        description = "The instance's settings, as the adapter's settings schema describes them; each secret among them is kept in the OS secret store, never recorded. Absent is no settings."
+    )]
+    settings: Option<Map<String, Value>>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ConfigureRelayToolArguments {
+    #[schemars(description = "The relay instance, as `list_relays` names it.")]
+    relay_id: String,
+    #[schemars(
+        description = "The settings to replace, each by name; a setting left out keeps its value, and `null` returns one to its default. A secret given here replaces the one held."
+    )]
+    settings: Map<String, Value>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RemoveRelayToolArguments {
+    #[schemars(description = "The relay instance, as `list_relays` names it.")]
+    relay_id: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ListRelaysToolArguments {}
 
 /// A tool's answer: its result, or the message an `isError` result carries.
 type ToolCallAnswer = Result<CallToolResult, String>;
@@ -811,6 +876,81 @@ impl LocalApiMcpServerHandler {
             },
         )
     }
+
+    #[tool(
+        description = "Add a relay instance of an adapter and join it: `adapter` is a kind the resource `streamlib://relay-adapter-catalog` lists, `settings` follows that adapter's settings schema. Answers the `relay_id` the runtime gave it. Each secret among the settings is kept in the OS secret store and never shown again; the rest is recorded in `relays.json` and joined again at every start. An instance that cannot be joined is refused and nothing is recorded. The local relay is built in, so no `local` instance is added."
+    )]
+    async fn add_relay(
+        &self,
+        Parameters(AddRelayToolArguments { adapter, settings }): Parameters<AddRelayToolArguments>,
+    ) -> ToolCallAnswer {
+        let relay_id = self
+            .a_relay_call_off_the_async_runtime(move |relay_instances| {
+                relay_instances.add_relay(&adapter, settings.unwrap_or_default())
+            })
+            .await?;
+        serialized_tool_result(
+            "add_relay",
+            &AddRelayToolResult {
+                relay_id: relay_id.0,
+            },
+        )
+    }
+
+    #[tool(
+        description = "Replace settings of a relay instance and join it again with them, or keep what it had when it cannot be joined. Only the settings named change; `null` returns one to its default; a secret named replaces the one held in the OS secret store."
+    )]
+    async fn configure_relay(
+        &self,
+        Parameters(ConfigureRelayToolArguments { relay_id, settings }): Parameters<
+            ConfigureRelayToolArguments,
+        >,
+    ) -> ToolCallAnswer {
+        let configured_relay_id = relay_id.clone();
+        self.a_relay_call_off_the_async_runtime(move |relay_instances| {
+            relay_instances.configure_relay(&relay_id, settings)
+        })
+        .await?;
+        serialized_tool_result(
+            "configure_relay",
+            &ConfigureRelayToolResult {
+                relay_id: configured_relay_id,
+            },
+        )
+    }
+
+    #[tool(
+        description = "Leave a relay instance and forget it and its secrets. The local relay's built-in instances, `local-loopback` and `local-every-interface`, are never removed."
+    )]
+    async fn remove_relay(
+        &self,
+        Parameters(RemoveRelayToolArguments { relay_id }): Parameters<RemoveRelayToolArguments>,
+    ) -> ToolCallAnswer {
+        let removed_relay_id = relay_id.clone();
+        self.a_relay_call_off_the_async_runtime(move |relay_instances| {
+            relay_instances.remove_relay(&relay_id)
+        })
+        .await?;
+        serialized_tool_result(
+            "remove_relay",
+            &RemoveRelayToolResult {
+                relay_id: removed_relay_id,
+            },
+        )
+    }
+
+    #[tool(
+        description = "List every relay instance the runtime holds, the built-in ones first: its `relay_id`, its `adapter`, whether it is `built_in`, its `settings` with every secret left out, each secret setting by name as `set` or `unset` and never its value, and its `connection_state` — `not_joined` (with `why` when known), `joining`, `joined`, or `lost` (with `why` and `rejoining_after_ms`)."
+    )]
+    async fn list_relays(
+        &self,
+        Parameters(ListRelaysToolArguments {}): Parameters<ListRelaysToolArguments>,
+    ) -> ToolCallAnswer {
+        let relays = self
+            .a_relay_call_off_the_async_runtime(|relay_instances| Ok(relay_instances.list_relays()))
+            .await?;
+        serialized_tool_result("list_relays", &ListRelaysToolResult { relays })
+    }
 }
 
 fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamState {
@@ -892,9 +1032,13 @@ impl ServerHandler for LocalApiMcpServerHandler {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        crate::mcp_resources::read_resource(&self.operations_on_the_loaded_streams, &request.uri)
-            .await
-            .map(Into::into)
+        crate::mcp_resources::read_resource(
+            &self.operations_on_the_loaded_streams,
+            self.relay_instances.as_ref(),
+            &request.uri,
+        )
+        .await
+        .map(Into::into)
     }
 }
 
@@ -1076,6 +1220,10 @@ pub(crate) mod tests {
         "remove_stream",
         "list_streams",
         "expose_port",
+        "add_relay",
+        "configure_relay",
+        "remove_relay",
+        "list_relays",
     ];
 
     /// The tools that act on one stream, each naming it with a required
@@ -1111,7 +1259,7 @@ pub(crate) mod tests {
     /// address.
     const LOCAL_API_MCP_URI: &str = "http://localhost/mcp";
 
-    fn mcp_transport_to(
+    pub(crate) fn mcp_transport_to(
         served: &LocalApiServedOnAFreshSocket,
     ) -> StreamableHttpClientTransport<UnixSocketHttpClient> {
         mcp_transport_naming(served, LOCAL_API_MCP_URI)
@@ -1355,6 +1503,7 @@ pub(crate) mod tests {
     fn the_endpoint_is_stateless_demands_per_request_metadata_and_admits_any_host() {
         let service = local_api_mcp_streamable_http_service(LocalApiMcpServerHandler::new(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            crate::control_plane_stub_support::RelayInstancesOfThisMachineStub::shared(),
             CancellationToken::new(),
         ));
         assert!(!service.config.legacy_session_mode);
@@ -2675,7 +2824,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn resources_list_names_the_node_catalog_and_the_live_graph() {
+    async fn resources_list_names_the_node_catalog_the_live_graph_and_the_relay_adapter_catalog() {
         let result =
             listed_resources_result(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
 
@@ -2685,7 +2834,14 @@ pub(crate) mod tests {
             .iter()
             .map(|resource| resource["uri"].as_str().unwrap())
             .collect();
-        assert_eq!(uris, ["streamlib://node-catalog", "streamlib://graph"]);
+        assert_eq!(
+            uris,
+            [
+                "streamlib://node-catalog",
+                "streamlib://graph",
+                "streamlib://relay-adapter-catalog"
+            ]
+        );
         for resource in result["resources"].as_array().unwrap() {
             assert_eq!(resource["mimeType"], "application/json", "{resource}");
             assert!(

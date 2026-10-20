@@ -228,9 +228,148 @@ pub struct ExposePortToolResult {
     pub not_recorded_because: Option<String>,
 }
 
+/// The `add_relay` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddRelayToolResult {
+    /// The id the runtime gave the new relay instance.
+    pub relay_id: String,
+}
+
+/// The `configure_relay` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigureRelayToolResult {
+    /// The relay instance configured.
+    pub relay_id: String,
+}
+
+/// The `remove_relay` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoveRelayToolResult {
+    /// The relay instance left and forgotten.
+    pub relay_id: String,
+}
+
+/// The `list_relays` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListRelaysToolResult {
+    /// Every relay instance the runtime holds, the built-in ones first.
+    pub relays: Vec<ListedRelayInstance>,
+}
+
+/// One relay instance of a [`ListRelaysToolResult`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedRelayInstance {
+    /// The instance's id.
+    pub relay_id: String,
+    /// The adapter it is joined through, as the relay-adapter catalog names it.
+    pub adapter: String,
+    /// Whether it is built in, and so never removed.
+    pub built_in: bool,
+    /// Its settings, every secret left out.
+    pub settings: serde_json::Map<String, serde_json::Value>,
+    /// Each secret setting its adapter takes, by name, and whether it is set.
+    pub secrets: std::collections::BTreeMap<String, ListedRelaySecretPresence>,
+    /// Where it stands with its relay.
+    pub connection_state: ListedRelayConnectionState,
+}
+
+/// Whether a relay instance's secret setting holds a value; never the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ListedRelaySecretPresence {
+    /// The secret store holds a value for it.
+    Set,
+    /// Nothing is held for it.
+    Unset,
+}
+
+impl std::fmt::Display for ListedRelaySecretPresence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            ListedRelaySecretPresence::Set => "set",
+            ListedRelaySecretPresence::Unset => "unset",
+        })
+    }
+}
+
+/// Where a relay instance stands with its relay, as `list_relays` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ListedRelayConnectionState {
+    /// Not joined, or left; `why` says why when the runtime knows.
+    NotJoined {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        why: Option<String>,
+    },
+    /// Joining, with nothing yet to dial.
+    Joining,
+    /// Joined.
+    Joined,
+    /// Lost after joining, and joining again after `rejoining_after_ms`.
+    Lost {
+        why: String,
+        rejoining_after_ms: u64,
+    },
+}
+
+impl std::fmt::Display for ListedRelayConnectionState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ListedRelayConnectionState::NotJoined { why: None } => {
+                formatter.write_str("not joined")
+            }
+            ListedRelayConnectionState::NotJoined { why: Some(why) } => {
+                write!(formatter, "not joined: {why}")
+            }
+            ListedRelayConnectionState::Joining => formatter.write_str("joining"),
+            ListedRelayConnectionState::Joined => formatter.write_str("joined"),
+            ListedRelayConnectionState::Lost {
+                why,
+                rejoining_after_ms,
+            } => write!(
+                formatter,
+                "lost ({why}); joining again in {rejoining_after_ms} ms"
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listed_relay_names_each_secret_set_or_unset_and_its_state_by_tag() {
+        let listed = ListRelaysToolResult {
+            relays: vec![ListedRelayInstance {
+                relay_id: "cloudflare-1".to_owned(),
+                adapter: "cloudflare".to_owned(),
+                built_in: false,
+                settings: serde_json::json!({"region": "us"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                secrets: [("token".to_owned(), ListedRelaySecretPresence::Set)].into(),
+                connection_state: ListedRelayConnectionState::Lost {
+                    why: "refused".to_owned(),
+                    rejoining_after_ms: 2000,
+                },
+            }],
+        };
+        let wire_text = serde_json::to_string(&listed).unwrap();
+        assert_eq!(
+            wire_text,
+            r#"{"relays":[{"relay_id":"cloudflare-1","adapter":"cloudflare","built_in":false,"settings":{"region":"us"},"secrets":{"token":"set"},"connection_state":{"state":"lost","why":"refused","rejoining_after_ms":2000}}]}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<ListRelaysToolResult>(&wire_text).unwrap(),
+            listed
+        );
+        assert_eq!(
+            serde_json::to_string(&ListedRelayConnectionState::NotJoined { why: None }).unwrap(),
+            r#"{"state":"not_joined"}"#
+        );
+    }
 
     /// Each stream-action result in the order and spelling the runtime writes its keys.
     #[test]

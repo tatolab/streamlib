@@ -27,7 +27,9 @@ use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt;
 
 use crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge_at_the_engines_configured_level;
-use crate::core::logging::init::the_engines_configured_tracing_filter;
+use crate::core::logging::init::{
+    mcp_message_contents_kept_off_the_log, the_engines_configured_tracing_filter,
+};
 use crate::core::logging::layer::JsonlSinkLayer;
 use crate::core::logging::record::LogRecord;
 use crate::core::logging::worker::{DrainWorkerRecordQueue, WorkerSignal};
@@ -184,6 +186,7 @@ pub fn capture_this_helper_processes_engine_log_records() -> Result<HelperProces
     );
     let subscriber = Registry::default()
         .with(the_engines_configured_tracing_filter())
+        .with(mcp_message_contents_kept_off_the_log())
         .with(layer);
     tracing::dispatcher::set_global_default(Dispatch::new(subscriber)).map_err(|already| {
         anyhow::anyhow!(

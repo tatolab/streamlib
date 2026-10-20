@@ -50,9 +50,14 @@ CONTROL_TOOL_NAMES = {
     "remove_stream",
     "list_streams",
     "expose_port",
+    "add_relay",
+    "configure_relay",
+    "remove_relay",
+    "list_relays",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"
+RELAY_ADAPTER_CATALOG_RESOURCE_URI = "streamlib://relay-adapter-catalog"
 
 
 def mcp_verb_command(runtime_unit: RuntimeUnitUnderTest) -> "list[str]":
@@ -112,7 +117,11 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
             )
             resources = {
                 uri: (await client.read_resource(uri)).contents
-                for uri in (NODE_CATALOG_RESOURCE_URI, LIVE_GRAPH_RESOURCE_URI)
+                for uri in (
+                    NODE_CATALOG_RESOURCE_URI,
+                    LIVE_GRAPH_RESOURCE_URI,
+                    RELAY_ADAPTER_CATALOG_RESOURCE_URI,
+                )
             }
             prompt = await client.get_prompt(
                 "fan_output_to_another_consumer",

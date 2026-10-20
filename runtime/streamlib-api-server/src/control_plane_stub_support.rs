@@ -564,12 +564,15 @@ impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for Capture
     }
 }
 
-/// The real router over `operations_on_the_loaded_streams`, served on a
-/// local API socket at `local_api_socket_path` until the returned server is
-/// dropped.
+/// The real router over `operations_on_the_loaded_streams` and
+/// `relay_instances`, served on a local API socket at `local_api_socket_path`
+/// until the returned server is dropped.
 pub(crate) fn serve_the_control_plane_router_at(
     operations_on_the_loaded_streams: ::std::sync::Arc<
         dyn ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime,
+    >,
+    relay_instances: ::std::sync::Arc<
+        dyn ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine,
     >,
     local_api_socket_path: &::std::path::Path,
 ) -> crate::local_api_socket::RunningLocalApiSocketServer {
@@ -579,6 +582,7 @@ pub(crate) fn serve_the_control_plane_router_at(
             |local_api_stopping_token| {
                 crate::handlers::build_router(
                     operations_on_the_loaded_streams,
+                    relay_instances,
                     local_api_stopping_token,
                 )
             },
@@ -596,9 +600,26 @@ pub(crate) struct LocalApiServedOnAFreshSocket {
 }
 
 impl LocalApiServedOnAFreshSocket {
+    /// Over `operations_on_the_loaded_streams`, its relays a
+    /// [`RelayInstancesOfThisMachineStub`].
     pub(crate) fn over(
         operations_on_the_loaded_streams: ::std::sync::Arc<
             dyn ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime,
+        >,
+    ) -> Self {
+        Self::over_with_relay_instances(
+            operations_on_the_loaded_streams,
+            RelayInstancesOfThisMachineStub::shared(),
+        )
+    }
+
+    /// Over `operations_on_the_loaded_streams` and `relay_instances`.
+    pub(crate) fn over_with_relay_instances(
+        operations_on_the_loaded_streams: ::std::sync::Arc<
+            dyn ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime,
+        >,
+        relay_instances: ::std::sync::Arc<
+            dyn ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine,
         >,
     ) -> Self {
         let socket_directory = ::tempfile::tempdir().expect("a temp directory");
@@ -606,6 +627,7 @@ impl LocalApiServedOnAFreshSocket {
         Self {
             running_server: Some(serve_the_control_plane_router_at(
                 operations_on_the_loaded_streams,
+                relay_instances,
                 &local_api_socket_path,
             )),
             local_api_socket_path,
@@ -635,4 +657,187 @@ pub(crate) async fn response_head_over_the_socket(
         head.push(byte[0]);
     }
     String::from_utf8(head).unwrap()
+}
+
+/// The adapter kind the relay stub catalogs beside the local one.
+pub(crate) const STUB_RELAY_ADAPTER_KIND: &str = "stub-provider";
+
+/// One call the relay stub took, in its own words, secrets and all.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RelayInstancesStubCall {
+    Added {
+        adapter: String,
+        settings: ::serde_json::Map<String, ::serde_json::Value>,
+    },
+    Configured {
+        relay_id: String,
+        settings: ::serde_json::Map<String, ::serde_json::Value>,
+    },
+    Removed {
+        relay_id: String,
+    },
+}
+
+/// A machine's relays as the tools' tests need them: the local relay's two
+/// built-in instances and a `stub-provider` adapter whose `token` is a secret,
+/// each call recorded.
+#[derive(Default)]
+pub(crate) struct RelayInstancesOfThisMachineStub {
+    pub(crate) calls: ::parking_lot::Mutex<Vec<RelayInstancesStubCall>>,
+}
+
+impl RelayInstancesOfThisMachineStub {
+    /// A fresh stub, shared as the router takes it.
+    pub(crate) fn shared()
+    -> ::std::sync::Arc<dyn ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine> {
+        ::std::sync::Arc::new(Self::default())
+    }
+}
+
+const STUB_BUILT_IN_RELAY_IDS: [&str; 2] = ["local-loopback", "local-every-interface"];
+
+impl ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine
+    for RelayInstancesOfThisMachineStub
+{
+    fn relay_adapter_catalog(
+        &self,
+    ) -> Vec<::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry> {
+        vec![
+            ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
+                kind: "local".to_string(),
+                doc: "The machine's own relay, built in.".to_string(),
+                settings_schema: ::serde_json::json!({
+                    "type": "object",
+                    "properties": {"port": {"type": ["integer", "null"]}}
+                }),
+            },
+            ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
+                kind: STUB_RELAY_ADAPTER_KIND.to_string(),
+                doc: "A hosted relay standing in for a provider.".to_string(),
+                settings_schema: ::serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "region": {"type": "string"},
+                        "token": {"type": "string", "writeOnly": true}
+                    }
+                }),
+            },
+        ]
+    }
+
+    fn add_relay(
+        &self,
+        adapter: &str,
+        settings: ::serde_json::Map<String, ::serde_json::Value>,
+    ) -> Result<
+        ::streamlib_relay_adapter_sdk::RelayInstanceId,
+        ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal,
+    > {
+        if adapter != STUB_RELAY_ADAPTER_KIND {
+            return Err(
+                ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal::UnknownAdapter {
+                    adapter: adapter.to_string(),
+                    known: format!("`local`, `{STUB_RELAY_ADAPTER_KIND}`"),
+                },
+            );
+        }
+        self.calls.lock().push(RelayInstancesStubCall::Added {
+            adapter: adapter.to_string(),
+            settings,
+        });
+        Ok(::streamlib_relay_adapter_sdk::RelayInstanceId(format!(
+            "{STUB_RELAY_ADAPTER_KIND}-1"
+        )))
+    }
+
+    fn configure_relay(
+        &self,
+        relay_id: &str,
+        settings: ::serde_json::Map<String, ::serde_json::Value>,
+    ) -> Result<(), ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal> {
+        self.calls.lock().push(RelayInstancesStubCall::Configured {
+            relay_id: relay_id.to_string(),
+            settings,
+        });
+        Ok(())
+    }
+
+    fn remove_relay(
+        &self,
+        relay_id: &str,
+    ) -> Result<(), ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal> {
+        if STUB_BUILT_IN_RELAY_IDS.contains(&relay_id) {
+            return Err(
+                ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal::BuiltInRelayIsNeverRemoved {
+                    relay_id: relay_id.to_string(),
+                },
+            );
+        }
+        self.calls.lock().push(RelayInstancesStubCall::Removed {
+            relay_id: relay_id.to_string(),
+        });
+        Ok(())
+    }
+
+    fn list_relays(
+        &self,
+    ) -> Vec<::streamlib_runtime_client_contract::local_api_wire_contract::ListedRelayInstance>
+    {
+        use ::streamlib_runtime_client_contract::local_api_wire_contract::{
+            ListedRelayConnectionState, ListedRelayInstance, ListedRelaySecretPresence,
+        };
+        let mut listed: Vec<ListedRelayInstance> = STUB_BUILT_IN_RELAY_IDS
+            .iter()
+            .map(|relay_id| ListedRelayInstance {
+                relay_id: relay_id.to_string(),
+                adapter: "local".to_string(),
+                built_in: true,
+                settings: ::serde_json::Map::new(),
+                secrets: Default::default(),
+                connection_state: ListedRelayConnectionState::Joined,
+            })
+            .collect();
+        listed.push(ListedRelayInstance {
+            relay_id: format!("{STUB_RELAY_ADAPTER_KIND}-1"),
+            adapter: STUB_RELAY_ADAPTER_KIND.to_string(),
+            built_in: false,
+            settings: ::serde_json::json!({"region": "us"})
+                .as_object()
+                .expect("an object")
+                .clone(),
+            secrets: [("token".to_string(), ListedRelaySecretPresence::Set)].into(),
+            connection_state: ListedRelayConnectionState::Joining,
+        });
+        listed
+    }
+}
+
+/// One HTTP/1.1 GET over the socket at `local_api_socket_path`: its status
+/// line and body.
+pub(crate) async fn http_get_over_the_local_api_socket(
+    local_api_socket_path: &std::path::Path,
+    request_target: &str,
+) -> (String, String) {
+    let mut connection = tokio::net::UnixStream::connect(local_api_socket_path)
+        .await
+        .expect("the local API socket accepts a connection");
+    ::tokio::io::AsyncWriteExt::write_all(
+        &mut connection,
+        format!("GET {request_target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut answer = Vec::new();
+    ::tokio::io::AsyncReadExt::read_to_end(&mut connection, &mut answer)
+        .await
+        .unwrap();
+    let answer = String::from_utf8_lossy(&answer).into_owned();
+    let (head, body) = answer
+        .split_once("\r\n\r\n")
+        .expect("a complete response head");
+    (
+        head.lines().next().unwrap_or_default().to_string(),
+        body.to_string(),
+    )
 }
