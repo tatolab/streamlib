@@ -134,10 +134,10 @@ expect_warn "tatolab run from inside an example directory is noted" example_laun
 # ── The observation verbs stay silent ────────────────────────────────
 # /verify-live exposes a port and reads its track at the local relay; a note on
 # each read would bury the audit in reminders.
-run_hook 'tatolab expose main encoder encoded_video'
+run_hook 'tatolab expose main h264encoder encoded_video'
 expect_silent "tatolab expose is a control-plane write that launches nothing"
 
-run_hook 'target/release/tatolab-read-track http://127.0.0.1:4443 desk/main.hang encoder/encoded_video --count 30 --out /tmp/e2e/track'
+run_hook 'target/release/tatolab-read-track http://127.0.0.1:4443 desk/main.hang h264encoder/encoded_video --count 30 --out /tmp/e2e/track'
 expect_silent "tatolab-read-track reads a track as any MoQ client does"
 
 run_hook 'tatolab streams'
@@ -246,8 +246,8 @@ expect_silent "cargo run of a workspace tool stays silent"
 run_hook 'cargo run -p camera-display'
 expect_silent "no -p spelling reaches an example crate"
 
-run_hook 'cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/main.hang encoder/encoded_video --count 30 --out /tmp/e2e/track'
-expect_silent "cargo run -p tatolab-read-track is a workspace tool, not a launch"
+run_hook 'cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/main.hang h264encoder/encoded_video --count 30 --out /tmp/e2e/track' '/home/dev/streamlib/examples/camera-display'
+expect_silent "cargo run -p tatolab-read-track from inside an example directory is a workspace tool, not a launch"
 
 run_hook 'cargo run --release' '/home/dev/streamlib/examples/jpeg-psnr'
 expect_warn "cargo run from inside an example directory is noted" example_launch

@@ -14,7 +14,7 @@ Device indices, driver, and cameras come from `docs/rig-profile.local.md` plus a
 Pick the scenario from the change class, reading the fixture scripts under the engine's `tests/fixtures/` to derive the current commands (they drift — do not cache them here):
 
 - **Encoder/decoder change** → the encoder/decoder round trip — the colour rig, a sender stream and a receiver stream — run for both codecs.
-- **Camera / GPU-compute / GPU-texture change, no codec** → the camera-or-kernel scenario: the `tatolab new` scaffold with the change's source or effect swapped in, its encoder's track read and decoded.
+- **Camera / GPU-compute / GPU-texture change, no codec** → the camera-or-kernel through the encoder scenario: the `tatolab new` scaffold with the change's source or effect swapped in, its encoder's track read and decoded.
 - **Frame-ordering / timestamp / drop-sensitive change** → the v4l2loopback motion scenario (a source with a visible per-frame counter, so a drop or repeat is visible by eye).
 - **Color-path change** → the PSNR fixture rigs, including at least one negative-injection mode to prove the gate is non-vacuous.
 

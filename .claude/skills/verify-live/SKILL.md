@@ -26,7 +26,7 @@ When unsure, default to the more demanding scenario (the round trip also exercis
 
 **The runtime has no door for verification.** A port is read the way any user reads it: exposed, it is a track at the machine's local relay, and `tatolab-read-track` — a stock MoQ subscriber built from this checkout, never part of the runtime unit — writes what it reads to files (`read-live-track`). No window, no display server, no runtime-side image conversion.
 
-**Only an encoded port carries pixels off the process.** A raw-frame port's record carries a surface id, which means nothing outside the runtime. So the pixels you read are an encoder's output: the scaffold's `encoder/encoded_video`, or — for a mid-graph port — an `H264Encoder` the stream chains off that port, its `encoded_video` exposed. Chaining a node is a topology a user could ship; the observation adds no door.
+**Only an encoded port carries pixels off the process.** A raw-frame port's record carries a surface id, which means nothing outside the runtime. So the pixels you read are an encoder's output: the scaffold's `h264encoder/encoded_video`, or — for a mid-graph port — an `H264Encoder` the stream chains off that port, its `encoded_video` exposed. Chaining a node is a topology a user could ship; the observation adds no door.
 
 **Deriving the address.** From `tatolab graph --stream <stream>`: the `machine`, the `stream`, the encoder node's `name` and its output port under `ports.outputs`. The broadcast is `<machine>/<stream>.hang` and the track `<node>/<port>`. A node's name is already cast to lowercase URL-safe (a defaulted `H264Encoder` is `h264encoder`, `name="encoder"` is `encoder`), so copy it out of the graph rather than spelling it from the stream source. `exposed` in the same graph says whether the port is a track yet; when it is not, `tatolab expose <stream> <node> <port>` makes it a private one.
 
@@ -42,7 +42,9 @@ with open(sys.argv[2], "wb") as elementary_stream:
     for line in (dump / "objects.jsonl").read_text().splitlines():
         elementary_stream.write((dump / json.loads(line)["file"]).read_bytes())
 ' <dir>/track <dir>/encoded.h264
-ffmpeg -hide_banner -loglevel error -nostdin -f h264 -i <dir>/encoded.h264 -fps_mode passthrough -pix_fmt rgb24 <dir>/frames/%04d.png
+mkdir -p <dir>/frames
+ffmpeg -hide_banner -loglevel error -nostdin -f h264 -i <dir>/encoded.h264 -fps_mode passthrough -pix_fmt rgb24 \
+  <dir>/frames/%04d.png 2> <dir>/ffmpeg.log
 ```
 
 `<relay-url>` is the local relay's loopback listener: `http://127.0.0.1:4443` for the machine's runtime and every fixture's, the port the session's runtime was given otherwise (`drive-running-stream`). `-f hevc` and `encoded.hevc` for `H265Encoder`. This is the colour rig's own decode (`e2e_fixture_psnr_test_pattern.sh`) — read it when this drifts.

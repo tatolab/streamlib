@@ -25,8 +25,8 @@ Read the addresses of the ports you want to read out of this snapshot — the `m
 ### 3. Read N objects per port to disk
 Repeat per port, exposing an internal one first (`read-live-track`):
 ```bash
-target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang encoder/encoded_video \
-  --count 30 --out "$EVIDENCE_DIR/track-encoder-encoded_video"
+target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang <encoder>/encoded_video \
+  --count 30 --out "$EVIDENCE_DIR/track-<encoder>-encoded_video"
 target/release/tatolab-read-track http://127.0.0.1:4443 <machine>/<stream>.hang microphonesource/audio \
   --count 30 --out "$EVIDENCE_DIR/track-microphonesource-audio"
 ```

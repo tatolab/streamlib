@@ -33,7 +33,7 @@ target/release/tatolab-read-track http://127.0.0.1:4443 desk/lab.hang encoder/en
 
 ### 4. Read the dump
 The directory holds one `object-NNNNNN.bin` per object, `objects.jsonl` indexing them (`index`, `group_sequence`, `starts_group`, `timestamp_ns`, `file`, `payload`), and `catalog_entry.json`, the track's entry in the broadcast's catalog when one listed it. `payload` says what each file holds:
-- **`codec_payload_of_the_hang_legacy_container`** — an encoded video or audio port: the codec's own payload, so the files concatenated in index order are an Annex-B `.h264` / `.hevc` stream ffmpeg decodes (`verify-live` § Reading pixels). The dump opens on a group's first object, where a decoder can start.
+- **`codec_payload_of_the_hang_legacy_container`** — an encoded video or audio port: each file is one codec packet. An H.264 / H.265 track's files concatenated in index order are an Annex-B `.h264` / `.hevc` stream ffmpeg decodes (`verify-live` § Reading pixels); an Opus track's are one packet each, with no container joining them. The dump opens on a group's first object, where a decoder can start.
 - **`as_sent`** — any other port: the msgpack record the node wrote. Decode it with the port's wire contract (`docs/plan/ARCHITECTURE.md`). A raw-frame port's record carries a surface id, which means nothing outside the runtime — to see its pixels, chain an encoder off it and read that.
 
 Interpreting it:
