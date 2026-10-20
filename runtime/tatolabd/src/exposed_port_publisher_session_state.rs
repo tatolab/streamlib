@@ -83,7 +83,9 @@ pub(crate) struct ExposedPortPublisherSessionStateOfOneDial {
 
 impl ExposedPortPublisherSessionStateOfOneDial {
     /// The reports of a dial starting now into `session_state`.
-    pub(crate) fn into(session_state: ExposedPortPublisherSessionStateSender) -> Self {
+    pub(crate) fn of_a_dial_starting_now(
+        session_state: ExposedPortPublisherSessionStateSender,
+    ) -> Self {
         Self {
             session_state,
             hung_up: Arc::new(AtomicBool::new(false)),
@@ -146,7 +148,9 @@ mod tests {
     #[test]
     fn a_dial_hung_up_reports_nothing_after_its_hang_up() {
         let session_state = a_relay_instances_session_state_not_dialed();
-        let reports = ExposedPortPublisherSessionStateOfOneDial::into(session_state.clone());
+        let reports = ExposedPortPublisherSessionStateOfOneDial::of_a_dial_starting_now(
+            session_state.clone(),
+        );
         reports.report(ExposedPortPublisherSessionState::Connected);
         assert_eq!(
             *session_state.borrow(),
@@ -158,7 +162,7 @@ mod tests {
             *session_state.borrow(),
             ExposedPortPublisherSessionState::NotDialed
         );
-        ExposedPortPublisherSessionStateOfOneDial::into(session_state.clone())
+        ExposedPortPublisherSessionStateOfOneDial::of_a_dial_starting_now(session_state.clone())
             .report(ExposedPortPublisherSessionState::Dialing);
         assert_eq!(
             *session_state.borrow(),

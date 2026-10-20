@@ -91,8 +91,10 @@ impl RelayTheExposedPortPublisherDials {
     /// Whether its credential must be replaced by a fresh one at `now`: its
     /// renewal is due, or the relay ended the session the credential opened.
     pub(crate) fn its_credential_is_due_at(&self, now: Instant) -> bool {
-        self.renew_by
-            .is_some_and(|renew_by| renew_by <= now || self.its_session_ended())
+        let Some(renew_by) = self.renew_by else {
+            return false;
+        };
+        renew_by <= now || self.its_session_ended()
     }
 
     /// Whether `other` is dialed exactly as this is.
@@ -274,7 +276,9 @@ impl RelayDialedByThePublisher {
             .connect(dial_url);
         tracing::info!(relay = %relay.relay_id, "the publisher dials the relay");
         let session_state_reports =
-            ExposedPortPublisherSessionStateOfOneDial::into(relay.session_state.clone());
+            ExposedPortPublisherSessionStateOfOneDial::of_a_dial_starting_now(
+                relay.session_state.clone(),
+            );
         let session_state_reporting = tokio::spawn(report_the_session_state_as_it_changes(
             relay.relay_id.clone(),
             session.clone(),
@@ -1318,6 +1322,8 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
+        // Never polled, so no dial's reporter runs: the session state is the
+        // test's to set, and what the hang-up wrote stays.
         let _entered = async_runtime.enter();
         let mut publisher = ExposedPortPublisher {
             relays: Vec::new(),
