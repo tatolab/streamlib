@@ -317,10 +317,10 @@ expect_warn "an e2e fixture script run directly is noted" e2e_fixture
 run_hook './runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/va'
 expect_warn "an e2e fixture script run by relative path is noted" e2e_fixture
 
-run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-full h264 2>&1 | tail -45'
+run_hook 'TOLERANCE=0.05 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-full h264 2>&1 | tail -45'
 expect_warn "an env-prefixed e2e fixture run is noted" e2e_fixture
 
-run_hook 'INJECT_BUG=swap-chroma OBJECT_COUNT=10 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-v h264'
+run_hook 'INJECT_BUG=swap-chroma RUN_LABEL="swap chroma" OBJECT_COUNT=10 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/psnr-v h264'
 expect_warn "a quoted env value with a space does not hide the run" e2e_fixture
 
 run_hook 'timeout 2400 bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/vivid-h264 h264 2>&1 | grep -E "RESULT"'
