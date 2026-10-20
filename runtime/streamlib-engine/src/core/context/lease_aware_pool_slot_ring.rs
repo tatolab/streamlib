@@ -303,8 +303,8 @@ impl<'leases> PoolSlotReuse<'leases> {
     }
 }
 
-/// The slots one producer (or one pool key) publishes frames from, handed out
-/// in ring order with held slots skipped.
+/// The slots one producer (or one pool key) publishes frames from, the unheld
+/// one published longest ago handed out next.
 pub(crate) struct LeaseAwarePoolSlotRing<Resource> {
     slots: Vec<LeaseAwarePoolSlot<Resource>>,
     hand_offs_so_far: u64,
@@ -352,7 +352,7 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
     }
 
     /// Take one slot out of the ring, its published generation with it; the
-    /// slots left keep their ring order.
+    /// slots left keep their generations and hand-off order.
     pub(crate) fn take_out_the_slot_at(
         &mut self,
         slot_index: usize,
