@@ -870,7 +870,7 @@ entry reads as **message** (the glossary).
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ moq-relays; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ moq-relays, relay-track-reading; OPEN: resources across streams)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -3391,7 +3391,7 @@ entry reads as **message** (the glossary).
   Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
   #2721]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ moq-relays)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ moq-relays, relay-track-reading)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
