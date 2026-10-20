@@ -309,6 +309,9 @@ mod tests {
         use crate::core::context::GpuContext;
         use crate::core::rhi::TextureFormat;
         use crate::core::test_support::LiveSurfaceShareServiceForATest;
+        use crate::core::test_support::rig_only_capability_skip::{
+            RigOnlyCapability, skip_unless_this_machine_has,
+        };
         use crate::host_rhi::{HostGpuDeviceExt as _, HostSurfaceStoreExt as _};
         use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
 
@@ -320,8 +323,14 @@ mod tests {
             println!("Skipping - no GPU device available");
             return;
         };
-        if !gpu.device().vulkan_device().supports_video_encode() {
-            println!("Skipping - the device has no Vulkan Video encode queue");
+        let vulkan_device = gpu.device().vulkan_device();
+        if skip_unless_this_machine_has(
+            RigOnlyCapability::VulkanVideo,
+            vulkan_device.supports_video_encode(),
+        ) || skip_unless_this_machine_has(
+            RigOnlyCapability::DmaBufModifiers,
+            vulkan_device.has_render_target_modifier_for_texture_format(TextureFormat::Rgba8Unorm),
+        ) {
             return;
         }
         let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
