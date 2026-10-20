@@ -28,9 +28,11 @@ so their reports are directly comparable.
 - **`verify_audio_loopback.sh [--count N] [--path P]` — through-engine.**
   `SpeakerSink` plays the signal into the same null sink and `MicrophoneSource` captures it back
   off that sink's monitor, so both ends are StreamLib. It also runs the block-level channel
-  contract on the microphone's own port on the way through (cadence, timestamp continuity, a frame
-  the engine did not re-stamp), and fails on that before it ever measures the signal. `--count` is
-  how many bags that intermediate tap collects, not anything about the signal; `--path` is macOS-only (below) and exits 2 elsewhere.
+  contract on the microphone's own port on the way through — `verify_audio_channel.sh` reads that
+  port's `AudioBlock` track at the local relay with `tatolab-read-track` and decodes each object's
+  msgpack in the script (cadence, timestamp continuity, a frame the engine did not re-stamp) — and
+  fails on that before it ever measures the signal. `--count` is how many objects that
+  intermediate read measures, not anything about the signal; `--path` is macOS-only (below) and exits 2 elsewhere.
 
 **Through-engine is the default.** It is the question a PR usually has. Run rig-only alone only
 when the engine will not build, or when you are checking the machine rather than the change.
@@ -174,16 +176,16 @@ through-engine run the *channel* report JSON goes to stderr as well, because tha
 intermediate one. Don't mistake it for the signal report on stdout.
 
 **Artifacts land in a `mktemp` directory named on the last `artifacts: <dir>` line of stderr.** A
-through-engine run prints two: the first is the nested channel tap's directory, the last is the
+through-engine run prints two: the first is the nested channel read's directory, the last is the
 loopback's own. Take the last one — that is where `captured.wav`, `spectrogram.png` and `node.log`
 are.
 
 **On any non-zero exit, recover the directory rather than trusting the last `artifacts:` line.**
 An analyser `FAIL` prints that line exactly as a pass does, so far so good. But a *channel*
-contract that fails its analysis prints exactly one `artifacts:` line — the nested tap's — and
+contract that fails its analysis prints exactly one `artifacts:` line — the nested read's — and
 "take the last one" then lands you in a `streamlib-audio-channel-` directory with no `node.log`,
 no `captured.wav` and no spectrogram. Anything that fails earlier still (channel resolution, the
-tap itself, the speaker-format refusal, a runtime that never served) prints none at all. Those are
+track read itself, the speaker-format refusal, a runtime that never served) prints none at all. Those are
 exactly the runs whose `node.log` you need:
 
 ```bash
@@ -201,7 +203,7 @@ because that is where the fixtures put artifacts: on macOS `TMPDIR` is a per-use
 `/var/folders/…` directory, so a bare `/tmp` glob there finds nothing.
 
 The rig-only fixture is the only one that takes an output directory as an argument, and it tees a
-`report.json` into it; the nested channel tap writes one into its own directory too. The
+`report.json` into it; the nested channel read writes one into its own directory too, beside the track dump. The
 through-engine fixture's own signal report is the one that exists on stdout alone — capture it
 yourself.
 
@@ -332,8 +334,8 @@ without its label invites it to be read as though it were.
 - Holes: `missing_loud_audio_ms` <n> · `silent_stretch_ms` <n> · `emptiest_region` <region>
 - Acoustic only: `raw_tone_rms_dbfs` <n> · `room_noise_rms_dbfs` <n> · `tone_to_noise_db` <n> ·
   `exact_zero_stretch_ms` <n> · output volume <n> — or `n/a`
-- Channel contract (through-engine only): <verdict + `bags_dropped_by_the_tap`, or "n/a">
-- Tapped channel belonged to this run's own stream: yes — `<tapped stream name>` vs `node.log` | n/a
+- Channel contract (through-engine only): <verdict + `blocks` · `block_continuity_error_ms` · `track_versus_block_timestamp_error_ns`, or "n/a">
+- Track read belonged to this run's own stream: yes — `<broadcast read>` vs `node.log` | n/a
 
 #### Spectrogram
 
