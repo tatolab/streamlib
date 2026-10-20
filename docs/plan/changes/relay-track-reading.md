@@ -1,5 +1,7 @@
 # relay-track-reading
 
+> **Approved by the owner, 2026-10-20**, as written, with its stated assumptions.
+
 The build of the §Networking align of 2026-10-20 (`ARCHITECTURE.md:3825-3843`, ADR
 `docs/decisions/relay-track-reading.md`, evidence `docs/research/2026-10-20-audio-groups-over-moq.md`).
 
