@@ -245,7 +245,12 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
     let sequence_parameter_set = constrained_baseline_320x180_sequence_parameter_set();
     let idr_slice = an_idr_slice_larger_than_one_packet();
     let access_unit = annex_b(&[&sequence_parameter_set, PICTURE_PARAMETER_SET, &idr_slice]);
-    let media_frame = hang_legacy_container_media_frame_bytes(1_000_000, &access_unit).unwrap();
+    // 0x1_4141_4141 microseconds: the eight-byte varint `C0 00 00 01 41 41 41
+    // 41` holds a start code and a slice header after it, so the H.264
+    // payloader would send it as a NAL unit of its own if the session left it
+    // on — bytes before a stream's first start code it drops without a word.
+    let media_frame =
+        hang_legacy_container_media_frame_bytes(0x1_4141_4141 * 1_000, &access_unit).unwrap();
 
     // The first frames are written before the DTLS handshake has necessarily
     // completed, and a track drops what it cannot yet send — so this publishes

@@ -343,11 +343,11 @@ class WhipPublisher:
                 session.write_video_media_frame(message.payload, message.timestamp_ns)
             else:
                 session.write_audio_media_frame(message.payload)
-        except ValueError as not_a_media_frame:
+        except ValueError as refused_media_frame:
             raise ValueError(
-                f"WhipPublisher: a message on `{message.inbound_link}` is not a "
-                f"media frame: {not_a_media_frame}"
-            ) from not_a_media_frame
+                f"WhipPublisher: a message on `{message.inbound_link}` is "
+                f"refused: {refused_media_frame}"
+            ) from refused_media_frame
         self._report_progress()
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
