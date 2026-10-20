@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A file only its owner reads, replaced whole or not at all.
+//! A file only its owner reads, replaced whole or not at all: the kept-stream
+//! records, `relays.json` and the relay secrets' fallback file.
 
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
@@ -9,11 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Only the owner reads or writes the file.
-pub(crate) const OWNER_ONLY_FILE_MODE: u32 = 0o600;
+pub const OWNER_ONLY_FILE_MODE: u32 = 0o600;
 
 /// Write `contents` to `path` whole or not at all: to an owner-only temporary
-/// file beside it, synced, then renamed over it, its directory synced after.
-pub(crate) fn write_an_owner_only_file_whole(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+/// file beside it — hidden, `.<name>.<pid>.<n>.tmp` — synced, then renamed over
+/// it, its directory synced after, best effort.
+pub fn write_an_owner_only_file_whole(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let temporary_path = a_temporary_path_beside(path);
     let written = std::fs::OpenOptions::new()
         .write(true)

@@ -15,7 +15,8 @@ mod loopback_http_listener_of_this_runtime;
 mod machine_stream_hosting;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 mod numbered_message_writer_test_node;
-mod owner_only_file_written_whole;
+#[cfg(not(feature = "machine-directories-under-a-test-root"))]
+mod os_relay_secret_store;
 mod refusal_on_standard_error;
 mod relay_instances_of_this_runtime;
 mod relay_instances_record;

@@ -4,12 +4,14 @@
 //! `<state>/relays.json`: every relay instance the runtime joins at its start,
 //! `[{relay_id, adapter, settings}]`, holding no secret.
 
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::owner_only_file_written_whole::write_an_owner_only_file_whole;
+use streamlib_runtime_client_contract::owner_only_file_written_whole::write_an_owner_only_file_whole;
 
 /// One relay instance as `relays.json` records it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,8 +34,8 @@ impl RelayInstancesRecordFile {
         Self { path }
     }
 
-    /// The file's path.
-    pub(crate) fn path(&self) -> &Path {
+    #[cfg(test)]
+    fn path(&self) -> &Path {
         &self.path
     }
 
@@ -53,8 +55,12 @@ impl RelayInstancesRecordFile {
     }
 
     /// Record exactly `instances`, whole or not at all, owner-only.
-    pub(crate) fn write(&self, instances: &[RecordedRelayInstance]) -> Result<(), String> {
-        let mut record_json = serde_json::to_vec_pretty(instances)
+    pub(crate) fn write<'recorded>(
+        &self,
+        instances: impl IntoIterator<Item = &'recorded RecordedRelayInstance>,
+    ) -> Result<(), String> {
+        let instances: Vec<&RecordedRelayInstance> = instances.into_iter().collect();
+        let mut record_json = serde_json::to_vec_pretty(&instances)
             .map_err(|cannot_serialize| cannot_serialize.to_string())?;
         record_json.push(b'\n');
         write_an_owner_only_file_whole(&self.path, &record_json).map_err(|not_written| {

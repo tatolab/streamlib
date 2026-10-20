@@ -29,6 +29,13 @@ use crate::relay_secret_store::RelaySecretStore;
 pub(crate) type RelaysThePublisherDialsReceiver =
     watch::Receiver<Vec<RelayTheExposedPortPublisherDials>>;
 
+/// One adapter compiled into this runtime, its catalog entry read once.
+struct RelayAdapterOfThisRuntime {
+    catalog_entry: RelayAdapterCatalogEntry,
+    secret_setting_names: Vec<String>,
+    maker: Box<dyn RelayAdapterInstanceMaker>,
+}
+
 /// One relay instance this runtime holds.
 struct HeldRelayInstance {
     recorded: RecordedRelayInstance,
@@ -39,9 +46,33 @@ struct HeldRelayInstance {
     why_not_joined: Option<String>,
 }
 
+impl HeldRelayInstance {
+    fn unjoined(
+        recorded: RecordedRelayInstance,
+        built_in: bool,
+        secret_settings_set: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            recorded,
+            built_in,
+            secret_settings_set,
+            adapter: None,
+            joined: None,
+            why_not_joined: None,
+        }
+    }
+
+    fn leave(&mut self) {
+        if let Some(adapter) = &mut self.adapter {
+            adapter.leave();
+        }
+        self.joined = None;
+    }
+}
+
 /// Every relay instance of this runtime.
 pub(crate) struct RelayInstancesOfThisRuntime {
-    adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>>,
+    adapters: Vec<RelayAdapterOfThisRuntime>,
     record_file: RelayInstancesRecordFile,
     why_the_record_is_not_written: Option<String>,
     secret_store: Box<dyn RelaySecretStore>,
@@ -50,10 +81,20 @@ pub(crate) struct RelayInstancesOfThisRuntime {
     relays_the_publisher_dials: watch::Sender<Vec<RelayTheExposedPortPublisherDials>>,
 }
 
-/// An instance's settings split from the secrets among them.
+/// An instance's settings split from the secrets among them; a secret named
+/// `None` is one to hold nothing for.
 struct SettingsAndSecrets {
     settings: Map<String, Value>,
     secrets: BTreeMap<String, Option<SecretString>>,
+}
+
+/// What `configure_relay` changes on one instance, and what it had.
+struct RelayInstanceReconfiguration {
+    settings_before: Map<String, Value>,
+    secrets_before: BTreeMap<String, SecretString>,
+    settings_after: Map<String, Value>,
+    secrets_after: BTreeMap<String, SecretString>,
+    secrets_named: BTreeMap<String, Option<SecretString>>,
 }
 
 impl RelayInstancesOfThisRuntime {
@@ -77,7 +118,17 @@ impl RelayInstancesOfThisRuntime {
         };
         let (relays_the_publisher_dials, _) = watch::channel(Vec::new());
         let relay_instances = Self {
-            adapter_makers,
+            adapters: adapter_makers
+                .into_iter()
+                .map(|maker| {
+                    let catalog_entry = maker.catalog_entry();
+                    RelayAdapterOfThisRuntime {
+                        secret_setting_names: catalog_entry.secret_setting_names(),
+                        catalog_entry,
+                        maker,
+                    }
+                })
+                .collect(),
             record_file,
             why_the_record_is_not_written,
             secret_store,
@@ -87,17 +138,16 @@ impl RelayInstancesOfThisRuntime {
         };
 
         let mut held_instances = Vec::new();
-        for maker in &relay_instances.adapter_makers {
-            let adapter = maker.catalog_entry().kind;
-            for built_in in maker.built_in_instances() {
+        for adapter in &relay_instances.adapters {
+            for built_in in adapter.maker.built_in_instances() {
                 let recorded = recorded_instances
                     .iter()
                     .find(|recorded| recorded.relay_id == built_in.relay_id.0)
                     .cloned()
                     .unwrap_or_else(|| RecordedRelayInstance {
-                        relay_id: built_in.relay_id.0.clone(),
-                        adapter: adapter.clone(),
-                        settings: built_in.settings.clone(),
+                        relay_id: built_in.relay_id.0,
+                        adapter: adapter.catalog_entry.kind.clone(),
+                        settings: built_in.settings,
                     });
                 held_instances.push(relay_instances.held_instance(recorded, true));
             }
@@ -126,10 +176,7 @@ impl RelayInstancesOfThisRuntime {
     /// Leave every relay; the publisher dials none afterwards.
     pub(crate) fn leave_every_relay(&self) {
         for held in self.lock_the_held_instances().iter_mut() {
-            if let Some(adapter) = &mut held.adapter {
-                adapter.leave();
-            }
-            held.joined = None;
+            held.leave();
         }
         self.relays_the_publisher_dials.send_replace(Vec::new());
     }
@@ -140,54 +187,45 @@ impl RelayInstancesOfThisRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn maker_of(&self, adapter: &str) -> Option<&dyn RelayAdapterInstanceMaker> {
-        self.adapter_makers
+    fn adapter_named(&self, adapter: &str) -> Option<&RelayAdapterOfThisRuntime> {
+        self.adapters
             .iter()
-            .find(|maker| maker.catalog_entry().kind == adapter)
-            .map(AsRef::as_ref)
+            .find(|candidate| candidate.catalog_entry.kind == adapter)
     }
 
-    fn secret_setting_names_of(&self, adapter: &str) -> Vec<String> {
-        self.maker_of(adapter)
-            .map(|maker| maker.catalog_entry().secret_setting_names())
+    fn secret_setting_names_of(&self, adapter: &str) -> &[String] {
+        self.adapter_named(adapter)
+            .map(|adapter| adapter.secret_setting_names.as_slice())
             .unwrap_or_default()
     }
 
     fn held_instance(&self, recorded: RecordedRelayInstance, built_in: bool) -> HeldRelayInstance {
         let secret_settings_set = self
             .secret_setting_names_of(&recorded.adapter)
-            .into_iter()
+            .iter()
             .filter(|setting| {
                 matches!(
                     self.secret_store.read(&recorded.relay_id, setting),
                     Ok(Some(_))
                 )
             })
+            .cloned()
             .collect();
-        HeldRelayInstance {
-            recorded,
-            built_in,
-            secret_settings_set,
-            adapter: None,
-            joined: None,
-            why_not_joined: None,
-        }
+        HeldRelayInstance::unjoined(recorded, built_in, secret_settings_set)
     }
 
     /// `held` joined with its recorded settings and its stored secrets, or
     /// held unjoined saying why.
     fn join_with_its_held_settings(&self, held: &mut HeldRelayInstance) {
-        let secrets = match self.the_stored_secrets_of(&held.recorded) {
-            Ok(secrets) => secrets,
-            Err(refusal) => {
-                tracing::error!("{refusal}");
-                held.why_not_joined = Some(refusal.to_string());
-                return;
-            }
-        };
-        let settings = held.recorded.settings.clone();
-        if let Err(refusal) = self.join(held, &settings, &secrets) {
+        let joined = self
+            .the_stored_secrets_of(&held.recorded)
+            .and_then(|secrets| {
+                let settings = held.recorded.settings.clone();
+                self.join(held, &settings, &secrets)
+            });
+        if let Err(refusal) = joined {
             tracing::error!("{refusal}");
+            held.why_not_joined = Some(refusal.to_string());
         }
     }
 
@@ -199,52 +237,55 @@ impl RelayInstancesOfThisRuntime {
         for setting in self.secret_setting_names_of(&recorded.adapter) {
             let stored = self
                 .secret_store
-                .read(&recorded.relay_id, &setting)
+                .read(&recorded.relay_id, setting)
                 .map_err(|why| RelayInstanceControlRefusal::SecretNotStored {
                     relay_id: recorded.relay_id.clone(),
                     setting: setting.clone(),
                     why: format!("it cannot be read: {why}"),
                 })?;
             if let Some(secret) = stored {
-                secrets.insert(setting, secret);
+                secrets.insert(setting.clone(), secret);
             }
         }
         Ok(secrets)
     }
 
+    fn make_the_adapter_of(
+        &self,
+        recorded: &RecordedRelayInstance,
+    ) -> Result<Box<dyn RelayAdapter>, RelayAdapterRefusal> {
+        let relay_id = RelayInstanceId(recorded.relay_id.clone());
+        match self.adapter_named(&recorded.adapter) {
+            Some(adapter) => adapter.maker.make_the_instance(&relay_id),
+            None => Err(RelayAdapterRefusal::JoinFailed {
+                relay_id,
+                why: format!(
+                    "no relay adapter is named `{}` in this runtime",
+                    recorded.adapter
+                ),
+            }),
+        }
+    }
+
     /// Join `held` with `settings` and `secrets`, making its adapter first
-    /// when it has none.
+    /// when it has none; a refusal is held as why it is not joined.
     fn join(
         &self,
         held: &mut HeldRelayInstance,
         settings: &Map<String, Value>,
         secrets: &BTreeMap<String, SecretString>,
     ) -> Result<(), RelayInstanceControlRefusal> {
-        let relay_id = RelayInstanceId(held.recorded.relay_id.clone());
-        if held.adapter.is_none() {
-            let Some(maker) = self.maker_of(&held.recorded.adapter) else {
-                let why = format!(
-                    "no relay adapter is named `{}` in this runtime",
-                    held.recorded.adapter
-                );
-                held.why_not_joined = Some(why.clone());
-                return Err(RelayAdapterRefusal::JoinFailed { relay_id, why }.into());
-            };
-            match maker.make_the_instance(&relay_id) {
-                Ok(adapter) => held.adapter = Some(adapter),
-                Err(refusal) => {
-                    held.why_not_joined = Some(refusal.to_string());
-                    return Err(refusal.into());
-                }
-            }
-        }
-        let adapter = held
-            .adapter
-            .as_mut()
-            .expect("an adapter is made above when none is held");
-        match adapter.join(settings_with_the_secrets_among_them(settings, secrets)) {
+        let joined = match &mut held.adapter {
+            Some(adapter) => adapter.join(settings_with_the_secrets_among_them(settings, secrets)),
+            no_adapter_yet => self.make_the_adapter_of(&held.recorded).and_then(|made| {
+                no_adapter_yet
+                    .insert(made)
+                    .join(settings_with_the_secrets_among_them(settings, secrets))
+            }),
+        };
+        match joined {
             Ok(joined) => {
-                tracing::info!(relay = %relay_id, "the relay is joined");
+                tracing::info!(relay = %held.recorded.relay_id, "the relay is joined");
                 held.joined = Some(joined);
                 held.why_not_joined = None;
                 Ok(())
@@ -289,8 +330,21 @@ impl RelayInstancesOfThisRuntime {
         Ok(split)
     }
 
-    /// Hold each of `secrets` for `relay_id` — `None` held as nothing —
-    /// putting back what was held when one cannot be.
+    /// Hold `secret` as `setting` of `relay_id`, or nothing for `None`.
+    fn store_one_secret(
+        &self,
+        relay_id: &str,
+        setting: &str,
+        secret: Option<&SecretString>,
+    ) -> Result<(), String> {
+        match secret {
+            Some(secret) => self.secret_store.write(relay_id, setting, secret),
+            None => self.secret_store.delete(relay_id, setting),
+        }
+    }
+
+    /// Hold each of `secrets` for `relay_id`, putting back what `held_before`
+    /// had for each already stored when one cannot be.
     fn store_the_secrets(
         &self,
         relay_id: &str,
@@ -299,60 +353,62 @@ impl RelayInstancesOfThisRuntime {
     ) -> Result<(), RelayInstanceControlRefusal> {
         let mut stored_so_far = Vec::new();
         for (setting, secret) in secrets {
-            let stored = match secret {
-                Some(secret) => self.secret_store.write(relay_id, setting, secret),
-                None => self.secret_store.delete(relay_id, setting),
-            };
-            if let Err(why) = stored {
-                for setting_stored in stored_so_far {
-                    let _ = match held_before.get(setting_stored) {
-                        Some(secret) => self.secret_store.write(relay_id, setting_stored, secret),
-                        None => self.secret_store.delete(relay_id, setting_stored),
-                    };
-                }
+            if let Err(why) = self.store_one_secret(relay_id, setting, secret.as_ref()) {
+                self.put_back_the_secrets(relay_id, stored_so_far, held_before);
                 return Err(RelayInstanceControlRefusal::SecretNotStored {
                     relay_id: relay_id.to_string(),
                     setting: setting.clone(),
                     why,
                 });
             }
-            stored_so_far.push(setting);
+            stored_so_far.push(setting.as_str());
         }
         Ok(())
     }
 
-    fn delete_every_secret_of(&self, recorded: &RecordedRelayInstance) {
-        for setting in self.secret_setting_names_of(&recorded.adapter) {
-            if let Err(why) = self.secret_store.delete(&recorded.relay_id, &setting) {
+    /// Hold again what `held_before` had for each of `settings`, saying so
+    /// where it cannot be.
+    fn put_back_the_secrets<'setting>(
+        &self,
+        relay_id: &str,
+        settings: impl IntoIterator<Item = &'setting str>,
+        held_before: &BTreeMap<String, SecretString>,
+    ) {
+        for setting in settings {
+            if let Err(why) = self.store_one_secret(relay_id, setting, held_before.get(setting)) {
                 tracing::warn!(
-                    relay = %recorded.relay_id,
-                    "the secret `{setting}` of a removed relay was not deleted: {why}"
+                    relay = %relay_id,
+                    "the secret `{setting}` could not be put back as it was: {why}"
                 );
             }
         }
     }
 
-    fn record(
+    fn delete_every_secret_of(&self, recorded: &RecordedRelayInstance) {
+        for setting in self.secret_setting_names_of(&recorded.adapter) {
+            if let Err(why) = self.secret_store.delete(&recorded.relay_id, setting) {
+                tracing::warn!(
+                    relay = %recorded.relay_id,
+                    "the secret `{setting}` of a relay no longer held was not deleted: {why}"
+                );
+            }
+        }
+    }
+
+    /// Record exactly `instances` in `relays.json`, or refuse naming `relay_id`.
+    fn record<'recorded>(
         &self,
         relay_id: &str,
-        held_instances: &[HeldRelayInstance],
+        instances: impl IntoIterator<Item = &'recorded RecordedRelayInstance>,
     ) -> Result<(), RelayInstanceControlRefusal> {
+        let not_recorded = |why: String| RelayInstanceControlRefusal::NotRecorded {
+            relay_id: relay_id.to_string(),
+            why,
+        };
         if let Some(why) = &self.why_the_record_is_not_written {
-            return Err(RelayInstanceControlRefusal::NotRecorded {
-                relay_id: relay_id.to_string(),
-                why: why.clone(),
-            });
+            return Err(not_recorded(why.clone()));
         }
-        let recorded: Vec<RecordedRelayInstance> = held_instances
-            .iter()
-            .map(|held| held.recorded.clone())
-            .collect();
-        self.record_file
-            .write(&recorded)
-            .map_err(|why| RelayInstanceControlRefusal::NotRecorded {
-                relay_id: relay_id.to_string(),
-                why,
-            })
+        self.record_file.write(instances).map_err(not_recorded)
     }
 
     fn hand_the_publisher_every_joined_relay(&self) {
@@ -372,23 +428,69 @@ impl RelayInstancesOfThisRuntime {
         self.relays_the_publisher_dials.send_replace(relays);
     }
 
-    fn known_relay_ids(held_instances: &[HeldRelayInstance]) -> String {
+    /// Where `relay_id` is among `held_instances`, or the refusal naming them.
+    fn position_of(
+        relay_id: &str,
+        held_instances: &[HeldRelayInstance],
+    ) -> Result<usize, RelayInstanceControlRefusal> {
         held_instances
             .iter()
-            .map(|held| format!("`{}`", held.recorded.relay_id))
-            .collect::<Vec<_>>()
-            .join(", ")
+            .position(|held| held.recorded.relay_id == relay_id)
+            .ok_or_else(|| RelayInstanceControlRefusal::UnknownRelay {
+                relay_id: relay_id.to_string(),
+                known: held_instances
+                    .iter()
+                    .map(|held| format!("`{}`", held.recorded.relay_id))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            })
     }
 
     fn the_lowest_free_relay_id_of(adapter: &str, held_instances: &[HeldRelayInstance]) -> String {
-        (1..)
-            .map(|number| format!("{adapter}-{number}"))
-            .find(|relay_id| {
-                !held_instances
-                    .iter()
-                    .any(|held| &held.recorded.relay_id == relay_id)
+        let mut number: u64 = 1;
+        loop {
+            let relay_id = format!("{adapter}-{number}");
+            if !held_instances
+                .iter()
+                .any(|held| held.recorded.relay_id == relay_id)
+            {
+                return relay_id;
+            }
+            number += 1;
+        }
+    }
+
+    /// Join the instance at `position` with what `reconfiguration` makes of
+    /// it, store its secrets and record it; on a refusal the caller puts back
+    /// what it had.
+    fn reconfigure_the_held_instance(
+        &self,
+        held_instances: &mut [HeldRelayInstance],
+        position: usize,
+        reconfiguration: &RelayInstanceReconfiguration,
+    ) -> Result<(), RelayInstanceControlRefusal> {
+        let held = &mut held_instances[position];
+        let relay_id = held.recorded.relay_id.clone();
+        self.join(
+            held,
+            &reconfiguration.settings_after,
+            &reconfiguration.secrets_after,
+        )?;
+        self.store_the_secrets(
+            &relay_id,
+            &reconfiguration.secrets_named,
+            &reconfiguration.secrets_before,
+        )?;
+        held.recorded.settings = reconfiguration.settings_after.clone();
+        held.secret_settings_set = reconfiguration.secrets_after.keys().cloned().collect();
+        self.record(&relay_id, held_instances.iter().map(|held| &held.recorded))
+            .inspect_err(|_| {
+                self.put_back_the_secrets(
+                    &relay_id,
+                    reconfiguration.secrets_named.keys().map(String::as_str),
+                    &reconfiguration.secrets_before,
+                );
             })
-            .expect("some number names no held instance")
     }
 }
 
@@ -409,9 +511,9 @@ fn settings_with_the_secrets_among_them(
 
 impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
     fn relay_adapter_catalog(&self) -> Vec<RelayAdapterCatalogEntry> {
-        self.adapter_makers
+        self.adapters
             .iter()
-            .map(|maker| maker.catalog_entry())
+            .map(|adapter| adapter.catalog_entry.clone())
             .collect()
     }
 
@@ -420,18 +522,18 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
         adapter: &str,
         settings: Map<String, Value>,
     ) -> Result<RelayInstanceId, RelayInstanceControlRefusal> {
-        let Some(maker) = self.maker_of(adapter) else {
+        let Some(adapter_of_this_runtime) = self.adapter_named(adapter) else {
             return Err(RelayInstanceControlRefusal::UnknownAdapter {
                 adapter: adapter.to_string(),
                 known: self
-                    .adapter_makers
+                    .adapters
                     .iter()
-                    .map(|maker| format!("`{}`", maker.catalog_entry().kind))
+                    .map(|adapter| format!("`{}`", adapter.catalog_entry.kind))
                     .collect::<Vec<_>>()
                     .join(", "),
             });
         };
-        if let Some(why) = maker.why_no_instance_is_added() {
+        if let Some(why) = adapter_of_this_runtime.maker.why_no_instance_is_added() {
             return Err(RelayInstanceControlRefusal::AdapterAddsNoInstance {
                 adapter: adapter.to_string(),
                 why,
@@ -445,36 +547,34 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
             .iter()
             .filter_map(|(setting, secret)| Some((setting.clone(), secret.clone()?)))
             .collect();
-        let mut held = HeldRelayInstance {
-            recorded: RecordedRelayInstance {
+        let mut held = HeldRelayInstance::unjoined(
+            RecordedRelayInstance {
                 relay_id: relay_id.clone(),
                 adapter: adapter.to_string(),
                 settings: split.settings,
             },
-            built_in: false,
-            secret_settings_set: secrets.keys().cloned().collect(),
-            adapter: None,
-            joined: None,
-            why_not_joined: None,
-        };
+            false,
+            secrets.keys().cloned().collect(),
+        );
         let settings = held.recorded.settings.clone();
-        self.join(&mut held, &settings, &secrets)?;
-        let leave_it = |held: &mut HeldRelayInstance| {
-            if let Some(adapter) = &mut held.adapter {
-                adapter.leave();
-            }
-        };
-        if let Err(refusal) = self.store_the_secrets(&relay_id, &split.secrets, &BTreeMap::new()) {
-            leave_it(&mut held);
+        let added = self
+            .join(&mut held, &settings, &secrets)
+            .and_then(|()| self.store_the_secrets(&relay_id, &split.secrets, &BTreeMap::new()))
+            .and_then(|()| {
+                self.record(
+                    &relay_id,
+                    held_instances
+                        .iter()
+                        .map(|held| &held.recorded)
+                        .chain(std::iter::once(&held.recorded)),
+                )
+                .inspect_err(|_| self.delete_every_secret_of(&held.recorded))
+            });
+        if let Err(refusal) = added {
+            held.leave();
             return Err(refusal);
         }
         held_instances.push(held);
-        if let Err(refusal) = self.record(&relay_id, &held_instances) {
-            let mut held = held_instances.pop().expect("the instance was just pushed");
-            leave_it(&mut held);
-            self.delete_every_secret_of(&held.recorded);
-            return Err(refusal);
-        }
         drop(held_instances);
         tracing::info!(relay = %relay_id, "the relay is added through the `{adapter}` adapter");
         self.hand_the_publisher_every_joined_relay();
@@ -487,20 +587,12 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
         settings: Map<String, Value>,
     ) -> Result<(), RelayInstanceControlRefusal> {
         let mut held_instances = self.lock_the_held_instances();
-        let known = Self::known_relay_ids(&held_instances);
-        let Some(position) = held_instances
-            .iter()
-            .position(|held| held.recorded.relay_id == relay_id)
-        else {
-            return Err(RelayInstanceControlRefusal::UnknownRelay {
-                relay_id: relay_id.to_string(),
-                known,
-            });
-        };
-        let adapter = held_instances[position].recorded.adapter.clone();
-        let split = self.split_the_settings_from_the_secrets(relay_id, &adapter, settings)?;
-        let secrets_before = self.the_stored_secrets_of(&held_instances[position].recorded)?;
-        let settings_before = held_instances[position].recorded.settings.clone();
+        let position = Self::position_of(relay_id, &held_instances)?;
+        let held = &held_instances[position];
+        let split =
+            self.split_the_settings_from_the_secrets(relay_id, &held.recorded.adapter, settings)?;
+        let secrets_before = self.the_stored_secrets_of(&held.recorded)?;
+        let settings_before = held.recorded.settings.clone();
 
         let mut settings_after = settings_before.clone();
         for (setting, value) in split.settings {
@@ -517,74 +609,54 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
                 None => secrets_after.remove(setting),
             };
         }
+        let reconfiguration = RelayInstanceReconfiguration {
+            settings_before,
+            secrets_before,
+            settings_after,
+            secrets_after,
+            secrets_named: split.secrets,
+        };
 
-        let held = &mut held_instances[position];
-        let rejoin_as_before = |relay_instances: &Self, held: &mut HeldRelayInstance| {
-            if let Err(refusal) = relay_instances.join(held, &settings_before, &secrets_before) {
+        let reconfigured =
+            self.reconfigure_the_held_instance(&mut held_instances, position, &reconfiguration);
+        if reconfigured.is_err() {
+            let held = &mut held_instances[position];
+            held.recorded.settings = reconfiguration.settings_before.clone();
+            held.secret_settings_set = reconfiguration.secrets_before.keys().cloned().collect();
+            if let Err(refusal) = self.join(
+                held,
+                &reconfiguration.settings_before,
+                &reconfiguration.secrets_before,
+            ) {
                 tracing::error!("{refusal}");
             }
-        };
-        if let Err(refusal) = self.join(held, &settings_after, &secrets_after) {
-            rejoin_as_before(self, held);
-            drop(held_instances);
-            self.hand_the_publisher_every_joined_relay();
-            return Err(refusal);
-        }
-        if let Err(refusal) = self.store_the_secrets(relay_id, &split.secrets, &secrets_before) {
-            rejoin_as_before(self, held);
-            drop(held_instances);
-            self.hand_the_publisher_every_joined_relay();
-            return Err(refusal);
-        }
-        held.recorded.settings = settings_after;
-        held.secret_settings_set = secrets_after.keys().cloned().collect();
-        if let Err(refusal) = self.record(relay_id, &held_instances) {
-            let held = &mut held_instances[position];
-            held.recorded.settings = settings_before.clone();
-            held.secret_settings_set = secrets_before.keys().cloned().collect();
-            let unstored: BTreeMap<String, Option<SecretString>> = split
-                .secrets
-                .keys()
-                .map(|setting| (setting.clone(), secrets_before.get(setting).cloned()))
-                .collect();
-            let _ = self.store_the_secrets(relay_id, &unstored, &secrets_after);
-            rejoin_as_before(self, held);
-            drop(held_instances);
-            self.hand_the_publisher_every_joined_relay();
-            return Err(refusal);
         }
         drop(held_instances);
-        tracing::info!(relay = %relay_id, "the relay is configured");
         self.hand_the_publisher_every_joined_relay();
+        reconfigured?;
+        tracing::info!(relay = %relay_id, "the relay is configured");
         Ok(())
     }
 
     fn remove_relay(&self, relay_id: &str) -> Result<(), RelayInstanceControlRefusal> {
         let mut held_instances = self.lock_the_held_instances();
-        let known = Self::known_relay_ids(&held_instances);
-        let Some(position) = held_instances
-            .iter()
-            .position(|held| held.recorded.relay_id == relay_id)
-        else {
-            return Err(RelayInstanceControlRefusal::UnknownRelay {
-                relay_id: relay_id.to_string(),
-                known,
-            });
-        };
+        let position = Self::position_of(relay_id, &held_instances)?;
         if held_instances[position].built_in {
             return Err(RelayInstanceControlRefusal::BuiltInRelayIsNeverRemoved {
                 relay_id: relay_id.to_string(),
             });
         }
+        self.record(
+            relay_id,
+            held_instances
+                .iter()
+                .enumerate()
+                .filter(|(held_position, _)| *held_position != position)
+                .map(|(_, held)| &held.recorded),
+        )?;
         let mut removed = held_instances.remove(position);
-        if let Err(refusal) = self.record(relay_id, &held_instances) {
-            held_instances.insert(position, removed);
-            return Err(refusal);
-        }
         drop(held_instances);
-        if let Some(adapter) = &mut removed.adapter {
-            adapter.leave();
-        }
+        removed.leave();
         self.delete_every_secret_of(&removed.recorded);
         tracing::info!(relay = %relay_id, "the relay is removed");
         self.hand_the_publisher_every_joined_relay();
@@ -601,14 +673,14 @@ impl RelayInstancesOfThisMachine for RelayInstancesOfThisRuntime {
                 settings: held.recorded.settings.clone(),
                 secrets: self
                     .secret_setting_names_of(&held.recorded.adapter)
-                    .into_iter()
+                    .iter()
                     .map(|setting| {
-                        let presence = if held.secret_settings_set.contains(&setting) {
+                        let presence = if held.secret_settings_set.contains(setting) {
                             ListedRelaySecretPresence::Set
                         } else {
                             ListedRelaySecretPresence::Unset
                         };
-                        (setting, presence)
+                        (setting.clone(), presence)
                     })
                     .collect(),
                 connection_state: match (&held.why_not_joined, &held.adapter) {

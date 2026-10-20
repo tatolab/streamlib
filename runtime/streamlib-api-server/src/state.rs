@@ -36,6 +36,22 @@ pub(crate) struct RelayAdapterCatalogResponseAdapter {
     pub settings_schema: serde_json::Value,
 }
 
+impl From<RelayAdapterCatalogEntry> for RelayAdapterCatalogResponseAdapter {
+    fn from(
+        RelayAdapterCatalogEntry {
+            kind,
+            doc,
+            settings_schema,
+        }: RelayAdapterCatalogEntry,
+    ) -> Self {
+        Self {
+            kind,
+            doc,
+            settings_schema,
+        }
+    }
+}
+
 impl RelayAdapterCatalogResponse {
     /// The catalog `relay_instances` serves.
     pub(crate) fn of(relay_instances: &dyn RelayInstancesOfThisMachine) -> Self {
@@ -43,17 +59,7 @@ impl RelayAdapterCatalogResponse {
             adapters: relay_instances
                 .relay_adapter_catalog()
                 .into_iter()
-                .map(
-                    |RelayAdapterCatalogEntry {
-                         kind,
-                         doc,
-                         settings_schema,
-                     }| RelayAdapterCatalogResponseAdapter {
-                        kind,
-                        doc,
-                        settings_schema,
-                    },
-                )
+                .map(Into::into)
                 .collect(),
         }
     }

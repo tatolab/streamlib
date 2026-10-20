@@ -43,25 +43,7 @@ impl fmt::Debug for RelaySecretSetting {
 
 impl<'de> Deserialize<'de> for RelaySecretSetting {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct RelaySecretSettingVisitor;
-
-        impl serde::de::Visitor<'_> for RelaySecretSettingVisitor {
-            type Value = RelaySecretSetting;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a secret, as a string")
-            }
-
-            fn visit_str<E: serde::de::Error>(self, secret: &str) -> Result<Self::Value, E> {
-                Ok(RelaySecretSetting(SecretString::from(secret.to_owned())))
-            }
-
-            fn visit_string<E: serde::de::Error>(self, secret: String) -> Result<Self::Value, E> {
-                Ok(RelaySecretSetting(SecretString::from(secret)))
-            }
-        }
-
-        deserializer.deserialize_string(RelaySecretSettingVisitor)
+        String::deserialize(deserializer).map(|secret| Self(SecretString::from(secret)))
     }
 }
 

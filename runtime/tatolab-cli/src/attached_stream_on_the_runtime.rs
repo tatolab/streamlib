@@ -313,7 +313,7 @@ impl AttachedStreamSession {
         };
         let run_stream_result = match load_outcome.and_then(|run_stream_result_text| {
             tool_result_from::<RunStreamToolResult>(
-                StreamActionTool::RunStream,
+                StreamActionTool::RunStream.tool_name(),
                 &run_stream_result_text,
             )
             .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)

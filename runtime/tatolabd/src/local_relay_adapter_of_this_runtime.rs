@@ -10,8 +10,9 @@ use std::path::PathBuf;
 
 use streamlib::sdk::runtime::Runner;
 use streamlib_relay_adapter_local::{
-    LocalRelayAdapterInstanceMaker, LocalRelayListener, LocalRelaySharedByBothInstances,
-    local_relay_executable_beside, mint_the_runtimes_relay_publish_token,
+    LocalRelayAdapterInstanceMaker, LocalRelaySharedByBothInstances,
+    SettingsOfEachLocalRelayListener, local_relay_executable_beside,
+    mint_the_runtimes_relay_publish_token,
 };
 
 /// The maker of the local relay's two instances on `engine`'s machine; when
@@ -29,11 +30,6 @@ pub(crate) fn the_local_relay_adapter_of_this_runtime(
         }
     }
 }
-
-type SettingsOfEachLocalRelayListener = Vec<(
-    LocalRelayListener,
-    serde_json::Map<String, serde_json::Value>,
-)>;
 
 fn the_local_relay_shared_by_both_instances(
     engine: &Runner,
@@ -83,10 +79,7 @@ fn the_local_relay_executable_beside_this_one() -> Result<PathBuf, String> {
 /// Each listener with the settings it is built in with: its defaults.
 #[cfg(not(feature = "machine-directories-under-a-test-root"))]
 fn the_settings_of_both_listeners() -> Result<SettingsOfEachLocalRelayListener, String> {
-    Ok(LocalRelayListener::BOTH
-        .into_iter()
-        .map(|listener| (listener, serde_json::Map::new()))
-        .collect())
+    Ok(streamlib_relay_adapter_local::default_settings_of_each_local_relay_listener())
 }
 
 /// Each listener with the port the test names for it, or why none runs: a
@@ -94,6 +87,7 @@ fn the_settings_of_both_listeners() -> Result<SettingsOfEachLocalRelayListener, 
 /// names no ports runs no local relay.
 #[cfg(feature = "machine-directories-under-a-test-root")]
 fn the_settings_of_both_listeners() -> Result<SettingsOfEachLocalRelayListener, String> {
+    use streamlib_relay_adapter_local::LocalRelayListener;
     use streamlib_runtime_client_contract::machine_directories_test_root::{
         TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT_ENVIRONMENT_VARIABLE,
         TEST_LOCAL_RELAY_LOOPBACK_PORT_ENVIRONMENT_VARIABLE,

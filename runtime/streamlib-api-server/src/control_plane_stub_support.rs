@@ -755,12 +755,10 @@ impl ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine
         relay_id: &str,
         settings: ::serde_json::Map<String, ::serde_json::Value>,
     ) -> Result<(), ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal> {
-        self.calls
-            .lock()
-            .push(RelayInstancesStubCall::Configured {
-                relay_id: relay_id.to_string(),
-                settings,
-            });
+        self.calls.lock().push(RelayInstancesStubCall::Configured {
+            relay_id: relay_id.to_string(),
+            settings,
+        });
         Ok(())
     }
 

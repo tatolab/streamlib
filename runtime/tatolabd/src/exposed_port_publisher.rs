@@ -183,9 +183,6 @@ const A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY: Duration = Duration::fro
 /// One relay's session, through which every broadcast at it is published.
 struct RelayDialedByThePublisher {
     dialed_as: RelayTheExposedPortPublisherDials,
-    relay_id: RelayInstanceId,
-    levels_served: Vec<OutputPortExposureLevel>,
-    broadcast_root: BroadcastPath,
     origin: moq_net::origin::Producer,
     _session: moq_tokio::Connection,
 }
@@ -225,17 +222,14 @@ impl RelayDialedByThePublisher {
             .connect(dial_url);
         tracing::info!(relay = %relay.relay_id, "the publisher dials the relay");
         Some(Self {
-            dialed_as: relay.clone(),
-            relay_id: relay.relay_id,
-            levels_served: relay.levels_served,
-            broadcast_root: relay.broadcast_root,
+            dialed_as: relay,
             origin,
             _session: session,
         })
     }
 
     fn serves(&self, level: OutputPortExposureLevel) -> bool {
-        self.levels_served.contains(&level)
+        self.dialed_as.levels_served.contains(&level)
     }
 }
 
@@ -286,7 +280,7 @@ impl BroadcastOfAStreamAtARelay {
     fn announced_at(relay: &RelayDialedByThePublisher, stream_name: &str) -> Option<Self> {
         let broadcast_path = format!(
             "{}/{stream_name}{BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ}",
-            relay.broadcast_root
+            relay.dialed_as.broadcast_root
         );
         let created = (|| -> Result<Self, moq_net::Error> {
             let broadcast = relay.origin.create_broadcast(broadcast_path.as_str())?;
@@ -316,7 +310,7 @@ impl BroadcastOfAStreamAtARelay {
             Ok(broadcast) => broadcast,
             Err(refusal) => {
                 tracing::error!(
-                    relay = %relay.relay_id,
+                    relay = %relay.dialed_as.relay_id,
                     "the broadcast `{broadcast_path}` could not be created: {refusal}"
                 );
                 return None;
@@ -325,12 +319,12 @@ impl BroadcastOfAStreamAtARelay {
         broadcast.publish_the_catalog(&serde_json::json!({}));
         if let Err(refusal) = broadcast.broadcast.announce(Default::default()) {
             tracing::error!(
-                relay = %relay.relay_id,
+                relay = %relay.dialed_as.relay_id,
                 "the broadcast `{broadcast_path}` could not be announced: {refusal}"
             );
             return None;
         }
-        tracing::info!(relay = %relay.relay_id, "the broadcast `{broadcast_path}` is announced");
+        tracing::info!(relay = %relay.dialed_as.relay_id, "the broadcast `{broadcast_path}` is announced");
         Some(broadcast)
     }
 
@@ -567,12 +561,13 @@ impl ExposedPortPublisher {
         self.relays = kept;
         for relay in hung_up {
             for forwarded in self.forwarded_ports.values() {
-                lock_the_writer(&forwarded.track_writer)
-                    .withdraw_every_track_but_those_at(|relay_id| relay_id != &relay.relay_id);
+                lock_the_writer(&forwarded.track_writer).withdraw_every_track_but_those_at(
+                    |relay_id| relay_id != &relay.dialed_as.relay_id,
+                );
             }
             self.broadcasts
-                .retain(|(relay_id, _), _| relay_id != &relay.relay_id);
-            tracing::info!(relay = %relay.relay_id, "the publisher no longer dials the relay");
+                .retain(|(relay_id, _), _| relay_id != &relay.dialed_as.relay_id);
+            tracing::info!(relay = %relay.dialed_as.relay_id, "the publisher no longer dials the relay");
         }
         for relay in relays {
             if self
@@ -670,16 +665,16 @@ impl ExposedPortPublisher {
         track_writer.withdraw_every_track_but_those_at(|relay_id| {
             relays_reached
                 .iter()
-                .any(|relay| &relay.relay_id == relay_id)
+                .any(|relay| &relay.dialed_as.relay_id == relay_id)
         });
         for relay in relays_reached {
-            if track_writer.reaches(&relay.relay_id) {
+            if track_writer.reaches(&relay.dialed_as.relay_id) {
                 continue;
             }
-            let broadcast = match self
-                .broadcasts
-                .entry((relay.relay_id.clone(), address.stream_name.clone()))
-            {
+            let broadcast = match self.broadcasts.entry((
+                relay.dialed_as.relay_id.clone(),
+                address.stream_name.clone(),
+            )) {
                 std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
                 std::collections::hash_map::Entry::Vacant(vacant) => {
                     match BroadcastOfAStreamAtARelay::announced_at(relay, &address.stream_name) {
@@ -694,18 +689,18 @@ impl ExposedPortPublisher {
             {
                 Ok(track) => {
                     tracing::info!(
-                        relay = %relay.relay_id,
+                        relay = %relay.dialed_as.relay_id,
                         "the exposed port `{address}` is announced as the track `{}`",
                         address.track_name()
                     );
                     track_writer.add_the_track_at(
-                        relay.relay_id.clone(),
-                        relay.levels_served.clone(),
+                        relay.dialed_as.relay_id.clone(),
+                        relay.dialed_as.levels_served.clone(),
                         track,
                     );
                 }
                 Err(refusal) => tracing::error!(
-                    relay = %relay.relay_id,
+                    relay = %relay.dialed_as.relay_id,
                     "the track `{}` could not be created: {refusal}",
                     address.track_name()
                 ),

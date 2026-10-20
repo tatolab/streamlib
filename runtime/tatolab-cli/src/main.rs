@@ -24,6 +24,7 @@ mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
 mod stream_actions_on_the_runtime;
 mod stream_log_records_from_the_runtime;
+mod verb_output_table;
 mod verb_standard_output;
 mod virtual_camera_loopback_permission_grant;
 
@@ -168,7 +169,10 @@ enum TatolabVerb {
     },
     /// List the relays the runtime joins: each one's adapter, state, settings and secrets set.
     #[command(
-        long_about = "Every relay instance: the local relay's two built-in listeners and each added                       one, with its adapter, its connection state, its settings, and each secret                       setting as set or unset — never its value — then why each relay not joined                       is not."
+        long_about = "Every relay instance: the local relay's two built-in listeners and each \
+                      added one, with its adapter, its connection state, its settings, and each \
+                      secret setting as set or unset — never its value — then why each relay not \
+                      joined is not."
     )]
     Relays,
     /// Add, configure or remove one of the relays the runtime joins.

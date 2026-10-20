@@ -108,14 +108,25 @@ pub struct LocalRelaySharedByBothInstances {
     pub async_runtime: tokio::runtime::Handle,
 }
 
+/// Each local relay listener with the settings it is built in with.
+pub type SettingsOfEachLocalRelayListener = Vec<(
+    LocalRelayListener,
+    serde_json::Map<String, serde_json::Value>,
+)>;
+
+/// Each listener with no settings: its default port.
+pub fn default_settings_of_each_local_relay_listener() -> SettingsOfEachLocalRelayListener {
+    LocalRelayListener::BOTH
+        .into_iter()
+        .map(|listener| (listener, serde_json::Map::new()))
+        .collect()
+}
+
 /// Makes the local relay's two instances, one per [`LocalRelayListener`], and
 /// never a third.
 pub struct LocalRelayAdapterInstanceMaker {
     shared_or_why_no_local_relay_runs: Result<LocalRelaySharedByBothInstances, String>,
-    settings_of_each_listener: Vec<(
-        LocalRelayListener,
-        serde_json::Map<String, serde_json::Value>,
-    )>,
+    settings_of_each_listener: SettingsOfEachLocalRelayListener,
 }
 
 impl LocalRelayAdapterInstanceMaker {
@@ -123,10 +134,7 @@ impl LocalRelayAdapterInstanceMaker {
     /// its settings in `settings_of_each_listener`.
     pub fn sharing(
         shared: LocalRelaySharedByBothInstances,
-        settings_of_each_listener: Vec<(
-            LocalRelayListener,
-            serde_json::Map<String, serde_json::Value>,
-        )>,
+        settings_of_each_listener: SettingsOfEachLocalRelayListener,
     ) -> Self {
         Self {
             shared_or_why_no_local_relay_runs: Ok(shared),
@@ -139,10 +147,7 @@ impl LocalRelayAdapterInstanceMaker {
     pub fn running_no_local_relay(why: String) -> Self {
         Self {
             shared_or_why_no_local_relay_runs: Err(why),
-            settings_of_each_listener: LocalRelayListener::BOTH
-                .into_iter()
-                .map(|listener| (listener, serde_json::Map::new()))
-                .collect(),
+            settings_of_each_listener: default_settings_of_each_local_relay_listener(),
         }
     }
 }

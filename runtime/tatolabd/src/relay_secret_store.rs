@@ -12,11 +12,7 @@ use std::sync::Mutex;
 
 use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
 
-use crate::owner_only_file_written_whole::write_an_owner_only_file_whole;
-
-/// The service every relay secret is filed under in the OS secret store.
-#[cfg(not(feature = "machine-directories-under-a-test-root"))]
-const RELAY_SECRET_STORE_SERVICE_NAME: &str = "tatolab";
+use streamlib_runtime_client_contract::owner_only_file_written_whole::write_an_owner_only_file_whole;
 
 /// One relay instance's secrets, held by whichever store answers.
 pub(crate) trait RelaySecretStore: Send + Sync {
@@ -35,6 +31,8 @@ pub(crate) trait RelaySecretStore: Send + Sync {
 pub(crate) fn the_relay_secret_store_of_this_machine(
     fallback_file_path: PathBuf,
 ) -> Box<dyn RelaySecretStore> {
+    #[cfg(not(feature = "machine-directories-under-a-test-root"))]
+    use crate::os_relay_secret_store::the_os_secret_store_answering_now;
     match the_os_secret_store_answering_now() {
         Ok(os_secret_store) => {
             tracing::info!("relay secrets are kept in the OS secret store");
@@ -55,81 +53,6 @@ pub(crate) fn the_relay_secret_store_of_this_machine(
 #[cfg(feature = "machine-directories-under-a-test-root")]
 fn the_os_secret_store_answering_now() -> Result<Box<dyn RelaySecretStore>, String> {
     Err("a test build never reaches the user's own secret store".to_string())
-}
-
-/// The OS secret store, once a read of an item no relay holds is answered.
-#[cfg(not(feature = "machine-directories-under-a-test-root"))]
-fn the_os_secret_store_answering_now() -> Result<Box<dyn RelaySecretStore>, String> {
-    let os_secret_store = OsRelaySecretStore {
-        credential_store: this_platforms_credential_store()?,
-    };
-    os_secret_store.read("tatolab", "a-secret-no-relay-holds")?;
-    Ok(Box::new(os_secret_store))
-}
-
-#[cfg(all(
-    target_os = "linux",
-    not(feature = "machine-directories-under-a-test-root")
-))]
-fn this_platforms_credential_store() -> Result<std::sync::Arc<keyring_core::CredentialStore>, String>
-{
-    zbus_secret_service_keyring_store::Store::new()
-        .map(|store| store as std::sync::Arc<keyring_core::CredentialStore>)
-        .map_err(|refusal| format!("the Secret Service did not answer: {refusal}"))
-}
-
-#[cfg(all(
-    target_os = "macos",
-    not(feature = "machine-directories-under-a-test-root")
-))]
-fn this_platforms_credential_store() -> Result<std::sync::Arc<keyring_core::CredentialStore>, String>
-{
-    apple_native_keyring_store::keychain::Store::new()
-        .map(|store| store as std::sync::Arc<keyring_core::CredentialStore>)
-        .map_err(|refusal| format!("the login keychain did not answer: {refusal}"))
-}
-
-/// The OS secret store, one item per relay instance and setting.
-#[cfg(not(feature = "machine-directories-under-a-test-root"))]
-struct OsRelaySecretStore {
-    credential_store: std::sync::Arc<keyring_core::CredentialStore>,
-}
-
-#[cfg(not(feature = "machine-directories-under-a-test-root"))]
-impl OsRelaySecretStore {
-    fn entry(&self, relay_id: &str, setting: &str) -> Result<keyring_core::Entry, String> {
-        self.credential_store
-            .build(
-                RELAY_SECRET_STORE_SERVICE_NAME,
-                &format!("{relay_id}/{setting}"),
-                None,
-            )
-            .map_err(|refusal| refusal.to_string())
-    }
-}
-
-#[cfg(not(feature = "machine-directories-under-a-test-root"))]
-impl RelaySecretStore for OsRelaySecretStore {
-    fn read(&self, relay_id: &str, setting: &str) -> Result<Option<SecretString>, String> {
-        match self.entry(relay_id, setting)?.get_password() {
-            Ok(secret) => Ok(Some(SecretString::from(secret))),
-            Err(keyring_core::Error::NoEntry) => Ok(None),
-            Err(refusal) => Err(refusal.to_string()),
-        }
-    }
-
-    fn write(&self, relay_id: &str, setting: &str, secret: &SecretString) -> Result<(), String> {
-        self.entry(relay_id, setting)?
-            .set_password(secret.expose_secret())
-            .map_err(|refusal| refusal.to_string())
-    }
-
-    fn delete(&self, relay_id: &str, setting: &str) -> Result<(), String> {
-        match self.entry(relay_id, setting)?.delete_credential() {
-            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
-            Err(refusal) => Err(refusal.to_string()),
-        }
-    }
 }
 
 /// Every relay secret in one owner-only JSON file, `{relay_id: {setting:

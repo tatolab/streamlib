@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{ArgGroup, Subcommand};
-use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AddRelayToolResult, ConfigureRelayToolResult, ListRelaysToolResult, ListedRelayConnectionState,
@@ -19,7 +18,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 
 use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
-use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
+use crate::stream_actions_on_the_runtime::call_one_tool_reading_its_result;
+use crate::verb_output_table::rendered_padded_table;
 use crate::verb_standard_output::write_verb_standard_output;
 
 /// How long `relay add`, `relay set` and `relay rm` wait for the runtime: a join may reach its
@@ -145,23 +145,8 @@ impl SecretSource {
     }
 }
 
-fn call_one_relay_tool<ToolResult: DeserializeOwned>(
-    tool_name: &str,
-    tool_arguments: Map<String, Value>,
-    call_timeout: Duration,
-) -> Result<ToolResult, TatolabCommandFailure> {
-    let tool_result_text =
-        call_one_tool_of_the_running_runtime(tool_name, tool_arguments, call_timeout)?;
-    serde_json::from_str(&tool_result_text).map_err(|parse_failure| {
-        TatolabCommandFailure::refused(format!(
-            "{tool_name} answered something other than its result ({parse_failure}): \
-             {tool_result_text}"
-        ))
-    })
-}
-
 fn listed_relays() -> Result<Vec<ListedRelayInstance>, TatolabCommandFailure> {
-    let list_relays_result: ListRelaysToolResult = call_one_relay_tool(
+    let list_relays_result: ListRelaysToolResult = call_one_tool_reading_its_result(
         "list_relays",
         Map::new(),
         OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
@@ -183,7 +168,7 @@ fn add_relay(adapter: &str, settings_file: Option<&Path>) -> Result<u8, TatolabC
     let mut add_relay_arguments = Map::new();
     add_relay_arguments.insert("adapter".to_owned(), adapter.into());
     add_relay_arguments.insert("settings".to_owned(), Value::Object(settings));
-    let added: AddRelayToolResult = call_one_relay_tool(
+    let added: AddRelayToolResult = call_one_tool_reading_its_result(
         "add_relay",
         add_relay_arguments,
         RELAY_ACTION_TOOL_CALL_TIMEOUT,
@@ -254,7 +239,7 @@ fn configure_relay(
     let mut configure_relay_arguments = Map::new();
     configure_relay_arguments.insert("relay_id".to_owned(), relay_id.into());
     configure_relay_arguments.insert("settings".to_owned(), Value::Object(settings));
-    let configured: ConfigureRelayToolResult = call_one_relay_tool(
+    let configured: ConfigureRelayToolResult = call_one_tool_reading_its_result(
         "configure_relay",
         configure_relay_arguments,
         RELAY_ACTION_TOOL_CALL_TIMEOUT,
@@ -302,7 +287,7 @@ fn refuse_a_secret_as_an_argument_or_a_setting_as_a_secret(
 fn remove_relay(relay_id: &str) -> Result<u8, TatolabCommandFailure> {
     let mut remove_relay_arguments = Map::new();
     remove_relay_arguments.insert("relay_id".to_owned(), relay_id.into());
-    let removed: RemoveRelayToolResult = call_one_relay_tool(
+    let removed: RemoveRelayToolResult = call_one_tool_reading_its_result(
         "remove_relay",
         remove_relay_arguments,
         RELAY_ACTION_TOOL_CALL_TIMEOUT,
@@ -340,31 +325,7 @@ fn rendered_relays_table(listed_relays: &[ListedRelayInstance]) -> String {
         ]
     });
     let table_rows: Vec<[String; 5]> = std::iter::once(header_row).chain(relay_rows).collect();
-    let column_width = |column_index: usize| {
-        table_rows
-            .iter()
-            .map(|table_row| table_row[column_index].chars().count())
-            .max()
-            .unwrap_or_default()
-    };
-    let [relay_width, adapter_width, state_width, settings_width] = [
-        column_width(0),
-        column_width(1),
-        column_width(2),
-        column_width(3),
-    ];
-    let mut rendered_table: String = table_rows
-        .iter()
-        .map(|[relay, adapter, state, settings, secrets]| {
-            format!(
-                "{relay:<relay_width$}  {adapter:<adapter_width$}  {state:<state_width$}  \
-                 {settings:<settings_width$}  {secrets}"
-            )
-            .trim_end()
-            .to_owned()
-                + "\n"
-        })
-        .collect();
+    let mut rendered_table = rendered_padded_table(&table_rows);
     let why_each_is_not_joined: Vec<String> = listed_relays
         .iter()
         .filter_map(|listed| match &listed.connection_state {
