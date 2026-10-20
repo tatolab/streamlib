@@ -206,9 +206,12 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     /// Encode one published surface, handing back every access unit it
     /// completed.
     ///
-    /// A frame arriving after a failed mint is drained and discarded, so
-    /// upstream still sees a live consumer and the escalate gate is not
-    /// re-taken at camera cadence on a machine with no encode queue.
+    /// The frame is claimed against its producer's reuse from the read
+    /// through the encode, so a session mint outlasting the producer's
+    /// rotation never loses it. A frame arriving after a failed mint is
+    /// drained and discarded, so upstream still sees a live consumer and the
+    /// escalate gate is not re-taken at camera cadence on a machine with no
+    /// encode queue.
     pub fn encode_one_published_surface(
         &mut self,
         config: &HardwareVideoEncoderConfig,
@@ -218,7 +221,30 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         if self.encode_session.is_none() && self.session_mint_already_failed {
             return Ok(());
         }
+        let claimed = self
+            .gpu_context
+            .as_ref()
+            .ok_or_else(gpu_context_not_initialized::<Identity>)?
+            .claim_surface_against_producer_reuse(&frame.surface_id);
+        let _frame_claimed_against_producer_reuse = match claimed {
+            Ok(claim) => claim,
+            Err(refusal) => {
+                self.frames_that_failed_to_encode += 1;
+                return Err(Error::Runtime(format!(
+                    "{}: encode failed: {refusal}",
+                    Identity::PROCESSOR_NAME
+                )));
+            }
+        };
+        self.encode_one_claimed_surface(config, frame, staged)
+    }
 
+    fn encode_one_claimed_surface(
+        &mut self,
+        config: &HardwareVideoEncoderConfig,
+        frame: &VideoFrame,
+        staged: &mut Vec<EncodedAccessUnitAwaitingPublication>,
+    ) -> Result<()> {
         if let Some(stale_session) = self
             .encode_session
             .take_if(|minted| !minted.matches_source_extent(frame.width, frame.height))
@@ -236,12 +262,10 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             let minted = match &mut self.encode_session {
                 Some(minted) => minted,
                 empty_session_slot => {
-                    let gpu_context = self.gpu_context.as_ref().ok_or_else(|| {
-                        Error::Runtime(format!(
-                            "{}: GPU context not initialized",
-                            Identity::PROCESSOR_NAME
-                        ))
-                    })?;
+                    let gpu_context = self
+                        .gpu_context
+                        .as_ref()
+                        .ok_or_else(gpu_context_not_initialized::<Identity>)?;
                     match mint_encode_session_from_first_frame::<Identity>(
                         gpu_context,
                         config,
@@ -414,6 +438,13 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
 
 /// One access unit, stamped with its packet's own timestamp when the arm
 /// carried one through and the source frame's otherwise.
+fn gpu_context_not_initialized<Identity: HardwareVideoCodecProcessorIdentity>() -> Error {
+    Error::Runtime(format!(
+        "{}: GPU context not initialized",
+        Identity::PROCESSOR_NAME
+    ))
+}
+
 fn access_unit_awaiting_publication(
     packet: EncodedVideoAccessUnitFromSession,
     source_frame_timestamp_ns: i64,
@@ -860,7 +891,7 @@ mod tests {
 
         let mut refused_frame_access_units = Vec::new();
         encode_body
-            .encode_one_published_surface(
+            .encode_one_claimed_surface(
                 &config,
                 &a_720p_frame(1_000),
                 &mut refused_frame_access_units,
@@ -874,7 +905,7 @@ mod tests {
         for timestamp_ns in [2_000, 3_000] {
             let mut staged = Vec::new();
             encode_body
-                .encode_one_published_surface(&config, &a_720p_frame(timestamp_ns), &mut staged)
+                .encode_one_claimed_surface(&config, &a_720p_frame(timestamp_ns), &mut staged)
                 .unwrap();
             encode_body
                 .publish_staged_access_units(staged, |_, _, _| Ok(()))
