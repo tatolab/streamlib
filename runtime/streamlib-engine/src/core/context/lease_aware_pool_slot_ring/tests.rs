@@ -45,7 +45,7 @@ fn next_published_id(
     leases: Option<&SurfaceCheckOutLeaseRegistry>,
     minted: &LeaseAwarePoolMintedFrameGenerations,
 ) -> Option<String> {
-    ring.hand_off_a_reusable_slot(leases, minted)
+    ring.hand_off_a_reusable_slot(ANY_ONE_UNHELD_SLOT_IS_REUSABLE, leases, minted)
         .map(|slot_index| ring.slot(slot_index).currently_published_frame_id())
 }
 

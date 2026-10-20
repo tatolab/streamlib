@@ -19,6 +19,10 @@ use super::{SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseRegistry};
 use crate::core::rhi::published_frame_id_of_pool_slot;
 use crate::core::{Error, Result};
 
+/// The `unheld_slots_a_reuse_needs` of a ring that reuses any slot nobody
+/// holds.
+pub(crate) const ANY_ONE_UNHELD_SLOT_IS_REUSABLE: usize = 1;
+
 /// What a lease-aware ring needs to know about one slot's resource.
 pub(crate) trait LeaseAwarePoolSlotResource {
     /// Whether a holder in this address space still has the resource.
@@ -344,7 +348,8 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
     }
 
     /// Hand out the next slot in ring order that nobody holds, minting and
-    /// publishing its next generation; `None` when every slot is held.
+    /// publishing its next generation; `None` when fewer than
+    /// `unheld_slots_a_reuse_needs` slots are unheld.
     ///
     /// The whole scan and the retire step run under one hold of the lease
     /// table, so a checkout lands strictly before the test or strictly after
@@ -352,6 +357,7 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
     /// promised back to the producer.
     pub(crate) fn hand_off_a_reusable_slot(
         &mut self,
+        unheld_slots_a_reuse_needs: usize,
         check_out_leases: Option<&SurfaceCheckOutLeaseRegistry>,
         minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
     ) -> Option<usize> {
@@ -360,6 +366,14 @@ impl<Resource: LeaseAwarePoolSlotResource> LeaseAwarePoolSlotRing<Resource> {
             return None;
         }
         let mut reuse = PoolSlotReuse::over(check_out_leases);
+        let unheld_slot_count = self
+            .slots
+            .iter()
+            .filter(|slot| slot.is_unheld(&reuse))
+            .count();
+        if unheld_slot_count < unheld_slots_a_reuse_needs {
+            return None;
+        }
         for _ in 0..slot_count {
             let slot_index = self.next_slot_index % slot_count;
             self.next_slot_index = (self.next_slot_index + 1) % slot_count;

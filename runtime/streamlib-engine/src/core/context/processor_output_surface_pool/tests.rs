@@ -105,6 +105,60 @@ fn a_held_frames_slot_is_skipped_never_rewritten() {
 }
 
 #[test]
+fn while_a_frame_is_held_a_frame_nobody_claimed_stays_resolvable_for_rotation_depth_publishes() {
+    let mut pool = PoolUnderTest::new();
+    let held_frame = pool.next_frame(2).unwrap();
+    pool.check_out(&held_frame);
+    let unclaimed_frame = pool.next_frame(2).unwrap();
+
+    let published_after_the_unclaimed_frame = pool.next_frame(2).unwrap();
+    assert_eq!(
+        pool.minted
+            .refusal_of_a_retired_frame_id_named(&unclaimed_frame)
+            .unwrap()
+            .ok(),
+        Some(()),
+        "{unclaimed_frame} was retired one publish later, by {published_after_the_unclaimed_frame}"
+    );
+
+    let published: Vec<_> = (0..2).map(|_| pool.next_frame(2).unwrap()).collect();
+    assert_eq!(
+        [
+            held_frame.as_str(),
+            unclaimed_frame.as_str(),
+            published_after_the_unclaimed_frame.as_str(),
+            published[0].as_str(),
+            published[1].as_str(),
+        ],
+        ["slot-0#1", "slot-1#1", "slot-2#1", "slot-1#2", "slot-2#2"]
+    );
+    assert!(matches!(
+        pool.minted
+            .refusal_of_a_retired_frame_id_named(&unclaimed_frame),
+        Some(Err(Error::SurfaceFrameRecycled { .. }))
+    ));
+    assert_eq!(pool.pool.slot_count(), 3);
+}
+
+#[test]
+fn at_its_cap_with_fewer_than_rotation_depth_slots_unheld_the_pool_reuses_one_rather_than_refusing()
+{
+    let mut pool = PoolUnderTest::new();
+    for _ in 0..PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY - 1 {
+        let published = pool.next_frame(2).unwrap();
+        pool.check_out(&published);
+    }
+    let the_one_unheld_frame = pool.next_frame(2).unwrap();
+    assert_eq!(the_one_unheld_frame, "slot-15#1");
+
+    assert_eq!(pool.next_frame(2).unwrap(), "slot-15#2");
+    assert_eq!(
+        pool.pool.slot_count(),
+        PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+    );
+}
+
+#[test]
 fn every_slot_held_grows_the_pool_until_its_cap_then_refuses_by_name() {
     let mut pool = PoolUnderTest::new();
     for _ in 0..PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
@@ -248,7 +302,11 @@ fn slot_lent_out_of(
     lending_ring.hand_off_fresh_slot(slot_index, Some(leases), minted);
     for _ in 1..frames_published_before_lending {
         assert_eq!(
-            lending_ring.hand_off_a_reusable_slot(Some(leases), minted),
+            lending_ring.hand_off_a_reusable_slot(
+                ANY_ONE_UNHELD_SLOT_IS_REUSABLE,
+                Some(leases),
+                minted
+            ),
             Some(slot_index),
             "the lending ring republishes its one unheld slot"
         );

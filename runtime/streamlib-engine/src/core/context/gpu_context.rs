@@ -46,8 +46,8 @@ impl RhiBlitter for NoOpBlitter {
 }
 
 use super::lease_aware_pool_slot_ring::{
-    LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
-    LeaseAwarePoolSlotRing, PoolSlotReuse,
+    ANY_ONE_UNHELD_SLOT_IS_REUSABLE, LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot,
+    LeaseAwarePoolSlotResource, LeaseAwarePoolSlotRing, PoolSlotReuse,
 };
 use super::shared_pool_entry_freeing::{
     LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
@@ -387,10 +387,11 @@ impl PixelBufferPoolManager {
         // `docs/decisions/surface-id-lifetime-contract.md` — and on macOS also
         // the kernel's own in-use answer for the slot's IOSurface.
         let check_out_leases = surface_store.and_then(SurfaceStore::check_out_lease_registry);
-        if let Some(slot_index) = ring_pool
-            .ring
-            .hand_off_a_reusable_slot(check_out_leases, &self.minted_frame_generations)
-        {
+        if let Some(slot_index) = ring_pool.ring.hand_off_a_reusable_slot(
+            ANY_ONE_UNHELD_SLOT_IS_REUSABLE,
+            check_out_leases,
+            &self.minted_frame_generations,
+        ) {
             let handed_off_slot = ring_pool.ring.slot_mut(slot_index);
             handed_off_slot
                 .resource_mut()
@@ -476,10 +477,11 @@ impl PixelBufferPoolManager {
         let surface_store = self.engines_own_surface_store.get();
         let ring_pool = self.ring_pool_for_shape(pools, shape, surface_store, acquiring_stream)?;
         let check_out_leases = surface_store.and_then(SurfaceStore::check_out_lease_registry);
-        let lent_slot_index = match ring_pool
-            .ring
-            .hand_off_a_reusable_slot(check_out_leases, &self.minted_frame_generations)
-        {
+        let lent_slot_index = match ring_pool.ring.hand_off_a_reusable_slot(
+            ANY_ONE_UNHELD_SLOT_IS_REUSABLE,
+            check_out_leases,
+            &self.minted_frame_generations,
+        ) {
             Some(reused_slot_index) => reused_slot_index,
             None => {
                 let fresh_slot_index = Self::allocate_and_register_one_more_slot(
