@@ -2,24 +2,4 @@
 name = "camera-virtual-camera"
 version = "0.1.0"
 requires-python = ">=3.12"
-# 0.22.1 is the release `ShaderEffect`'s tests pass against.
-dependencies = [
-    "streamlib>=0.22.1",
-    "numpy>=2.1",
-]
-
-# streamlib is served from its own simple index until the PyPI publication that
-# follows the project rename; everything else resolves from PyPI as usual.
-[[tool.uv.index]]
-name = "streamlib"
-url = "https://tatolab.github.io/streamlib/simple/"
-explicit = true
-
-[tool.uv.sources]
-streamlib = { index = "streamlib" }
-
-[dependency-groups]
-dev = ["pytest>=8"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+dependencies = ["tatolab-stream>=0.54.3", "numpy>=2.1"]
