@@ -246,7 +246,6 @@ fn a_frame_published_in_undefined_is_refused_by_name() {
             timestamp_ns: 1_000_000_000,
             force_sync_point: false,
         })
-        .err()
-        .expect("a frame no producer published a layout for is refused");
+        .expect_err("a frame no producer published a layout for is refused");
     assert!(refusal.to_string().contains("UNDEFINED"), "{refusal}");
 }

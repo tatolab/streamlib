@@ -464,14 +464,7 @@ impl SimpleEncoder {
         source_width: u32,
         source_height: u32,
     ) -> Result<(vk::Image, vk::ImageView), VideoError> {
-        // Lazily create the RGB→NV12 converter on first call, unless the caller
-        // pre-allocated it via `prepare_gpu_encode_resources()`.
-        if self.rgb_to_nv12.is_none() {
-            self.prepare_gpu_encode_resources_impl()?;
-        }
-        let converter = self.rgb_to_nv12.as_mut().ok_or_else(|| {
-            VideoError::Engine("the RGB→NV12 converter was not prepared".to_string())
-        })?;
+        let converter = self.rgb_to_nv12_converter_prepared_on_first_use()?;
         unsafe {
             converter.convert(
                 rgba_image_view,

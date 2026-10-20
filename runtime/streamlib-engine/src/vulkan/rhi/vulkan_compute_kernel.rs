@@ -114,7 +114,17 @@ impl SampledImageReadLayout {
                     .to_string(),
             ));
         }
-        Ok(Self::try_from(published_layout).unwrap_or(Self::ShaderReadOnlyOptimal))
+        Ok(Self::sampled_read_layout_matching(published_layout)
+            .unwrap_or(Self::ShaderReadOnlyOptimal))
+    }
+
+    fn sampled_read_layout_matching(layout: crate::core::rhi::VulkanLayout) -> Option<Self> {
+        use crate::core::rhi::VulkanLayout;
+        match layout {
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL => Some(Self::ShaderReadOnlyOptimal),
+            VulkanLayout::GENERAL => Some(Self::General),
+            _ => None,
+        }
     }
 }
 
@@ -123,16 +133,23 @@ impl TryFrom<crate::core::rhi::VulkanLayout> for SampledImageReadLayout {
 
     fn try_from(layout: crate::core::rhi::VulkanLayout) -> Result<Self> {
         use crate::core::rhi::VulkanLayout;
-        match layout {
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL => Ok(Self::ShaderReadOnlyOptimal),
-            VulkanLayout::GENERAL => Ok(Self::General),
-            other => Err(Error::GpuError(format!(
+        Self::sampled_read_layout_matching(layout).ok_or_else(|| {
+            Error::GpuError(format!(
                 "a sampled image is read in SHADER_READ_ONLY_OPTIMAL ({}) or GENERAL ({}), not \
                  layout {}",
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0,
                 VulkanLayout::GENERAL.0,
-                other.0
-            ))),
+                layout.0
+            ))
+        })
+    }
+}
+
+impl From<SampledImageReadLayout> for crate::core::rhi::VulkanLayout {
+    fn from(layout: SampledImageReadLayout) -> Self {
+        match layout {
+            SampledImageReadLayout::ShaderReadOnlyOptimal => Self::SHADER_READ_ONLY_OPTIMAL,
+            SampledImageReadLayout::General => Self::GENERAL,
         }
     }
 }
@@ -2567,6 +2584,15 @@ void main() {
                 read_in,
                 "an image published in layout {}",
                 published.0
+            );
+        }
+        for read_in in [
+            SampledImageReadLayout::ShaderReadOnlyOptimal,
+            SampledImageReadLayout::General,
+        ] {
+            assert_eq!(
+                SampledImageReadLayout::try_from(VulkanLayout::from(read_in)).unwrap(),
+                read_in
             );
         }
         let refusal =

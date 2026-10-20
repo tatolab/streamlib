@@ -391,17 +391,21 @@ impl SimpleEncoder {
         source_height: u32,
         timestamp_ns: Option<i64>,
     ) -> Result<Vec<EncodePacket>, VideoError> {
-        self.refuse_a_source_short_of_the_configured_picture_area(source_width, source_height)?;
-        unsafe {
-            let (nv12_image, nv12_view) = self.convert_rgba_source_to_nv12(
+        self.refuse_a_source_short_of_the_configured_picture_area(
+            "encode_image",
+            source_width,
+            source_height,
+        )?;
+        let (nv12_image, nv12_view) = unsafe {
+            self.convert_rgba_source_to_nv12(
                 rgba_image_view,
                 rgba_image_layout,
                 None,
                 source_width,
                 source_height,
-            )?;
-            self.encode_converted_nv12(nv12_image, nv12_view, timestamp_ns)
-        }
+            )
+        }?;
+        unsafe { self.encode_converted_nv12(nv12_image, nv12_view, timestamp_ns) }
     }
 
     /// Encode a published GPU-resident RGBA source named by its
@@ -421,17 +425,22 @@ impl SimpleEncoder {
         source_registration: &crate::core::context::TextureRegistration,
         timestamp_ns: Option<i64>,
     ) -> Result<Vec<EncodePacket>, VideoError> {
+        use crate::core::rhi::VulkanLayout;
         use crate::host_rhi::HostTextureExt;
 
         let source = source_registration.texture();
-        self.refuse_a_source_short_of_the_configured_picture_area(source.width(), source.height())?;
+        self.refuse_a_source_short_of_the_configured_picture_area(
+            "encode_source_texture",
+            source.width(),
+            source.height(),
+        )?;
         let published_layout = source_registration.current_layout();
         let rgba_image_layout =
             crate::vulkan::rhi::SampledImageReadLayout::to_read_an_image_published_in(
                 published_layout,
             )
             .map_err(|refusal| VideoError::Engine(format!("encode_source_texture: {refusal}")))?;
-        let rgba_source_barrier = if rgba_image_layout.as_vk() == published_layout.as_vk() {
+        let rgba_source_barrier = if VulkanLayout::from(rgba_image_layout) == published_layout {
             None
         } else {
             let rgba_image = source.vulkan_inner().image().ok_or_else(|| {
@@ -452,19 +461,17 @@ impl SimpleEncoder {
                 "encode_source_texture: resolve the source texture's image view: {e}"
             ))
         })?;
-        unsafe {
-            let (nv12_image, nv12_view) = self.convert_rgba_source_to_nv12(
+        let (nv12_image, nv12_view) = unsafe {
+            self.convert_rgba_source_to_nv12(
                 rgba_image_view,
                 rgba_image_layout,
                 rgba_source_barrier,
                 source.width(),
                 source.height(),
-            )?;
-            source_registration.update_layout(crate::core::rhi::VulkanLayout(
-                rgba_image_layout.as_vk().as_raw(),
-            ));
-            self.encode_converted_nv12(nv12_image, nv12_view, timestamp_ns)
-        }
+            )
+        }?;
+        source_registration.update_layout(rgba_image_layout.into());
+        unsafe { self.encode_converted_nv12(nv12_image, nv12_view, timestamp_ns) }
     }
 
     /// A source smaller than the configured picture area is refused naming
@@ -472,12 +479,13 @@ impl SimpleEncoder {
     /// missing picture region.
     fn refuse_a_source_short_of_the_configured_picture_area(
         &self,
+        refusing_entry_point: &str,
         source_width: u32,
         source_height: u32,
     ) -> Result<(), VideoError> {
         if source_width < self.config.width || source_height < self.config.height {
             return Err(VideoError::BitstreamError(format!(
-                "encode_image: source {}x{} does not cover the session's configured \
+                "{refusing_entry_point}: source {}x{} does not cover the session's configured \
                  picture area {}x{}",
                 source_width, source_height, self.config.width, self.config.height
             )));
@@ -492,31 +500,36 @@ impl SimpleEncoder {
     /// call, for first-frame latency; the exportable VMA blocks the NV12 image
     /// rides through are pre-warmed at `HostVulkanDevice::new()`.
     pub fn prepare_gpu_encode_resources(&mut self) -> Result<(), VideoError> {
-        self.prepare_gpu_encode_resources_impl()
+        self.rgb_to_nv12_converter_prepared_on_first_use()
+            .map(|_| ())
     }
 
-    pub(crate) fn prepare_gpu_encode_resources_impl(&mut self) -> Result<(), VideoError> {
-        if self.rgb_to_nv12.is_some() {
-            return Ok(());
-        }
-        let (aligned_w, aligned_h) = self.aligned_extent();
-        let codec_flag = match self.config.codec {
-            Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
-            Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
+    /// The RGB→NV12 converter, created on the first call.
+    pub(crate) fn rgb_to_nv12_converter_prepared_on_first_use(
+        &mut self,
+    ) -> Result<&mut crate::vulkan::video::rgb_to_nv12::RgbToNv12Converter, VideoError> {
+        let converter = match self.rgb_to_nv12.take() {
+            Some(prepared) => prepared,
+            None => {
+                let (aligned_w, aligned_h) = self.aligned_extent();
+                let codec_flag = match self.config.codec {
+                    Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
+                    Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
+                };
+                unsafe {
+                    crate::vulkan::video::rgb_to_nv12::RgbToNv12Converter::new(
+                        &self.ctx,
+                        aligned_w,
+                        aligned_h,
+                        self.compute_queue_family,
+                        self.compute_queue,
+                        self.encode_queue_family,
+                        codec_flag,
+                    )?
+                }
+            }
         };
-        let converter = unsafe {
-            crate::vulkan::video::rgb_to_nv12::RgbToNv12Converter::new(
-                &self.ctx,
-                aligned_w,
-                aligned_h,
-                self.compute_queue_family,
-                self.compute_queue,
-                self.encode_queue_family,
-                codec_flag,
-            )?
-        };
-        self.rgb_to_nv12 = Some(converter);
-        Ok(())
+        Ok(self.rgb_to_nv12.insert(converter))
     }
 }
 
