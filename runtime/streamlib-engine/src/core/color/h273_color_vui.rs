@@ -194,6 +194,26 @@ fn matrix_id_from_h273_byte(byte: u8) -> Option<MatrixId> {
     })
 }
 
+/// The H.273 `MatrixCoefficients` byte that names `matrix_id` — the inverse
+/// of the byte → id table, so a producer can signal the matrix it converted with.
+pub fn h273_matrix_byte_of(matrix_id: MatrixId) -> u8 {
+    match matrix_id {
+        MatrixId::Identity => matrix::IDENTITY,
+        MatrixId::Bt709 => matrix::BT709,
+        MatrixId::Fcc => matrix::FCC,
+        MatrixId::Bt470Bg => matrix::BT470_BG,
+        MatrixId::Smpte170m => matrix::SMPTE170M,
+        MatrixId::Smpte240m => matrix::SMPTE240M,
+        MatrixId::Ycgco => matrix::YCGCO,
+        MatrixId::Bt2020Ncl => matrix::BT2020_NCL,
+        MatrixId::Bt2020Cl => matrix::BT2020_CL,
+        MatrixId::Smpte2085 => matrix::SMPTE2085,
+        MatrixId::ChromaNcl => matrix::CHROMA_NCL,
+        MatrixId::ChromaCl => matrix::CHROMA_CL,
+        MatrixId::Ictcp => matrix::ICTCP,
+    }
+}
+
 /// The engine range id a `video_full_range_flag` names.
 fn range_id_from_h273_full_range_flag(full_range: bool) -> RangeId {
     if full_range {
@@ -356,6 +376,15 @@ mod tests {
                 range: RangeId::Limited,
             }
         );
+    }
+
+    #[test]
+    fn every_matrix_id_names_the_byte_that_names_it() {
+        for matrix_byte in 0..=u8::MAX {
+            if let Some(matrix_id) = matrix_id_from_h273_byte(matrix_byte) {
+                assert_eq!(h273_matrix_byte_of(matrix_id), matrix_byte, "{matrix_id:?}");
+            }
+        }
     }
 
     #[test]

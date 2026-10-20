@@ -46,6 +46,7 @@ use crate::apple::imported_iosurface_storage_buffers_kept_for_recycling::Importe
 use crate::core::annex_b_access_unit::{
     NalUnitLengthPrefixWidth, annex_b_access_unit_from_length_prefixed_sample,
 };
+use crate::core::color::h273_color_vui::h273_matrix_byte_of;
 use crate::core::color::{ColorSpaceKind, H273ColorVui, RangeId, ResolvedColorInfo};
 use crate::core::context::{
     EncodedVideoAccessUnitFromSession, GpuContextFullAccess, GpuContextLimitedAccess,
@@ -214,9 +215,10 @@ impl VideoToolboxEncodeSession {
             gpu_context: gpu_context.host_inner().limited_access(),
         };
         session.set_the_streaming_shape_and_rate(request)?;
-        if let Some(color_vui) = request.color_vui {
-            session.set_the_colour_the_parameter_sets_signal(color_vui)?;
-        }
+        session.set_the_colour_the_parameter_sets_signal(H273ColorVui {
+            matrix: Some(h273_matrix_byte_of(resolved_color.matrix)),
+            ..request.color_vui.unwrap_or_default()
+        })?;
         // SAFETY: a live session.
         let prepare_os_status = unsafe { session.compression_session.0.prepare_to_encode_frames() };
         if prepare_os_status != 0 {
@@ -345,8 +347,9 @@ impl VideoToolboxEncodeSession {
         }
     }
 
-    /// The colour VideoToolbox writes into the parameter sets' VUI. The range
-    /// is the pool's pixel format's, which VideoToolbox states for itself.
+    /// The colour VideoToolbox writes into the parameter sets' VUI, its matrix
+    /// the one the NV12 conversion encodes with. The range is the pool's pixel
+    /// format's, which VideoToolbox states for itself.
     fn set_the_colour_the_parameter_sets_signal(&self, color_vui: H273ColorVui) -> Result<()> {
         type CoreVideoStringForCodePoint =
             extern "C-unwind" fn(c_int) -> Option<CFRetained<CFString>>;
