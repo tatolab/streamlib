@@ -132,13 +132,13 @@ run_hook 'tatolab run' '/home/dev/streamlib/examples/camera-display'
 expect_warn "tatolab run from inside an example directory is noted" example_launch
 
 # ── The observation verbs stay silent ────────────────────────────────
-# /verify-live taps a channel and exchanges surface ids per frame; a note on
+# /verify-live exposes a port and reads its track at the local relay; a note on
 # each read would bury the audit in reminders.
-run_hook 'tatolab exchange --channel effects/cyberpunkglitch/video --out /tmp/e2e --count 3'
-expect_silent "tatolab exchange is a control-plane read, not a rig command"
+run_hook 'tatolab expose main encoder encoded_video'
+expect_silent "tatolab expose is a control-plane write that launches nothing"
 
-run_hook 'tatolab tap camera/video --count 5'
-expect_silent "tatolab tap is a control-plane read"
+run_hook 'target/release/tatolab-read-track http://127.0.0.1:4443 desk/main.hang encoder/encoded_video --count 30 --out /tmp/e2e/track'
+expect_silent "tatolab-read-track reads a track as any MoQ client does"
 
 run_hook 'tatolab streams'
 expect_silent "tatolab streams is a control-plane read"
@@ -246,8 +246,8 @@ expect_silent "cargo run of a workspace tool stays silent"
 run_hook 'cargo run -p camera-display'
 expect_silent "no -p spelling reaches an example crate"
 
-run_hook 'cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera'
-expect_silent "the codec rig is a workspace target and names no examples/ path (known gap, locked)"
+run_hook 'cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/main.hang encoder/encoded_video --count 30 --out /tmp/e2e/track'
+expect_silent "cargo run -p tatolab-read-track is a workspace tool, not a launch"
 
 run_hook 'cargo run --release' '/home/dev/streamlib/examples/jpeg-psnr'
 expect_warn "cargo run from inside an example directory is noted" example_launch
@@ -311,7 +311,7 @@ run_hook 'tatolab dev --dir /home/dev/scaffolds/camera-app'
 expect_silent "tatolab dev outside examples/ is NOT noted (scoped to examples/)"
 
 # ── e2e fixture scripts: executing one is noted, naming one is not ───
-run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e'
+run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/streamlib-e2e'
 expect_warn "an e2e fixture script run directly is noted" e2e_fixture
 
 run_hook './runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/va'
@@ -356,7 +356,7 @@ expect_silent "chmod on an e2e fixture script stays silent"
 run_hook 'bash -n runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh && echo "syntax OK"'
 expect_silent "a bash -n syntax check of an e2e fixture script stays silent"
 
-run_hook 'git add runtime/streamlib-engine/tests/fixtures/codec_roundtrip_node.py runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
+run_hook 'git add runtime/streamlib-engine/tests/fixtures/codec_roundtrip_stream.py runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh'
 expect_silent "staging an e2e fixture script stays silent"
 
 run_hook 'grep -n "STREAMLIB_CLI" runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh | head'
@@ -466,7 +466,7 @@ clear_config
 set_config project '{"rules": {"example_launch": "ask"}}'
 run_hook 'tatolab run --dir examples/camera-display'
 expect_ask "a per-rule ask prompts on that rule" "rules.example_launch"
-run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/e2e'
+run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/e2e'
 expect_warn "a per-rule ask leaves the other rules at warn" e2e_fixture
 clear_config
 
