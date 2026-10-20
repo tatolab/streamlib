@@ -270,6 +270,7 @@ fn a_hosted_relays_token_and_signing_key_reach_no_log_line_listing_or_file_at_tr
         "each hosted relay is dialed: {standard_error}"
     );
     let runtime_log = every_file_under(&machine_root.runtime_log_directory());
+    assert!(!runtime_log.is_empty(), "the runtime's own log is read");
     for (shown_in, text) in [
         ("list_relays", listing.to_string()),
         ("graph", graph.text),
@@ -396,5 +397,6 @@ fn a_relays_secret_sent_over_mcp_stdio_in_any_shape_reaches_no_log_line_at_trace
     let standard_error = runtime.standard_error();
     assert!(!standard_error.contains(RELAY_SECRET), "{standard_error}");
     let runtime_log = every_file_under(&machine_root.runtime_log_directory());
+    assert!(!runtime_log.is_empty(), "the runtime's own log is read");
     assert!(!runtime_log.contains(RELAY_SECRET), "{runtime_log}");
 }

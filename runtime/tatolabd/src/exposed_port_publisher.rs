@@ -171,13 +171,14 @@ async fn publish_every_exposed_port(
     };
     publisher.dial_exactly(relays.borrow_and_update().clone());
     let mut latest_exposed_output_ports = Vec::new();
-    let mut retried_after = A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER;
+    let mut refused_subscription_retry = RefusedSubscriptionRetry::starting_at(Instant::now());
     loop {
+        let refused_subscription_retried_at = refused_subscription_retry.retried_at;
         let a_refused_subscription_is_due = async {
             if publisher.why_each_port_is_not_forwarded_yet.is_empty() {
                 std::future::pending::<()>().await
             } else {
-                tokio::time::sleep(retried_after).await
+                tokio::time::sleep_until(refused_subscription_retried_at.into()).await
             }
         };
         let next_catalog_rewrite = publisher.when_a_catalog_is_next_due_to_be_rewritten_whole();
@@ -204,14 +205,13 @@ async fn publish_every_exposed_port(
                     return;
                 };
                 latest_exposed_output_ports = exposed_output_ports;
-                retried_after = A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER;
+                refused_subscription_retry.start_the_backoff_over();
             }
             ExposedPortPublisherWake::TheRelaysChanged => {
                 publisher.dial_exactly(relays.borrow_and_update().clone());
             }
             ExposedPortPublisherWake::ARefusedSubscriptionIsDue => {
-                retried_after =
-                    (retried_after * 2).min(A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY);
+                refused_subscription_retry.back_off();
             }
             ExposedPortPublisherWake::ACatalogIsDueToBeRewrittenWhole => {
                 publisher.rewrite_each_catalog_due_whole(Instant::now());
@@ -224,6 +224,41 @@ async fn publish_every_exposed_port(
         publisher
             .forward_exactly(&engine, latest_exposed_output_ports.clone())
             .await;
+        refused_subscription_retry.after_a_forward_at(Instant::now());
+    }
+}
+
+/// When a subscription the last forward left refused is tried again: a
+/// deadline only a forward moves, so a wake that forwards nothing — a catalog
+/// rewritten whole — never pushes the retry back.
+struct RefusedSubscriptionRetry {
+    retried_after: Duration,
+    retried_at: Instant,
+}
+
+impl RefusedSubscriptionRetry {
+    fn starting_at(now: Instant) -> Self {
+        Self {
+            retried_after: A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER,
+            retried_at: now + A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER,
+        }
+    }
+
+    /// The exposed set changed: the next retry waits the first wait again.
+    fn start_the_backoff_over(&mut self) {
+        self.retried_after = A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER;
+    }
+
+    /// A retry fell due: the one after it waits twice as long, at most
+    /// [`A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY`].
+    fn back_off(&mut self) {
+        self.retried_after =
+            (self.retried_after * 2).min(A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY);
+    }
+
+    /// A forward ran at `now`: the next retry is the current wait after it.
+    fn after_a_forward_at(&mut self, now: Instant) {
+        self.retried_at = now + self.retried_after;
     }
 }
 
@@ -1538,6 +1573,34 @@ mod tests {
         assert_eq!(
             publisher.when_a_catalog_is_next_due_to_be_rewritten_whole(),
             Some(due_at + Duration::from_secs(1))
+        );
+    }
+
+    /// The retry of a refused subscription keeps its deadline through any wake
+    /// that forwards nothing, so a catalog rewritten whole every second never
+    /// starves a retry backed off past a second.
+    #[test]
+    fn a_refused_subscriptions_retry_keeps_its_deadline_until_a_forward_moves_it() {
+        let started_at = Instant::now();
+        let mut retry = RefusedSubscriptionRetry::starting_at(started_at);
+        for _ in 0..6 {
+            retry.back_off();
+        }
+        assert_eq!(
+            retry.retried_at,
+            started_at + A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER,
+            "backing off moves no deadline already set"
+        );
+        retry.after_a_forward_at(started_at);
+        assert_eq!(
+            retry.retried_at,
+            started_at + A_REFUSED_SUBSCRIPTION_IS_RETRIED_AT_LEAST_EVERY
+        );
+        retry.start_the_backoff_over();
+        retry.after_a_forward_at(started_at + Duration::from_secs(1));
+        assert_eq!(
+            retry.retried_at,
+            started_at + Duration::from_secs(1) + A_REFUSED_SUBSCRIPTION_IS_FIRST_RETRIED_AFTER
         );
     }
 }

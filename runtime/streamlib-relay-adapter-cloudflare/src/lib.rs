@@ -105,16 +105,25 @@ impl CloudflareRelayAddressAndToken {
         if dial_url.query().is_some() || dial_url.fragment().is_some() {
             return Err(CloudflareRelayUrlRefusal::CarriesAQueryOrAFragment);
         }
-        let token = dial_url
+        let mut path_segments_before_the_token: Vec<String> = dial_url
             .path_segments()
-            .and_then(|mut path_segments| path_segments.rfind(|segment| !segment.is_empty()))
+            .ok_or(CloudflareRelayUrlRefusal::NoTokenInThePath)?
             .map(str::to_string)
+            .collect();
+        while path_segments_before_the_token
+            .last()
+            .is_some_and(|segment| segment.is_empty())
+        {
+            path_segments_before_the_token.pop();
+        }
+        let token = path_segments_before_the_token
+            .pop()
             .ok_or(CloudflareRelayUrlRefusal::NoTokenInThePath)?;
         dial_url
             .path_segments_mut()
             .map_err(|_| CloudflareRelayUrlRefusal::NoTokenInThePath)?
-            .pop_if_empty()
-            .pop();
+            .clear()
+            .extend(&path_segments_before_the_token);
         Ok(Self {
             dial_url,
             token: SecretString::from(token),
@@ -271,8 +280,17 @@ mod tests {
 
     #[test]
     fn a_trailing_slash_or_a_deeper_path_keeps_the_last_segment_as_the_token() {
-        let read = CloudflareRelayAddressAndToken::read_from(&format!("{}/", relay_url())).unwrap();
-        assert_eq!(read.token.expose_secret(), TOKEN);
+        for trailing in ["/", "//", "///"] {
+            let read =
+                CloudflareRelayAddressAndToken::read_from(&format!("{}{trailing}", relay_url()))
+                    .unwrap();
+            assert_eq!(read.token.expose_secret(), TOKEN);
+            assert_eq!(
+                read.dial_url.as_str(),
+                "https://draft-16.cloudflare.mediaoverquic.com/",
+                "`{trailing}` after the token leaves it in the address"
+            );
+        }
         let read = CloudflareRelayAddressAndToken::read_from(&format!(
             "https://relay.example/moq/{TOKEN}"
         ))

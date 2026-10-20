@@ -128,6 +128,7 @@ fn each_listener_is_listed_joined_once_the_publishers_session_connects_and_its_t
         "{standard_error}"
     );
     let runtime_log = every_file_under(&machine_root.runtime_log_directory());
+    assert!(!runtime_log.is_empty(), "the runtime's own log is read");
     for (shown_in, text) in [
         ("the standard error", standard_error),
         ("the runtime log", runtime_log),
