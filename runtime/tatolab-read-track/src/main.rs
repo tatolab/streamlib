@@ -6,7 +6,8 @@
 //! first `N` objects into `<dir>` — one file each, an index of their groups,
 //! timestamps and payload form, and the track's catalog entry. A stream's exposed port is the
 //! track `<node>/<port>` of the broadcast `<machine>/<stream>.hang`; the
-//! machine's local relay answers at `http://127.0.0.1:4443`.
+//! machine's local relay answers at `http://127.0.0.1:4443`. A relay URL
+//! carrying a credential is read from stdin with `-`, never an argument.
 
 // stderr is this tool's progress and refusal channel, as it is the CLI's.
 #![allow(clippy::disallowed_macros)]
@@ -43,7 +44,8 @@ const THE_RELAY_IS_TOLD_THE_SESSION_CLOSED_WITHIN: Duration = Duration::from_sec
 #[command(name = "tatolab-read-track")]
 struct ReadTrackArguments {
     /// The relay's URL; `http://` dials it with the certificate fingerprint the
-    /// relay serves.
+    /// relay serves. `-` reads it from stdin, for a URL carrying a credential,
+    /// which is then named by its scheme, host and port alone.
     relay_url: String,
     /// The broadcast's path at the relay, e.g. `<machine>/<stream>.hang`.
     broadcast: String,
@@ -83,13 +85,43 @@ fn main() -> ExitCode {
     }
 }
 
+/// What a relay URL argument of `-` names: the URL is read from stdin.
+const RELAY_URL_READ_FROM_STDIN: &str = "-";
+
+/// The relay URL `relay_url_argument` names, and how a message names it: as
+/// written, or by its scheme, host and port alone when it was read from stdin
+/// and may carry a credential anywhere else in it.
+fn the_relay_url_and_how_it_is_named(relay_url_argument: &str) -> Result<(url::Url, String)> {
+    if relay_url_argument != RELAY_URL_READ_FROM_STDIN {
+        let relay_url = relay_url_argument
+            .parse()
+            .with_context(|| format!("`{relay_url_argument}` is not a URL"))?;
+        return Ok((relay_url, relay_url_argument.to_string()));
+    }
+    let mut relay_url_read = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut relay_url_read)
+        .context("the relay URL could not be read from stdin")?;
+    let relay_url: url::Url = relay_url_read
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("the relay URL read from stdin is not a URL"))?;
+    let relay_as_named = the_relay_named_by_its_origin_alone(&relay_url);
+    Ok((relay_url, relay_as_named))
+}
+
+/// `relay_url` as `scheme://host[:port]`, nothing of its path or query.
+fn the_relay_named_by_its_origin_alone(relay_url: &url::Url) -> String {
+    let host = relay_url.host_str().unwrap_or_default();
+    match relay_url.port() {
+        Some(port) => format!("{}://{host}:{port}", relay_url.scheme()),
+        None => format!("{}://{host}", relay_url.scheme()),
+    }
+}
+
 /// Read `arguments.object_count` objects of the track into the output
 /// directory, or refuse naming how many arrived in the time allowed.
 async fn read_the_track(arguments: &ReadTrackArguments) -> Result<u64> {
-    let relay_url: url::Url = arguments
-        .relay_url
-        .parse()
-        .with_context(|| format!("`{}` is not a URL", arguments.relay_url))?;
+    let (relay_url, relay_as_named) = the_relay_url_and_how_it_is_named(&arguments.relay_url)?;
     let moq_client = moq_tokio::connect::Config::default()
         .init(moq_tokio::quic::Config::default())
         .context("no MoQ client builds")?
@@ -106,7 +138,7 @@ async fn read_the_track(arguments: &ReadTrackArguments) -> Result<u64> {
     let read = tokio::time::timeout(wait_at_most, async {
         let broadcast = tokio::select! {
             ended = connection.closed() => {
-                return Err(anyhow!("the session with {} ended before the broadcast was announced: {ended:?}", arguments.relay_url));
+                return Err(anyhow!("the session with {relay_as_named} ended before the broadcast was announced: {ended:?}"));
             }
             broadcast = announced_broadcasts.routed_broadcast(arguments.broadcast.as_str()) => {
                 broadcast.with_context(|| format!("the broadcast `{}` was refused", arguments.broadcast))?
@@ -239,4 +271,37 @@ async fn the_tracks_catalog_entry(
             "the catalog did not list `{track_name}` within {THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR:?}"
         )
     })?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_relay_read_from_stdin_is_named_by_its_origin_and_never_its_path_or_query() {
+        for (relay_url, named) in [
+            (
+                "https://draft-16.relay.example/sub-token-91c2",
+                "https://draft-16.relay.example",
+            ),
+            (
+                "https://cdn.relay.example/pb1test?jwt=eyJ.secret.sig",
+                "https://cdn.relay.example",
+            ),
+            ("http://127.0.0.1:4443/?jwt=abc", "http://127.0.0.1:4443"),
+        ] {
+            assert_eq!(
+                the_relay_named_by_its_origin_alone(&relay_url.parse().unwrap()),
+                named
+            );
+        }
+    }
+
+    #[test]
+    fn a_relay_url_given_as_an_argument_is_named_as_written() {
+        let (relay_url, named) =
+            the_relay_url_and_how_it_is_named("http://127.0.0.1:4443").unwrap();
+        assert_eq!(relay_url.as_str(), "http://127.0.0.1:4443/");
+        assert_eq!(named, "http://127.0.0.1:4443");
+    }
 }
