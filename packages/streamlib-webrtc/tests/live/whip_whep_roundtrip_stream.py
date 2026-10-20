@@ -8,8 +8,7 @@
 `WhepPlayer -> H264Decoder`, its `video` port exposed, beside `-> OpusDecoder ->
 SpeakerSink`. It is `examples/camera-webrtc-publish` with the playback half
 attached: the same publish shape, with node names the driving script can
-find nodes by and a local API socket it can read them through. It opens no
-window.
+find nodes by and a local API socket it can read them through.
 
 Nothing joins the two halves locally. Every frame the decoder publishes was
 packetised into RTP, ingested by the endpoint, and depacketised back out of it,
@@ -34,9 +33,6 @@ import tatolab.stream
 from tatolab.webrtc import WhepPlayer, WhipPublisher
 from tatolab.stream import StreamBuilder, stream
 
-#: Stated rather than left to the encoder's default, because the baseline this
-#: run locks against was captured with it stated: one baseline scores two paths
-#: only if both present the same GOP structure to the decoder.
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 PUBLISH_URL_VARIABLE = "STREAMLIB_WHIP_URL"
