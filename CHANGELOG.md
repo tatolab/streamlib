@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.9](https://github.com/tatolab/streamlib/compare/v0.54.8...v0.54.9) (2026-10-20)
+
+
+### Bug Fixes
+
+* **webrtc:** WhipPublisher and WhepPlayer read and write the media frame, the codec and extent riding the ports' catalog entries ([#2888](https://github.com/tatolab/streamlib/issues/2888)) ([ebf638e](https://github.com/tatolab/streamlib/commit/ebf638ec86878ebfef75256560ca4236a47fd971))
+
 ## [0.54.8](https://github.com/tatolab/streamlib/compare/v0.54.7...v0.54.8) (2026-10-20)
 
 
