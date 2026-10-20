@@ -15,7 +15,7 @@ use crate::h264_rtp_depacketiser::{
 };
 use crate::h264_sequence_parameter_set::{SequenceParameterSet, parse_sequence_parameter_set};
 use crate::monotonic_clock::RtpClockAnchoredToMonotonic;
-use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, describe_opus_packet};
+use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, OpusRtpChannelLayout, describe_opus_packet};
 use bytes::Bytes;
 
 use crate::webrtc_peer_connection::H264_CLOCK_RATE_HZ;
@@ -30,11 +30,11 @@ pub(crate) struct ReceivedVideoAccessUnit {
     pub timestamp_ns: i64,
 }
 
-/// One Opus packet, with the stream's declared channel count.
+/// One Opus packet, with the stream's declared channel layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReceivedOpusPacket {
     pub opus_packet: Bytes,
-    pub channels: u32,
+    pub channel_layout: OpusRtpChannelLayout,
     pub timestamp_ns: i64,
 }
 
@@ -130,7 +130,7 @@ impl VideoAccessUnitAssembler {
 
         // Only the SPS states the codec string and the extent the port's entry
         // names, and no decoder could enter a stream before its first one.
-        let Some(sequence_parameter_set) = self.latched_sequence_parameter_set.clone() else {
+        let Some(sequence_parameter_set) = self.latched_sequence_parameter_set else {
             if !self.reported_waiting_for_a_parameter_set {
                 self.reported_waiting_for_a_parameter_set = true;
                 tracing::info!(
@@ -165,11 +165,11 @@ impl VideoAccessUnitAssembler {
 /// Describes each arriving Opus packet from the packet itself.
 pub(crate) struct OpusPacketAssembler {
     clock: RtpClockAnchoredToMonotonic,
-    /// The stream's declared output channel count, settled once and then
+    /// The stream's declared output channel layout, settled once and then
     /// constant. libopus in two-channel mode codes mono frames on quiet or
     /// mono-ish content, so a per-packet TOC reading would flip mid-stream and
     /// re-mint the decoder downstream on every flip.
-    declared_channels: Option<u32>,
+    declared_channel_layout: Option<OpusRtpChannelLayout>,
     sender_declared_stereo: Option<bool>,
     reported_a_disagreement_with_the_answer: bool,
 }
@@ -181,7 +181,8 @@ impl OpusPacketAssembler {
     pub(crate) fn new(sender_declared_stereo: Option<bool>) -> Self {
         Self {
             clock: RtpClockAnchoredToMonotonic::new(OPUS_WIRE_SAMPLE_RATE_HZ),
-            declared_channels: sender_declared_stereo.map(|stereo| if stereo { 2 } else { 1 }),
+            declared_channel_layout: sender_declared_stereo
+                .map(OpusRtpChannelLayout::from_stereo_flag),
             sender_declared_stereo,
             reported_a_disagreement_with_the_answer: false,
         }
@@ -196,12 +197,14 @@ impl OpusPacketAssembler {
         // An answer that stated no Opus fmtp leaves the first packet's own TOC
         // as the only statement available — latched here, so the stream's
         // declared count is settled once either way.
-        let channels = *self.declared_channels.get_or_insert(described.channels);
-        self.report_any_disagreement_with_the_answer(described.channels);
+        let channel_layout = *self
+            .declared_channel_layout
+            .get_or_insert(described.channel_layout);
+        self.report_any_disagreement_with_the_answer(described.channel_layout);
 
         Ok(ReceivedOpusPacket {
             opus_packet: payload,
-            channels,
+            channel_layout,
             timestamp_ns: self.clock.stamp_for(rtp_timestamp),
         })
     }
@@ -210,16 +213,19 @@ impl OpusPacketAssembler {
     /// stream is doing something ordinary and the port does not follow it — but a
     /// relay whose fmtp is simply wrong should leave evidence rather than a
     /// mismatch nobody can trace later.
-    fn report_any_disagreement_with_the_answer(&mut self, channels_in_the_packet: u32) {
+    fn report_any_disagreement_with_the_answer(
+        &mut self,
+        channel_layout_in_the_packet: OpusRtpChannelLayout,
+    ) {
         let Some(declared_stereo) = self.sender_declared_stereo else {
             return;
         };
-        let packet_is_stereo = channels_in_the_packet > 1;
+        let packet_is_stereo = channel_layout_in_the_packet == OpusRtpChannelLayout::Stereo;
         if declared_stereo != packet_is_stereo && !self.reported_a_disagreement_with_the_answer {
             self.reported_a_disagreement_with_the_answer = true;
             tracing::warn!(
                 declared_stereo,
-                channels_in_the_packet,
+                ?channel_layout_in_the_packet,
                 "a packet's TOC codes a different channel count than the answer's \
                  sprop-stereo declared; the port carries the declared count"
             );
@@ -465,7 +471,7 @@ mod tests {
             .accept_rtp_packet(opus_packet(1, false), 0)
             .unwrap();
 
-        assert_eq!(packet.channels, 1);
+        assert_eq!(packet.channel_layout, OpusRtpChannelLayout::Mono);
     }
 
     #[test]
@@ -477,18 +483,18 @@ mod tests {
         // mid-stream on ordinary content.
         let mut assembler = OpusPacketAssembler::new(Some(true));
 
-        let channels: Vec<u32> = [true, false, false, true]
+        let channel_layouts: Vec<OpusRtpChannelLayout> = [true, false, false, true]
             .into_iter()
             .enumerate()
             .map(|(index, stereo_frame)| {
                 assembler
                     .accept_rtp_packet(opus_packet(1, stereo_frame), index as u32 * 960)
                     .unwrap()
-                    .channels
+                    .channel_layout
             })
             .collect();
 
-        assert_eq!(channels, vec![2, 2, 2, 2]);
+        assert_eq!(channel_layouts, vec![OpusRtpChannelLayout::Stereo; 4]);
     }
 
     #[test]
@@ -505,7 +511,10 @@ mod tests {
             .accept_rtp_packet(opus_packet(1, true), 960)
             .unwrap();
 
-        assert_eq!((first.channels, second.channels), (1, 1));
+        assert_eq!(
+            (first.channel_layout, second.channel_layout),
+            (OpusRtpChannelLayout::Mono, OpusRtpChannelLayout::Mono)
+        );
     }
 
     #[test]

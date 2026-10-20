@@ -362,5 +362,8 @@ async fn a_published_opus_packet_arrives_whole_and_described() {
     // test is the answerer and so reads no answer of its own — the
     // answer-declared path is covered by the assembler's unit tests.
     assert_eq!(received.opus_packet, Bytes::from(opus_packet));
-    assert_eq!(received.channels, 1);
+    assert_eq!(
+        received.channel_layout,
+        crate::opus_packet::OpusRtpChannelLayout::Mono
+    );
 }

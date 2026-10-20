@@ -37,17 +37,18 @@ pub(crate) fn read_hang_legacy_container_media_frame(
     let first_byte = *message_bytes.first().ok_or_else(not_a_media_frame)?;
     // The top two bits of the first byte give the encoding's width: 1, 2, 4 or 8 bytes.
     let varint_bytes = 1usize << (first_byte >> 6);
-    let encoded_varint = message_bytes
-        .get(..varint_bytes)
+    let (encoded_varint, codec_payload_bytes) = message_bytes
+        .split_at_checked(varint_bytes)
         .ok_or_else(not_a_media_frame)?;
-    let timestamp_microseconds = encoded_varint[1..]
+    let timestamp_microseconds = encoded_varint
         .iter()
+        .skip(1)
         .fold(u64::from(first_byte & 0x3F), |value, &byte| {
             (value << 8) | u64::from(byte)
         });
     Ok(HangLegacyContainerMediaFrame {
         timestamp_microseconds,
-        codec_payload_bytes: &message_bytes[varint_bytes..],
+        codec_payload_bytes,
     })
 }
 

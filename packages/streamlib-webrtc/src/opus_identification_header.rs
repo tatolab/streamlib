@@ -11,20 +11,24 @@
 
 use std::fmt::Write;
 
-use crate::opus_packet::OPUS_WIRE_SAMPLE_RATE_HZ;
+use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, OpusRtpChannelLayout};
 
+/// Magic, version, channel count, pre-skip, input rate, output gain, family.
+const OPUS_HEAD_FAMILY_ZERO_LENGTH_BYTES: usize = 19;
 const OPUS_HEAD_MAGIC_SIGNATURE: &[u8; 8] = b"OpusHead";
 const OPUS_HEAD_VERSION: u8 = 1;
 const PRE_SKIP_RTP_CARRIES_NONE: u16 = 0;
 const OUTPUT_GAIN_UNCHANGED: i16 = 0;
 const CHANNEL_MAPPING_FAMILY_MONO_OR_STEREO: u8 = 0;
 
-/// The hex-encoded `OpusHead` of a mono or stereo RTP Opus stream.
-pub(crate) fn hex_encoded_opus_identification_header_for_rtp_stream(channels: u8) -> String {
-    let mut header = Vec::with_capacity(19);
+/// The hex-encoded `OpusHead` of an RTP Opus stream laid out as `channel_layout`.
+pub(crate) fn hex_encoded_opus_identification_header_for_rtp_stream(
+    channel_layout: OpusRtpChannelLayout,
+) -> String {
+    let mut header = Vec::with_capacity(OPUS_HEAD_FAMILY_ZERO_LENGTH_BYTES);
     header.extend_from_slice(OPUS_HEAD_MAGIC_SIGNATURE);
     header.push(OPUS_HEAD_VERSION);
-    header.push(channels);
+    header.push(channel_layout.channel_count());
     header.extend_from_slice(&PRE_SKIP_RTP_CARRIES_NONE.to_le_bytes());
     header.extend_from_slice(&OPUS_WIRE_SAMPLE_RATE_HZ.to_le_bytes());
     header.extend_from_slice(&OUTPUT_GAIN_UNCHANGED.to_le_bytes());
@@ -44,7 +48,7 @@ mod tests {
 
     #[test]
     fn a_stereo_header_lays_out_rfc_7845s_nineteen_fixed_bytes() {
-        let expected: [u8; 19] = [
+        let expected: [u8; OPUS_HEAD_FAMILY_ZERO_LENGTH_BYTES] = [
             b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', // magic
             1,    // version
             2,    // channels
@@ -56,15 +60,17 @@ mod tests {
         let expected_hex: String = expected.iter().map(|byte| format!("{byte:02x}")).collect();
 
         assert_eq!(
-            hex_encoded_opus_identification_header_for_rtp_stream(2),
+            hex_encoded_opus_identification_header_for_rtp_stream(OpusRtpChannelLayout::Stereo),
             expected_hex
         );
     }
 
     #[test]
     fn a_mono_header_differs_only_in_its_channel_count() {
-        let mono = hex_encoded_opus_identification_header_for_rtp_stream(1);
-        let stereo = hex_encoded_opus_identification_header_for_rtp_stream(2);
+        let mono =
+            hex_encoded_opus_identification_header_for_rtp_stream(OpusRtpChannelLayout::Mono);
+        let stereo =
+            hex_encoded_opus_identification_header_for_rtp_stream(OpusRtpChannelLayout::Stereo);
 
         assert_eq!(&mono[18..20], "01");
         assert_eq!(mono[..18], stereo[..18]);

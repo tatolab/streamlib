@@ -111,7 +111,8 @@ impl WhipSession {
     }
 
     /// Send the Annex-B access unit one media frame carries after its varint
-    /// timestamp, on the RTP clock `timestamp_ns` places it.
+    /// timestamp, on the RTP clock `timestamp_ns` places it — the envelope's
+    /// stamp, which a local reader is promised; the varint's is not read.
     ///
     /// The RTP clock advances by the gap to the *previous* frame, because the
     /// payloader applies a sample's duration to the frame after it and a
@@ -332,11 +333,11 @@ impl PlayedVideoAccessUnit {
     /// The access unit as one media frame, behind the varint of its stamp.
     #[getter]
     fn media_frame<'python>(&self, python: Python<'python>) -> PyResult<Bound<'python, PyBytes>> {
-        let media_frame = hang_legacy_container_media_frame_bytes(
+        media_frame_as_python_bytes(
+            python,
             self.inner.timestamp_ns,
             &self.inner.annex_b_access_unit,
-        )?;
-        Ok(PyBytes::new(python, &media_frame))
+        )
     }
     #[getter]
     fn is_sync_point(&self) -> bool {
@@ -378,24 +379,29 @@ impl PlayedOpusPacket {
     /// The packet as one media frame, behind the varint of its stamp.
     #[getter]
     fn media_frame<'python>(&self, python: Python<'python>) -> PyResult<Bound<'python, PyBytes>> {
-        let media_frame = hang_legacy_container_media_frame_bytes(
-            self.inner.timestamp_ns,
-            &self.inner.opus_packet,
-        )?;
-        Ok(PyBytes::new(python, &media_frame))
+        media_frame_as_python_bytes(python, self.inner.timestamp_ns, &self.inner.opus_packet)
     }
     #[getter]
-    fn channels(&self) -> u32 {
-        self.inner.channels
+    fn channels(&self) -> u8 {
+        self.inner.channel_layout.channel_count()
     }
     #[getter]
     fn opus_identification_header_hex(&self) -> String {
-        hex_encoded_opus_identification_header_for_rtp_stream(self.inner.channels as u8)
+        hex_encoded_opus_identification_header_for_rtp_stream(self.inner.channel_layout)
     }
     #[getter]
     fn timestamp_ns(&self) -> i64 {
         self.inner.timestamp_ns
     }
+}
+
+fn media_frame_as_python_bytes<'python>(
+    python: Python<'python>,
+    timestamp_ns: i64,
+    codec_payload_bytes: &[u8],
+) -> PyResult<Bound<'python, PyBytes>> {
+    let media_frame = hang_legacy_container_media_frame_bytes(timestamp_ns, codec_payload_bytes)?;
+    Ok(PyBytes::new(python, &media_frame))
 }
 
 /// Nanoseconds on the clock this wheel stamps media frames with, which is the

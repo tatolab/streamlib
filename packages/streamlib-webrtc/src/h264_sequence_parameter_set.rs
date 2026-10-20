@@ -10,7 +10,7 @@
 use crate::error::{Result, WebRtcExtensionError};
 
 /// The profile, level and coded extent one SPS declares.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SequenceParameterSet {
     pub profile_idc: u8,
     /// `constraint_set0_flag` through `constraint_set5_flag` and the two
@@ -59,9 +59,9 @@ pub(crate) fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequencePa
     let raw_byte_sequence = strip_emulation_prevention_bytes(payload);
     let mut bits = RawBitstreamReader::new(&raw_byte_sequence);
 
-    let profile_idc = bits.read_bits(8)? as u8;
-    let constraint_set_flags = bits.read_bits(8)? as u8;
-    let level_idc = bits.read_bits(8)? as u8;
+    let profile_idc = bits.read_byte()?;
+    let constraint_set_flags = bits.read_byte()?;
+    let level_idc = bits.read_byte()?;
     bits.read_unsigned_exp_golomb()?; // seq_parameter_set_id
 
     // Absent means 4:2:0 — H.264 §7.4.2.1.1.
@@ -241,6 +241,10 @@ impl<'a> RawBitstreamReader<'a> {
             value = (value << 1) | u32::from(self.read_one_bit()?);
         }
         Ok(value)
+    }
+
+    fn read_byte(&mut self) -> Result<u8> {
+        (0..8).try_fold(0u8, |value, _| Ok((value << 1) | self.read_one_bit()?))
     }
 
     fn skip_bits(&mut self, count: usize) -> Result<()> {
