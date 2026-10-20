@@ -300,6 +300,7 @@ impl ProcessorOutputPoolsOfOneHelper {
                 // An unreadable lease table proves no slot free; keep them all.
                 Some(None) => return Vec::new(),
             };
+        let mut minted_frame_generations_held = minted_frame_generations.held_for_a_hand_off();
         let (unheld_slots, still_held_slots): (Vec<_>, Vec<_>) =
             std::mem::take(&mut self.retiring_slots)
                 .into_iter()
@@ -318,7 +319,7 @@ impl ProcessorOutputPoolsOfOneHelper {
                     generation_past_every_published_frame,
                 );
             }
-            minted_frame_generations.retire_every_published_frame_of_slot(
+            minted_frame_generations_held.retire_every_published_frame_of_slot(
                 slot.pool_slot_key(),
                 generation_past_every_published_frame,
             );

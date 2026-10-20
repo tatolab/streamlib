@@ -18,9 +18,11 @@ pub struct SurfaceClaimedAgainstProducerReuse {
 impl GpuContext {
     /// Claim a published frame against its producer's reuse.
     ///
-    /// The share is taken before the frame's generation is checked, so a pool
-    /// hand-off after the check sees a holder. A frame no pool in this process
-    /// published has no backing here to share, and the claim holds none.
+    /// The share is taken before the frame's generation is checked, and the
+    /// check waits out any hand-off in progress, so a hand-off either sees the
+    /// share or retires the id before the check refuses it. A frame no pool in
+    /// this process published has no backing here to share, and the claim
+    /// holds none.
     pub(crate) fn claim_surface_against_producer_reuse(
         &self,
         surface_id: &str,

@@ -555,14 +555,17 @@ impl PixelBufferPoolManager {
         let mut slots_taken_out = Vec::new();
         for mut lent_slot in lent_slots {
             ring_pool.note_a_lent_slot_came_back(shape);
+            let mut minted_frame_generations_held =
+                self.minted_frame_generations.held_for_a_hand_off();
             let is_unheld = lent_slot.is_unheld(&cross_process_holders);
             let freeing_record = &mut lent_slot.resource_mut().freeing_record;
             freeing_record.flag_freed_as_soon_as_unheld();
             if scan.observe(freeing_record, is_unheld) {
                 cross_process_holders.retire_every_frame_a_slot_being_freed_published(
                     &lent_slot,
-                    &self.minted_frame_generations,
+                    &mut minted_frame_generations_held,
                 );
+                drop(minted_frame_generations_held);
                 slots_taken_out.push(self.forget_the_slot_in_its_rings_allocator_and_every_cache(
                     &mut ring_pool.pool,
                     lent_slot,

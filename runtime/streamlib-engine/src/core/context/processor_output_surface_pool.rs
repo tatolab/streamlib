@@ -66,8 +66,9 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
     ///
     /// The pool keeps `rotation_depth` slots nobody holds, so a frame nobody
     /// claimed stays resolvable for that many publishes behind the newest
-    /// however many frames consumers hold. It reuses the next unheld slot while
-    /// that many are unheld and otherwise asks for a fresh slot; at
+    /// however many frames consumers hold. It reuses the unheld slot published
+    /// longest ago while that many are unheld and otherwise asks for a fresh
+    /// slot; at
     /// [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`] it reuses any unheld slot,
     /// and refuses when none is.
     pub(crate) fn hand_off_a_reusable_frame(

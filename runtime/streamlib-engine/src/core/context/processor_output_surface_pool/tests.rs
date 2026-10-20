@@ -141,6 +141,33 @@ fn while_a_frame_is_held_a_frame_nobody_claimed_stays_resolvable_for_rotation_de
 }
 
 #[test]
+fn a_consumer_holding_an_older_frame_never_costs_a_newer_unclaimed_frame_its_window() {
+    let mut pool = PoolUnderTest::new();
+    let published_before_the_hold: Vec<_> = (0..3).map(|_| pool.next_frame(2).unwrap()).collect();
+    assert_eq!(
+        published_before_the_hold,
+        ["slot-0#1", "slot-1#1", "slot-0#2"]
+    );
+    pool.check_out(&published_before_the_hold[1]);
+
+    let grown_into = pool.next_frame(2).unwrap();
+    assert_eq!(grown_into, "slot-2#1");
+    let published_after_it = pool.next_frame(2).unwrap();
+    assert_eq!(
+        published_after_it, "slot-0#3",
+        "the oldest unheld frame is the one retired"
+    );
+    assert_eq!(
+        pool.minted
+            .refusal_of_a_retired_frame_id_named(&grown_into)
+            .unwrap()
+            .ok(),
+        Some(()),
+        "{grown_into} was retired one publish later, by {published_after_it}"
+    );
+}
+
+#[test]
 fn at_its_cap_with_fewer_than_rotation_depth_slots_unheld_the_pool_reuses_one_rather_than_refusing()
 {
     let mut pool = PoolUnderTest::new();

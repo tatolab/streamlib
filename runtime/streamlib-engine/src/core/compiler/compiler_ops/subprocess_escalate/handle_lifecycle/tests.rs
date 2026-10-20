@@ -298,7 +298,7 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
         panic!("a recycled frame's id {recycled_frame} still resolves");
     };
     assert!(
-        matches!(refusal, crate::core::Error::SurfaceFrameRecycled { .. }),
+        matches!(refusal, Error::SurfaceFrameRecycled { .. }),
         "got: {refusal}"
     );
 

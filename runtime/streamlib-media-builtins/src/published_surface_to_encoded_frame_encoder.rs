@@ -923,3 +923,182 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod frame_claimed_from_the_read_through_the_encode_tests {
+    use std::sync::{Arc, Mutex};
+
+    use streamlib::sdk::context::GpuContext;
+    use streamlib::sdk::rhi::{PixelFormat, pool_slot_key_of_surface_id};
+
+    use super::*;
+    use crate::h264_encoder::H264EncoderCodecIdentity;
+
+    const FRAME_EXTENT: u32 = 64;
+    const FRAMES_THE_PRODUCER_PUBLISHES_DURING_ONE_ENCODE: usize = 4;
+    const PUBLISHES_A_SLOT_COMES_ROUND_WITHIN: usize = 16;
+
+    /// A session standing in for an encode the producer outpaces: while it
+    /// encodes, the producer publishes more frames of the source's shape, and
+    /// the session records the slot each lands in.
+    struct SessionTheProducerOutpaces {
+        gpu_context: GpuContextLimitedAccess,
+        slot_of_each_frame_published_during_the_encode: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl VideoEncodeSession for SessionTheProducerOutpaces {
+        fn coded_extent(&self) -> (u32, u32) {
+            (FRAME_EXTENT, FRAME_EXTENT)
+        }
+
+        fn encode_published_surface(
+            &mut self,
+            _source: &VideoEncodeSourceSurface<'_>,
+        ) -> Result<Vec<EncodedVideoAccessUnitFromSession>> {
+            for _ in 0..FRAMES_THE_PRODUCER_PUBLISHES_DURING_ONE_ENCODE {
+                let (published, _released_at_once) = self.gpu_context.acquire_pixel_buffer(
+                    FRAME_EXTENT,
+                    FRAME_EXTENT,
+                    PixelFormat::Rgba32,
+                )?;
+                self.slot_of_each_frame_published_during_the_encode
+                    .lock()
+                    .unwrap()
+                    .push(pool_slot_key_of_surface_id(&published.to_string()).to_owned());
+            }
+            Ok(Vec::new())
+        }
+    }
+
+    fn a_frame_nothing_but_the_encoder_holds(gpu_context: &GpuContextLimitedAccess) -> VideoFrame {
+        let (published, released_at_once) = gpu_context
+            .acquire_pixel_buffer(FRAME_EXTENT, FRAME_EXTENT, PixelFormat::Rgba32)
+            .expect("a pixel buffer");
+        drop(released_at_once);
+        VideoFrame {
+            surface_id: published.to_string(),
+            width: FRAME_EXTENT,
+            height: FRAME_EXTENT,
+            timestamp_ns: 1_000,
+            color_info: None,
+            fps: None,
+            content_light: None,
+            mastering_display: None,
+            texture_layout: None,
+        }
+    }
+
+    fn encode_body_over(
+        gpu_context: &GpuContextLimitedAccess,
+        slot_of_each_frame_published_during_the_encode: &Arc<Mutex<Vec<String>>>,
+    ) -> PublishedSurfaceToEncodedFrameEncoder<H264EncoderCodecIdentity> {
+        PublishedSurfaceToEncodedFrameEncoder {
+            encode_session: Some(EncodeSessionMintedFromUpstream {
+                session: Box::new(SessionTheProducerOutpaces {
+                    gpu_context: gpu_context.clone(),
+                    slot_of_each_frame_published_during_the_encode: Arc::clone(
+                        slot_of_each_frame_published_during_the_encode,
+                    ),
+                }),
+                minted_width: FRAME_EXTENT,
+                minted_height: FRAME_EXTENT,
+                coded_width: FRAME_EXTENT,
+                coded_height: FRAME_EXTENT,
+                minted_color: None,
+                color_change_already_warned: false,
+                video_entry_derived: true,
+            }),
+            gpu_context: Some(gpu_context.clone()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "needs a Vulkan device (lavapipe will do). Run with --features streamlib-media-builtins/hardware-tests. See docs/testing-hardware.md"
+    )]
+    fn the_producer_never_republishes_the_slot_of_the_frame_being_encoded() {
+        let gpu_context = GpuContext::init_for_platform_sync()
+            .expect("a GPU device")
+            .limited_access();
+        let slot_of_each_frame_published_during_the_encode = Arc::default();
+        let mut encode_body = encode_body_over(
+            &gpu_context,
+            &slot_of_each_frame_published_during_the_encode,
+        );
+        let frame = a_frame_nothing_but_the_encoder_holds(&gpu_context);
+
+        encode_body
+            .encode_one_published_surface(
+                &HardwareVideoEncoderConfig::default(),
+                &frame,
+                &mut Vec::new(),
+            )
+            .expect("the frame encodes");
+
+        let slot_being_encoded = pool_slot_key_of_surface_id(&frame.surface_id);
+        let published_during_the_encode = slot_of_each_frame_published_during_the_encode
+            .lock()
+            .unwrap();
+        assert_eq!(
+            published_during_the_encode.len(),
+            FRAMES_THE_PRODUCER_PUBLISHES_DURING_ONE_ENCODE
+        );
+        assert!(
+            published_during_the_encode
+                .iter()
+                .all(|published_slot| published_slot != slot_being_encoded),
+            "the producer republished {slot_being_encoded} while it was encoded: \
+             {published_during_the_encode:?}"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "needs a Vulkan device (lavapipe will do). Run with --features streamlib-media-builtins/hardware-tests. See docs/testing-hardware.md"
+    )]
+    fn a_frame_recycled_before_its_read_is_refused_naming_the_recycling_and_counted() {
+        let gpu_context = GpuContext::init_for_platform_sync()
+            .expect("a GPU device")
+            .limited_access();
+        let slot_of_each_frame_published_during_the_encode = Arc::default();
+        let mut encode_body = encode_body_over(
+            &gpu_context,
+            &slot_of_each_frame_published_during_the_encode,
+        );
+        let recycled_frame = a_frame_nothing_but_the_encoder_holds(&gpu_context);
+        let recycled_slot = pool_slot_key_of_surface_id(&recycled_frame.surface_id);
+        let the_slot_came_round = (0..PUBLISHES_A_SLOT_COMES_ROUND_WITHIN).any(|_| {
+            pool_slot_key_of_surface_id(
+                &a_frame_nothing_but_the_encoder_holds(&gpu_context).surface_id,
+            ) == recycled_slot
+        });
+        assert!(
+            the_slot_came_round,
+            "the pool never republished {recycled_slot}"
+        );
+
+        let refusal = encode_body
+            .encode_one_published_surface(
+                &HardwareVideoEncoderConfig::default(),
+                &recycled_frame,
+                &mut Vec::new(),
+            )
+            .expect_err("a recycled frame is not encoded");
+
+        assert!(
+            refusal.to_string().contains("names a recycled frame"),
+            "got: {refusal}"
+        );
+        assert_eq!(encode_body.frames_that_failed_to_encode, 1);
+        assert!(
+            slot_of_each_frame_published_during_the_encode
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "the session was asked to encode a recycled frame"
+        );
+    }
+}
