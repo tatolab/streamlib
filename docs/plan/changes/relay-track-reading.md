@@ -102,17 +102,17 @@ The ways to carry it disagree with those sentences differently.
 **Recommendation: (b).** It is the only option that keeps both `:972-974` and the loss
 sentence true. Either way the call is engine-internal Rust: Python's `write` gains nothing.
 
-## [NEEDS DECISION] 2 — what one given-up group counts as
+## Decided 2 — one given-up group counts as one (owner, 2026-10-20)
 
 `lost_since_last_read` counts messages, and the relay source node writes one message per
 object. A given-up group's object count is unknown: it may never have been seen at all.
 
-- **(a) One per group given up** (recommended). For audio, a group is one object, so the
+- **(a) One per group given up — chosen.** For audio, a group is one object, so the
   count is exact. For video, the count is a lower bound, and a decoder's reaction is the same
   whatever the count: discard to the next `starts_group` (`:3135`). The plan states the lower
   bound.
-- **(b) The objects seen of it, plus one.** This adds bookkeeping, and the number is still a
-  guess for a group whose header never arrived.
+- Rejected: (b) the objects seen of it, plus one — more bookkeeping for a number that is still
+  a guess when a group's header never arrived (owner, 2026-10-20).
 
 ## ADDED: the relay-track reader — `runtime/streamlib-relay-track-reader`
 
