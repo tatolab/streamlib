@@ -1,42 +1,29 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
-"""The right-hand half: the same scene, ray traced.
 
-The kernel is an object — built once in `setup()` where the capability is
-Full, traced per frame in `process()` with its bindings passed by name. So is
-the scene: `build_triangles_blas` takes the unit cube's triangles and
-`build_tlas` places nine instances of it, and neither hands back an id string
-— the handle each build returned is the whole way to name it.
+"""The right-hand half: the showcase scene traced by a ray-tracing kernel.
 
-Four shader modules and four groups, because the shader binding table is
-where a ray tracer's control flow lives: a ray that hits nothing runs the sky
-miss shader, and the shadow ray a hit casts runs the *second* miss shader
-instead by naming a different miss index. That is what a hit shader can ask
-that a fragment shader cannot — is anything between this point and the light
-— and it is the whole visible difference across the divider.
-
-The floor's reflection bounces from ray generation rather than recursing in
-the hit shader: a shader may declare only one incoming payload, so a hit
-shader cannot both receive at a location and trace at it. Bouncing here keeps
-`max_recursion_depth` at 2 — one hit shader casting one shadow ray — and lets
-the reflected hit cast a shadow ray of its own, so the reflections have
-shadows in them.
+Importable as `nodes.ray_traced_scene_renderer:RayTracedSceneRenderer`, which
+is the name the engine spawns this node's child interpreter with. The kernel and
+both acceleration structures are objects built once in `setup()`; a trace binds
+them by name.
 """
 
 from __future__ import annotations
 
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from streamlib import (
-    ProcessorOutputTextureRing,
+from tatolab.stream import (
+    NodeOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    output,
-    processor,
+    node,
 )
-from processors.showcase_box_scene import (
+
+from nodes.showcase_box_scene import (
     SHOWCASE_SCENE_GLSL,
     UNIT_CUBE_CORNER_POSITIONS,
     UNIT_CUBE_TRIANGLE_INDICES,
@@ -47,26 +34,22 @@ from processors.showcase_box_scene import (
 RAY_TRACED_FRAME_OUTPUT_PORT = "ray_traced_frame_to_downstream"
 
 # The shaders' own names for the two resources they bind, read off them by
-# reflection at construction. A trace resolves against these and never against
-# slot order.
+# reflection. A trace resolves against these, never against slot order.
 SCENE_STRUCTURE_BINDING = "scene_structure"
 TRACED_FRAME_BINDING = "traced_frame"
 
 TEXTURE_FORMAT = "rgba8_unorm"
-# Written by the trace as a storage image, then sampled by the compositor in
-# its own helper process.
+# Written by the trace as a storage image, then sampled by the compositor and
+# read by an encoder, each in its own process.
 STORAGE_AND_SAMPLED_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
 
-# The camera's angle, the light's angle and the aspect, little-endian at the
-# wire like every push constant. The declared size must equal what the shaders
-# reflect, so the two cannot drift.
+# `float camera_azimuth; float light_azimuth; float aspect;`, little-endian
+# like every push constant.
 SCENE_PUSH_CONSTANT_FORMAT = "<fff"
 SCENE_PUSH_CONSTANT_SIZE = struct.calcsize(SCENE_PUSH_CONSTANT_FORMAT)
 
-# The sky miss shader is index 0 in the miss region of the shader binding
-# table and the shadow miss shader is index 1, in the order the groups below
-# declare them. A `traceRayEXT` names which one it wants, which is how one
-# scene structure serves two entirely different questions.
+# Miss-region indices in the shader binding table, in the order the groups
+# below declare the miss shaders. A `traceRayEXT` names which one it wants.
 SKY_MISS_INDEX = 0
 SHADOW_MISS_INDEX = 1
 
@@ -77,8 +60,8 @@ _RAY_TRACING_PREAMBLE = (
     f"#define SHADOW_MISS_INDEX {SHADOW_MISS_INDEX}\n"
 )
 
-# Declared identically in every shader that touches it: ray generation traces
-# with it, the sky miss shader fills it in, the hit shader answers into it.
+# Declared identically in ray generation, the sky miss shader and the hit
+# shader, which all read or write it at payload location 0.
 _PRIMARY_RAY_PAYLOAD_GLSL = """
 struct PrimaryRayPayload {
     vec3 colour;
@@ -124,9 +107,10 @@ void main() {
                 eye, 0.001, direction, 400.0, 0);
     vec3 colour = primary.colour;
 
-    // One bounce off the mirror floor, iterated rather than recursed. The
-    // reflected ray runs the same hit shader, so it casts its own shadow ray
-    // and the reflections come back with shadows already in them.
+    // One bounce off the mirror floor, iterated here rather than recursed in
+    // the hit shader, which cannot both receive and trace at one payload
+    // location. The reflected ray runs the same hit shader, so it casts its
+    // own shadow ray.
     if (primary.mirror_strength > 0.0) {
         float strength = primary.mirror_strength;
         vec3 surface = primary.world_position;
@@ -158,9 +142,9 @@ void main() {
 """
 )
 
-# The second miss shader, and the reason the shadow ray is cheap: a shadow ray
-# runs no closest-hit shader and stops at the first thing it touches, so all
-# it can do is arrive here — which means nothing was in the way.
+# A shadow ray skips closest-hit shaders and stops at its first hit, so
+# arriving here is the only thing that can happen to it — and it means nothing
+# was in the way.
 SHADOW_MISS_GLSL = (
     _RAY_TRACING_PREAMBLE
     + """
@@ -184,23 +168,20 @@ layout(location = 0) rayPayloadInEXT PrimaryRayPayload primary;
 layout(location = 1) rayPayloadEXT float lit_fraction;
 
 void main() {
-    // Object space here *is* unit-cube space: every instance's transform maps
-    // the one cube onto its box, so the same helpers the rasterizer uses on
-    // its interpolated corner work on the hit position.
+    // Every instance's transform maps the one unit cube onto its box, so
+    // object space is unit-cube space.
     vec3 in_unit_cube = gl_ObjectRayOriginEXT + gl_HitTEXT * gl_ObjectRayDirectionEXT;
     vec3 world_position = gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT;
-    // The instance transforms are axis-aligned scale and translation only, so
-    // the forward transform carries a face normal without an inverse
-    // transpose.
+    // The transforms are axis-aligned scale and translation only, so the
+    // forward transform carries a normal without an inverse transpose.
     vec3 world_normal = normalize(mat3(gl_ObjectToWorldEXT)
                                   * unit_cube_face_normal(in_unit_cube));
 
     int box = gl_InstanceCustomIndexEXT;
     vec3 base_colour = SHOWCASE_BOX_COLOURS[box] * box_edge_darkening(in_unit_cube);
 
-    // The question a fragment shader cannot ask. A hit leaves the fraction at
-    // zero because the shadow ray skips closest-hit shaders entirely — only
-    // reaching the shadow miss shader lights this point.
+    // The question a fragment shader cannot ask: is anything between this
+    // point and the light? Only reaching the shadow miss shader lights it.
     vec3 light = light_position_at(scene.light_azimuth);
     lit_fraction = 0.0;
     traceRayEXT(scene_structure,
@@ -220,9 +201,9 @@ void main() {
 """
 )
 
-# One module per shader stage, and one group per shader binding table record
-# over them. A group names its modules by index into `stages`, which is what
-# lets two modules fill the same stage — here, the two miss shaders.
+# One module per shader, and one shader-binding-table group over them. A group
+# names its modules by index into `stages`, which is how two modules fill the
+# miss stage.
 RAY_TRACING_STAGES = [
     {"stage": "ray_gen", "source": RAY_GENERATION_GLSL},
     {"stage": "miss", "source": SKY_MISS_GLSL},
@@ -236,27 +217,27 @@ RAY_TRACING_GROUPS = [
     {"kind": "triangles_hit", "closest_hit_stage": 3},
 ]
 
-# The hit shader traces too, so the scene structure is read from two stages —
-# a declaration may widen what reflection found but never narrow it.
-DECLARED_BINDINGS: dict[str, str | tuple[str, list[str]]] = {
+# Asserted against the shaders' reflection at construction. The hit shader
+# traces too, so the scene structure is read from two stages.
+DECLARED_BINDINGS: dict[str, str | tuple[str, Sequence[str]]] = {
     SCENE_STRUCTURE_BINDING: ("acceleration_structure", ["ray_gen", "closest_hit"]),
     TRACED_FRAME_BINDING: ("storage_image", ["ray_gen"]),
 }
 
-# Primary ray, then the one shadow ray its hit shader casts. The reflection
-# bounce costs no depth because ray generation fires it, not a hit shader.
+# The primary ray, then the one shadow ray its hit shader casts. The reflection
+# bounce costs no depth because ray generation fires it.
 MAX_RECURSION_DEPTH = 2
 
 
 @dataclass
 class RayTracedSceneRendererConfig:
-    """RayTracedSceneRenderer's settings, as `rt.add(..., config={...})` spells them."""
+    """RayTracedSceneRenderer's settings: the extent of the frame it traces."""
 
     width: int = 1280
     height: int = 720
 
 
-@processor(
+@node(
     execution="continuous",
     interval_ms=16,
     description="The showcase scene with ray-traced shadows and a mirror floor",
@@ -265,46 +246,41 @@ class RayTracedSceneRenderer:
     """Ray tracing on: hard shadows that track the light, and reflections."""
 
     def __init__(self, config: RayTracedSceneRendererConfig) -> None:
-        width = config.width
-        height = config.height
-        self.frame_width = width
-        self.frame_height = height
+        self.frame_width = config.width
+        self.frame_height = config.height
+
+    @node.output(description="The scene with ray-traced shadows and a mirror floor")
+    def ray_traced_frame_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        gpu = ctx.gpu_full_access
-        self.output_ring = ProcessorOutputTextureRing(
+        gpu_full_access = ctx.gpu_full_access
+        self.output_ring = NodeOutputTextureRing(
             TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
-        # One bottom-level structure over the unit cube's triangles, placed
-        # nine times by the top-level one. The scene is built here and not per
-        # frame because `build_tlas` is a method on the Full capability, which
-        # only `setup()` holds — so the camera and the light are what move.
-        self.cube_structure = gpu.build_triangles_blas(
+        # Built here because `build_tlas` is on the full capability, which only
+        # `setup()` holds — so the geometry is fixed and the camera and the
+        # light are what move.
+        self.cube_structure = gpu_full_access.build_triangles_blas(
             vertices=list(UNIT_CUBE_CORNER_POSITIONS),
             indices=list(UNIT_CUBE_TRIANGLE_INDICES),
             label="showcase-unit-cube",
         )
-        self.scene_structure = gpu.build_tlas(
+        self.scene_structure = gpu_full_access.build_tlas(
             instances=showcase_tlas_instances(self.cube_structure),
             label="showcase-scene",
         )
-        self.trace_kernel = gpu.create_ray_tracing_kernel(
+        self.trace_kernel = gpu_full_access.create_ray_tracing_kernel(
             stages=RAY_TRACING_STAGES,
             groups=RAY_TRACING_GROUPS,
             max_recursion_depth=MAX_RECURSION_DEPTH,
             push_constant_size=SCENE_PUSH_CONSTANT_SIZE,
-            # Asserted against the shaders' own reflection, so renaming a
-            # binding on one side of this file is refused here at construction
-            # rather than at the first trace.
             bindings=DECLARED_BINDINGS,
             label="showcase-ray-tracer",
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        # Off the shared clock, never off a private epoch: the rasterizer is
-        # another process reaching its own first frame at its own moment, and
-        # the two halves have to be the same picture.
-        camera_azimuth, light_azimuth = orbit_azimuths_at(ctx.time)
+        frame_time_ns = ctx.time
+        camera_azimuth, light_azimuth = orbit_azimuths_at(frame_time_ns)
 
         traced_frame_texture = self.output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, self.frame_width, self.frame_height
@@ -323,15 +299,14 @@ class RayTracedSceneRenderer:
             ),
         )
 
+        ray_traced_frame = VideoFrame(
+            surface_id=traced_frame_texture.surface_id,
+            width=self.frame_width,
+            height=self.frame_height,
+            timestamp_ns=frame_time_ns,
+        )
         ctx.outputs.write(
             RAY_TRACED_FRAME_OUTPUT_PORT,
-            {
-                "surface_id": traced_frame_texture.surface_id,
-                "width": self.frame_width,
-                "height": self.frame_height,
-                "timestamp_ns": ctx.time,
-            },
+            ray_traced_frame.to_bytes(),
+            timestamp_ns=frame_time_ns,
         )
-
-    @output(description="The scene with ray-traced shadows and a mirror floor")
-    def ray_traced_frame_to_downstream(self) -> VideoFrame: ...

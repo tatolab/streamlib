@@ -11,22 +11,43 @@ like a loop, and it is unmistakably running rather than pre-rendered.
 
 ## The model this example teaches
 
-**Three kernel kinds, one app, and every one of them an object.** Each is
-built once in `setup()`, where the capability is Full, and used per frame in
-`process()`:
+**Three kernel kinds, one stream, and every one of them an object.** Each node
+lives in its own module under `nodes/` and runs in its own child interpreter.
+Each kernel is built once in `setup()`, where the capability is Full, and used
+per frame in `process()`:
 
-| Processor | Kernel | What it does |
+| Node | Kernel | What it does |
 | --- | --- | --- |
 | `RasterizedSceneRenderer` | graphics | draws the scene as triangles — ray tracing off |
 | `RayTracedSceneRenderer` | ray tracing | traces it, with shadow and reflection rays |
 | `SplitScreenCompositor` | compute | cuts the two halves together and labels them |
 
+`stream.py` wires them and shares what they draw:
+
+```python
+@stream
+def main(stream_builder: StreamBuilder) -> None:
+    rasterizer = stream_builder.add(RasterizedSceneRenderer, config=frame_extent)
+    ray_tracer = stream_builder.add(RayTracedSceneRenderer, config=frame_extent)
+    compositor = stream_builder.add(SplitScreenCompositor, config={...})
+    split_screen_encoder = stream_builder.add(H264Encoder, name="split-screen-encoder")
+    ...
+    stream_builder.expose(
+        split_screen_encoder.output("encoded_video"), Exposure.PRIVATE
+    )
+```
+
+**The runtime opens no windows.** What a stream shows, it exposes: the cut goes
+through an `H264Encoder`, a native built-in, whose `encoded_video` is exposed as
+a track at this machine's local relay, which a browser plays and any MoQ client
+reads.
+
 No handle string, fence, timeline or slot number ever reaches Python. The
 object is the handle — and so is an acceleration structure:
 
 ```python
-self.cube_structure = gpu.build_triangles_blas(vertices=…, indices=…)
-self.scene_structure = gpu.build_tlas(instances=[{"blas": self.cube_structure, …}])
+self.cube_structure = gpu_full_access.build_triangles_blas(vertices=…, indices=…)
+self.scene_structure = gpu_full_access.build_tlas(instances=[{"blas": self.cube_structure, …}])
 …
 self.trace_kernel.trace(
     bindings={"scene_structure": self.scene_structure, "traced_frame": texture},
@@ -42,9 +63,9 @@ Two of those modules are miss shaders, and that is the whole trick:
 
 ```python
 RAY_TRACING_STAGES = [
-    {"stage": "ray_gen",     "source": RAY_GENERATION_GLSL},
-    {"stage": "miss",        "source": SKY_MISS_GLSL},      # index 0
-    {"stage": "miss",        "source": SHADOW_MISS_GLSL},   # index 1
+    {"stage": "ray_gen", "source": RAY_GENERATION_GLSL},
+    {"stage": "miss", "source": SKY_MISS_GLSL},  # index 0
+    {"stage": "miss", "source": SHADOW_MISS_GLSL},  # index 1
     {"stage": "closest_hit", "source": CLOSEST_HIT_GLSL},
 ]
 ```
@@ -78,9 +99,9 @@ second ray itself. Two consequences worth knowing:
 
 ### The scene is generated *into* the GLSL
 
-`processors/showcase_box_scene.py` holds one table of ten boxes. Out of it
-come both the acceleration-structure instance transforms and the `const`
-arrays the rasterizer's vertex shader reads:
+`nodes/showcase_box_scene.py` holds one table of ten boxes. Out of it come both
+the acceleration-structure instance transforms and the `const` arrays the
+rasterizer's vertex shader reads:
 
 ```python
 SHOWCASE_SCENE_GLSL = (
@@ -94,85 +115,89 @@ The two renderers therefore cannot drift into drawing different scenes, they
 share one camera function and one lighting function, and the sky runs
 continuously across the divider because both sides ask the same
 `sky_colour_towards` for the same view ray. None of that is possible with an
-ahead-of-time `glslc` step: it works because a StreamLib shader is a Python
-string the engine compiles at `setup()`, and there is no toolchain to install.
+ahead-of-time `glslc` step: it works because a kernel's shader is a Python
+string the runtime compiles at `setup()`, and there is no toolchain to install.
 
 ### The labels are generated into the shader too
 
 Text on a GPU frame usually means a font rasterizer and a glyph atlas. Two
-short labels need neither: `processors/label_font.py` holds a 5×7 font written
-as ASCII art, Python lays each label out into a bitmap, and the compositor
+short labels need neither: `nodes/label_font.py` holds a 5×7 font written as
+ASCII art, Python lays each label out into a bitmap, and the compositor
 generates that bitmap into its GLSL as a `const uint` array. The shader unpacks
 one bit per pixel, scales it to the frame, and draws white ink over a black
 outline sampled at eight offsets — legible over a bright sky and a dark floor
 alike.
 
-This is also the one place the app builds a shader out of its own config: the
-kernel source is a function of `left_label` and `right_label`, not a module
-constant, so changing a label in `app.py` changes the GLSL the engine compiles
-at `setup()`. It is why the app still depends on nothing but the wheel.
+This is also the one place the stream builds a shader out of its own config:
+the kernel source is a function of `left_label` and `right_label`, not a module
+constant, so changing `LEFT_LABEL` in `stream.py` changes the GLSL the runtime
+compiles at `setup()`. It is why the project depends on nothing but
+`tatolab-stream`.
 
 ### What the rasterized half cannot do, and why
 
-Both are honest properties of the Python graphics surface rather than
+Both are honest properties of the Python graphics kernel rather than
 workarounds hidden in a helper:
 
-- **No vertex or index buffer reaches a Python processor.** The vertex stage
+- **No vertex or index buffer reaches a Python node.** The vertex stage
   fabricates its positions from `gl_VertexIndex` against the generated unit
   cube, and `gl_InstanceIndex` picks which box.
-- **The pass has no depth attachment** — an unbuilt engine capability,
-  reachable from neither language. So the vertex shader collapses faces the
-  camera cannot see (a test against the face's own centre, which every vertex
-  of that face agrees on, and which needs no winding convention to be right),
-  and the app packs a back-to-front instance order into a push constant.
-  Sorting by the distance to each box's centre is not exact for convex bodies
-  in general; it is exact for *this* ring — one radius, well separated — and
-  that was established by ray-casting the scene, not argued from the shape. A
-  box moved off the ring is what would need re-checking.
+- **The pass attaches colour targets only, so it has no depth test.** The
+  vertex shader collapses faces the camera cannot see (a test against the
+  face's own centre, which every vertex of that face agrees on, and which needs
+  no winding convention to be right), and the node packs a back-to-front
+  instance order into a push constant. Sorting by the distance to each box's
+  centre is not exact for convex bodies in general; it is exact for *this*
+  ring — one radius, well separated. A box moved off the ring is what would
+  need re-checking.
 
 ### And the parts that are just the engine
 
-Both renderers publish a **surface id, an extent and a timestamp** — no
-pixels ride a link. The compositor binds both upstream ids straight into its
-dispatch, with **no landing copy**: a kernel binding resolves texture-backed
-surfaces, and a kernel output is exactly that, whichever process acquired it.
-(A camera is the other case — it publishes buffer-backed frames, which is why
-`camera-compute-kernel` needs a copy and this app does not.)
+Both renderers publish a `VideoFrame` — a **surface id, an extent and a
+timestamp**; no pixels ride a link. The compositor binds both upstream ids
+straight into its dispatch, with **no landing copy**: a kernel binding resolves
+texture-backed surfaces, and a kernel output is exactly that, whichever process
+acquired it. (A camera publishes buffer-backed frames, which is why
+`camera-compute-kernel` lands each one with a copy first and this stream does
+not.)
 
-The compositor is also the tree's fan-in example: two producers, each in its
-own child interpreter, one consumer. The two run at their own cadences, so a
-reactive wake rarely carries both ports at once — the compositor holds the
-newest rasterized frame and composites when the traced one lands. What keeps
-the halves the same picture despite that is the section below: one clock, not
-one cadence.
+The compositor is also a fan-in: two producers, each in its own child
+interpreter, one consumer. The two run at their own cadences, so a wake rarely
+carries both ports at once — the compositor holds the newest rasterized frame,
+read as a `VideoFrame` so its surface stays claimed against reuse, and
+composites when the traced one lands. What keeps the halves the same picture
+despite that is the section below: one clock, not one cadence.
 
 Nothing here needs a camera, a microphone, or any other device. It needs a GPU
-with `VK_KHR_ray_tracing_pipeline` (an RTX-class or RDNA2+ card), and says so
-by refusing at `setup()` rather than pretending.
+with `VK_KHR_ray_tracing_pipeline` (an RTX-class or RDNA2+ card) — so Linux
+only, since MoltenVK exposes no ray tracing — and says so by refusing at
+`setup()` rather than pretending. `tatolab dev` and `tatolab run` print the
+cross-floor check's warning for the three ray-tracing constructors; the stream
+starts anyway.
 
 ## Why the boxes do not move
 
-`build_tlas` is a method on the **Full** capability, and the capability
-typestate is on the phase axis: `setup()` holds Full, `process()` holds
-Limited. A scene's geometry lives in an acceleration structure, so the scene is
-built once and what animates is the camera and the light — two floats of push
-constant. Moving geometry would mean rebuilding the top-level structure every
-frame, and a Python processor cannot reach that from `process()` at all: its
-limited context's `escalate` is a refusal, because the callback's one atomic
-privileged scope cannot cross the helper's process boundary.
+`build_tlas` is a method on the **Full** capability, and the capability split
+is on the phase axis: `setup()` holds Full, `process()` holds Limited. A
+scene's geometry lives in an acceleration structure, so the scene is built once
+and what animates is the camera and the light — two floats of push constant.
+Moving geometry would mean rebuilding the top-level structure every frame, and
+a Python node cannot reach that from `process()` at all: its limited context's
+`escalate` is a refusal, because the callback's one atomic privileged scope
+cannot cross the node's process boundary.
 
 ### The two halves are the same instant, and that is not free
 
 Both renderers are separate processes reaching their first frame at their own
-moment — the ray tracer's `setup()` is a couple of hundred milliseconds longer,
-with four shader modules and two acceleration structures to build. A phase
-counted from each processor's own first frame would leave the two cameras
-degrees apart and break every box crossing the divider. So the orbit angles are
-a pure function of `ctx.time`, the one machine-monotonic clock every processor
-shares, wrapped into a single turn before they reach a shader as push constants:
+moment — the ray tracer's `setup()` is the longer one, with four shader modules
+and two acceleration structures to build. A phase counted from each node's own
+first frame would leave the two cameras degrees apart and break every box
+crossing the divider. So the orbit angles are a pure function of `ctx.time`,
+the monotonic clock every node shares, wrapped into a single turn before they
+reach a shader as push constants:
 
 ```python
-camera_azimuth, light_azimuth = orbit_azimuths_at(ctx.time)
+camera_azimuth, light_azimuth = orbit_azimuths_at(frame_time_ns)
 ```
 
 What is left is the interval between the two frames the compositor happened to
@@ -180,40 +205,38 @@ pair — about a quarter of a degree of orbit, a pixel or two.
 
 ## Run it
 
-```bash
-uv venv --python 3.12 && uv sync
-source .venv/bin/activate
-streamlib run
-```
-
-A window opens with the split view. Ctrl-C stops it.
-
-`uv sync` installs `streamlib` from the simple index pinned in
-`pyproject.toml`; the wheel carries the Python API, the engine and the
-`streamlib` CLI. The CLI lands in `.venv/bin`, so it needs the venv on your
-`PATH` — activate it as above, or spell it `.venv/bin/streamlib` every time.
-
-**Not `uv run streamlib`.** It re-syncs the environment from `pyproject.toml`
-first, which silently replaces a locally built wheel with the released one —
-exactly what the next paragraph is for.
-
-To work against a checkout rather than a release, install that checkout's wheel
-into this venv instead:
+With this machine's runtime running (`tatolabd`, which the installer starts):
 
 ```bash
-uv pip install maturin
-maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
+uv sync
+tatolab dev
 ```
+
+`uv sync` installs `tatolab-stream` from PyPI — the authoring surface, and the
+only Tatolab package a stream's venv holds. The runtime itself is not on pip.
+
+Use `tatolab dev` while editing — it loads the stream again on every saved edit
+— and `tatolab run` otherwise. Both keep the stream as long as the command
+runs; Ctrl-C unloads it.
+
+Then open the stream in a browser:
+
+```text
+http://127.0.0.1:4446/watch/<machine>/main
+```
+
+The watch page lists every video track of the broadcast and plays the one you
+pick. `http://127.0.0.1:4446/` lists this machine's name and every stream's
+exposed ports.
 
 ## Editing it
 
-Everything is a Python string the engine compiles at startup, and a warm
-restart is sub-second. That is the edit loop; there is no reload-on-save and
-nothing is cached against you.
+Everything is a Python string the runtime compiles at `setup()`; save a file
+while `tatolab dev` runs and the stream loads again with it.
 
-- **The scene** is `SHOWCASE_BOXES` in `processors/showcase_box_scene.py`.
-  Add a box, change a colour, move the ring — both halves follow, because both
-  read the same table. A new ring cube needs an entry in
+- **The scene** is `SHOWCASE_BOXES` in `nodes/showcase_box_scene.py`. Add a
+  box, change a colour, move the ring — both halves follow, because both read
+  the same table. A new ring cube needs an entry in
   `_RING_CUBE_SIZES_AND_COLOURS`; keep them on one radius and not touching,
   which is what makes the rasterizer's back-to-front sort exact.
 - **The light** is `LIGHT_ORBIT_RADIUS`, `LIGHT_HEIGHT` and
@@ -221,66 +244,59 @@ nothing is cached against you.
   lengthens the shadows; changing its rate changes how fast they sweep.
 - **What the floor reflects** is `FLOOR_MIRROR_STRENGTH`. Set it to `0.0` and
   the two halves differ only by their shadows.
-- **The labels** are `left_label` / `right_label` in `app.py`. The font covers
-  A-Z, 0-9, space, hyphen and full stop, and a character it has no glyph for is
-  refused by name rather than drawn as a blank — so a typo says so instead of
-  leaving a hole.
+- **The labels** are `LEFT_LABEL` / `RIGHT_LABEL` in `stream.py`. The font
+  covers A-Z, 0-9, space, hyphen and full stop, and a character it has no glyph
+  for is refused by name rather than drawn as a blank — so a typo says so
+  instead of leaving a hole.
 
-Two edits worth making on purpose, because each fails in an instructive way:
-
-- Rename a binding in the ray-generation GLSL but not in `DECLARED_BINDINGS`.
-  The refusal lands at `setup()`, before a single frame, and names the
-  shaders' own bindings.
-- Declare the scene structure for a stage the kernel has no module for —
-  `("acceleration_structure", ["any_hit"])`. Refused at construction, because
-  a trace never revisits which stage reads what.
+One edit worth making on purpose, because it fails in an instructive way:
+rename a binding in the ray-generation GLSL but not in `DECLARED_BINDINGS`.
+The declaration is asserted against the shaders' own reflection when the kernel
+is built, so the refusal lands at `setup()`, before a single frame.
 
 ## Observing it
 
-From another terminal with this venv activated, while it runs:
+From another terminal:
 
 ```bash
-streamlib nodes                       # the live nodes on this machine
-streamlib graph                       # processors, ports, links and their states
-streamlib logs --list                 # the runtimes that have a log file
-streamlib logs <RUNTIME_ID> --follow  # tail one of them, like `tail -F`
+tatolab streams                 # the streams this machine's runtime holds
+tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
+tatolab logs --stream main -f   # the stream's records, Rust and Python alike
 ```
 
-To see each half on its own rather than only the cut, encode it: a frame's
-record names its pixels by a surface id, which means nothing outside the
-runtime, so a frame port is seen by connecting an `H264Encoder` to
-`ray_traced_frame_to_downstream` and exposing the encoder's `encoded_video`.
-`http://127.0.0.1:4446/watch/<machine>/<stream>` then plays it in a browser, and
-any MoQ client reads it — this repository's `tatolab-read-track` writes its
-access units to files that concatenate into an H.264 stream ffmpeg decodes to
-PNGs. Read the machine's, the stream's and the node's names out of `tatolab
-graph` rather than spelling them by hand: a port is the track `<node>/<port>` of
-the broadcast `<machine>/<stream>.hang` at the machine's local relay.
+A node is named after its class, lowercased — `rasterizedscenerenderer`,
+`raytracedscenerenderer`, `splitscreencompositor` — unless `add` passes
+`name=`, as it does for the encoder. An exposed port is the track
+`<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the machine's
+local relay, so any MoQ client reads it; this repository's `tatolab-read-track`
+writes a track's objects to files:
 
 ```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
-    <encoder>/encoded_video --count 30 --out /tmp/traced
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
+    split-screen-encoder/encoded_video --count 30 --out /tmp/split-screen
 ```
 
-To see the other two, connect an encoder of its own to
-`rasterized_frame_to_downstream` or `split_screen_frame_to_downstream` and read
-that encoder's `encoded_video` the same way; reading either frame port directly
-gives its records, not pictures. Reading twice, several seconds apart, is also
+Each file is one H.264 access unit, so the files concatenated in `objects.jsonl`
+order are an H.264 stream ffmpeg plays. Reading twice, several seconds apart, is
 how you check the light is really orbiting rather than the picture being static.
 
-`graph` renders per-link drop counts under a node's `metrics`, but only for a
-destination that lives in the app process — here, the window. Every Python
-processor is helper-placed and counts its losses inside its own child; its node
-carries no `metrics` key at all rather than a zero the parent cannot stand
-behind. So a quiet `graph` is not yet proof that nothing was dropped.
+The renderers' and the compositor's own frame ports are internal to the stream.
+`tatolab expose main raytracedscenerenderer ray_traced_frame_to_downstream`
+makes one a track too, but each of its objects is a frame's record, not its
+picture: the surface id names engine-owned GPU memory, which means nothing
+outside the runtime. To watch one half on its own, add an `H264Encoder` in
+`stream.py`, connect `ray_traced_frame_to_downstream` or
+`rasterized_frame_to_downstream` to its `video`, and expose its `encoded_video`
+beside the cut's — the watch page then offers both.
 
-## Runtime knobs
+## Knobs
 
-Everything is literal config in `app.py` — edit it and re-run.
+Everything is literal config in `stream.py` — edit it and save while
+`tatolab dev` runs.
 
-| Knob | Where | What it does |
+| Knob | Where | Effect |
 | --- | --- | --- |
-| `split_fraction` | `rt.add(SplitScreenCompositor, config=…)` | where the cut falls; 0.0 is all ray traced, 1.0 all rasterized |
-| `left_label` / `right_label` | `rt.add(SplitScreenCompositor, config=…)` | the text over each half; baked into the kernel at `setup()` |
-| `width` / `height` | `rt.add(…SceneRenderer, config=…)` | the resolution both halves render at |
-| `title` / `scaling` | `rt.add(DisplayWindow, config=…)` | window geometry; `scaling` is `fit` / `fill` / `stretch` |
+| `FRAME_WIDTH` / `FRAME_HEIGHT` | top of `stream.py` | The extent both halves render at, and so the extent of the cut. |
+| `SPLIT_FRACTION` | top of `stream.py` | Where the cut falls; 0.0 is all ray traced, 1.0 all rasterized. |
+| `LEFT_LABEL` / `RIGHT_LABEL` | top of `stream.py` | The text over each half; generated into the compositor's kernel at `setup()`. |
+| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares an encoder's track off this machine, at every relay the runtime has joined. |

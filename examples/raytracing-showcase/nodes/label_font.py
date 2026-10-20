@@ -1,28 +1,20 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
-"""A 5×7 bitmap font, and the label bitmaps the compositor draws with it.
 
-Text on a GPU frame usually means a font rasterizer and a texture atlas. At
-two short labels it means neither: Python lays the characters out into a bitmap
-and the compositor generates that bitmap into its GLSL as a `const` array, the
-same way the scene table reaches the renderers' shaders. So the app still
-depends on nothing but the wheel, and there is no glyph upload per frame.
+"""A 5×7 bitmap font, and the label bitmaps the compositor generates into its GLSL.
 
-The font is uppercase only — a label that names a rendering mode is shouting
-anyway — and an unsupported character is refused by name rather than drawn as
-a blank, which would leave a caller staring at a hole wondering what happened.
+Uppercase only. A character the font has no glyph for is refused by name rather
+than drawn as a blank.
 """
 
 from __future__ import annotations
 
 GLYPH_WIDTH = 5
 GLYPH_HEIGHT = 7
-# One blank column between glyphs, so the label reads as words rather than a
-# run of touching letters.
+# One blank column between glyphs, so a label reads as words.
 GLYPH_ADVANCE = GLYPH_WIDTH + 1
 
-# `#` is ink, anything else is background. Written as art because a label font
-# is the one kind of data whose bug is visible at a glance in the source.
+# `#` is ink, anything else is background.
 _GLYPH_ART: dict[str, tuple[str, ...]] = {
     " ": (".....", ".....", ".....", ".....", ".....", ".....", "....."),
     "-": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
@@ -67,12 +59,10 @@ _GLYPH_ART: dict[str, tuple[str, ...]] = {
 
 
 def characters_drawn_for(text: str) -> str:
-    """The characters a label actually draws.
+    """The characters a label actually draws, which can outnumber the caller's string.
 
-    Upper-casing can change how many there are — `\N{LATIN SMALL LETTER SHARP S}`
-    becomes `SS` — so the width and the bitmap have to measure this rather than
-    the caller's string, or the label is laid out wider than it is reported and
-    the shader clips its last glyph.
+    Upper-casing can lengthen a string — `\N{LATIN SMALL LETTER SHARP S}` becomes
+    `SS` — so the width and the bitmap both measure this.
     """
     return text.upper()
 
