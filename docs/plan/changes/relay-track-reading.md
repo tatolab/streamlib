@@ -10,9 +10,10 @@ The build of the §Networking align of 2026-10-20 (`ARCHITECTURE.md:3825-3843`, 
   within its `max_age`. The relay source node and `tatolab-read-track` read through one
   relay-track reader.
 - **Ordering.** The reader receives in arrival order, releases in sequence order, and holds
-  at a missing sequence. It gives up a missing group only on its reset, the track's end, or
-  newer content past `max_age`, measured in the track's own timestamps. It joins at the live
-  edge.
+  at a missing sequence. It gives up a missing group only on its stream's reset (which
+  moq-net surfaces as the group's abort), the track's end, or newer content past `max_age`,
+  measured in the track's own timestamps. After a give-up it moves to the next sequence. It
+  joins at the live edge.
 - **The relay source node's config.** It takes `max_age` (100 ms by default).
   `tatolab-read-track` waits the track's declared retention.
 - **Losses reach the graph.** Each group the relay source node gives up reaches its readers
@@ -127,14 +128,30 @@ object. A given-up group's object count is unknown: it may never have been seen 
     `moq-dev/moq` `rs/moq-audio/src/decode/consumer.rs:182-199` does, so it replays no history.
   - **Ordering:** it reads `recv_group()` (arrival order) into a hold keyed by sequence, and
     releases the lowest held group whose sequence is next.
-  - **Giving up:** a missing sequence is given up when its group aborts after its header
-    arrived, when the track ends, or when the newest frame's timestamp is `max_age` past the
-    first timestamp of the held group after the hole.
+  - **Giving up:** a missing sequence is given up on one of three events:
+    - its stream is reset after its header arrived, which moq-net surfaces as the group's
+      abort;
+    - the track ends;
+    - the newest frame of a later group is `max_age` past the hole's reach, the first
+      timestamp of the held group immediately after it. This is the reach rule moq-net's own
+      staleness check uses (`moq-net` `src/model/track.rs:553-567`, `:610-638`), so a later
+      group whose timestamps step back neither convicts the hole nor shrinks its reach.
+  - **Timestamps that never advance:** such a track never ages a hole, so its hole is given
+    up only on a reset or the track's end. That is the decided no-clock rule applied to a
+    track that carries no time.
+  - **After a give-up:** the cursor moves to the next sequence. A given-up group that arrives
+    later is discarded, because its loss is already counted.
+  - **A group served part-way through:** a group served from a later object than its first
+    (`index() > 0`) is skipped to the next group's start, as `tatolab-read-track` does today
+    (`runtime/tatolab-read-track/src/main.rs:224-233`). A group served whole is released
+    whole.
   - **What it yields:** `ReleasedRelayTrackGroup::InSequence(group)` or
     `ReleasedRelayTrackGroup::GivenUp { groups: u64 }`.
-- **The relay source node** reads through it. On `GivenUp` it declares the loss on its output
-  before its next write, through the header field of Decided 1, and counts it on itself as
-  `given_up_groups_by_output_port`. Its private `RelayTrackReader` is renamed `RelayTrackSourceSession`.
+- **The relay source node** reads through it. On `GivenUp` it counts the loss on itself at
+  once, as `given_up_groups_by_output_port`, and declares it to its readers on its next write,
+  through the header field of Decided 1. A give-up after its last write reaches no reader.
+  That is the residual §Processor model already states for a ring gap after a link's last
+  receive (`ARCHITECTURE.md:1022-1024`). Its private `RelayTrackReader` is renamed `RelayTrackSourceSession`.
   - **Config:** `RelayTrackSourceConfig` gains `max_age`, a whole number of milliseconds, 100
     by default. Its doc comment names the unit, and the generated
     `_built_in_nodes.py` TypedDict follows through
@@ -149,7 +166,8 @@ object. A given-up group's object count is unknown: it may never have been seen 
 - **A new DECIDED clause after `:1036-1045`.** "A message a writer declares lost upstream is
   carried in the user header beside the sequence number and added to an `ordered` reader's
   `lost_since_last_read`, never to its link's dropped count; the writer counts it on itself,
-  per output port. Only engine-internal writers declare one."
+  per output port. Only engine-internal writers declare one. A loss declared after the
+  writer's last write reaches no reader, the producer's count excepted."
 - **The two residuals at `:1022-1024` stay as written.** They are about ring gaps.
 
 ## MODIFIED: §Networking — verify lines for `:3794-3824` and `:3825-3843`
@@ -165,7 +183,10 @@ The entries' text stands. Each gains `<!-- verify: -->` lines naming the tests b
   - `a_missing_group_is_held_while_newer_content_stays_within_max_age`
   - `a_missing_group_is_given_up_once_newer_content_runs_max_age_past_it`
   - `a_missing_group_is_never_given_up_while_nothing_newer_arrives`. This proves no clock.
-  - `an_aborted_group_is_given_up_at_once`
+  - `a_reset_group_is_given_up_at_once`
+  - `a_given_up_group_arriving_late_is_discarded`
+  - `a_group_served_after_its_first_object_is_skipped_to_the_next_groups_start`
+  - `a_track_whose_timestamps_never_advance_gives_up_a_hole_only_on_its_reset_or_end`
   - `a_track_that_ends_gives_up_its_missing_groups`
   - `a_reader_joining_a_track_with_cached_history_starts_at_the_live_edge`
 - **The relay source node:**
