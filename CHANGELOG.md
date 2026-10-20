@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.4](https://github.com/tatolab/streamlib/compare/v0.54.3...v0.54.4) (2026-10-20)
+
+
+### Bug Fixes
+
+* **examples:** the examples are tatolab streams — ten rewritten on tatolab-stream, their windows now exposed encoders; camera-audio-recorder and camera-codec-roundtrip deleted ([#2878](https://github.com/tatolab/streamlib/issues/2878)) ([cbb03cc](https://github.com/tatolab/streamlib/commit/cbb03cc039bafe3d84bfc9e8252669e8ccc3563a))
+
 ## [0.54.3](https://github.com/tatolab/streamlib/compare/v0.54.2...v0.54.3) (2026-10-20)
 
 
