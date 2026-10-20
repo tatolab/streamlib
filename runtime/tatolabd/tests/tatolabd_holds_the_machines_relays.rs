@@ -1,0 +1,164 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! `tatolabd` holding the machine's relays through its local API: the local
+//! relay's two instances built in and never removed, a second instance of an
+//! adapter added from its settings alone, and a secret kept in the store —
+//! across a restart, and out of `relays.json`, `list_relays`, `graph`, the log
+//! and the runtime's environment, which every child inherits. GPU-free, and
+//! needing no `moq-relay`. Built with
+//! `--features machine-directories-under-a-test-root`.
+
+#![cfg(feature = "machine-directories-under-a-test-root")]
+
+mod common;
+
+use serde_json::json;
+
+use common::{
+    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, call_a_tool_over_the_local_api,
+    the_mode_of,
+};
+
+/// The secret every test looks for where it must not be.
+const RELAY_SECRET: &str = "relay-secret-5f1c9a7e";
+
+/// The adapter a test build compiles in whose settings hold a secret.
+const SECRET_HOLDING_TEST_RELAY_ADAPTER: &str = "test-secret-holder";
+
+fn the_relays_listed(machine_root: &TatolabTestMachineRoot) -> serde_json::Value {
+    call_a_tool_over_the_local_api(
+        &machine_root.local_api_socket_path(),
+        "list_relays",
+        json!({}),
+    )
+    .json()
+}
+
+fn the_relay_listed<'listing>(
+    listing: &'listing serde_json::Value,
+    relay_id: &str,
+) -> &'listing serde_json::Value {
+    listing["relays"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|relay| relay["relay_id"] == relay_id)
+        .unwrap_or_else(|| panic!("`{relay_id}` is not listed: {listing}"))
+}
+
+/// `process_id`'s environment as the kernel holds it.
+#[cfg(target_os = "linux")]
+fn the_environment_of(process_id: i32) -> String {
+    String::from_utf8_lossy(&std::fs::read(format!("/proc/{process_id}/environ")).unwrap())
+        .into_owned()
+}
+
+#[test]
+fn an_added_relays_secret_is_kept_in_the_store_across_a_restart_and_shown_nowhere() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
+        machine_root.tatolabd_command(&runtime_unit.tatolabd),
+    );
+
+    for label in ["first", "second"] {
+        call_a_tool_over_the_local_api(
+            &machine_root.local_api_socket_path(),
+            "add_relay",
+            json!({
+                "adapter": SECRET_HOLDING_TEST_RELAY_ADAPTER,
+                "settings": {"token": RELAY_SECRET, "label": label}
+            }),
+        )
+        .json();
+    }
+    let listing = the_relays_listed(&machine_root);
+    let second = the_relay_listed(&listing, "test-secret-holder-2");
+    assert_eq!(second["settings"], json!({"label": "second"}));
+    assert_eq!(second["secrets"], json!({"token": "set"}));
+    assert_eq!(second["connection_state"], json!({"state": "joined"}));
+    assert!(!listing.to_string().contains(RELAY_SECRET), "{listing}");
+
+    let graph =
+        call_a_tool_over_the_local_api(&machine_root.local_api_socket_path(), "graph", json!({}));
+    assert!(!graph.text.contains(RELAY_SECRET), "{}", graph.text);
+    #[cfg(target_os = "linux")]
+    assert!(
+        !the_environment_of(runtime.process_id()).contains(RELAY_SECRET),
+        "the secret is in the environment every child of the runtime inherits"
+    );
+
+    let relays_record_path = machine_root.state_directory().join("relays.json");
+    let relays_record = std::fs::read_to_string(&relays_record_path).unwrap();
+    assert!(!relays_record.contains(RELAY_SECRET), "{relays_record}");
+    assert_eq!(the_mode_of(&relays_record_path), 0o600);
+    let fallback_secrets_path = machine_root
+        .state_directory()
+        .join("relay-credentials.json");
+    assert_eq!(the_mode_of(&fallback_secrets_path), 0o600);
+
+    runtime.interrupt_and_expect_a_clean_exit();
+    let mut restarted = SpawnedTatolabd::spawn_and_wait_until_serving(
+        machine_root.tatolabd_command(&runtime_unit.tatolabd),
+    );
+    let listing = the_relays_listed(&machine_root);
+    let first = the_relay_listed(&listing, "test-secret-holder-1");
+    assert_eq!(first["secrets"], json!({"token": "set"}));
+    assert_eq!(
+        first["connection_state"],
+        json!({"state": "joined"}),
+        "re-joined at the start with the secret read back from the store"
+    );
+    restarted.interrupt_and_expect_a_clean_exit();
+
+    for standard_error in [runtime.standard_error(), restarted.standard_error()] {
+        assert!(!standard_error.contains(RELAY_SECRET), "{standard_error}");
+        assert_eq!(
+            standard_error.matches("no OS secret store answers").count(),
+            1,
+            "where the secrets are kept is said once at each start:\n{standard_error}"
+        );
+    }
+}
+
+#[test]
+fn the_local_relays_two_instances_are_built_in_never_removed_and_never_added_to() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
+        machine_root.tatolabd_command(&runtime_unit.tatolabd),
+    );
+
+    let listing = the_relays_listed(&machine_root);
+    for relay_id in ["local-loopback", "local-every-interface"] {
+        let local = the_relay_listed(&listing, relay_id);
+        assert_eq!(local["adapter"], "local");
+        assert_eq!(local["built_in"], true);
+        let removal = call_a_tool_over_the_local_api(
+            &machine_root.local_api_socket_path(),
+            "remove_relay",
+            json!({"relay_id": relay_id}),
+        );
+        assert!(removal.is_error);
+        assert!(
+            removal.text.contains(&format!(
+                "the relay `{relay_id}` is built in and is never removed"
+            )),
+            "{}",
+            removal.text
+        );
+    }
+    let addition = call_a_tool_over_the_local_api(
+        &machine_root.local_api_socket_path(),
+        "add_relay",
+        json!({"adapter": "local"}),
+    );
+    assert!(addition.is_error);
+    assert!(
+        addition.text.contains("the local relay is built in"),
+        "{}",
+        addition.text
+    );
+    runtime.interrupt_and_expect_a_clean_exit();
+}

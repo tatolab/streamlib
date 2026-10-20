@@ -23,6 +23,7 @@ use streamlib::sdk::runtime::{
     raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
+use streamlib_relay_adapter_sdk::RelayAdapterInstanceMaker;
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
 use crate::exposed_port_publisher::start_the_exposed_port_publisher;
@@ -173,13 +174,24 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
 }
 
 /// Every relay instance this runtime holds, each joined: the local relay's
-/// two built in, then each `relays.json` records.
+/// two built in, then each `relays.json` records. A test build adds the
+/// secret-holding test relay's adapter.
 fn join_every_relay_instance_of_this_runtime(
     engine: &Runner,
     tatolab_state_directory: &TatolabStateDirectory,
 ) -> RelayInstancesOfThisRuntime {
+    #[cfg_attr(
+        not(feature = "machine-directories-under-a-test-root"),
+        expect(unused_mut, reason = "a test build adds an adapter")
+    )]
+    let mut adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> =
+        vec![Box::new(the_local_relay_adapter_of_this_runtime(engine))];
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    adapter_makers.push(Box::new(
+        crate::secret_holding_test_relay_adapter::SecretHoldingTestRelayAdapterInstanceMaker,
+    ));
     RelayInstancesOfThisRuntime::join_every_relay_instance(
-        vec![Box::new(the_local_relay_adapter_of_this_runtime(engine))],
+        adapter_makers,
         RelayInstancesRecordFile::at(tatolab_state_directory.relay_instances_record_path()),
         the_relay_secret_store_of_this_machine(
             tatolab_state_directory.relay_secrets_fallback_file_path(),
