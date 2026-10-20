@@ -119,11 +119,7 @@ fn the_relay_url_and_how_it_is_named(relay_url_argument: &str) -> Result<(url::U
 
 /// `relay_url` as `scheme://host[:port]`, nothing of its path or query.
 fn the_relay_named_by_its_origin_alone(relay_url: &url::Url) -> String {
-    let host = relay_url.host_str().unwrap_or_default();
-    match relay_url.port() {
-        Some(port) => format!("{}://{host}:{port}", relay_url.scheme()),
-        None => format!("{}://{host}", relay_url.scheme()),
-    }
+    relay_url.origin().ascii_serialization()
 }
 
 /// Read `arguments.object_count` objects of the track into the output

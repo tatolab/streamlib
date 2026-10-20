@@ -17,7 +17,7 @@ use serde_json::json;
 
 use common::{
     SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, call_a_tool_over_the_local_api,
-    every_file_under, the_mode_of,
+    every_file_under, the_mode_of, the_relay_listed, the_relays_listed,
 };
 
 /// The secret every test looks for where it must not be.
@@ -25,27 +25,6 @@ const RELAY_SECRET: &str = "relay-secret-5f1c9a7e";
 
 /// The adapter a test build compiles in whose settings hold a secret.
 const SECRET_HOLDING_TEST_RELAY_ADAPTER: &str = "test-secret-holder";
-
-fn the_relays_listed(machine_root: &TatolabTestMachineRoot) -> serde_json::Value {
-    call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "list_relays",
-        json!({}),
-    )
-    .json()
-}
-
-fn the_relay_listed<'listing>(
-    listing: &'listing serde_json::Value,
-    relay_id: &str,
-) -> &'listing serde_json::Value {
-    listing["relays"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|relay| relay["relay_id"] == relay_id)
-        .unwrap_or_else(|| panic!("`{relay_id}` is not listed: {listing}"))
-}
 
 /// `process_id`'s environment as the kernel holds it.
 #[cfg(target_os = "linux")]

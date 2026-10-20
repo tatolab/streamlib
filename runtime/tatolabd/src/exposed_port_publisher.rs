@@ -33,8 +33,8 @@ use streamlib_relay_adapter_sdk::{
 
 use crate::exposed_port_publisher_session_state::{
     A_RELAY_IS_FIRST_REDIALED_AFTER, A_RELAY_IS_REDIALED_AT_LEAST_EVERY,
-    ExposedPortPublisherSessionState, ExposedPortPublisherSessionStateSender,
-    report_the_session_state_as_it_changes,
+    ExposedPortPublisherSessionStateOfOneDial, ExposedPortPublisherSessionStateSender,
+    MOQ_TOKIO_BACKOFF_TIMEOUT_THAT_NEVER_GIVES_UP, report_the_session_state_as_it_changes,
 };
 use crate::relay_instances_of_this_runtime::RelaysThePublisherDialsReceiver;
 
@@ -201,15 +201,14 @@ struct RelayDialedByThePublisher {
     dialed_as: RelayTheExposedPortPublisherDials,
     origin: moq_net::origin::Producer,
     _session: moq_tokio::Connection,
+    session_state_reports: ExposedPortPublisherSessionStateOfOneDial,
     session_state_reporting: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for RelayDialedByThePublisher {
     fn drop(&mut self) {
         self.session_state_reporting.abort();
-        self.dialed_as
-            .session_state
-            .send_replace(ExposedPortPublisherSessionState::NotDialed);
+        self.session_state_reports.hang_up();
     }
 }
 
@@ -220,7 +219,7 @@ fn the_publishers_dial_configuration() -> moq_tokio::connect::Config {
     let mut configuration = moq_tokio::connect::Config::default();
     configuration.backoff.initial = A_RELAY_IS_FIRST_REDIALED_AFTER;
     configuration.backoff.max = A_RELAY_IS_REDIALED_AT_LEAST_EVERY;
-    configuration.backoff.timeout = Duration::ZERO;
+    configuration.backoff.timeout = MOQ_TOKIO_BACKOFF_TIMEOUT_THAT_NEVER_GIVES_UP;
     configuration
 }
 
@@ -258,15 +257,18 @@ impl RelayDialedByThePublisher {
             .with_reconnect(true)
             .connect(dial_url);
         tracing::info!(relay = %relay.relay_id, "the publisher dials the relay");
+        let session_state_reports =
+            ExposedPortPublisherSessionStateOfOneDial::into(relay.session_state.clone());
         let session_state_reporting = tokio::spawn(report_the_session_state_as_it_changes(
             relay.relay_id.clone(),
             session.clone(),
-            relay.session_state.clone(),
+            session_state_reports.clone(),
         ));
         Some(Self {
             dialed_as: relay,
             origin,
             _session: session,
+            session_state_reports,
             session_state_reporting,
         })
     }
@@ -845,7 +847,9 @@ async fn the_source_opened_its_end(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exposed_port_publisher_session_state::a_relay_instances_session_state_not_dialed;
+    use crate::exposed_port_publisher_session_state::{
+        ExposedPortPublisherSessionState, a_relay_instances_session_state_not_dialed,
+    };
     use streamlib::sdk::descriptors::{BinaryEntry, CatalogDataTrackMode};
 
     use MessageGroupBoundary::{ContinuesGroup, StartsGroup};

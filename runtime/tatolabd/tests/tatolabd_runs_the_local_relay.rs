@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use common::{
     LocalRelayPortsOfATest, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
-    call_a_tool_over_the_local_api, every_file_under, http_get_body_on_loopback,
-    the_port_is_free_for_udp_and_tcp_on,
+    every_file_under, http_get_body_on_loopback, the_port_is_free_for_udp_and_tcp_on,
+    the_relay_listed, the_relays_listed,
 };
 
 /// How long both children have to answer once `tatolabd` serves, and to be
@@ -94,26 +94,6 @@ fn spawn_tatolabd_with_its_local_relay(
     SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command)
 }
 
-/// `relay_id`'s connection state as `list_relays` reports it.
-fn the_connection_state_listed_for(
-    machine_root: &TatolabTestMachineRoot,
-    relay_id: &str,
-) -> serde_json::Value {
-    let listing = call_a_tool_over_the_local_api(
-        &machine_root.local_api_socket_path(),
-        "list_relays",
-        serde_json::json!({}),
-    )
-    .json();
-    listing["relays"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|relay| relay["relay_id"] == relay_id)
-        .unwrap_or_else(|| panic!("`{relay_id}` is not listed: {listing}"))["connection_state"]
-        .clone()
-}
-
 /// The publisher dials each listener with the token in the URL's query, and
 /// the stack's WebTransport and WebSocket clients print that URL whole below
 /// `warn`; at `RUST_LOG=trace` it still reaches no log line.
@@ -132,7 +112,9 @@ fn each_listener_is_listed_joined_once_the_publishers_session_connects_and_its_t
         let mut listed = serde_json::Value::Null;
         assert!(
             wait_until(LOCAL_RELAY_BUDGET, || {
-                listed = the_connection_state_listed_for(&machine_root, relay_id);
+                listed = the_relay_listed(&the_relays_listed(&machine_root), relay_id)
+                    ["connection_state"]
+                    .clone();
                 listed == serde_json::json!({"state": "joined"})
             }),
             "`{relay_id}` is listed {listed} {LOCAL_RELAY_BUDGET:?} after the runtime serves"

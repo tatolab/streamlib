@@ -40,18 +40,37 @@ struct RelayAdapterOfThisRuntime {
     maker: Box<dyn RelayAdapterInstanceMaker>,
 }
 
+/// One join of a relay instance: where its adapter said to dial it, and how
+/// the publisher dials it, its credential asked for once per join and again
+/// once due.
+struct JoinOfARelayInstance {
+    joined: JoinedRelay,
+    dialed_as: Option<RelayTheExposedPortPublisherDials>,
+}
+
+impl JoinOfARelayInstance {
+    fn just_joined(joined: JoinedRelay) -> Self {
+        Self {
+            joined,
+            dialed_as: None,
+        }
+    }
+}
+
 /// One relay instance this runtime holds.
 struct HeldRelayInstance {
     recorded: RecordedRelayInstance,
     built_in: bool,
     secret_settings_set: BTreeSet<String>,
     adapter: Option<Box<dyn RelayAdapter>>,
-    joined: Option<JoinedRelay>,
+    join: Option<JoinOfARelayInstance>,
     why_not_joined: Option<String>,
-    /// How the publisher dials it while joined, its credential asked for once
-    /// per join and again once due.
-    dialed_as: Option<RelayTheExposedPortPublisherDials>,
     session_state: ExposedPortPublisherSessionStateSender,
+}
+
+/// Whether `adapter` carries any exposed port, so has something to publish.
+fn serves_a_level(adapter: &dyn RelayAdapter) -> bool {
+    !adapter.levels_served().is_empty()
 }
 
 impl HeldRelayInstance {
@@ -65,9 +84,8 @@ impl HeldRelayInstance {
             built_in,
             secret_settings_set,
             adapter: None,
-            joined: None,
+            join: None,
             why_not_joined: None,
-            dialed_as: None,
             session_state: a_relay_instances_session_state_not_dialed(),
         }
     }
@@ -76,8 +94,7 @@ impl HeldRelayInstance {
         if let Some(adapter) = &mut self.adapter {
             adapter.leave();
         }
-        self.joined = None;
-        self.dialed_as = None;
+        self.join = None;
     }
 
     /// How the publisher dials this instance, or `None` while it is not
@@ -91,21 +108,21 @@ impl HeldRelayInstance {
         let adapter = self
             .adapter
             .as_deref()
-            .filter(|adapter| !adapter.levels_served().is_empty())?;
-        let joined = self.joined.as_ref()?;
-        let due = self
+            .filter(|adapter| serves_a_level(*adapter))?;
+        let join = self.join.as_mut()?;
+        let due = join
             .dialed_as
             .as_ref()
             .is_none_or(|dialed_as| dialed_as.renew_by.is_some_and(|renew_by| renew_by <= now));
         if due {
-            self.dialed_as = Some(RelayTheExposedPortPublisherDials::of_a_joined_relay(
+            join.dialed_as = Some(RelayTheExposedPortPublisherDials::of_a_joined_relay(
                 adapter,
-                joined,
+                &join.joined,
                 machine,
                 self.session_state.clone(),
             ));
         }
-        self.dialed_as.clone()
+        join.dialed_as.clone()
     }
 
     /// Where this instance stands, its adapter's state and, once joined, the
@@ -116,7 +133,7 @@ impl HeldRelayInstance {
                 why: Some(why.clone()),
             },
             (None, Some(adapter)) => match adapter.events().borrow().as_listed() {
-                ListedRelayConnectionState::Joined if !adapter.levels_served().is_empty() => {
+                ListedRelayConnectionState::Joined if serves_a_level(adapter.as_ref()) => {
                     self.session_state.borrow().as_listed_for_a_joined_relay()
                 }
                 not_joined => not_joined,
@@ -262,7 +279,18 @@ impl RelayInstancesOfThisRuntime {
                     let Some(relay_instances) = relay_instances.upgrade() else {
                         return;
                     };
-                    tracing::info!("a relay's dial credential is due; the publisher is handed a fresh one");
+                    let now = Instant::now();
+                    let relays_due = relays
+                        .borrow()
+                        .iter()
+                        .filter(|relay| relay.renew_by.is_some_and(|renew_by| renew_by <= now))
+                        .map(|relay| relay.relay_id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    tracing::info!(
+                        relays = %relays_due,
+                        "a dial credential is due; the publisher is handed a fresh one"
+                    );
                     relay_instances.hand_the_publisher_every_joined_relay();
                 }
             }
@@ -368,14 +396,12 @@ impl RelayInstancesOfThisRuntime {
         match joined {
             Ok(joined) => {
                 tracing::info!(relay = %held.recorded.relay_id, "the relay is joined");
-                held.joined = Some(joined);
-                held.dialed_as = None;
+                held.join = Some(JoinOfARelayInstance::just_joined(joined));
                 held.why_not_joined = None;
                 Ok(())
             }
             Err(refusal) => {
-                held.joined = None;
-                held.dialed_as = None;
+                held.join = None;
                 held.why_not_joined = Some(refusal.to_string());
                 Err(refusal.into())
             }

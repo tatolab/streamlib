@@ -30,20 +30,20 @@ const LEVELS_A_CLOUDFLARE_RELAY_SERVES: [OutputPortExposureLevel; 1] =
 /// A Cloudflare relay instance's settings.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CloudflareRelayInstanceSettings {
+pub(crate) struct CloudflareRelayInstanceSettings {
     /// The relay's publish-and-subscribe URL as Cloudflare returns it,
     /// `https://draft-16.cloudflare.mediaoverquic.com/<token>`; its token rides
     /// the path, so the whole URL is a secret.
-    pub relay_url: RelaySecretSetting,
+    pub(crate) relay_url: RelaySecretSetting,
 }
 
 /// A Cloudflare relay URL read as the relay's address and the token in its
 /// path.
-pub struct CloudflareRelayAddressAndToken {
+pub(crate) struct CloudflareRelayAddressAndToken {
     /// The relay's URL with the token taken off its path.
-    pub dial_url: Url,
+    pub(crate) dial_url: Url,
     /// The token the URL's path carried.
-    pub token: SecretString,
+    pub(crate) token: SecretString,
 }
 
 impl std::fmt::Debug for CloudflareRelayAddressAndToken {
@@ -58,10 +58,14 @@ impl std::fmt::Debug for CloudflareRelayAddressAndToken {
 /// Why a Cloudflare relay URL was refused; it never names the URL, which is
 /// the secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CloudflareRelayUrlRefusal {
+pub(crate) enum CloudflareRelayUrlRefusal {
+    /// It does not parse as a URL.
     NotAUrl,
+    /// Its scheme is not `https`.
     NotHttps,
+    /// Its path carries no segment to read as the token.
     NoTokenInThePath,
+    /// It carries a query or a fragment.
     CarriesAQueryOrAFragment,
 }
 
@@ -84,7 +88,7 @@ impl std::fmt::Display for CloudflareRelayUrlRefusal {
 impl CloudflareRelayAddressAndToken {
     /// `relay_url` read as the relay's address and its token, the last path
     /// segment.
-    pub fn read_from(relay_url: &str) -> Result<Self, CloudflareRelayUrlRefusal> {
+    pub(crate) fn read_from(relay_url: &str) -> Result<Self, CloudflareRelayUrlRefusal> {
         let mut dial_url =
             Url::parse(relay_url.trim()).map_err(|_| CloudflareRelayUrlRefusal::NotAUrl)?;
         if dial_url.scheme() != "https" {
@@ -152,10 +156,7 @@ impl RelayAdapter for CloudflareRelayAdapter {
         let address_and_token = CloudflareRelayAddressAndToken::read_from(
             settings.relay_url.expose_secret(),
         )
-        .map_err(|refusal| RelayAdapterRefusal::SettingsRefused {
-            relay_id: self.relay_id.clone(),
-            why: refusal.to_string(),
-        })?;
+        .map_err(|refusal| RelayAdapterRefusal::settings_refused(&self.relay_id, refusal))?;
         self.token = Some(address_and_token.token);
         self.connection_state
             .send_replace(RelayConnectionState::Joined);

@@ -11,7 +11,6 @@
 mod moqpro_relay_instance_settings;
 mod moqpro_relay_token;
 
-use streamlib_relay_adapter_sdk::secrecy::SecretString;
 use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_adapter_sdk::{
     BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter,
@@ -22,7 +21,8 @@ use streamlib_relay_adapter_sdk::{
 use tokio::sync::watch;
 
 pub use moqpro_relay_instance_settings::{
-    MOQPRO_DEFAULT_RELAY_URL, MoqProRelayInstanceSettings, MoqProRelaySettingsRefusal,
+    MOQPRO_DEFAULT_RELAY_URL, MoqProProjectId, MoqProRelayInstanceSettings,
+    MoqProRelaySettingsRefusal,
 };
 pub use moqpro_relay_token::{
     MOQPRO_PUBLISH_TOKEN_LIFETIME, MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER, MoqProProjectSigningKey,
@@ -38,7 +38,7 @@ const LEVELS_A_MOQPRO_RELAY_SERVES: [OutputPortExposureLevel; 1] =
 
 /// What a joined instance mints its tokens with.
 struct JoinedMoqProProject {
-    project_id: String,
+    project_id: MoqProProjectId,
     signing_key: MoqProProjectSigningKey,
 }
 
@@ -62,21 +62,16 @@ impl MoqProRelayAdapter {
     }
 
     fn settings_refused(&self, why: impl std::fmt::Display) -> RelayAdapterRefusal {
-        RelayAdapterRefusal::SettingsRefused {
-            relay_id: self.relay_id.clone(),
-            why: why.to_string(),
-        }
+        RelayAdapterRefusal::settings_refused(&self.relay_id, why)
     }
 
-    fn mint_a_publish_token(
+    fn mint_a_publish_credential(
         &self,
         joined: &JoinedMoqProProject,
-    ) -> Result<SecretString, MoqProSigningKeyRefusal> {
-        joined.signing_key.mint_a_publish_token_for_the_machine(
-            &joined.project_id,
-            &self.machine,
-            moqpro_relay_token::the_time_a_token_minted_now_is_issued_at(),
-        )
+    ) -> Result<RelayDialCredential, MoqProSigningKeyRefusal> {
+        joined
+            .signing_key
+            .mint_a_publish_credential_for_the_machine(&joined.project_id, &self.machine)
     }
 }
 
@@ -104,12 +99,13 @@ impl RelayAdapter for MoqProRelayAdapter {
         let dial_url: Url = settings
             .the_projects_dial_url()
             .map_err(|refusal| self.settings_refused(refusal))?;
+        let signing_key = MoqProProjectSigningKey::read_from(settings.signing_key.expose_secret())
+            .map_err(|refusal| self.settings_refused(refusal))?;
         let joined = JoinedMoqProProject {
-            project_id: settings.project_id.clone(),
-            signing_key: MoqProProjectSigningKey::read_from(settings.signing_key.expose_secret())
-                .map_err(|refusal| self.settings_refused(refusal))?,
+            project_id: settings.project_id,
+            signing_key,
         };
-        self.mint_a_publish_token(&joined)
+        self.mint_a_publish_credential(&joined)
             .map_err(|refusal| self.settings_refused(refusal))?;
         self.joined = Some(joined);
         self.connection_state
@@ -133,16 +129,11 @@ impl RelayAdapter for MoqProRelayAdapter {
 
     fn credential_for_dial(&self) -> Option<RelayDialCredential> {
         let joined = self.joined.as_ref()?;
-        match self.mint_a_publish_token(joined) {
-            Ok(token) => Some(
-                RelayDialCredential::token_in_the_dial_url_query(token)
-                    .renewed_by(moqpro_relay_token::a_publish_token_minted_now_is_renewed_by()),
-            ),
-            Err(refusal) => {
+        self.mint_a_publish_credential(joined)
+            .inspect_err(|refusal| {
                 tracing::error!(relay = %self.relay_id, "no publish token is minted: {refusal}");
-                None
-            }
-        }
+            })
+            .ok()
     }
 
     fn events(&self) -> RelayConnectionStateReceiver {
@@ -328,6 +319,23 @@ mod tests {
             joined.dial_url.as_str(),
             "https://relay.example/moq/pb1test"
         );
+    }
+
+    #[test]
+    fn a_project_id_with_stray_space_roots_its_tokens_at_the_path_it_dials() {
+        let key = a_project_key();
+        let mut settings = settings_with(&key);
+        settings["project_id"] = serde_json::json!(" pb1test ");
+        let mut adapter = an_instance();
+        let joined = adapter.join(settings).unwrap();
+        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.dev/pb1test");
+        let dial_url = adapter
+            .credential_for_dial()
+            .unwrap()
+            .dial_url_carrying_the_credential(&joined.dial_url);
+        let dial_url = Url::parse(dial_url.expose_secret()).unwrap();
+        let (_, token) = dial_url.query_pairs().next().unwrap();
+        assert_eq!(key.verify(&token).unwrap().root, "pb1test");
     }
 
     #[test]

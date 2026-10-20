@@ -234,6 +234,16 @@ pub enum RelayAdapterRefusal {
     },
 }
 
+impl RelayAdapterRefusal {
+    /// The settings of `relay_id` refused for `why`.
+    pub fn settings_refused(relay_id: &RelayInstanceId, why: impl fmt::Display) -> Self {
+        Self::SettingsRefused {
+            relay_id: relay_id.clone(),
+            why: why.to_string(),
+        }
+    }
+}
+
 /// An adapter's settings type: read from an instance's JSON, described by its
 /// JSON Schema.
 pub trait RelayInstanceSettings:
@@ -248,10 +258,8 @@ pub fn relay_instance_settings_from_json<S: RelayInstanceSettings>(
     relay_id: &RelayInstanceId,
     settings: serde_json::Value,
 ) -> Result<S, RelayAdapterRefusal> {
-    serde_json::from_value(settings).map_err(|unreadable| RelayAdapterRefusal::SettingsRefused {
-        relay_id: relay_id.clone(),
-        why: unreadable.to_string(),
-    })
+    serde_json::from_value(settings)
+        .map_err(|unreadable| RelayAdapterRefusal::settings_refused(relay_id, unreadable))
 }
 
 /// One relay instance, joined and left by `tatolabd`.

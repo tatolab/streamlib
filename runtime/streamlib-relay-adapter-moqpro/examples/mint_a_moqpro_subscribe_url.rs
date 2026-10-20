@@ -10,9 +10,11 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use streamlib_relay_adapter_moqpro::{MoqProProjectSigningKey, MoqProRelayInstanceSettings};
+use streamlib_relay_adapter_moqpro::{
+    MoqProProjectId, MoqProProjectSigningKey, MoqProRelayInstanceSettings,
+};
 use streamlib_relay_adapter_sdk::RelayDialCredential;
-use streamlib_relay_adapter_sdk::secrecy::ExposeSecret;
+use streamlib_relay_adapter_sdk::secrecy::{ExposeSecret, SecretString};
 
 const A_SUBSCRIBE_URL_IS_VALID_FOR: Duration = Duration::from_secs(10 * 60);
 
@@ -27,36 +29,36 @@ fn main() -> ExitCode {
 }
 
 fn write_the_subscribe_url() -> Result<(), String> {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let (project_id, broadcast, relay_url) = match arguments.as_slice() {
-        [project_id, broadcast] => (project_id, broadcast, None),
-        [project_id, broadcast, relay_url] => (project_id, broadcast, Some(relay_url.clone())),
-        _ => {
-            return Err(
-                "usage: mint_a_moqpro_subscribe_url <project_id> <broadcast> [relay_url], the \
-                 signing key on stdin"
-                    .to_string(),
-            );
-        }
+    let mut arguments = std::env::args().skip(1);
+    let (Some(project_id), Some(broadcast), relay_url, None) = (
+        arguments.next(),
+        arguments.next(),
+        arguments.next(),
+        arguments.next(),
+    ) else {
+        return Err(
+            "usage: mint_a_moqpro_subscribe_url <project_id> <broadcast> [relay_url], the \
+             signing key on stdin"
+                .to_string(),
+        );
     };
     let mut signing_key = String::new();
     std::io::stdin()
         .read_to_string(&mut signing_key)
         .map_err(|failure| format!("the signing key could not be read from stdin: {failure}"))?;
-    let settings: MoqProRelayInstanceSettings = serde_json::from_value(serde_json::json!({
-        "project_id": project_id,
-        "signing_key": signing_key,
-        "relay_url": relay_url,
-    }))
-    .map_err(|refusal| refusal.to_string())?;
+    let settings = MoqProRelayInstanceSettings {
+        project_id: MoqProProjectId::try_from(project_id).map_err(|refusal| refusal.to_string())?,
+        signing_key: SecretString::from(signing_key).into(),
+        relay_url,
+    };
     let dial_url = settings
         .the_projects_dial_url()
         .map_err(|refusal| refusal.to_string())?;
     let token = MoqProProjectSigningKey::read_from(settings.signing_key.expose_secret())
         .and_then(|signing_key| {
             signing_key.mint_a_subscribe_only_token(
-                project_id,
-                broadcast,
+                &settings.project_id,
+                &broadcast,
                 A_SUBSCRIBE_URL_IS_VALID_FOR,
             )
         })

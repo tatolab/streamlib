@@ -8,8 +8,10 @@
 use std::time::{Duration, Instant, SystemTime};
 
 use moq_auth::{Claims, Key, KeyOperation, Pattern};
-use streamlib_relay_adapter_sdk::MachineName;
 use streamlib_relay_adapter_sdk::secrecy::SecretString;
+use streamlib_relay_adapter_sdk::{MachineName, RelayDialCredential};
+
+use crate::moqpro_relay_instance_settings::MoqProProjectId;
 
 /// How long a publish token the adapter mints is valid.
 pub const MOQPRO_PUBLISH_TOKEN_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
@@ -84,33 +86,39 @@ impl MoqProProjectSigningKey {
         Ok(Self(key))
     }
 
-    /// A token rooted at `project_id` granting publish to `machine`'s own
-    /// broadcasts, valid for [`MOQPRO_PUBLISH_TOKEN_LIFETIME`] from `issued_at`.
-    pub fn mint_a_publish_token_for_the_machine(
+    /// The credential a dial presents: a token minted now, rooted at
+    /// `project_id`, granting publish to `machine`'s own broadcasts, valid for
+    /// [`MOQPRO_PUBLISH_TOKEN_LIFETIME`] and renewed after
+    /// [`MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER`].
+    pub fn mint_a_publish_credential_for_the_machine(
         &self,
-        project_id: &str,
+        project_id: &MoqProProjectId,
         machine: &MachineName,
-        issued_at: SystemTime,
-    ) -> Result<SecretString, MoqProSigningKeyRefusal> {
+    ) -> Result<RelayDialCredential, MoqProSigningKeyRefusal> {
+        let issued_at = SystemTime::now();
+        let renew_by = Instant::now() + MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER;
         let claims = Claims::default()
-            .with_root(project_id)
+            .with_root(project_id.as_str())
             .with_publish([broadcast_pattern(&format!("{}/**", machine.name()))?])
             .with_issued(issued_at)
             .with_expires(issued_at + MOQPRO_PUBLISH_TOKEN_LIFETIME);
-        self.sign(&claims)
+        Ok(
+            RelayDialCredential::token_in_the_dial_url_query(self.sign(&claims)?)
+                .renewed_by(renew_by),
+        )
     }
 
     /// A token rooted at `project_id` granting subscribe to `broadcast` alone,
     /// valid for `lifetime` from now.
     pub fn mint_a_subscribe_only_token(
         &self,
-        project_id: &str,
+        project_id: &MoqProProjectId,
         broadcast: &str,
         lifetime: Duration,
     ) -> Result<SecretString, MoqProSigningKeyRefusal> {
         let issued_at = SystemTime::now();
         let claims = Claims::default()
-            .with_root(project_id)
+            .with_root(project_id.as_str())
             .with_subscribe([broadcast_pattern(broadcast)?])
             .with_issued(issued_at)
             .with_expires(issued_at + lifetime);
@@ -135,22 +143,31 @@ fn broadcast_pattern(pattern: &str) -> Result<Pattern, MoqProSigningKeyRefusal> 
         })
 }
 
-/// When a publish token minted now is replaced by a fresh one.
-pub fn a_publish_token_minted_now_is_renewed_by() -> Instant {
-    Instant::now() + MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER
-}
-
-/// The time a token minted now says it was issued at.
-pub fn the_time_a_token_minted_now_is_issued_at() -> SystemTime {
-    SystemTime::now()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine;
     use moq_auth::{Algorithm, KeyId};
     use streamlib_relay_adapter_sdk::secrecy::ExposeSecret;
+    use streamlib_relay_adapter_sdk::url::Url;
+
+    fn the_project() -> MoqProProjectId {
+        MoqProProjectId::try_from("pb1test".to_string()).unwrap()
+    }
+
+    /// The token `credential` carries in a dial URL's query.
+    fn the_token_of(credential: &RelayDialCredential) -> String {
+        let dial_url = credential.dial_url_carrying_the_credential(
+            &Url::parse("https://relay.example/pb1test").unwrap(),
+        );
+        Url::parse(dial_url.expose_secret())
+            .unwrap()
+            .query_pairs()
+            .find(|(parameter, _)| parameter == "jwt")
+            .unwrap()
+            .1
+            .into_owned()
+    }
 
     fn a_project_key(algorithm: Algorithm) -> Key {
         Key::generate(algorithm, Some(KeyId::decode("pb1test-default").unwrap())).unwrap()
@@ -175,15 +192,14 @@ mod tests {
         for algorithm in [Algorithm::ES256, Algorithm::HS256] {
             let key = a_project_key(algorithm);
             let signing_key = MoqProProjectSigningKey::read_from(&the_jwk_json_of(&key)).unwrap();
-            let issued_at = SystemTime::now();
-            let token = signing_key
-                .mint_a_publish_token_for_the_machine(
-                    "pb1test",
+            let credential = signing_key
+                .mint_a_publish_credential_for_the_machine(
+                    &the_project(),
                     &MachineName::from_a_hostname("Desk").unwrap(),
-                    issued_at,
                 )
                 .unwrap();
-            let claims = key.verify(token.expose_secret()).unwrap();
+            let token = the_token_of(&credential);
+            let claims = key.verify(&token).unwrap();
             assert_eq!(claims.root, "pb1test");
             assert_eq!(
                 claims.publish,
@@ -198,7 +214,7 @@ mod tests {
                 .duration_since(claims.issued.unwrap())
                 .unwrap();
             assert_eq!(lifetime, MOQPRO_PUBLISH_TOKEN_LIFETIME);
-            let header = the_header_of(token.expose_secret());
+            let header = the_header_of(&token);
             assert_eq!(header["kid"], "pb1test-default");
             assert_eq!(header["alg"], format!("{algorithm:?}"));
             assert!(
@@ -214,13 +230,22 @@ mod tests {
     }
 
     #[test]
-    fn a_token_is_renewed_well_before_it_expires() {
+    fn a_publish_credential_is_renewed_well_before_its_token_expires() {
         let margin = MOQPRO_PUBLISH_TOKEN_LIFETIME - MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER;
         assert!(margin >= Duration::from_secs(60 * 60), "{margin:?}");
-        let renew_by = a_publish_token_minted_now_is_renewed_by();
-        assert!(
-            renew_by > Instant::now() + MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER - Duration::from_secs(5)
-        );
+        let key = a_project_key(Algorithm::ES256);
+        let minted_after = Instant::now();
+        let renew_by = MoqProProjectSigningKey::read_from(&the_jwk_json_of(&key))
+            .unwrap()
+            .mint_a_publish_credential_for_the_machine(
+                &the_project(),
+                &MachineName::from_a_hostname("desk").unwrap(),
+            )
+            .unwrap()
+            .renew_by()
+            .unwrap();
+        assert!(renew_by >= minted_after + MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER);
+        assert!(renew_by <= Instant::now() + MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER);
     }
 
     #[test]
@@ -228,7 +253,11 @@ mod tests {
         let key = a_project_key(Algorithm::ES256);
         let signing_key = MoqProProjectSigningKey::read_from(&the_jwk_json_of(&key)).unwrap();
         let token = signing_key
-            .mint_a_subscribe_only_token("pb1test", "desk/sample.hang", Duration::from_secs(600))
+            .mint_a_subscribe_only_token(
+                &the_project(),
+                "desk/sample.hang",
+                Duration::from_secs(600),
+            )
             .unwrap();
         let claims = key.verify(token.expose_secret()).unwrap();
         assert_eq!(claims.root, "pb1test");
