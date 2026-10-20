@@ -47,7 +47,7 @@ pub(crate) const OPUS_RECEIVE_FORMAT_PARAMETERS: &str = "minptime=10;useinbandfe
 pub(crate) const OPUS_RTPMAP_CHANNELS: u16 = 2;
 
 /// Host-only ICE gathering on a reachable relay is prompt, but this sits inside
-/// a `connect()` that WHIP calls from `process()` on the first bag — so a stall
+/// a `connect()` that WHIP calls from `process()` on the first media frame — so a stall
 /// has to end in a usable offer rather than in a processor that never returns.
 const ICE_GATHERING_BUDGET: Duration = Duration::from_secs(10);
 

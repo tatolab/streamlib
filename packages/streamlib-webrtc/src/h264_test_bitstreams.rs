@@ -53,8 +53,9 @@ impl RawBitstreamWriter {
 }
 
 /// A constrained-baseline SPS for 320x180 4:2:0 progressive: 20 macroblocks
-/// across, 12 map units down (192 coded), the bottom 12 rows cropped away.
-pub(crate) fn baseline_320x180(vui: impl FnOnce(&mut RawBitstreamWriter)) -> Vec<u8> {
+/// across, 12 map units down (192 coded), the bottom 12 rows cropped away, and
+/// no `vui_parameters()`.
+pub(crate) fn constrained_baseline_320x180_sequence_parameter_set() -> Vec<u8> {
     let mut writer = RawBitstreamWriter::default();
     writer
         .bits(66, 8) // profile_idc — constrained baseline
@@ -74,34 +75,7 @@ pub(crate) fn baseline_320x180(vui: impl FnOnce(&mut RawBitstreamWriter)) -> Vec
         .unsigned_exp_golomb(0) // left
         .unsigned_exp_golomb(0) // right
         .unsigned_exp_golomb(0) // top
-        .unsigned_exp_golomb(6); // bottom — 6 crop units of 2 luma rows
-    vui(&mut writer);
+        .unsigned_exp_golomb(6) // bottom — 6 crop units of 2 luma rows
+        .bit(0); // vui_parameters_present_flag
     writer.finish(0x67)
-}
-
-/// No `vui_parameters()` block at all.
-pub(crate) fn no_vui(writer: &mut RawBitstreamWriter) {
-    writer.bit(0);
-}
-
-/// A `vui_parameters()` carrying a full colour description.
-pub(crate) fn vui_with_colour(
-    primaries: u32,
-    transfer: u32,
-    matrix: u32,
-    full_range: u8,
-) -> impl FnOnce(&mut RawBitstreamWriter) {
-    move |writer| {
-        writer
-            .bit(1) // vui_parameters_present_flag
-            .bit(0) // aspect_ratio_info_present_flag
-            .bit(0) // overscan_info_present_flag
-            .bit(1) // video_signal_type_present_flag
-            .bits(5, 3) // video_format — unspecified
-            .bit(full_range)
-            .bit(1) // colour_description_present_flag
-            .bits(primaries, 8)
-            .bits(transfer, 8)
-            .bits(matrix, 8);
-    }
 }

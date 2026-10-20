@@ -8,7 +8,7 @@
 //! sender actually declares rides the fmtp instead.
 
 /// The Opus fmtp's `sprop-stereo` — the session description's own statement of
-/// what the sender will send, and what a played bag's `channels` is taken from.
+/// what the sender will send, and what a played audio port's channel count is taken from.
 /// `None` when the answer describes no Opus fmtp at all; RFC 7587 §3.1.1 makes
 /// the parameter default to mono when the line exists without it.
 pub(crate) fn opus_sender_stereo_hint_in_answer(session_description: &str) -> Option<bool> {

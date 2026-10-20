@@ -16,13 +16,33 @@ pub(crate) const OPUS_WIRE_SAMPLE_RATE_HZ: u32 = 48_000;
 /// at the wire rate.
 const HIGHEST_PER_CHANNEL_SAMPLES_IN_ONE_PACKET: u32 = 5_760;
 
+/// The channel layouts an Opus RTP stream carries (RFC 7587): mono or stereo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpusRtpChannelLayout {
+    Mono,
+    Stereo,
+}
+
+impl OpusRtpChannelLayout {
+    pub(crate) fn from_stereo_flag(stereo: bool) -> Self {
+        if stereo { Self::Stereo } else { Self::Mono }
+    }
+
+    pub(crate) fn channel_count(self) -> u8 {
+        match self {
+            Self::Mono => 1,
+            Self::Stereo => 2,
+        }
+    }
+}
+
 /// What one Opus packet declares about itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OpusPacketDescription {
     /// Per-channel samples at 48 kHz across every frame the packet carries.
     pub sample_count: u32,
-    /// 1 or 2, from the TOC's stereo bit.
-    pub channels: u32,
+    /// From the TOC's stereo bit.
+    pub channel_layout: OpusRtpChannelLayout,
 }
 
 /// Read the TOC byte, and the frame-count byte when there is one.
@@ -34,7 +54,7 @@ pub(crate) fn describe_opus_packet(packet: &[u8]) -> Result<OpusPacketDescriptio
     };
 
     let configuration = table_of_contents >> 3;
-    let channels = if table_of_contents & 0x04 == 0 { 1 } else { 2 };
+    let channel_layout = OpusRtpChannelLayout::from_stereo_flag(table_of_contents & 0x04 != 0);
     let frame_count = match table_of_contents & 0x03 {
         0 => 1,
         1 | 2 => 2,
@@ -68,7 +88,7 @@ pub(crate) fn describe_opus_packet(packet: &[u8]) -> Result<OpusPacketDescriptio
 
     Ok(OpusPacketDescription {
         sample_count,
-        channels,
+        channel_layout,
     })
 }
 
@@ -97,7 +117,7 @@ mod tests {
         let described = describe_opus_packet(&packet).unwrap();
 
         assert_eq!(described.sample_count, 960);
-        assert_eq!(described.channels, 2);
+        assert_eq!(described.channel_layout, OpusRtpChannelLayout::Stereo);
     }
 
     #[test]
@@ -105,8 +125,8 @@ mod tests {
         let mono = describe_opus_packet(&[table_of_contents(1, false, 0), 0x00]).unwrap();
         let stereo = describe_opus_packet(&[table_of_contents(1, true, 0), 0x00]).unwrap();
 
-        assert_eq!(mono.channels, 1);
-        assert_eq!(stereo.channels, 2);
+        assert_eq!(mono.channel_layout, OpusRtpChannelLayout::Mono);
+        assert_eq!(stereo.channel_layout, OpusRtpChannelLayout::Stereo);
     }
 
     #[test]

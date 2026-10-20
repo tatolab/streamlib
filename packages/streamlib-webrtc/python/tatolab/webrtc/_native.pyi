@@ -22,7 +22,7 @@ __all__ = [
 ]
 
 def monotonic_now_ns() -> int:
-    """Nanoseconds on the clock this wheel stamps bags with.
+    """Nanoseconds on the clock this wheel stamps media frames with.
 
     The engine's clock, read here rather than asked of the engine, so a
     reading compares with `tatolab.stream.monotonic_now_ns()` taken on this
@@ -36,7 +36,7 @@ class WhipSession:
     def __new__(
         cls, endpoint_url: str, bearer_token: str | None = None
     ) -> WhipSession:
-        """Construct without connecting — the first bag is what connects."""
+        """Construct without connecting — the first media frame is what connects."""
 
     def connect(
         self, *, video: bool, audio: bool, audio_channels: int | None = None
@@ -48,10 +48,9 @@ class WhipSession:
         for every Opus stream, mono included.
         """
 
-    def write_video_access_unit(
-        self, annex_b_access_unit: bytes, timestamp_ns: int
-    ) -> None:
-        """Send one whole Annex-B access unit.
+    def write_video_media_frame(self, media_frame: bytes, timestamp_ns: int) -> None:
+        """Send the Annex-B access unit `media_frame` carries after its varint
+        timestamp, on the RTP clock `timestamp_ns` places it.
 
         Whole, not per NAL unit: the H.264 payloader does its own STAP-A
         aggregation and FU-A fragmentation, and one Sample per NAL would
@@ -61,11 +60,12 @@ class WhipSession:
         payloader applies a sample's duration to the frame after it. The
         stream's rate is exact and its numbering trails real time by one frame,
         so video presents roughly one frame interval later than audio — about
-        33 ms at 30 fps.
+        33 ms at 30 fps. Bytes that are not a media frame raise `ValueError`.
         """
 
-    def write_audio_packet(self, opus_packet: bytes, sample_count: int) -> None:
-        """Send one Opus packet, its RTP advance taken from `sample_count`."""
+    def write_audio_media_frame(self, media_frame: bytes) -> None:
+        """Send the Opus packet `media_frame` carries after its varint
+        timestamp, its RTP advance taken from the packet's own TOC."""
 
     def close(self) -> None:
         """Close the peer connection and DELETE the session, both bounded."""
@@ -103,48 +103,39 @@ class PlayedVideoAccessUnit:
     """One access unit off a WHEP stream, described by the stream itself."""
 
     @property
-    def bitstream(self) -> bytes:
-        """The Annex-B access unit, start codes included."""
+    def media_frame(self) -> bytes:
+        """The Annex-B access unit, start codes included, behind the QUIC
+        varint of `timestamp_ns` in microseconds — hang's legacy container."""
 
     @property
     def is_sync_point(self) -> bool: ...
     @property
-    def group_index(self) -> int: ...
-    @property
-    def sequence_index(self) -> int: ...
-    @property
-    def width(self) -> int:
-        """Coded width from the SPS the stream carried — the codec-aligned
-        extent before the conformance crop, which is what the encoded-video
-        wire contract means by `width` and what `H264Encoder` writes."""
+    def codec(self) -> str:
+        """`avc1.PPCCLL`, spelled from the profile, constraint flags and level
+        of the latest SPS the stream carried."""
 
     @property
-    def height(self) -> int: ...
+    def coded_width(self) -> int:
+        """Width before the conformance crop, from the latest SPS — the
+        codec-aligned extent a catalog entry's `codedWidth` means and
+        `H264Encoder` writes."""
+
+    @property
+    def coded_height(self) -> int: ...
     @property
     def timestamp_ns(self) -> int:
         """Monotonic, anchored at the stream's first packet and advanced by the
         RTP clock — so jitter on the wire does not become jitter in the stamps."""
-
-    @property
-    def color(self) -> "dict[str, str] | None":
-        """The bag's `color` sub-map, or `None` where the VUI described none.
-
-        An axis carrying an H.273 enumerant the bag vocabulary does not model is
-        left out rather than guessed at.
-        """
 
 @final
 class PlayedOpusPacket:
     """One Opus packet off a WHEP stream, described by the stream itself."""
 
     @property
-    def bitstream(self) -> bytes: ...
-    @property
-    def group_index(self) -> int: ...
-    @property
-    def sequence_index(self) -> int: ...
-    @property
-    def sample_rate(self) -> int: ...
+    def media_frame(self) -> bytes:
+        """The Opus packet behind the QUIC varint of `timestamp_ns` in
+        microseconds — hang's legacy container."""
+
     @property
     def channels(self) -> int:
         """The stream's declared output channel count, constant for its life.
@@ -157,10 +148,10 @@ class PlayedOpusPacket:
         """
 
     @property
-    def sample_count(self) -> int: ...
-    @property
-    def pre_skip(self) -> int:
-        """Always 0 — RTP carries no `OpusHead` to state a lookahead."""
+    def opus_identification_header_hex(self) -> str:
+        """The stream's `OpusHead` (RFC 7845 §5.1), hex-encoded: `channels`,
+        mapping family 0, and a pre-skip of 0 because RTP states no encoder
+        lookahead."""
 
     @property
     def timestamp_ns(self) -> int: ...

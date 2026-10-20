@@ -14,7 +14,11 @@
 
 #![cfg(test)]
 
-use crate::h264_test_bitstreams::{baseline_320x180, no_vui};
+use crate::error::WebRtcExtensionError;
+use crate::h264_test_bitstreams::constrained_baseline_320x180_sequence_parameter_set;
+use crate::hang_legacy_container_media_frame::{
+    hang_legacy_container_media_frame_bytes, read_hang_legacy_container_media_frame,
+};
 use crate::http_test_responder::HttpResponderUnderTest;
 use crate::received_media_assembly::{OpusPacketAssembler, VideoAccessUnitAssembler};
 use crate::webrtc_peer_connection::{
@@ -238,9 +242,15 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
     .expect("the WHIP connect did not finish inside its deadline")
     .expect("the WHIP connect failed");
 
-    let sequence_parameter_set = baseline_320x180(no_vui);
+    let sequence_parameter_set = constrained_baseline_320x180_sequence_parameter_set();
     let idr_slice = an_idr_slice_larger_than_one_packet();
     let access_unit = annex_b(&[&sequence_parameter_set, PICTURE_PARAMETER_SET, &idr_slice]);
+    // 0x1_4141_4141 microseconds: the eight-byte varint `C0 00 00 01 41 41 41
+    // 41` holds a start code and a slice header after it, so the H.264
+    // payloader would send it as a NAL unit of its own if the session left it
+    // on — bytes before a stream's first start code it drops without a word.
+    let media_frame =
+        hang_legacy_container_media_frame_bytes(0x1_4141_4141 * 1_000, &access_unit).unwrap();
 
     // The first frames are written before the DTLS handshake has necessarily
     // completed, and a track drops what it cannot yet send — so this publishes
@@ -249,12 +259,12 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
         tokio::time::timeout(MEDIA_DEADLINE, async {
             loop {
                 session
-                    .write_video_access_unit(
-                        Bytes::from(access_unit.clone()),
+                    .write_video_media_frame(
+                        Bytes::from(media_frame.clone()),
                         Duration::from_millis(33),
                     )
                     .await
-                    .expect("writing the access unit failed");
+                    .expect("writing the media frame failed");
                 match tokio::time::timeout(Duration::from_millis(100), assembled.recv()).await {
                     Ok(Some(access_unit)) => return access_unit,
                     Ok(None) => panic!("the receiving side closed"),
@@ -273,26 +283,43 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
         RTCPeerConnectionState::Connected,
         "the access unit arrived without the peer connection being connected"
     );
+    assert!(
+        matches!(
+            session
+                .write_video_media_frame(Bytes::from_static(&[0x40]), Duration::from_millis(33))
+                .await,
+            Err(WebRtcExtensionError::Refused { .. })
+        ),
+        "a message ending inside its varint is refused as the caller's mistake"
+    );
 
     session.close().await;
 
     // Every NAL unit, in order, through real packetisation: the parameter sets
     // ride a STAP-A and the slice is fragmented into FU-As, and what comes out
-    // is the stream that went in.
+    // is the access unit the media frame carried, its varint left behind.
     assert_eq!(
-        received.annex_b_access_unit,
-        annex_b(&[&sequence_parameter_set, PICTURE_PARAMETER_SET, &idr_slice]),
+        received.annex_b_access_unit, access_unit,
         "the reassembled access unit is not the one that was published"
+    );
+    let played_media_frame = received.media_frame_bytes().unwrap();
+    let played = read_hang_legacy_container_media_frame(&played_media_frame).unwrap();
+    assert_eq!(played.codec_payload_bytes, access_unit);
+    assert_eq!(
+        played.timestamp_microseconds,
+        (received.timestamp_ns / 1_000) as u64
     );
     assert!(received.is_sync_point, "an IDR access unit is a sync point");
     // The coded extent, parsed out of the SPS that survived the round trip
     // rather than taken from config: 320x180 displayed is 320x192 coded.
-    assert_eq!((received.width, received.height), (320, 192));
+    assert_eq!(
+        (
+            received.sequence_parameter_set.coded_width,
+            received.sequence_parameter_set.coded_height
+        ),
+        (320, 192)
+    );
 }
-
-/// 960 samples at Opus's 48 kHz clock, which is what the publisher derives a
-/// packet's RTP advance from.
-const TWENTY_MILLISECONDS: Duration = Duration::from_millis(20);
 
 /// A 20 ms SILK frame, the framing every WebRTC Opus sender uses.
 fn an_opus_packet(stereo: bool) -> Vec<u8> {
@@ -324,12 +351,13 @@ async fn a_published_opus_packet_arrives_whole_and_described() {
     .expect("the WHIP connect failed");
 
     let opus_packet = an_opus_packet(false);
+    let media_frame = hang_legacy_container_media_frame_bytes(1_000_000, &opus_packet).unwrap();
     let received = tokio::time::timeout(MEDIA_DEADLINE, async {
         loop {
             session
-                .write_audio_packet(Bytes::from(opus_packet.clone()), TWENTY_MILLISECONDS)
+                .write_audio_media_frame(Bytes::from(media_frame.clone()))
                 .await
-                .expect("writing the Opus packet failed");
+                .expect("writing the media frame failed");
             match tokio::time::timeout(Duration::from_millis(100), assembled.recv()).await {
                 Ok(Some(ReceivedMedia::Audio(packet))) => return packet,
                 Ok(Some(ReceivedMedia::Video(_))) => {
@@ -355,9 +383,16 @@ async fn a_published_opus_packet_arrives_whole_and_described() {
     // rather than from an answer's `sprop-stereo`, because the relay in this
     // test is the answerer and so reads no answer of its own — the
     // answer-declared path is covered by the assembler's unit tests.
-    assert_eq!(received.opus_packet, Bytes::from(opus_packet));
-    assert_eq!(received.sample_count, 960);
-    assert_eq!(received.sample_rate, 48_000);
-    assert_eq!(received.channels, 1);
-    assert!(received.pre_skip == 0, "RTP carries no OpusHead to skip by");
+    assert_eq!(received.opus_packet, Bytes::from(opus_packet.clone()));
+    let played_media_frame = received.media_frame_bytes().unwrap();
+    assert_eq!(
+        read_hang_legacy_container_media_frame(&played_media_frame)
+            .unwrap()
+            .codec_payload_bytes,
+        opus_packet
+    );
+    assert_eq!(
+        received.channel_layout,
+        crate::opus_packet::OpusRtpChannelLayout::Mono
+    );
 }

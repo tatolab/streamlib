@@ -12,14 +12,15 @@ use pyo3::types::PyBytes;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-pub mod encoded_stream_ordering;
 pub mod error;
 pub mod h264_rtp_depacketiser;
 pub mod h264_sequence_parameter_set;
 mod h264_test_bitstreams;
+pub mod hang_legacy_container_media_frame;
 pub mod http_signalling;
 mod http_test_responder;
 pub mod monotonic_clock;
+pub mod opus_identification_header;
 pub mod opus_packet;
 pub mod received_media_assembly;
 pub mod session_description;
@@ -30,12 +31,13 @@ mod whip_publish_loopback;
 pub mod whip_session;
 
 use crate::error::WebRtcExtensionError;
+use crate::opus_identification_header::hex_encoded_opus_identification_header_for_rtp_stream;
 use crate::received_media_assembly::{ReceivedOpusPacket, ReceivedVideoAccessUnit};
 use crate::whep_session::{ReceivedMedia, WhepPlayingSession};
 use crate::whip_session::{PublishedMediaSet, WhipPublishingSession};
 
 /// Only the first frame of a stream, so that no two frames share a presentation
-/// timestamp. Every later one advances by the gap the bags' own stamps state.
+/// timestamp. Every later one advances by the gap the messages' own stamps state.
 const FIRST_FRAME_NOMINAL_DURATION: Duration = Duration::from_nanos(1_000_000_000 / 30);
 
 /// Publishes encoded media to a WHIP endpoint.
@@ -62,7 +64,7 @@ struct PublishingState {
 #[pymethods]
 impl WhipSession {
     /// Constructs without connecting: opening the session is what the first
-    /// bag does, so a relay round trip never runs inside `setup()`.
+    /// media frame does, so a relay round trip never runs inside `setup()`.
     #[new]
     #[pyo3(signature = (endpoint_url, bearer_token=None))]
     fn new(endpoint_url: String, bearer_token: Option<String>) -> Self {
@@ -105,7 +107,9 @@ impl WhipSession {
         Ok(())
     }
 
-    /// Send one whole Annex-B access unit.
+    /// Send the Annex-B access unit one media frame carries after its varint
+    /// timestamp, on the RTP clock `timestamp_ns` places it — the envelope's
+    /// stamp, which a local reader is promised; the varint's is not read.
     ///
     /// The RTP clock advances by the gap to the *previous* frame, because the
     /// payloader applies a sample's duration to the frame after it and a
@@ -113,14 +117,14 @@ impl WhipSession {
     /// stream's rate is exact and its RTP numbering trails real time by one
     /// frame, so video presents roughly one frame interval later than audio,
     /// whose duration comes from each packet's own sample count and is exact.
-    fn write_video_access_unit(
+    fn write_video_media_frame(
         &self,
         python: Python<'_>,
-        annex_b_access_unit: &[u8],
+        media_frame: &[u8],
         timestamp_ns: i64,
     ) -> PyResult<()> {
         // Copied while the GIL is held: the slice borrows Python's buffer.
-        let access_unit = bytes::Bytes::copy_from_slice(annex_b_access_unit);
+        let media_frame = bytes::Bytes::copy_from_slice(media_frame);
 
         python.detach(|| {
             let mut publishing = self.locked_state()?;
@@ -132,7 +136,7 @@ impl WhipSession {
             };
             let session = connected(publishing.session.as_ref())?;
             transport_stack::transport_runtime()?
-                .block_on(session.write_video_access_unit(access_unit, duration))?;
+                .block_on(session.write_video_media_frame(media_frame, duration))?;
             // Only after the write landed: a frame the track never saw must not
             // move the anchor, or the clock stays short by that frame's gap for
             // the rest of the stream.
@@ -142,25 +146,18 @@ impl WhipSession {
         Ok(())
     }
 
-    /// Send one Opus packet, its RTP advance taken from the packet's own sample
-    /// count rather than from an assumed 20 ms frame.
-    fn write_audio_packet(
-        &self,
-        python: Python<'_>,
-        opus_packet: &[u8],
-        sample_count: u32,
-    ) -> PyResult<()> {
-        let duration = Duration::from_nanos(
-            u64::from(sample_count) * 1_000_000_000
-                / u64::from(opus_packet::OPUS_WIRE_SAMPLE_RATE_HZ),
-        );
-        let packet = bytes::Bytes::copy_from_slice(opus_packet);
+    /// Send the Opus packet one media frame carries after its varint
+    /// timestamp, its RTP advance taken from the packet's own TOC rather than
+    /// from an assumed 20 ms frame.
+    fn write_audio_media_frame(&self, python: Python<'_>, media_frame: &[u8]) -> PyResult<()> {
+        // Copied while the GIL is held: the slice borrows Python's buffer.
+        let media_frame = bytes::Bytes::copy_from_slice(media_frame);
 
         python.detach(|| {
             let publishing = self.locked_state()?;
             let session = connected(publishing.session.as_ref())?;
             transport_stack::transport_runtime()?
-                .block_on(session.write_audio_packet(packet, duration))
+                .block_on(session.write_audio_media_frame(media_frame))
         })?;
         Ok(())
     }
@@ -308,8 +305,8 @@ impl WhepSession {
     }
 }
 
-/// One access unit off a WHEP stream, with every key the video wire contract
-/// requires taken from the stream itself.
+/// One access unit off a WHEP stream, with what its port's catalog entry
+/// states taken from the stream itself.
 #[pyclass]
 struct PlayedVideoAccessUnit {
     inner: ReceivedVideoAccessUnit,
@@ -323,56 +320,35 @@ impl From<ReceivedVideoAccessUnit> for PlayedVideoAccessUnit {
 
 #[pymethods]
 impl PlayedVideoAccessUnit {
+    /// The access unit as one media frame, behind the varint of its stamp.
     #[getter]
-    fn bitstream<'python>(&self, python: Python<'python>) -> Bound<'python, PyBytes> {
-        PyBytes::new(python, &self.inner.annex_b_access_unit)
+    fn media_frame<'python>(&self, python: Python<'python>) -> PyResult<Bound<'python, PyBytes>> {
+        Ok(PyBytes::new(python, &self.inner.media_frame_bytes()?))
     }
     #[getter]
     fn is_sync_point(&self) -> bool {
         self.inner.is_sync_point
     }
     #[getter]
-    fn group_index(&self) -> u64 {
-        self.inner.group_index
+    fn codec(&self) -> String {
+        self.inner.sequence_parameter_set.avc1_codec_string()
     }
     #[getter]
-    fn sequence_index(&self) -> u64 {
-        self.inner.sequence_index
+    fn coded_width(&self) -> u32 {
+        self.inner.sequence_parameter_set.coded_width
     }
     #[getter]
-    fn width(&self) -> u32 {
-        self.inner.width
-    }
-    #[getter]
-    fn height(&self) -> u32 {
-        self.inner.height
+    fn coded_height(&self) -> u32 {
+        self.inner.sequence_parameter_set.coded_height
     }
     #[getter]
     fn timestamp_ns(&self) -> i64 {
         self.inner.timestamp_ns
     }
-    /// The bag's `color` sub-map, or `None` where the stream's VUI described no
-    /// colour at all. An axis the bag vocabulary does not model is left out
-    /// rather than guessed at.
-    #[getter]
-    fn color(&self) -> Option<std::collections::HashMap<&'static str, &'static str>> {
-        let color = self.inner.color.as_ref()?;
-        let mut axes = std::collections::HashMap::new();
-        for (name, value) in [
-            ("primaries", color.primaries),
-            ("transfer", color.transfer),
-            ("matrix", color.matrix),
-            ("range", color.range),
-        ] {
-            if let Some(value) = value {
-                axes.insert(name, value);
-            }
-        }
-        Some(axes)
-    }
 }
 
-/// One Opus packet off a WHEP stream, described by the packet's own TOC byte.
+/// One Opus packet off a WHEP stream, with what its port's catalog entry
+/// states taken from the stream itself.
 #[pyclass]
 struct PlayedOpusPacket {
     inner: ReceivedOpusPacket,
@@ -386,33 +362,18 @@ impl From<ReceivedOpusPacket> for PlayedOpusPacket {
 
 #[pymethods]
 impl PlayedOpusPacket {
+    /// The packet as one media frame, behind the varint of its stamp.
     #[getter]
-    fn bitstream<'python>(&self, python: Python<'python>) -> Bound<'python, PyBytes> {
-        PyBytes::new(python, &self.inner.opus_packet)
+    fn media_frame<'python>(&self, python: Python<'python>) -> PyResult<Bound<'python, PyBytes>> {
+        Ok(PyBytes::new(python, &self.inner.media_frame_bytes()?))
     }
     #[getter]
-    fn group_index(&self) -> u64 {
-        self.inner.group_index
+    fn channels(&self) -> u8 {
+        self.inner.channel_layout.channel_count()
     }
     #[getter]
-    fn sequence_index(&self) -> u64 {
-        self.inner.sequence_index
-    }
-    #[getter]
-    fn sample_rate(&self) -> u32 {
-        self.inner.sample_rate
-    }
-    #[getter]
-    fn channels(&self) -> u32 {
-        self.inner.channels
-    }
-    #[getter]
-    fn sample_count(&self) -> u32 {
-        self.inner.sample_count
-    }
-    #[getter]
-    fn pre_skip(&self) -> u32 {
-        self.inner.pre_skip
+    fn opus_identification_header_hex(&self) -> String {
+        hex_encoded_opus_identification_header_for_rtp_stream(self.inner.channel_layout)
     }
     #[getter]
     fn timestamp_ns(&self) -> i64 {
@@ -420,7 +381,7 @@ impl PlayedOpusPacket {
     }
 }
 
-/// Nanoseconds on the clock this wheel stamps bags with, which is the
+/// Nanoseconds on the clock this wheel stamps media frames with, which is the
 /// engine's — so a reading compares with `tatolab.stream.monotonic_now_ns()`.
 #[pyfunction(name = "monotonic_now_ns")]
 fn this_wheels_monotonic_now_ns() -> i64 {

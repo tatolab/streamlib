@@ -39,36 +39,37 @@ from tatolab.webrtc.processors import (
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
     LONGEST_RECONNECT_DELAY_SECONDS,
     LinkOutputWriteFailure,
+    PublishedTrack,
     VideoOrAudio,
     TRACKS_INPUT_PORT,
     _native,
-    encoded_audio_packet_bag,
-    encoded_video_frame_bag,
+    published_track_from_catalog_entry,
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
 )
 from helper_process_link_wiring import wire_one_link
+from parent_catalog_entry_stand_in import ParentHoldingCatalogEntries
 from played_media_stand_ins import (
-    ANNEX_B_ACCESS_UNIT,
-    OPUS_PACKET,
+    MEDIA_FRAME_OF_AN_ACCESS_UNIT,
+    MEDIA_FRAME_OF_AN_OPUS_PACKET,
+    MONO_OPUS_IDENTIFICATION_HEADER_HEX,
     AccessUnitTheSessionPlayed,
     OpusPacketTheSessionPlayed,
 )
 from tatolab.runtime import _engine
 from tatolab.runtime._processor_hosting import construct_processor_instance
 from tatolab.stream import (
-    EncodedAudioPacket,
-    EncodedVideoFrame,
     H264Decoder,
     H264Encoder,
+    Message,
     OpusDecoder,
     OpusEncoder,
     StreamBuilder,
     compile_stream_to_graph,
     log,
-    msgpack,
     stream,
 )
+from tatolab.stream.catalog import AudioEntry, CatalogEntry, VideoEntry
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -460,43 +461,93 @@ def test_a_publish_and_play_round_trip_composes_as_published(tmp_path, tatolabd_
     node_names_loaded_by_tatolabd(a_publish_and_play_round_trip, tmp_path, tatolabd_with_no_vulkan_driver)
 
 
-def test_each_codec_names_the_track_it_belongs_on():
-    assert resolve_track_kind("h264", "encoder/encoded_video", {}) == "video"
-    assert resolve_track_kind("opus", "encoder/encoded_audio", {}) == "audio"
+H264_VIDEO_ENTRY = {
+    "section": "video",
+    "entry": {"codec": "avc1.42e01f", "codedWidth": 320, "codedHeight": 192},
+}
+MONO_OPUS_AUDIO_ENTRY = {
+    "section": "audio",
+    "entry": {
+        "codec": "opus",
+        "sampleRate": 48_000,
+        "numberOfChannels": 1,
+        "description": MONO_OPUS_IDENTIFICATION_HEADER_HEX,
+    },
+}
 
 
-@pytest.mark.parametrize("codec", ["h265", "av1", "", None, 5])
-def test_a_codec_this_session_does_not_carry_is_refused_naming_it(codec):
+def opus_audio_entry_of(channels: int) -> "dict[str, Any]":
+    return {
+        "section": "audio",
+        "entry": {**MONO_OPUS_AUDIO_ENTRY["entry"], "numberOfChannels": channels},
+    }
+
+
+@pytest.mark.parametrize("codec", ["avc1.42e01f", "avc1.640028", "avc3.64001f"])
+def test_an_h264_video_entry_names_a_video_track(codec):
+    entry = {"section": "video", "entry": {"codec": codec}}
+
+    assert published_track_from_catalog_entry(
+        entry, "encoder/encoded_video"
+    ) == PublishedTrack(kind="video", channels=None)
+
+
+def test_an_opus_audio_entry_names_an_audio_track_with_its_channel_count():
+    assert published_track_from_catalog_entry(
+        opus_audio_entry_of(2), "encoder/encoded_audio"
+    ) == PublishedTrack(kind="audio", channels=2)
+
+
+@pytest.mark.parametrize(
+    "catalog_entry",
+    [
+        {"section": "video", "entry": {"codec": "hvc1.1.6.L93.B0"}},
+        {"section": "video", "entry": {"codec": "av01.0.08M.08"}},
+        {"section": "audio", "entry": {"codec": "mp4a.40.2"}},
+        {"section": "audio", "entry": {"codec": "avc1.42e01f"}},
+        {"section": "video", "entry": {"codec": "opus"}},
+        {"section": "binary", "entry": {"mode": "snapshot"}},
+    ],
+    ids=["h265", "av1", "aac", "h264_under_audio", "opus_under_video", "a_data_track"],
+)
+def test_an_entry_naming_media_this_session_does_not_carry_is_refused_naming_it(
+    catalog_entry,
+):
     """H.265 included: the offer registers H.264 and Opus, so a stream this
     session never negotiated is a refusal and not a silent wrong track."""
-    with pytest.raises(ValueError, match="does not carry"):
-        resolve_track_kind(codec, "encoder/encoded_video", {})
+    with pytest.raises(ValueError, match="encoder/output.*does not carry"):
+        published_track_from_catalog_entry(catalog_entry, "encoder/output")
+
+
+def test_a_link_whose_upstream_port_states_no_entry_is_refused_naming_it():
+    with pytest.raises(ValueError, match="`numpy/frames` carries no catalog entry"):
+        published_track_from_catalog_entry(None, "numpy/frames")
 
 
 def test_two_links_publishing_one_medium_are_refused_naming_both():
     already: "dict[str, VideoOrAudio]" = {"first/encoded_video": "video"}
 
     with pytest.raises(ValueError, match="second/encoded_video.*first/encoded_video"):
-        resolve_track_kind("h264", "second/encoded_video", already)
+        resolve_track_kind("video", "second/encoded_video", already)
 
 
 def test_a_link_that_changes_medium_is_refused_naming_it():
     already: "dict[str, VideoOrAudio]" = {"encoder/tracks": "video"}
 
     with pytest.raises(ValueError, match="does not change medium"):
-        resolve_track_kind("opus", "encoder/tracks", already)
+        resolve_track_kind("audio", "encoder/tracks", already)
 
 
 def test_a_link_publishing_the_medium_it_already_claimed_is_unchanged():
     already: "dict[str, VideoOrAudio]" = {"encoder/encoded_video": "video"}
 
-    assert resolve_track_kind("h264", "encoder/encoded_video", already) == "video"
+    assert resolve_track_kind("video", "encoder/encoded_video", already) == "video"
 
 
-def test_an_oversized_bag_is_reported_once_rather_than_silently_dropped(
+def test_an_oversized_media_frame_is_reported_once_rather_than_silently_dropped(
     monkeypatch,
 ):
-    """The engine drops a bag past the link ceiling at `debug` rather than
+    """The engine drops a message past the link ceiling at `debug` rather than
     raising, which downstream looks like a stream that simply stopped. The
     player is the only place that can say what actually happened — and a
     per-frame condition reported per frame is noise, so it says it once."""
@@ -505,15 +556,15 @@ def test_an_oversized_bag_is_reported_once_rather_than_silently_dropped(
     player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
     over_the_ceiling = b"\x00" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)
 
-    player._report_a_bag_the_link_will_drop("encoded_video", over_the_ceiling)
-    player._report_a_bag_the_link_will_drop("encoded_video", over_the_ceiling)
+    player._report_a_media_frame_the_link_will_drop("encoded_video", over_the_ceiling)
+    player._report_a_media_frame_the_link_will_drop("encoded_video", over_the_ceiling)
 
     assert len(reported) == 1
     assert "encoded_video" in reported[0]
     assert str(len(over_the_ceiling)) in reported[0]
 
 
-def test_a_bag_inside_the_ceiling_is_not_reported(monkeypatch):
+def test_a_media_frame_inside_the_ceiling_is_not_reported(monkeypatch):
     reported: "list[str]" = []
     monkeypatch.setattr(log, "error", reported.append)
 
@@ -521,7 +572,7 @@ def test_a_bag_inside_the_ceiling_is_not_reported(monkeypatch):
         WhepPlayerConfig(
             url="https://example.invalid/whep"
         )
-    )._report_a_bag_the_link_will_drop(
+    )._report_a_media_frame_the_link_will_drop(
         "encoded_video", b"\x00" * 4096
     )
 
@@ -558,6 +609,7 @@ class PublisherWiredToEncoders:
         config: "dict[str, Any]",
     ) -> None:
         unique = f"whipwired{os.getpid()}_{request.node.name}"
+        self.parent = ParentHoldingCatalogEntries()
         destination_notify_service_name = f"{unique}_dest/notify"
         tracks_input = _engine.open_node_link_data_access_for_helper_process()
         self.encoder_outputs = _engine.open_node_link_data_access_for_helper_process()
@@ -577,18 +629,33 @@ class PublisherWiredToEncoders:
                 channel_service_name
             )
         self.context = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, tracks_input, "runtime-under-test", "processor-under-test"
+            {},
+            tracks_input,
+            "runtime-under-test",
+            "processor-under-test",
+            self.parent.escalate_request_to_parent,
         )
         # Constructed the way the helper constructs it: the mapping becomes
         # the class's config object, not something read off the context.
         self.publisher = construct_processor_instance(WhipPublisher, config, tracks_input)
         self.publisher.setup(self.context)
 
+    def state_catalog_entry(
+        self, encoder_output_port: str, catalog_entry: "dict[str, Any]"
+    ) -> None:
+        self.parent.catalog_entry_by_inbound_link[
+            self.inbound_link_by_encoder_output_port[encoder_output_port]
+        ] = catalog_entry
+
     def publish(
-        self, encoder_output_port: str, payload: bytes, timestamp_ns: int = 0
+        self,
+        encoder_output_port: str,
+        payload: bytes,
+        timestamp_ns: int = 0,
+        starts_group: bool = True,
     ) -> None:
         self.encoder_outputs.write_to_output_port(
-            encoder_output_port, payload, timestamp_ns
+            encoder_output_port, payload, timestamp_ns, starts_group
         )
         self.publisher.process(
             _engine.limited_access_view_of_runtime_context_for_helper_process(
@@ -685,8 +752,8 @@ class RecordingWhipSession:
         del endpoint_url, bearer_token
         self.is_connected = False
         self.offered: "tuple[bool, bool, int | None] | None" = None
-        self.video_access_units: "list[tuple[bytes, int]]" = []
-        self.audio_packets: "list[tuple[bytes, int]]" = []
+        self.video_media_frames: "list[tuple[bytes, int]]" = []
+        self.audio_media_frames: "list[bytes]" = []
         RecordingWhipSession.constructed.append(self)
 
     def connect(
@@ -695,13 +762,11 @@ class RecordingWhipSession:
         self.offered = (video, audio, audio_channels)
         self.is_connected = True
 
-    def write_video_access_unit(
-        self, annex_b_access_unit: bytes, timestamp_ns: int
-    ) -> None:
-        self.video_access_units.append((annex_b_access_unit, timestamp_ns))
+    def write_video_media_frame(self, media_frame: bytes, timestamp_ns: int) -> None:
+        self.video_media_frames.append((media_frame, timestamp_ns))
 
-    def write_audio_packet(self, opus_packet: bytes, sample_count: int) -> None:
-        self.audio_packets.append((opus_packet, sample_count))
+    def write_audio_media_frame(self, media_frame: bytes) -> None:
+        self.audio_media_frames.append(media_frame)
 
     def close(self) -> None:
         self.is_connected = False
@@ -727,62 +792,68 @@ def recording_whip_session(monkeypatch) -> "type[RecordingWhipSession]":
     return RecordingWhipSession
 
 
-def test_a_packed_access_unit_reaches_the_session_with_its_stamp(
+def test_a_media_frame_reaches_the_session_whole_with_its_envelope_stamp(
     request, recording_whip_session
 ):
+    """The varint stays on: the session's Rust strips it, and the envelope's
+    stamp — the one a local reader is promised — places it on the RTP clock."""
     wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
+    wired.state_catalog_entry("encoded_video", H264_VIDEO_ENTRY)
 
-    wired.publish(
-        "encoded_video",
-        msgpack.pack(encoded_video_frame_bag(AccessUnitTheSessionPlayed())),
-        timestamp_ns=1_234,
-    )
+    wired.publish("encoded_video", MEDIA_FRAME_OF_AN_ACCESS_UNIT, timestamp_ns=1_234)
 
     (session,) = recording_whip_session.constructed
     assert session.offered == (True, False, None)
-    assert session.video_access_units == [(ANNEX_B_ACCESS_UNIT, 1_234)]
+    assert session.video_media_frames == [(MEDIA_FRAME_OF_AN_ACCESS_UNIT, 1_234)]
 
 
-def test_a_packed_opus_packet_reaches_the_session_with_its_sample_count(
+def test_an_opus_media_frame_offers_the_channel_count_its_entry_names(
     request, recording_whip_session
 ):
     wired = PublisherWiredToEncoders(request, ["encoded_audio"], AN_ENDPOINT)
+    wired.state_catalog_entry("encoded_audio", opus_audio_entry_of(2))
 
-    wired.publish(
-        "encoded_audio",
-        msgpack.pack(encoded_audio_packet_bag(OpusPacketTheSessionPlayed(channels=2))),
-    )
+    wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
 
     (session,) = recording_whip_session.constructed
     assert session.offered == (False, True, 2)
-    assert session.audio_packets == [(OPUS_PACKET, 960)]
+    assert session.audio_media_frames == [MEDIA_FRAME_OF_AN_OPUS_PACKET]
 
 
-@pytest.mark.parametrize(
-    ("payload", "refusal"),
-    [
-        (b"\x93\x01\x02\x03", "carries a msgpack list"),
-        (ANNEX_B_ACCESS_UNIT, "is not msgpack"),
-        (b"", "is not msgpack"),
-    ],
-    ids=["a_msgpack_array", "a_raw_access_unit", "nothing"],
-)
-def test_a_payload_that_is_not_a_msgpack_map_is_refused_naming_its_link(
-    request, recording_whip_session, payload, refusal
+def test_two_links_are_one_video_and_one_audio_track_by_their_entries(
+    request, recording_whip_session
+):
+    wired = PublisherWiredToEncoders(
+        request, ["encoded_video", "encoded_audio"], AN_ENDPOINT
+    )
+    wired.state_catalog_entry("encoded_video", H264_VIDEO_ENTRY)
+    wired.state_catalog_entry("encoded_audio", MONO_OPUS_AUDIO_ENTRY)
+
+    wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
+    wired.publish("encoded_video", MEDIA_FRAME_OF_AN_ACCESS_UNIT, timestamp_ns=5)
+
+    (session,) = recording_whip_session.constructed
+    assert session.offered == (True, True, 1)
+    assert session.audio_media_frames == [MEDIA_FRAME_OF_AN_OPUS_PACKET]
+    assert session.video_media_frames == [(MEDIA_FRAME_OF_AN_ACCESS_UNIT, 5)]
+
+
+def test_a_link_whose_upstream_states_no_entry_is_refused_before_any_session_opens(
+    request, recording_whip_session
 ):
     """Any port can be wired into `tracks`, and the refusal is the only place
     that wiring mistake is caught."""
-    wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
+    wired = PublisherWiredToEncoders(request, ["frames"], AN_ENDPOINT)
 
-    with pytest.raises(ValueError, match=refusal) as refused:
-        wired.publish("encoded_video", payload)
+    with pytest.raises(ValueError, match="carries no catalog entry") as refused:
+        wired.publish("frames", MEDIA_FRAME_OF_AN_ACCESS_UNIT)
 
-    inbound_link = wired.inbound_link_by_encoder_output_port["encoded_video"]
+    inbound_link = wired.inbound_link_by_encoder_output_port["frames"]
     assert f"`{inbound_link}`" in str(refused.value)
     assert recording_whip_session.constructed[0].offered is None
 
 
-def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
+def test_a_multichannel_entry_is_refused_before_any_session_is_opened(request):
     """The ordering, not just the refusal.
 
     Refusing after the connect would leave a live session at the relay that
@@ -793,14 +864,104 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
     wired = PublisherWiredToEncoders(
         request, ["encoded_audio"], {"url": "https://unresolvable.invalid/whip"}
     )
+    wired.state_catalog_entry("encoded_audio", opus_audio_entry_of(6))
 
     with pytest.raises(ValueError, match="mono and stereo only"):
-        wired.publish(
-            "encoded_audio",
-            msgpack.pack(
-                encoded_audio_packet_bag(OpusPacketTheSessionPlayed(channels=6))
-            ),
-        )
+        wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
+
+
+def test_a_video_link_is_entered_at_its_first_group_start(
+    request, recording_whip_session
+):
+    """A delta frame before the first keyframe references pictures the far end
+    never had."""
+    wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
+    wired.state_catalog_entry("encoded_video", H264_VIDEO_ENTRY)
+
+    wired.publish("encoded_video", b"\x01delta", timestamp_ns=1, starts_group=False)
+    wired.publish("encoded_video", b"\x02keyframe", timestamp_ns=2, starts_group=True)
+    wired.publish("encoded_video", b"\x03delta", timestamp_ns=3, starts_group=False)
+
+    (session,) = recording_whip_session.constructed
+    assert session.video_media_frames == [(b"\x02keyframe", 2), (b"\x03delta", 3)]
+
+
+class TracksInputReplayingMessages:
+    """`ctx.inputs` for a publisher, handing back scripted messages and one entry."""
+
+    def __init__(
+        self,
+        inbound_links: "list[str]",
+        catalog_entry: "dict[str, Any]",
+        messages: "list[Message[bytes]]",
+    ) -> None:
+        self.inbound_links = inbound_links
+        self.catalog_entry = catalog_entry
+        self.messages_still_to_hand_back = list(messages)
+
+    def inbound_link_names(self, port_name: str) -> "list[str]":
+        del port_name
+        return self.inbound_links
+
+    def read_message(self, port_name: str) -> "Message[bytes] | None":
+        del port_name
+        if self.messages_still_to_hand_back:
+            return self.messages_still_to_hand_back.pop(0)
+        return None
+
+    def inbound_link_catalog_entry(
+        self, port_name: str, *, inbound_link: "str | None" = None
+    ) -> "dict[str, Any]":
+        del port_name, inbound_link
+        return self.catalog_entry
+
+
+class ContextWithTracksInput:
+    def __init__(self, inputs: TracksInputReplayingMessages) -> None:
+        self.inputs = inputs
+
+
+def video_message(
+    payload: bytes, *, starts_group: bool, lost_since_last_read: int = 0
+) -> "Message[bytes]":
+    return Message(
+        payload=payload,
+        timestamp_ns=0,
+        starts_group=starts_group,
+        lost_since_last_read=lost_since_last_read,
+        inbound_link="encoder/encoded_video",
+    )
+
+
+def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session):
+    """After a loss the next delta frame references a picture the far end never
+    received; the group start reporting a loss is itself sent."""
+    inputs = TracksInputReplayingMessages(
+        ["encoder/encoded_video"],
+        H264_VIDEO_ENTRY,
+        [
+            video_message(b"keyframe", starts_group=True),
+            video_message(b"delta after a loss", starts_group=False, lost_since_last_read=2),
+            video_message(b"delta in the broken group", starts_group=False),
+            video_message(b"next keyframe", starts_group=True),
+            video_message(b"keyframe reporting a loss", starts_group=True, lost_since_last_read=1),
+            video_message(b"delta after it", starts_group=False),
+        ],
+    )
+    context = cast(Any, ContextWithTracksInput(inputs))
+    publisher = construct_processor_instance(WhipPublisher, AN_ENDPOINT, None)
+    publisher.setup(context)
+
+    for _ in range(6):
+        publisher.process(context)
+
+    (session,) = recording_whip_session.constructed
+    assert [media_frame for media_frame, _ in session.video_media_frames] == [
+        b"keyframe",
+        b"next keyframe",
+        b"keyframe reporting a loss",
+        b"delta after it",
+    ]
 
 
 class RecordingWhepSession:
@@ -855,10 +1016,7 @@ def scripted_whep_session(monkeypatch):
 
 
 def _player_for_a_drain_that_returns_immediately() -> WhepPlayer:
-    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
-    # The drain would otherwise spin on `next_media` returning None; stopping
-    # the player makes each attempt reach the backoff at once.
-    return player
+    return WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
 
 
 def test_a_refused_connect_is_retried_rather_than_ending_the_stream(
@@ -943,12 +1101,12 @@ def test_a_stop_during_the_backoff_ends_the_thread_without_reconnecting(
     )
 
 
-def test_a_refused_bag_names_its_port_and_stops_rather_than_reconnecting(
+def test_a_refused_write_names_its_port_and_stops_rather_than_reconnecting(
     scripted_whep_session, monkeypatch
 ):
     """A wire-contract violation is this player's fault, not the endpoint's.
 
-    Retrying it would spend an endpoint's session forever on a bag that will be
+    Retrying it would spend an endpoint's session forever on a write that will be
     refused every time, under a message naming neither the port nor the cause.
     """
     scripted_whep_session.connect_outcomes = [None]
@@ -963,7 +1121,7 @@ def test_a_refused_bag_names_its_port_and_stops_rather_than_reconnecting(
     errors: "list[str]" = []
     monkeypatch.setattr(log, "error", errors.append)
     monkeypatch.setattr(
-        player._stop, "wait", lambda _: pytest.fail("a refused bag must not be retried")
+        player._stop, "wait", lambda _: pytest.fail("a refused write must not be retried")
     )
 
     player._play_until_stopped(outputs=None)
@@ -971,7 +1129,7 @@ def test_a_refused_bag_names_its_port_and_stops_rather_than_reconnecting(
     assert len(scripted_whep_session.constructed) == 1
     assert scripted_whep_session.constructed[0].closed
     assert any("encoded_video" in message for message in errors), (
-        "the port that refused the bag has to reach the log"
+        "the port that refused the write has to reach the log"
     )
 
 
@@ -1001,6 +1159,7 @@ class PlayerWiredToBothDecoders:
 
     def __init__(self, request: pytest.FixtureRequest) -> None:
         unique = f"whepwired{os.getpid()}_{request.node.name}"
+        self.parent = ParentHoldingCatalogEntries()
         destination_notify_service_name = f"{unique}_dest/notify"
         decoder_inputs = _engine.open_node_link_data_access_for_helper_process()
         player_outputs = _engine.open_node_link_data_access_for_helper_process()
@@ -1019,7 +1178,11 @@ class PlayerWiredToBothDecoders:
             {}, decoder_inputs, "runtime-under-test", "decoders-under-test"
         )
         self.player_context = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, player_outputs, "runtime-under-test", "player-under-test"
+            {},
+            player_outputs,
+            "runtime-under-test",
+            "player-under-test",
+            self.parent.escalate_request_to_parent,
         )
 
     def play(
@@ -1052,13 +1215,13 @@ def test_only_a_sync_point_opens_a_group_on_the_video_port(
     )
     decoder = player_wired_to_both_decoders.decoders.inputs
 
-    keyframe = decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT, into=EncodedVideoFrame)
-    delta = decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT, into=EncodedVideoFrame)
+    keyframe = decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT)
+    delta = decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT)
 
     assert keyframe is not None and delta is not None
     assert (keyframe.starts_group, keyframe.timestamp_ns) == (True, 1_000)
     assert (delta.starts_group, delta.timestamp_ns) == (False, 2_000)
-    assert delta.payload.annex_b_access_unit_bytes == ANNEX_B_ACCESS_UNIT
+    assert delta.payload == MEDIA_FRAME_OF_AN_ACCESS_UNIT
 
 
 def test_every_opus_packet_opens_a_group_on_the_audio_port(
@@ -1072,10 +1235,140 @@ def test_every_opus_packet_opens_a_group_on_the_audio_port(
     )
     decoder = player_wired_to_both_decoders.decoders.inputs
 
-    first = decoder.read_message(ENCODED_AUDIO_OUTPUT_PORT, into=EncodedAudioPacket)
-    second = decoder.read_message(ENCODED_AUDIO_OUTPUT_PORT, into=EncodedAudioPacket)
+    first = decoder.read_message(ENCODED_AUDIO_OUTPUT_PORT)
+    second = decoder.read_message(ENCODED_AUDIO_OUTPUT_PORT)
 
     assert first is not None and second is not None
     assert (first.starts_group, first.timestamp_ns) == (True, 1_000)
     assert (second.starts_group, second.timestamp_ns) == (True, 1_020)
+    assert first.payload == MEDIA_FRAME_OF_AN_OPUS_PACKET
     assert decoder.read_message(ENCODED_VIDEO_OUTPUT_PORT) is None
+
+
+def test_each_port_states_its_entry_in_hangs_own_field_names(
+    player_wired_to_both_decoders: PlayerWiredToBothDecoders,
+):
+    """What reaches the parent is spelled in hang's catalog field names — the
+    codec string and coded extent for video, and the codec, rate, channel count
+    and `OpusHead` for audio — which the parent parses with hang's types."""
+    player_wired_to_both_decoders.play(
+        [AccessUnitTheSessionPlayed(), OpusPacketTheSessionPlayed()]
+    )
+
+    assert player_wired_to_both_decoders.parent.catalog_entries_stated == [
+        (
+            ENCODED_VIDEO_OUTPUT_PORT,
+            "video",
+            {"codec": "avc1.42e01f", "codedWidth": 320, "codedHeight": 192},
+        ),
+        (
+            ENCODED_AUDIO_OUTPUT_PORT,
+            "audio",
+            {
+                "codec": "opus",
+                "sampleRate": 48_000,
+                "numberOfChannels": 1,
+                "description": MONO_OPUS_IDENTIFICATION_HEADER_HEX,
+            },
+        ),
+    ]
+
+
+class OutputsRecordingWritesAndEntries:
+    """`ctx.outputs` for a player, keeping its writes and entries in one order."""
+
+    def __init__(self, refuse_entries: bool = False) -> None:
+        self.refuse_entries = refuse_entries
+        self.recorded: "list[tuple[str, str, Any]]" = []
+
+    def write(
+        self,
+        port_name: str,
+        payload: bytes,
+        timestamp_ns: "int | None" = None,
+        starts_group: bool = True,
+    ) -> None:
+        del timestamp_ns, starts_group
+        self.recorded.append(("write", port_name, payload))
+
+    def set_catalog_entry(self, port_name: str, entry: CatalogEntry) -> None:
+        if self.refuse_entries:
+            raise ValueError(f"output port {port_name!r}: the entry does not parse")
+        self.recorded.append(("entry", port_name, entry))
+
+
+def play_into(
+    outputs: OutputsRecordingWritesAndEntries,
+    media: "list[AccessUnitTheSessionPlayed | OpusPacketTheSessionPlayed]",
+) -> None:
+    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
+    player._drain_until_stopped(
+        cast(Any, WhepSessionReplayingMedia(player, media)), cast(Any, outputs)
+    )
+
+
+def test_an_entry_is_stated_before_the_first_media_frame_and_again_only_on_change(
+    monkeypatch,
+):
+    """A decoder reads its upstream entry when the first frame arrives, so the
+    entry lands first; a stream that changes extent states the new one before
+    the frame it describes."""
+    monkeypatch.setattr(_native, "PlayedOpusPacket", OpusPacketTheSessionPlayed)
+    route_every_log_level_to(monkeypatch, discard_log_record)
+    outputs = OutputsRecordingWritesAndEntries()
+    wider = AccessUnitTheSessionPlayed(
+        codec="avc1.640028", coded_width=1920, coded_height=1088
+    )
+
+    play_into(
+        outputs,
+        [
+            AccessUnitTheSessionPlayed(),
+            AccessUnitTheSessionPlayed(is_sync_point=False),
+            wider,
+            OpusPacketTheSessionPlayed(),
+            OpusPacketTheSessionPlayed(),
+        ],
+    )
+
+    assert outputs.recorded == [
+        (
+            "entry",
+            ENCODED_VIDEO_OUTPUT_PORT,
+            VideoEntry(codec="avc1.42e01f", codedWidth=320, codedHeight=192),
+        ),
+        ("write", ENCODED_VIDEO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_ACCESS_UNIT),
+        ("write", ENCODED_VIDEO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_ACCESS_UNIT),
+        (
+            "entry",
+            ENCODED_VIDEO_OUTPUT_PORT,
+            VideoEntry(codec="avc1.640028", codedWidth=1920, codedHeight=1088),
+        ),
+        ("write", ENCODED_VIDEO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_ACCESS_UNIT),
+        (
+            "entry",
+            ENCODED_AUDIO_OUTPUT_PORT,
+            AudioEntry(
+                codec="opus",
+                sampleRate=48_000,
+                numberOfChannels=1,
+                description=MONO_OPUS_IDENTIFICATION_HEADER_HEX,
+            ),
+        ),
+        ("write", ENCODED_AUDIO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_OPUS_PACKET),
+        ("write", ENCODED_AUDIO_OUTPUT_PORT, MEDIA_FRAME_OF_AN_OPUS_PACKET),
+    ]
+
+
+def test_a_refused_entry_names_its_port_and_writes_nothing(monkeypatch):
+    """Refused, the entry is the player's fault and not the endpoint's — the
+    same failure a refused write is, which ends the thread rather than
+    reconnecting."""
+    route_every_log_level_to(monkeypatch, discard_log_record)
+    outputs = OutputsRecordingWritesAndEntries(refuse_entries=True)
+
+    with pytest.raises(LinkOutputWriteFailure) as refused:
+        play_into(outputs, [AccessUnitTheSessionPlayed()])
+
+    assert refused.value.port == ENCODED_VIDEO_OUTPUT_PORT
+    assert outputs.recorded == []

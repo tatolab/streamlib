@@ -1,56 +1,56 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Turning received RTP into everything an encoded bag has to carry.
+//! Turning received RTP into media frames and what their ports' catalog
+//! entries state.
 //!
-//! RTP states none of it: no extent, no colour, no ordering pair, no sample
-//! count, no channel count. Each one comes from the stream itself — the SPS,
-//! the access unit, the Opus TOC — because a player that took them from config
-//! gets them wrong the first time the far end changes.
+//! RTP states neither the codec's profile and level, nor the extent, nor the
+//! channel count. Each comes from the stream itself — the SPS, the answer, the
+//! Opus TOC — because a player that took them from config gets them wrong the
+//! first time the far end changes.
 
-use crate::encoded_stream_ordering::EncodedStreamOrderingPairCounter;
 use crate::error::Result;
 use crate::h264_rtp_depacketiser::{
     H264RtpDepacketiser, NAL_TYPE_IDR_SLICE, NAL_TYPE_SEQUENCE_PARAMETER_SET,
 };
-use crate::h264_sequence_parameter_set::{
-    ColorDescription, SequenceParameterSet, parse_sequence_parameter_set,
-};
+use crate::h264_sequence_parameter_set::{SequenceParameterSet, parse_sequence_parameter_set};
+use crate::hang_legacy_container_media_frame::hang_legacy_container_media_frame_bytes;
 use crate::monotonic_clock::RtpClockAnchoredToMonotonic;
-use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, describe_opus_packet};
+use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, OpusRtpChannelLayout, describe_opus_packet};
 use bytes::Bytes;
 
 use crate::webrtc_peer_connection::H264_CLOCK_RATE_HZ;
-/// RFC 6716 §4.2: an Opus stream's encoder lookahead is signalled in the
-/// container's header, and RTP has no container. A player states no skip
-/// rather than inventing one, so a decoder trims nothing.
-const PRE_SKIP_RTP_CARRIES_NONE: u32 = 0;
 const ANNEX_B_START_CODE: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
-/// One whole access unit, with everything the video wire contract requires.
+/// One whole access unit, with the latest SPS the stream carried.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReceivedVideoAccessUnit {
     pub annex_b_access_unit: Vec<u8>,
     pub is_sync_point: bool,
-    pub group_index: u64,
-    pub sequence_index: u64,
-    pub width: u32,
-    pub height: u32,
-    pub color: Option<ColorDescription>,
+    pub sequence_parameter_set: SequenceParameterSet,
     pub timestamp_ns: i64,
 }
 
-/// One Opus packet, with everything the audio wire contract requires.
+impl ReceivedVideoAccessUnit {
+    /// The access unit as one media frame, behind the varint of its stamp.
+    pub(crate) fn media_frame_bytes(&self) -> Result<Vec<u8>> {
+        hang_legacy_container_media_frame_bytes(self.timestamp_ns, &self.annex_b_access_unit)
+    }
+}
+
+/// One Opus packet, with the stream's declared channel layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReceivedOpusPacket {
     pub opus_packet: Bytes,
-    pub group_index: u64,
-    pub sequence_index: u64,
-    pub sample_rate: u32,
-    pub channels: u32,
-    pub sample_count: u32,
-    pub pre_skip: u32,
+    pub channel_layout: OpusRtpChannelLayout,
     pub timestamp_ns: i64,
+}
+
+impl ReceivedOpusPacket {
+    /// The packet as one media frame, behind the varint of its stamp.
+    pub(crate) fn media_frame_bytes(&self) -> Result<Vec<u8>> {
+        hang_legacy_container_media_frame_bytes(self.timestamp_ns, &self.opus_packet)
+    }
 }
 
 /// Collects RTP payloads into whole access units.
@@ -59,7 +59,6 @@ pub(crate) struct VideoAccessUnitAssembler {
     nal_units_in_progress: Vec<Bytes>,
     rtp_timestamp_in_progress: Option<u32>,
     latched_sequence_parameter_set: Option<SequenceParameterSet>,
-    ordering: EncodedStreamOrderingPairCounter,
     clock: RtpClockAnchoredToMonotonic,
     reported_waiting_for_a_parameter_set: bool,
 }
@@ -77,7 +76,6 @@ impl VideoAccessUnitAssembler {
             nal_units_in_progress: Vec::new(),
             rtp_timestamp_in_progress: None,
             latched_sequence_parameter_set: None,
-            ordering: EncodedStreamOrderingPairCounter::default(),
             clock: RtpClockAnchoredToMonotonic::new(H264_CLOCK_RATE_HZ),
             reported_waiting_for_a_parameter_set: false,
         }
@@ -92,9 +90,6 @@ impl VideoAccessUnitAssembler {
     /// Both can fire on one packet — a new timestamp closes the unit before it
     /// while the packet's own marker closes a single-packet unit of its own —
     /// which is reachable whenever the previous unit's marker packet was lost.
-    /// Returning only one of the two would spend an ordering pair on a unit
-    /// nobody receives, and the gap reads downstream as loss of the whole group
-    /// rather than of the one packet that actually went missing.
     pub(crate) fn accept_rtp_packet(
         &mut self,
         payload: Bytes,
@@ -148,10 +143,9 @@ impl VideoAccessUnitAssembler {
             }
         }
 
-        // Every required key must be present, and only the SPS states the
-        // extent — so a stream entered before its first one has nothing to
-        // publish yet. A decoder could not have entered before it either.
-        let Some(parameters) = self.latched_sequence_parameter_set.clone() else {
+        // Only the SPS states the codec string and the extent the port's entry
+        // names, and no decoder could enter a stream before its first one.
+        let Some(sequence_parameter_set) = self.latched_sequence_parameter_set else {
             if !self.reported_waiting_for_a_parameter_set {
                 self.reported_waiting_for_a_parameter_set = true;
                 tracing::info!(
@@ -174,15 +168,10 @@ impl VideoAccessUnitAssembler {
             annex_b_access_unit.extend_from_slice(nal_unit);
         }
 
-        let pair = self.ordering.account_published_bag(is_sync_point);
         Some(ReceivedVideoAccessUnit {
             annex_b_access_unit,
             is_sync_point,
-            group_index: pair.group_index,
-            sequence_index: pair.sequence_index,
-            width: parameters.width,
-            height: parameters.height,
-            color: parameters.color,
+            sequence_parameter_set,
             timestamp_ns: self.clock.stamp_for(rtp_timestamp),
         })
     }
@@ -190,15 +179,12 @@ impl VideoAccessUnitAssembler {
 
 /// Describes each arriving Opus packet from the packet itself.
 pub(crate) struct OpusPacketAssembler {
-    ordering: EncodedStreamOrderingPairCounter,
     clock: RtpClockAnchoredToMonotonic,
-    /// The stream's declared output channel count, settled once and then
-    /// constant. The wire contract's `channels` is "the declared output count,
-    /// not the mono/stereo the TOC byte codes each frame at" — libopus in
-    /// two-channel mode codes mono frames on quiet or mono-ish content, so a
-    /// per-packet TOC reading would flip mid-stream and re-mint the decoder
-    /// downstream on every flip.
-    declared_channels: Option<u32>,
+    /// The stream's declared output channel layout, settled once and then
+    /// constant. libopus in two-channel mode codes mono frames on quiet or
+    /// mono-ish content, so a per-packet TOC reading would flip mid-stream and
+    /// re-mint the decoder downstream on every flip.
+    declared_channel_layout: Option<OpusRtpChannelLayout>,
     sender_declared_stereo: Option<bool>,
     reported_a_disagreement_with_the_answer: bool,
 }
@@ -206,12 +192,12 @@ pub(crate) struct OpusPacketAssembler {
 impl OpusPacketAssembler {
     /// `sender_declared_stereo` is the answer's `sprop-stereo` — the session
     /// description's own statement of what the sender will send, and the
-    /// contract's preferred source for `channels`.
+    /// preferred source for the channel count.
     pub(crate) fn new(sender_declared_stereo: Option<bool>) -> Self {
         Self {
-            ordering: EncodedStreamOrderingPairCounter::default(),
             clock: RtpClockAnchoredToMonotonic::new(OPUS_WIRE_SAMPLE_RATE_HZ),
-            declared_channels: sender_declared_stereo.map(|stereo| if stereo { 2 } else { 1 }),
+            declared_channel_layout: sender_declared_stereo
+                .map(OpusRtpChannelLayout::from_stereo_flag),
             sender_declared_stereo,
             reported_a_disagreement_with_the_answer: false,
         }
@@ -226,39 +212,37 @@ impl OpusPacketAssembler {
         // An answer that stated no Opus fmtp leaves the first packet's own TOC
         // as the only statement available — latched here, so the stream's
         // declared count is settled once either way.
-        let channels = *self.declared_channels.get_or_insert(described.channels);
-        self.report_any_disagreement_with_the_answer(described.channels);
+        let channel_layout = *self
+            .declared_channel_layout
+            .get_or_insert(described.channel_layout);
+        self.report_any_disagreement_with_the_answer(described.channel_layout);
 
-        // Every Opus packet is a sync point, so each is its own group.
-        let pair = self.ordering.account_published_bag(true);
         Ok(ReceivedOpusPacket {
             opus_packet: payload,
-            group_index: pair.group_index,
-            sequence_index: pair.sequence_index,
-            sample_rate: OPUS_WIRE_SAMPLE_RATE_HZ,
-            channels,
-            sample_count: described.sample_count,
-            pre_skip: PRE_SKIP_RTP_CARRIES_NONE,
+            channel_layout,
             timestamp_ns: self.clock.stamp_for(rtp_timestamp),
         })
     }
 
     /// Reported once, because a sender that codes a mono frame inside a stereo
-    /// stream is doing something ordinary and the bags do not follow it — but a
+    /// stream is doing something ordinary and the port does not follow it — but a
     /// relay whose fmtp is simply wrong should leave evidence rather than a
     /// mismatch nobody can trace later.
-    fn report_any_disagreement_with_the_answer(&mut self, channels_in_the_packet: u32) {
+    fn report_any_disagreement_with_the_answer(
+        &mut self,
+        channel_layout_in_the_packet: OpusRtpChannelLayout,
+    ) {
         let Some(declared_stereo) = self.sender_declared_stereo else {
             return;
         };
-        let packet_is_stereo = channels_in_the_packet > 1;
+        let packet_is_stereo = channel_layout_in_the_packet == OpusRtpChannelLayout::Stereo;
         if declared_stereo != packet_is_stereo && !self.reported_a_disagreement_with_the_answer {
             self.reported_a_disagreement_with_the_answer = true;
             tracing::warn!(
                 declared_stereo,
-                channels_in_the_packet,
+                ?channel_layout_in_the_packet,
                 "a packet's TOC codes a different channel count than the answer's \
-                 sprop-stereo declared; the bags carry the declared count"
+                 sprop-stereo declared; the port carries the declared count"
             );
         }
     }
@@ -267,7 +251,7 @@ impl OpusPacketAssembler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::h264_test_bitstreams::{baseline_320x180, no_vui, vui_with_colour};
+    use crate::h264_test_bitstreams::constrained_baseline_320x180_sequence_parameter_set;
 
     /// F=0, NRI=3, type=5 (IDR slice).
     const IDR_SLICE: &[u8] = &[0x65, 0x11, 0x22, 0x33];
@@ -332,11 +316,11 @@ mod tests {
     #[test]
     fn a_keyframes_parameter_sets_and_slice_arrive_as_one_access_unit() {
         let mut assembler = VideoAccessUnitAssembler::new();
-        let sps = baseline_320x180(no_vui);
+        let sps = constrained_baseline_320x180_sequence_parameter_set();
 
         let unit = feed_a_keyframe(&mut assembler, &sps, 3000, 1).unwrap();
 
-        // One bag, not three: what a decoder is handed is an access unit.
+        // One unit, not three: what a decoder is handed is an access unit.
         assert_eq!(
             unit.annex_b_access_unit,
             annex_b_of(&[&sps, PICTURE_PARAMETER_SET, IDR_SLICE])
@@ -345,37 +329,81 @@ mod tests {
     }
 
     #[test]
-    fn the_coded_extent_comes_from_the_sps_the_stream_carried() {
+    fn the_codec_and_coded_extent_come_from_the_sps_the_stream_carried() {
         let mut assembler = VideoAccessUnitAssembler::new();
 
-        let unit = feed_a_keyframe(&mut assembler, &baseline_320x180(no_vui), 3000, 1).unwrap();
+        let unit = feed_a_keyframe(
+            &mut assembler,
+            &constrained_baseline_320x180_sequence_parameter_set(),
+            3000,
+            1,
+        )
+        .unwrap();
 
-        assert_eq!((unit.width, unit.height), (320, 192));
-        assert_eq!(unit.color, None);
+        let sequence_parameter_set = &unit.sequence_parameter_set;
+        assert_eq!(sequence_parameter_set.avc1_codec_string(), "avc1.42e01e");
+        assert_eq!(
+            (
+                sequence_parameter_set.coded_width,
+                sequence_parameter_set.coded_height
+            ),
+            (320, 192)
+        );
     }
 
     #[test]
-    fn the_colour_comes_from_the_vui_when_the_stream_describes_one() {
+    fn a_played_access_unit_is_one_media_frame_stamped_in_microseconds() {
         let mut assembler = VideoAccessUnitAssembler::new();
-        let sps = baseline_320x180(vui_with_colour(1, 13, 1, 0));
-
+        let sps = constrained_baseline_320x180_sequence_parameter_set();
         let unit = feed_a_keyframe(&mut assembler, &sps, 3000, 1).unwrap();
 
+        let media_frame = unit.media_frame_bytes().unwrap();
+        let read =
+            crate::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame(
+                &media_frame,
+            )
+            .unwrap();
+
         assert_eq!(
-            unit.color,
-            Some(ColorDescription {
-                primaries: Some("bt709"),
-                transfer: Some("srgb"),
-                matrix: Some("bt709"),
-                range: Some("limited"),
-            })
+            read.timestamp_microseconds,
+            (unit.timestamp_ns / 1_000) as u64
         );
+        assert_eq!(
+            read.codec_payload_bytes,
+            annex_b_of(&[&sps, PICTURE_PARAMETER_SET, IDR_SLICE])
+        );
+    }
+
+    #[test]
+    fn a_played_opus_packet_is_one_media_frame_stamped_in_microseconds() {
+        let mut assembler = OpusPacketAssembler::new(None);
+        let packet = assembler
+            .accept_rtp_packet(opus_packet(1, true), 960)
+            .unwrap();
+
+        let media_frame = packet.media_frame_bytes().unwrap();
+        let read =
+            crate::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame(
+                &media_frame,
+            )
+            .unwrap();
+
+        assert_eq!(
+            read.timestamp_microseconds,
+            (packet.timestamp_ns / 1_000) as u64
+        );
+        assert_eq!(read.codec_payload_bytes, &packet.opus_packet[..]);
     }
 
     #[test]
     fn a_later_picture_without_its_own_sps_still_carries_the_extent() {
         let mut assembler = VideoAccessUnitAssembler::new();
-        feed_a_keyframe(&mut assembler, &baseline_320x180(no_vui), 3000, 1);
+        feed_a_keyframe(
+            &mut assembler,
+            &constrained_baseline_320x180_sequence_parameter_set(),
+            3000,
+            1,
+        );
 
         let unit = only_completed_unit(assembler.accept_rtp_packet(
             single_nal_packet(NON_IDR_SLICE),
@@ -385,7 +413,13 @@ mod tests {
         ))
         .unwrap();
 
-        assert_eq!((unit.width, unit.height), (320, 192));
+        assert_eq!(
+            (
+                unit.sequence_parameter_set.coded_width,
+                unit.sequence_parameter_set.coded_height
+            ),
+            (320, 192)
+        );
         assert!(!unit.is_sync_point);
     }
 
@@ -393,8 +427,8 @@ mod tests {
     fn nothing_is_published_before_the_streams_first_parameter_set() {
         let mut assembler = VideoAccessUnitAssembler::new();
 
-        // Joined mid-stream: a picture with no extent to state is not a bag
-        // the wire contract can carry, and no decoder could enter here anyway.
+        // Joined mid-stream: a picture with no codec or extent to state, and
+        // no decoder could enter here anyway.
         let published =
             assembler.accept_rtp_packet(single_nal_packet(NON_IDR_SLICE), 3000, 1, true);
 
@@ -402,38 +436,9 @@ mod tests {
     }
 
     #[test]
-    fn the_ordering_pair_counts_groups_by_keyframe_and_never_resets() {
-        let mut assembler = VideoAccessUnitAssembler::new();
-        let sps = baseline_320x180(no_vui);
-
-        let first = feed_a_keyframe(&mut assembler, &sps, 3000, 1).unwrap();
-        let second = only_completed_unit(assembler.accept_rtp_packet(
-            single_nal_packet(NON_IDR_SLICE),
-            6000,
-            4,
-            true,
-        ))
-        .unwrap();
-        let third = feed_a_keyframe(&mut assembler, &sps, 9000, 5).unwrap();
-
-        assert_eq!(
-            [
-                first.sequence_index,
-                second.sequence_index,
-                third.sequence_index
-            ],
-            [0, 1, 2]
-        );
-        assert_eq!(
-            [first.group_index, second.group_index, third.group_index],
-            [0, 0, 1]
-        );
-    }
-
-    #[test]
     fn a_timestamp_change_closes_an_access_unit_a_sender_never_marked() {
         let mut assembler = VideoAccessUnitAssembler::new();
-        let sps = baseline_320x180(no_vui);
+        let sps = constrained_baseline_320x180_sequence_parameter_set();
         assembler.accept_rtp_packet(single_nal_packet(&sps), 3000, 1, false);
         assembler.accept_rtp_packet(single_nal_packet(IDR_SLICE), 3000, 2, false);
 
@@ -454,7 +459,7 @@ mod tests {
     #[test]
     fn the_stamps_advance_by_the_rtp_clock_not_by_arrival() {
         let mut assembler = VideoAccessUnitAssembler::new();
-        let sps = baseline_320x180(no_vui);
+        let sps = constrained_baseline_320x180_sequence_parameter_set();
         let first = feed_a_keyframe(&mut assembler, &sps, 3000, 1).unwrap();
 
         let second = only_completed_unit(assembler.accept_rtp_packet(
@@ -472,11 +477,9 @@ mod tests {
     fn one_packet_can_close_two_access_units_and_neither_is_dropped() {
         // Reachable whenever the previous unit's marker packet was lost: the
         // new timestamp closes what came before while this packet's own marker
-        // closes a single-packet unit of its own. Returning one of the two
-        // would spend an ordering pair on a unit nobody receives, and the gap
-        // reads downstream as loss of a whole group.
+        // closes a single-packet unit of its own.
         let mut assembler = VideoAccessUnitAssembler::new();
-        let sps = baseline_320x180(no_vui);
+        let sps = constrained_baseline_320x180_sequence_parameter_set();
         assembler.accept_rtp_packet(single_nal_packet(&sps), 3000, 1, false);
         assembler.accept_rtp_packet(single_nal_packet(IDR_SLICE), 3000, 2, false);
 
@@ -492,17 +495,12 @@ mod tests {
             completed[1].annex_b_access_unit,
             annex_b_of(&[NON_IDR_SLICE])
         );
-        // The pair is continuous across both, so a consumer sees no loss.
-        assert_eq!(
-            (completed[0].sequence_index, completed[1].sequence_index),
-            (0, 1)
-        );
     }
 
     #[test]
     fn a_malformed_payload_costs_its_own_packet_and_not_the_stream() {
         let mut assembler = VideoAccessUnitAssembler::new();
-        let sps = baseline_320x180(no_vui);
+        let sps = constrained_baseline_320x180_sequence_parameter_set();
         assembler.accept_rtp_packet(single_nal_packet(&sps), 3000, 1, false);
         assembler.accept_rtp_packet(Bytes::new(), 3000, 2, false);
 
@@ -532,32 +530,30 @@ mod tests {
             .accept_rtp_packet(opus_packet(1, false), 0)
             .unwrap();
 
-        assert_eq!(packet.channels, 1);
-        assert_eq!(packet.sample_count, 960);
-        assert_eq!(packet.sample_rate, 48_000);
+        assert_eq!(packet.channel_layout, OpusRtpChannelLayout::Mono);
     }
 
     #[test]
     fn the_channel_count_does_not_flip_when_a_frames_toc_does() {
         // libopus in two-channel mode codes a mono frame on quiet or mono-ish
-        // content. The wire contract's `channels` is the stream's declared
-        // output count, and a decoder re-mints and resets state on every change
-        // of it — so following the TOC per packet would restart the decoder
+        // content. The port's channel count is the stream's declared output
+        // count, and a decoder re-mints and resets state on every change of
+        // it — so following the TOC per packet would restart the decoder
         // mid-stream on ordinary content.
         let mut assembler = OpusPacketAssembler::new(Some(true));
 
-        let channels: Vec<u32> = [true, false, false, true]
+        let channel_layouts: Vec<OpusRtpChannelLayout> = [true, false, false, true]
             .into_iter()
             .enumerate()
             .map(|(index, stereo_frame)| {
                 assembler
                     .accept_rtp_packet(opus_packet(1, stereo_frame), index as u32 * 960)
                     .unwrap()
-                    .channels
+                    .channel_layout
             })
             .collect();
 
-        assert_eq!(channels, vec![2, 2, 2, 2]);
+        assert_eq!(channel_layouts, vec![OpusRtpChannelLayout::Stereo; 4]);
     }
 
     #[test]
@@ -574,34 +570,10 @@ mod tests {
             .accept_rtp_packet(opus_packet(1, true), 960)
             .unwrap();
 
-        assert_eq!((first.channels, second.channels), (1, 1));
-    }
-
-    #[test]
-    fn every_opus_packet_is_its_own_group() {
-        let mut assembler = OpusPacketAssembler::new(None);
-
-        let pairs: Vec<_> = (0..3)
-            .map(|index| {
-                let packet = assembler
-                    .accept_rtp_packet(opus_packet(1, true), index * 960)
-                    .unwrap();
-                (packet.group_index, packet.sequence_index)
-            })
-            .collect();
-
-        assert_eq!(pairs, vec![(0, 0), (1, 1), (2, 2)]);
-    }
-
-    #[test]
-    fn the_pre_skip_is_zero_because_rtp_carries_no_opus_head() {
-        let mut assembler = OpusPacketAssembler::new(None);
-
-        let packet = assembler
-            .accept_rtp_packet(opus_packet(1, true), 0)
-            .unwrap();
-
-        assert_eq!(packet.pre_skip, 0);
+        assert_eq!(
+            (first.channel_layout, second.channel_layout),
+            (OpusRtpChannelLayout::Mono, OpusRtpChannelLayout::Mono)
+        );
     }
 
     #[test]
@@ -619,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_opus_packet_is_refused_rather_than_bagged() {
+    fn a_malformed_opus_packet_is_refused_rather_than_published() {
         let mut assembler = OpusPacketAssembler::new(None);
 
         assert!(assembler.accept_rtp_packet(Bytes::new(), 0).is_err());

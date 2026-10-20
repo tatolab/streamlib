@@ -20,9 +20,12 @@ It installs from PyPI with the `tatolab-stream` package it depends on.
 from tatolab.webrtc import WhepPlayer, WhipPublisher
 ```
 
+Both read and write media frames — hang's legacy container, a QUIC varint timestamp in
+microseconds and then the Annex-B access unit or Opus packet — with a keyframe opening a group.
 `WhipPublisher` takes one fan-in input, `tracks` — each inbound link becomes one RTP track,
-video or audio by the bag's `codec`. `WhepPlayer` emits `encoded_video` and `encoded_audio`,
-filling every key of the wire contract from the stream itself.
+video or audio by the codec its upstream port's catalog entry names. `WhepPlayer` writes
+`encoded_video` and `encoded_audio`, and states each port's catalog entry — the codec string,
+the coded extent, the channel count and the `OpusHead` — from the stream itself.
 
 Both sit on the encoded side of the codec blocks: `H264Encoder` / `OpusEncoder` upstream of
 the publisher, `H264Decoder` / `OpusDecoder` downstream of the player.

@@ -4,7 +4,9 @@
 //! Publishing encoded media to a WHIP endpoint.
 
 use crate::error::{Result, WebRtcExtensionError};
+use crate::hang_legacy_container_media_frame::codec_payload_of_media_frame;
 use crate::http_signalling::WhipWhepSignallingClient;
+use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, describe_opus_packet};
 use crate::session_description::opus_format_parameters_for_offer;
 use crate::webrtc_peer_connection::{
     H264_PAYLOAD_TYPE, NegotiatedCodec, OPUS_PAYLOAD_TYPE, TrackMedium, apply_the_relays_answer,
@@ -29,7 +31,7 @@ const PROTOCOL: &str = "WHIP";
 pub(crate) struct PublishedMediaSet {
     pub video: bool,
     pub audio: bool,
-    /// The channel count the first audio bag declared, when one arrived before
+    /// The channel count the audio track's catalog entry names, when one arrived before
     /// the connect. Absent leaves the sender's hint at stereo, which RFC 7587
     /// §3.1.1 makes a hint and not a promise.
     pub audio_channels: Option<u32>,
@@ -107,26 +109,34 @@ impl WhipPublishingSession {
         })
     }
 
-    /// Hand one whole Annex-B access unit to the H.264 payloader, which does
-    /// the STAP-A aggregation and FU-A fragmentation itself.
+    /// Hand the whole Annex-B access unit `media_frame` carries after its
+    /// varint to the H.264 payloader, which does the STAP-A aggregation and
+    /// FU-A fragmentation itself.
     ///
     /// `duration` advances the track's RTP clock to the *next* sample, so it is
     /// the gap to the frame after this one and not this frame's own length.
-    pub(crate) async fn write_video_access_unit(
+    pub(crate) async fn write_video_media_frame(
         &self,
-        annex_b_access_unit: Bytes,
+        media_frame: Bytes,
         duration: Duration,
     ) -> Result<()> {
+        let annex_b_access_unit = codec_payload_of_media_frame(&media_frame)?;
         write_sample(self.video_track.as_ref(), annex_b_access_unit, duration).await
     }
 
-    /// Hand one Opus packet to the audio track, its duration taken from the
-    /// bag's own sample count rather than assumed to be one 20 ms frame.
-    pub(crate) async fn write_audio_packet(
-        &self,
-        opus_packet: Bytes,
-        duration: Duration,
-    ) -> Result<()> {
+    /// Hand the Opus packet `media_frame` carries after its varint to the
+    /// audio track, its duration taken from the packet's own TOC rather than
+    /// assumed to be one 20 ms frame.
+    pub(crate) async fn write_audio_media_frame(&self, media_frame: Bytes) -> Result<()> {
+        let opus_packet = codec_payload_of_media_frame(&media_frame)?;
+        let sample_count = describe_opus_packet(&opus_packet)
+            .map_err(|refusal| WebRtcExtensionError::Refused {
+                what: refusal.to_string(),
+            })?
+            .sample_count;
+        let duration = Duration::from_nanos(
+            u64::from(sample_count) * 1_000_000_000 / u64::from(OPUS_WIRE_SAMPLE_RATE_HZ),
+        );
         write_sample(self.audio_track.as_ref(), opus_packet, duration).await
     }
 

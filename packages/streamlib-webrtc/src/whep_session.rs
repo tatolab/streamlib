@@ -27,13 +27,12 @@ use webrtc::track::track_remote::TrackRemote;
 
 const PROTOCOL: &str = "WHEP";
 
-/// How many assembled bags may wait for the processor thread to collect them.
+/// How many assembled items may wait for the processor thread to collect them.
 /// Bounded and dropped rather than blocked: a stalled reader must not stall the
-/// network loop, and a gap in `sequence_index` is how a consumer learns it lost
-/// something — which is exactly what happened.
+/// network loop.
 const RECEIVED_MEDIA_QUEUE_DEPTH: usize = 256;
 
-/// One bag's worth of media, assembled and ready to be spelled.
+/// One media frame's worth of media, assembled and ready to be written.
 #[derive(Debug, Clone)]
 pub(crate) enum ReceivedMedia {
     Video(ReceivedVideoAccessUnit),
@@ -103,7 +102,7 @@ impl WhepPlayingSession {
         })
     }
 
-    /// The next assembled bag, or `None` if none arrived within `timeout`.
+    /// The next assembled access unit or Opus packet, or `None` if none arrived within `timeout`.
     pub(crate) async fn next_media(&mut self, timeout: Duration) -> Option<ReceivedMedia> {
         tokio::time::timeout(timeout, self.received_media.recv())
             .await
@@ -262,7 +261,9 @@ fn try_forward_to_the_reading_thread(
     match received_media.try_send(media) {
         Ok(()) => Ok(()),
         Err(mpsc::error::TrySendError::Full(_)) => {
-            tracing::debug!("the received-media queue is full; a bag was dropped");
+            tracing::debug!(
+                "the received-media queue is full; an access unit or packet was dropped"
+            );
             Ok(())
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
