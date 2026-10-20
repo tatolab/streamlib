@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.5](https://github.com/tatolab/streamlib/compare/v0.54.4...v0.54.5) (2026-10-20)
+
+
+### Bug Fixes
+
+* **rhi:** the encoder barriers a published source into the layout it samples it in ([#2880](https://github.com/tatolab/streamlib/issues/2880)) ([506814d](https://github.com/tatolab/streamlib/commit/506814dc3c971c8fa602047896969ec2dbf93c13))
+
 ## [0.54.4](https://github.com/tatolab/streamlib/compare/v0.54.3...v0.54.4) (2026-10-20)
 
 

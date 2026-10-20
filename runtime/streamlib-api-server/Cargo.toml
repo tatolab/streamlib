@@ -36,11 +36,11 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.54.4" }
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.54.4" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.54.5" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.54.5" }
 # The runtime directory the local API's socket is bound in, and the wire names and tool result
 # shapes it serves.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.54.4" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.54.5" }
 # The machine's relay instances the relay tools drive, and the relay-adapter catalog.
 streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
 
