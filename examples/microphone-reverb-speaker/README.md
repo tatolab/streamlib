@@ -7,7 +7,7 @@ Microphone → reverb → speaker. You hear yourself in a room that isn't there.
 
 ## The model this example teaches
 
-**Two format conversions, neither of them in your code.** Nothing in `app.py`
+**Two format conversions, neither of them in your code.** Nothing in `stream.py`
 names a sample rate, a channel count or a block size. The capture device opens
 at whatever it opens at, the playback device likewise, and the only format
 anybody states is the one the reverb wants:
@@ -21,15 +21,19 @@ anybody states is the one the reverb wants:
 The rate and channel count in the last row come off the playback stream;
 the 480 is `SpeakerSink`'s own 10 ms window, which is what it settles
 `match_device` to where the backend has not told it a period. Both numbers vary
-by machine, and neither appears in this app.
+by machine, and neither appears in this stream.
 
 ```python
 REVERB_WINDOW = AudioWindowContract(
-    sample_rate=48_000, channels=1, dtype="f32", window_size=128,
+    sample_rate=48_000,
+    channels=1,
+    dtype="f32",
+    window_size=128,
 )
 
-@input(delivery_profile="ordered", audio_window=REVERB_WINDOW)
-def dry_audio_from_upstream(self) -> None: ...
+
+@node.input(delivery_profile="ordered", audio_window=REVERB_WINDOW)
+def dry_audio_from_upstream(self) -> AudioBlock: ...
 ```
 
 On the way in, the engine mixes the capture device's stereo down to mono and
@@ -38,7 +42,7 @@ input declares `match_device`, so the same stage duplicates the reverb's mono to
 stereo and reframes it into 480-sample windows. Both conversions are engine
 stages that run before anyone's `process()` does.
 
-`streamlib graph` reports each input port as an object carrying its
+`tatolab graph --stream main` reports each input port as an object carrying its
 `audio_window`, and the `resolved_from` field is where the two halves show up —
 `"declaration"` on the reverb's port, `"device"` on the speaker's:
 
@@ -56,16 +60,20 @@ stages that run before anyone's `process()` does.
 ```
 
 That is the whole reason a delay-line algorithm can be a plain Python class
-here. `ReverbEffect` reads `block.samples[:, 0]` and knows it has 128 mono
-samples at 48 kHz, always, on every machine — so its filter lengths are fixed
-once in `__init__` and there is no resampler, no rechunker and no format
-negotiation anywhere in the file.
+here. `ReverbEffect` reads `ctx.inputs.read("dry_audio_from_upstream",
+into=AudioBlock)`, takes `block.samples[:, 0]` and knows it has 128 mono samples
+at 48 kHz, always, on every machine — so its filter lengths are fixed once in
+`__init__` and there is no resampler, no rechunker and no format negotiation
+anywhere in `nodes/reverb_effect.py`. What it writes back is an `AudioBlock`
+too, built and packed with `to_bytes()`, so the record's keys are checked where
+it is made rather than discovered wrong downstream.
 
 Three more things it teaches:
 
 - **A declared contract requires `delivery_profile="ordered"`.** A reverb is an
-  accumulator: its output depends on every sample before it. `newest` skips bags
-  by design, and a skipped block is a hole in a delay line.
+  accumulator: its output depends on every sample before it. `newest` skips
+  messages by design, and a skipped block is a hole in a delay line. `@node.input`
+  refuses a contract on a `newest` port at import.
 - **The window size is the latency dial** — 128 samples is 2.67 ms at 48 kHz,
   and it is the only number here you would expect to tune. It also has a real
   ceiling: every delay line must be at least one window long, or its ring
@@ -80,36 +88,31 @@ Three more things it teaches:
   lines carry their tail across it, which is what you would want and is also why
   the gap stays audible rather than being papered over.
 
-`ReverbEffect` runs in its own child interpreter with its own GIL;
-`MicrophoneSource` and `SpeakerSink` are native built-ins inside the wheel, and
-their per-sample paths never enter an interpreter at all.
+`ReverbEffect` runs in its own child interpreter with its own GIL, which imports
+it as `nodes.reverb_effect:ReverbEffect` — that is why it lives under `nodes/`
+and never in `stream.py`. `MicrophoneSource` and `SpeakerSink` are native
+built-ins that ship inside the runtime, and their per-sample paths never enter an
+interpreter at all.
 
 ## Run it
 
-```bash
-uv venv --python 3.12 && uv sync
-source .venv/bin/activate
-streamlib run
-```
-
-Speak into your microphone and you should hear yourself, wet. Ctrl-C stops it.
-
-`uv sync` installs `streamlib` from the simple index pinned in `pyproject.toml`;
-the wheel carries the Python API, the engine and the `streamlib` CLI. The CLI
-lands in `.venv/bin`, so it needs the venv on your `PATH` — activate it as
-above, or spell it `.venv/bin/streamlib` every time.
-
-**Not `uv run streamlib`.** It re-syncs the environment from `pyproject.toml`
-first, which silently replaces a locally built wheel with the released one —
-exactly what the next paragraph is for.
-
-To work against a checkout rather than a release, install that checkout's wheel
-into this venv instead:
+With this machine's runtime running (`tatolabd`, which the installer starts):
 
 ```bash
-uv pip install maturin
-maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
+uv sync
+tatolab dev
 ```
+
+Speak into your microphone and you should hear yourself, wet. Ctrl-C unloads the
+stream.
+
+`uv sync` installs `tatolab-stream` and `numpy` from PyPI — `tatolab-stream` is
+the authoring surface, and the only Tatolab package a stream's venv holds. The
+runtime itself is not on pip.
+
+Use `tatolab dev` while editing — it loads the stream again on every saved edit,
+so a change to a dial or to the reverb is heard on the next save — and
+`tatolab run` otherwise. Both keep the stream as long as the command runs.
 
 **No audio hardware?** It still runs. The backend chain demotes to a null
 backend under which `MicrophoneSource` publishes silence and `SpeakerSink`
@@ -118,26 +121,30 @@ exercised in a headless container, silently.
 
 ## Observing it
 
-From another terminal with this venv activated, while it runs:
+From another terminal:
 
 ```bash
-streamlib nodes           # the live nodes on this machine
-streamlib graph           # processors, ports, links and per-link drop counts
-streamlib logs --follow   # the node's JSONL log
+tatolab streams                 # the streams this machine's runtime holds
+tatolab graph --stream main     # nodes, ports, window contracts, links and counters, as JSON
+tatolab logs --stream main -f   # the stream's records, Rust and Python alike
 ```
 
 `graph` renders each windowed port's contract beside its delivery profile, which
-is where the two rows above come from.
+is where the two rows above come from. A node is named after its class,
+lowercased — `microphonesource`, `reverbeffect`, `speakersink` — unless `add`
+passes `name=`.
 
-To see the wet signal itself, expose the reverb's output and read it as a track.
-Read the machine's, the stream's and the node's names out of `tatolab graph`
-rather than spelling them by hand: a port is the track `<node>/<port>` of the
-broadcast `<machine>/<stream>.hang` at the machine's local relay.
+To see the wet signal itself, expose the reverb's output; every port in this
+stream is internal to it until you do. An exposed port is the track
+`<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the machine's local
+relay — `http://127.0.0.1:4446/` lists this machine's name — so any MoQ client
+reads it; this repository's `tatolab-read-track` writes a track's objects to
+files:
 
 ```bash
-tatolab expose <stream> <reverb> reverberated_audio_to_downstream
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/<stream>.hang \
-    <reverb>/reverberated_audio_to_downstream --count 20 --out /tmp/wet
+tatolab expose main reverbeffect reverberated_audio_to_downstream
+cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
+    reverbeffect/reverberated_audio_to_downstream --count 20 --out /tmp/wet
 ```
 
 Each object is one block's msgpack record, indexed with its timestamp in
@@ -150,31 +157,53 @@ bytes — 128 mono `f32` samples — and consecutive stamps are one window apart
 every three windows. 128/48 000 s is not a whole number of nanoseconds, so a
 stamp that accumulated a rounded delta would drift; each one is instead derived
 from a single anchor in integer arithmetic, which is what makes the cycle exact
-rather than approximately right.
+rather than approximately right. The reverb keeps the stamp each block arrived
+with — its tail rides later windows, but these samples cover the instants the
+incoming ones did, so A/V sync downstream stays subtraction.
+
+`tatolab expose main reverbeffect reverberated_audio_to_downstream --remove`
+makes the port internal again; the microphone's `audio` port is read the same way.
 
 ### Recording the loop instead of shouting at it
 
 A null sink gives you a microphone with no microphone: play a signal into it and
 capture it back off its monitor, which is what `<sink>.monitor` device ids are
-for. Both built-ins take a `device_id`, so the whole loop can be closed on a
-machine with no audio hardware attached:
+for on PipeWire. Both built-ins take a `device_id`, so the whole loop can be
+closed on a machine with no audio hardware attached. Set the two constants at
+the top of `stream.py`:
 
 ```python
-rt.add(MicrophoneSource, config={"device_id": "my-null-sink.monitor"})
-rt.add(SpeakerSink, config={"device_id": "my-other-null-sink"})
+MICROPHONE_DEVICE_ID: str | None = "my-null-sink.monitor"
+SPEAKER_DEVICE_ID: str | None = "my-other-null-sink"
 ```
 
-## Runtime knobs
+which the stream passes on as
 
-Everything is literal config in `app.py` — edit it and re-run. `ReverbEffect`
-takes four 0..1 dials:
+```python
+stream_builder.add(MicrophoneSource, config={"device_id": "my-null-sink.monitor"})
+stream_builder.add(SpeakerSink, config={"device_id": "my-other-null-sink"})
+```
 
-| Dial | Default | What it does |
+## Knobs
+
+Everything is literal config in `stream.py` — edit it and save while
+`tatolab dev` runs. A stream is compiled in the runtime's environment, not your
+shell's, so nothing here is read from an environment variable.
+
+| Knob | Where | Effect |
 | --- | --- | --- |
-| `room_size` | 0.7 | how long the tail rings |
-| `damping` | 0.5 | how fast the top end dies inside that tail |
-| `wet_level` | 0.25 | how much of the tail you hear |
-| `dry_level` | 0.7 | how much of the original you hear |
+| `MICROPHONE_DEVICE_ID` | top of `stream.py` | Capture device, as the audio backend names it (a CoreAudio device UID on macOS). `None` picks the default device. |
+| `SPEAKER_DEVICE_ID` | top of `stream.py` | Playback device, likewise. `None` picks the default device. |
+| `room_size` | `ReverbEffect`'s `config` | how long the tail rings (default 0.7) |
+| `damping` | `ReverbEffect`'s `config` | how fast the top end dies inside that tail (default 0.5) |
+| `wet_level` | `ReverbEffect`'s `config` | how much of the tail you hear (default 0.25) |
+| `dry_level` | `ReverbEffect`'s `config` | how much of the original you hear (default 0.7) |
+| `REVERB_WINDOW` | top of `nodes/reverb_effect.py` | the latency dial; at most 245 samples, the shortest delay line |
+
+The four dials each run from 0.0 to 1.0; `ReverbEffectConfig` declares them, and
+`ReverbEffect` refuses a value outside that range when it is constructed. A
+named device that cannot be opened raises rather than silently landing on
+another.
 
 The two levels leave headroom for most of what a microphone produces — a
 full-scale sine measures 0.64 at 440 Hz, 0.78 at 1 kHz and 0.69 at 8 kHz, none
@@ -188,7 +217,3 @@ calls them) multiply on top. The resonance is razor-thin — 5 760 Hz and
 That is worth more than a footnote given the warning at the top of this file:
 acoustic feedback locks onto whichever frequency the loop has the most gain at,
 which is precisely that 5.77 kHz peak. Headphones.
-
-`MicrophoneSource` and `SpeakerSink` each take a `device_id`; unset picks the
-default device, and one that *is* named and cannot be opened raises at `setup()`
-rather than silently landing on another.
