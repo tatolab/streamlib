@@ -10,8 +10,9 @@
 //!
 //! The access units in between are held to the wire the Linux arm speaks:
 //! Annex-B with four-byte start codes, parameter sets in front of every sync
-//! point and nowhere else, and a coded extent that is the one the stream's own
-//! SPS states.
+//! point and nowhere else, a coded extent that is the one the stream's own
+//! SPS states, and an SPS VUI stating the BT.709 limited-range samples every
+//! engine encoder writes.
 //!
 //! The same arm wrote the checked-in cross-floor clips the Linux rig decodes
 //! through Vulkan Video (`vulkan_video_decodes_what_videotoolbox_encoded`);
@@ -35,6 +36,10 @@ use streamlib::sdk::context::{
     probe_video_codec_backend,
 };
 use streamlib::sdk::rhi::PixelFormat;
+use streamlib_engine::core::h265_sequence_parameter_set::parse_h265_sequence_parameter_set;
+use streamlib_engine::core::nal_unit_raw_byte_sequence_payload::{
+    RbspBitstreamReader, remove_emulation_prevention_bytes,
+};
 
 #[path = "support/codec_round_trip_scoring.rs"]
 mod codec_round_trip_scoring;
@@ -248,6 +253,16 @@ fn test_pattern_color_vui() -> H273ColorVui {
         transfer: Some(13),
         matrix: None,
         full_range: Some(true),
+    }
+}
+
+/// What an encoder writes for a [`test_pattern_color_vui`] frame: its
+/// primaries and transfer, the BT.709 matrix, limited range.
+fn color_vui_encoded_for_the_test_pattern() -> H273ColorVui {
+    H273ColorVui {
+        matrix: Some(1),
+        full_range: Some(false),
+        ..test_pattern_color_vui()
     }
 }
 
@@ -535,10 +550,17 @@ fn assert_the_access_unit_is_the_linux_wire(
              types {nal_unit_types:?}"
         );
         let sequence_parameter_set = nal_units[parameter_set_types.len() - 2];
+        let (stated_coded_extent, stated_color_vui) =
+            coded_extent_and_colour_stated_by(elementary_stream, sequence_parameter_set);
         assert_eq!(
-            coded_extent_stated_by(elementary_stream, sequence_parameter_set),
-            coded_extent,
+            stated_coded_extent, coded_extent,
             "{reference_name}: the session reports the coded extent its own SPS states"
+        );
+        assert_eq!(
+            stated_color_vui,
+            color_vui_encoded_for_the_test_pattern(),
+            "{reference_name}: the SPS VUI states the BT.709 limited-range samples the \
+             encoder wrote for a full-range source naming no matrix"
         );
     } else {
         assert!(
@@ -585,69 +607,127 @@ fn nal_unit_type(elementary_stream: VideoCodecElementaryStream, nal_unit: &[u8])
     }
 }
 
-/// The coded extent a sequence parameter set states, read as far as its
-/// picture dimensions.
-fn coded_extent_stated_by(
+/// The coded extent and the VUI colour a sequence parameter set states.
+fn coded_extent_and_colour_stated_by(
     elementary_stream: VideoCodecElementaryStream,
     sequence_parameter_set: &[u8],
-) -> (u32, u32) {
+) -> ((u32, u32), H273ColorVui) {
     match elementary_stream {
         VideoCodecElementaryStream::H264 => {
-            let mut bits = RbspBitReader::over(&sequence_parameter_set[1..]);
-            let profile_idc = bits.bits(8);
-            bits.bits(16); // constraint flags, level_idc
-            bits.exp_golomb(); // seq_parameter_set_id
-            if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(&profile_idc)
-            {
-                let chroma_format_idc = bits.exp_golomb();
-                if chroma_format_idc == 3 {
-                    bits.bits(1);
-                }
-                bits.exp_golomb(); // bit_depth_luma_minus8
-                bits.exp_golomb(); // bit_depth_chroma_minus8
-                bits.bits(1); // qpprime_y_zero_transform_bypass_flag
-                assert_eq!(bits.bits(1), 0, "scaling matrices are not read here");
-            }
-            bits.exp_golomb(); // log2_max_frame_num_minus4
-            match bits.exp_golomb() {
-                0 => {
-                    bits.exp_golomb();
-                }
-                1 => {
-                    bits.bits(1);
-                    bits.signed_exp_golomb();
-                    bits.signed_exp_golomb();
-                    for _ in 0..bits.exp_golomb() {
-                        bits.signed_exp_golomb();
-                    }
-                }
-                _ => {}
-            }
-            bits.exp_golomb(); // max_num_ref_frames
-            bits.bits(1); // gaps_in_frame_num_value_allowed_flag
-            let width_in_macroblocks = bits.exp_golomb() + 1;
-            let height_in_map_units = bits.exp_golomb() + 1;
-            let frame_mbs_only = bits.bits(1);
-            (
-                width_in_macroblocks * 16,
-                height_in_map_units * 16 * (2 - frame_mbs_only),
-            )
+            h264_coded_extent_and_colour_stated_by(sequence_parameter_set)
         }
         VideoCodecElementaryStream::H265 => {
-            let mut bits = RbspBitReader::over(&sequence_parameter_set[2..]);
-            bits.bits(4); // sps_video_parameter_set_id
-            let max_sub_layers_minus1 = bits.bits(3);
-            assert_eq!(max_sub_layers_minus1, 0, "sub-layer PTL is not read here");
-            bits.bits(1); // sps_temporal_id_nesting_flag
-            bits.bits(88); // general profile_tier_level
-            bits.bits(8); // general_level_idc
-            bits.exp_golomb(); // sps_seq_parameter_set_id
-            if bits.exp_golomb() == 3 {
-                bits.bits(1);
-            }
-            (bits.exp_golomb(), bits.exp_golomb())
+            let raw_byte_sequence_payload =
+                remove_emulation_prevention_bytes(&sequence_parameter_set[2..]);
+            let parsed = parse_h265_sequence_parameter_set(&mut RbspBitstreamReader::new(
+                &raw_byte_sequence_payload,
+            ))
+            .expect("the H.265 SPS parses");
+            let vui = &parsed.vui;
+            let colour_description_present = vui.flags.colour_description_present_flag;
+            let stated_color_vui = if vui.flags.video_signal_type_present_flag {
+                H273ColorVui {
+                    primaries: colour_description_present.then_some(vui.colour_primaries),
+                    transfer: colour_description_present.then_some(vui.transfer_characteristics),
+                    matrix: colour_description_present.then_some(vui.matrix_coeffs),
+                    full_range: Some(vui.flags.video_full_range_flag),
+                }
+            } else {
+                H273ColorVui::default()
+            };
+            (
+                (
+                    parsed.pic_width_in_luma_samples,
+                    parsed.pic_height_in_luma_samples,
+                ),
+                stated_color_vui,
+            )
         }
     }
+}
+
+/// ITU-T H.264 §7.3.2.1.1 read through the VUI's `video_signal_type`.
+fn h264_coded_extent_and_colour_stated_by(
+    sequence_parameter_set: &[u8],
+) -> ((u32, u32), H273ColorVui) {
+    let mut bits = RbspBitReader::over(&sequence_parameter_set[1..]);
+    let profile_idc = bits.bits(8);
+    bits.bits(16); // constraint flags, level_idc
+    bits.exp_golomb(); // seq_parameter_set_id
+    if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(&profile_idc) {
+        let chroma_format_idc = bits.exp_golomb();
+        if chroma_format_idc == 3 {
+            bits.bits(1);
+        }
+        bits.exp_golomb(); // bit_depth_luma_minus8
+        bits.exp_golomb(); // bit_depth_chroma_minus8
+        bits.bits(1); // qpprime_y_zero_transform_bypass_flag
+        assert_eq!(bits.bits(1), 0, "scaling matrices are not read here");
+    }
+    bits.exp_golomb(); // log2_max_frame_num_minus4
+    match bits.exp_golomb() {
+        0 => {
+            bits.exp_golomb();
+        }
+        1 => {
+            bits.bits(1);
+            bits.signed_exp_golomb();
+            bits.signed_exp_golomb();
+            for _ in 0..bits.exp_golomb() {
+                bits.signed_exp_golomb();
+            }
+        }
+        _ => {}
+    }
+    bits.exp_golomb(); // max_num_ref_frames
+    bits.bits(1); // gaps_in_frame_num_value_allowed_flag
+    let width_in_macroblocks = bits.exp_golomb() + 1;
+    let height_in_map_units = bits.exp_golomb() + 1;
+    let frame_mbs_only = bits.bits(1);
+    let coded_extent = (
+        width_in_macroblocks * 16,
+        height_in_map_units * 16 * (2 - frame_mbs_only),
+    );
+
+    if frame_mbs_only == 0 {
+        bits.bits(1); // mb_adaptive_frame_field_flag
+    }
+    bits.bits(1); // direct_8x8_inference_flag
+    if bits.bits(1) == 1 {
+        for _ in 0..4 {
+            bits.exp_golomb(); // frame_crop_{left,right,top,bottom}_offset
+        }
+    }
+    let vui_parameters_present = bits.bits(1) == 1;
+    if !vui_parameters_present {
+        return (coded_extent, H273ColorVui::default());
+    }
+    if bits.bits(1) == 1 && bits.bits(8) == 255 {
+        bits.bits(32); // sar_width, sar_height
+    }
+    if bits.bits(1) == 1 {
+        bits.bits(1); // overscan_appropriate_flag
+    }
+    let video_signal_type_present = bits.bits(1) == 1;
+    if !video_signal_type_present {
+        return (coded_extent, H273ColorVui::default());
+    }
+    bits.bits(3); // video_format
+    let full_range = bits.bits(1) == 1;
+    let colour_description_present = bits.bits(1) == 1;
+    let mut colour_description_byte = || colour_description_present.then(|| bits.bits(8) as u8);
+    let primaries = colour_description_byte();
+    let transfer = colour_description_byte();
+    let matrix = colour_description_byte();
+    (
+        coded_extent,
+        H273ColorVui {
+            primaries,
+            transfer,
+            matrix,
+            full_range: Some(full_range),
+        },
+    )
 }
 
 /// Reads an RBSP's bits, emulation-prevention bytes removed.
