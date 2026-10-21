@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.12](https://github.com/tatolab/streamlib/compare/v0.54.11...v0.54.12) (2026-10-21)
+
+
+### Bug Fixes
+
+* **codec:** the VideoToolbox encoder writes and signals BT.709 limited range, the colour every engine encoder writes ([#2903](https://github.com/tatolab/streamlib/issues/2903)) ([43e129d](https://github.com/tatolab/streamlib/commit/43e129dd6ede11807006597934c699b4d9524d19))
+
 ## [0.54.11](https://github.com/tatolab/streamlib/compare/v0.54.10...v0.54.11) (2026-10-21)
 
 
