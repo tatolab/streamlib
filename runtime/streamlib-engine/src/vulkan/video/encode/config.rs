@@ -364,10 +364,9 @@ pub struct SimpleEncoderConfig {
     /// This effort index does not move PSNR at fixed CQP on the reference
     /// driver.
     pub effort_level: Option<u32>,
-    /// The source frames' H.273 colour. Its primaries and transfer reach the
-    /// SPS VUI; the matrix and range there are always BT.709 limited, what
-    /// `rgb_to_nv12.comp` writes. Callers translate their domain `ColorInfo` →
-    /// [`H273ColorVui`] at the processor seam.
+    /// The source frames' H.273 colour; the SPS VUI states
+    /// `color_vui_every_engine_encoder_writes` of it. Callers translate their
+    /// domain `ColorInfo` → [`H273ColorVui`] at the processor seam.
     pub color_vui: Option<H273ColorVui>,
 }
 
