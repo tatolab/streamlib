@@ -49,6 +49,9 @@ hardware-tests = ["streamlib/hardware-tests"]
 audible-hardware-tests = ["hardware-tests", "streamlib/audible-hardware-tests"]
 
 [dev-dependencies]
+# The relay source's tests run its output into input mailboxes over a channel in
+# the test process's own iceoryx2 domain.
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.54.10", default-features = false, features = ["test-support"] }
 serde_json = { workspace = true }
 # Pins each golden graph's bytes, so a golden is added beside the others and never edited.
 sha2 = { workspace = true }
