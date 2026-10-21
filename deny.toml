@@ -206,11 +206,6 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
-name = "vulkan-jpeg"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
 name = "xtask"
 expression = "BUSL-1.1"
 license-files = []

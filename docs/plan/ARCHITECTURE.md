@@ -675,7 +675,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   this doctrine, and that backlog is executed in full: `audio-mixer-demo`,
   `microphone-reverb-speaker`, `raytracing-showcase` and `fisheye-object-detection` are
   Python, and `camera-compute-kernel` and `camera-halftone` are kernel examples.
-  `examples/` stands at ten converted beside two held. A showcase authored in the
+  `examples/` stands at ten converted beside one held. A showcase authored in the
   current idiom is an ordinary addition under the convention below, not conversion backlog:
   `camera-webrtc-publish` sends camera and microphone through the codec blocks to
   `WhipPublisher`, credentials from the environment; and `camera-virtual-camera` is the
@@ -725,10 +725,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [consumer-tree-disposition — SHIPPED #2052]
 - **DECIDED** — A consumer blocked on an undecided domain is held in-tree until the
   align covering that domain mines it for logic; its deletion rides that change's own
-  ship. Held on codec blocks: `packages/jpeg` and `examples/jpeg-psnr`, which delete outright
-  with the retired `JpegDecoder` rather than waiting on a rung. Held on audio plugins:
-  `packages/clap`. Held on screen capture: `packages/screen-capture`,
-  `examples/screen-recorder`. [consumer-tree-disposition — SHIPPED #2052; amended by
+  ship. Held on audio plugins: `packages/clap`. Held on screen capture:
+  `packages/screen-capture`, `examples/screen-recorder`. [consumer-tree-disposition — SHIPPED #2052; amended by
   jpeg-after-the-robotics-cut: the JPEG pair deletes outright]
 - **DECIDED** — No additional native-processor *distribution* mechanism is owed
   pre-1.0: an extension wheel is an ordinary Python package on the ordinary index, and

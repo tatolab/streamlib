@@ -372,8 +372,8 @@ pub fn scan_rust(
                             .to_str()
                             .is_some_and(is_parked_pending_segment)
                     }) {
-                        // Parked implementation dirs (`_apple_impl_pending_`,
-                        // `_nvjpeg_impl_pending_`, ...) hold code that is NOT
+                        // Parked implementation dirs (`_apple_impl_pending_`, ...)
+                        // hold code that is NOT
                         // declared in any mod graph and never compiles — lint it
                         // when it is activated, not while parked.
                         continue;
@@ -407,8 +407,8 @@ pub fn scan_rust(
 }
 
 /// Whether a path segment names a parked implementation dir per the
-/// `_<name>_pending_` convention (`_apple_impl_pending_`,
-/// `_nvjpeg_impl_pending_`, `tests_pending` nested inside one, ...).
+/// `_<name>_pending_` convention (`_apple_impl_pending_`, `tests_pending`
+/// nested inside one, ...).
 fn is_parked_pending_segment(segment: &str) -> bool {
     segment.starts_with('_') && segment.ends_with("pending_")
 }

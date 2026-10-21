@@ -227,7 +227,7 @@ expect_silent "posting the launch path as data is not launching it"
 run_hook 'ls examples/ && grep -rn "cargo run" examples/'
 expect_silent "listing then grepping for cargo run stays silent"
 
-run_hook 'tail -20 examples/jpeg-psnr/README.md'
+run_hook 'tail -20 examples/screen-recorder/README.md'
 expect_silent "reading an example README stays silent"
 
 # ── Not a launch: --help, and cargo run of a workspace target ────────
@@ -249,10 +249,10 @@ expect_silent "no -p spelling reaches an example crate"
 run_hook 'cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/main.hang h264encoder/encoded_video --count 30 --out /tmp/e2e/track' '/home/dev/streamlib/examples/camera-display'
 expect_silent "cargo run -p tatolab-read-track from inside an example directory is a workspace tool, not a launch"
 
-run_hook 'cargo run --release' '/home/dev/streamlib/examples/jpeg-psnr'
+run_hook 'cargo run --release' '/home/dev/streamlib/examples/screen-recorder'
 expect_warn "cargo run from inside an example directory is noted" example_launch
 
-run_hook 'cargo run --manifest-path examples/jpeg-psnr/Cargo.toml'
+run_hook 'cargo run --manifest-path examples/screen-recorder/Cargo.toml'
 expect_warn "cargo run against an example manifest is noted" example_launch
 
 run_hook 'git grep -n "cargo run" -- examples/'
@@ -291,7 +291,7 @@ expect_silent "a commit-message heredoc quoting the launch stays silent"
 
 run_hook 'cat <<'"'"'EOF'"'"' > /tmp/x
 cargo run
-EOF' '/home/dev/streamlib/examples/jpeg-psnr'
+EOF' '/home/dev/streamlib/examples/screen-recorder'
 expect_silent "a heredoc quoting cargo run inside an example directory stays silent"
 
 run_hook 'cat > /tmp/notes.md <<'"'"'EOF'"'"'
@@ -497,7 +497,7 @@ echo "rig-brake.sh — globs"
 set_config project '{"allow": ["*e2e_fixture_psnr_test_pattern.sh*"]}'
 run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh /tmp/v h264'
 expect_silent "an allow glob silences a matching command"
-run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/p'
+run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/p'
 expect_warn "an allow glob leaves a non-matching command noted" e2e_fixture
 clear_config
 

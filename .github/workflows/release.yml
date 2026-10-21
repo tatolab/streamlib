@@ -48,7 +48,7 @@ jobs:
       # The `simple` release-type bumps [workspace.package].version in Cargo.toml
       # but ships no cargo dependency-requirement updater. Every in-tree crate
       # pins its workspace-versioned sibling crates with a frozen
-      # `version = "X.Y.Z"` requirement (e.g. streamlib-error, vulkan-jpeg). Those
+      # `version = "X.Y.Z"` requirement (e.g. streamlib-error). Those
       # requirements never move on their own: caret-compatible within a 0.17.x
       # line but silently EXCLUDING the next breaking bump (0.18.0), which leaves
       # the release branch holding a workspace that cannot resolve at all.
