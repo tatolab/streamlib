@@ -126,11 +126,6 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
         })
     }
 
-    /// The track's properties, as its publisher declared them.
-    pub fn track_info(&self) -> &moq_net::track::Info {
-        self.groups_in_arrival_order.info()
-    }
-
     /// The next group in sequence or the run of sequences given up before it;
     /// `None` once the track ended and everything before its end is released.
     pub async fn next_released_group(
