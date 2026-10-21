@@ -2061,9 +2061,6 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   import (MoltenVK before 1.4.1) falls back to CPU upload. Owner, 2026-09-21, while shipping
   #2359; a driver patch to import the surface as an NV12 image was ruled out, 2026-09-26
   (#2488, #2489). [media-io-layering; macos-platform-floor — SHIPPED #2359]
-  Rejected: MJPEG capture, decoding a camera's JPEG frames in the capture path — every camera
-  the runtime meets offers full size and rate uncompressed, and USB 2.0 webcams are out of
-  scope (owner, 2026-10-21).
 - **DECIDED** — Python-authored media processors (vendor or user) run in their own
   helper process like every other Python processor and are supported where deadlines
   allow: camera-class sources and block-level audio fit within the helper hop's

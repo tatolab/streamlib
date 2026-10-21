@@ -1,8 +1,7 @@
 # jpeg-after-the-robotics-cut
 
 > **Approved by the owner, 2026-10-05.** Cut to removal only by the owner on 2026-10-21: MJPEG
-> capture is not built, and no JPEG decoder survives anywhere (§Media I/O, the camera transport
-> entry's `Rejected:` line).
+> capture is not built, and no JPEG decoder survives anywhere.
 
 The removal half of the JPEG align (owner, 2026-10-04). After this change the tree holds no
 JPEG block, no JPEG decoder, no nvJPEG backend, no `libnvjpeg` probe, no
