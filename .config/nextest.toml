@@ -30,6 +30,7 @@ default-filter = """
   | package(streamlib-relay-adapter-local)
   | package(streamlib-relay-adapter-cloudflare)
   | package(streamlib-relay-adapter-moqpro)
+  | package(streamlib-relay-track-reader)
   | (kind(lib) & (
         package(streamlib-macros)
       | package(streamlib-processor-schema)
