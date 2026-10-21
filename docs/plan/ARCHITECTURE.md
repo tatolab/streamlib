@@ -3257,8 +3257,8 @@ Reading rule since the 2026-10-16 align (`[moq-relays]`): "bag" in an older entr
   carries the camera, microphone and local-network usage strings; the app and `tatolabd`
   carry the hardened-runtime device entitlements; only the runtime process opens devices,
   never a processor interpreter. The runtime checks authorization before opening a device and
-  refuses by name, because a denied microphone delivers silence. Nothing discovers on the LAN;
-  the local-network usage string ships. A runtime started from a terminal credits that terminal — the
+  refuses by name, because a denied microphone delivers silence. A runtime started from a
+  terminal credits that terminal — the
   responsible code — and only Apple's Terminal is exempt from the local-network check.
   Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
   #2721]
