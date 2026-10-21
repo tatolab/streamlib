@@ -18,6 +18,8 @@ mod machine_stream_hosting;
 mod numbered_message_writer_test_node;
 #[cfg(not(feature = "machine-directories-under-a-test-root"))]
 mod os_relay_secret_store;
+#[cfg(feature = "machine-directories-under-a-test-root")]
+mod paired_group_writer_test_node;
 mod refusal_on_standard_error;
 mod relay_instances_of_this_runtime;
 mod relay_instances_record;
