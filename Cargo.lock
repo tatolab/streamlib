@@ -6291,6 +6291,7 @@ dependencies = [
  "moq-tokio",
  "serde",
  "serde_json",
+ "streamlib-relay-track-reader",
  "tempfile",
  "tokio",
  "url",
