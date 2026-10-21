@@ -3855,6 +3855,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_track_whose_timestamps_never_advance_gives_up_a_hole_only_on_its_reset_or_end -->
   <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_track_that_ends_gives_up_its_missing_groups -->
   <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_reader_joining_a_track_with_cached_history_starts_at_the_live_edge -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order at_a_max_age_of_zero_a_missing_group_is_given_up_only_once_newer_content_runs_past_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_reading_paired_writes_keeps_every_group -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
   and the `moq-relay` program, each pinned to an exact version the change that builds the

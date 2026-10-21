@@ -242,13 +242,36 @@ async fn a_reset_group_is_given_up_at_once() {
 #[tokio::test]
 async fn a_given_up_group_arriving_late_is_discarded() {
     let (track, mut reader) = a_track_read_from_its_first_group(ONE_HUNDRED_MILLISECONDS).await;
-    track.write_the_groups(2..=7);
-    let mut expected = vec![Released::GivenUp { groups: 1 }];
-    expected.extend((2..=7).map(in_sequence));
-    assert_eq!(the_next_releases_of(&mut reader, 7).await, expected);
+    let group_reset_while_held = track.open_the_group(2);
+    track.write_the_group(3);
+    assert_the_reader_holds(&mut reader).await;
+    group_reset_while_held
+        .abort(moq_net::Error::Cancel)
+        .unwrap();
+    assert_the_reader_holds(&mut reader).await;
     track.write_the_group(1);
-    track.write_the_group(8);
-    assert_eq!(the_next_release_of(&mut reader).await, in_sequence(8));
+    assert_eq!(
+        the_next_releases_of(&mut reader, 3).await,
+        [
+            in_sequence(1),
+            Released::GivenUp { groups: 1 },
+            in_sequence(3)
+        ]
+    );
+    // Served again within max_age of the track's newest content, so the
+    // stack hands it over; its loss is already counted.
+    track.write_the_group(2);
+    assert_the_reader_holds(&mut reader).await;
+    track.write_the_group(5);
+    track.track.finish().unwrap();
+    assert_eq!(
+        the_next_releases_of(&mut reader, 3).await,
+        [
+            Released::GivenUp { groups: 1 },
+            in_sequence(5),
+            Released::TrackEnded
+        ]
+    );
 }
 
 #[tokio::test]
@@ -323,4 +346,20 @@ async fn a_reader_joining_a_track_with_cached_history_starts_at_the_live_edge() 
     assert_eq!(the_next_release_of(&mut reader).await, in_sequence(4));
     track.write_the_group(5);
     assert_eq!(the_next_release_of(&mut reader).await, in_sequence(5));
+}
+
+#[tokio::test]
+async fn at_a_max_age_of_zero_a_missing_group_is_given_up_only_once_newer_content_runs_past_it() {
+    let (track, mut reader) = a_track_read_from_its_first_group(Duration::ZERO).await;
+    track.write_the_group(2);
+    assert_the_reader_holds(&mut reader).await;
+    track.write_the_group(3);
+    assert_eq!(
+        the_next_releases_of(&mut reader, 3).await,
+        [
+            Released::GivenUp { groups: 1 },
+            in_sequence(2),
+            in_sequence(3)
+        ]
+    );
 }

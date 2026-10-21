@@ -18,14 +18,7 @@ pub enum ReleasedRelayTrackGroup {
     GivenUp { groups: u64 },
 }
 
-/// A relay track's groups, released lowest sequence first.
-///
-/// A group that arrives in sequence is released at once. A missing sequence
-/// is held for and given up only when its stream is reset, when the track
-/// ends, or when newer content on the track has run `max_age` past the
-/// missing group's reach — the first timestamp of the held group right after
-/// it — measured in the track's own timestamps and never on a clock. The read
-/// joins at the live edge, replaying no cached history.
+/// A relay track's groups, released lowest sequence first from the live edge.
 ///
 /// [`Self::next_released_group`] is cancel-safe: dropping it mid-wait loses no
 /// group, so it can sit in a `select!` beside other work.
@@ -155,7 +148,8 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
         Self::subscribe(track, the_tracks_retention).await
     }
 
-    /// The next group in sequence or the run of sequences given up before it;
+    /// The next group in sequence, or the run of missing sequences given up on
+    /// its stream's reset, the track's end, or newer content `max_age` past it;
     /// `None` once the track ended and everything before its end is released.
     pub async fn next_released_group(
         &mut self,
