@@ -13,7 +13,7 @@ use futures_util::future::select_all;
 /// What a [`RelayTrackGroupsReleasedInSequenceOrder`] releases next.
 pub enum ReleasedRelayTrackGroup {
     /// The next group in sequence, read from its first object.
-    InSequence(moq_net::group::Consumer),
+    InSequence(Box<moq_net::group::Consumer>),
     /// Consecutive sequences given up, each group counting as one.
     GivenUp { groups: u64 },
 }
@@ -96,7 +96,7 @@ enum RelayTrackArrivals {
 
 /// What one wait on the track produced.
 enum RelayTrackEvent {
-    GroupArrived(moq_net::group::Consumer),
+    GroupArrived(Box<moq_net::group::Consumer>),
     TrackEnded,
     HeldGroupFrameRead {
         sequence: u64,
@@ -144,7 +144,7 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
                 return Ok(None);
             }
             match self.the_next_event().await? {
-                RelayTrackEvent::GroupArrived(group) => self.take_the_arrival_of(group),
+                RelayTrackEvent::GroupArrived(group) => self.take_the_arrival_of(*group),
                 RelayTrackEvent::TrackEnded => {
                     let exclusive_final_sequence = self
                         .groups_in_arrival_order
@@ -195,7 +195,7 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
         tokio::select! {
             biased;
             arrival = groups_in_arrival_order.recv_group() => Ok(match arrival? {
-                Some(group) => RelayTrackEvent::GroupArrived(group),
+                Some(group) => RelayTrackEvent::GroupArrived(Box::new(group)),
                 None => RelayTrackEvent::TrackEnded,
             }),
             (sequence, frame_read) = the_next_held_group_frame_read => {
@@ -255,9 +255,9 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
                 return Some(ReleasedRelayTrackGroup::GivenUp { groups: 1 });
             }
             self.a_group_was_released = true;
-            return Some(ReleasedRelayTrackGroup::InSequence(
+            return Some(ReleasedRelayTrackGroup::InSequence(Box::new(
                 held_group.group_to_release,
-            ));
+            )));
         }
         let lowest_held_sequence = self.held_groups_by_sequence.keys().next().copied();
         let the_missing_run_ends_before = match self.arrivals {
