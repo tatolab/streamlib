@@ -373,9 +373,9 @@ pub fn scan_rust(
                             .is_some_and(is_parked_pending_segment)
                     }) {
                         // Parked implementation dirs (`_apple_impl_pending_`, ...)
-                        // hold code that is NOT
-                        // declared in any mod graph and never compiles — lint it
-                        // when it is activated, not while parked.
+                        // hold code that is NOT declared in any mod graph and
+                        // never compiles — lint it when it is activated, not
+                        // while parked.
                         continue;
                     }
                     if paths_already_counted.insert(path.to_path_buf()) {
