@@ -27,8 +27,7 @@ it. Hand-rolling a parallel ring inside a consumer is the
 anti-pattern this abstraction exists to prevent.
 
 For GPU-native producers that write to ring slots via a compute
-kernel (camera, future GPU-decoded H.264 / H.265 output)
-the same ring shape applies — the only difference is whether the
+kernel (camera, etc.) the same ring shape applies — the only difference is whether the
 consumer fills a slot via `copy_pixel_buffer_to_texture` (CPU
 upload) or by dispatching its own compute kernel directly against
 the slot's `texture`. The ring doesn't care.
