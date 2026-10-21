@@ -530,6 +530,7 @@ impl OutputWriterInner {
     /// For engine-internal writers only. A declaration after the port's last
     /// write reaches no reader; this port's count still has it. A declared
     /// port no link has reached counts nothing, as a write to it sends nothing.
+    #[doc(hidden)]
     pub fn declare_groups_given_up_upstream_before_the_next_write(
         &self,
         port: &str,
@@ -707,6 +708,7 @@ impl OutputWriter {
     /// Declare `given_up_group_count` groups given up upstream of `port`, told
     /// to its `ordered` readers with the next message it sends. For
     /// engine-internal writers only.
+    #[doc(hidden)]
     pub fn declare_groups_given_up_upstream_before_the_next_write(
         &self,
         port: &str,
