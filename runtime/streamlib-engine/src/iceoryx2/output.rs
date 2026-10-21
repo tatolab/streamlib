@@ -34,8 +34,8 @@ use serde::Serialize;
 use super::helper_process_loss_count_board::OutputPortBagCountBoardMirror;
 use super::loss_counters::{BagCountsByOutputPort, OutputPortBagCounters};
 use super::{
-    ChannelDataServicePublisher, ChannelTrustTier, DataChannelBagSequenceNumberUserHeader,
-    FRAME_HEADER_SIZE, FrameHeader, MessageGroupBoundary,
+    ChannelDataServicePublisher, ChannelTrustTier, DataChannelBagUserHeader, FRAME_HEADER_SIZE,
+    FrameHeader, MessageGroupBoundary,
 };
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
@@ -470,7 +470,7 @@ impl OutputWriterInner {
             .publisher
             .loan_slice_uninit(total_len)
             .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
-        *sample.user_header_mut() = DataChannelBagSequenceNumberUserHeader {
+        *sample.user_header_mut() = DataChannelBagUserHeader {
             sequence_number: egress.next_sequence_number,
             messages_lost_upstream_before_this_one: egress
                 .messages_lost_upstream_before_the_next_send,
@@ -1501,11 +1501,11 @@ mod tests {
         assert_eq!(
             channel_user_headers,
             vec![
-                DataChannelBagSequenceNumberUserHeader {
+                DataChannelBagUserHeader {
                     sequence_number: 0,
                     messages_lost_upstream_before_this_one: 2,
                 },
-                DataChannelBagSequenceNumberUserHeader {
+                DataChannelBagUserHeader {
                     sequence_number: 1,
                     messages_lost_upstream_before_this_one: 0,
                 },

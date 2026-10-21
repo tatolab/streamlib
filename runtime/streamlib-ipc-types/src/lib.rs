@@ -50,7 +50,7 @@ pub const UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES: usize = 16 * 1024 * 102
 
 /// Bytes iceoryx2 lays out ahead of a channel frame in the shared-memory sample
 /// that carries it: its own publish-subscribe header, this crate's
-/// [`DataChannelBagSequenceNumberUserHeader`], and the padding aligning them.
+/// [`DataChannelBagUserHeader`], and the padding aligning them.
 ///
 /// Mirrors `MessageTypeDetails::all_headers_len`, which is crate-private
 /// upstream: the header, then the user header at its alignment, then the
@@ -58,8 +58,8 @@ pub const UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES: usize = 16 * 1024 * 102
 /// than written out, so a size change upstream moves this with it.
 const ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME: usize =
     (size_of::<iceoryx2::service::header::publish_subscribe::Header>()
-        .next_multiple_of(align_of::<DataChannelBagSequenceNumberUserHeader>())
-        + size_of::<DataChannelBagSequenceNumberUserHeader>())
+        .next_multiple_of(align_of::<DataChannelBagUserHeader>())
+        + size_of::<DataChannelBagUserHeader>())
     .next_multiple_of(align_of::<u8>());
 
 /// The alignment iceoryx2 rounds a whole channel sample up to. Mirrors
@@ -67,7 +67,7 @@ const ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME: usize =
 /// the user header's and the payload's; a `[u8]` payload's is `1`.
 const ICEORYX2_SAMPLE_ALIGNMENT_BYTES: usize = {
     let header_alignment = align_of::<iceoryx2::service::header::publish_subscribe::Header>();
-    let user_header_alignment = align_of::<DataChannelBagSequenceNumberUserHeader>();
+    let user_header_alignment = align_of::<DataChannelBagUserHeader>();
     if header_alignment > user_header_alignment {
         header_alignment
     } else {
@@ -678,9 +678,9 @@ impl std::error::Error for FramePayloadRefusal {}
 /// pinned because the default one carries the module path, and every opener of
 /// a data service must present the same name or be refused `IncompatibleTypes`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
-#[type_name("DataChannelBagSequenceNumberUserHeader")]
+#[type_name("DataChannelBagUserHeader")]
 #[repr(C)]
-pub struct DataChannelBagSequenceNumberUserHeader {
+pub struct DataChannelBagUserHeader {
     /// Counted from zero per publisher; consumed by every send that may have
     /// delivered.
     pub sequence_number: u64,
@@ -699,7 +699,7 @@ const HELPER_PROCESS_LOSS_COUNT_BOARD_OUTPUT_PORT_SECTION: u32 = 1;
 /// inbound-link slot, or a declared output port by its index.
 ///
 /// The iceoryx2 type name is pinned for the reason
-/// [`DataChannelBagSequenceNumberUserHeader`]'s is: the parent creates the board
+/// [`DataChannelBagUserHeader`]'s is: the parent creates the board
 /// and the helper opens it, and both must present the same key type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, ZeroCopySend)]
 #[type_name("HelperProcessLossCountBoardKey")]
@@ -920,29 +920,23 @@ mod tests {
 
     #[test]
     fn the_channel_user_header_is_two_u64s_under_its_pinned_name() {
+        assert_eq!(std::mem::size_of::<DataChannelBagUserHeader>(), 16);
+        assert_eq!(std::mem::align_of::<DataChannelBagUserHeader>(), 8);
         assert_eq!(
-            std::mem::size_of::<DataChannelBagSequenceNumberUserHeader>(),
-            16
-        );
-        assert_eq!(
-            std::mem::align_of::<DataChannelBagSequenceNumberUserHeader>(),
-            8
-        );
-        assert_eq!(
-            std::mem::offset_of!(DataChannelBagSequenceNumberUserHeader, sequence_number),
+            std::mem::offset_of!(DataChannelBagUserHeader, sequence_number),
             0
         );
         assert_eq!(
             std::mem::offset_of!(
-                DataChannelBagSequenceNumberUserHeader,
+                DataChannelBagUserHeader,
                 messages_lost_upstream_before_this_one
             ),
             8
         );
         assert_eq!(
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
-            unsafe { <DataChannelBagSequenceNumberUserHeader as ZeroCopySend>::type_name() },
-            "DataChannelBagSequenceNumberUserHeader",
+            unsafe { <DataChannelBagUserHeader as ZeroCopySend>::type_name() },
+            "DataChannelBagUserHeader",
             "the iceoryx2 type name every opener must present, independent of the module path"
         );
     }
@@ -1246,11 +1240,11 @@ mod tests {
     fn a_channel_samples_layout_is_iceoryx2s_own_over_the_two_headers_and_the_payload() {
         type Iceoryx2PublishSubscribeHeader = iceoryx2::service::header::publish_subscribe::Header;
         let all_headers_len = (size_of::<Iceoryx2PublishSubscribeHeader>()
-            .next_multiple_of(align_of::<DataChannelBagSequenceNumberUserHeader>())
-            + size_of::<DataChannelBagSequenceNumberUserHeader>())
+            .next_multiple_of(align_of::<DataChannelBagUserHeader>())
+            + size_of::<DataChannelBagUserHeader>())
         .next_multiple_of(align_of::<u8>());
         let max_alignment = align_of::<Iceoryx2PublishSubscribeHeader>()
-            .max(align_of::<DataChannelBagSequenceNumberUserHeader>())
+            .max(align_of::<DataChannelBagUserHeader>())
             .max(align_of::<u8>());
         for frame_total_bytes in [0usize, 1, 7, 8, 9, 4096, 65_536, 1_000_003] {
             let upstream_formula = (all_headers_len

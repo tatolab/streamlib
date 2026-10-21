@@ -1009,7 +1009,7 @@ entry reads as **message** (the glossary).
   that fail before any delivery consume no number; the other three consume one, because
   iceoryx2 does not report a partial delivery, and a subscriber the failed send never
   reached therefore reads a real loss. **The header is one engine type**,
-  `DataChannelBagSequenceNumberUserHeader`, with its iceoryx2 type name pinned so a move
+  `DataChannelBagUserHeader`, with its iceoryx2 type name pinned so a move
   never changes its identity, and a source-walking gate refuses a data `publish_subscribe`
   builder outside the node wrapper so no site can open a service without it. **A gap and an
   eviction never double-count**: a ring gap is a bag never received and an eviction is a bag

@@ -32,7 +32,7 @@ use crate::core::graph::{
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
 use crate::iceoryx2::{
-    BagsAGapInTheNumberingSaysWereLost, DataChannelBagSequenceNumberUserHeader, FrameHeader,
+    BagsAGapInTheNumberingSaysWereLost, DataChannelBagUserHeader, FrameHeader,
     MessageReadFromInputPort,
 };
 
@@ -399,7 +399,7 @@ impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnb
     fn message_from_a_bag_headed(
         &mut self,
         run: OneUnbrokenRun,
-        channel_user_header: DataChannelBagSequenceNumberUserHeader,
+        channel_user_header: DataChannelBagUserHeader,
         framed_bag: &[u8],
     ) -> Option<MessageReadFromInputPort> {
         self.lost_ahead_of_the_next_message_forwarded = self
@@ -807,8 +807,8 @@ mod tests {
     }
 
     /// A channel user header carrying `sequence_number` and no declared loss.
-    fn numbered(sequence_number: u64) -> DataChannelBagSequenceNumberUserHeader {
-        DataChannelBagSequenceNumberUserHeader {
+    fn numbered(sequence_number: u64) -> DataChannelBagUserHeader {
+        DataChannelBagUserHeader {
             sequence_number,
             messages_lost_upstream_before_this_one: 0,
         }
@@ -871,7 +871,7 @@ mod tests {
     fn the_forwarding_tells_a_declared_upstream_loss_on_the_message_carrying_it() {
         let mut forwarding = ExposedOutputPortMessageForwarding::<u64>::default();
         let run = 1u64;
-        let first_carrying_two_lost_upstream = DataChannelBagSequenceNumberUserHeader {
+        let first_carrying_two_lost_upstream = DataChannelBagUserHeader {
             sequence_number: 0,
             messages_lost_upstream_before_this_one: 2,
         };

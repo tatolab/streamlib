@@ -25,7 +25,7 @@ use iceoryx2::identifiers::UniquePublisherId;
 use crate::core::error::{Error, Result};
 use crate::iceoryx2::{
     ChannelIdlePollBackoff, ChannelReservedSlotSubscribeError, ChannelSizing,
-    DataChannelBagSequenceNumberUserHeader, Iceoryx2Node,
+    DataChannelBagUserHeader, Iceoryx2Node,
 };
 
 /// One bag as the reserved slot received it.
@@ -34,7 +34,7 @@ pub(crate) struct BagReceivedOnTheReservedSlot<'sample> {
     pub(crate) publisher: UniquePublisherId,
     /// The number its publisher gave it, and the messages its writer declared
     /// lost upstream ahead of it.
-    pub(crate) channel_user_header: DataChannelBagSequenceNumberUserHeader,
+    pub(crate) channel_user_header: DataChannelBagUserHeader,
     /// The bag as published: frame header, then payload.
     pub(crate) framed_bag: &'sample [u8],
 }

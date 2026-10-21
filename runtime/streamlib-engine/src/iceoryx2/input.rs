@@ -1612,7 +1612,7 @@ mod tests {
     use super::*;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::test_support::CapturedTracingWarnings;
-    use crate::iceoryx2::{DataChannelBagSequenceNumberUserHeader, PortKey};
+    use crate::iceoryx2::{DataChannelBagUserHeader, PortKey};
 
     fn unique_suffix(tag: &str) -> String {
         format!(
@@ -1663,7 +1663,7 @@ mod tests {
         /// Send `bytes` as one sample carrying the next sequence number.
         fn send_numbered(&self, bytes: &[u8]) {
             let mut sample = self.publisher.loan_slice_uninit(bytes.len()).unwrap();
-            *sample.user_header_mut() = DataChannelBagSequenceNumberUserHeader {
+            *sample.user_header_mut() = DataChannelBagUserHeader {
                 sequence_number: self
                     .next_sequence_number
                     .replace(self.next_sequence_number.get() + 1),

@@ -90,7 +90,7 @@ The ways to carry it disagree with those sentences differently.
   - **Cost:** it cannot be told apart from a ring overwrite.
   - **Plan wording:** `:999-1003` gains "or a writer declared lost".
 - **(b) A second field in the user header — chosen.**
-  `DataChannelBagSequenceNumberUserHeader` gains `messages_lost_upstream_before_this_one: u64`,
+  `DataChannelBagSequenceNumberUserHeader` (renamed `DataChannelBagUserHeader` as built) gains `messages_lost_upstream_before_this_one: u64`,
   with its layout test, written by a new engine-internal writer call.
   - **Readers:** a reader adds it to `lost_since_last_read` on `ordered` ports, read straight
     off the header with no baseline involved. It never adds it to the link's dropped count.
@@ -197,7 +197,7 @@ The entries' text stands. Each gains `<!-- verify: -->` lines naming the tests b
     the engine's input and output pair.
   - `a_given_up_group_is_counted_on_the_relay_source_and_not_on_the_downstream_link`.
 - **The engine:**
-  - a layout regression test for the widened `DataChannelBagSequenceNumberUserHeader`;
+  - a layout regression test for the widened `DataChannelBagUserHeader`;
   - `a_declared_upstream_loss_reaches_lost_since_last_read_on_an_ordered_port`;
   - `a_declared_upstream_loss_on_a_links_first_sample_is_still_counted`;
   - `a_newest_port_does_not_count_a_declared_upstream_loss`.

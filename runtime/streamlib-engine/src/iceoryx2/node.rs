@@ -22,9 +22,7 @@ use super::helper_process_loss_count_board::{
     HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter, inbound_link_slot_keys,
     output_port_keys,
 };
-use super::{
-    DataChannelBagSequenceNumberUserHeader, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
-};
+use super::{DataChannelBagUserHeader, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
 use crate::core::error::{Error, Result};
 use streamlib_ipc_types::{
     HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry,
@@ -235,13 +233,11 @@ pub(crate) struct ChannelSizing {
 
 /// The publisher of a channel data service: `[u8]` frames under the
 /// sequence-number user header.
-pub type ChannelDataServicePublisher =
-    Publisher<ipc::Service, [u8], DataChannelBagSequenceNumberUserHeader>;
+pub type ChannelDataServicePublisher = Publisher<ipc::Service, [u8], DataChannelBagUserHeader>;
 
 /// A subscriber to a channel data service: `[u8]` frames under the
 /// sequence-number user header.
-pub type ChannelDataServiceSubscriber =
-    Subscriber<ipc::Service, [u8], DataChannelBagSequenceNumberUserHeader>;
+pub type ChannelDataServiceSubscriber = Subscriber<ipc::Service, [u8], DataChannelBagUserHeader>;
 
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
@@ -303,7 +299,7 @@ impl Iceoryx2Node {
     }
 
     /// Open or create a channel-centric publish-subscribe service for `[u8]`
-    /// slices under [`DataChannelBagSequenceNumberUserHeader`].
+    /// slices under [`DataChannelBagUserHeader`].
     ///
     /// Every opener comes through here or [`Self::open_existing_channel_service`],
     /// which share one builder: iceoryx2 refuses an opener presenting any other
@@ -489,15 +485,15 @@ fn iceoryx2_service_name_of(service_name: &str) -> Result<ServiceName> {
 }
 
 /// The channel data service builder: `[u8]` frames under
-/// [`DataChannelBagSequenceNumberUserHeader`], the one type pair every opener
+/// [`DataChannelBagUserHeader`], the one type pair every opener
 /// presents.
 fn channel_data_service_builder(
     node: &Node<ipc::Service>,
     service_name: &ServiceName,
-) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagSequenceNumberUserHeader, ipc::Service> {
+) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagUserHeader, ipc::Service> {
     node.service_builder(service_name)
         .publish_subscribe::<[u8]>()
-        .user_header::<DataChannelBagSequenceNumberUserHeader>()
+        .user_header::<DataChannelBagUserHeader>()
 }
 
 /// The channel data service builder carrying the whole channel policy every
@@ -511,7 +507,7 @@ fn channel_data_service_builder_under_the_channel_policy(
     service_name: &ServiceName,
     max_subscribers: usize,
     channel_service_creation_depth: usize,
-) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagSequenceNumberUserHeader, ipc::Service> {
+) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagUserHeader, ipc::Service> {
     channel_data_service_builder(node, service_name)
         .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
         .max_subscribers(max_subscribers)
@@ -576,7 +572,7 @@ fn channel_data_service_built_by_something_other_than_this_engine(
 ) -> Error {
     Error::Runtime(format!(
         "channel data service '{}' exists with a sample type other than `[u8]` frames under \
-         the `DataChannelBagSequenceNumberUserHeader` user header, so it was built by \
+         the `DataChannelBagUserHeader` user header, so it was built by \
          something other than this engine: {failure:?}",
         service_name.as_str()
     ))
@@ -587,7 +583,7 @@ pub struct Iceoryx2Service {
     inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
         ipc::Service,
         [u8],
-        DataChannelBagSequenceNumberUserHeader,
+        DataChannelBagUserHeader,
     >,
 }
 
@@ -1038,7 +1034,7 @@ mod tests {
             Err(refusal) => refusal.to_string(),
         };
         assert!(
-            refusal.contains("DataChannelBagSequenceNumberUserHeader")
+            refusal.contains("DataChannelBagUserHeader")
                 && refusal.contains(&built_without_the_header),
             "the refusal must name the header and the service: {refusal}"
         );
