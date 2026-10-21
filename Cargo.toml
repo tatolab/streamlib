@@ -27,6 +27,7 @@ members = [
     "runtime/streamlib-relay-adapter-moqpro", # The moq.pro relay adapter: a project dialed at its path on moq.pro's relays with a JWT signed by the project's key, granting the machine's own broadcasts and renewed before it expires; public ports under the project
     "runtime/tatolabd", # `tatolabd` — the runtime process: hosts one stream in the foreground, engine and built-ins, no Python in its process
     "runtime/tatolab-cli", # `tatolab` — the native CLI, linking no engine: `new`; `run`/`dev`, which compile in the project's venv and start `tatolabd` attached; `graph`, `logs` and `mcp`, which observe running runtimes through their local API sockets and their log files; `enable-virtual-camera`
+    "runtime/streamlib-relay-track-reader", # engine-free: the one relay-track reader — a track's groups received in arrival order, released in sequence order, a missing one given up only on its reset, the track's end, or newer content past the reader's max_age; the relay source node and `tatolab-read-track` read through it
     "runtime/tatolab-read-track", # `tatolab-read-track` — a MoQ subscriber writing one track's objects to files, the rigs' way to read a port as a user does; a development tool, never shipped in the runtime unit
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-sys", # Vendored vulkanalia-sys fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md

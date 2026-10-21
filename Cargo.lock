@@ -6115,6 +6115,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamlib-relay-track-reader"
+version = "0.54.9"
+dependencies = [
+ "futures-util",
+ "moq-net",
+ "tokio",
+]
+
+[[package]]
 name = "streamlib-runtime-client-contract"
 version = "0.54.9"
 dependencies = [
