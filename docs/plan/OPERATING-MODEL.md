@@ -40,8 +40,7 @@ Every section carries a status marker. This is the visibility mechanism: one gla
 current state, target state, and what's in flight — the "current + goal + tickets"
 linkage in one artifact.
 
-- **SHIPPED** — true in the tree today. Carries a `<!-- verify: <glob or command> -->`
-  marker so drift is detectable.
+- **SHIPPED** — true in the tree today.
 - **IN-FLIGHT (→ change-name)** — being built; links the delta in `changes/` and its
   tickets.
 - **DECIDED** — agreed, not started. Build exactly this.
@@ -165,7 +164,7 @@ wrangle determinism out of a stochastic system — predictability of process, no
 | `/pivot` | Owner declares a direction change → plan edited FIRST → inventory of now-legacy code/docs/rules → a rip-out change with REMOVED sections → deletion tickets. (medium) | nothing — legitimizes the deletion agents currently resist |
 | `/research` | Background agent, primary sources only, memo with citations. Produces no tickets and no code. (low) | ad-hoc research |
 | `/diagnose` | Feedback-loop-first debugging: no hypothesis before a red-capable, fast, deterministic repro command exists and has been run once. 3–5 ranked hypotheses before testing any. Regression test before fix. Tagged debug logs (`[DEBUG-xxxx]`) for one-grep cleanup. (medium) | ad-hoc debugging; composes with the domain experts |
-| `/hygiene` | The counter-model sniffer: doc statements contradicting DECIDED/SHIPPED plan entries, retired patterns still endorsed, references to deleted machinery, README rot, dead rule globs, stale memories, verify-marker staleness. ONE table ordered by thrash risk, each finding routed to the skill that owns the fix. Detection only, never repairs. (low) | nothing — the missing smell test |
+| `/hygiene` | The counter-model sniffer: doc statements contradicting DECIDED/SHIPPED plan entries, retired patterns still endorsed, references to deleted machinery, README rot, dead rule globs, stale memories. ONE table ordered by thrash risk, each finding routed to the skill that owns the fix. Detection only, never repairs. (low) | nothing — the missing smell test |
 | `/reconcile-tracker` | Audits every GitHub milestone and open ticket against the plan: a milestone must map to a plan section or an active change; a ticket must trace to a change or be a bug against SHIPPED behavior. Anything that doesn't trace gets a proposed action — close / retitle / re-milestone / rewrite — presented as ONE batch the owner approves as a list, then executed via `gh`. Never acts item-by-item without the approved batch. (medium) | manual milestone/ticket cleanup |
 | `/propose-rule` | The only way a rule is born or dies. Evidence in (a recurring review finding, a repeated owner correction, a shipped defect) → drafted rule text + the evidence + which existing rule or skill gate it overlaps → owner approves → lands in its own operating-model PR. Also proposes rule deletions when a skill gate supersedes prose. (low) | ad-hoc rule accretion |
 

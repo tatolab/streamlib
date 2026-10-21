@@ -16,20 +16,18 @@ Sweep these surfaces:
    SHIPPED plan entry (the known worst offenders are pattern endorsements the plan has
    retired — e.g. a doc teaching a resolution or authoring pattern the plan replaced).
    The plan wins; the doc is the finding.
-2. **Verify-marker staleness.** For each SHIPPED plan section with `<!-- verify: X -->`:
-   has X changed since the section's last edit (`git log` both sides)?
-3. **References to deleted machinery.** Mentions of removed workflows, retired skills,
+2. **References to deleted machinery.** Mentions of removed workflows, retired skills,
    deleted files, or dead vocabulary anywhere in docs, skills, agents,
    `.claude/agent-knowledge/` indexes, hooks, or issue templates.
-4. **Dead rule scopes.** `.claude/rules/*.md` `paths:` globs that match nothing in the
+3. **Dead rule scopes.** `.claude/rules/*.md` `paths:` globs that match nothing in the
    tree; rules whose subject a skill gate now enforces (propose deletion via
    `/propose-rule`).
-5. **README and top-level rot.** Claims in `README.md` and other entry docs that are
+4. **README and top-level rot.** Claims in `README.md` and other entry docs that are
    false against the tree (platform status, SDK status, links into directories that
    left the repo).
-6. **Memory staleness.** Memory files naming files, flags, or skills that no longer
+5. **Memory staleness.** Memory files naming files, flags, or skills that no longer
    exist, or recording states the plan has since superseded.
-7. **Tracker misalignment.** Open tickets referencing archived changes, OPEN plan
+6. **Tracker misalignment.** Open tickets referencing archived changes, OPEN plan
    sections, or retired patterns (summary only — `/reconcile-tracker` owns the deep
    audit).
 
