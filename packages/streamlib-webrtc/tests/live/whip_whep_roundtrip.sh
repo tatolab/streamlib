@@ -8,7 +8,7 @@
 # against this wheel's own baseline.
 #
 # It is the engine's codec round trip (`e2e_fixture_psnr_test_pattern.sh`) with
-# the network where the local relay was: the sender
+# the network in the local relay's place: the sender
 # (`TestPatternSource → H264Encoder → WhipPublisher`) and the receiver
 # (`WhepPlayer → H264Decoder`) share nothing on this machine. The receiver's
 # player port — the frames that crossed the network — is read the way any user
@@ -179,32 +179,9 @@ RECEIVER_RUN_LOG_FILE="$OUTPUT_DIR/receiver_run.log"
 # loaded there, and the streams' config holds both endpoint URLs.
 RUNTIME_STATE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/streamlib-webrtc-live-runtime-state-XXXXXX")"
 
-STREAM_RUN_PIDS=()
-STREAM_RUN_NEEDED_SIGKILL=0
 # Redefined once the fixture sink is up; declared here so the EXIT trap,
 # which is installed before that, can always call it.
 stop_the_signal() { :; }
-stop_the_stream_runs() {
-    local stream_run_pid
-    for stream_run_pid in "${STREAM_RUN_PIDS[@]}"; do
-        kill -0 "$stream_run_pid" 2>/dev/null || continue
-        # SIGTERM so the graph tears down the way a real stop does; a killed
-        # run would hide a hung teardown — and a WHIP DELETE is part of it.
-        # `timeout` passes it on; `tatolab run` stops its stream, which the
-        # runtime unloads before the run exits.
-        kill -TERM "$stream_run_pid" 2>/dev/null || true
-        for _ in $(seq 1 50); do
-            kill -0 "$stream_run_pid" 2>/dev/null || break
-            sleep 0.2
-        done
-        if kill -0 "$stream_run_pid" 2>/dev/null; then
-            STREAM_RUN_NEEDED_SIGKILL=1
-            kill -9 "$stream_run_pid" 2>/dev/null || true
-        fi
-        wait "$stream_run_pid" 2>/dev/null || true
-    done
-    STREAM_RUN_PIDS=()
-}
 # The runtime holds every credential in its environment and the URLs in the
 # streams' config, and its log sits in the output directory — so it is scanned
 # however the run ends, a failed run's above all.
@@ -221,7 +198,7 @@ refuse_a_credential_written_into_the_output_directory() {
     done
 }
 stop_everything_and_scan_for_credentials() {
-    stop_the_stream_runs
+    stop_the_fixture_stream_runs
     stop_the_fixture_runtime
     rm -rf "$RUNTIME_STATE_HOME"
     stop_the_signal
@@ -290,17 +267,13 @@ fi
 
 run_the_fixture_stream() {
     local stream_name="$1" stream_function="$2" run_log_file="$3"
-    timeout --kill-after=5 "$RUN_SECONDS" \
-        "$TATOLAB_EXECUTABLE" run --dir "$PACKAGE_DIR" \
-            --name "$stream_name" \
-            "tests/live/whip_whep_roundtrip_stream.py:$stream_function" \
-        > "$run_log_file" 2>&1 &
-    STREAM_RUN_PIDS+=("$!")
-    if ! wait_until_the_stream_is_running "$stream_name" "$!" 60; then
+    start_the_fixture_stream_run "$PACKAGE_DIR" \
+        "tests/live/whip_whep_roundtrip_stream.py:$stream_function" \
+        "$stream_name" "$run_log_file" "$RUN_SECONDS" || {
         tail -40 "$run_log_file" >&2
         tail -40 "$LOG_FILE" >&2
         fail "the stream $stream_name never ran — it never answered over the local API socket with every node Running"
-    fi
+    }
     say "Running:           $stream_name"
 }
 say "Publishing over WHIP and playing back over WHEP..."
@@ -309,24 +282,13 @@ run_the_fixture_stream "$SENDER_STREAM_NAME" \
 run_the_fixture_stream "$RECEIVER_STREAM_NAME" \
     the_same_input_played_back_over_whep_through_the_decoders "$RECEIVER_RUN_LOG_FILE"
 
-# How many messages <node>'s <port> in <stream> has written, off the live
-# graph, in a pipe: the graph renders every node's config, and these hold both
-# endpoint URLs.
-written_bags_of() {
-    tatolab_observation_verb graph --stream "$1" 2>/dev/null | "$FIXTURE_PYTHON" -c '
-import json, sys
-try:
-    graph = json.load(sys.stdin)
-    node = next(node for node in graph["nodes"] if node["name"] == sys.argv[1])
-    print(node["components"]["metrics"]["written_bags_by_output_port"].get(sys.argv[2], 0))
-except Exception:
-    print(0)
-' "$2" "$3"
-}
+# A graph that does not answer yet is a frame not decoded yet; the floor is
+# what fails.
 wait_until_the_decoder_has_written() {
     local frame_floor="$1" deadline_seconds="$2"
     for _ in $(seq 1 "$deadline_seconds"); do
-        RECEIVER_DECODED_FRAMES="$(written_bags_of "$RECEIVER_STREAM_NAME" video_decoder video)"
+        RECEIVER_DECODED_FRAMES="$(written_messages_of_the_output_port \
+            "$RECEIVER_STREAM_NAME" video_decoder video)" || RECEIVER_DECODED_FRAMES=0
         [ "$RECEIVER_DECODED_FRAMES" -ge "$frame_floor" ] 2>/dev/null && return 0
         sleep 1
     done
@@ -360,13 +322,12 @@ grep -q '"payload":"codec_payload_of_the_hang_legacy_container"' \
         "$ENCODED_TRACK_DIR/objects.jsonl" \
     || fail "tatolab-read-track wrote the player's track as sent, not as its codec payload — the catalog never listed it as a legacy-container video track"
 
-wait_until_the_decoder_has_written "$DECODED_FRAMES_FLOOR" 30
-say "Receiver decoded:  $RECEIVER_DECODED_FRAMES frames"
-[ "$RECEIVER_DECODED_FRAMES" -ge "$DECODED_FRAMES_FLOOR" ] 2>/dev/null || {
+wait_until_the_decoder_has_written "$DECODED_FRAMES_FLOOR" 30 || {
     tail -30 "$RECEIVER_RUN_LOG_FILE" >&2
     tail -30 "$LOG_FILE" >&2
     fail "the receiver's decoder wrote $RECEIVER_DECODED_FRAMES frames, fewer than $DECODED_FRAMES_FLOOR"
 }
+say "Receiver decoded:  $RECEIVER_DECODED_FRAMES frames"
 
 # ── The audio arm: the block contract on what came back ──────────────
 # Judged against what was *sent*, not in isolation. A rig whose default capture
@@ -375,8 +336,10 @@ say "Receiver decoded:  $RECEIVER_DECODED_FRAMES frames"
 # an audio arm exists to prevent. So the sender's encoder count is read first:
 # silent there means the arm cannot run, and only a decoder that stayed empty
 # while the encoder spoke is a failure.
-PUBLISHED_AUDIO_BAGS="$(written_bags_of "$SENDER_STREAM_NAME" audio_encoder encoded_audio)"
-if [ "${PUBLISHED_AUDIO_BAGS:-0}" -eq 0 ] 2>/dev/null; then
+PUBLISHED_AUDIO_PACKETS="$(written_messages_of_the_output_port \
+    "$SENDER_STREAM_NAME" audio_encoder encoded_audio)" \
+    || fail "could not read the audio encoder's written count off the sender's graph"
+if [ "$PUBLISHED_AUDIO_PACKETS" -eq 0 ]; then
     AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
 elif "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
         --stream "$RECEIVER_STREAM_NAME" --port audio --count 8 \
@@ -387,8 +350,8 @@ else
 fi
 say "Audio channel:     $AUDIO_VERDICT ($OUTPUT_DIR/audio_channel.json)"
 
-stop_the_stream_runs
-[ "$STREAM_RUN_NEEDED_SIGKILL" -eq 0 ] \
+stop_the_fixture_stream_runs
+[ "$FIXTURE_STREAM_RUN_NEEDED_SIGKILL" -eq 0 ] \
     || fail "a stream run did not exit on SIGTERM and needed SIGKILL; a teardown that hangs is a finding, not a slow exit"
 stop_the_fixture_runtime 15
 the_fixture_runtime_stopped_cleanly \
@@ -402,24 +365,9 @@ done
 echo ""
 
 # ── Decode ───────────────────────────────────────────────────────────
-# The dump's files are an H.264 elementary stream once concatenated in index
-# order, which ffmpeg decodes as it would any `.h264` file.
-ENCODED_ELEMENTARY_STREAM="$OUTPUT_DIR/encoded.h264"
-"$FIXTURE_PYTHON" -c '
-import json, pathlib, sys
-dump = pathlib.Path(sys.argv[1])
-with open(sys.argv[2], "wb") as elementary_stream:
-    for line in (dump / "objects.jsonl").read_text().splitlines():
-        elementary_stream.write((dump / json.loads(line)["file"]).read_bytes())
-' "$ENCODED_TRACK_DIR" "$ENCODED_ELEMENTARY_STREAM" \
-    || fail "could not concatenate the dump into an elementary stream"
-mkdir -p "$MEASURED_DIR"
-ffmpeg -hide_banner -loglevel error -nostdin \
-        -f h264 -i "$ENCODED_ELEMENTARY_STREAM" \
-        -fps_mode passthrough -pix_fmt rgb24 \
-        "$MEASURED_DIR/%04d.png" 2> "$OUTPUT_DIR/ffmpeg.log" \
+DECODED_PNG_COUNT="$(decode_the_encoded_track_dump_to_pngs "$ENCODED_TRACK_DIR" h264 \
+        "$OUTPUT_DIR/encoded.h264" "$MEASURED_DIR" "$OUTPUT_DIR/ffmpeg.log")" \
     || { cat "$OUTPUT_DIR/ffmpeg.log" >&2; fail "ffmpeg could not decode the player's track"; }
-DECODED_PNG_COUNT="$(find "$MEASURED_DIR" -name '*.png' | wc -l)"
 say "ffmpeg decoded:    $DECODED_PNG_COUNT of $OBJECT_COUNT frames"
 [ "$DECODED_PNG_COUNT" -eq "$OBJECT_COUNT" ] || {
     cat "$OUTPUT_DIR/ffmpeg.log" >&2

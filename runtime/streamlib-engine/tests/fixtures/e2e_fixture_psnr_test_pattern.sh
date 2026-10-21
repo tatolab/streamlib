@@ -132,34 +132,8 @@ LOG_FILE="$OUTPUT_DIR/runtime.log"
 SENDER_RUN_LOG_FILE="$OUTPUT_DIR/sender_run.log"
 RECEIVER_RUN_LOG_FILE="$OUTPUT_DIR/receiver_run.log"
 
-STREAM_RUN_PIDS=()
-STREAM_RUN_NEEDED_SIGKILL=0
-stop_the_stream_runs() {
-    local stream_run_pid
-    for stream_run_pid in "${STREAM_RUN_PIDS[@]}"; do
-        kill -0 "$stream_run_pid" 2>/dev/null || continue
-        # SIGTERM so the graph tears down the way a real stop does — a killed
-        # run would hide exactly the shutdown race this rig guards against. `timeout`
-        # passes it on; `tatolab run` stops its stream, which the runtime
-        # unloads before the run exits.
-        kill -TERM "$stream_run_pid" 2>/dev/null || true
-        for _ in $(seq 1 50); do
-            kill -0 "$stream_run_pid" 2>/dev/null || break
-            sleep 0.2
-        done
-        # A run still alive after 10 s of SIGTERM is that shutdown race, not
-        # a slow exit. SIGKILL ends it; the caller is told, so the kill can
-        # never launder a hung teardown into a PASS.
-        if kill -0 "$stream_run_pid" 2>/dev/null; then
-            STREAM_RUN_NEEDED_SIGKILL=1
-            kill -9 "$stream_run_pid" 2>/dev/null || true
-        fi
-        wait "$stream_run_pid" 2>/dev/null || true
-    done
-    STREAM_RUN_PIDS=()
-}
 stop_the_streams_and_the_runtime() {
-    stop_the_stream_runs
+    stop_the_fixture_stream_runs
     stop_the_fixture_runtime
 }
 trap stop_the_streams_and_the_runtime EXIT
@@ -189,14 +163,8 @@ fi
 
 run_the_fixture_stream() {
     local stream_name="$1" stream_function="$2" run_log_file="$3"
-    timeout --kill-after=5 "$RUN_SECONDS" \
-        "$TATOLAB_EXECUTABLE" run \
-            --dir "$SCRIPT_DIR" \
-            --name "$stream_name" \
-            "codec_roundtrip_stream.py:$stream_function" \
-        > "$run_log_file" 2>&1 &
-    STREAM_RUN_PIDS+=("$!")
-    if ! wait_until_the_stream_is_running "$stream_name" "$!" 60; then
+    if ! start_the_fixture_stream_run "$SCRIPT_DIR" "codec_roundtrip_stream.py:$stream_function" \
+            "$stream_name" "$run_log_file" "$RUN_SECONDS"; then
         echo "[test-pattern-color] FAIL: the stream $stream_name never ran — it never answered over" \
             "the local API socket with every node Running" >&2
         tail -30 "$run_log_file" >&2
@@ -238,13 +206,8 @@ fi
 # `graph`, are its proof.
 RECEIVER_DECODED_FRAMES=0
 for _ in $(seq 1 60); do
-    RECEIVER_DECODED_FRAMES="$("$TATOLAB_EXECUTABLE" graph --stream "$RECEIVER_STREAM_NAME" 2>/dev/null \
-        | "$FIXTURE_PYTHON" -c '
-import json, sys
-graph = json.load(sys.stdin)
-decoder = next(node for node in graph["nodes"] if node["name"] == "decoder")
-print(decoder["components"]["metrics"]["written_bags_by_output_port"].get("video", 0))
-')" || RECEIVER_DECODED_FRAMES=0
+    RECEIVER_DECODED_FRAMES="$(written_messages_of_the_output_port \
+        "$RECEIVER_STREAM_NAME" decoder video)" || RECEIVER_DECODED_FRAMES=0
     [ "$RECEIVER_DECODED_FRAMES" -ge "$DECODED_FRAMES_FLOOR" ] && break
     sleep 0.5
 done
@@ -257,8 +220,8 @@ if [ "$RECEIVER_DECODED_FRAMES" -lt "$DECODED_FRAMES_FLOOR" ]; then
     exit 1
 fi
 
-stop_the_stream_runs
-if [ "$STREAM_RUN_NEEDED_SIGKILL" -eq 1 ]; then
+stop_the_fixture_stream_runs
+if [ "$FIXTURE_STREAM_RUN_NEEDED_SIGKILL" -eq 1 ]; then
     echo "[test-pattern-color] FAIL: a stream run did not exit on SIGTERM and needed SIGKILL." \
          "A teardown that hangs is the shutdown race class, not a slow exit." >&2
     tail -30 "$LOG_FILE" >&2
@@ -273,26 +236,13 @@ if ! the_fixture_runtime_stopped_cleanly; then
 fi
 
 # ── Decode ───────────────────────────────────────────────────────────
-# The dump's files are the codec's own elementary stream once concatenated in
-# index order, which ffmpeg decodes as it would any `.h264` / `.hevc` file.
-ENCODED_ELEMENTARY_STREAM="$OUTPUT_DIR/encoded.$FFMPEG_ELEMENTARY_STREAM_FORMAT"
-"$FIXTURE_PYTHON" -c '
-import json, pathlib, sys
-dump = pathlib.Path(sys.argv[1])
-with open(sys.argv[2], "wb") as elementary_stream:
-    for line in (dump / "objects.jsonl").read_text().splitlines():
-        elementary_stream.write((dump / json.loads(line)["file"]).read_bytes())
-' "$ENCODED_TRACK_DIR" "$ENCODED_ELEMENTARY_STREAM"
-mkdir -p "$MEASURED_DIR"
-if ! ffmpeg -hide_banner -loglevel error -nostdin \
-        -f "$FFMPEG_ELEMENTARY_STREAM_FORMAT" -i "$ENCODED_ELEMENTARY_STREAM" \
-        -fps_mode passthrough -pix_fmt rgb24 \
-        "$MEASURED_DIR/%04d.png" 2> "$OUTPUT_DIR/ffmpeg.log"; then
+if ! DECODED_PNG_COUNT="$(decode_the_encoded_track_dump_to_pngs "$ENCODED_TRACK_DIR" \
+        "$FFMPEG_ELEMENTARY_STREAM_FORMAT" "$OUTPUT_DIR/encoded.$FFMPEG_ELEMENTARY_STREAM_FORMAT" \
+        "$MEASURED_DIR" "$OUTPUT_DIR/ffmpeg.log")"; then
     echo "[test-pattern-color] FAIL: ffmpeg could not decode the sender's track" >&2
     cat "$OUTPUT_DIR/ffmpeg.log" >&2
     exit 1
 fi
-DECODED_PNG_COUNT="$(find "$MEASURED_DIR" -name '*.png' | wc -l)"
 echo "[test-pattern-color] ffmpeg decoded:    $DECODED_PNG_COUNT of $OBJECT_COUNT frames"
 if [ "$DECODED_PNG_COUNT" -ne "$OBJECT_COUNT" ]; then
     echo "[test-pattern-color] FAIL: ffmpeg decoded $DECODED_PNG_COUNT of the $OBJECT_COUNT frames" \

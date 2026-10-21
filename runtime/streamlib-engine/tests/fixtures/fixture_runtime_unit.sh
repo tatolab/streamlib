@@ -4,9 +4,10 @@
 #
 # Sourced by the fixture drivers: the runtime unit a fixture stream runs on,
 # the venv it compiles in, the runtime a fixture starts and stops itself, the
-# runtime unit's `tatolab` verbs that load and observe a stream, and
-# `tatolab-read-track`, which reads a stream's exposed port as a track at the
-# machine's local relay, as any user reads it.
+# runtime unit's `tatolab` verbs that load and observe a stream, the stream runs
+# a driver starts and stops, and `tatolab-read-track`, which reads a stream's
+# exposed port as a track at the machine's local relay, as any user reads it,
+# with the decode of what it wrote.
 #
 # The runtime unit is what `cargo xtask build-runtime` lays out —
 # `bin/tatolab`, `bin/tatolabd` and `lib/tatolab/lend/` — at
@@ -366,4 +367,85 @@ name_of_the_stream_a_rig_serves_once_it_runs() {
         sleep 0.5
     done
     return 1
+}
+
+FIXTURE_STREAM_RUN_PIDS=()
+FIXTURE_STREAM_RUN_NEEDED_SIGKILL=0
+
+# Loads <stream file:function> of the project at <directory> as <stream name>
+# with `tatolab run`, in the background for at most <seconds>, its output in
+# <run log>, and returns once the stream is running; 1 when it never runs.
+start_the_fixture_stream_run() {
+    local project_directory="$1" stream_reference="$2" stream_name="$3"
+    local run_log_file="$4" run_budget_seconds="$5"
+    timeout --kill-after=5 "$run_budget_seconds" \
+        "$TATOLAB_EXECUTABLE" run --dir "$project_directory" \
+            --name "$stream_name" "$stream_reference" \
+        >"$run_log_file" 2>&1 &
+    FIXTURE_STREAM_RUN_PIDS+=("$!")
+    wait_until_the_stream_is_running "$stream_name" "$!" 60
+}
+
+# SIGTERM to every run `start_the_fixture_stream_run` started, so each graph
+# tears down the way a real stop does — `timeout` passes it on, and `tatolab
+# run` stops its stream, which the runtime unloads before the run exits. A run
+# still alive 10 s later is a hung teardown, not a slow exit: it is killed and
+# FIXTURE_STREAM_RUN_NEEDED_SIGKILL set to 1, so the kill never launders it into
+# a pass.
+stop_the_fixture_stream_runs() {
+    local stream_run_pid
+    for stream_run_pid in "${FIXTURE_STREAM_RUN_PIDS[@]}"; do
+        kill -0 "$stream_run_pid" 2>/dev/null || continue
+        kill -TERM "$stream_run_pid" 2>/dev/null || true
+        for _ in $(seq 1 50); do
+            kill -0 "$stream_run_pid" 2>/dev/null || break
+            sleep 0.2
+        done
+        if kill -0 "$stream_run_pid" 2>/dev/null; then
+            # shellcheck disable=SC2034  # read by the driver that sourced this file
+            FIXTURE_STREAM_RUN_NEEDED_SIGKILL=1
+            kill -9 "$stream_run_pid" 2>/dev/null || true
+        fi
+        wait "$stream_run_pid" 2>/dev/null || true
+    done
+    FIXTURE_STREAM_RUN_PIDS=()
+}
+
+# Prints how many messages <node>'s output <port> in <stream> has written, off
+# `graph`, which counts a port's writes once something reads it. Fails when the
+# graph does not answer or names no such node, so a broken read is never a 0.
+# The graph renders every node's config, so it is read in a pipe and never kept.
+written_messages_of_the_output_port() {
+    "$TATOLAB_EXECUTABLE" graph --stream "$1" 2>/dev/null | "$FIXTURE_PYTHON" -c '
+import json, sys
+stream_graph = json.load(sys.stdin)
+node_name, port_name = sys.argv[1], sys.argv[2]
+node = next((node for node in stream_graph["nodes"] if node["name"] == node_name), None)
+if node is None:
+    sys.exit(f"the graph names no node `{node_name}`")
+print(node["components"]["metrics"]["written_bags_by_output_port"].get(port_name, 0))
+' "$2" "$3"
+}
+
+# Concatenates a `tatolab-read-track` dump in its `objects.jsonl` order into
+# <elementary stream file> — a codec payload's files are its elementary stream —
+# and decodes that with ffmpeg as <format> (`h264` | `hevc`) into
+# <PNG directory>/%04d.png, ffmpeg's errors in <ffmpeg log>. Prints the count of
+# PNGs decoded.
+decode_the_encoded_track_dump_to_pngs() {
+    local dump_directory="$1" ffmpeg_elementary_stream_format="$2"
+    local elementary_stream_file="$3" png_directory="$4" ffmpeg_log_file="$5"
+    "$FIXTURE_PYTHON" -c '
+import json, pathlib, sys
+dump = pathlib.Path(sys.argv[1])
+with open(sys.argv[2], "wb") as elementary_stream:
+    for line in (dump / "objects.jsonl").read_text().splitlines():
+        elementary_stream.write((dump / json.loads(line)["file"]).read_bytes())
+' "$dump_directory" "$elementary_stream_file" || return 1
+    mkdir -p "$png_directory"
+    ffmpeg -hide_banner -loglevel error -nostdin \
+        -f "$ffmpeg_elementary_stream_format" -i "$elementary_stream_file" \
+        -fps_mode passthrough -pix_fmt rgb24 \
+        "$png_directory/%04d.png" 2>"$ffmpeg_log_file" || return 1
+    find "$png_directory" -name '*.png' | wc -l
 }
