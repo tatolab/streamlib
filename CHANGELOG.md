@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.11](https://github.com/tatolab/streamlib/compare/v0.54.10...v0.54.11) (2026-10-21)
+
+
+### Features
+
+* **relays:** a group a relay source gives up reaches its readers as lost_since_last_read and is counted on the relay source ([#2900](https://github.com/tatolab/streamlib/issues/2900)) ([94a1c85](https://github.com/tatolab/streamlib/commit/94a1c85f0ad54f530a127d3cca113bedd6b3b2de))
+
 ## [0.54.10](https://github.com/tatolab/streamlib/compare/v0.54.9...v0.54.10) (2026-10-21)
 
 
