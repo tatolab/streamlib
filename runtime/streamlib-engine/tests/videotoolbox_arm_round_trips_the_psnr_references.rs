@@ -16,9 +16,7 @@
 //!
 //! This file decodes the checked-in cross-floor clips the Linux rig decodes
 //! through Vulkan Video (`vulkan_video_decodes_what_videotoolbox_encoded`),
-//! and `regenerate_the_cross_floor_clips` rewrites them from this arm. The
-//! checked-in clips signal full range with an unspecified matrix, so they are not the
-//! BT.709 limited-range stream this arm writes until they are regenerated.
+//! and `regenerate_the_cross_floor_clips` rewrites them from this arm.
 //!
 //! Rig tier — it needs Apple's hardware encoder and decoder, which a virtual
 //! machine does not expose, so Cargo builds it only under `hardware-tests`.
