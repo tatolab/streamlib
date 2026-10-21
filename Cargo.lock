@@ -6004,6 +6004,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "streamlib",
+ "streamlib-relay-track-reader",
  "tempfile",
  "tokio",
  "tracing",
