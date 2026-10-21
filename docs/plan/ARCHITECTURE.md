@@ -2061,17 +2061,6 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   import (MoltenVK before 1.4.1) falls back to CPU upload. Owner, 2026-09-21, while shipping
   #2359; a driver patch to import the surface as an NV12 image was ruled out, 2026-09-26
   (#2488, #2489). [media-io-layering; macos-platform-floor — SHIPPED #2359]
-- **DECIDED** — MJPEG capture on Linux (unbuilt). `CameraSource`'s V4L2 arm reads a camera's
-  MJPEG modes beside NV12 and YUYV. The frame is decoded inside the capture path by the
-  in-tree JPEG decoder — `sdk/vulkan-jpeg`, which moves into the engine with the change that
-  builds this and stays a workspace member until then — and lands in the pooled `Rgba32`
-  pixel buffer every capture lands in, so no JPEG reaches a port and no block is involved.
-  The decoder reads the 4:2:2 frames cameras send, not 4:2:0 alone. Which mode the arm
-  picks when a camera offers several is ticket-level. Acceptance is the rig's capture card, a
-  real UVC device: its MJPEG mode, opened directly, live at 1920×1080 and 30 fps through the
-  engine's MJPEG path; the mode rule is proven by unit tests over a USB 2.0 camera's mode list,
-  and no USB 2.0 webcam is sought (owner, 2026-10-05). The Apple arm is unchanged. Owner,
-  2026-10-04. [jpeg-after-the-robotics-cut]
 - **DECIDED** — Python-authored media processors (vendor or user) run in their own
   helper process like every other Python processor and are supported where deadlines
   allow: camera-class sources and block-level audio fit within the helper hop's
@@ -2479,9 +2468,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `OpusEncoder`, `OpusDecoder` — instantiated and configured the one way a
   built-in is configured (`stream_builder.add(H264Encoder)`), per-frame paths never entering an
   interpreter, serving Python and Rust apps alike. Video blocks are built on the video
-  codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple. There is no JPEG
-  block: `JpegDecoder` is retired unbuilt, the parked nvJPEG backend and its `libnvjpeg`
-  probe are deleted, and JPEG decode exists only inside camera capture. AV1 and VP9 remain ported but unexposed until a consumer demands them.
+  codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple. The runtime decodes no
+  JPEG anywhere: `JpegDecoder` is retired unbuilt, and the parked nvJPEG backend and its
+  `libnvjpeg` probe are deleted. AV1 and VP9 remain ported but unexposed until a consumer demands them.
   The six name the shipped set, not a rule: the next codec follows the built-in criterion in
   §Packages & extension model.
   Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
