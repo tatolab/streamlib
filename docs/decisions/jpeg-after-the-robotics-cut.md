@@ -22,9 +22,12 @@ second at its top resolution.
    no rung, so nothing is mined and no proof-rig job is owed. `packages/jpeg` builds
    against plugin crates the tree no longer has, and the example and its fixture run
    through it, so the fixture had already stopped being a proof.
-4. **MJPEG capture on Linux is decided, and `sdk/vulkan-jpeg` is its decoder.** The V4L2
+4. ~~**MJPEG capture on Linux is decided, and `sdk/vulkan-jpeg` is its decoder.** The V4L2
    arm reads a camera's MJPEG modes and decodes inside the capture path. The crate stays
-   a workspace member until the change that builds this moves it into the engine.
+   a workspace member until the change that builds this moves it into the engine.~~ —
+   Superseded 2026-10-21 by the owner: MJPEG capture is not built. Every camera the runtime
+   meets offers full size and rate uncompressed, and USB 2.0 webcams are out of scope, so no
+   JPEG decoder survives and `sdk/vulkan-jpeg` is deleted with the removals.
 
 ## Why MJPEG capture is decided rather than left open
 
@@ -75,12 +78,12 @@ decision cleans up: code held for a consumer nobody had committed to.
 
 ## Consequences
 
-- Between the removals and the capture build, the decoder's GPU half is compiled and
-  unproven. ~~only its parser, Huffman and colour tests run.~~ — Superseded 2026-10-05 by a
+- ~~Between the removals and the capture build, the decoder's GPU half is compiled and
+  unproven.~~ — Superseded 2026-10-21: there is no capture build, and the crate is deleted. ~~only its parser, Huffman and colour tests run.~~ — Superseded 2026-10-05 by a
   read of `test.yml`: no CI step runs the crate's tests at all — Linux clippy builds its lib
   only and macOS compiles its tests without running them; they run locally and nowhere else.
-- The capture build owes 4:2:2 decode, the move into the engine, a mode-selection rule
-  that weighs frame rate, and a proof on ~~a real USB 2.0 webcam~~ the capture card's MJPEG
-  mode (superseded 2026-10-05, owner: no USB 2.0 webcam is sought).
+- ~~The capture build owes 4:2:2 decode, the move into the engine, a mode-selection rule
+  that weighs frame rate, and a proof on the capture card's MJPEG mode.~~ — Superseded
+  2026-10-21 by the owner: MJPEG capture is not built.
 - The decoder choice is the owner's stated one. Its internals — how much runs on the CPU,
   whether default Huffman tables are needed — stay ticket-level.
