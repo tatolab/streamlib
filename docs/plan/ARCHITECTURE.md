@@ -726,8 +726,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A consumer blocked on an undecided domain is held in-tree until the
   align covering that domain mines it for logic; its deletion rides that change's own
   ship. Held on audio plugins: `packages/clap`. Held on screen capture:
-  `packages/screen-capture`, `examples/screen-recorder`. [consumer-tree-disposition — SHIPPED #2052; amended by
-  jpeg-after-the-robotics-cut: the JPEG pair deletes outright]
+  `packages/screen-capture`, `examples/screen-recorder`. [consumer-tree-disposition — SHIPPED
+  #2052]
 - **DECIDED** — No additional native-processor *distribution* mechanism is owed
   pre-1.0: an extension wheel is an ordinary Python package on the ordinary index, and
   closed-source Rust processors for Rust apps are deliberately not a path — a

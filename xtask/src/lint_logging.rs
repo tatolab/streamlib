@@ -407,8 +407,7 @@ pub fn scan_rust(
 }
 
 /// Whether a path segment names a parked implementation dir per the
-/// `_<name>_pending_` convention (`_apple_impl_pending_`, `tests_pending`
-/// nested inside one, ...).
+/// `_<name>_pending_` convention (`_apple_impl_pending_`, ...).
 fn is_parked_pending_segment(segment: &str) -> bool {
     segment.starts_with('_') && segment.ends_with("pending_")
 }
