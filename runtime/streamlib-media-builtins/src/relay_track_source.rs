@@ -430,9 +430,16 @@ impl RelayTrackSourceSession {
                 }
                 released = groups_of_the_track.next_released_group(), if group_being_read.is_none() => {
                     match released {
-                        Ok(Some(released)) => {
-                            group_being_read = self.the_group_to_read_from(released);
-                            the_next_object_starts_a_group = group_being_read.is_some();
+                        Ok(Some(ReleasedRelayTrackGroup::InSequence(group))) => {
+                            group_being_read = Some(*group);
+                            the_next_object_starts_a_group = true;
+                        }
+                        Ok(Some(ReleasedRelayTrackGroup::GivenUp { groups })) => {
+                            tracing::debug!(
+                                "RelayTrackSource: {groups} groups of {relay_track_location} \
+                                 were given up"
+                            );
+                            self.declare_groups_given_up_on_the_track_output(groups);
                         }
                         Ok(None) => return WhyARelayTrackSessionEnded::TrackEnded(None),
                         Err(refusal) => {
@@ -462,31 +469,20 @@ impl RelayTrackSourceSession {
         }
     }
 
-    /// The group to write next, or none where the release gave groups up: each
-    /// is counted on the output at once and told to its readers as one lost
-    /// message ahead of the next object written.
-    fn the_group_to_read_from(
-        &self,
-        released: ReleasedRelayTrackGroup,
-    ) -> Option<moq_net::group::Consumer> {
-        match released {
-            ReleasedRelayTrackGroup::InSequence(group) => Some(*group),
-            ReleasedRelayTrackGroup::GivenUp { groups } => {
-                tracing::debug!("RelayTrackSource: {groups} groups were given up");
-                if let Err(refusal) = self
-                    .outputs
-                    .declare_groups_given_up_upstream_before_the_next_write(
-                        TRACK_OUTPUT_PORT,
-                        groups,
-                    )
-                {
-                    tracing::warn!(
-                        "RelayTrackSource: {groups} given-up groups reach no reader of `track`: \
-                         {refusal}"
-                    );
-                }
-                None
-            }
+    /// Count `given_up_group_count` groups on the output at once, and tell its
+    /// readers of each as one lost message ahead of the next object written.
+    fn declare_groups_given_up_on_the_track_output(&self, given_up_group_count: u64) {
+        if let Err(refusal) = self
+            .outputs
+            .declare_groups_given_up_upstream_before_the_next_write(
+                TRACK_OUTPUT_PORT,
+                given_up_group_count,
+            )
+        {
+            tracing::warn!(
+                "RelayTrackSource: {given_up_group_count} given-up groups reach no reader of \
+                 `{TRACK_OUTPUT_PORT}`: {refusal}"
+            );
         }
     }
 
@@ -1002,11 +998,7 @@ mod tests {
             &an_object(0, b"group-0".to_vec()),
             MessageGroupBoundary::StartsGroup,
         );
-        assert!(
-            session
-                .the_group_to_read_from(ReleasedRelayTrackGroup::GivenUp { groups: 1 })
-                .is_none()
-        );
+        session.declare_groups_given_up_on_the_track_output(1);
         session.write_the_object(
             &an_object(40_000_000, b"group-2".to_vec()),
             MessageGroupBoundary::StartsGroup,
@@ -1030,7 +1022,7 @@ mod tests {
             &an_object(0, b"group-0".to_vec()),
             MessageGroupBoundary::StartsGroup,
         );
-        let _ = session.the_group_to_read_from(ReleasedRelayTrackGroup::GivenUp { groups: 2 });
+        session.declare_groups_given_up_on_the_track_output(2);
         assert_eq!(
             output_writer
                 .bag_counts_by_output_port()

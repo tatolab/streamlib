@@ -402,10 +402,13 @@ impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnb
         channel_user_header: DataChannelBagSequenceNumberUserHeader,
         framed_bag: &[u8],
     ) -> Option<MessageReadFromInputPort> {
-        self.lost_ahead_of_the_next_message_forwarded += self
-            .bags_the_ring_overwrote
-            .how_many_were_lost_before(run, channel_user_header.sequence_number)
-            + channel_user_header.messages_lost_upstream_before_this_one;
+        self.lost_ahead_of_the_next_message_forwarded = self
+            .lost_ahead_of_the_next_message_forwarded
+            .saturating_add(
+                self.bags_the_ring_overwrote
+                    .how_many_were_lost_before(run, channel_user_header.sequence_number),
+            )
+            .saturating_add(channel_user_header.messages_lost_upstream_before_this_one);
         let Some(payload) = FrameHeader::read_payload_from_slice(framed_bag) else {
             self.lost_ahead_of_the_next_message_forwarded += 1;
             return None;

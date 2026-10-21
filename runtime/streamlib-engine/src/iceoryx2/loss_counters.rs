@@ -377,8 +377,10 @@ impl OutputPortBagCounters {
         self.0.given_up_groups.add(given_up_group_count);
     }
 
-    /// Write every new total of both counts through its mirror, or refuse
-    /// where the counts are already mirrored.
+    /// Write every new total of the refused and written counts through its
+    /// mirror, or refuse where they are already mirrored. Given-up groups are
+    /// not mirrored: only an engine-internal writer in this process declares
+    /// one.
     pub(crate) fn mirror_every_new_total_into(
         &self,
         refused_bags_mirror: LossCountMirror,

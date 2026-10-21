@@ -142,17 +142,19 @@ impl JsonSerializableComponent for ProcessorMetrics {
         let Some(rendered_keys) = rendered.as_object_mut() else {
             return rendered;
         };
-        if !discarded_samples_by_inbound_link.is_empty() {
-            rendered_keys.insert(
-                "discarded_samples_by_link".to_string(),
-                serde_json::json!(discarded_samples_by_inbound_link),
-            );
-        }
-        if !given_up_groups_by_output_port.is_empty() {
-            rendered_keys.insert(
-                "given_up_groups_by_output_port".to_string(),
-                serde_json::json!(given_up_groups_by_output_port),
-            );
+        for (key, counts_by_name) in [
+            (
+                "discarded_samples_by_link",
+                discarded_samples_by_inbound_link,
+            ),
+            (
+                "given_up_groups_by_output_port",
+                given_up_groups_by_output_port,
+            ),
+        ] {
+            if !counts_by_name.is_empty() {
+                rendered_keys.insert(key.to_string(), serde_json::json!(counts_by_name));
+            }
         }
         rendered
     }
@@ -284,7 +286,7 @@ mod tests {
             with_nothing_given_up
                 .get("given_up_groups_by_output_port")
                 .is_none(),
-            "a processor that never gave a group up has no count to render; got              {with_nothing_given_up}"
+            "a processor that never gave a group up has no count to render; got {with_nothing_given_up}"
         );
     }
 

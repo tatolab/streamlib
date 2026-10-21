@@ -54,8 +54,8 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
     }
 }
 
-/// The sequence number the send after one numbered `sent_sequence_number`
-/// carries, given how that send ended.
+/// Whether a send that ended in `send_outcome` may have reached a subscriber,
+/// and so consumed its sequence number and the losses declared ahead of it.
 ///
 /// A send consumes its number once it may have reached a subscriber. iceoryx2
 /// does not say which subscribers a failed send reached, so only a failure
@@ -64,11 +64,8 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
 /// variant is named so an iceoryx2 upgrade adding one does not compile until
 /// it is placed. The number wraps to zero past `u64::MAX` in every build
 /// profile, which a subscriber reads as no gap.
-fn sequence_number_following_a_send(
-    sent_sequence_number: u64,
-    send_outcome: &std::result::Result<usize, SendError>,
-) -> u64 {
-    let may_have_delivered = match send_outcome {
+fn a_send_may_have_delivered(send_outcome: &std::result::Result<usize, SendError>) -> bool {
+    match send_outcome {
         Ok(_) => true,
         Err(
             SendError::ConnectionBrokenSinceSenderNoLongerExists
@@ -78,11 +75,6 @@ fn sequence_number_following_a_send(
         Err(
             SendError::ConnectionCorrupted | SendError::UnableToDeliver | SendError::InternalError,
         ) => true,
-    };
-    if may_have_delivered {
-        sent_sequence_number.wrapping_add(1)
-    } else {
-        sent_sequence_number
     }
 }
 
@@ -418,15 +410,8 @@ impl OutputWriterInner {
         group_boundary: MessageGroupBoundary,
     ) -> Result<()> {
         let mut channels = self.channels.lock();
-        let Some(egress) = channels.get_mut(port) else {
-            // A declared port no link has reached — a processor added to a
-            // running graph ahead of its connect, or one whose last link was
-            // taken away — carries nothing, so the message is dropped as it
-            // would be for a consumer that cannot keep up.
-            if self.declared_output_ports.lock().contains(port) {
-                return Ok(());
-            }
-            return Err(Error::Link(format!("Unknown output port: {}", port)));
+        let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? else {
+            return Ok(());
         };
 
         let total_len = FRAME_HEADER_SIZE + payload_bytes.len();
@@ -488,11 +473,8 @@ impl OutputWriterInner {
         // loan was taken for — or panicked on a length mismatch.
         let sample = unsafe { sample.assume_init() };
         let send_outcome = sample.send();
-        let sent_sequence_number = egress.next_sequence_number;
-        egress.next_sequence_number =
-            sequence_number_following_a_send(sent_sequence_number, &send_outcome);
-        let the_send_consumed_its_number = egress.next_sequence_number != sent_sequence_number;
-        if the_send_consumed_its_number {
+        if a_send_may_have_delivered(&send_outcome) {
+            egress.next_sequence_number = egress.next_sequence_number.wrapping_add(1);
             egress.messages_lost_upstream_before_the_next_send = 0;
         }
         send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
@@ -511,6 +493,22 @@ impl OutputWriterInner {
         Ok(())
     }
 
+    /// `port`'s egress, or `None` for a declared port no link has reached — a
+    /// processor added to a running graph ahead of its connect, or one whose
+    /// last link was taken away — which carries nothing, as for a consumer
+    /// that cannot keep up. An undeclared port is refused.
+    fn linked_egress_of_a_declared_port<'channels>(
+        &self,
+        channels: &'channels mut HashMap<String, ChannelEgress>,
+        port: &str,
+    ) -> Result<Option<&'channels mut ChannelEgress>> {
+        match channels.get_mut(port) {
+            Some(egress) => Ok(Some(egress)),
+            None if self.declared_output_ports.lock().contains(port) => Ok(None),
+            None => Err(Error::Link(format!("Unknown output port: {}", port))),
+        }
+    }
+
     /// Declare `given_up_group_count` groups given up upstream of `port` since
     /// its last write: counted on this port at once, and carried to every
     /// `ordered` reader as one lost message each, ahead of the next message
@@ -525,11 +523,8 @@ impl OutputWriterInner {
         given_up_group_count: u64,
     ) -> Result<()> {
         let mut channels = self.channels.lock();
-        let Some(egress) = channels.get_mut(port) else {
-            if self.declared_output_ports.lock().contains(port) {
-                return Ok(());
-            }
-            return Err(Error::Link(format!("Unknown output port: {}", port)));
+        let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? else {
+            return Ok(());
         };
         egress
             .bag_counters
@@ -607,6 +602,17 @@ impl OutputWriter {
         Some(unsafe { &*(self.handle as *const OutputWriterInner) })
     }
 
+    /// The host's inner writer, refused naming `port` before the host has
+    /// wired this processor instance.
+    fn wired_inner_for_port(&self, port: &str) -> Result<&OutputWriterInner> {
+        self.host_inner().ok_or_else(|| {
+            Error::Link(format!(
+                "OutputWriter not wired (port='{port}'): host has not yet installed iceoryx2 \
+                 resources on this processor instance"
+            ))
+        })
+    }
+
     /// Build an empty pre-wiring handle with a null handle pointer. The
     /// engine patches in a real inner via
     /// `GeneratedProcessor::set_iceoryx2_resources` before any
@@ -677,14 +683,7 @@ impl OutputWriter {
         timestamp_ns: i64,
         group_boundary: MessageGroupBoundary,
     ) -> Result<()> {
-        let Some(inner) = self.host_inner() else {
-            return Err(Error::Link(format!(
-                "OutputWriter not wired (port='{}'): host has not yet \
-                 installed iceoryx2 resources on this processor instance",
-                port
-            )));
-        };
-        inner.write_bytes_with_timestamp(
+        self.wired_inner_for_port(port)?.write_bytes_with_timestamp(
             &cast_exposed_name_to_url_safe(port)?,
             payload_bytes,
             timestamp_ns,
@@ -700,16 +699,11 @@ impl OutputWriter {
         port: &str,
         given_up_group_count: u64,
     ) -> Result<()> {
-        let Some(inner) = self.host_inner() else {
-            return Err(Error::Link(format!(
-                "OutputWriter not wired (port='{port}'): host has not yet installed iceoryx2 \
-                 resources on this processor instance"
-            )));
-        };
-        inner.declare_groups_given_up_upstream_before_the_next_write(
-            &cast_exposed_name_to_url_safe(port)?,
-            given_up_group_count,
-        )
+        self.wired_inner_for_port(port)?
+            .declare_groups_given_up_upstream_before_the_next_write(
+                &cast_exposed_name_to_url_safe(port)?,
+                given_up_group_count,
+            )
     }
 
     /// Check if a port is configured.
@@ -728,13 +722,8 @@ impl OutputWriter {
         port: &str,
         catalog_entry: impl Into<CatalogEntry>,
     ) -> Result<()> {
-        let Some(inner) = self.host_inner() else {
-            return Err(Error::Link(format!(
-                "OutputWriter not wired (port='{port}'): host has not yet installed iceoryx2 \
-                 resources on this processor instance"
-            )));
-        };
-        inner.set_catalog_entry(port, catalog_entry.into())
+        self.wired_inner_for_port(port)?
+            .set_catalog_entry(port, catalog_entry.into())
     }
 }
 
@@ -1542,24 +1531,17 @@ mod tests {
     fn a_send_consumes_its_sequence_number_unless_it_failed_before_any_delivery() {
         use iceoryx2::port::LoanError;
 
-        assert_eq!(sequence_number_following_a_send(7, &Ok(1)), 8);
-        assert_eq!(
-            sequence_number_following_a_send(u64::MAX, &Ok(1)),
-            0,
-            "the last number wraps to zero rather than overflowing in a debug build"
-        );
-        assert_eq!(
-            sequence_number_following_a_send(7, &Ok(0)),
-            8,
+        assert!(a_send_may_have_delivered(&Ok(1)));
+        assert!(
+            a_send_may_have_delivered(&Ok(0)),
             "a send that reached no subscriber still numbered a bag"
         );
         for failed_before_delivering in [
             SendError::ConnectionBrokenSinceSenderNoLongerExists,
             SendError::LoanError(LoanError::OutOfMemory),
         ] {
-            assert_eq!(
-                sequence_number_following_a_send(7, &Err(failed_before_delivering)),
-                7,
+            assert!(
+                !a_send_may_have_delivered(&Err(failed_before_delivering)),
                 "{failed_before_delivering:?} reached no subscriber"
             );
         }
@@ -1568,9 +1550,8 @@ mod tests {
             SendError::ConnectionCorrupted,
             SendError::InternalError,
         ] {
-            assert_eq!(
-                sequence_number_following_a_send(7, &Err(failed_after_delivering_to_some)),
-                8,
+            assert!(
+                a_send_may_have_delivered(&Err(failed_after_delivering_to_some)),
                 "{failed_after_delivering_to_some:?} may have reached a subscriber"
             );
         }
