@@ -15,32 +15,21 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-Reading rule since the 2026-10-16 align (`[moq-relays]`, which amends the 2026-10-04
-`[moq-on-the-tailnet]` pivot): the `tap` and `exchange` verbs, every window, `remote_output`
-and the cross-stream link, and the msgpack encoding inside `write` and
-`read` go at the sharing step. An entry describing one is a fact about the shipped tree until
-the change that removes it ships and folds it out — never direction, and nothing new is built
-on it. Off a stream, the direction is §Networking's `[moq-relays]` entries. "Bag" in an older
-entry reads as **message** (the glossary).
-
-## Product (the MVP sentence) — IN-FLIGHT (→ moq-relays)
+## Product (the MVP sentence) — SHIPPED (unbuilt: `H264Encoder`'s CPU arm)
 <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-16-optional-accelerators.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-moq-relays.md -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
   each registering it as a per-user service — installs `tatolab-stream` from PyPI into an
-  ordinary uv-managed venv, runs `tatolab new` then `tatolab dev`, sees their camera live in
-  a window within a minute — on Linux a window needs a hardware device, and on the software
-  device the Linux unit carries the stream runs and is viewed from outside the runtime
-  (§Graphics) — and makes the pipeline theirs by editing the scaffolded node —
-  zero ceremony: no manifest, no `main()`, no schema wrangling, a fast edit loop. Amended by
-  moq-relays (owner, 2026-10-16): "sees Tatolab's sample stream live in their browser within a
-  minute, on every floor — and on the software device once the CPU encoder arm lands, deferred
-  past the sharing step (owner, 2026-10-17) — then points it at their camera and makes the
-  pipeline theirs" — the window clauses go with the windows. The
+  ordinary uv-managed venv, runs `tatolab new` then `tatolab dev`, sees Tatolab's sample
+  stream live in their browser within a minute, on every floor — and on the software device
+  once `H264Encoder`'s CPU arm lands (§Media I/O; owner, 2026-10-17) — then points it at their
+  camera and makes the pipeline theirs by editing the scaffolded node — zero ceremony: no
+  manifest, no `main()`, no schema wrangling, a fast edit loop. The
   zero-ceremony clauses bind both floors alike. Apple Silicon is a supported floor, not a
   developer machine: CI gates it on every PR, its runtime unit is proven in the release
   closure, and a macOS-only regression blocks a release as a Linux one does. macOS
@@ -49,7 +38,7 @@ entry reads as **message** (the glossary).
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
   SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
   runtime-hosting — SHIPPED #2721, #2722; optional-accelerators — SHIPPED #2761, #2763,
-  #2796]
+  #2796; moq-relays — SHIPPED #2853, #2864, #2866]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_sample_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
@@ -72,13 +61,13 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_project_stream_compile_entry.py::test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
-  manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
+  manifest authoring; no boilerplate entry; messages/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
   processor; the scaffold pins `.python-version` (3.12) and the wheel supports a small
   Python version range. [importable-python-library — SHIPPED #1684, #1711; schema-free-ports
   — SHIPPED #1814]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_each_node_lives_outside_the_entry_file -->
-  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one -->
 - **DECIDED** — Rust authoring stays a supported capability: a Rust app is a plain
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
@@ -101,7 +90,7 @@ entry reads as **message** (the glossary).
   both CI lanes; on Linux their `requires_gpu` halves run on the lane on the unit's own
   software device, and a test stays on the rig only when it carries
   `rig_only_capability(reason=…)`, whose reason `test_platform_markers.py` holds to a closed
-  list — Vulkan Video, DMA-BUF modifiers, CUDA, a camera, a display, an audio device; on macOS
+  list — Vulkan Video, DMA-BUF modifiers, CUDA, a camera, an audio device; on macOS
   the `requires_gpu` half runs on that floor's rig until the parity ticket that first makes
   it green; and a test skipped off
   Linux carries `linux_only_capability(reason=…)`, whose
@@ -118,25 +107,24 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
   <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
 - **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
-  pixel view explicit. `tatolab new` writes two nodes, each in its own module
-  under `nodes/` — an `InvertingEffect` over `GlslPixelEffect` (one GLSL `effect`
-  function) in the camera-to-window path, and a numpy `BrightnessMeter` on a fan-out of
-  the effect's output that reads the frame through `frame.cpu()` and logs its mean once a
+  pixel view explicit — and it is the sample stream and only that. `tatolab new` writes one
+  `@stream`, `TestPatternSource` (the branded animation, §Media I/O) → `HalftoneLensEffect`
+  → `H264Encoder` → `expose(…, PUBLIC)`, and two nodes, each in its own module under
+  `nodes/` — the `HalftoneLensEffect` over `GlslPixelEffect`, a drifting lens that turns what
+  it covers into dots (owner, 2026-10-19), and a numpy `BrightnessMeter` on a fan-out of the
+  effect's output that reads the frame through `frame.cpu()` and logs its mean once a
   second, paced on `ctx.time` — with dependencies `tatolab-stream` and `numpy>=2.1`,
-  nothing more, the same on both floors. The files render from the template files in
+  nothing more, the same on both floors. `tatolab new` takes no `--camera` and no
+  `--test-pattern`, and no template holds a camera: camera projects live in the docs' sample
+  projects and, later, an examples folder the app installs, and the in-repo camera examples
+  stay examples (owner, 2026-10-16). The files render from the template files in
   `sdk/tatolab-stream/scaffold_template/`, which the `tatolab` CLI embeds, each
   placeholder its template's own default value so the templates stay importable and
   checkable; ruff runs over every render, pyright over the template tree, and the
   cross-floor check gates the output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
-  stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; amended by
-  moq-relays: the scaffold is the sample stream and only that — `TestPatternSource` (the
-  branded animation, §Media I/O) → `HalftoneLensEffect` (a drifting lens that turns what it
-  covers into dots; owner, 2026-10-19) → `H264Encoder` → `expose(…, PUBLIC)`,
-  the `BrightnessMeter` on a fan-out of the effect's output; `tatolab new` takes no `--camera`
-  and no `--test-pattern`, and no template holds a camera — camera projects live in the docs'
-  sample projects and, later, an examples folder the app installs; the in-repo camera
-  examples stay examples (owner, 2026-10-16)]
+  stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; moq-relays —
+  SHIPPED #2866]
   Rejected: a camera in the scaffold, as the default or as a flag — a user whose camera does
   not open meets a failure as the first thing (owner, 2026-10-16).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
@@ -157,10 +145,11 @@ entry reads as **message** (the glossary).
   it with the project as the import root (the graph's JSON on stdout, a failed compile's
   traceback as the error), describes the Python types and loads; the compile's cross-floor
   warnings come back in the reply and the CLI prints them on stderr. The runtime compiles, so
-  an agent loads exactly as the CLI does. `graph`, `tap`, `logs`, `exchange` and `mcp` speak
+  an agent loads exactly as the CLI does. `graph`, `logs`, `mcp`, `relays` and `relay` speak
   the local API, and `new` writes the embedded scaffold. Only `<project>/.venv/bin/python` is
   taken; a relocated venv is refused by name until a need appears. Owner, 2026-10-02.
-  [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711]
+  [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
+  moq-relays — SHIPPED #2871]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_run_and_dev_attached -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_stream_actions -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name -->
@@ -205,17 +194,17 @@ entry reads as **message** (the glossary).
   stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
   and one venv; a stream may expose ports. Each machine runs one runtime, which runs many streams — written by different people
   or teams — owns the accelerator when one is
-  present, serves the machine's local API, and schedules across streams. Every Python node
-  keeps its own process, and agents keep changing live graphs. Owner, 2026-09-30.
-  [one-runtime-per-machine; stream-graph — SHIPPED #2612, #2618, #2655; amended by
-  moq-relays: the runtime sends every exposed port to relays through one publisher and runs
-  the local relay as a child, built at the sharing step]
+  present, serves the machine's local API, schedules across streams, sends every exposed
+  port to relays through one publisher, and runs the local relay's two instances as its
+  children. Every Python node keeps its own process, and agents keep changing live graphs.
+  Owner, 2026-09-30. [one-runtime-per-machine; stream-graph — SHIPPED #2612, #2618, #2655;
+  moq-relays — SHIPPED #2842, #2853]
 - **DECIDED** — What Tatolab is for: a simple SDK for defining live streams as pipes and
   sharing them with people and agents. Tailscale users are the first customers, and Tatolab
   builds nothing Tailscale already does — nor reads or configures it: a tailnet reaches a
   machine's local relay as any network does. Robotics and physical-machine systems are out of
   scope, and Tatolab never replaces a team's own ROS or Zenoh stack. Owner, 2026-10-04 and
-  2026-10-16. [moq-on-the-tailnet; moq-relays]
+  2026-10-16. [moq-on-the-tailnet; moq-relays — SHIPPED #2842]
 - **DECIDED** — The runtime is required and always on, installed once per machine by an
   installer — the desktop app, a package manager, a `curl | sh` script or a distro package —
   which ships the runtime, the CLI and the native portion processor interpreters borrow as one
@@ -305,10 +294,11 @@ entry reads as **message** (the glossary).
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715]
 
-## Packages & extension model — IN-FLIGHT (→ moq-relays)
+## Packages & extension model — SHIPPED
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-08-package-split-and-lend.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-07-authoring-names.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-13-shared-pools-bounded-by-memory-budget.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-moq-relays.md -->
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -374,8 +364,7 @@ entry reads as **message** (the glossary).
 - **DECIDED** — The criterion for a built-in, stated so that the next one is
   contestable: a first-party capability is a built-in — its native half in `tatolabd`, never
   in a pip distribution, its generated class in `tatolab-stream` — only if (a) its per-frame
-  path has a deadline the helper hop cannot meet — a vsync-paced present loop, a device
-  audio callback — or (b) it needs an engine-only primitive the handle-shaped surface does
+  path has a deadline the helper hop cannot meet — a device audio callback — or (b) it needs an engine-only primitive the handle-shaped surface does
   not export, or (c) it presents an OS-facing device to the other applications on the
   machine — a virtual camera; a virtual microphone would be the same case — which
   installing the runtime alone must make available, with no further package to install;
@@ -386,24 +375,6 @@ entry reads as **message** (the glossary).
   needs one brings that export as engine work. [extension-model; virtual-camera-sink —
   SHIPPED #2196, #2197, #2198; package-split-and-lend — SHIPPED #2684, #2697]
   <!-- verify: pytest tests/stream-on-runtime/test_virtual_camera_sink.py -->
-- **DECIDED** — The runtime exports its bag codec as two functions `tatolab.stream` declares
-  as runtime-backed: `encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes` and
-  `decode_msgpack_bytes_to_python_object(msgpack_bytes: bytes) -> Any`. They are the
-  existing `encode_bag_to_msgpack` and `decode_msgpack_to_python_object` made reachable,
-  with exactly the codec's rules — a dict with string keys at every level, the eight value
-  types, `bytes` as `bin` at 1×, refusal by name of anything else — and no new behavior.
-  The codec's rules include one nesting bound: a value nesting more than 128 containers is
-  refused by name, on encode and decode alike.
-  This is the first firing of the clause above that engine work an extension needs is done
-  as engine code inside the extension's own change: an extension carrying a bag across its
-  own transport needs the one codec, and a second one in the wheel would be the parallel
-  abstraction the doctrine forbids. It is not a raw byte port — no link reads or writes
-  bytes; the pair converts between a bag and bytes in the caller's own hands.
-  `docs/decisions/extension-model.md` records why. [moq-data-tracks — SHIPPED #2171;
-  package-split-and-lend — SHIPPED #2686; amended by moq-relays: the whole entry is deleted —
-  the pair is gone from the runtime, and msgpack is `tatolab.stream.msgpack`, a helper the
-  stream package ships (§Processor model); built #2801]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py -k test_the_engine_exports_no_message_payload_codec -->
 - **DECIDED** — An extension wheel is built the way a third party would build one, which
   is the dogfooding the pivot exists for: a standalone maturin project under `packages/`
   with its own workspace root and lockfile — not a member of the engine workspace —
@@ -420,7 +391,7 @@ entry reads as **message** (the glossary).
   <!-- verify: grep -n "tatolab-stream>=" packages/streamlib-webrtc/pyproject.toml -->
 - **DECIDED** — The engine's handle-shaped primitive surface is the public contract
   for native interop: DMA-BUF / OPAQUE_FD import and export on Linux and IOSurface export
-  on macOS, the present target, texture rings, codec byte pumps, the audio clock, color
+  on macOS, texture rings, codec byte pumps, the audio clock, color
   resolution — surfaced to the Python ecosystem as DLPack and the CUDA Array Interface
   (DLPack first; the CUDA Array Interface is CUDA by nature and never offered on macOS).
   A graph frame's natural DLPack side is the device on both floors. On Linux it is
@@ -513,10 +484,10 @@ entry reads as **message** (the glossary).
   at the typed cast — the moment a consumer names what it is holding — and released
   when that object drops; the read offers the constructing type the means to take
   one, on terms equally open to any authored class, and takes none for a consumer
-  that reads the bag as a dict. Publish-to-claim transit rides pool depth, and so
+  that reads the payload untyped. Publish-to-claim transit rides pool depth, and so
   does an untyped read: the strictness dial is also the safety dial — depth bounds
   the window, and outwaiting it is an error, never somebody else's pixels. The
-  engine inspects no bag content anywhere. The producer never waits on a consumer:
+  engine inspects no message content anywhere. The producer never waits on a consumer:
   its node's output pool skips leased slots and grows to its cap; at the cap, or past
   the runtime's memory budget (§Graphics), the producer drops its own frame — a slow
   consumer costs memory, then its own node's frames, never another processor's
@@ -563,7 +534,7 @@ entry reads as **message** (the glossary).
   (`ClaimedSurfacePixelAccess`), over the unchanged claim seam — `VideoFrame` is itself
   built from it, which is the proof it holds no privileged position over any library or
   user cast type. The surface a type claims is the field it declares, defaulting to
-  `surface_id` and never guessed: the wheel inspects bag content no more than the engine
+  `surface_id` and never guessed: the wheel inspects message content no more than the engine
   does. The bare
   protocol binds a type that claims exactly one surface: a type claiming several gets
   no bare `__dlpack__` — the ambiguity is refused by name — and reaches each surface
@@ -682,7 +653,7 @@ entry reads as **message** (the glossary).
 - **DECIDED** — What the runtime backs is declared once, in `tatolab.stream`: the contexts,
   `LinkInputDataReader`, `LinkOutputDataWriter`, `NodeLinkDataAccess`, the `GpuContext`
   capabilities, `GpuSurfaceHandle`, the kernels, `MonotonicTimer`, the texture exports,
-  `NodeOwnedWindow` and its events, the bag codec pair, `monotonic_now_ns`,
+  `monotonic_now_ns`,
   `gpu_limited_access_of_the_typed_read_in_progress`, and `start_monotonic_timer(interval_ns)`,
   the one way a node starts a timer — `MonotonicTimer(n)` is gone, with no alias (owner,
   2026-10-07). A class is a `typing.Protocol` carrying the native signatures; a function binds
@@ -705,9 +676,9 @@ entry reads as **message** (the glossary).
   #2693, #2697]
   <!-- verify: cargo run -p xtask -- check-no-tatolab-namespace-package-init -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_bundled_vulkan_driver.py -->
-- **OPEN** — How an external control client plugs in. The sharing step settled what it hands
-  the runtime: a relay's address and credential per adapter, and nothing else (§Networking,
-  the adapters); how it plugs in stays open. Known (2026-10-04): no stream map, router or peer
+- **OPEN** — How an external control client plugs in. What it hands the runtime is settled: a
+  relay's address and credential per adapter, and nothing else (§Networking, the adapters);
+  how it plugs in stays open. Known (2026-10-04): no stream map, router or peer
   identity exists to push. [one-runtime-per-machine; moq-relays]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tatolab (`Tatolab.app`); the installer ships all three as one
@@ -725,8 +696,7 @@ entry reads as **message** (the glossary).
   #2691]
 - **DECIDED** — No public Python name Tatolab publishes says "processor". The move from
   `streamlib` to `tatolab.*` re-spells every one still standing, at once:
-  `ProcessorOwnedWindow` → `NodeOwnedWindow`, `ProcessorOwnedWindowEvents` →
-  `NodeOwnedWindowEvents`, `ProcessorOutputTextureRing` → `NodeOutputTextureRing` (its module
+  `ProcessorOutputTextureRing` → `NodeOutputTextureRing` (its module
   `node_output_texture_ring`), `ProcessorLinkDataAccess` → `NodeLinkDataAccess`, the GPU
   capabilities' `acquire_texture_from_processor_output_pool` and
   `acquire_storage_buffer_from_processor_output_pool` → `…_from_node_output_pool`, and the
@@ -820,7 +790,7 @@ entry reads as **message** (the glossary).
   user would be misled by an example of modifying Tailscale. An engine-facing example is
   deleted, never converted. Engine contracts are proven by engine tests, as the first entry
   in this section states. Owner, 2026-10-09. [examples-show-streams-only — SHIPPED #2718]
-  Rejected: porting `tokio-integration` to the new graph and tap shape (#2615): it keeps
+  Rejected: porting `tokio-integration` to the new graph shape (#2615): it keeps
   alive an example of engine embedding that no stream author needs (owner, 2026-10-09).
 - **DECIDED** — The GPU examples run on the portable path: `camera-compute-kernel`,
   `camera-halftone`, `camera-virtual-camera` and `camera-python-effects` land frames with
@@ -870,57 +840,62 @@ entry reads as **message** (the glossary).
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ moq-relays, relay-track-reading; OPEN: resources across streams)
+## Processor model & scheduling — SHIPPED (OPEN: resources across streams)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-moq-relays.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-relay-track-reading.md -->
 
-- **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
-  (self-describing msgpack named map). The engine has no type layer: ports carry no
+- **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
+  payload is bytes. The engine has no type layer and applies no encoding: ports carry no
   type declaration, connect never inspects or compares types and never warns, no read
-  path examines a tag, and the frame header carries no schema ident. Consuming is a
-  cast at read time; a mismatch surfaces as a decode failure at the consuming
-  processor. One carve-out, and only one: declaring an audio window contract **is** that
-  port's opt-in to the engine reading its bags as `AudioBlock`, so the engine inspects a
-  payload on exactly the ports that asked it to. A link into a port with
+  path examines a tag, and the frame header carries no schema ident. `write(port, payload:
+  bytes, timestamp_ns=, starts_group=)` and `read(port) -> bytes` move bytes, with
+  `read(port, into=T)` calling `T.from_bytes`; msgpack is a helper the stream package ships,
+  `tatolab.stream.msgpack` — `pack`, `unpack`, and `MsgpackCast` and
+  `msgpack_typed_dict_cast`, giving a dataclass or a TypedDict its `from_bytes` — never an
+  encoding the engine or the runtime portion applies behind a call. A built-in writes bytes
+  in the encoding its port's catalog entry names: the camera's frame record stays a msgpack
+  record `VideoFrame` reads, and the encoders write the stack's media frame (§Media I/O).
+  The envelope carries the group flag (§Networking), which Python and Rust readers see alike
+  beside the stamp. Consuming is a cast at read time; a mismatch surfaces as a decode failure
+  at the consuming processor. One carve-out, and only one: declaring an audio window contract
+  **is** that port's opt-in to the engine reading its messages as `AudioBlock`, on the input's
+  own declared contract and never in the forwarding path, so the engine inspects a payload on
+  exactly the ports that asked it to. A link into a port with
   no contract is unchanged in every respect — still pure plumbing, `connect` still
-  compares nothing, and the frame header still carries no schema ident.
-  [schema-free-ports — SHIPPED #1814; audio-port-window-contract — SHIPPED #2033; amended by
-  moq-relays: a message's payload is bytes — `write(port, payload: bytes, timestamp_ns=,
-  starts_group=)` and `read(port) -> bytes`, with `read(port, into=T)` calling
-  `T.from_bytes`; msgpack becomes a helper the stream package ships (`pack`, and a one-line
-  mixin giving a dataclass or TypedDict `from_bytes`), never an encoding the engine or the
-  runtime portion applies behind a call; a built-in writes bytes in the encoding its port's
-  catalog entry names — the camera's frame record stays a msgpack record `VideoFrame`
-  reads, the encoders write the stack's media frame; the envelope gains the group flag
-  (§Networking), which Python and Rust readers see alike beside the stamp; the audio-window
-  stage, on the input's own declared contract and never in the forwarding path, stays the one
-  place the engine reads a payload (owner, 2026-10-16 and 2026-10-17)]
+  compares nothing, and the frame header still carries no schema ident. Owner, 2026-10-16
+  and 2026-10-17. [schema-free-ports — SHIPPED #1814; audio-port-window-contract — SHIPPED
+  #2033; moq-relays — SHIPPED #2821, #2850]
   Rejected: an encoding applied inside `write` and `read` — it stood between an encoder's port
   and a stock MoQ player (owner, 2026-10-16).
   <!-- verify: cargo test -p streamlib-ipc-types frame_header_size_matches_constant -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_bag_carrying_extra_keys_is_read_rather_than_refused -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py -k test_the_engine_exports_no_message_payload_codec -->
 - **DECIDED** — A port declares three things, plus an optional window contract on an
-  audio input, and nothing else: name, description, and — on an input — delivery profile,
-  beside which an audio input may declare the window contract §Media I/O states. Type
+  audio input and an optional catalog entry on an output, and nothing else: name,
+  description, and — on an input — delivery profile, beside which an audio input may declare
+  the window contract §Media I/O states; an output port carries its producer-written catalog
+  entry — a hang entry, the section and that section's own fields — documentation `connect`
+  never compares (§Networking, the catalog). Type
   information belongs to the authoring language and never reaches the engine: in Python
   the port method's return annotation is the declaration, read by humans and type
-  checkers only, with `ctx.inputs.read(port)`
-  yielding the bag as a mapping and `read(port, into=T)` the opt-in strictness dial
-  (a TypedDict casts for free, a dataclass or pydantic model constructs and validates,
-  raising at read); in Rust the read target's `Deserialize` impl is the validation,
-  always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812; amended by
-  moq-relays: an output port also carries its producer-written catalog entry — a hang
-  entry, the section and that section's own fields — documentation `connect` never compares
-  (§Networking, the catalog); `into=T` casts bytes through `T.from_bytes`]
+  checkers only, with `ctx.inputs.read(port)` yielding the payload's bytes and
+  `read(port, into=T)` the opt-in strictness dial, casting the bytes through `T.from_bytes`
+  and raising at read; in Rust the read target's `Deserialize` impl is the validation,
+  always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812; moq-relays —
+  SHIPPED #2821, #2840]
   Rejected: a port declaring a shape or a convention name the engine compares — the 2026-09-10
   ruling, whose reason (agents on a mesh reading dynamically coded nodes) no longer exists;
   the entry is documentation, not a contract (owner, 2026-10-16).
   <!-- verify: sdk/streamlib-python-wheel/tests/test_read_into_target.py -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_catalog_entry_declaration.py -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::python_processor_declaration::tests::a_catalog_entry_hang_does_not_read_is_refused_naming_the_port_and_the_field -->
 - **DECIDED** — A read can name the inbound link it drained. Beside `read_raw`, a reader
-  offers a read that returns the bag, its stamp and the *inbound link* it arrived on,
+  offers a read that returns the message, its stamp and the *inbound link* it arrived on,
   named by the source channel name the link subscribed to — `<lowercased producer
-  processor id>/<output port>`, the name `graph` and `tap` already show. The mailbox
+  processor id>/<output port>`, the name `graph` already shows. The mailbox
   already queued each frame holding its link's identity for drop attribution; this
   exposes the identity the per-link counters are keyed by, so no frame carries anything
   it did not carry before and counting is unchanged. In Python `LinkInputDataReader`
@@ -930,7 +905,7 @@ entry reads as **message** (the glossary).
   many-input sink is possible rather than deferred, and one that restates a producer's
   timing downstream has the stamp to restate. A destination can also enumerate its
   inbound links at `setup()`
-  (`inbound_link_names(port)`), which is how a sink learns how many tracks it owes. A bag
+  (`inbound_link_names(port)`), which is how a sink learns how many tracks it owes. A message
   the port never enumerated a link for is refused by name rather than borrowing one.
   A helper-placed destination is *told* its link's name rather than deriving it: the wiring
   envelope's input entry carries `inbound_link_name` — the channel's own name — beside
@@ -939,10 +914,14 @@ entry reads as **message** (the glossary).
   because a default meaning "the channel name" is the back-compat shim the doctrine bans and
   would make a silently wrong name reachable. A helper-protocol change, made safe by the
   build id above.
+  Every read also tells what its link lost: `MessageReadFromInputPort` carries
+  `lost_since_last_read`, the inbound link's dropped count less its value at this reader's
+  previous message from that link, so a cumulative counter answers "since my last read" with
+  no zeroing; Python's `read_message(port_name, *, into=None)` hands back a frozen
+  `Message(payload, timestamp_ns, starts_group, lost_since_last_read, inbound_link)` from
+  `tatolab.stream`, beside the four reads above. Owner, 2026-10-16.
   [opus-mp4-recording-rung — SHIPPED #2124; networking-extension-wheels — SHIPPED #2150;
-  cross-runtime-links — SHIPPED #2287; reopened by one-runtime-per-machine: whether addresses
-  gain a stream level; amended by moq-on-the-tailnet: naming a link pulled from another
-  machine is the sharing step's]
+  cross-runtime-links — SHIPPED #2287; moq-relays — SHIPPED #2830]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::naming_the_inbound_link_a_bag_arrived_on_leaves_the_per_link_drop_counts_alone -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none -->
@@ -950,6 +929,9 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_inbound_link_read_with_timestamp.py -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_native_destination_knows_each_link_by_its_channel -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_message_lost_on_a_running_ordered_link_is_told_to_the_next_read -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_fan_in_read_is_told_only_the_losses_of_the_link_it_arrived_on -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_read_message.py -->
 - **DECIDED** — The delivery profile is the whole of channel policy: one word, declared
   port-locally at the consuming input port. Every input port declares its delivery profile explicitly — there is no default
   and nothing left to infer one from, so an input port without one is a wiring error.
@@ -960,8 +942,8 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine missing_declaration_is_a_wiring_error_naming_the_port -->
   <!-- verify: sdk/tatolab-stream/tests/test_node_declaration.py::test_an_input_port_without_a_delivery_profile_is_refused -->
 - **DECIDED** — The delivery profile names a read policy and nothing else. There are
-  exactly two: `newest` — the consumer drains to the most recent bag, older ones are
-  passed over — and `ordered` — the consumer receives bags in publication order. Both
+  exactly two: `newest` — the consumer drains to the most recent message, older ones are
+  passed over — and `ordered` — the consumer receives messages in publication order. Both
   drop under sustained pressure. Neither promises delivery, because on a link whose head
   is a device that will not wait, no port-local declaration can: backpressure only
   relocates the loss to the device edge. `lossless` is retired — the word promised what
@@ -969,7 +951,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::delivery_profile::tests::ordered_resolves_to_fifo_drop_deep -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::delivery_profile::tests::port_declaration_resolution::unknown_declared_value_is_rejected_with_the_legal_values -->
-- **DECIDED** — No loss is silent. A bag dropped at a port is counted by the port that
+- **DECIDED** — No loss is silent. A message dropped at a port is counted by the port that
   dropped it and is readable over the control plane in `graph`, alongside the processor's
   other metrics. Drops are counted per link, never as one blended total, so a future
   reflection of a link's count to its producer stays possible without recounting. A count
@@ -977,8 +959,8 @@ entry reads as **message** (the glossary).
   the link and reconnecting the same id starts from zero, because a count outliving its
   link would name something `graph` no longer has. A drop is a normal, reportable event
   on a realtime link, never an error and never invisible — a run that lost most of its
-  bags must not read as a healthy one. A `newest` port
-  passing over bags to reach the most recent is the profile working, not loss at the
+  messages must not read as a healthy one. A `newest` port
+  passing over messages to reach the most recent is the profile working, not loss at the
   port, and is deliberately uncounted. In the tree, the mailbox eviction, the subscriber
   ring's overwrite, the two receive-seam
   discards and a write refused at the channel ceiling are each counted where they happen and
@@ -991,16 +973,16 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::each_inbound_link_reports_its_own_losses_at_a_stalled_ordered_port -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_every_inbound_links_losses_by_name -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::mailbox::tests::passing_over_bags_to_reach_the_newest_is_not_a_drop_at_the_port -->
-- **DECIDED** — A bag the iceoryx2 subscriber ring overwrites is counted. Every channel's
+- **DECIDED** — A message the iceoryx2 subscriber ring overwrites is counted. Every channel's
   data service carries a per-channel 64-bit sequence number in an iceoryx2 user header —
   never in the frame header, which stays exactly as it is. A number is consumed once a
-  sample reaches the send, unless the send fails before delivering to anyone; a bag refused
+  sample reaches the send, unless the send fails before delivering to anyone; a message refused
   at the ceiling or never loaned consumes none. Each subscriber keeps the last number it
   received per producing publisher, the first sample after wiring its baseline, so a
   restarted producer is never read as a gap; the numbers a jump skips — the new number
-  minus the last, minus one — are added to that inbound link's dropped-bag count, on
-  `ordered` ports only, since a `newest` port passing over bags is the
-  profile working. The number is engine-internal: no processor reads it and no bag carries
+  minus the last, minus one — are added to that inbound link's dropped-message count, on
+  `ordered` ports only, since a `newest` port passing over messages is the
+  profile working. The number is engine-internal: no processor reads it and no message carries
   it. Six readings the build settled, none of them a mechanism the entry did not already
   state. **Per-channel is per producing publisher**: each publisher numbers its own sends
   from zero and each subscriber keeps its last number keyed by the publisher's id, so a
@@ -1012,15 +994,15 @@ entry reads as **message** (the glossary).
   `DataChannelBagUserHeader`, with its iceoryx2 type name pinned so a move
   never changes its identity, and a source-walking gate refuses a data `publish_subscribe`
   builder outside the node wrapper so no site can open a service without it. **A gap and an
-  eviction never double-count**: a ring gap is a bag never received and an eviction is a bag
+  eviction never double-count**: a ring gap is a message never received and an eviction is a message
   received and then displaced, and each lands once on the link's one counter. **A `newest`
   port counts neither** — the eviction at a skip-to-latest mailbox is the profile working.
-  And **a bag
+  And **a message
   dropped at the receive seam is counted on its link**: a frame too short for a header and a
   frame bound to a port with no mailbox each consume a number and reach no reader, so no gap
   could show them.
-  Two stated residuals: a bag lost after a link's last receive and before its disconnect is
-  not counted; and bags the ring overwrites before a link's first receive are not counted
+  Two stated residuals: a message lost after a link's last receive and before its disconnect is
+  not counted; and messages the ring overwrites before a link's first receive are not counted
   either, because that first sample is the baseline the gap is measured from. Counts land on
   the next receive for a native and a Python consumer alike — a consumer inside a long
   `process()` receives nothing, so its overwrites reach `graph` when it next reads, and no
@@ -1034,7 +1016,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::node::tests::a_channel_data_service_and_an_opener_disagreeing_on_the_user_header_are_refused_by_name -->
   <!-- verify: cargo run -p xtask -- check-iceoryx2-construction -->
 - **DECIDED** — A write refused at the channel ceiling is counted on the producer, per
-  output port. The ceiling is per channel and the refusal happens before the bag reaches any
+  output port. The ceiling is per channel and the refusal happens before the message reaches any
   link, so it consumes no sequence number and no destination can ever see it; one counter at
   the single send seam serves a native and a Python producer alike, so a Rust author's `Err`
   is counted too, and `graph` renders `refused_bags_by_output_port: {port: n}` on the
@@ -1049,7 +1031,7 @@ entry reads as **message** (the glossary).
   the sequence number and added to an `ordered` reader's `lost_since_last_read`, never to its
   link's dropped count; the writer counts it on itself, per output port. Only engine-internal
   writers declare one. A loss declared after the writer's last write reaches no reader, the
-  producer's count excepted. Owner, 2026-10-20. [relay-track-reading]
+  producer's count excepted. Owner, 2026-10-20. [relay-track-reading — SHIPPED #2900]
   <!-- verify: cargo test -p streamlib-ipc-types --lib tests::the_channel_user_header_is_two_u64s_under_its_pinned_name -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_declared_upstream_loss_reaches_lost_since_last_read_on_an_ordered_port -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_declared_upstream_loss_on_a_links_first_sample_is_still_counted -->
@@ -1062,7 +1044,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-python-wheel --lib python_processor_link_data_access::tests::a_loss_declared_upstream_of_a_link_reaches_a_helpers_reader_as_lost_since_last_read -->
 - **DECIDED** — A helper-placed destination's per-link counts reach `graph`. The parent
   creates one blackboard per helper spawn; the helper is its only writer, one entry per
-  inbound link holding that link's dropped-bag count, and the parent reads it whenever
+  inbound link holding that link's dropped-message count, and the parent reads it whenever
   `graph` renders, without waiting on the child. The last counts a crashed helper wrote stay
   readable; a dead writer can no longer update its entries, so a respawned helper gets a
   fresh board. A helper's write refused at the ceiling is
@@ -1072,7 +1054,7 @@ entry reads as **message** (the glossary).
   blackboard's keys are fixed at creation and links arrive live, so the board declares one
   slot per inbound link the cap allows, and the parent assigns each link a slot and a wiring
   generation carried in its setup envelope entry or its `wire_link`. Each value holds that
-  generation beside the link's dropped bags and discarded samples, and the parent renders a
+  generation beside the link's dropped messages and discarded samples, and the parent renders a
   slot only while its generation matches the link it assigned — so a late write for an
   unwired link is ignored and a reused slot starts from zero, which is what makes a count
   cumulative for the life of one wiring rather than of the slot. An output port's entry
@@ -1099,7 +1081,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted -->
   <!-- verify: pytest -m requires_gpu tests/stream-on-runtime/test_helper_loss_counts.py -->
 - **DECIDED** — No link ever blocks a producer: no profile resolves to producer-blocking and
-  no overflow policy parks a producer. A processor publishing to a slow consumer loses bags at
+  no overflow policy parks a producer. A processor publishing to a slow consumer loses messages at
   that consumer's port, counted as the entry above states; it is never parked. A parked
   producer cannot observe shutdown.
   [delivery-profile-vocabulary — SHIPPED #2025]
@@ -1109,7 +1091,7 @@ entry reads as **message** (the glossary).
 - **DECIDED** — Loss-handling knowledge lives at the link's endpoints, never in the
   engine. The engine's whole role is to count a drop at the port that dropped it and
   surface it; it never inspects a payload — save on a port whose window contract is
-  exactly that opt-in — never knows a bag holds a reference frame, and never acquires a
+  exactly that opt-in — never knows a message holds a reference frame, and never acquires a
   drop rule that depends on content. The carve-out buys no drop rule either: the windowing
   stage reads samples, never a frame's role in a stream, and a windowed port drops on the
   same counted-mailbox terms as every other port. A producer that can make loss
@@ -1119,12 +1101,12 @@ entry reads as **message** (the glossary).
   option: a consumer that sees a gap discards until the producer's next sync point, and
   never commits or forwards a stream it knows is broken. No consumer drops or passes on
   encoded frames blindly. The information that makes both possible travels as
-  ordinary bag fields the producer writes and the consumer casts, never as a tag in the
+  ordinary message fields the producer writes and the consumer casts, never as a tag in the
   frame header and never as engine-visible type. [delivery-profile-vocabulary]
 - **OPEN** — Reflecting a link's drop count back to its producing port, so a producer
   can react to pressure it cannot otherwise see: intended, do not build until the first
   encoded-domain link exists — nothing in the tree reads it before an encoder does.
-  Direction — only drops at `ordered` inputs (a `newest` input passing over bags is the
+  Direction — only drops at `ordered` inputs (a `newest` input passing over messages is the
   profile working and must never throttle a producer); rides the link's own notify path,
   never the control plane; a read-only count the producer polls, no callback, no
   configuration dial. The per-link counting decided above is the only piece today's work
@@ -1212,20 +1194,22 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest tests/stream-on-runtime/test_processor_config_catalog.py -->
   <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
 - **DECIDED** — Port rendering in the control plane is name, description, delivery
-  profile, direction, and — on an audio input that declared one — its window contract; no
-  port carries a type in `graph`, `tap`, or any snapshot. A port that declared nothing
+  profile, direction, on an audio input that declared one its window contract, and on an
+  output that carries one its `catalog_entry`, in `graph` and `/api/registry` alike; no port
+  carries a type in `graph` or any snapshot. A port that declared nothing
   renders no `audio_window` key at all rather than a null. A `match_device` port renders
   the five values its device settled — machine-dependent because the device format is,
   which is truer than a static lie — and renders the sentinel itself while nothing has
   settled it. [schema-free-ports — SHIPPED #1816; audio-port-window-contract — SHIPPED
-  #2032, #2034]
+  #2032, #2034; moq-relays — SHIPPED #2840]
   <!-- verify: sdk/tatolab-stream/tests/test_node_declaration.py::test_a_declared_port_carries_no_type_key_under_any_spelling -->
   <!-- verify: sdk/tatolab-stream/tests/test_node_declaration.py::test_a_port_declaring_no_contract_carries_no_audio_window_key -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_settled_contract_reaches_graph_on_the_port_that_settled_it -->
-- **OPEN** — What a port reports about the bags it produces or accepts, and how a bag
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::port_rendering_tests::an_output_port_renders_the_catalog_entry_it_declared_beside_the_four -->
+- **OPEN** — What a port reports about the messages it produces or accepts, and how a message
   shape is described and served at all — by any author, the built-ins included — so an
   agent can wire a custom processor it did not write: an input that only receives and
-  may be fed several shapes, an output that may write a duck-typed bag, nothing
+  may be fed several shapes, an output that may write a duck-typed message, nothing
   required, and a form that survives a transport where no link names the producer.
   Undecided; the shapes considered and set aside are recorded in
   `docs/research/2026-09-10-bag-shape-hints-for-agents.md`. Do not build; ports render
@@ -1237,7 +1221,7 @@ entry reads as **message** (the glossary).
 - **DECIDED** — Reactive and continuous execution pace the same on both floors. A reactive
   processor waits on one readiness queue — epoll on Linux, kqueue `EVFILT_READ` on macOS,
   level-triggered on both, with one 500 ms bound — holding its inbound listener and its
-  shutdown wake (an `eventfd` on Linux, a close-on-exec pipe written once on macOS), so a bag
+  shutdown wake (an `eventfd` on Linux, a close-on-exec pipe written once on macOS), so a message
   or a shutdown wakes it on arrival. The 100 ms channel-poll loop survives only as the
   fallback for a platform with neither queue or a waiter whose setup failed, and a wake that
   cannot be created leaves channel-only shutdown rather than a panic. `MonotonicTimer`, which
@@ -1381,7 +1365,7 @@ entry reads as **message** (the glossary).
   runs. The engine stops every helper at once, never one after another, each on the same
   ladder: `stop` and `teardown` are sent together; a Python callback still running after one
   second is interrupted with `KeyboardInterrupt`, after which `stop()` and `teardown()` still
-  run and the bag in flight is lost; `teardown()` then has five seconds; the helper's whole
+  run and the message in flight is lost; `teardown()` then has five seconds; the helper's whole
   process group is terminated, then killed; and the child is reaped, or abandoned and named.
   Native code a callback is inside is interrupted only when it returns. Budgets are
   engine-chosen and not authorable. A processor's descendants die with it: its process group
@@ -1398,8 +1382,7 @@ entry reads as **message** (the glossary).
   `setup()` included — a `setup()` that raises by itself keeps the no-teardown rule it
   already had, and a `teardown()` touching state `setup()` never built raises and is logged
   like any hook failure. The second interrupt gives a Python helper no `teardown()` at all:
-  it terminates the helper's process group, and a recording keeps what its closed fragments
-  hold, which is the case the fragmented layout was chosen for. A live `remove_processor`
+  it terminates the helper's process group. A live `remove_processor`
   whose native thread outlives its budget still removes the processor — the node and its
   links go, the thread is abandoned, and the call fails naming it, so the caller learns the
   change did not end cleanly. The engine's ends of a helper's stdout and stderr are detached
@@ -1614,7 +1597,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::processor_interpreter_describe -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_interpreter_lend.py -->
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
-  Direction (review, not decided): a camera, a microphone, a display, the accelerator, network
+  Direction (review, not decided): a camera, a microphone, the accelerator, network
   exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that
   opens a device directly says so on `@node`) and carried in the graph, never authored; the
   runtime requests exactly those at load and refuses by name what the machine cannot grant, so
@@ -1639,12 +1622,13 @@ entry reads as **message** (the glossary).
   an engine-chosen bound of abandoned threads in the process, the runtime exits 124. A stream
   reads another stream's private or public port on the same machine through the local relay's
   loopback listener and the relay source node (§Networking); no link crosses a stream's edge.
-  Surfaces are shared across every stream's processor interpreters on both floors, all being
+  `tatolabd` keeps once for the machine the exposed-port publisher, the relay adapters and
+  the local relay's two children (§Networking). Surfaces are shared across every stream's
+  processor interpreters on both floors, all being
   the runtime's children. Streams needing conflicting Python
   packages each start from their own venv (the package split and the lend, §Packages). Owner,
   2026-10-01; the surface clause confirmed 2026-10-02. [one-runtime-per-machine;
-  runtime-hosting — SHIPPED #2704, #2715; amended by moq-relays: the publisher, the adapters
-  and the local relay child are kept once for the machine, built at the sharing step]
+  runtime-hosting — SHIPPED #2704, #2715; moq-relays — SHIPPED #2842, #2853, #2855]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::one_streams_shutdown_ends_it_and_leaves_the_other_loaded -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::one_streams_graph_change_reaches_only_its_own_compiler_and_topic -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_streams_log_each_to_its_own_file_and_a_record_no_stream_emitted_to_neither -->
@@ -1658,7 +1642,7 @@ entry reads as **message** (the glossary).
   and remembered; a control client reads the same list and never has to predict it.
   [one-runtime-per-machine]
 - **DECIDED** — Failure isolation: one engine for every stream on the machine. A native crash
-  in a built-in — camera, codec, display — ends every stream on the
+  in a built-in — camera, codec, audio — ends every stream on the
   machine, and the runtime restarts and re-loads every kept stream neither stopped nor failed
   from its persisted graph, while an attached stream ends with its `run` (§Product); a hang is
   bounded per node by the existing abandon budget and ends only that stream; Python crashes and hangs
@@ -1717,14 +1701,11 @@ entry reads as **message** (the glossary).
   subgroup operation the driver does not serve, or uses one in a stage it does not serve,
   refuses at `create_*_kernel` naming the driver, the operation and the stage (MoltenVK serves
   none in vertex, measured) — the one class of GLSL construct found that MoltenVK cannot serve.
-  A vsync-off present request on a surface advertising no `MAILBOX` takes FIFO — never
-  IMMEDIATE, which tears — and says so once per process.
   [macos-platform-floor — SHIPPED #2356, #2357, #2374; macos-capability-parity — SHIPPED #2403]
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests ray_tracing_on_a_device_without_it_refuses_rather_than_panicking -->
   <!-- verify: cargo test -p streamlib-engine the_ray_tracing_refusal_names_the_tier_and_the_extension -->
   <!-- verify: cargo test -p streamlib-engine device_without_video_refuses_every_codec_operation_naming_its_direction -->
   <!-- verify: cargo test -p streamlib-engine a_subgroup_operation_in_a_stage_the_driver_does_not_serve_is_refused -->
-  <!-- verify: cargo test -p streamlib-engine a_vsync_off_request_takes_fifo_where_the_driver_advertises_no_mailbox -->
   <!-- verify: pytest tests/stream-on-runtime/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
 - **DECIDED** — The engine's kernel primitives are exposable to Python as configured
   blocks: shader/compute source and binding config passed from Python, compiled and
@@ -1760,7 +1741,7 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_graphics_kernel_surface.py::test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_graphics_kernel_surface.py::test_a_graphics_kernel_carries_no_depth_or_vertex_input_state -->
 - **DECIDED** — A kernel's output is an engine-owned texture that Python names by
-  surface id and passes downstream in a bag, and that a third-party GPU library in its
+  surface id and passes downstream in a message, and that a third-party GPU library in its
   own Python package reaches through a scope. On Linux, entering blits the texture to a
   linear view (`kDLCUDA` over DMA-BUF / OPAQUE_FD) and leaving blits any write back and
   orders it on the surface's timeline ahead of the engine's next read. On macOS there is no
@@ -1898,7 +1879,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-media-builtins both_doors_barrier_into_the_layout_a_sampled_descriptor_declares -->
 - **OPEN** — Serialising a `TextureRegistration`'s layout cell. The engine's contract is
   read-then-barrier-then-update with no lock held across the submit, which the encoder, the
-  present compositor and the escalate path all follow; two app-process consumers fanned
+  offscreen compositor and the escalate path all follow; two app-process consumers fanned
   from one producer can therefore observe the same layout and both barrier out of it. It
   is confined to the same-process texture cache — a re-imported registration and a private
   host texture share no cell — and whether the fix is a lock, a per-consumer view, or a
@@ -2020,7 +2001,6 @@ entry reads as **message** (the glossary).
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2429, #2430, #2431]
   <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_tensor_written_through_torch_is_read_by_another_process -->
   <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_an_odd_shaped_tensor_round_trips -->
-  <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_tensor_acquired_after_a_window_opens_round_trips -->
   <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one -->
   <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_mlx_reads_the_tensor_torch_mps_wrote_in_another_process -->
   <!-- verify: cargo test -p streamlib-engine a_storage_buffer_registration_without_its_layout_is_refused_by_name -->
@@ -2047,8 +2027,8 @@ entry reads as **message** (the glossary).
   escalate gate nor a device-idle wait; only growth allocates under the gate. Nothing
   therefore drains a slot's earlier readers before its next write, so every write into a slot
   orders itself: a draw's colour-target barrier sources `ALL_COMMANDS` / `MEMORY_WRITE`, as
-  the compute path's entry scope does, so it waits on the one queue for a display's in-flight
-  compose of that slot. Owner, 2026-09-22, over a wheel ring asking a "still held?" op per
+  the compute path's entry scope does, so it waits on the one queue for any in-flight work on
+  that slot. Owner, 2026-09-22, over a wheel ring asking a "still held?" op per
   rotation, which would be a second system deciding slot reuse.
   [engine-steps — SHIPPED #2427, #2429, #2503, #2546; shared-pools-bounded-by-memory-budget —
   SHIPPED #2741, #2743; amended by
@@ -2059,7 +2039,6 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine a_slot_a_consumer_has_checked_out_is_skipped_until_released -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests offscreen_draw_into_a_slot_the_display_is_still_composing_is_ordered_after_the_compose -->
   <!-- verify: pytest tests/stream-on-runtime/test_texture_ring_producer.py::test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces -->
   <!-- verify: pytest tests/stream-on-runtime/test_texture_ring_producer.py::test_the_same_schedule_with_no_claim_recycles_the_first_frame -->
   <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_tensor_a_consumer_holds_is_never_rewritten -->
@@ -2108,14 +2087,13 @@ entry reads as **message** (the glossary).
   [shared-pools-bounded-by-memory-budget — SHIPPED #2743]
   <!-- verify: cargo test -p streamlib-engine a_stopped_streams_pool_entries_are_freed_and_their_ids_retired -->
   <!-- verify: cargo test -p streamlib-engine an_entry_unused_past_the_idle_window_is_freed_and_releases_its_registration -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests every_exportable_flavour_reacquires_after_its_pool_is_freed_with_a_swapchain_live -->
 - **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, pure wheel
   Python over `create_compute_kernel`, the processor output texture ring,
   `copy_surface_to_surface` and dispatch, with no engine, wire or stub change. The user writes
   one GLSL function, `vec4 effect(vec4 source, ivec2 at)`;
   `GlslPixelEffect.compile(gpu_full_access, effect_glsl=, dials=)` in `setup()` builds an
   ordinary compute kernel around it, and `apply_to_frame(gpu_limited_access, frame, dials=)`
-  in `process()` lands the frame with the engine copy, dispatches, and returns the output bag
+  in `process()` lands the frame with the engine copy, dispatches, and returns the output message
   (`surface_id`, `width`, `height`, `timestamp_ns`, `color_info`). One single-plane RGBA
   source, output at its extent in `rgba8_unorm`. Dials are push constants typed `float`,
   `int`, `vec2` or `vec4`, read as `dials.<name>` and laid out std430 after the template's
@@ -2197,13 +2175,10 @@ entry reads as **message** (the glossary).
   the host-pointer import tier. A device that exports no semaphore — the software device does
   not — crosses no timeline: a texture or staging registration carries none, a processor
   interpreter waits on none, and every copy an escalate op makes on that device is retired on
-  the host before the reply, as on macOS. Camera capture takes its MMAP path; a window needs a
-  hardware device — the bundled driver carries no window-system code, so `DisplayWindow`
-  refuses by name on the software device, and a stream there is viewed from outside the
-  runtime, by its URL or by a node that reads its frames; compute, graphics, ray tracing and
-  pixel effects run at the speed the CPU gives; the runtime names the device once and warns no
-  further. A user who wants a window on a machine with no GPU points `VK_DRIVER_FILES` at
-  their distribution's own lavapipe, which carries the window-system code. A processor
+  the host before the reply, as on macOS. Camera capture takes its MMAP path; the bundled
+  driver carries no window-system code; compute, graphics, ray tracing and pixel effects run
+  at the speed the CPU gives; the runtime names the device once and warns no further. A
+  processor
   interpreter imports on the runtime's device: the runtime hands each interpreter the device
   it built on and the loader environment reaching the bundled driver at spawn, and an
   interpreter that resolves another device refuses by name. The memory budget on the software
@@ -2221,10 +2196,9 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-consumer-rhi --lib a_helper_on_a_machine_with_two_devices_imports_on_the_one_the_runtime_named -->
   <!-- verify: cargo test -p streamlib-python-wheel as_device_tensor_refuses_on_a_software_device_naming_it_before_any_staging_opens -->
   <!-- verify: cargo test -p streamlib-python-wheel a_staging_without_a_timeline_reads_after_the_reply -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib a_device_with_no_window_system_surface_refuses_naming_the_vendor_driver_and_the_way_to_view -->
 - **DECIDED** — The Linux CI lane runs the engine on the bundled software device. A test is
   rig-only only when it needs what a GitHub runner cannot give — a capability the software
-  device lacks (Vulkan Video, DMA-BUF modifiers, CUDA) or a real camera, display or audio
+  device lacks (Vulkan Video, DMA-BUF modifiers, CUDA) or a real camera or audio
   device — and its marker's reason says which; every other engine, runtime and integration
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
@@ -2232,10 +2206,11 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib the_helpers_reasons_are_the_python_rig_only_closed_list -->
   <!-- verify: grep -n -e "--expected-device llvmpipe" -e "Integration suite (all but rig-only)" .github/workflows/ci.yml -->
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut, moq-relays)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-moq-relays.md -->
 
-- **DECIDED** — First-party camera, display, and audio are native built-in processors
+- **DECIDED** — First-party camera and audio are native built-in processors
   in the engine tree, statically linked into `tatolabd` — pre-built named blocks added and
   configured from Python (`stream_builder.add(CameraSource)`) through the classes generated
   into `tatolab.stream`, whose per-frame paths never enter an interpreter. Lag-by-design
@@ -2243,8 +2218,7 @@ entry reads as **message** (the glossary).
   set, not a rule: a further first-party capability is a built-in only under the criterion
   in §Packages & extension model, and is otherwise an extension wheel.
   [importable-python-library — SHIPPED #1709; extension-model; package-split-and-lend —
-  SHIPPED #2684, #2693; amended by moq-relays: the display built-in is deleted with the
-  windows (the entry below)]
+  SHIPPED #2684, #2693]
   <!-- verify: pytest tests/stream-on-runtime/test_native_builtin_blocks.py -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
@@ -2254,11 +2228,11 @@ entry reads as **message** (the glossary).
   justification, and the DAL plug-in stopped loading in macOS 14.1; on macOS the runtime
   refuses a graph naming it at load, naming the platform, and `tatolab enable-virtual-camera`
   refuses by name. As
-  many instances as the graph adds — the display's rule. Each instance is one camera that exists only
+  many instances as the graph adds. Each instance is one camera that exists only
   while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
   in and pulled out from every other application's point of view, whose frames are
-  whatever the graph writes. It takes video on an input `video` declared `newest`, the
-  display's shape. Config: `name`, the camera's name in every picker, defaulting to
+  whatever the graph writes. It takes video on an input `video` declared `newest`. Config:
+  `name`, the camera's name in every picker, defaulting to
   `StreamLib Camera` followed by a four-character id derived from the stream's project
   directory, the stream's name and the node's name — distinct across nodes and streams, the
   same on every run of the same stream, so unnamed cameras never collide and a device left
@@ -2329,8 +2303,7 @@ entry reads as **message** (the glossary).
   is owed, and whether it belongs to this built-in or to the runtime's restart policy, is
   undecided.
 - **DECIDED** — Built-ins are written against the same handle-shaped hardware
-  primitives third parties get — DMA-BUF / OPAQUE_FD / IOSurface import-export, present
-  target, audio clock, color resolution, and the audio device, video device and video codec
+  primitives third parties get — DMA-BUF / OPAQUE_FD / IOSurface import-export, audio clock, color resolution, and the audio device, video device and video codec
   backend seams — never against private engine guts;
   the layering wall survives the ABI's deletion as internal discipline.
   [importable-python-library — SHIPPED #1709, #1710]
@@ -2345,7 +2318,7 @@ entry reads as **message** (the glossary).
   lists nothing and refuses every open by name. `CameraSource` is platform-free above it and
   opens its stream at `setup()`, refusing there by name a named `device_id` that is not
   attached and listing the ones that are. The published contract: a
-  `VideoFrame` bag on port `video` whose `surface_id` names a pooled buffer, colour as the
+  `VideoFrame` message on port `video` whose `surface_id` names a pooled buffer, colour as the
   H.273 four-tuple resolved through the one table in `core::color`, an undescribed axis still
   an empty map. The V4L2 arm is `linux/v4l2_video_device_backend.rs`, with its EXPBUF/DMA-BUF
   probe, MMAP fallback and virtual-device skip list. The AVFoundation arm lists
@@ -2388,7 +2361,6 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib a_zero_stamp_falls_back_to_the_dequeue_instant_and_is_not_counted_as_clamped -->
   <!-- verify: cargo test -p streamlib-engine --lib a_device_that_never_stamps_usably_is_reported_once_however_many_frames_it_sends -->
   <!-- verify: cargo test -p streamlib-engine --lib a_buffer_flagged_monotonic_carries_its_stamp_in_nanoseconds -->
-  <!-- verify: cargo test -p streamlib-media-builtins --features hardware-tests --test camera_to_display_window_on_the_macos_window_server -->
 - **DECIDED** — Camera and microphone permission on Apple is requested, never merely
   queried, and never awaited on a path that stalls the graph — one privacy gate serves both
   devices. The graph starts under a pending prompt and frames or blocks begin once the user
@@ -2406,110 +2378,24 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib a_reminder_due_before_any_answer_warns_once_naming_the_application_and_the_setting -->
   <!-- verify: cargo test -p streamlib-engine --lib a_terminal_is_named_by_its_bundle -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib a_stream_waiting_on_the_user_binds_no_unit_and_delivers_once_allowed -->
-- **DECIDED** — Windowing: the engine owns the process's one event pump and mints
-  windows on request; a window-owning processor registers with it and keeps every
-  window policy decision — title, extent, what a resize means, when to redraw, what
-  closing does. winit permits one event loop per process, so the loop is owned once,
-  above every processor that wants a window, and N window-owning processors coexist
-  in one process: the built-ins crate does not depend on winit, so the engine holds
-  the only construction site there is. Each window's owner renders on its own thread,
-  never the pump's, so windows are not serialised behind one render loop — a claim
-  about the render loop, not the device, since two windows still share one `VkDevice`
-  and its queues. The raw-window-handle seam remains the internal boundary — the
-  engine mints the present target from the raw handle and owns every swapchain and
-  acquire detail,
-  plus the platform main-thread event loop where the OS demands it. On Linux the pump runs
-  on its own thread; on Apple it is built on the process's first thread when the runtime
-  starts and driven there while `tatolabd` waits for the shutdown. A runtime started off the first
-  thread, or a process whose first thread another `NSApplication` loop already drives, is
-  refused a pump by name, and every caller gets the same answer. On Apple the present target
-  is minted from a `CAMetalLayer` the pump adds as a sublayer of the window's content view at
-  creation, since winit hands out a raw window handle and AppKit a view only on the first
-  thread; a present target opens at the size the pump read at creation, so opening one under
-  the escalate gate never waits on that thread; and a registration hands its window back to
-  the pump to close, AppKit closing a window only there. Cmd+Q from the engine's application
-  menu requests the same shutdown Ctrl-C does. A window's requested size is in the desktop's
-  logical pixels, so `DisplayWindow`'s `width`/`height` and a processor-owned window's
-  request mean the same apparent size on a 1x and a 2x display while the swapchain renders at
-  full density — owner, 2026-09-21, while shipping #2357, on a 640×360 window showing at
-  320×180 on a Retina Mac. A processor that cannot get a window drains and discards, so
-  upstream still sees a live consumer.
-  [importable-python-library — SHIPPED #1707; shared-window-event-pump — SHIPPED #1734;
-  macos-platform-floor — SHIPPED #2357; amended by moq-relays: the whole entry is deleted (the
-  windows entry below)]
-  <!-- verify: cargo test -p streamlib-engine --test window_event_pump_serves_many_windows -->
-  <!-- verify: cargo test -p streamlib-engine --lib a_request_carries_its_title_and_size_to_the_window_attributes -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test processor_owned_window_on_the_first_thread -->
-  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test window_event_pump_built_when_the_run_starts -->
-  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_hosts_a_stream_on_the_gpu a_stream_started_through_the_local_api_opens_its_window -->
-  <!-- verify: cargo test -p streamlib-media-builtins --features hardware-tests --test two_display_windows_on_the_macos_window_server -->
-  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-23-shared-window-event-pump.md -->
-- **DECIDED** — Window ownership is a processor capability, not a built-in privilege:
-  a processor requests a window from the engine and owns its policy; the engine mints
-  it (pump registration + present target) and, for an owner whose code cannot sit in
-  the app process, runs that window's native present loop itself — the owner feeds
-  the loop by naming published surface ids, latest-wins: naming no frame leaves the
-  last one up, and an owner's slowness never stutters its own window, which paces on
-  vsync in native code always. The request seam is the same for every processor, and
-  the only cross-language delta is where the loop runs: a native owner may instead
-  drive its own render thread against its present target — the deadline constraint
-  does not bind app-process code — while a Python processor reaches the request
-  across the escalate path and feeds the engine-run loop; the per-frame naming is a
-  camera-class-cadence message that fits the helper hop, and no vsync deadline ever
-  crosses it. Colour is no delta either: the per-frame naming carries the frame's
-  primaries, transfer and HDR sidecar in the engine's own vocabulary, so a Python
-  owner renegotiates the swapchain exactly as a native one does. A window is
-  requested in `setup()`, where the typestate is Full, and released at teardown or
-  with its processor — never minted mid-`process()`. The
-  per-frame verb accepts anything that names a published surface: the cast object
-  (whose claim guarantees the id un-recycled), a kernel-output handle, or a bare
-  surface id — the last with one qualifier: naming no extent is how a caller says it
-  knows nothing else about the surface, so a bare id, or a cast type declaring none,
-  names a texture-backed surface only. A buffer-backed frame named that way does not
-  draw — the window keeps what it last had and the engine says so once per pool slot
-  rather than raising — so a camera or test pattern, which publishes buffer-backed
-  frames, is named with a cast object carrying its extent. The pump's two events
-  reach the owner as coalesced state polled off the window object, never a callback
-  across the hop; an owner that reads neither
-  gets the defaults — resize just works (the engine owns every swapchain detail),
-  and an unread close-request closes the window, after which the per-frame verb is
-  a no-op and the window reports closed: a user gesture never takes down a pipeline.
-  A refused request — no display server, a dead pump — raises at `setup()`, never
-  degrading silently: the built-in's drain-and-discard exists to keep upstream
-  seeing a live consumer, and a processor-owned window has no port of its own to
-  protect. The window is a processor resource, invisible to `graph` and `tap`
-  topology. The present compositor stays engine-internal — no cross-process spelling
-  and no Python name; at this capability surface, present-class means windows. One
-  present-loop machinery serves the built-in display and every processor-owned
-  window. The capability is Python's on both floors: on macOS a Python processor requests,
-  shows, drains and closes its own window and carries the HDR sidecar through the same
-  present loop, the helper's window exchange client being fd-free and shared.
-  [processor-owned-windows — SHIPPED #1928, #1929, #1930; macos-capability-parity — SHIPPED
-  #2407; amended by moq-relays: the whole entry is deleted (the windows entry below)]
-  <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_over_the_escalate_wire -->
-  <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_shows_named_surfaces -->
-  <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_refused_without_a_display_server -->
-  <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_all_three_ways_of_naming_a_published_surface_reach_the_window -->
-  <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed -->
-  <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar -->
-- **DECIDED** — The runtime opens no windows. `DisplayWindow`, `NodeOwnedWindow` and its events
-  and Protocols, the window event pump, the present target, the swapchain and present
-  compositor code in the RHI, the Apple first-thread pump and its `CAMetalLayer` path, `winit`,
-  every window test and rig fixture, the restart-for-a-display unit, the `DISPLAY`,
-  `WAYLAND_DISPLAY` and `XAUTHORITY` handling in `tatolabd`, and the software-device window
-  refusal are deleted by the sharing step's change, which inventories every site and deletes
-  them together so no window path outlives the browser path. A person sees a stream in a
-  browser through the preview page (§Networking); the rigs and the codec proof read a port
-  through the local relay as a user does, as tools outside the runtime; a stream's one output
-  off its graph is a track at a relay. Owner, 2026-10-16 and 2026-10-17. [moq-relays]
+- **DECIDED** — The runtime opens no windows: no display built-in, no node-owned window, no
+  event pump, no present target or swapchain, no `winit`, and no `DISPLAY`, `WAYLAND_DISPLAY`
+  or `XAUTHORITY` handling in `tatolabd`. The virtual camera keeps its compositor,
+  `VulkanOffscreenCompositor`, offscreen only. A person sees a stream in a browser through the
+  preview page (§Networking); the rigs and the codec proof read a port through the local relay
+  as a user does, as tools outside the runtime; a stream's one output off its graph is a track
+  at a relay. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2845]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-moq-relays.md -->
 - **DECIDED** — `TestPatternSource` is the sample stream's source: a branded looping animation
   — colour bars, the potato bouncing corner to corner, "Tatolab stream setup successfully" and
   "sample stream" bottom-right — rendered by one GPU pass into the pooled `Rgba32` frame every
   source lands in, the text from a glyph atlas baked into the binary, so it needs no device, no
   permission, no font library and nothing added to `DT_NEEDED`, and runs on the software
   device. It keeps its name and its ports; the branding is content. Owner, 2026-10-16.
-  [moq-relays]
-- **DECIDED** — `H264Encoder` has a CPU arm, deferred past the sharing step: until it lands a
+  [moq-relays — SHIPPED #2866]
+  <!-- verify: cargo test -p streamlib-media-builtins --lib test_pattern_frame_renderer::tests -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib test_pattern_frames_render_from_their_index_alone_on_the_device::every_frame_is_its_index_s_bars_potato_and_captions_and_renders_identically_twice -->
+- **DECIDED** — `H264Encoder` has a CPU arm (unbuilt): until it lands a
   machine without a GPU encoder shares no H.264, and the sample stream is proven on a device
   with one. Where the device's platform arm refuses H.264 encode — the software device among
   them — the block encodes with openh264, loading Cisco's own prebuilt library, which the
@@ -2559,11 +2445,11 @@ entry reads as **message** (the glossary).
 - **DECIDED** — Python-authored media processors (vendor or user) run in their own
   helper process like every other Python processor and are supported where deadlines
   allow: camera-class sources and block-level audio fit within the helper hop's
-  budget; vsync-paced present loops and device audio callbacks stay native, always —
+  budget; device audio callbacks stay native, always —
   a deadline the cross-process hop cannot meet, not a GIL argument.
   [importable-python-library; helper-process-placement-only — SHIPPED #1714]
 - **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
-  or compares — frames, bags, audio ticks, `ctx.time` — is the machine's monotonic clock
+  or compares — frames, messages, audio ticks, `ctx.time` — is the machine's monotonic clock
   (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
   and ALSA driver stamps carry on Linux and CoreAudio's `mHostTime` and AVFoundation's
   host-time-converted presentation stamps carry on Apple, comparable across every node on a host — and on that host
@@ -2589,7 +2475,7 @@ entry reads as **message** (the glossary).
   allowlist is per-file, which is why a data-plane file never joins it — a machine-global
   unique name comes from the engine's unique-name primitive, never from reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
-  SHIPPED #2408; moq-relays]
+  SHIPPED #2408; moq-relays — SHIPPED #2842, #2873]
   <!-- verify: cargo test -p streamlib-engine --lib now_lands_in_the_kernel_monotonic_domain -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_engine_media_clock -->
   <!-- verify: cargo test -p streamlib-python-wheel --lib python_logging::tests::a_wheel_stamp_and_an_engine_stamp_taken_back_to_back_differ_by_microseconds -->
@@ -2723,7 +2609,7 @@ entry reads as **message** (the glossary).
   CoreAudio arm — and it is published
   through the timestamped write, never the implicit one, whose `MediaClock::now()`
   would stamp the moment of publication rather than the instant of capture. Both the
-  bag field and the frame header therefore carry the same device-derived value, in the
+  message field and the frame header therefore carry the same device-derived value, in the
   same epoch a video frame's timestamp carries, which is the whole of block-level A/V
   sync: joining audio to camera frames is subtracting two integers.
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991; macos-capability-parity —
@@ -2754,7 +2640,7 @@ entry reads as **message** (the glossary).
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1989]
   <!-- verify: cargo test -p streamlib-engine --lib every_block_carries_a_full_quantum_of_silence -->
   <!-- verify: cargo test -p streamlib-engine --lib a_named_device_is_refused_by_name_rather_than_opened_as_something_else -->
-- **DECIDED** — The audio data model is the `AudioBlock` bag: samples ride the link
+- **DECIDED** — The audio data model is the `AudioBlock` message: samples ride the link
   inline as msgpack bin, CPU-resident, interleaved, with sample rate, channel count,
   dtype, and first-sample timestamp beside them. It is the wire contract and the field
   names are the contract — the same shape `VideoFrame` states for video: an optional
@@ -2762,12 +2648,12 @@ entry reads as **message** (the glossary).
   nowhere, ignoring keys it does not read. The keys are `samples`, `sample_rate`,
   `channels`, `sample_count`, `dtype`, `first_sample_timestamp_ns`. `dtype` is metadata
   with `f32` the default and `i16` legal, and `samples` is little-endian — a wire
-  statement rather than an assumption, since it is the property a bag decoded by a tap,
-  a CLI, or another language depends on. The sample count counts per-channel samples —
+  statement rather than an assumption, since it is the property a message decoded by a relay
+  reader, a CLI, or another language depends on. The sample count counts per-channel samples —
   an interleaved block of `channels` channels carries `sample_count × channels`
   scalars — so duration and the next block's expected timestamp derive from count and
   rate alone. Audio touches no surface machinery — no surface ids, no claims, no
-  lifetime contract, no `exchange`.
+  lifetime contract.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
   <!-- verify: cargo test -p streamlib-media-builtins --lib audio_block_msgpack_wire_carries_the_samples_as_a_binary_payload -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib audio_block_cast_ignores_unknown_keys -->
@@ -2779,7 +2665,7 @@ entry reads as **message** (the glossary).
   the binary type for both, which is the one test that can catch an array-for-`bin`
   mistake. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
   <!-- verify: cargo test -p streamlib-media-builtins --lib an_i16_block_carries_its_samples_as_a_binary_payload_too -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_the_payload_crosses_the_wire_as_bytes -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_the_samples_cross_the_wire_as_bytes -->
 - **DECIDED** — The Python cast is pure Python and composes nothing surface-shaped. It
   lives beside `video_frame.py`, is read with `ctx.inputs.read("audio", into=AudioBlock)`,
   and owes no `.pyi` entry — pyright checks it from source, as it does `VideoFrame`. It
@@ -2800,19 +2686,14 @@ entry reads as **message** (the glossary).
   Between shared memory and `process()` the payload is copied four times — out of the
   iceoryx2 sample, a header-strip memmove, the msgpack decode into an owned value, and
   into a Python `bytes` — and audio removes none of them; they are the helper hop every
-  bag pays. What the cast guarantees is that it adds no fifth: the numpy array is a view
+  message pays. What the cast guarantees is that it adds no fifth: the numpy array is a view
   over that `bytes`, and `torch.from_numpy` over it is a view again. At audio's sizes
   this is the right trade and the reason audio touches no surface machinery at all — a
   512-sample stereo `f32` block is 4 096 bytes against a 16 MiB per-link ceiling for a
   helper-placed processor. No doc, test name, or log line may describe the path as
   zero-copy from the device.
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_the_samples_are_a_numpy_view_over_the_bag_bytes -->
-- **DECIDED** — The wheel's own test harness decodes a bag carrying bytes: the collector
-  `await_bag` decodes through `rmpv`, the way the tap path does, so a `bin` payload in any
-  bag — audio's or one a Python processor writes — reaches a test intact.
-  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_a_block_read_off_the_wire_casts_to_an_audio_block -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_the_samples_are_a_numpy_view_over_the_unpacked_bytes -->
 - **DECIDED** — An audio input port may declare a window contract — sample rate,
   channels, dtype, window size, hop — beside its delivery profile: the engine resamples,
   converts channels, and frames natively so `process()` receives exact-size timestamped
@@ -2859,14 +2740,14 @@ entry reads as **message** (the glossary).
   unknown `dtype`, a hop above `window_size` (which would silently discard samples between
   windows), any numeric field at zero or below — a *declared* `channels` included — a
   second contract on one port, and a contract on an output. A window contract requires `delivery_profile = "ordered"` and is
-  refused beside a skipping profile naming both knobs — `newest` passes over bags by
+  refused beside a skipping profile naming both knobs — `newest` passes over messages by
   design, so an accumulator needing contiguous samples would flush on nearly every read
   and, for a window wider than one device quantum, might never emit at all. Refused at
   wire time: a second inbound link into a windowed port, naming the port and both links —
   fan-in legally interleaves N producers' blocks in one mailbox, and two sample streams
   interleaved into one accumulator is plausible-looking wrong audio. Refused at the stage:
   an N→M channel pair with neither side 1, naming both counts, because the source count
-  arrives with the bags and declaration cannot see it — a refusal that applies only to a
+  arrives with the messages and declaration cannot see it — a refusal that applies only to a
   *declared* count, there being nothing to convert to without one. Channel conversion runs
   both directions by fixed rule — N→1 averages, 1→N duplicates — since the rung's flagship
   case is an up-conversion.
@@ -2889,24 +2770,24 @@ entry reads as **message** (the glossary).
   decode to f32 → channel-convert → resample → frame → encode to the declared dtype, with
   internal arithmetic in f32 always and an `i16` contract encoded back saturating rather
   than wrapping. The stage owns its own decode of the six `AudioBlock` wire keys and
-  re-encodes each emitted window as an ordinary `AudioBlock` bag, so `read(into=AudioBlock)`
-  and Rust's `read::<AudioBlock>` work unchanged. A bag the stage cannot read is refused by
+  re-encodes each emitted window as an ordinary `AudioBlock` message, so `read(into=AudioBlock)`
+  and Rust's `read::<AudioBlock>` work unchanged. A message the stage cannot read is refused by
   name at the read — an unknown `dtype`, a payload whose length is not
-  `sample_count × channels × itemsize`, a bag with no `AudioBlock` keys at all — never
+  `sample_count × channels × itemsize`, a message with no `AudioBlock` keys at all — never
   reshaped into a plausible wrong answer, and the refusal names the port.
   [audio-port-window-contract — SHIPPED #2033]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_48k_stereo_source_reaches_a_16k_mono_512_port_as_exact_windows_32ms_apart -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_bag_the_stage_cannot_read_is_refused_by_name_rather_than_reshaped -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_i16_contract_saturates_at_both_endpoints_rather_than_wrapping -->
   <!-- verify: pytest tests/stream-on-runtime/test_audio_window_stage.py::test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared -->
-- **DECIDED** — Readiness on a windowed port means a full window, not an arrived bag.
+- **DECIDED** — Readiness on a windowed port means a full window, not an arrived message.
   Windowing is N-in → M-out — one 1024-sample quantum satisfies two 512-sample windows, a
   one-second rolling window needs about forty-seven of them — so the stage owns a per-port
   accumulator between the mailbox and the reader, and a windowed port reports data only
   when a full window can be emitted. A reactive `process()` is never dispatched with
   nothing to read, in the helper loop and the app-process runner alike; the drain loop
   dispatches once per ready window, so one 1024-sample quantum against a 512/512 contract
-  dispatches twice and a ready window never sits latent waiting for the next bag. A stream
+  dispatches twice and a ready window never sits latent waiting for the next message. A stream
   that simply stops leaves under one window of samples parked in the accumulator, delivered
   to nothing — designed, not a defect: an exact-size contract has no partial form to hand
   over. [audio-port-window-contract — SHIPPED #2033]
@@ -2945,7 +2826,7 @@ entry reads as **message** (the glossary).
 - **DECIDED** — Counting is unchanged and the accumulator is not a second drop site. Bags
   stay in the counted mailbox until `read` consumes them into the stage; the accumulator
   holds only the already-consumed resampled remainder, under one window's worth, and never
-  evicts. Readiness is computed jointly — queued bags' sample counts plus the remainder —
+  evicts. Readiness is computed jointly — queued messages' sample counts plus the remainder —
   never by draining the mailbox at `has_data`, because an eager drain would starve the
   per-link counters exactly where loss happens and grow the accumulator unboundedly under
   a stalled consumer. That forces the depth question open: the profile's depth is a floor
@@ -2954,20 +2835,20 @@ entry reads as **message** (the glossary).
   the contract is a declaration, not a depth dial. Overflow past that depth is a counted
   mailbox eviction, same counter, same `graph` surface. A discontinuity flush discards the
   remainder — under one window of samples — and that discard is counted: the samples it
-  threw away are reported on the port's link beside its dropped bags and logged with the
-  port and the sample count, so a bag evicted at a windowed port costs its own samples plus
+  threw away are reported on the port's link beside its dropped messages and logged with the
+  port and the sample count, so a message evicted at a windowed port costs its own samples plus
   the counted flush of the remainder behind it, and no part of the loss is silent. The
   iceoryx2 ring in front of a windowed port is engine-sized to a fixed cap well above a
   profile's depth, never to the contract's own depth, and a windowed port connected live onto
   a channel created smaller than that cap is refused by name.
-  Three readings the build settled. **The cap is 64 bags**, returned by the one
+  Three readings the build settled. **The cap is 64 messages**, returned by the one
   creation-depth function whenever any destination of the channel being created is windowed
   and 16 otherwise; the windowed port's subscriber ring is that 64, its mailbox depth stays
   sized from its contract, and neither is fed to the other. **The live refusal reads the
   held factory** — a windowed destination wired onto a channel whose creation depth is below
   64 is refused at wire time naming the port, the link, both depths and the fix of
   connecting the windowed consumer before the channel's other links, and it reads a channel
-  only a tap or a lagging helper still holds as readily as a busy one. **A flush counts the
+  only the exposed-port publisher or a lagging helper still holds as readily as a busy one. **A flush counts the
   samples no reader had received**, in per-channel samples at the port's declared rate: the
   remainder past the last emitted window's already-delivered overlap, plus the staged source
   frames scaled by the rate ratio and rounded down. Subtracting the overlap is what makes
@@ -2976,11 +2857,11 @@ entry reads as **message** (the glossary).
   delivered. `graph` renders `discarded_samples_by_link` beside `dropped_bags_by_link`, only
   for links into windowed ports, and a link into an unwindowed port carries no sample count
   rather than a zero, the way a port that declared nothing renders no `audio_window` key;
-  `frames_dropped` stays a bag total, and both flush callers — the format change and the
+  `frames_dropped` stays a message total, and both flush callers — the format change and the
   gap — count.
   Three discards stay uncounted, each for a reason already in this section: resampler priming
   output is filter delay rather than input; the remainder parked when a port's last link
-  disconnects is the designed stop above; and a bag `accept` refuses already fails the read
+  disconnects is the designed stop above; and a message `accept` refuses already fails the read
   by name.
   [audio-port-window-contract — SHIPPED #2033; loss-visibility — SHIPPED #2269]
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_channel_created_for_a_windowed_destination_holds_the_windowed_ring_depth -->
@@ -3006,7 +2887,7 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_elf_the_lend_carries_links_only_what_the_host_may_supply -->
 - **DECIDED** — A port whose target format is not knowable at declaration declares the
   sentinel `audio_window = match_device`, and the contract resolves at `setup()` — where
-  the typestate is Full, the same phase in which a processor requests a window — from the
+  the typestate is Full — from the
   format the device stream just opened. Only a processor that opens a device stream can
   satisfy the sentinel: the `setup()` setter is the engine-internal mechanism, never public
   surface, and it is deliberately not exported to Python — the parity disposition, named:
@@ -3025,7 +2906,7 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_node_declaration.py::test_the_device_matching_sentinel_is_on_no_public_surface -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_node_declaration.py::test_the_device_matching_sentinel_is_refused_at_decoration -->
 - **DECIDED** — `MicrophoneSource` and `SpeakerSink` are the audio built-ins, beside
-  camera and display: native built-ins in the engine tree, registered with the other
+  the camera: native built-ins in the engine tree, registered with the other
   media built-ins and reaching Python as classes generated into
   `tatolab/stream/_built_in_nodes.py` from their descriptors, beside `CameraSource`,
   configured the one way a built-in is configured
@@ -3059,7 +2940,7 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest tests/stream-on-runtime/test_speaker_sink.py::test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured -->
   <!-- verify: cargo test -p streamlib-media-builtins --test speaker_sink_matches_its_device a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-29-audio-port-window-contract.md -->
-- **DECIDED** — Codec blocks are native built-ins beside camera, display and the audio
+- **DECIDED** — Codec blocks are native built-ins beside the camera and the audio
   pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`,
   `OpusEncoder`, `OpusDecoder` — instantiated and configured the one way a
   built-in is configured (`stream_builder.add(H264Encoder)`), per-frame paths never entering an
@@ -3073,7 +2954,7 @@ entry reads as **message** (the glossary).
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
   GOP knobs are ticket-level, like every other built-in's config. The four video blocks
   are one encode body and one decode body specialised by a codec identity, not four
-  processors — the pair differs in an enumerant, the bag's `codec` string and a name —
+  processors — the pair differs in an enumerant, its catalog entry's codec string and a name —
   and each built-in is its own port surface, registration and identity. The layering
   wall holds at this fourth device class too: colour conversion into the codec's NV12
   input rides the engine's existing RHI colour converter — the `rgb_to_nv12` stage on
@@ -3122,35 +3003,24 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-engine --lib device_without_video_refuses_every_codec_operation_naming_its_direction -->
   <!-- verify: cargo test -p streamlib-media-builtins --test video_encoders_refuse_knobs_videotoolbox_does_not_honour_at_setup -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test videotoolbox_arm_round_trips_the_psnr_references -->
-- **DECIDED** — An encoded frame is an ordinary bag: the bitstream rides inline as a
-  msgpack `bin` field beside the producer-written stream metadata the delivery-profile
-  decision already specified (sync-point flag, group index, sequence). No pooled-buffer
-  or surface-id carriage for encoded bytes unless a measured need appears. The keys are
-  the wire contract, the way `AudioBlock`'s six are: `codec` (`"h264"` / `"h265"`, the
-  elementary-stream identity), `bitstream` (msgpack `bin`, one Annex-B access unit),
-  `is_sync_point`, and `group_index` with `sequence_index` (the producer-scoped ordering
-  pair), `width` and `height` (the coded extent, before crop), and `color` (the H.273 tuple).
-  Timestamp rides the frame header like every bag. A bag the decoder cannot read is
-  refused by name, never reshaped — the audio wire codec's doctrine — and the ordering
-  pair is an encoded-frame key that never reaches a decoded bag: a decoded frame is an
-  ordinary `VideoFrame`, so nothing downstream of the decoder joins on it. The
-  ring-overwrite loss §Processor model leaves OPEN is stream-corrupting for an encoded
-  link until the next sync point; the discard-to-sync-point doctrine makes it
-  survivable — a reader enters a stream only at a sync point and discards back to one
-  after a `sequence_index` step other than exactly one, counting what it lost — and
-  that OPEN stays its own decision, named here so a codec ship is never read as having
-  resolved it. [codec-blocks — SHIPPED #2083, #2085; amended by moq-relays: the encoded
-  frame's payload becomes the stack's media frame — a varint timestamp in microseconds then
-  the Annex-B access unit with parameter sets inline, which the port's catalog entry signals
-  by carrying no `description` — and nothing around it; `codec` (parsed from the SPS the arm
-  emits, so no arm's profile is misstated) and the coded extent move to the port's catalog
-  entry, the encoder writing it after its first frame; `color` rides the bitstream's VUI;
-  `is_sync_point` is the envelope's `starts_group`; the ordering pair is deleted — loss on an
-  ordered encoded link is the engine's per-link count the reader exposes as
-  `lost_since_last_read`, a decoder discarding to the next `starts_group` — resuming at the
-  message reporting the loss when that message itself starts a group — and a write the
-  channel ceiling refuses makes the encoder's next frame a keyframe, counted in `graph`'s
-  refused-write count; `H264Decoder` reads that payload (owner, 2026-10-16 and 2026-10-17)]
+- **DECIDED** — An encoded frame is the stack's media frame and nothing around it: a varint
+  timestamp in microseconds, then one Annex-B access unit with its parameter sets inline, which
+  the port's catalog entry signals by carrying no `description`. No pooled-buffer or
+  surface-id carriage for encoded bytes unless a measured need appears. The codec string —
+  parsed from the SPS the arm emits, so no arm's profile is misstated — and the coded extent,
+  before crop, ride the port's catalog entry, which the encoder writes after its first frame;
+  colour rides the bitstream's VUI; a sync point is the envelope's `starts_group`; the
+  timestamp rides the frame header like every message's. A message the decoder cannot read is
+  refused by name, never reshaped — the audio wire codec's doctrine — and a decoded frame is
+  an ordinary `VideoFrame`. Loss on an ordered encoded link is the engine's per-link count the
+  reader exposes as `lost_since_last_read`: a decoder enters a stream only at a
+  `starts_group` and, on a message reporting a loss, discards to the next `starts_group` —
+  resuming at that message when it itself starts a group. A write the channel ceiling refuses
+  makes the encoder's next frame a keyframe, counted in `graph`'s refused-write count. Owner,
+  2026-10-16 and 2026-10-17. [codec-blocks — SHIPPED #2083, #2085; moq-relays — SHIPPED #2850]
+  Rejected: a producer sequence inside the payload — a stock player stops on it (owner,
+  2026-10-16).
+  Rejected: codec-level gap detection — unreliable with hardware decoders (owner, 2026-10-16).
   <!-- verify: cargo test -p streamlib-media-builtins --lib published_surface_to_encoded_frame_encoder -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_survives_a_loss_on_its_link -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_survives_a_loss_on_its_link -->
@@ -3168,25 +3038,19 @@ entry reads as **message** (the glossary).
   [codec-blocks — SHIPPED #2086]
   <!-- verify: cargo test -p streamlib-engine --lib vulkan::video::decode::decoded_picture_display_window -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
-- **DECIDED** — Proof precedes surface: camera → encode → decode → display is proven
-  through the engine-owned PSNR rig (`runtime/streamlib-engine/tests/fixtures/`, Y ≥ 35 dB
-  floor) before any codec block's API lands. The rig is built on the control plane's own
-  observation surface — tap the encoded and decoded channels, exchange surface ids for exact
-  pixel bytes — with PSNR a first-class calculation in the proof tooling, never a
-  display processor writing frames to disk for a script to score. A codec block ships only with (i) a rig round-trip carrying the
-  PSNR floor, run through `/verify-live`, and (ii) CI-named GPU-free tests: bitstream
-  parsing, VUI/color translation, config resolution, container bytes. The rig is an
-  engine-owned Rust fixture app, `cargo run -p streamlib-engine --example
-  codec_roundtrip_rig` — engine-owned means CI compiles it so it cannot rot between rig
-  runs while running it stays rig-only, and no test reaches into a consumer for its
-  fixtures. Pairing a decoded frame to its reference is a filename contract
-  (`<reference_stem>__<n>.png`) over one reference per run, not a key on the wire:
-  best-match pairing was rejected as vacuous, since it satisfies the `swap-channels`
-  injection by re-pairing a swapped red onto `solid_blue.png` — the exact regression
-  that mode exists to catch. [codec-blocks — SHIPPED #2084, #2085, #2086; amended by
-  moq-relays: the rig is a sender stream and a receiver stream on `tatolabd`, the sender's
-  encoded track read with `tatolab-read-track` and decoded by ffmpeg; the in-process rig and
-  the reference-PNG harness are deleted]
+- **DECIDED** — Proof precedes surface: encode → decode is proven through the engine-owned
+  rig (`runtime/streamlib-engine/tests/fixtures/`) before any codec block's API lands. The rig
+  is two streams on `tatolabd`, as a deployment builds it (owner, 2026-10-19): the sender
+  (`TestPatternSource` → the encoder) exposes the encoder's port, and the receiver reads that
+  track at the local relay through `RelayTrackSource` and decodes it. The rig reads the
+  sender's encoded track with `tatolab-read-track`, as any user reads a port, decodes the dump
+  with the rig's ffmpeg into PNGs, and measures them with `cargo xtask psnr`, a first-class
+  calculation in the proof tooling; the receiver's decode is proven by its decoded-frame count
+  in `graph`. A codec block ships only with (i) a rig round trip carrying its lock, run through
+  `/verify-live`, and (ii) CI-named GPU-free tests: bitstream parsing, VUI/color translation,
+  config resolution, container bytes. Running the rig stays rig-only, and no test reaches into
+  a consumer for its fixtures. [codec-blocks — SHIPPED #2084, #2085, #2086; moq-relays —
+  SHIPPED #2860, #2866]
   <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh -->
 - **DECIDED** — The gate scores chroma, not luma alone: `cargo xtask psnr` classifies a
   frame Y ≥ 35 dB pass / 30–35 warn / < 30 fail **and** fails it outright when either
@@ -3210,15 +3074,15 @@ entry reads as **message** (the glossary).
   CI-run; ffmpeg is not on the scoring path. [codec-blocks — SHIPPED #2085, #2094]
   <!-- verify: cargo test -p xtask psnr -->
   <!-- verify: cargo test -p xtask codec_proof_image_measurement -->
-- **DECIDED** — The vivid drift lock is per codec, not per rig: the H.265 arm locks
-  against `psnr_vivid_baseline_h265.tsv` and H.264 keeps the unsuffixed file it was
-  captured under, tolerance ±0.05. Measured over exact decoded pixels, the bt601/bt709
-  green rise reads 0.0965 off a 0.0029 floor. Measured, the two codecs agree to 0.0001 on every channel, so one shared file would
-  have passed both arms here; the split is headroom for a codec that does reconstruct a
-  saturated primary differently, so that it cannot be read as a colour regression.
-  [codec-blocks — SHIPPED #2085, #2086; amended by moq-relays: the lock's source is
-  `TestPatternSource`, and it measures each SMPTE bar's median colour against
-  `psnr_test_pattern_bar_colors_baseline_<codec>.tsv`]
+- **DECIDED** — The test pattern's drift lock is per codec, not per rig: `cargo xtask psnr
+  bar-colors` measures each SMPTE bar's median colour, averaged across the decoded frames
+  (owner, 2026-10-19), and the H.265 arm locks against `psnr_test_pattern_bar_colors_baseline_h265.tsv` and H.264
+  against `psnr_test_pattern_bar_colors_baseline_h264.tsv`, tolerance ±0.05 per channel. Each
+  bar is a saturated primary, secondary or neutral, so a matrix mis-interpretation moves the
+  bars it touches by more than a whole-frame average would show — bt601/bt709 lifts the red
+  bar's green by about 0.09. The split is headroom for a codec that reconstructs a saturated
+  primary differently, so that it cannot be read as a colour regression.
+  [codec-blocks — SHIPPED #2085, #2086; moq-relays — SHIPPED #2866]
   <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh -->
 - **DECIDED** — On the rig the decoder enters at the stream's first keyframe with zero frames
   discarded, and the encoder writes parameter sets on every IDR, so even a late subscriber re-enters within
@@ -3258,42 +3122,24 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
   <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
-- **DECIDED** — The per-block ship bar the entry above states is met for a Python
-  surface by agreement, never by a second rig: below the marker the path is
-  byte-identical to the one the engine-owned rig scored, so the live proof is a
-  Python-authored round trip locking to the same per-codec vivid baseline within the
-  same ±0.05. `e2e_fixture_psnr_vivid.sh` carries a `PIPELINE=python` arm (default
-  `rust`) differing in its launch argv alone — one timeout, one environment, one
-  redirect, and the same tap, `exchange`, scoring and comparison after launch — over an
-  engine-owned fixture stream, `codec_roundtrip_stream.py`, whose `@stream` adds four nodes,
-  beside `audio_loopback_stream.py`, taking its codec and camera from environment variables
-  where the Rust rig takes arguments. One refusal rides the arm rather than a note:
-  `BASELINE_CAPTURE=1` is refused on it, because a baseline written through the arm whose
-  whole proof is locking to the Rust rig's number leaves nothing to lock to.
-  Both codecs PASS through the arm, log gates at zero, clean exit. The reference-PNG rig
-  gets no Python arm — nothing Python-specific sits on the colour path.
-  [python-codec-block-api — SHIPPED #2107; amended by moq-relays: the Python-authored
-  streams are the codec rig itself, with no Rust arm to agree with]
+- **DECIDED** — The per-block ship bar the entry above states is met for a Python surface by
+  the rig itself: its two streams are Python-authored, `codec_roundtrip_stream.py`, an
+  engine-owned fixture stream beside `audio_loopback_stream.py` taking its codec from an
+  environment variable, so there is no second rig and no Rust arm to agree with.
+  [python-codec-block-api — SHIPPED #2107; moq-relays — SHIPPED #2860]
   <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_test_pattern.sh -->
   <!-- verify: git ls-files runtime/streamlib-engine/tests/fixtures/codec_roundtrip_stream.py -->
-- **DECIDED** — An encoded audio packet is an ordinary bag, the encoded-frame convention
-  applied to audio: `codec` (`"opus"`), `bitstream` (msgpack `bin`, one Opus packet as
-  RFC 6716 §3 frames it), `is_sync_point` (`true` on every packet — a decoder enters at
-  any), `group_index` and `sequence_index` (each packet its own group), `sample_rate`
-  (`48000`, Opus's own clock), `channels`, `sample_count` (per-channel samples the packet
-  spans, `960` for 20 ms — `AudioBlock`'s unit), and `pre_skip` (the encoder's lookahead
-  in 48 kHz samples, the `OpusHead` PreSkip a container writes and a decoder trims). The
-  stamp rides the frame header and names the packet's first sample, carried from the
-  window block the encoder consumed with the timestamped write. Refused by name, never
-  reshaped: a missing key, a `codec` other than `opus`, a non-`bin` `bitstream`, and a bag
-  with none of these keys — the encoded-video bag's three refusals spelled again. The Rust
-  struct is `EncodedAudioPacket` — *packet*, because Opus uses *frame* for a subdivision
-  of one, and a name that means two things at the seam it crosses is the wrong name.
-  [opus-mp4-recording-rung — SHIPPED #2125; amended by moq-relays: the payload becomes the
-  stack's media frame — the varint timestamp then the bare Opus packet — with the port's
-  catalog entry a hang audio entry (`codec`, `sampleRate`, `numberOfChannels`, the OpusHead
-  bytes in `description`) and `is_sync_point` the envelope's `starts_group`, one packet per
-  group; `OpusDecoder` reads that payload (owner, 2026-10-16 and 2026-10-17)]
+- **DECIDED** — An encoded audio packet is the encoded-frame convention applied to audio: the
+  stack's media frame — the varint timestamp in microseconds, then one bare Opus packet as
+  RFC 6716 §3 frames it — every packet opening its own group, so a decoder enters at any. The
+  port's catalog entry is a hang audio entry: `codec` (`"opus"`), `sampleRate` (`48000`,
+  Opus's own clock), `numberOfChannels`, and the `OpusHead` bytes in `description`, whose
+  PreSkip is the encoder's lookahead in 48 kHz samples, which a decoder trims. The stamp rides
+  the frame header and names the packet's first sample, carried from the window block the
+  encoder consumed with the timestamped write. `OpusDecoder` reads the channels and the
+  pre-skip from the upstream entry's `OpusHead`, falling back to the packet's TOC for the
+  channels. Owner, 2026-10-16 and 2026-10-17. [opus-mp4-recording-rung — SHIPPED #2125;
+  moq-relays — SHIPPED #2850]
   <!-- verify: cargo test -p streamlib-media-builtins --lib opus_identification_header -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::with_no_opus_head_upstream_the_toc_names_the_channels_and_nothing_is_trimmed -->
 - **DECIDED** — `OpusEncoder` is `execution = reactive`, `scheduling = high` like the
@@ -3307,7 +3153,7 @@ entry reads as **message** (the glossary).
   both MP4 and WebRTC accept), more than eight refused by name; a block whose count
   changes re-mints, as an extent change re-mints video, and the port's catalog entry then
   names the new count.
-  Output `encoded_audio`; `pre_skip` is the minted encoder's reported lookahead. Config,
+  Output `encoded_audio`; the `OpusHead`'s pre-skip is the minted encoder's reported lookahead. Config,
   both optional so `{}` is legal: `bitrate_bps` (absent → libopus's automatic rate) and
   `application` (`"audio"`, `"voip"`, `"lowdelay"`; absent → `"audio"`). FEC and DTX off.
   [opus-mp4-recording-rung — SHIPPED #2125]
@@ -3317,7 +3163,7 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-media-builtins --lib opus_stream_layout::tests::three_to_eight_channels_ride_mapping_family_one_in_vorbis_order -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib opus_stream_layout::tests::a_channel_count_opus_cannot_place_is_refused_naming_the_count_and_the_range -->
 - **DECIDED** — `OpusDecoder` is `reactive`/`high`, input `encoded_audio` (`ordered`,
-  declaring no window contract), output `audio` as `AudioBlock` bags: `f32`, `48000`, the
+  declaring no window contract), output `audio` as `AudioBlock` messages: `f32`, `48000`, the
   stream's channel count, stamp derived from the packet's, published through the
   timestamped write; one or two channels through `Decoder`, three to eight through
   `MSDecoder`. No config. It enters at any packet and trims `pre_skip` at entry so its
@@ -3370,9 +3216,10 @@ entry reads as **message** (the glossary).
   OpusEncoder → OpusDecoder → CapturedAudioWaveformRecorder`, scored by
   `known_audio_signal.py` — tone identity and the DTMF timing grid intact within its own
   floor, a lossy codec's verdict being the analysis's, never a sample-exact match — with
-  no audio device in the path, so a failure here with the loopback green is the codec's.
-  [opus-mp4-recording-rung — SHIPPED #2126, #2128; amended by moq-relays: the live arm
-  becomes a tool outside the runtime reading the local relay (§Networking)]
+  no audio device in the path, so a failure here with the loopback green is the codec's. The
+  decoder's port is read as a track at the local relay with `tatolab-read-track`, a tool
+  outside the runtime (§Networking), by `verify_audio_channel.sh`.
+  [opus-mp4-recording-rung — SHIPPED #2126, #2128; moq-relays — SHIPPED #2860]
   <!-- verify: bash runtime/streamlib-engine/tests/fixtures/verify_opus_roundtrip.sh -->
 - **DECIDED** — The held codec consumers resolve through this align, per §Consumers: a held
   codec package is mined for its logic and deletes in the change that ships its block, and a
@@ -3399,19 +3246,20 @@ entry reads as **message** (the glossary).
   carries the camera, microphone and local-network usage strings; the app and `tatolabd`
   carry the hardened-runtime device entitlements; only the runtime process opens devices,
   never a processor interpreter. The runtime checks authorization before opening a device and
-  refuses by name, because a denied microphone delivers silence. Nothing discovers on the LAN,
-  so the local-network usage string ships and the retry after a local-network denial lands
-  with the sharing step. A runtime started from a terminal credits that terminal — the
+  refuses by name, because a denied microphone delivers silence. A runtime started from a
+  terminal credits that terminal — the
   responsible code — and only Apple's Terminal is exempt from the local-network check.
   Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
   #2721]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ moq-relays, relay-track-reading)
+## Networking — transport, moq, webrtc — SHIPPED (unbuilt: a publicly valid certificate on the every-interface listener)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-moq-relays.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-relay-track-reading.md -->
 
-- **DECIDED** — Cross-language interop happens on the wire between nodes, as
-  self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
+- **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
+  never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
   than as a built-in — not every app needs it, and a capability with a consumer is what proves
   the extension model. Its processors are ordinary processor extensions, and a runtime
@@ -3420,13 +3268,13 @@ entry reads as **message** (the glossary).
   streams at a runtime boundary. [extension-model; networking-extension-wheels — SHIPPED
   #2153]
 - **DECIDED** — The wheel sits on the encoded side of the codec blocks and touches no raw
-  frame, surface or GPU: `WhipPublisher` consumes `EncodedVideoFrame` and
-  `EncodedAudioPacket` bags downstream of `H264Encoder` and `OpusEncoder`; `WhepPlayer` emits
-  the same bags upstream of `H264Decoder` and `OpusDecoder`. Audio is in scope from the first
+  frame, surface or GPU: `WhipPublisher` consumes the media frames `H264Encoder` and
+  `OpusEncoder` write; `WhepPlayer` writes the same frames upstream of `H264Decoder` and
+  `OpusDecoder`. Audio is in scope from the first
   rung. Both are ordinary processor extensions — `@node` classes in the wheel calling the
   wheel's own Rust — each in its own processor interpreter, on the tokio runtime the wheel
   brings up there on first use. [extension-model; networking-extension-wheels — SHIPPED
-  #2151; package-split-and-lend — SHIPPED #2691]
+  #2151; package-split-and-lend — SHIPPED #2691; moq-relays — SHIPPED #2888]
 - **DECIDED** — Many tracks are many links: the publisher takes one track per
   inbound link and derives its session media description from them. The player exposes one
   output per track kind — `encoded_video` and `encoded_audio` — never one port per track:
@@ -3435,18 +3283,16 @@ entry reads as **message** (the glossary).
   session's media and there is nothing left to choose. Endpoint and credential configuration
   is ticket-level, as for every built-in's config.
   [extension-model; networking-extension-wheels — SHIPPED #2150, #2151]
-- **DECIDED** — The WebRTC processors are typed, and the Python surface has no raw byte
-  port for them: the publisher reads `EncodedVideoFrame` / `EncodedAudioPacket` and hands
-  the bitstream to the wheel's Rust; the player writes the bag literal against the wire
-  contract, filling every required key from the stream itself — the extent from the SPS, the
-  ordering pair from its own counters, a sync point from the access unit, the audio
-  parameters from the session description — rather than from config. What crosses a
-  network on a media track is a bitstream and the keys a decoder needs, never a serialised
-  link payload. [extension-model; moq-data-tracks — SHIPPED #2172, #2173; amended by
-  moq-relays: the two casts are deleted and the ports carry the stack's media frame as bytes,
-  the keys a decoder needs riding the ports' catalog entries; the wheel is a consumer in
-  `packages/` and follows on its own backlog, never inside the change]
-- **DECIDED** — A received stream reaches the bag through the manual-source shape: the wheel's Rust receives on
+- **DECIDED** — The WebRTC processors carry the stack's media frame as bytes: the publisher
+  reads each track's codec off its upstream port's catalog entry and hands the access unit or
+  packet after its varint timestamp to the wheel's Rust; the player writes that frame and
+  fills what a decoder needs from the stream itself — the extent from the SPS, a sync point
+  from the access unit as the group flag, the audio parameters from the session description
+  — into its ports' catalog entries rather than from config. What crosses a network on a
+  media track is a bitstream and the description a decoder needs, never a serialised link
+  payload. [extension-model; moq-data-tracks — SHIPPED #2172, #2173; moq-relays — SHIPPED
+  #2888]
+- **DECIDED** — A received stream reaches the graph through the manual-source shape: the wheel's Rust receives on
   its own runtime and a processor-owned thread writes, so no engine seam is added for it. Two
   budgets the wheel lives inside, ticket-level but named here: a helper stops on the shutdown
   ladder §Processor model states, whose `teardown()` budget is five seconds, so a WHIP
@@ -3455,7 +3301,8 @@ entry reads as **message** (the glossary).
   [extension-model; local-transport-hardening — SHIPPED #2264, #2266]
 - **DECIDED** — The proof bar is the codec blocks' two halves. CI-run, GPU-free and
   endpoint-free: RTP packetising and depacketising round trips, SDP construction and
-  parsing, and the bag literal the player writes checked against the wire contract. Live,
+  parsing, and the media frames and catalog entries the player writes checked against the
+  wire contract. Live,
   rig-only: WHIP publish to Cloudflare Stream and WHEP play back from it, with credentials
   outside the tree, in the fixture-script shape the codec rig set (owner, 2026-09-04).
   [extension-model]
@@ -3471,28 +3318,23 @@ entry reads as **message** (the glossary).
   sessions run in. [networking-extension-wheels — SHIPPED #2150; package-split-and-lend —
   SHIPPED #2673, #2691]
 - **DECIDED** — `WhipPublisher`: `@node`, one fan-in input `tracks` (`ordered`) —
-  each inbound link is one RTP track, video or audio by the bag's
-  `codec`, the session's SDP built from the links `inbound_link_names` reports at
+  each inbound link is one RTP track, video or audio by its upstream port's catalog entry,
+  the session's SDP built from the links `inbound_link_names` reports at
   `setup()`; config `url` and optional `bearer_token`. `WhepPlayer`:
   `@node(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
   `url` and optional `bearer_token`; `start()` hands `ctx.outputs` to a processor-owned
-  thread that connects, drains the session and writes bag literals — extent from the SPS,
-  `group_index` advancing on each IDR and `sequence_index` within it, `is_sync_point` from
-  the access unit, Opus parameters from the SDP answer, the stamp from the RTP clock mapped
-  onto the monotonic clock — and `stop()` closes the session inside the 5 s budget. **No
+  thread that connects, drains the session and writes media frames — a group starting at
+  each IDR, the stamp from the RTP clock mapped onto the monotonic clock, codec, extent and
+  Opus parameters stated in its ports' catalog entries — and `stop()` closes the session inside the 5 s budget. **No
   session is minted in `setup()`, and a refused connect is retried rather than ending the
   stream** (2026-09-05, found by the live proof): a WHEP endpoint answers `409 Conflict`
   while the input it fronts has not started publishing, the ordinary state of a player
   brought up beside its publisher, so the player carries a bounded backoff — a fresh session
   per attempt, since a closed peer connection
-  cannot be dialled again. A bag the engine refuses is the one failure not retried: it names
-  its port and ends the thread, because reconnecting would spend an endpoint's session
-  forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150; amended
-  by moq-relays: both read and write the stack's media frame as bytes — the publisher hands
-  the access unit or packet after its varint timestamp to RTP, the player writes that frame
-  and states codec, extent and Opus parameters in its ports' catalog entries — since
-  `EncodedVideoFrame` and `EncodedAudioPacket` are deleted, on the wheel's own backlog as a
-  consumer]
+  cannot be dialled again. A write the engine refuses is the one failure not retried: it
+  names its port and ends the thread, because reconnecting would spend an endpoint's session
+  forever on a write refused every time. [networking-extension-wheels — SHIPPED #2150;
+  moq-relays — SHIPPED #2888]
 - **DECIDED** — `ci.yml`'s `integration-test-linux` and `integration-test-macos` jobs
   carry the extension lane for `packages/streamlib-webrtc`: on the runtime unit they built, build
   the extension into a venv holding `tatolab-stream`, `cargo test` and clippy over its
@@ -3506,18 +3348,21 @@ entry reads as **message** (the glossary).
   <!-- verify: grep -n "build-tatolab-webrtc-distribution:" .github/workflows/reusable-distributions.yml -->
 - **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by the wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
-  cases), SDP offer construction and answer parsing, and the player's bag literal checked
-  against the wire contract on the `wired_link` fixture pattern. Live, rig-only, under
-  `/verify-live` with a networking arm: WHIP publish of the vivid camera and the known signal
-  to Cloudflare Stream and WHEP play-back of the same stream — credentials read from the
-  environment, absent ones reported as cannot-run, never as pass. The decode-back is the
-  lock: `WhepPlayer` → `H264Decoder` → tap and exchange → `xtask psnr channel-means` against
-  the per-codec vivid baseline within ±0.05 — the network sits inside a path the codec rig
-  already scored, so a mismatch is the wheel's. [networking-extension-wheels — SHIPPED #2153;
-  amended by moq-relays: the lock reads the decoded port through the local relay as a tool
-  outside the runtime (§Networking), `tap` and `exchange` being deleted]
+  cases), SDP offer construction and answer parsing, and the player's media frames and catalog
+  entries checked against the wire contract on the `wired_link` fixture pattern. Live, rig-only, under
+  `/verify-live` with a networking arm, two streams on one runtime as the codec rig is: a
+  sender publishes `TestPatternSource` → `H264Encoder` and the known signal over WHIP to
+  Cloudflare Stream, and a receiver plays the same stream back over WHEP through the decoders
+  — credentials read from the environment, absent ones reported as cannot-run, never as pass.
+  The lock reads the receiver's `encoded_video` track at the local relay with
+  `tatolab-read-track`, a tool outside the runtime, decodes it with the rig's ffmpeg and
+  scores it with `xtask psnr bar-colors` against its own baseline within ±0.05; the
+  receiver's decode is proven by its decoded-frame count in `graph` — the network sits inside
+  a path the codec rig already scored, so a mismatch is the wheel's.
+  [networking-extension-wheels — SHIPPED #2153; moq-relays — SHIPPED #2902]
   <!-- verify: git ls-files packages/streamlib-webrtc -->
   <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
+  <!-- verify: git ls-files packages/streamlib-webrtc/tests/live/whip_whep_roundtrip.sh packages/streamlib-webrtc/tests/live/psnr_test_pattern_bar_colors_baseline_whip_whep_h264.tsv -->
 - **DECIDED** — The address, as built. A port's address is `<machine>/<stream>/<node>/<port>`,
   every part cast as one address chunk (`core/runtime/address_chunk.rs`, one shared fixture
   of cases the engine and the pure-Python builder both cast from): the `/watch` path names
@@ -3554,20 +3399,19 @@ entry reads as **message** (the glossary).
   source node, the preview page, or any MoQ client — and nothing is sent for a track nobody
   subscribes to. No runtime pushes its output into another's input, and no runtime wires two
   others. Owner, 2026-10-04: a source never wires itself into a reader, the way a server never
-  wires its URL into a client's browser. [exposure-levels; moq-relays]
+  wires its URL into a client's browser. [exposure-levels; moq-relays — SHIPPED #2853, #2855]
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_in_another_stream_reads_a_private_port_through_loopback_keeping_its_groups_and_spacing -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_in_a_second_runtime_reads_the_first_runtimes_public_port -->
 - **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
   is one clock per machine, and a stamp is never compared against one from another clock. No
-  link carries a stamp from another machine, so nothing reads or renders a clock identity, and
-  a many-track sink compares first stamps across tracks with no another-machine refusal. A
+  link carries a stamp from another machine, so a many-track sink compares first stamps across tracks with no another-machine refusal. A
   message read from a relay reaches a graph through the relay source node, which stamps it
   from the track's own timestamp re-based onto this machine's clock — a fixed offset taken
   from the first object, re-anchored on a discontinuity, never per-message arrival time, the
   stack's own player's model — with the timestamped write; a track carrying no timestamp is
   stamped at arrival. The relay's object carries the writer's stamp and the node's doc says
   both. Owner, 2026-10-17. [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643;
-  moq-relays]
+  moq-relays — SHIPPED #2855]
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::the_output_keeps_the_tracks_spacing_under_jittered_arrival -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_track_that_restarts_its_timestamps_is_re_anchored_and_keeps_its_spacing_after -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::an_object_carrying_no_timestamp_is_stamped_at_arrival -->
@@ -3582,7 +3426,7 @@ entry reads as **message** (the glossary).
   way WebRTC's NetEQ does, separate from a relay reader's `max_age`. Owner, 2026-10-20.
   [relay-track-reading]
 - **DECIDED** — The runtime decides what leaves the machine; who reads at a relay is that
-  relay's own access rules. [one-runtime-per-machine; moq-relays]
+  relay's own access rules. [one-runtime-per-machine; moq-relays — SHIPPED #2842, #2853]
 - **DECIDED** — Tatolab solves no networking problem. Reach between machines, a peer's
   identity, encryption on the wire, NAT and names are a relay's, or the network the user
   already has — a tailnet, a LAN, the internet. The runtime reads, configures and requires
@@ -3590,7 +3434,7 @@ entry reads as **message** (the glossary).
   machine's local relay over a tailnet is a docs page, because the relay listens on the
   machine and a tailnet reaches the machine. Nothing is built for discovery, certificate
   minting, name claiming or peer authentication, on any network. Owner, 2026-10-16.
-  [one-runtime-per-machine; moq-relays]
+  [one-runtime-per-machine; moq-relays — SHIPPED #2842]
   Rejected: reading Tailscale's status for the machine's name and the tailnet's machines, and
   having `tatolabd` configure `tailscale serve` — a rights prompt and a manual step on every
   install, for reach the local relay already gives (owner, 2026-10-16).
@@ -3618,9 +3462,9 @@ entry reads as **message** (the glossary).
   runtime-hosting — SHIPPED #2715]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
-  that relay's credential assigns. As built, the engine names the machine by its hostname cast
-  and reads nothing of Tailscale. [runtime-hosting — SHIPPED #2715; amended by moq-relays: a
-  relay adapter's root prefixes the broadcast there]
+  that relay's credential assigns. The engine names the machine by its hostname cast and reads
+  nothing of Tailscale; a relay adapter's root prefixes the broadcast at that relay.
+  [runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2842, #2873]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_names_the_machine_cast -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::machine_name::tests::a_hostname_drops_its_trailing_mdns_local_domain_and_keeps_every_other_dot -->
@@ -3638,12 +3482,11 @@ entry reads as **message** (the glossary).
   once — a reader the new level no longer allows is cut off, a relay subscriber included — and
   neither the runtime nor the stream restarts. The engine checks the live exposures wherever a
   read crosses a stream's edge, and a port is read from outside its stream only through
-  exposure: no debugging tap or other door bypasses it, and a stream's own logs are how its
+  exposure: no debugging door bypasses it, and a stream's own logs are how its
   insides are seen. Nothing leaves the machine until a port is public. The CLI and the app
   list every running stream with its private and public ports; an internal port may be
   listed and is never readable. Owner, 2026-10-04 and 2026-10-16. [exposure-levels;
-  one-runtime-per-machine; stream-graph — SHIPPED #2708; amended by moq-relays: private is
-  the local relay, public every joined relay]
+  one-runtime-per-machine; stream-graph — SHIPPED #2708; moq-relays — SHIPPED #2853]
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_public_port_is_read_at_both_listeners_and_a_private_one_at_loopback_alone -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay an_internal_port_is_at_no_relay_and_lowering_a_port_to_internal_ends_its_loopback_subscribers -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay lowering_a_port_ends_its_subscribers_and_raising_it_announces_it_again -->
@@ -3651,7 +3494,7 @@ entry reads as **message** (the glossary).
   one way a port is read from outside its stream — by another stream through the relay source
   node, by the preview page, by a script, by ffmpeg-side MoQ tooling, by another runtime,
   all alike. A user with no account sees and uses their own streams through the local relay
-  (owner, 2026-09-30). [one-runtime-per-machine; moq-relays]
+  (owner, 2026-09-30). [one-runtime-per-machine; moq-relays — SHIPPED #2853, #2855, #2864]
 - **DECIDED** — The runtime's HTTP is on loopback only and carries what is not real time:
   the listing of the machine's streams and exposed ports, and the preview page. Its paths are
   the address: `/watch/<machine>/<stream>` opens the preview on a broadcast with its tracks to
@@ -3661,7 +3504,7 @@ entry reads as **message** (the glossary).
   serves over HTTP beside its tracks — its certificate fingerprint, its WebSocket path and the
   relay program's `/fetch` — is the relay's, under the same grant as the tracks. The read-only
   MCP, the bounded-sample form and the snapshot form are not built. Owner, 2026-10-16 and
-  2026-10-17. [moq-relays]
+  2026-10-17. [moq-relays — SHIPPED #2860, #2864]
   Rejected: live forms over HTTP served by the runtime — MPEG-TS, HLS, raw H.264, fMP4 — and a
   `whep` form (owner, 2026-10-04).
   Rejected: a snapshot form — one PNG of a port's latest frame, the runtime reading the port's
@@ -3674,7 +3517,7 @@ entry reads as **message** (the glossary).
   is inspected by exposing it — private keeps it on the machine — or by chaining nodes off it
   at the access level its author chooses, and an internal port is seen through its stream's
   logs alone. The engine's internals are proven by unit tests; the engine is never proven by
-  building an app on it. Owner, 2026-10-17. [moq-relays]
+  building an app on it. Owner, 2026-10-17. [moq-relays — SHIPPED #2860, #2875]
   Rejected: `exchange` kept as an engine-internal verification door, an image-writing built-in
   for the rigs, an MCP image tool — side paths past exposure and the relays, which agents
   reach for over the product's own doors (owner, 2026-10-17).
@@ -3707,7 +3550,7 @@ entry reads as **message** (the glossary).
   loopback a short-lived certificate the player pins by its fingerprint; where the machine has
   a reachable hostname, a publicly valid certificate issued programmatically, so a browser off
   the machine trusts it with nothing pinned — the issuer is a research question, not decided
-  here. Owner, 2026-10-16 and 2026-10-17. [moq-relays]
+  here. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2842, #2853]
   Rejected: embedding `moq-relay` as a library inside `tatolabd` to save the loopback hop — the
   runtime would then be a relay (owner, 2026-10-16).
   Rejected: the engine serving a MoQ endpoint itself on its tailnet address, read directly by
@@ -3718,7 +3561,7 @@ entry reads as **message** (the glossary).
   watches exposure across every loaded stream: a port turning private or public is announced
   at the relays its level reaches, one turning back is withdrawn, which cuts its subscribers
   at once. Per exposed port it holds one reader on the port's channel — the subscriber slot
-  every channel reserves, which `tap` held — and forwards each message's payload bytes as
+  every channel reserves — and forwards each message's payload bytes as
   written to every joined relay that has a subscriber, stamping each object from the
   message's envelope and nothing else. Under backpressure, and on a message whose
   `lost_since_last_read` is nonzero, it drops the rest of the current group and resumes at
@@ -3728,7 +3571,7 @@ entry reads as **message** (the glossary).
   predicate that says "all": anything can be published and any port can go public, and a port
   whose bytes mean nothing off the machine — a `VideoFrame` record naming a surface — is
   forwarded all the same, so what was published is what a subscriber sees. Owner, 2026-10-16
-  and 2026-10-17. [moq-relays]
+  and 2026-10-17. [moq-relays — SHIPPED #2853]
   Rejected: the publisher refusing, warning on or filtering a port by what it carries — logic
   in the forwarding path (owner, 2026-10-17).
 - **DECIDED** — A stream is one broadcast; each exposed port is one track in it. At a relay a
@@ -3739,7 +3582,7 @@ entry reads as **message** (the glossary).
   rendition at a time, and the preview page names the track in its URL. The relay's
   own listing is the directory: everything under `<root>/<machine>/` is that machine's streams,
   and the broadcast's catalog is what is in one. A stream that wants two unrelated bundles is
-  two streams. Owner, 2026-10-16. [moq-relays]
+  two streams. Owner, 2026-10-16. [moq-relays — SHIPPED #2853]
   Rejected: one broadcast per exposed port — it loses multi-track switching and audio beside
   video, the things a broadcast is for (owner, 2026-10-16).
 - **DECIDED** — A message's group boundary is the writer's, in the envelope. `write(port,
@@ -3750,7 +3593,7 @@ entry reads as **message** (the glossary).
   own keyframe knowledge; `OpusEncoder` opens a group per packet. The publisher maps it to the
   relay's group boundary and reads nothing else; Python and Rust readers see it alike, beside
   the stamp, and the envelope's stamp is the object's. Owner, 2026-10-16 and 2026-10-17.
-  [moq-relays]
+  [moq-relays — SHIPPED #2821, #2850, #2853]
 - **DECIDED** — The catalog is assembled from port descriptions, never from payloads. An output
   port's declaration may carry, beside its name and description, its catalog entry in the
   layout the stack's players read: the section it belongs in — `video`, `audio`, `text`,
@@ -3766,7 +3609,7 @@ entry reads as **message** (the glossary).
   each port's entry. Any reader may read a port's entry — a local node off its inbound link,
   a remote client off the catalog — and it is documentation a reader follows: `connect`
   compares nothing, the engine checks nothing against it, and no port is required to carry
-  one. Owner, 2026-10-16 and 2026-10-17. [moq-relays]
+  one. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2840, #2853]
   Rejected: a port declaration the engine acts on — a media opt-in the publisher reads payloads
   under — media logic in the adapter path (owner, 2026-10-16).
   Rejected: an entry in the runtime's own words — a `kind`, a free-text `encoding`, a `cast`
@@ -3800,7 +3643,7 @@ entry reads as **message** (the glossary).
   port is therefore readable only by a process on the machine, enforced by the kernel's
   loopback binding; the two listeners are two `moq-relay` children, since the program binds one
   address, and the local adapter's two instances. Owner, 2026-10-14, 2026-10-16 and
-  2026-10-17. [moq-relays]
+  2026-10-17. [moq-relays — SHIPPED #2842, #2871, #2873]
   Rejected: private tracks on an all-interfaces listener behind a token minted over loopback —
   a bearer token carried off the machine reads them from anywhere (owner, 2026-10-17, from the
   review of the align PR on 2026-10-16).
@@ -3821,15 +3664,16 @@ entry reads as **message** (the glossary).
   runtime casts every name it gives, and a name another publisher's relay accepts is read as
   that publisher wrote it, `.hang` (moq-dev's catalog-format suffix, a convention our
   publisher follows) or not. Tatolab's `<machine>/<stream>/<node>/<port>` address is not one
-  of the node's names. Owner, 2026-10-18. [moq-relays]
+  of the node's names. Owner, 2026-10-18. [moq-relays — SHIPPED #2855, #2858;
+  relay-track-reading — SHIPPED #2898]
   Rejected: naming the track by a Tatolab address, `track_address`, beside `broadcast` and
   `track` — two ways to name one thing, one of them a term invented where MoQ has one (owner,
   2026-10-18).
   Rejected: casting a name the node reads — casting is for names the runtime gives (owner,
   2026-10-18).
-  Rejected: the engine subscribing inside the link machinery so `remote_output("desk/…")`
-  wires through a relay — a MoQ reader in the engine, a second link kind, and a stamp-marking
-  question with no answer (owner, 2026-10-16).
+  Rejected: the engine subscribing to a relay inside the link machinery, so a link's source
+  can name a port on another machine — a MoQ reader in the engine, a second link kind, and a
+  stamp-marking question with no answer (owner, 2026-10-16).
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_reads_a_hang_track_a_third_party_published -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_broadcast_and_a_track_are_read_exactly_as_written_at_the_local_relay_by_default -->
@@ -3852,7 +3696,8 @@ entry reads as **message** (the glossary).
   `tatolab-read-track` waits the track's declared retention. It is a transport budget, how late
   a group may arrive and still be used, and never a playout delay. The relay source node
   writes every group it gives up as a loss its readers count in `lost_since_last_read`, the
-  way a link counts one, never as a silent step. Owner, 2026-10-20. [relay-track-reading]
+  way a link counts one, never as a silent step. Owner, 2026-10-20. [relay-track-reading —
+  SHIPPED #2898, #2900]
   Rejected: moq-net's sequence cursor (`.ordered()`) — it steps over a group whose stream lands
   after its successor's, at any budget (session, 2026-10-20).
   Rejected: giving up a missing group when the budget elapses on a clock — waits and sleeps
@@ -3875,14 +3720,15 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_given_up_group_reaches_the_reader_of_the_output_as_lost_since_last_read -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_given_up_group_is_counted_on_the_relay_source_and_not_on_the_downstream_link -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
-  and the `moq-relay` program, each pinned to an exact version the change that builds the
-  publisher names (0.3, 0.19, 0.21 and 0.17 lines as of 2026-10-16), and every payload a stock
+  and the `moq-relay` program, each pinned to an exact version — the 0.3, 0.19, 0.21 and 0.17
+  lines — and every payload a stock
   player reads is in that line's media layout, every catalog in its catalog layout. Known
   (2026-10-17): Cloudflare's hosted relays are a beta speaking IETF drafts 14 and 16, which
   `moq-net` negotiates; a Cloudflare token rides the URL path; Cloudflare assigns no root, so
   its adapter names the machine's namespace; moq.pro's credential is a project signing key
   that mints read and write for every broadcast. The line's own compatibility claim is
-  otherwise unverified here. Owner, 2026-10-04 and 2026-10-16. [moq-relays]
+  otherwise unverified here. Owner, 2026-10-04 and 2026-10-16. [moq-relays — SHIPPED #2842,
+  #2853]
 - **DECIDED** — The preview page is a lightweight built-in viewer, not a product: a small web
   project in the repo — `package.json`, `index.html` and one script on the stack's own browser
   player — built in the release pipeline the way the crates are and staged into the runtime
@@ -3891,21 +3737,12 @@ entry reads as **message** (the glossary).
   playing the track its URL names. Every browser plays it: Safari and iOS over the relay's
   WebSocket path, the rest over QUIC. A hosted relay has its own player at its own URL. Known
   (2026-10-17): the player's dependency tree carries an LGPL-2.1 Opus decoder polyfill, named
-  in the third-party notices. Owner, 2026-10-04, 2026-10-16 and 2026-10-17. [moq-relays]
+  in the third-party notices. Owner, 2026-10-04, 2026-10-16 and 2026-10-17. [moq-relays —
+  SHIPPED #2864]
   Rejected: a `?relay=` parameter pointing the preview page at another relay — every hosted
   relay already has its own player (owner, 2026-10-16).
   Rejected: the player's published package copied in with no build — it is a library of many
   packages a browser cannot load unbundled (owner, 2026-10-17).
-- **DECIDED** — The sharing step is the one change after accelerators optional, in place of the
-  one-runtime-per-machine sequence's steps 8 and 9, then resources, packs and the app. It
-  builds the publisher, the adapters, the local relay, the catalog entries, the group flag,
-  bytes payloads, the relay source node, the sample stream, the listing and the preview page;
-  it deletes the windows (§Media I/O), `Mp4Sink`, `remote_output` and the cross-stream link,
-  the Tailscale read, `tap` and `exchange`, in the same change, inventorying every site; the
-  CPU encoder arm (§Product) is deferred past it. Until
-  it ships nothing links one machine to another. Owner, 2026-10-04
-  and 2026-10-16. [moq-relays; zenoh-and-moq-wheel-removal — SHIPPED #2633, #2643, #2645,
-  #2649]
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
   ports; end-to-end encryption (the entry above); a CMAF-emitting node for HLS players and
   stock MoQ tooling; Red5's adapter; and a zero-copy
@@ -3954,10 +3791,11 @@ entry reads as **message** (the glossary).
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_sighup_tears_the_graph_down_gracefully -->
 
-## Distribution & versioning — IN-FLIGHT (→ moq-relays; unbuilt: the Rust crate's `tatolab-stream` name)
+## Distribution & versioning — SHIPPED (unbuilt: the Rust crate's `tatolab-stream` name)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-16-optional-accelerators.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-moq-relays.md -->
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
@@ -3984,7 +3822,7 @@ entry reads as **message** (the glossary).
   SHIPPED #2671, #2691, #2697]
   <!-- verify: grep -n "packages/streamlib-webrtc/pyproject.toml" release-please-config.json -->
 - **DECIDED** — Wheel portability model: what the host may supply is stated per platform,
-  and nothing else is linked. On Linux, system libraries (window system, libcuda) are
+  and nothing else is linked. On Linux, system libraries (libcuda, the audio servers) are
   dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape. A stock machine
   on either floor may have no Vulkan driver, so the lend carries one in
   `tatolab/runtime/_vulkan_driver/`: on macOS the Vulkan loader (built from source at the
@@ -4051,14 +3889,17 @@ entry reads as **message** (the glossary).
   built zip and again after install. The same workflow runs as a dry run on every push to
   `main`, on a runner with no Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
   and of `tatolabd` and `tatolab`, runs the portability, notices and driver-search tests
-  against the lend, and in a venv holding only `tatolab-stream` runs `tatolab new
-  --test-pattern` then `tatolab run` for twenty seconds, which must open the carried loader, raise
-  nothing from the effect and show at least sixty frames. On release a failed macOS proof of
+  against the lend, and in a venv holding only `tatolab-stream` runs `tatolab new` then
+  `tatolab run` for twenty seconds, which must open the carried loader, raise nothing from the
+  effect, and show the stream loaded with `TestPatternSource.video` writing at least sixty
+  frames in `graph` — `H264Encoder` either encoding or, on a runner with no encoder, refusing
+  by name while the stream stays loaded. On release a failed macOS proof of
   the runtime unit withholds the PyPI upload, as a failed build of any distribution does. A
   pull request builds no distribution; on `main`, `ci.yml` also builds the debug runtime
   unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
   Python suite and the integration suite's GPU-free half on it.
-  [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697]
+  [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697;
+  moq-relays — SHIPPED #2845, #2866]
   <!-- verify: grep -n 'macos-deployment-target = "15.0"' sdk/streamlib-python-wheel/pyproject.toml -->
   <!-- verify: grep -n "runs-on: macos-26" .github/workflows/reusable-macos-runtime-unit.yml -->
   <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/reusable-distributions.yml -->
@@ -4117,13 +3958,7 @@ entry reads as **message** (the glossary).
   to `~/.local/share/tatolab/<version>/`, points `current` at it, links `tatolab` and
   `tatolabd` into `~/.local/bin`, and writes `~/.config/systemd/user/tatolabd.service`
   (`Restart=on-failure`, `WantedBy=default.target`, `After=graphical-session.target`) — always
-  on, and across logouts with `loginctl enable-linger`, which it offers. A runtime started with
-  no display in its environment takes `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` from the
-  user manager's, which desktop sessions import at login, at its start and never later —
-  NVIDIA's driver reads `DISPLAY` once, at `vkCreateInstance`, and a swapchain on an instance
-  created without it crashes. One that found none says so, refuses every window by name, and is
-  restarted by `tatolabd-restart-for-a-display-at-login.service`
-  (`WantedBy=graphical-session.target`) when a desktop session starts. Re-running upgrades in
+  on, and across logouts with `loginctl enable-linger`, which it offers. Re-running upgrades in
   place and restarts the service, a failed restart keeping the previous release; `--uninstall`
   removes the service and the files, never the state directory. On macOS the script refuses,
   pointing at the app. The tarball carries the Vulkan loader and the software device in
@@ -4166,8 +4001,9 @@ entry reads as **message** (the glossary).
   list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
   Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721]
 
-## Control plane & observability — IN-FLIGHT (→ moq-relays)
+## Control plane & observability — SHIPPED
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-21-moq-relays.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-09-stream-graph.md -->
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-12-runtime-hosting.md -->
 
@@ -4182,11 +4018,12 @@ entry reads as **message** (the glossary).
   hosted in-process by the engine itself. The MCP tool set is the canonical
   control vocabulary; the CLI is a pure JSON-RPC client of it — agents and humans use
   the same verbs; REST/WS routes serve the same operations for programmatic clients.
-  The served MCP tool set is exactly the observation verbs `graph`, `tap`, `logs` and
-  `exchange`, the four graph-mutation verbs — `add_node`, `remove_node`, `connect` and
-  `disconnect` — and the six stream actions — `run_stream`, `stop_stream`, `start_stream`,
-  `remove_stream`, `list_streams` and `expose_port` (§Product); `health` is a REST route,
-  not a tool. The runtime has no shutdown verb: it stays on as a service does, stopped by
+  The served MCP tool set is exactly the observation verbs `graph` and `logs`, the four
+  graph-mutation verbs — `add_node`, `remove_node`, `connect` and `disconnect` — the six
+  stream actions — `run_stream`, `stop_stream`, `start_stream`, `remove_stream`,
+  `list_streams` and `expose_port` (§Product) — and the four relay verbs — `add_relay`,
+  `configure_relay`, `remove_relay` and `list_relays` (§Networking, the adapters); `health` is
+  a REST route, not a tool. The runtime has no shutdown verb: it stays on as a service does, stopped by
   the service manager or a signal, and `stop_stream` ends a client's work. Rejected: a control plane that never mutates the graph, code being the
   source of truth and the edit loop `dev` — a dynamic graph an agent cannot add to is not
   worth having (owner, 2026-09-06). A mutation compiles inside the call, so the caller learns whether
@@ -4196,30 +4033,27 @@ entry reads as **message** (the glossary).
   runtime process never imports the class, and the processor runs in its own processor
   interpreter — and a native built-in by the path `graph` reports for one;
   a link wired onto a running processor reaches it, and every channel is sized for a
-  destination that connects later. `exchange` stays an observation verb because a read
-  that costs the node a bounded copy is still a read. MCP is
+  destination that connects later. MCP is
   served by the node's local API, mounted with the node and sharing its lifecycle, through
   `rmcp`, the official Rust MCP SDK — no MCP protocol logic is hand-written, in the runtime
   or the CLI's client, which is `rmcp`'s client — in two framings over one handler:
   `POST /mcp`, `rmcp`'s Streamable HTTP service with its header checks and statuses, for
   the CLI's one-shot calls; and `/mcp/stdio`, an HTTP/1.1 `Upgrade: mcp-stdio` after which
   the connection carries MCP's stdio framing both ways, for the `mcp` verb. Beside its
-  tools the node serves two resources, each rendered at the moment it is read:
+  tools the node serves three resources, each rendered at the moment it is read:
   `streamlib://node-catalog`, every node type it can add with its description, derived
-  config schema and ports — `/api/registry`'s document — and `streamlib://graph`, the
-  `graph` tool's. It also serves four prompts, recipes rendered against the live graph and
-  the catalog — `insert_node_between_linked_nodes`, `fan_output_to_another_consumer`,
-  `show_channel_on_virtual_camera` and `look_at_what_a_channel_carries` — whose every
-  step is a call to a served tool: a prompt is text, never a mutation path, so the tool
+  config schema and ports — `/api/registry`'s document; `streamlib://graph`, the `graph`
+  tool's; and `streamlib://relay-adapter-catalog`, each relay adapter's kind, doc and settings
+  schema, its secrets marked `writeOnly` — `/api/relay-adapters`' document. It also serves
+  three prompts, recipes rendered against the live graph and the catalog —
+  `insert_node_between_linked_nodes`, `fan_output_to_another_consumer` and
+  `show_channel_on_virtual_camera` — whose every step is a call to a served tool: a prompt is
+  text, never a mutation path, so the tool
   set stays the whole of the control vocabulary.
   [importable-python-library; mcp-served-with-the-node — SHIPPED #1712;
-  agent-readable-processor-catalog — SHIPPED #2232;
-  control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; local-transport-hardening —
+  agent-readable-processor-catalog — SHIPPED #2232; local-transport-hardening —
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
-  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; amended by moq-on-the-tailnet: `tap`
-  and `exchange` leave the tool set at the sharing step; amended by moq-relays: the relay verbs
-  `add_relay`, `configure_relay`, `remove_relay` and `list_relays` join it, and the
-  relay-adapter catalog is a resource beside the node catalog]
+  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871]
   <!-- verify: cargo test -p streamlib-api-server the_upgraded_stream_serves_the_same_tools_and_resources_as_post_mcp -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest tests/stream-on-runtime/test_live_graph_mutation.py -->
@@ -4235,25 +4069,23 @@ entry reads as **message** (the glossary).
   Every tool addresses a node by its name within its stream, never by an id; `graph` still
   renders a node's `id` as a live key. `add_node`, `remove_node`, `connect`, `disconnect` and
   `logs` take a required `stream`; `graph {stream?}` returns one stream's one-shape graph,
-  loadable, or `{machine, streams: […]}`; `exchange` takes a surface id, unique on the
-  machine. A link end renders right-anchored — `{node, port}`, `{stream, node, port}` — and
-  `connect`, named by the input's stream, takes `<end>_stream` beside `<end>_node` and
-  `<end>_port`, an omitted stream meaning that one, and only the source may name another. `tap`'s channel is an address (§Networking, the address); the catalog
+  loadable, or `{machine, streams: […]}`. Both ends of a `connect` are ports in the one
+  stream it names (§Networking, a link's ends); the catalog
   resource is `node-catalog`, listing `nodes`, each under the `type` `add_node` takes; the
   `graph` resource, the instructions and the prompts say node and stream —
   `insert_node_between_linked_nodes` among them. The engine's Rust identifiers keep
   "processor" until the rename. Owner, 2026-10-02. [local-api; stream-graph — SHIPPED #2614;
   zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; runtime-hosting — SHIPPED #2704, #2711,
-  #2715; amended by moq-on-the-tailnet: `tap`'s channel goes with `tap`, at the sharing step]
+  #2715]
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_states_the_link_id_and_the_links_state -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_resolves_each_ends_node_by_its_cast_name -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_takes_its_stream_and_a_link_id_alone -->
 - **DECIDED** — `graph` carries the machine's name as a top-level key, `machine`, beside a
   stream's `stream`, `nodes`, `links` and `exposed` — in the OpenAPI schema, the MCP tool, the
   generated schema and the prompt fixture — and no mesh key. Every channel reserves one
-  subscriber slot beyond its fixed cap, `tap`'s, and no other. [zenoh-and-moq-wheel-removal —
-  SHIPPED #2643, #2645; package-split-and-lend — SHIPPED #2691, #2697; runtime-hosting —
-  SHIPPED #2715]
+  subscriber slot beyond its fixed cap, the exposed-port publisher's, and no other.
+  [zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; package-split-and-lend — SHIPPED
+  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::graph_response_top_level_key_rendering_tests::the_machine_is_a_top_level_key_and_no_mesh_key_renders -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_the_taps_reservation_and_refuses_past_it -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
@@ -4264,25 +4096,19 @@ entry reads as **message** (the glossary).
 - **DECIDED** — The CLI is the native `tatolab`, shipped with the runtime and never in a
   pip distribution, linking no engine: `new`; the stream verbs `run`, `dev`, `stop`,
   `start`, `rm`, `streams` and `expose`, each a call into the running runtime; the
-  observation verbs `graph`, `tap`, `logs` and `exchange`; the `mcp` verb; and one
-  machine-setup verb, `enable-virtual-camera`, which installs the
+  observation verbs `graph` and `logs`; the relay verbs `relays` and `relay add`, `relay set`
+  and `relay remove`, a secret given only from a file or standard input; the `mcp` verb; and
+  one machine-setup verb, `enable-virtual-camera`, which installs the
   loopback permission the virtual camera's loopback door needs behind the desktop's
-  password prompt and touches no node. `exchange` takes a surface id, or a
-  channel: the channel form composes tap → decode → exchange client-side in one warm
-  process — one connection, the exchange fired the moment the bag lands, `--count` and
-  every-Nth sampling as client flags. It is the cold-spawn latency fix and the
-  throttling surface in one, and it adds nothing to the engine: the CLI stays a pure
-  client of the local API composing the same two operations any consumer composes; the
+  password prompt and touches no node. The CLI stays a pure client of the local API; the
   control plane exists to observe and drive *running* nodes, not to embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
-  — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975;
-  virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667; tatolab-names;
-  package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711, #2721,
-  #2722; amended by moq-on-the-tailnet: `tap` and `exchange` leave the CLI at the sharing
-  step; amended by moq-relays: the `relay` verbs join it]
+  — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
+  tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
+  #2711, #2721, #2722; moq-relays — SHIPPED #2871]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help help_lists_exactly_the_served_verbs -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs -->
-  <!-- verify: cargo test -p tatolab-cli --test tatolab_exchange_verb the_channel_form_taps_then_exchanges_each_sampled_id -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_relay_verbs -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_mcp_verb -->
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
@@ -4303,92 +4129,12 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-runtime-client-contract streamlib_runtime_directory -->
   <!-- verify: cargo test -p streamlib-runtime-client-contract a_fallback_that_does_not_exist_yet_is_resolved_for_a_reader_without_being_created -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket with_no_runtime_every_verb_fails_at_once_naming_the_socket_and_how_to_start_one -->
-- **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
-  bags verbatim, trading completeness for guaranteed non-interference; graph and health
-  inspection ride the same control plane. [control-plane-one-surface; amended by moq-on-the-tailnet: `tap` is deleted at the sharing step; logs, `graph` and health stand]
-- **DECIDED** — The control plane exposes one composable door for pixels: `exchange`
-  takes a published surface id and hands back that frame's image bytes, out of process,
-  with no window in the graph and no display server in the path. It is its own verb,
-  peer to `graph` / `tap` / `logs` — never a mode of any of them. Tap keeps exactly its
-  shipped contract: bags forwarded verbatim as bytes, no decode, no field named, no new
-  argument. Its non-interference guarantee is untouched because the two doors touch
-  different systems — tap's guarantee is about the channel (one reserved subscriber
-  slot, completeness traded away and reported as `dropped_bags`), while the exchange
-  never attaches to a channel and is a pool consumer on the same terms as any typed cast
-  in a downstream processor, one frame at a time. Composition happens entirely at the
-  consumer: it decodes the bag itself, reads whatever field it knows carries a surface
-  id, and calls `exchange` with that id. The engine therefore still inspects no bag
-  content anywhere. This is how verification sees pixels, and equally how any API
-  consumer sees them, because the door knows nothing about verification.
-  [control-plane-surface-pixel-exchange — SHIPPED #1972; amended by moq-on-the-tailnet: `exchange` is deleted at the sharing step, the repo's
-  verification reading a port through a relay as a user does (§Networking) instead]
-  <!-- verify: cargo test -p streamlib-api-server the_tap_tool_schema_requires_the_channel_alone -->
-  <!-- verify: cargo test -p streamlib-engine --lib a_published_pool_frame_exchanges_through_the_runtime_operation_for_its_own_pixels -->
-- **DECIDED** — The exchange is a pool claim, bounded to the copy. Inside one operation
-  call: resolve the id, claim the frame through the pool's own claim seam (the refcount
-  in-process, the checkout lease cross-process — the shipped seam, never a new one), run
-  the GPU conversion and the GPU→CPU copy under the claim, release, then encode and
-  return. Encoding happens after the release, so the claim window is the copy alone and
-  an encoder's cost can never extend it. The producer never waits regardless: the pool
-  skips claimed slots and grows to its cap, so an exchange costs the node memory at
-  worst, never another processor's cadence. Without the claim a producer could recycle
-  the slot mid-copy and the caller would receive a torn frame — half one frame, half the
-  next — which is precisely the silent wrongness the surface-id lifetime contract exists
-  to kill. [control-plane-surface-pixel-exchange — SHIPPED #1972; amended by moq-on-the-tailnet: `exchange` is deleted at the sharing step, the repo's
-  verification reading a port through a relay as a user does (§Networking) instead]
-  <!-- verify: cargo test -p streamlib-engine --lib sequential_exchanges_of_one_frame_never_pin_more_than_one_hold -->
-- **DECIDED** — Staleness fails loud and composes as a retry, never as wrong pixels. A
-  surface id is per-frame (`<slot>#<generation>`), and resolving a retired one is refused
-  with the recycled-frame error before any bytes move — `410 Gone` over REST, never a
-  `200` carrying the slot's newer pixels. So when an exchange succeeds the bytes are
-  exactly the tapped bag's frame — the generation grammar is what proves the pairing —
-  and when it is too slow the caller taps a newer bag and exchanges that.
-  Sample-and-exchange-as-you-go is therefore the intended loop, and temporal sampling
-  falls out of composition rather than needing a batched verb. The publish-to-claim
-  window is the one every pool consumer already obeys: it rides pool depth, and
-  outwaiting it is an error. [control-plane-surface-pixel-exchange — SHIPPED #1972; amended by moq-on-the-tailnet: `exchange` is deleted at the sharing step, the repo's
-  verification reading a port through a relay as a user does (§Networking) instead]
-  <!-- verify: cargo test -p streamlib-engine --lib a_retired_frame_id_is_refused_at_the_exchange_naming_the_recycling -->
-  <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_on_a_recycled_frame_is_a_tool_error_naming_the_recycling -->
-- **DECIDED** — The engine converts, in the RHI, or the caller gets nothing viewable: a
-  camera frame is NV12 or YUYV and converting it is the RHI's existing job, while
-  readback is an always-present `GpuContext` capability. No pixel conversion happens
-  outside the RHI and no second converter is built. The operation reaches the engine
-  through `RuntimeOperations` and nothing else — the api-server's HTTP task deliberately
-  holds only `Arc<dyn RuntimeOperations>`, the trait gains one operation, and `Runner`
-  implements it over the pool's own claim and the RHI's color converter, blit and texture
-  readback, on Linux and macOS alike; it never rode the export staging on either floor. On
-  macOS it runs the same conversion under MoltenVK, a pooled frame's IOSurface pages reaching
-  the GPU through their host-pointer import, never a CPU read of the surface — so `streamlib
-  tap` → `exchange`, and the repo's own live verification with it, answer on a Mac. No new
-  surface-resolution path exists — the backing resolution is the one `ResolvedSurfaceBacking`
-  — and the caller needs no Vulkan device, no surface
-  socket and no runtime link.
-  [control-plane-surface-pixel-exchange — SHIPPED #1972; macos-capability-parity — SHIPPED
-  #2406; amended by moq-on-the-tailnet: `exchange` is deleted at the sharing step, the repo's
-  verification reading a port through a relay as a user does (§Networking) instead]
-  <!-- verify: cargo test -p streamlib-engine --lib a_pooled_rgba_frame_exchanges_for_the_pixels_the_bag_published -->
-  <!-- verify: cargo test -p streamlib-engine --lib a_texture_backed_frame_exchanges_for_the_pixels_its_producer_rendered -->
-- **DECIDED** — Two spellings of one operation: MCP tool and REST route serve the same
-  `exchange` with the same arguments, differing only in result shape. REST serves the
-  exact frame as a binary `image/png` body — lossless, full resolution, no base64
-  inflation: the evidence and PSNR path, and what the CLI writes into a
-  caller-named directory. The MCP tool returns an image content block, downscaled by
-  default to a declared long-edge cap (~1568 px, the resolution ceiling vision models
-  actually use), with the result stating the true extent and the exact-bytes route — the
-  agent's in-session view, always under the per-image payload ceiling. The downscale
-  rides the RHI's existing blit path, never a second scaler, and raw unconverted planes
-  stay deferred until something needs them. Both spellings are gated as the rest of the
-  local API is, by the auth entry below. [control-plane-surface-pixel-exchange — SHIPPED
-  #1972, #1974; local-api — SHIPPED #2663; amended by moq-on-the-tailnet: `exchange` is
-  deleted at the sharing step, the repo's verification reading a port through a relay as a user does (§Networking)
-  instead]
-  <!-- verify: cargo test -p streamlib-api-server the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image -->
-  <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route -->
-- **DECIDED** — There is no observer effect: reading a channel does not require terminating
-  it in a window, so a mid-graph channel is observable in the topology that ships. Window capture survives only where
-  the window is genuinely the subject — the present and swapchain path.
-  [control-plane-surface-pixel-exchange — SHIPPED #1972, #1976; amended by moq-on-the-tailnet: once `exchange` is deleted at the sharing step the same holds through a relay — an exposed port is read with no node added to the graph]
+- **DECIDED** — Observability: the JSONL log schema is a durable contract; graph and health
+  inspection ride the same control plane. [control-plane-one-surface]
+- **DECIDED** — There is no observer effect: reading a port requires neither terminating it in
+  a window nor adding a node to the graph — an exposed port is read through a relay in the
+  topology that ships. [control-plane-surface-pixel-exchange; moq-relays — SHIPPED #2853,
+  #2860]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-26-control-plane-surface-pixel-exchange.md -->
 - **DECIDED** — Auth and remote-access posture: whoever can open the local API's socket may
   call it — the owning user, by file permission — and nothing off the machine can call it at
@@ -4401,17 +4147,16 @@ entry reads as **message** (the glossary).
   open — `local-api.sock`, chmod 0600 inside the 0700 directory, a live holder refused by a
   connect probe naming the path and a stale file replaced — carrying the router and control
   vocabulary unchanged; no network address serves control, and a client dials the one socket.
-  The URL forms are a separate listener that changes nothing — private and public
-  ports on loopback — because browsers and ffmpeg cannot dial a socket. A runtime is never
+  The runtime's HTTP is a separate listener that changes nothing — on loopback only, serving
+  the listing and `/watch` by address (§Networking) — because a browser cannot dial a socket. A runtime is never
   driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
   client's. Owner, 2026-10-01. [one-runtime-per-machine; local-api — SHIPPED
-  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; amended by moq-relays: the URL
-  listener stays on loopback and serves `watch` by address and the listing — no tailnet half]
+  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; moq-relays — SHIPPED #2860, #2864]
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name a_local_api_socket_a_live_process_holds_is_refused_naming_it -->
   <!-- verify: cargo test -p streamlib-api-server serving_the_router_on_the_local_api_socket_opens_no_tcp_listener -->
-  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_at_all -->
 - **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
   stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb resolves the runtime,
   opens its socket, sends the one `/mcp/stdio` upgrade request, and then copies bytes,
