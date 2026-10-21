@@ -33,12 +33,18 @@ use common::{
 use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use streamlib_relay_adapter_local::LocalRelayListener;
 use streamlib_relay_adapter_sdk::url::Url;
+use streamlib_relay_track_reader::{
+    RelayTrackGroupsReleasedInSequenceOrder, ReleasedRelayTrackGroup,
+};
 
 const STREAM: &str = "desk";
 /// A stream reading `STREAM`'s ports through the local relay.
 const READER_STREAM: &str = "reader";
 const WRITER_NODE_TYPE: &str =
     "tatolabd::numbered_message_writer_test_node::NumberedMessageWriterTestNode";
+/// Writes one-message groups two at a time on `paired_groups`.
+const PAIRED_GROUP_WRITER_NODE_TYPE: &str =
+    "tatolabd::paired_group_writer_test_node::PairedGroupWriterTestNode";
 /// Exposed public, and carrying a catalog entry.
 const PUBLIC_PORT: &str = "numbers";
 /// Exposed private, and carrying none.
@@ -227,6 +233,20 @@ impl TatolabdPublishingTheStream {
         );
     }
 
+    /// Add a paired-group writer named `node` to the running stream, its
+    /// `paired_groups` exposed private.
+    fn add_a_paired_group_writer_named(&self, node: &str) {
+        self.call(
+            "add_node",
+            serde_json::json!({
+                "stream": STREAM,
+                "type": PAIRED_GROUP_WRITER_NODE_TYPE,
+                "name": node,
+            }),
+        );
+        self.put_the_port_of_the_node_at(node, "paired_groups", "private");
+    }
+
     /// Add to [`READER_STREAM`] a `RelayTrackSource` named `node` reading
     /// `port` of the writer in [`STREAM`] through the loopback listener, and
     /// expose its output private.
@@ -381,9 +401,12 @@ impl BroadcastReadAtAListener {
     ) -> Option<moq_net::group::Consumer> {
         let deadline = tokio::time::Instant::now() + MOQ_BUDGET;
         while tokio::time::Instant::now() < deadline {
-            if let Ok(mut ordered) = self.subscribe_to(track_name).await
-                && let Ok(Ok(Some(group))) =
-                    tokio::time::timeout(Duration::from_secs(2), ordered.next_group()).await
+            if let Ok(mut groups) = self.subscribe_to(track_name).await
+                && let Ok(Some(group)) = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    the_next_group_in_sequence(&mut groups),
+                )
+                .await
             {
                 return Some(group);
             }
@@ -416,14 +439,20 @@ impl BroadcastReadAtAListener {
 
     /// `track_name` subscribed once it carries a group, asking again until
     /// [`MOQ_BUDGET`] runs out.
-    async fn the_track_once_it_is_served(&self, track_name: &str) -> moq_net::track::Ordered {
+    async fn the_track_once_it_is_served(
+        &self,
+        track_name: &str,
+    ) -> RelayTrackGroupsReleasedInSequenceOrder {
         let deadline = tokio::time::Instant::now() + MOQ_BUDGET;
         while tokio::time::Instant::now() < deadline {
-            if let Ok(mut ordered) = self.subscribe_to(track_name).await
-                && let Ok(Ok(Some(_))) =
-                    tokio::time::timeout(Duration::from_secs(2), ordered.next_group()).await
+            if let Ok(mut groups) = self.subscribe_to(track_name).await
+                && let Ok(Some(_)) = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    the_next_group_in_sequence(&mut groups),
+                )
+                .await
             {
-                return ordered;
+                return groups;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -433,25 +462,29 @@ impl BroadcastReadAtAListener {
         )
     }
 
+    /// `track_name` read waiting the track's retention for a missing group, as
+    /// `tatolab-read-track` reads it.
     async fn subscribe_to(
         &self,
         track_name: &str,
-    ) -> Result<moq_net::track::Ordered, moq_net::Error> {
-        let track = self.broadcast.track(track_name)?;
-        Ok(track.subscribe(None).await?.ordered())
+    ) -> Result<RelayTrackGroupsReleasedInSequenceOrder, moq_net::Error> {
+        RelayTrackGroupsReleasedInSequenceOrder::subscribe_waiting_the_tracks_retention(
+            &self.broadcast.track(track_name)?,
+        )
+        .await
     }
 
     /// The next `count` objects of `track_name` once it is served, each with
     /// its group.
     async fn the_next_objects_of(&self, track_name: &str, count: usize) -> Vec<ObjectRead> {
-        let mut ordered = self.the_track_once_it_is_served(track_name).await;
+        let mut groups = self.the_track_once_it_is_served(track_name).await;
         let mut objects = Vec::new();
         while objects.len() < count {
-            let mut group = tokio::time::timeout(MOQ_BUDGET, ordered.next_group())
-                .await
-                .expect("a group arrives")
-                .expect("the track is live")
-                .expect("the track has not ended");
+            let mut group =
+                tokio::time::timeout(MOQ_BUDGET, the_next_group_in_sequence(&mut groups))
+                    .await
+                    .expect("a group arrives")
+                    .expect("the track has not ended");
             let group_sequence = group.sequence;
             let objects_before_the_group = objects.len();
             loop {
@@ -490,6 +523,23 @@ impl BroadcastReadAtAListener {
             }
         }
         objects
+    }
+}
+
+/// The next group `groups` releases in sequence, past any it gave up; `None`
+/// once the track ended.
+async fn the_next_group_in_sequence(
+    groups: &mut RelayTrackGroupsReleasedInSequenceOrder,
+) -> Option<moq_net::group::Consumer> {
+    loop {
+        match groups
+            .next_released_group()
+            .await
+            .expect("the track is live")?
+        {
+            ReleasedRelayTrackGroup::InSequence(group) => return Some(*group),
+            ReleasedRelayTrackGroup::GivenUp { .. } => continue,
+        }
     }
 }
 
@@ -682,15 +732,15 @@ fn lowering_a_port_ends_its_subscribers_and_raising_it_announces_it_again() {
     let public_track = format!("writer/{PUBLIC_PORT}");
 
     let mut off_loopback = publishing.async_runtime.block_on(async {
-        let mut ordered = at_every_interface
+        let mut groups = at_every_interface
             .subscribe_to(&public_track)
             .await
             .unwrap();
-        tokio::time::timeout(MOQ_BUDGET, ordered.next_group())
+        tokio::time::timeout(MOQ_BUDGET, the_next_group_in_sequence(&mut groups))
             .await
             .expect("the public port carries groups off loopback")
             .unwrap();
-        ordered
+        groups
     });
     let mut on_loopback = publishing
         .async_runtime
@@ -700,7 +750,7 @@ fn lowering_a_port_ends_its_subscribers_and_raising_it_announces_it_again() {
     publishing.async_runtime.block_on(async {
         let ended = tokio::time::timeout(MOQ_BUDGET, async {
             loop {
-                match off_loopback.next_group().await {
+                match off_loopback.next_released_group().await {
                     Ok(Some(_)) => continue,
                     _ => return,
                 }
@@ -711,10 +761,9 @@ fn lowering_a_port_ends_its_subscribers_and_raising_it_announces_it_again() {
             ended.is_ok(),
             "a port lowered to private still reaches a subscriber off loopback"
         );
-        tokio::time::timeout(MOQ_BUDGET, on_loopback.next_group())
+        tokio::time::timeout(MOQ_BUDGET, the_next_group_in_sequence(&mut on_loopback))
             .await
             .expect("a port lowered to private still reaches loopback")
-            .expect("the loopback track stays live")
             .expect("the loopback track has not ended");
     });
 
@@ -759,7 +808,7 @@ fn a_node_added_exposed_removed_and_added_again_live_is_published_withdrawn_and_
     publishing.async_runtime.block_on(async {
         let ended = tokio::time::timeout(MOQ_BUDGET, async {
             loop {
-                match added_read.next_group().await {
+                match added_read.next_released_group().await {
                     Ok(Some(_)) => continue,
                     _ => return,
                 }
@@ -802,8 +851,8 @@ fn an_internal_port_is_at_no_relay_and_lowering_a_port_to_internal_ends_its_loop
     publishing.add_a_writer_named("unexposed");
     publishing.async_runtime.block_on(async {
         let internal_port_at_loopback = tokio::time::timeout(NEVER_SERVED_GRACE, async {
-            let mut ordered = at_loopback.subscribe_to(&internal_track).await?;
-            ordered.next_group().await
+            let mut groups = at_loopback.subscribe_to(&internal_track).await?;
+            groups.next_released_group().await
         })
         .await;
         assert!(
@@ -816,7 +865,7 @@ fn an_internal_port_is_at_no_relay_and_lowering_a_port_to_internal_ends_its_loop
     publishing.async_runtime.block_on(async {
         let ended = tokio::time::timeout(MOQ_BUDGET, async {
             loop {
-                match on_loopback.next_group().await {
+                match on_loopback.next_released_group().await {
                     Ok(Some(_)) => continue,
                     _ => return,
                 }
@@ -876,6 +925,46 @@ fn a_relay_track_source_in_another_stream_reads_a_private_port_through_loopback_
             serde_json::to_value(&catalog.binary.tracks["public-numbers/track"]).unwrap();
         assert_eq!(carried_entry["mode"], "stream");
         assert_eq!(carried_entry["mime"], "text/plain");
+    });
+    publishing.runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// Two groups ready on the wire together race at a relay, the newer first. A
+/// `RelayTrackSource` reading a writer of one-message groups written two at a
+/// time releases them in sequence and loses none: every message reaches its
+/// output, each its own group.
+#[test]
+fn a_relay_track_source_reading_paired_writes_keeps_every_group() {
+    const MESSAGES_READ: usize = 100;
+    let mut publishing = TatolabdPublishingTheStream::start_beside_a_reader_stream();
+    publishing.add_a_paired_group_writer_named("paired");
+    publishing.add_a_relay_track_source_reading_the_port_of(
+        "paired-groups",
+        STREAM,
+        "paired",
+        "paired_groups",
+    );
+    publishing.expose_in_the_reader_stream("paired-groups", "track");
+    let reader_at_loopback =
+        publishing.the_broadcast_of_the_stream_at(READER_STREAM, LocalRelayListener::Loopback);
+
+    publishing.async_runtime.block_on(async {
+        let objects = reader_at_loopback
+            .the_next_objects_of("paired-groups/track", MESSAGES_READ)
+            .await;
+        let numbers: Vec<u64> = objects.iter().map(the_number_in).collect();
+        assert!(
+            numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "every message the writer wrote reaches the source's output: {numbers:?}"
+        );
+        let group_sequences: Vec<u64> =
+            objects.iter().map(|object| object.group_sequence).collect();
+        assert!(
+            group_sequences
+                .windows(2)
+                .all(|pair| pair[1] == pair[0] + 1),
+            "each message is its own group, none skipped: {group_sequences:?}"
+        );
     });
     publishing.runtime.interrupt_and_expect_a_clean_exit();
 }

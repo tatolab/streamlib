@@ -126,12 +126,8 @@ fi
 
 BROADCAST="$MACHINE_NAME/$STREAM_NAME.hang"
 TRACK="$NODE_NAME/$OUTPUT_PORT"
-# Read past the subscription's join to the relay, which can skip groups while the
-# relay's own subscription settles, and measure what follows it.
-OBJECTS_THE_JOIN_TAKES=16
-echo "reading $OBJECT_COUNT objects of $TRACK in $BROADCAST after $OBJECTS_THE_JOIN_TAKES joining" >&2
-if ! read_the_track_at_the_local_relay "$BROADCAST" "$TRACK" \
-    "$(( OBJECTS_THE_JOIN_TAKES + OBJECT_COUNT ))" \
+echo "reading $OBJECT_COUNT objects of $TRACK in $BROADCAST" >&2
+if ! read_the_track_at_the_local_relay "$BROADCAST" "$TRACK" "$OBJECT_COUNT" \
     "$OUTPUT_DIR/track" 2>"$OUTPUT_DIR/read_track.err"; then
     cat "$OUTPUT_DIR/read_track.err" >&2
     exit 1
@@ -139,7 +135,6 @@ fi
 
 # shellcheck disable=SC2086  # deliberately unquoted: empty means "not asked for"
 "$FIXTURE_PYTHON" "$HERE/audio_track_dump_check.py" "$OUTPUT_DIR/track" \
-    --from-object "$OBJECTS_THE_JOIN_TAKES" \
     --waveform "$OUTPUT_DIR/published.wav" $EXPECT_THE_TRACK_STAMPED_WITH_THE_BLOCK \
     | tee "$OUTPUT_DIR/report.json"
 VERDICT=${PIPESTATUS[0]}

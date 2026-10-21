@@ -21,6 +21,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 
+use streamlib_relay_track_reader::{
+    RelayTrackGroupsReleasedInSequenceOrder, ReleasedRelayTrackGroup,
+};
+
 use relay_track_object_dump::{
     RelayTrackCatalogEntry, RelayTrackObjectDumpDirectory, RelayTrackObjectPayloadForm,
     RelayTrackObjectRead,
@@ -30,11 +34,6 @@ use relay_track_object_dump::{
 /// before the track is written as sent, unless `--catalog-wait-at-most` says:
 /// a port's entry may join the catalog only once its first message is written.
 const THE_TRACKS_CATALOG_ENTRY_IS_AWAITED_FOR_SECONDS: u64 = 5;
-
-/// How old a group may grow behind a newer one before the read gives it up.
-/// The stack's default gives up at once, which suits a player; a dump wants
-/// every group a reordering delivered late, up to what the publisher keeps.
-const A_GROUP_DELIVERED_LATE_IS_WAITED_FOR: Duration = Duration::from_secs(5);
 
 /// How long closing the session waits for the relay to hear it.
 const THE_RELAY_IS_TOLD_THE_SESSION_CLOSED_WITHIN: Duration = Duration::from_secs(2);
@@ -180,15 +179,12 @@ async fn read_the_tracks_objects(
     arguments: &ReadTrackArguments,
     objects_written: &std::cell::Cell<u64>,
 ) -> Result<u64> {
-    let mut groups_of_the_track = broadcast
-        .track(&arguments.track)?
-        .subscribe(
-            moq_net::track::Subscription::default()
-                .with_max_age(A_GROUP_DELIVERED_LATE_IS_WAITED_FOR),
+    let mut groups_of_the_track =
+        RelayTrackGroupsReleasedInSequenceOrder::subscribe_waiting_the_tracks_retention(
+            &broadcast.track(&arguments.track)?,
         )
         .await
-        .with_context(|| format!("the track `{}` was refused", arguments.track))?
-        .ordered();
+        .with_context(|| format!("the track `{}` was refused", arguments.track))?;
     let (payload_form, catalog_entry) = match the_tracks_catalog_entry(
         broadcast,
         &arguments.track,
@@ -209,28 +205,25 @@ async fn read_the_tracks_objects(
     }
 
     while dump.objects_written() < arguments.object_count {
-        let Some(mut group) = groups_of_the_track
-            .next_group()
+        let mut group = match groups_of_the_track
+            .next_released_group()
             .await
             .context("the track ended in error")?
-        else {
-            return Err(anyhow!(
-                "the track ended after {} of {} objects",
-                dump.objects_written(),
-                arguments.object_count
-            ));
+        {
+            Some(ReleasedRelayTrackGroup::InSequence(group)) => group,
+            Some(ReleasedRelayTrackGroup::GivenUp { groups }) => {
+                eprintln!("tatolab-read-track: {groups} groups were given up");
+                continue;
+            }
+            None => {
+                return Err(anyhow!(
+                    "the track ended after {} of {} objects",
+                    dump.objects_written(),
+                    arguments.object_count
+                ));
+            }
         };
         let group_sequence = group.sequence;
-        // A relay on the IETF drafts may hand a late subscriber the group it
-        // joined from the next object on; a dump opens where a decoder can.
-        if dump.objects_written() == 0 && group.index() > 0 {
-            eprintln!(
-                "tatolab-read-track: group {group_sequence} was joined at object {}; its \
-                 objects are skipped for the next group's start",
-                group.index()
-            );
-            continue;
-        }
         let mut starts_group = true;
         while dump.objects_written() < arguments.object_count {
             let object = match group.read_frame().await {

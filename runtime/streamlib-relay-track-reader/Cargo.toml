@@ -1,0 +1,25 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-relay-track-reader"
+description = "The one relay-track reader: a track's groups received in arrival order and released in sequence order, a missing group given up only on its reset, the track's end, or newer content past the reader's max_age. Engine-free, so `tatolab-read-track` reads through it as the relay source node does."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "streamlib_relay_track_reader"
+path = "src/lib.rs"
+
+[dependencies]
+# The MoQ client, pinned exactly as every reader of a relay pins it.
+moq-net = { version = "=0.3.15" }
+tokio = { workspace = true }
+futures-util = "0.3"
+
+[lints]
+workspace = true

@@ -473,6 +473,15 @@ class _RelayTrackSourceConfigRequiredKeys(TypedDict):
 class RelayTrackSourceConfig(_RelayTrackSourceConfigRequiredKeys, total=False):
     """`RelayTrackSource`'s config: the keys `stream_builder.add` takes."""
 
+    max_age: int
+    """How far newer content on the track may run past a missing group, in whole
+    milliseconds of the track's own timestamps, before the group is given up; the
+    history asked of the relay, clamped to what the track keeps. A transport budget,
+    never a playout delay.
+
+    Default: `100`.
+    """
+
     relay_url: str
     """The relay to subscribe at. The default is this machine's local relay on loopback,
     which serves every private and public port of the machine.
@@ -493,6 +502,12 @@ class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
     object of each group starting a group, and its catalog entry is the track's own from
     the broadcast's catalog. What a payload means is the publisher's: a `VideoFrame`
     track names surfaces on the machine that wrote it, which mean nothing here.
+
+    Groups reach `track` in sequence order, whatever order the relay delivers them in. A
+    missing group is waited for until newer content on the track runs `max_age`
+    milliseconds past it, measured in the track's own timestamps and never on a clock,
+    until its stream is reset, or until the track ends; then it is given up and the next
+    group read. The read joins at the live edge.
 
     The relay's object carries the writer's stamp, on the writer's clock. Every stamp in
     a graph is this machine's, so `track` is stamped with the object's own timestamp —

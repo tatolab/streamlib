@@ -349,27 +349,6 @@ class AudioTrackDumpCheck(unittest.TestCase):
         self.assertIn("block_continuity_error_ms", report["failed"])
         self.assertLess(report["block_continuity_error_ms"], 0.0)
 
-    def test_the_join_to_the_relay_is_left_out_of_the_measurement(self):
-        """A subscription's first objects can skip groups while the relay's own
-        subscription settles; measured from after them, the steady output is
-        what is judged."""
-        bags = self.track_objects(count=8)
-        del bags[1]
-        track_dump = _track_dump_written_by_read_track(Path(self.workspace.name), bags)
-
-        for from_object, expected_exit_status in ((0, 1), (2, 0)):
-            with self.subTest(from_object=from_object):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    exit_status = audio_track_dump_check.main(
-                        [
-                            "audio_track_dump_check.py",
-                            str(track_dump),
-                            "--from-object",
-                            str(from_object),
-                        ]
-                    )
-                self.assertEqual(exit_status, expected_exit_status)
-
     def test_the_dump_is_read_as_tatolab_read_track_writes_it(self):
         """The index names each object's file and stamp, in the order the track
         carried them."""

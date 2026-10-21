@@ -251,13 +251,6 @@ def main(argv):
     )
     parser.add_argument("--waveform", help="write the published samples here as WAV")
     parser.add_argument(
-        "--from-object",
-        type=int,
-        default=0,
-        help="measure from this object on: the ones before it are the read's join to the "
-        "relay, which can skip groups while the relay's own subscription settles",
-    )
-    parser.add_argument(
         "--expect-the-track-stamped-with-the-block",
         action="store_true",
         help="require each object's stamp to match its block's own, as a capture "
@@ -265,9 +258,7 @@ def main(argv):
     )
     arguments = parser.parse_args(argv[1:])
 
-    track_objects = audio_track_objects_in(arguments.track_dump_directory)[
-        arguments.from_object :
-    ]
+    track_objects = audio_track_objects_in(arguments.track_dump_directory)
     if not track_objects:
         print(
             json.dumps(

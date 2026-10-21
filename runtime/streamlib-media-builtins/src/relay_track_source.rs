@@ -25,6 +25,9 @@ use streamlib::sdk::media_clock::MediaClock;
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 use streamlib::sdk::serde_json::Value;
+use streamlib_relay_track_reader::{
+    RelayTrackGroupsReleasedInSequenceOrder, ReleasedRelayTrackGroup,
+};
 
 use crate::processor_thread_join::join_within_grace_or_detach;
 
@@ -67,10 +70,20 @@ pub struct RelayTrackSourceConfig {
     /// The track of `broadcast` to read, exactly as its publisher named it. An
     /// exposed port's is `<node>/<port>`.
     pub track: String,
+    /// How far newer content on the track may run past a missing group, in
+    /// whole milliseconds of the track's own timestamps, before the group is
+    /// given up; the history asked of the relay, clamped to what the track
+    /// keeps. A transport budget, never a playout delay.
+    #[serde(default = "default_max_age_milliseconds")]
+    pub max_age: u64,
 }
 
 fn default_relay_url() -> String {
     "http://127.0.0.1:4443".to_string()
+}
+
+fn default_max_age_milliseconds() -> u64 {
+    100
 }
 
 /// A node given no config names no track, and is refused at setup naming
@@ -81,6 +94,7 @@ impl Default for RelayTrackSourceConfig {
             relay_url: default_relay_url(),
             broadcast: String::new(),
             track: String::new(),
+            max_age: default_max_age_milliseconds(),
         }
     }
 }
@@ -98,6 +112,11 @@ impl Default for RelayTrackSourceConfig {
                   track's own from the broadcast's catalog. What a payload means is the \
                   publisher's: a `VideoFrame` track names surfaces on the machine that wrote it, \
                   which mean nothing here.\n\n\
+                  Groups reach `track` in sequence order, whatever order the relay delivers \
+                  them in. A missing group is waited for until newer content on the track runs \
+                  `max_age` milliseconds past it, measured in the track's own timestamps and \
+                  never on a clock, until its stream is reset, or until the track ends; then it \
+                  is given up and the next group read. The read joins at the live edge.\n\n\
                   The relay's object carries the writer's stamp, on the writer's clock. Every \
                   stamp in a graph is this machine's, so `track` is stamped with the object's \
                   own timestamp — the hang container's for a media track, the object's \
@@ -142,6 +161,7 @@ impl ManualProcessor for RelayTrackSource::Processor {
         self.stop_reading();
         self.relay_track_reading_thread = Some(RelayTrackReadingThread::spawn(
             relay_track_location,
+            Duration::from_millis(self.config.max_age),
             self.outputs.clone(),
         )?);
         Ok(())
@@ -216,7 +236,11 @@ struct RelayTrackReadingThread {
 }
 
 impl RelayTrackReadingThread {
-    fn spawn(relay_track_location: RelayTrackLocation, outputs: OutputWriter) -> Result<Self> {
+    fn spawn(
+        relay_track_location: RelayTrackLocation,
+        max_age: Duration,
+        outputs: OutputWriter,
+    ) -> Result<Self> {
         let async_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -246,7 +270,7 @@ impl RelayTrackReadingThread {
                 async_runtime.block_on(read_the_track_until_stopped(
                     relay_track_location,
                     moq_client,
-                    outputs,
+                    RelayTrackSourceSession::new(outputs, max_age),
                     stop_requested_receiver,
                 ));
             })
@@ -274,22 +298,21 @@ impl RelayTrackReadingThread {
 async fn read_the_track_until_stopped(
     relay_track_location: RelayTrackLocation,
     moq_client: moq_tokio::Client,
-    outputs: OutputWriter,
+    mut relay_track_source_session: RelayTrackSourceSession,
     mut stop_requested: tokio::sync::watch::Receiver<bool>,
 ) {
-    let mut track_reader = RelayTrackReader::new(outputs);
     let mut retried_after = A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER;
     let mut last_reason_the_session_ended: Option<WhyARelayTrackSessionEnded> = None;
     loop {
-        let objects_written_before_the_session = track_reader.objects_written;
+        let objects_written_before_the_session = relay_track_source_session.objects_written;
         let reason_the_session_ended = tokio::select! {
             _ = stop_requested.wait_for(|stop_requested| *stop_requested) => break,
-            reason_the_session_ended = track_reader
+            reason_the_session_ended = relay_track_source_session
                 .read_through_one_session(&moq_client, &relay_track_location) => {
                 reason_the_session_ended
             }
         };
-        if track_reader.objects_written > objects_written_before_the_session {
+        if relay_track_source_session.objects_written > objects_written_before_the_session {
             retried_after = A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER;
         }
         if last_reason_the_session_ended.as_ref() != Some(&reason_the_session_ended) {
@@ -315,20 +338,23 @@ async fn read_the_track_until_stopped(
     .await;
 }
 
-/// Writes one track's objects onto the node's output, across every session
-/// that reads it.
-struct RelayTrackReader {
+/// The node's reading of its track onto its output, carried across every
+/// session dialed to read it: the re-basing, the catalog entry set and the
+/// count written survive a redial.
+struct RelayTrackSourceSession {
     outputs: OutputWriter,
+    max_age: Duration,
     track_timestamp_rebasing: TrackTimestampRebasedOntoThisMachinesClock,
     where_the_track_carries_its_timestamp: WhereATrackCarriesItsTimestamp,
     catalog_entry_set_on_the_output: Option<CatalogEntry>,
     objects_written: u64,
 }
 
-impl RelayTrackReader {
-    fn new(outputs: OutputWriter) -> Self {
+impl RelayTrackSourceSession {
+    fn new(outputs: OutputWriter, max_age: Duration) -> Self {
         Self {
             outputs,
+            max_age,
             track_timestamp_rebasing: TrackTimestampRebasedOntoThisMachinesClock::default(),
             where_the_track_carries_its_timestamp: WhereATrackCarriesItsTimestamp::OnTheObject,
             catalog_entry_set_on_the_output: None,
@@ -364,7 +390,13 @@ impl RelayTrackReader {
             },
         };
         let (mut groups_of_the_track, mut catalog_of_the_broadcast) =
-            match subscribe_to_the_track_and_its_catalog(&broadcast, relay_track_location).await {
+            match subscribe_to_the_track_and_its_catalog(
+                &broadcast,
+                relay_track_location,
+                self.max_age,
+            )
+            .await
+            {
                 Ok(subscribed) => subscribed,
                 Err(refusal) => {
                     return WhyARelayTrackSessionEnded::TrackWasRefused(refusal.to_string());
@@ -396,11 +428,17 @@ impl RelayTrackReader {
                 ended = connection.closed() => {
                     return WhyARelayTrackSessionEnded::of_a_closed_session(ended);
                 }
-                group = groups_of_the_track.next_group(), if group_being_read.is_none() => {
-                    match group {
-                        Ok(Some(group)) => {
-                            group_being_read = Some(group);
+                released = groups_of_the_track.next_released_group(), if group_being_read.is_none() => {
+                    match released {
+                        Ok(Some(ReleasedRelayTrackGroup::InSequence(group))) => {
+                            group_being_read = Some(*group);
                             the_next_object_starts_a_group = true;
+                        }
+                        Ok(Some(ReleasedRelayTrackGroup::GivenUp { groups })) => {
+                            tracing::debug!(
+                                "RelayTrackSource: {groups} groups of {relay_track_location} \
+                                 were given up"
+                            );
                         }
                         Ok(None) => return WhyARelayTrackSessionEnded::TrackEnded(None),
                         Err(refusal) => {
@@ -515,15 +553,16 @@ impl std::fmt::Display for WhyARelayTrackSessionEnded {
 async fn subscribe_to_the_track_and_its_catalog(
     broadcast: &moq_net::broadcast::Consumer,
     relay_track_location: &RelayTrackLocation,
+    max_age: Duration,
 ) -> moq_net::Result<(
-    moq_net::track::Ordered,
+    RelayTrackGroupsReleasedInSequenceOrder,
     Option<moq_json::snapshot::Consumer<Value>>,
 )> {
-    let groups_of_the_track = broadcast
-        .track(&relay_track_location.track_name)?
-        .subscribe(None)
-        .await?
-        .ordered();
+    let groups_of_the_track = RelayTrackGroupsReleasedInSequenceOrder::subscribe(
+        &broadcast.track(&relay_track_location.track_name)?,
+        max_age,
+    )
+    .await?;
     let catalog_subscribed: moq_net::Result<_> = async {
         broadcast
             .track(hang::Catalog::DEFAULT_NAME)?
@@ -993,6 +1032,24 @@ mod tests {
     }
 
     #[test]
+    fn a_config_without_max_age_reads_with_one_hundred_milliseconds() {
+        assert_eq!(
+            config_naming("desk/main.hang", "microphone/audio").max_age,
+            100
+        );
+        assert_eq!(
+            config_read_from(json!({
+                "broadcast": "desk/main.hang",
+                "track": "microphone/audio",
+                "max_age": 40,
+            }))
+            .expect("a whole number of milliseconds is a max_age")
+            .max_age,
+            40
+        );
+    }
+
+    #[test]
     fn a_config_naming_a_key_the_node_does_not_take_is_refused_naming_it() {
         let refusal = config_read_from(json!({
             "broadcast": "desk/camera-rig.hang",
@@ -1073,6 +1130,7 @@ mod tests {
             config_schema["properties"]["relay_url"]["default"],
             "http://127.0.0.1:4443"
         );
+        assert_eq!(config_schema["properties"]["max_age"]["default"], 100);
         assert_eq!(config_schema["required"], json!(["broadcast", "track"]));
         assert_eq!(
             config_schema["properties"]
@@ -1080,7 +1138,7 @@ mod tests {
                 .expect("the config's properties")
                 .keys()
                 .collect::<Vec<_>>(),
-            ["broadcast", "relay_url", "track"]
+            ["broadcast", "max_age", "relay_url", "track"]
         );
         assert_eq!(
             descriptor

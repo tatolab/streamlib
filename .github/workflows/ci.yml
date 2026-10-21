@@ -284,7 +284,7 @@ jobs:
           -p streamlib-python-wheel
           -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
           -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
-          -p tatolab-read-track
+          -p tatolab-read-track -p streamlib-relay-track-reader
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests
           --lib --bins --tests
 

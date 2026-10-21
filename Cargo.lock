@@ -6004,6 +6004,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "streamlib",
+ "streamlib-relay-track-reader",
  "tempfile",
  "tokio",
  "tracing",
@@ -6112,6 +6113,15 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "streamlib-relay-track-reader"
+version = "0.54.9"
+dependencies = [
+ "futures-util",
+ "moq-net",
+ "tokio",
 ]
 
 [[package]]
@@ -6281,6 +6291,7 @@ dependencies = [
  "moq-tokio",
  "serde",
  "serde_json",
+ "streamlib-relay-track-reader",
  "tempfile",
  "tokio",
  "url",
@@ -6340,6 +6351,7 @@ dependencies = [
  "streamlib-relay-adapter-local",
  "streamlib-relay-adapter-moqpro",
  "streamlib-relay-adapter-sdk",
+ "streamlib-relay-track-reader",
  "streamlib-runtime-client-contract",
  "tempfile",
  "tokio",

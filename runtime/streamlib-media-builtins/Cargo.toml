@@ -32,6 +32,8 @@ moq-net = { version = "=0.3.15" }
 moq-tokio = { version = "=0.19.28" }
 moq-json = { version = "=0.5.13" }
 hang = { version = "=0.21.16" }
+# The one relay-track reader, which `tatolab-read-track` shares.
+streamlib-relay-track-reader = { path = "../streamlib-relay-track-reader" }
 tokio = { workspace = true }
 url = "2"
 

@@ -226,6 +226,11 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
+name = "streamlib-relay-track-reader"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
 name = "tatolab-read-track"
 expression = "BUSL-1.1"
 license-files = []

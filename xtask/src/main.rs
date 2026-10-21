@@ -384,6 +384,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-relay-adapter-moqpro",
                 "-p",
                 "tatolab-read-track",
+                "-p",
+                "streamlib-relay-track-reader",
                 "--features",
                 "streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests",
                 "--lib",

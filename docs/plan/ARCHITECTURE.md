@@ -3822,6 +3822,8 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_config_missing_the_broadcast_or_the_track_is_refused_naming_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_track_is_withdrawn_keeps_its_stream_running_and_reads_it_again -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_whose_relay_is_not_up_yet_reads_the_track_once_it_is -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::the_descriptor_publishes_the_config_and_the_one_output -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_config_without_max_age_reads_with_one_hundred_milliseconds -->
 - **DECIDED** — A relay track is read through one relay-track reader, which the relay source
   node and `tatolab-read-track` share. It receives a track's groups in arrival order and
   releases them in sequence order, holding at a missing sequence. A missing group is given up
@@ -3842,6 +3844,19 @@ entry reads as **message** (the glossary).
   never fix realtime streaming (owner, 2026-10-20).
   Rejected: one budget for every reader, the track's 5 s retention — one lost group becomes
   5 s of silence and then a burst (owner, 2026-10-20).
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_burst_of_complete_groups_is_released_whole_and_in_sequence -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_group_whose_stream_lands_after_its_successors_is_released_before_it -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_missing_group_is_held_while_newer_content_stays_within_max_age -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_missing_group_is_given_up_once_newer_content_runs_max_age_past_it -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_missing_group_is_never_given_up_while_nothing_newer_arrives -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_reset_group_is_given_up_at_once -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_given_up_group_arriving_late_is_discarded -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_group_served_after_its_first_object_is_skipped_to_the_next_groups_start -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_track_whose_timestamps_never_advance_gives_up_a_hole_only_on_its_reset_or_end -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_track_that_ends_gives_up_its_missing_groups -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_reader_joining_a_track_with_cached_history_starts_at_the_live_edge -->
+  <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order at_a_max_age_of_zero_a_missing_group_is_given_up_only_once_newer_content_runs_past_it -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_reading_paired_writes_keeps_every_group -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
   and the `moq-relay` program, each pinned to an exact version the change that builds the
   publisher names (0.3, 0.19, 0.21 and 0.17 lines as of 2026-10-16), and every payload a stock
