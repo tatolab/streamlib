@@ -16,8 +16,7 @@ sequence — no improvisation:
    residue and never becomes a ticket — the bullet cannot prove anything as written, so
    the change file is corrected in place (grammar: `docs/plan/changes/README.md`).
 2. Fold each `ADDED`/`MODIFIED` section into `docs/plan/ARCHITECTURE.md`; flip the
-   affected sections `IN-FLIGHT` → `SHIPPED`, each with a `<!-- verify: <glob or
-   command> -->` marker; delete the plan text the `REMOVED` sections retire. Per
+   affected sections `IN-FLIGHT` → `SHIPPED`; delete the plan text the `REMOVED` sections retire. Per
    `.claude/rules/docs-policy.md`, fold the `amended by` / `reopened by` clauses this
    change builds and drop their pointers and completed history, re-test each `Rejected:`
    line it touches, and never strike. Delete a head-of-plan reading rule, or the clause
