@@ -30,7 +30,7 @@ frame; the importer adopts it and consumes it as an image"| pkgs
   app --> wheel
   app -->|"the compiled graph, loaded by tatolabd\nwith the project and its venv interpreter"| engine
   wheel -->|"the lend, prepended to each processor\ninterpreter's PYTHONPATH"| helper
-  engine -->|"bags carry per-frame surface ids (slot#generation);
+  engine -->|"messages carry per-frame surface ids (slot#generation);
 claim at typed cast, lease until drop;
 a stale id errors, never another frame;
 the cast object is the tensor-protocol producer —
@@ -38,7 +38,7 @@ bare DLPack reads, scoped writes publishing at the block edge;
 the CPU door maps pixels in the child — the surface's own coherent
 mapping, or its host-visible staging over a texture backing;
 pixel bytes never ride the escalate socket;
-audio rides the bag itself — AudioBlock samples inline, no surface ids;
+audio rides the message itself — AudioBlock samples inline, no surface ids;
 a windowed input port is resampled, channel-converted and framed at this read
 seam, and reports ready only when a full window can be emitted — a gap flushes
 the accumulator and the resampler's filter rather than interpolating across it;
@@ -50,12 +50,12 @@ a drop is counted at the port that lost it; a ring overwrite is counted by a seq
 number in an iceoryx2 user header, a write refused at the channel ceiling is counted on the
 producer per output port, and a helper's counts reach graph through a per-spawn blackboard
 the parent reads on slots it assigned with a wiring generation;
-a windowed port's flush counts the samples no reader had received, behind a 64-bag ring;
+a windowed port's flush counts the samples no reader had received, behind a 64-message ring;
 shutdown always ends — every helper stops at once on one ladder, interrupt after 1 s,
 teardown within 5 s, then its process group terminated and killed; an interrupted setup()
 still tears down, and a thread past its budget is abandoned and named rather than joined;
 a link onto a helper reads pending until the helper answers wired, or error with its reason;
-a read can name the inbound link a bag arrived on and what that link lost since the
+a read can name the inbound link a message arrived on and what that link lost since the
 reader's last message from it, and a port can list the links wired into it — which is
 how a many-track sink learns what it owes, counting unchanged;
 every stamp reads the one machine-monotonic clock, and every link has both ends in one stream;

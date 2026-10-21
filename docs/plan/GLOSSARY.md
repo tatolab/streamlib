@@ -95,18 +95,17 @@ users read stays "runtime". _Avoid_: "host", "daemon", "server", "node", "engine
 surface (the engine is the library inside it).
 
 **Machine** _(user)_: what a runtime is addressed as — the first chunk of an address: its
-**tailnet** name, or its hostname where it has no tailnet; a containerised runtime is its own
-machine. _Avoid_: "host", "device", "runtime name" (retired).
+hostname, cast; a containerised runtime is its own machine. _Avoid_: "host", "device", "runtime name" (retired).
 
-**Address** _(crosses)_: the right-anchored path `<machine>/<stream>/<node>/<port>`, leading
-chunks omitted to mean "here"; the same string on every surface, so a link whose ends are on
-two machines is spelled by two addresses. _Avoid_: "channel name", "mesh address", "service
+**Address** _(crosses)_: the path `<machine>/<stream>/<node>/<port>`, the same string on
+every surface — the `/watch` path names it, and at a relay it is the track `<node>/<port>` of
+the broadcast `<machine>/<stream>.hang`. _Avoid_: "channel name", "mesh address", "service
 name", "remote link" (retired).
 
 **Exposure** _(crosses)_: who outside a stream may read one of its output ports — **internal**
 (the default: the stream's own nodes only), **private** (any stream or code on the machine) or
-**public** (private, plus readers off the machine — on the **tailnet**, and at a **relay** the
-machine has joined). A live permission
+**public** (private, plus every **relay** the machine has joined, the local relay's
+every-interface listener included). A live permission
 the runtime checks at the stream's edge, never part of the stream's logic. `expose` is the verb —
 in the stream's function, where the exposures start; at the CLI, the app or the local API, while
 it runs. _Avoid_: "visibility" (discovery's word), "export", "publish", "endpoint".
@@ -154,7 +153,7 @@ tree until the rename re-spells it._
 **Message** _(crosses)_: one thing a link carries — an **envelope** the engine owns (stamp,
 length, the group flag) and a **payload**, bytes the engine passes through unread; at a
 relay, one object. _Avoid_: "bag" (retired 2026-10-16 — it named the msgpack map that was the whole
-payload; older entries saying "bag" mean message), "frame" for anything but a video frame.
+payload), "frame" for anything but a video frame.
 
 **Payload**: a message's bytes, in whatever encoding the writer chose and its port's catalog
 entry names — msgpack through the stream package's helper, a codec's media frame, the
@@ -227,50 +226,35 @@ runtime runs complete without one, and how it plugs in is OPEN. _Avoid_: "connec
 and — on an input — delivery profile; never a type. _Avoid_: "channel" for the port
 itself.
 
-**Link**: one wired connection, output port → input port, carrying bags. _Avoid_:
+**Link**: one wired connection, output port → input port, in one stream, carrying messages. _Avoid_:
 "edge", "connection", "pipe".
 
 **Delivery profile**: the consuming input port's read policy — `newest` (drain to the
-most recent bag) or `ordered` (receive bags in publication order). Declared explicitly on
+most recent message) or `ordered` (receive messages in publication order). Declared explicitly on
 every input port; there is no default. Names a read policy only: both drop under
 pressure, and depth and overflow are engine-chosen. _Avoid_: "QoS", "channel mode",
 "queue"; and never a word implying guaranteed delivery — `lossless` and `every_sample`
 are retired for exactly that (see [[delivery-profile-vocabulary]]).
 
-**Dropped bag**: a bag a port discarded under pressure, counted by that port and reported
-in `graph`. Distinct from a **tap's** `dropped_bags`, which counts what the tap's own
-reserved subscriber slot missed — different subject, and the two are never summed.
+**Dropped message**: a message a port discarded under pressure, counted by that port and
+reported in `graph` (`dropped_bags_by_link`), and told to the reader's next read from that link
+as `lost_since_last_read`.
 
 **Monotonic clock**: the machine's boot-relative clock (`CLOCK_MONOTONIC` /
 `mach_absolute_time`) — the epoch of every data-plane timestamp and of the V4L2 and ALSA
 driver stamps. One per machine: two stamps from two machines are
-readings of two unrelated clocks and subtracting them means nothing, which is what
-**clock identity** exists to say. The default; anything a processor stamps or compares
+readings of two unrelated clocks and subtracting them means nothing. The default; anything a processor stamps or compares
 uses it. _Avoid_: "media clock" for the epoch (`MediaClock` is the Rust naming seam, not a
 second clock), "timestamp" unqualified where the epoch matters, "one clock" where the
 machine matters.
 
-**Clock identity**: which machine's monotonic clock a stamp was taken on — the kernel's
-boot-session UUID (`/proc/sys/kernel/random/boot_id`, `kern.bootsessionuuid`), the boot
-alone, so a container and its host share one. It renders on every link in `graph` as `stamp_clock_identity`, and is read by
-`inbound_link_stamp_clock_identity(port, link)` against
-`this_machines_stamp_clock_identity()`. Two stamps are comparable when their links name the
-same identity **and** neither stamp was restated by a node in between: what a link names is the clock
-of the machine that last wrote the bag, not necessarily of the machine that took the reading,
-so a processor restating an upstream stamp on a local output makes its link name this machine
-confidently and wrongly. That is the known restating gap (the plan's "relay gap", no kin of
-the **relay** a machine joins), and it is the common-clock OPEN's to
-close. _Avoid_: "host identity" (that is the boot id **plus** the pid-namespace inode, and it
-settles duplicate runtime names, never stamps), "boot id" unqualified, "clock id", "epoch".
-
-**Wall clock**: UNIX time — permitted only on the three observability surfaces (log
-`host_ts`, log `source_ts`, log file naming), because they correlate with the outside
-world. Never on the data plane, never compared against a
+**Wall clock**: UNIX time — permitted only on the five surfaces the plan lists (log
+`host_ts`, log `source_ts`, log file naming, the local relay certificate's validity, a relay
+token's expiry), because they correlate with the outside world. Never on the data plane, never compared against a
 monotonic timestamp. _Avoid_: "system time", "real time".
 
 **Engine primitive**: a hardware capability the engine owns and exposes through its
-handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), the present
-target, texture rings, codec sessions, the audio clock, color resolution. Built-ins and
+handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), texture rings, codec sessions, the audio clock, color resolution. Built-ins and
 external code compose primitives; they never reimplement them.
 
 **Handle**: a transferable value crossing the native↔Python boundary — a DMA-BUF fd, an
@@ -296,7 +280,7 @@ runtime opens none, and a stream is seen through the **preview page**.
 graphics, or ray-tracing. _Avoid_: "shader" for the whole object (that is its source
 text), "pipeline" (the Vulkan-internal object it builds).
 
-**AudioBlock**: the audio bag and its cast — a timestamped run of interleaved samples
+**AudioBlock**: the audio message and its cast — a timestamped run of interleaved samples
 riding the link inline (first-sample timestamp, rate, channels, dtype; the sample
 count is per channel), CPU-resident, never surface-backed. _Avoid_: "AudioFrame"
 (the dead schema-era type; in device APIs a frame is one sample across channels),
