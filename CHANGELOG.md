@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.10](https://github.com/tatolab/streamlib/compare/v0.54.9...v0.54.10) (2026-10-21)
+
+
+### Features
+
+* **relays:** a reader at a relay keeps every group that arrived within its max_age, through one relay-track reader ([#2898](https://github.com/tatolab/streamlib/issues/2898)) ([69305b8](https://github.com/tatolab/streamlib/commit/69305b841e3883b2558ed678ce9b57a3e0e014ea))
+
 ## [0.54.9](https://github.com/tatolab/streamlib/compare/v0.54.8...v0.54.9) (2026-10-20)
 
 
