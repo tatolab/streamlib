@@ -1,30 +1,29 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The stream the WebRTC live proof measures: WHIP out, WHEP back, in one runtime.
+"""The WebRTC live proof's two streams: WHIP out of one, WHEP back into the other.
 
-`CameraSource -> H264Encoder -> WhipPublisher` beside
-`MicrophoneSource -> OpusEncoder -> WhipPublisher`, and
-`WhepPlayer -> H264Decoder`, its `video` port exposed, beside `-> OpusDecoder ->
-SpeakerSink`. It is `examples/camera-webrtc-publish` with the playback half
-attached: the same publish shape, with node names the driving script can
-find nodes by and a local API socket it can read them through.
+The sender encodes the test pattern and the microphone and publishes both to a
+WHIP endpoint. The receiver plays the same live input back over WHEP and
+decodes it. Nothing joins the two on this machine: every frame the receiver's
+player writes was packetised into RTP, ingested by the endpoint, and
+depacketised back out of it, so what it writes is a statement about this wheel.
 
-Nothing joins the two halves locally. Every frame the decoder publishes was
-packetised into RTP, ingested by the endpoint, and depacketised back out of it,
-so what the decoder publishes is a statement about this wheel.
+The receiver exposes the player's `encoded_video` port, the frames that crossed
+the network, which `whip_whep_roundtrip.sh` reads at the local relay with
+`tatolab-read-track`, decodes with ffmpeg and scores; and the decoder's `video`
+port, so `graph` counts what the decoder writes.
 
 The two URLs arrive in the environment and never in argv: Cloudflare Stream
 carries the stream key as a path segment, and argv is world-readable through
 `/proc`. Neither is logged, printed, or written to the output directory.
 
-`whip_whep_roundtrip.sh` runs it with `tatolab run`, which hands a stream no
-argv, so the devices arrive in the environment too — the runtime's, which the
-compile inherits: `STREAMLIB_CAMERA_DEVICE`
-names the V4L2 node (else the first the engine finds), and
-`STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` the audio device to capture from — the
-driver passes the fixture sink's monitor, so the known signal played into that
-sink is what crosses the network (else the backend's own default device).
+`whip_whep_roundtrip.sh` loads each with `tatolab run`, which hands a stream no
+argv, so the audio device arrives in the runtime's environment, which the
+compile inherits: `STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` names the device to
+capture from — the driver passes the fixture sink's monitor, so the known
+signal played into that sink is what crosses the network (else the backend's
+own default device).
 """
 
 import os
@@ -33,6 +32,8 @@ import tatolab.stream
 from tatolab.webrtc import WhepPlayer, WhipPublisher
 from tatolab.stream import StreamBuilder, stream
 
+# Stated rather than left to the encoder's own default, so the baseline is
+# measured over a GOP structure this file names.
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 PUBLISH_URL_VARIABLE = "STREAMLIB_WHIP_URL"
@@ -62,9 +63,7 @@ def _session_configuration(url_variable: str, token_variable: str) -> dict[str, 
 
 
 @stream
-def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
-    """The round trip this process's environment describes."""
-    camera_device = os.environ.get("STREAMLIB_CAMERA_DEVICE")
+def test_pattern_and_microphone_published_over_whip(stream_builder: StreamBuilder) -> None:
     audio_capture_device = os.environ.get("STREAMLIB_AUDIO_CAPTURE_DEVICE_ID")
 
     publisher = stream_builder.add(
@@ -74,18 +73,8 @@ def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
         ),
         name="publisher",
     )
-    player = stream_builder.add(
-        WhepPlayer,
-        config=_session_configuration(
-            PLAYBACK_URL_VARIABLE, "STREAMLIB_WHEP_BEARER_TOKEN"
-        ),
-        name="player",
-    )
-
-    camera = stream_builder.add(
-        tatolab.stream.CameraSource,
-        config={"device_id": camera_device} if camera_device else {},
-        name="camera",
+    test_pattern = stream_builder.add(
+        tatolab.stream.TestPatternSource, name="test_pattern"
     )
     video_encoder = stream_builder.add(
         tatolab.stream.H264Encoder,
@@ -99,14 +88,26 @@ def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
     )
     audio_encoder = stream_builder.add(tatolab.stream.OpusEncoder, name="audio_encoder")
 
-    video_decoder = stream_builder.add(tatolab.stream.H264Decoder, name="video_decoder")
-    audio_decoder = stream_builder.add(tatolab.stream.OpusDecoder, name="audio_decoder")
-    speaker = stream_builder.add(tatolab.stream.SpeakerSink, name="speaker")
-
-    stream_builder.connect(camera.output("video"), video_encoder.input("video"))
+    stream_builder.connect(test_pattern.output("video"), video_encoder.input("video"))
     stream_builder.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
     stream_builder.connect(microphone.output("audio"), audio_encoder.input("audio"))
     stream_builder.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+
+
+@stream
+def the_same_input_played_back_over_whep_through_the_decoders(
+    stream_builder: StreamBuilder,
+) -> None:
+    player = stream_builder.add(
+        WhepPlayer,
+        config=_session_configuration(
+            PLAYBACK_URL_VARIABLE, "STREAMLIB_WHEP_BEARER_TOKEN"
+        ),
+        name="player",
+    )
+    video_decoder = stream_builder.add(tatolab.stream.H264Decoder, name="video_decoder")
+    audio_decoder = stream_builder.add(tatolab.stream.OpusDecoder, name="audio_decoder")
+    speaker = stream_builder.add(tatolab.stream.SpeakerSink, name="speaker")
 
     stream_builder.connect(
         player.output("encoded_video"), video_decoder.input("encoded_video")
@@ -116,5 +117,5 @@ def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
     )
     stream_builder.connect(audio_decoder.output("audio"), speaker.input("audio"))
 
-    # The exposure is the decoded video's reader for the whole run.
+    stream_builder.expose(player.output("encoded_video"))
     stream_builder.expose(video_decoder.output("video"))
