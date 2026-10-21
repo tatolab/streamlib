@@ -125,6 +125,20 @@ impl H273ColorVui {
     }
 }
 
+/// The colour every engine encoder writes and signals for frames described by
+/// `source_frame_color_vui`: the BT.709 matrix at limited range, whatever the
+/// source said, with the source's primaries and transfer, which the RGB →
+/// YCbCr conversion carries through unchanged.
+pub(crate) fn color_vui_every_engine_encoder_writes(
+    source_frame_color_vui: Option<H273ColorVui>,
+) -> H273ColorVui {
+    H273ColorVui {
+        matrix: Some(matrix::BT709),
+        full_range: Some(false),
+        ..source_frame_color_vui.unwrap_or_default()
+    }
+}
+
 /// The engine primaries id an H.273 `ColourPrimaries` byte names, `None` for
 /// Unspecified and for any value the engine has no id for.
 fn primaries_id_from_h273_byte(byte: u8) -> Option<PrimariesId> {
@@ -192,27 +206,6 @@ fn matrix_id_from_h273_byte(byte: u8) -> Option<MatrixId> {
         matrix::ICTCP => MatrixId::Ictcp,
         _ => return None,
     })
-}
-
-/// The H.273 `MatrixCoefficients` byte that names `matrix_id` — the inverse
-/// of the byte → id table, so a producer can signal the matrix it converted with.
-#[cfg(any(target_os = "macos", test))]
-pub(crate) fn h273_matrix_byte_of(matrix_id: MatrixId) -> u8 {
-    match matrix_id {
-        MatrixId::Identity => matrix::IDENTITY,
-        MatrixId::Bt709 => matrix::BT709,
-        MatrixId::Fcc => matrix::FCC,
-        MatrixId::Bt470Bg => matrix::BT470_BG,
-        MatrixId::Smpte170m => matrix::SMPTE170M,
-        MatrixId::Smpte240m => matrix::SMPTE240M,
-        MatrixId::Ycgco => matrix::YCGCO,
-        MatrixId::Bt2020Ncl => matrix::BT2020_NCL,
-        MatrixId::Bt2020Cl => matrix::BT2020_CL,
-        MatrixId::Smpte2085 => matrix::SMPTE2085,
-        MatrixId::ChromaNcl => matrix::CHROMA_NCL,
-        MatrixId::ChromaCl => matrix::CHROMA_CL,
-        MatrixId::Ictcp => matrix::ICTCP,
-    }
 }
 
 /// The engine range id a `video_full_range_flag` names.
@@ -380,12 +373,61 @@ mod tests {
     }
 
     #[test]
-    fn every_matrix_id_names_the_byte_that_names_it() {
-        for matrix_byte in 0..=u8::MAX {
-            if let Some(matrix_id) = matrix_id_from_h273_byte(matrix_byte) {
-                assert_eq!(h273_matrix_byte_of(matrix_id), matrix_byte, "{matrix_id:?}");
+    fn an_encoder_writes_bt709_limited_for_a_full_range_bt601_source_keeping_its_primaries_and_transfer()
+     {
+        let full_range_bt601_source = H273ColorVui {
+            primaries: Some(primaries::SMPTE170M),
+            transfer: Some(transfer::BT709),
+            matrix: Some(matrix::SMPTE170M),
+            full_range: Some(true),
+        };
+        assert_eq!(
+            color_vui_every_engine_encoder_writes(Some(full_range_bt601_source)),
+            H273ColorVui {
+                primaries: Some(primaries::SMPTE170M),
+                transfer: Some(transfer::BT709),
+                matrix: Some(matrix::BT709),
+                full_range: Some(false),
             }
-        }
+        );
+    }
+
+    #[test]
+    fn an_encoder_writes_bt709_limited_for_a_test_pattern_frame_that_names_no_matrix() {
+        let test_pattern_source = H273ColorVui {
+            primaries: Some(primaries::BT709),
+            transfer: Some(transfer::SRGB),
+            matrix: None,
+            full_range: Some(true),
+        };
+        let written = color_vui_every_engine_encoder_writes(Some(test_pattern_source));
+        assert_eq!(
+            written,
+            H273ColorVui {
+                primaries: Some(primaries::BT709),
+                transfer: Some(transfer::SRGB),
+                matrix: Some(matrix::BT709),
+                full_range: Some(false),
+            }
+        );
+        let resolved = written.resolve_defaults(ColorSpaceKind::Yuv);
+        assert_eq!(
+            (resolved.matrix, resolved.range),
+            (MatrixId::Bt709, RangeId::Limited)
+        );
+    }
+
+    #[test]
+    fn an_encoder_writes_bt709_limited_for_a_source_that_states_no_colour() {
+        assert_eq!(
+            color_vui_every_engine_encoder_writes(None),
+            H273ColorVui {
+                primaries: None,
+                transfer: None,
+                matrix: Some(matrix::BT709),
+                full_range: Some(false),
+            }
+        );
     }
 
     #[test]

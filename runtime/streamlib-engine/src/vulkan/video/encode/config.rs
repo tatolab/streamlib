@@ -10,6 +10,7 @@ use vulkanalia::vk;
 use vulkanalia::vk::Handle;
 
 use crate::core::color::H273ColorVui;
+use crate::core::color::h273_color_vui::color_vui_every_engine_encoder_writes;
 use crate::vulkan::video::video_context::{VideoError, VideoResult};
 use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
     H264_MB_SIZE_ALIGNMENT, align_size,
@@ -363,25 +364,10 @@ pub struct SimpleEncoderConfig {
     /// This effort index does not move PSNR at fixed CQP on the reference
     /// driver.
     pub effort_level: Option<u32>,
-    /// The source frames' H.273 colour. Its primaries and transfer reach the
-    /// SPS VUI; the matrix and range there are always what the encoder's
-    /// RGB → NV12 conversion writes. Callers translate their domain
-    /// `ColorInfo` → [`H273ColorVui`] at the processor seam.
+    /// The source frames' H.273 colour; the SPS VUI states
+    /// `color_vui_every_engine_encoder_writes` of it. Callers translate their
+    /// domain `ColorInfo` → [`H273ColorVui`] at the processor seam.
     pub color_vui: Option<H273ColorVui>,
-}
-
-/// The colour the SPS VUI states: primaries and transfer as the source frames
-/// signal them, which the RGB → NV12 conversion carries through unchanged, and
-/// the BT.709 matrix at TV range `rgb_to_nv12.comp` encodes every frame with,
-/// whatever the source said.
-pub(crate) fn sps_color_vui_stating_the_rgb_to_nv12_samples(
-    source_frame_color_vui: Option<H273ColorVui>,
-) -> H273ColorVui {
-    H273ColorVui {
-        matrix: Some(crate::core::color::h273_color_vui::matrix::BT709),
-        full_range: Some(false),
-        ..source_frame_color_vui.unwrap_or_default()
-    }
 }
 
 /// Default Vulkan encoder-effort index per codec.
@@ -518,9 +504,7 @@ impl SimpleEncoderConfig {
             idr_period,
             num_b_frames: num_b,
             max_dpb_slots: if num_b > 0 { 6 } else { 4 },
-            color_vui: Some(sps_color_vui_stating_the_rgb_to_nv12_samples(
-                self.color_vui,
-            )),
+            color_vui: Some(color_vui_every_engine_encoder_writes(self.color_vui)),
             ..Default::default()
         }
     }

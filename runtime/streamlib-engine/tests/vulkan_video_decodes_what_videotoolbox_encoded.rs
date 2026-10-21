@@ -6,7 +6,8 @@
 //! in `videotoolbox_arm_round_trips_the_psnr_references`) go through the
 //! Linux decoder one access unit at a time, and every one comes back as a
 //! picture at the clip's conformance extent, inside the PSNR bands. The wire
-//! is one wire on both floors, proven by bytes rather than by shape.
+//! is one wire on both floors, proven by bytes rather than by shape. The
+//! clips signal BT.709 limited range, the colour every engine encoder writes.
 //!
 //! Rig tier: it needs a device with Vulkan Video decode queues.
 
