@@ -26,7 +26,7 @@ use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 use streamlib::sdk::serde_json::Value;
 use streamlib_relay_track_reader::{
-    ReleasedRelayTrackGroup, RelayTrackGroupsReleasedInSequenceOrder,
+    RelayTrackGroupsReleasedInSequenceOrder, ReleasedRelayTrackGroup,
 };
 
 use crate::processor_thread_join::join_within_grace_or_detach;
@@ -298,21 +298,21 @@ impl RelayTrackReadingThread {
 async fn read_the_track_until_stopped(
     relay_track_location: RelayTrackLocation,
     moq_client: moq_tokio::Client,
-    mut track_reader: RelayTrackSourceSession,
+    mut relay_track_source_session: RelayTrackSourceSession,
     mut stop_requested: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut retried_after = A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER;
     let mut last_reason_the_session_ended: Option<WhyARelayTrackSessionEnded> = None;
     loop {
-        let objects_written_before_the_session = track_reader.objects_written;
+        let objects_written_before_the_session = relay_track_source_session.objects_written;
         let reason_the_session_ended = tokio::select! {
             _ = stop_requested.wait_for(|stop_requested| *stop_requested) => break,
-            reason_the_session_ended = track_reader
+            reason_the_session_ended = relay_track_source_session
                 .read_through_one_session(&moq_client, &relay_track_location) => {
                 reason_the_session_ended
             }
         };
-        if track_reader.objects_written > objects_written_before_the_session {
+        if relay_track_source_session.objects_written > objects_written_before_the_session {
             retried_after = A_FAILED_SESSION_IS_FIRST_RETRIED_AFTER;
         }
         if last_reason_the_session_ended.as_ref() != Some(&reason_the_session_ended) {
@@ -338,8 +338,9 @@ async fn read_the_track_until_stopped(
     .await;
 }
 
-/// Writes one track's objects onto the node's output, across every session
-/// that reads it.
+/// The node's reading of its track onto its output, carried across every
+/// session dialed to read it: the re-basing, the catalog entry set and the
+/// count written survive a redial.
 struct RelayTrackSourceSession {
     outputs: OutputWriter,
     max_age: Duration,

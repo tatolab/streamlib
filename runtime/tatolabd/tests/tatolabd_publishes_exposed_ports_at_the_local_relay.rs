@@ -468,9 +468,10 @@ impl BroadcastReadAtAListener {
         &self,
         track_name: &str,
     ) -> Result<RelayTrackGroupsReleasedInSequenceOrder, moq_net::Error> {
-        let track = self.broadcast.track(track_name)?;
-        let the_tracks_retention = track.query().await?.max_age;
-        RelayTrackGroupsReleasedInSequenceOrder::subscribe(&track, the_tracks_retention).await
+        RelayTrackGroupsReleasedInSequenceOrder::subscribe_waiting_the_tracks_retention(
+            &self.broadcast.track(track_name)?,
+        )
+        .await
     }
 
     /// The next `count` objects of `track_name` once it is served, each with

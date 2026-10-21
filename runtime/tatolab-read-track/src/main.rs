@@ -179,17 +179,12 @@ async fn read_the_tracks_objects(
     arguments: &ReadTrackArguments,
     objects_written: &std::cell::Cell<u64>,
 ) -> Result<u64> {
-    // A dump waits for a missing group as long as the publisher keeps one.
-    let track = broadcast.track(&arguments.track)?;
-    let the_tracks_retention = track
-        .query()
-        .await
-        .with_context(|| format!("the track `{}` was refused", arguments.track))?
-        .max_age;
     let mut groups_of_the_track =
-        RelayTrackGroupsReleasedInSequenceOrder::subscribe(&track, the_tracks_retention)
-            .await
-            .with_context(|| format!("the track `{}` was refused", arguments.track))?;
+        RelayTrackGroupsReleasedInSequenceOrder::subscribe_waiting_the_tracks_retention(
+            &broadcast.track(&arguments.track)?,
+        )
+        .await
+        .with_context(|| format!("the track `{}` was refused", arguments.track))?;
     let (payload_form, catalog_entry) = match the_tracks_catalog_entry(
         broadcast,
         &arguments.track,

@@ -12,8 +12,7 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::iceoryx2::MessageGroupBoundary;
 use streamlib::sdk::processors::{ContinuousProcessor, PROCESSOR_REGISTRY};
 
-/// The stamp of the message after one.
-const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
+use crate::numbered_message_writer_test_node::NANOSECONDS_BETWEEN_MESSAGE_STAMPS;
 
 /// How many one-message groups each write puts on the wire together.
 const GROUPS_WRITTEN_TOGETHER: u64 = 2;

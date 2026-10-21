@@ -35,35 +35,51 @@ pub struct RelayTrackGroupsReleasedInSequenceOrder {
     /// `None` until the first group arrives and places the join.
     next_sequence_to_release: Option<u64>,
     a_group_was_released: bool,
-    held_groups_by_sequence: BTreeMap<u64, RelayTrackGroupHeldBehindAMissingOne>,
+    groups_awaiting_release_by_sequence: BTreeMap<u64, RelayTrackGroupAwaitingRelease>,
     arrivals: RelayTrackArrivals,
 }
 
-/// A group received ahead of the sequence the reader releases next.
-struct RelayTrackGroupHeldBehindAMissingOne {
+/// A group received at or past the sequence the reader releases next.
+struct RelayTrackGroupAwaitingRelease {
     group_to_release: moq_net::group::Consumer,
     /// A clone of the group with a cursor of its own, read for its frames'
     /// timestamps while the group waits; `None` once it ended.
     group_read_for_its_timestamps: Option<moq_net::group::Consumer>,
     first_frame_timestamp_ns: Option<u128>,
     newest_frame_timestamp_ns: Option<u128>,
-    /// Reset, expired, or served from a later object than its first.
-    cannot_be_released_whole: bool,
+    /// False once it was reset or expired, or when it was served from a later
+    /// object than its first.
+    releasable_whole: bool,
 }
 
-impl RelayTrackGroupHeldBehindAMissingOne {
-    fn of(
-        group: moq_net::group::Consumer,
-        served_from_its_first_object: bool,
-        released_at_once: bool,
+impl RelayTrackGroupAwaitingRelease {
+    /// The next group in sequence, released before anything needs its timestamps.
+    fn released_at_once(group: moq_net::group::Consumer) -> Self {
+        Self::awaiting(group, None, true)
+    }
+
+    /// A group held behind a missing one, read for its timestamps meanwhile.
+    fn held_behind_a_missing_group(group: moq_net::group::Consumer) -> Self {
+        let group_read_for_its_timestamps = Some(group.clone());
+        Self::awaiting(group, group_read_for_its_timestamps, true)
+    }
+
+    /// A group served from a later object than its first, given up when reached.
+    fn served_part_way(group: moq_net::group::Consumer) -> Self {
+        Self::awaiting(group, None, false)
+    }
+
+    fn awaiting(
+        group_to_release: moq_net::group::Consumer,
+        group_read_for_its_timestamps: Option<moq_net::group::Consumer>,
+        releasable_whole: bool,
     ) -> Self {
         Self {
-            group_read_for_its_timestamps: (served_from_its_first_object && !released_at_once)
-                .then(|| group.clone()),
-            group_to_release: group,
+            group_to_release,
+            group_read_for_its_timestamps,
             first_frame_timestamp_ns: None,
             newest_frame_timestamp_ns: None,
-            cannot_be_released_whole: !served_from_its_first_object,
+            releasable_whole,
         }
     }
 
@@ -80,7 +96,7 @@ impl RelayTrackGroupHeldBehindAMissingOne {
             Ok(None) => self.group_read_for_its_timestamps = None,
             Err(_reset_or_expired) => {
                 self.group_read_for_its_timestamps = None;
-                self.cannot_be_released_whole = true;
+                self.releasable_whole = false;
             }
         }
     }
@@ -95,8 +111,12 @@ enum RelayTrackArrivals {
 }
 
 /// What one wait on the track produced.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "built and matched on the stack, never stored"
+)]
 enum RelayTrackEvent {
-    GroupArrived(Box<moq_net::group::Consumer>),
+    GroupArrived(moq_net::group::Consumer),
     TrackEnded,
     HeldGroupFrameRead {
         sequence: u64,
@@ -121,9 +141,18 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
             max_age,
             next_sequence_to_release: None,
             a_group_was_released: false,
-            held_groups_by_sequence: BTreeMap::new(),
+            groups_awaiting_release_by_sequence: BTreeMap::new(),
             arrivals: RelayTrackArrivals::StillArriving,
         })
+    }
+
+    /// Subscribe to `track` holding a missing group for as long as the track's
+    /// publisher declares it keeps one, as a reader dumping every group does.
+    pub async fn subscribe_waiting_the_tracks_retention(
+        track: &moq_net::track::Consumer,
+    ) -> moq_net::Result<Self> {
+        let the_tracks_retention = track.query().await?.max_age;
+        Self::subscribe(track, the_tracks_retention).await
     }
 
     /// The next group in sequence or the run of sequences given up before it;
@@ -139,7 +168,7 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
                 return Ok(None);
             }
             match self.the_next_event().await? {
-                RelayTrackEvent::GroupArrived(group) => self.take_the_arrival_of(*group),
+                RelayTrackEvent::GroupArrived(group) => self.take_the_arrival_of(group),
                 RelayTrackEvent::TrackEnded => {
                     let exclusive_final_sequence = self
                         .groups_in_arrival_order
@@ -154,7 +183,9 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
                     sequence,
                     frame_read,
                 } => {
-                    if let Some(held_group) = self.held_groups_by_sequence.get_mut(&sequence) {
+                    if let Some(held_group) =
+                        self.groups_awaiting_release_by_sequence.get_mut(&sequence)
+                    {
                         held_group.take_the_read_of_its_next_frame(frame_read);
                     }
                 }
@@ -167,10 +198,10 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
     async fn the_next_event(&mut self) -> moq_net::Result<RelayTrackEvent> {
         let Self {
             groups_in_arrival_order,
-            held_groups_by_sequence,
+            groups_awaiting_release_by_sequence,
             ..
         } = self;
-        let held_group_frame_reads: Vec<_> = held_groups_by_sequence
+        let held_group_frame_reads: Vec<_> = groups_awaiting_release_by_sequence
             .iter_mut()
             .filter_map(|(sequence, held_group)| {
                 let group = held_group.group_read_for_its_timestamps.as_mut()?;
@@ -190,7 +221,7 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
         tokio::select! {
             biased;
             arrival = groups_in_arrival_order.recv_group() => Ok(match arrival? {
-                Some(group) => RelayTrackEvent::GroupArrived(Box::new(group)),
+                Some(group) => RelayTrackEvent::GroupArrived(group),
                 None => RelayTrackEvent::TrackEnded,
             }),
             (sequence, frame_read) = the_next_held_group_frame_read => {
@@ -217,7 +248,9 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
             live_edge
         });
         if sequence < next_sequence_to_release
-            || self.held_groups_by_sequence.contains_key(&sequence)
+            || self
+                .groups_awaiting_release_by_sequence
+                .contains_key(&sequence)
         {
             return;
         }
@@ -229,32 +262,37 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
             self.next_sequence_to_release = Some(sequence + 1);
             return;
         }
-        self.held_groups_by_sequence.insert(
-            sequence,
-            RelayTrackGroupHeldBehindAMissingOne::of(
-                group,
-                served_from_its_first_object,
-                sequence == next_sequence_to_release,
-            ),
-        );
+        let group_awaiting_release = if !served_from_its_first_object {
+            RelayTrackGroupAwaitingRelease::served_part_way(group)
+        } else if sequence == next_sequence_to_release {
+            RelayTrackGroupAwaitingRelease::released_at_once(group)
+        } else {
+            RelayTrackGroupAwaitingRelease::held_behind_a_missing_group(group)
+        };
+        self.groups_awaiting_release_by_sequence
+            .insert(sequence, group_awaiting_release);
     }
 
     fn release_what_is_due(&mut self) -> Option<ReleasedRelayTrackGroup> {
         let next_sequence_to_release = self.next_sequence_to_release?;
-        if let Some(held_group) = self
-            .held_groups_by_sequence
+        if let Some(group_awaiting_release) = self
+            .groups_awaiting_release_by_sequence
             .remove(&next_sequence_to_release)
         {
             self.next_sequence_to_release = Some(next_sequence_to_release + 1);
-            if held_group.cannot_be_released_whole {
+            if !group_awaiting_release.releasable_whole {
                 return Some(ReleasedRelayTrackGroup::GivenUp { groups: 1 });
             }
             self.a_group_was_released = true;
             return Some(ReleasedRelayTrackGroup::InSequence(Box::new(
-                held_group.group_to_release,
+                group_awaiting_release.group_to_release,
             )));
         }
-        let lowest_held_sequence = self.held_groups_by_sequence.keys().next().copied();
+        let lowest_held_sequence = self
+            .groups_awaiting_release_by_sequence
+            .keys()
+            .next()
+            .copied();
         let the_missing_run_ends_before = match self.arrivals {
             RelayTrackArrivals::Ended {
                 exclusive_final_sequence,
@@ -277,25 +315,28 @@ impl RelayTrackGroupsReleasedInSequenceOrder {
     /// past the reach, so a group arriving first never convicts the one before
     /// it and a track whose timestamps never advance ages nothing.
     fn newer_content_has_run_max_age_past_the_missing_groups_reach(&self) -> bool {
-        let mut releasable_held_groups = self
-            .held_groups_by_sequence
-            .values()
-            .filter(|held_group| !held_group.cannot_be_released_whole);
-        let Some(reach_ns) = releasable_held_groups
+        let Some(reach_ns) = self
+            .groups_awaiting_release_releasable_whole()
             .next()
             .and_then(|held_group| held_group.first_frame_timestamp_ns)
         else {
             return false;
         };
         let Some(newest_ns) = self
-            .held_groups_by_sequence
-            .values()
+            .groups_awaiting_release_releasable_whole()
             .rev()
-            .filter(|held_group| !held_group.cannot_be_released_whole)
             .find_map(|held_group| held_group.newest_frame_timestamp_ns)
         else {
             return false;
         };
         newest_ns > reach_ns && newest_ns - reach_ns >= self.max_age.as_nanos()
+    }
+
+    fn groups_awaiting_release_releasable_whole(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &RelayTrackGroupAwaitingRelease> {
+        self.groups_awaiting_release_by_sequence
+            .values()
+            .filter(|group_awaiting_release| group_awaiting_release.releasable_whole)
     }
 }
