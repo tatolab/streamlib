@@ -670,7 +670,8 @@ impl std::error::Error for FramePayloadRefusal {}
 
 /// The iceoryx2 user header every channel data sample carries: the bag's place
 /// in its publisher's sends, so a subscriber can count the bags its ring
-/// overwrote from the numbers a jump skips.
+/// overwrote from the numbers a jump skips, and the messages its writer
+/// declared lost upstream ahead of it.
 ///
 /// Engine-internal and outside the payload, so [`FrameHeader`] and every tap
 /// client reading payload bytes are untouched. The iceoryx2 type name is
@@ -683,6 +684,9 @@ pub struct DataChannelBagSequenceNumberUserHeader {
     /// Counted from zero per publisher; consumed by every send that may have
     /// delivered.
     pub sequence_number: u64,
+    /// Messages the writer declared lost upstream of it since its previous send
+    /// that may have delivered — a loss no link of this channel caused.
+    pub messages_lost_upstream_before_this_one: u64,
 }
 
 /// The board section a [`HelperProcessLossCountBoardKey`] names an inbound-link slot in.
@@ -915,10 +919,10 @@ mod tests {
     }
 
     #[test]
-    fn the_sequence_number_user_header_is_one_u64_at_offset_zero_under_its_pinned_name() {
+    fn the_channel_user_header_is_two_u64s_under_its_pinned_name() {
         assert_eq!(
             std::mem::size_of::<DataChannelBagSequenceNumberUserHeader>(),
-            8
+            16
         );
         assert_eq!(
             std::mem::align_of::<DataChannelBagSequenceNumberUserHeader>(),
@@ -927,6 +931,13 @@ mod tests {
         assert_eq!(
             std::mem::offset_of!(DataChannelBagSequenceNumberUserHeader, sequence_number),
             0
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                DataChannelBagSequenceNumberUserHeader,
+                messages_lost_upstream_before_this_one
+            ),
+            8
         );
         assert_eq!(
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.

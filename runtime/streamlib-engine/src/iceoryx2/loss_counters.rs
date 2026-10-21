@@ -123,9 +123,13 @@ impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
 /// One inbound link's dropped bags: the total `graph` renders, split by where
 /// each was lost, and how many of them the reader has been told of.
 ///
-/// The split is what places a loss on the right message. A bag lost before it
-/// reached the mailbox is ahead of every bag queued after the loss was counted,
-/// so a queued bag carries that part as it stood when it was queued. A bag the
+/// What the reader is told also takes in the messages the link's writer
+/// declared lost upstream of it, which are never part of the total: the link
+/// lost none of them.
+///
+/// The split is what places a loss on the right message. A message lost before
+/// its bag reached the mailbox is ahead of every bag queued after the loss was
+/// counted, so a queued bag carries that part as it stood when it was queued. A bag the
 /// mailbox evicted was the oldest queued, so it is ahead of every bag of the
 /// link still queued, and a bag reads that part as it stands when it is taken.
 /// Each part lands on the right bag only while every push and pop of the link's
@@ -134,10 +138,10 @@ impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
 #[derive(Default)]
 struct InboundLinkDroppedBagCount {
     dropped_bags: CumulativeCount,
-    dropped_before_reaching_the_mailbox: AtomicU64,
+    lost_before_reaching_the_mailbox: AtomicU64,
     evicted_from_the_mailbox: AtomicU64,
-    dropped_ahead_of_the_latest_bag_taken_off_the_mailbox: AtomicU64,
-    dropped_and_handed_to_the_reader: AtomicU64,
+    lost_ahead_of_the_latest_bag_taken_off_the_mailbox: AtomicU64,
+    lost_and_told_to_the_reader: AtomicU64,
 }
 
 impl CountWithACumulativeTotal for InboundLinkDroppedBagCount {
@@ -155,7 +159,7 @@ impl CountWithACumulativeTotal for InboundLinkDroppedBagCount {
 ///
 /// The total is never zeroed. A reader is told of each loss once, on the first
 /// message it reads from the link after the lost bag, through
-/// [`Self::take_dropped_bags_the_reader_has_not_been_told_of`].
+/// [`Self::take_lost_messages_the_reader_has_not_been_told_of`].
 #[derive(Clone, Default)]
 pub struct InboundLinkDroppedBagCounter(Arc<InboundLinkDroppedBagCount>);
 
@@ -169,9 +173,21 @@ impl InboundLinkDroppedBagCounter {
     /// the mailbox.
     pub fn record_dropped_bags(&self, dropped_bag_count: u64) {
         self.0
-            .dropped_before_reaching_the_mailbox
+            .lost_before_reaching_the_mailbox
             .fetch_add(dropped_bag_count, Ordering::Relaxed);
         self.0.dropped_bags.add(dropped_bag_count);
+    }
+
+    /// Record `lost_message_count` messages the link's writer declared lost
+    /// upstream of it ahead of the bag now arriving: told to the reader with
+    /// that bag, never counted as this link's drop.
+    pub(super) fn record_messages_the_writer_declared_lost_upstream(
+        &self,
+        lost_message_count: u64,
+    ) {
+        self.0
+            .lost_before_reaching_the_mailbox
+            .fetch_add(lost_message_count, Ordering::Relaxed);
     }
 
     /// Record one bag of this link's that the mailbox evicted to make room.
@@ -187,41 +203,41 @@ impl InboundLinkDroppedBagCounter {
         self.0.dropped_bags.total()
     }
 
-    /// The bags lost before reaching the mailbox, as the count stands now — what
-    /// a bag queued now has ahead of it from that cause.
-    pub(super) fn dropped_before_reaching_the_mailbox(&self) -> u64 {
+    /// The messages lost before reaching the mailbox, as the count stands now —
+    /// what a bag queued now has ahead of it from that cause.
+    pub(super) fn lost_before_reaching_the_mailbox(&self) -> u64 {
         self.0
-            .dropped_before_reaching_the_mailbox
+            .lost_before_reaching_the_mailbox
             .load(Ordering::Relaxed)
     }
 
     /// Note a bag taken off the mailbox that had
-    /// `dropped_before_reaching_the_mailbox_when_queued` ahead of it when it was
+    /// `lost_before_reaching_the_mailbox_when_queued` ahead of it when it was
     /// queued; every eviction counted so far is ahead of it too.
     pub(super) fn note_a_bag_taken_off_the_mailbox(
         &self,
-        dropped_before_reaching_the_mailbox_when_queued: u64,
+        lost_before_reaching_the_mailbox_when_queued: u64,
     ) {
-        let dropped_ahead_of_it = dropped_before_reaching_the_mailbox_when_queued
+        let lost_ahead_of_it = lost_before_reaching_the_mailbox_when_queued
             + self.0.evicted_from_the_mailbox.load(Ordering::Relaxed);
         self.0
-            .dropped_ahead_of_the_latest_bag_taken_off_the_mailbox
-            .fetch_max(dropped_ahead_of_it, Ordering::Relaxed);
+            .lost_ahead_of_the_latest_bag_taken_off_the_mailbox
+            .fetch_max(lost_ahead_of_it, Ordering::Relaxed);
     }
 
-    /// The bags lost ahead of the latest bag taken off the mailbox that no
+    /// The messages lost ahead of the latest bag taken off the mailbox that no
     /// earlier call returned — the `lost_since_last_read` of the message that
     /// bag is handed to the reader as.
-    pub(super) fn take_dropped_bags_the_reader_has_not_been_told_of(&self) -> u64 {
-        let dropped_ahead = self
+    pub(super) fn take_lost_messages_the_reader_has_not_been_told_of(&self) -> u64 {
+        let lost_ahead = self
             .0
-            .dropped_ahead_of_the_latest_bag_taken_off_the_mailbox
+            .lost_ahead_of_the_latest_bag_taken_off_the_mailbox
             .load(Ordering::Relaxed);
         let already_told = self
             .0
-            .dropped_and_handed_to_the_reader
-            .fetch_max(dropped_ahead, Ordering::Relaxed);
-        dropped_ahead.saturating_sub(already_told)
+            .lost_and_told_to_the_reader
+            .fetch_max(lost_ahead, Ordering::Relaxed);
+        lost_ahead.saturating_sub(already_told)
     }
 
     /// Write this count's every new total through `mirror`, or hand it back
@@ -329,17 +345,19 @@ impl DiscardedSampleCountsByInboundLink {
     }
 }
 
-/// One output port's two cumulative counts: bags refused at its channel's
-/// payload ceiling, and bags sent on its channel.
+/// One output port's cumulative counts: bags refused at its channel's payload
+/// ceiling, bags sent on its channel, and groups its writer declared given up
+/// upstream of it.
 #[derive(Default)]
-struct OutputPortRefusedAndWrittenBagCounts {
+struct OutputPortRefusedWrittenAndGivenUpCounts {
     refused_bags: CumulativeCount,
     written_bags: CumulativeCount,
+    given_up_groups: CumulativeCount,
 }
 
 /// One output port's bag counters. Cloning shares the counts.
 #[derive(Clone, Default)]
-pub struct OutputPortBagCounters(Arc<OutputPortRefusedAndWrittenBagCounts>);
+pub struct OutputPortBagCounters(Arc<OutputPortRefusedWrittenAndGivenUpCounts>);
 
 impl OutputPortBagCounters {
     /// Record one bag this port refused, and return the port's refused total
@@ -351,6 +369,12 @@ impl OutputPortBagCounters {
     /// Record one bag this port sent.
     pub fn record_one_written_bag(&self) {
         self.0.written_bags.add(1);
+    }
+
+    /// Record `given_up_group_count` groups this port's writer gave up upstream
+    /// of it.
+    pub fn record_given_up_groups(&self, given_up_group_count: u64) {
+        self.0.given_up_groups.add(given_up_group_count);
     }
 
     /// Write every new total of both counts through its mirror, or refuse
@@ -383,7 +407,7 @@ pub(crate) struct OutputPortBagCountsAlreadyMirrored;
 /// with the port's last link, the same life a link's count has.
 #[derive(Default)]
 pub struct BagCountsByOutputPort {
-    per_output_port: CumulativeCountsByName<OutputPortRefusedAndWrittenBagCounts>,
+    per_output_port: CumulativeCountsByName<OutputPortRefusedWrittenAndGivenUpCounts>,
 }
 
 impl BagCountsByOutputPort {
@@ -409,6 +433,17 @@ impl BagCountsByOutputPort {
     pub fn written_bag_count_snapshot_by_output_port(&self) -> BTreeMap<String, u64> {
         self.per_output_port
             .snapshot_by_name_of(|count| count.written_bags.total())
+    }
+
+    /// Every output port whose writer has given up a group upstream of it, and
+    /// its given-up total as it stands right now, ordered by port name. A port
+    /// whose writer never gives one up is absent rather than zero.
+    pub fn given_up_group_count_snapshot_by_output_port(&self) -> BTreeMap<String, u64> {
+        let mut given_up_groups_by_output_port = self
+            .per_output_port
+            .snapshot_by_name_of(|count| count.given_up_groups.total());
+        given_up_groups_by_output_port.retain(|_, given_up_groups| *given_up_groups > 0);
+        given_up_groups_by_output_port
     }
 }
 

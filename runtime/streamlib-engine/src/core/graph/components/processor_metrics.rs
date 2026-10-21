@@ -56,9 +56,9 @@ pub struct LossCountsOfPortsInThisProcess {
     /// flushed, counted per inbound link and shared live with its input
     /// mailboxes.
     pub discarded_sample_counts_by_inbound_link: Arc<DiscardedSampleCountsByInboundLink>,
-    /// Bags this processor's output ports refused at the channel ceiling and
-    /// bags they sent, counted per output port and shared live with its output
-    /// writer.
+    /// Bags this processor's output ports refused at the channel ceiling, bags
+    /// they sent and groups their writer gave up upstream of them, counted per
+    /// output port and shared live with its output writer.
     pub bag_counts_by_output_port: Arc<BagCountsByOutputPort>,
 }
 
@@ -79,6 +79,9 @@ impl ProcessorLossCounts {
                 written_bags_by_output_port: counted_here
                     .bag_counts_by_output_port
                     .written_bag_count_snapshot_by_output_port(),
+                given_up_groups_by_output_port: counted_here
+                    .bag_counts_by_output_port
+                    .given_up_group_count_snapshot_by_output_port(),
             },
             Self::CountedInItsHelperProcess(helper_placed) => helper_placed.loss_count_snapshot(),
         }
@@ -125,6 +128,7 @@ impl JsonSerializableComponent for ProcessorMetrics {
             discarded_samples_by_inbound_link,
             refused_bags_by_output_port,
             written_bags_by_output_port,
+            given_up_groups_by_output_port,
         } = self.loss_counts.loss_count_snapshot();
         let mut rendered = serde_json::json!({
             "frames_dropped": dropped_bags_by_inbound_link.values().sum::<u64>(),
@@ -132,15 +136,22 @@ impl JsonSerializableComponent for ProcessorMetrics {
             "refused_bags_by_output_port": refused_bags_by_output_port,
             "written_bags_by_output_port": written_bags_by_output_port,
         });
-        // A per-link map with nothing in it renders no key at all rather than
-        // an empty object: a port that cannot discard samples is not the same
-        // as one that has not yet.
-        if !discarded_samples_by_inbound_link.is_empty()
-            && let Some(rendered_keys) = rendered.as_object_mut()
-        {
+        // A map with nothing in it renders no key at all rather than an empty
+        // object: a port that cannot discard samples or give up groups is not
+        // the same as one that has not yet.
+        let Some(rendered_keys) = rendered.as_object_mut() else {
+            return rendered;
+        };
+        if !discarded_samples_by_inbound_link.is_empty() {
             rendered_keys.insert(
                 "discarded_samples_by_link".to_string(),
                 serde_json::json!(discarded_samples_by_inbound_link),
+            );
+        }
+        if !given_up_groups_by_output_port.is_empty() {
+            rendered_keys.insert(
+                "given_up_groups_by_output_port".to_string(),
+                serde_json::json!(given_up_groups_by_output_port),
             );
         }
         rendered
@@ -236,6 +247,44 @@ mod tests {
                 "written_bags_by_output_port": { "audio": 0, "video": 60 }
             }),
             "a sent bag is counted per output port and is never a loss"
+        );
+    }
+
+    /// Only an output port whose writer gave up a group upstream renders a
+    /// given-up count, beside its refusals, and never in the inbound total.
+    #[test]
+    fn a_processors_metrics_render_given_up_groups_only_for_output_ports_that_gave_one_up() {
+        let bag_counts = Arc::new(BagCountsByOutputPort::default());
+        let track = bag_counts.counters_for_output_port("track");
+        let _ = bag_counts.counters_for_output_port("catalog");
+        track.record_given_up_groups(3);
+
+        let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
+            bag_counts_by_output_port: Arc::clone(&bag_counts),
+            ..Default::default()
+        })
+        .to_json();
+        assert_eq!(
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": {},
+                "refused_bags_by_output_port": { "catalog": 0, "track": 0 },
+                "written_bags_by_output_port": { "catalog": 0, "track": 0 },
+                "given_up_groups_by_output_port": { "track": 3 }
+            }),
+        );
+
+        let with_nothing_given_up = metrics_counted_here(LossCountsOfPortsInThisProcess {
+            bag_counts_by_output_port: Arc::new(BagCountsByOutputPort::default()),
+            ..Default::default()
+        })
+        .to_json();
+        assert!(
+            with_nothing_given_up
+                .get("given_up_groups_by_output_port")
+                .is_none(),
+            "a processor that never gave a group up has no count to render; got              {with_nothing_given_up}"
         );
     }
 

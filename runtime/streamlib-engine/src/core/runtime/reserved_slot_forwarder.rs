@@ -24,15 +24,17 @@ use iceoryx2::identifiers::UniquePublisherId;
 
 use crate::core::error::{Error, Result};
 use crate::iceoryx2::{
-    ChannelIdlePollBackoff, ChannelReservedSlotSubscribeError, ChannelSizing, Iceoryx2Node,
+    ChannelIdlePollBackoff, ChannelReservedSlotSubscribeError, ChannelSizing,
+    DataChannelBagSequenceNumberUserHeader, Iceoryx2Node,
 };
 
 /// One bag as the reserved slot received it.
 pub(crate) struct BagReceivedOnTheReservedSlot<'sample> {
     /// The publisher that sent it, whose numbering is one unbroken run.
     pub(crate) publisher: UniquePublisherId,
-    /// The number its publisher gave it.
-    pub(crate) sequence_number: u64,
+    /// The number its publisher gave it, and the messages its writer declared
+    /// lost upstream ahead of it.
+    pub(crate) channel_user_header: DataChannelBagSequenceNumberUserHeader,
     /// The bag as published: frame header, then payload.
     pub(crate) framed_bag: &'sample [u8],
 }
@@ -218,7 +220,7 @@ impl<Forwarding: ReservedSlotBagForwarding> ReaderOfAReservedSlot<Forwarding> {
                     idle_poll_backoff.reset_after_a_bag_arrived();
                     let Some(item) = forwarding.forwarded_from(BagReceivedOnTheReservedSlot {
                         publisher: sample.origin(),
-                        sequence_number: sample.user_header().sequence_number,
+                        channel_user_header: *sample.user_header(),
                         framed_bag: sample.payload(),
                     }) else {
                         continue;

@@ -34,8 +34,8 @@ use serde::Serialize;
 use super::helper_process_loss_count_board::OutputPortBagCountBoardMirror;
 use super::loss_counters::{BagCountsByOutputPort, OutputPortBagCounters};
 use super::{
-    ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader,
-    MessageGroupBoundary,
+    ChannelDataServicePublisher, ChannelTrustTier, DataChannelBagSequenceNumberUserHeader,
+    FRAME_HEADER_SIZE, FrameHeader, MessageGroupBoundary,
 };
 use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
@@ -113,6 +113,9 @@ struct ChannelEgress {
     /// The sequence number the next send that may deliver carries in its user
     /// header, counted from zero for this publisher's life.
     next_sequence_number: u64,
+    /// The messages declared lost upstream that the next send that may deliver
+    /// carries in its user header.
+    messages_lost_upstream_before_the_next_send: u64,
     /// Every outbound `connect()` link from this source port. Its length is
     /// what decides when the last link went away and the publisher can be
     /// released.
@@ -279,6 +282,7 @@ impl OutputWriterInner {
             ChannelEgress {
                 publisher,
                 next_sequence_number: 0,
+                messages_lost_upstream_before_the_next_send: 0,
                 links: Vec::new(),
                 channel_service_name: service_name,
                 trust_tier,
@@ -470,7 +474,11 @@ impl OutputWriterInner {
             .publisher
             .loan_slice_uninit(total_len)
             .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
-        sample.user_header_mut().sequence_number = egress.next_sequence_number;
+        *sample.user_header_mut() = DataChannelBagSequenceNumberUserHeader {
+            sequence_number: egress.next_sequence_number,
+            messages_lost_upstream_before_this_one: egress
+                .messages_lost_upstream_before_the_next_send,
+        };
         let (loaned_header_bytes, loaned_payload_bytes) =
             sample.payload_mut().split_at_mut(FRAME_HEADER_SIZE);
         loaned_header_bytes.copy_from_slice(as_maybe_uninit_bytes(&header_bytes));
@@ -480,8 +488,13 @@ impl OutputWriterInner {
         // loan was taken for — or panicked on a length mismatch.
         let sample = unsafe { sample.assume_init() };
         let send_outcome = sample.send();
+        let sent_sequence_number = egress.next_sequence_number;
         egress.next_sequence_number =
-            sequence_number_following_a_send(egress.next_sequence_number, &send_outcome);
+            sequence_number_following_a_send(sent_sequence_number, &send_outcome);
+        let the_send_consumed_its_number = egress.next_sequence_number != sent_sequence_number;
+        if the_send_consumed_its_number {
+            egress.messages_lost_upstream_before_the_next_send = 0;
+        }
         send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
         egress.bag_counters.record_one_written_bag();
 
@@ -495,6 +508,35 @@ impl OutputWriterInner {
             }
         }
 
+        Ok(())
+    }
+
+    /// Declare `given_up_group_count` groups given up upstream of `port` since
+    /// its last write: counted on this port at once, and carried to every
+    /// `ordered` reader as one lost message each, ahead of the next message
+    /// this port sends.
+    ///
+    /// For engine-internal writers only. A declaration after the port's last
+    /// write reaches no reader; this port's count still has it. A declared
+    /// port no link has reached counts nothing, as a write to it sends nothing.
+    pub fn declare_groups_given_up_upstream_before_the_next_write(
+        &self,
+        port: &str,
+        given_up_group_count: u64,
+    ) -> Result<()> {
+        let mut channels = self.channels.lock();
+        let Some(egress) = channels.get_mut(port) else {
+            if self.declared_output_ports.lock().contains(port) {
+                return Ok(());
+            }
+            return Err(Error::Link(format!("Unknown output port: {}", port)));
+        };
+        egress
+            .bag_counters
+            .record_given_up_groups(given_up_group_count);
+        egress.messages_lost_upstream_before_the_next_send = egress
+            .messages_lost_upstream_before_the_next_send
+            .saturating_add(given_up_group_count);
         Ok(())
     }
 
@@ -647,6 +689,26 @@ impl OutputWriter {
             payload_bytes,
             timestamp_ns,
             group_boundary,
+        )
+    }
+
+    /// Declare `given_up_group_count` groups given up upstream of `port`, told
+    /// to its `ordered` readers with the next message it sends. For
+    /// engine-internal writers only.
+    pub fn declare_groups_given_up_upstream_before_the_next_write(
+        &self,
+        port: &str,
+        given_up_group_count: u64,
+    ) -> Result<()> {
+        let Some(inner) = self.host_inner() else {
+            return Err(Error::Link(format!(
+                "OutputWriter not wired (port='{port}'): host has not yet installed iceoryx2 \
+                 resources on this processor instance"
+            )));
+        };
+        inner.declare_groups_given_up_upstream_before_the_next_write(
+            &cast_exposed_name_to_url_safe(port)?,
+            given_up_group_count,
         )
     }
 
@@ -1392,6 +1454,83 @@ mod tests {
             written_bag_count_of(&inner, "out"),
             2,
             "a refused write is never counted as written"
+        );
+    }
+
+    /// Groups declared given up are counted on the port at once and ride the
+    /// next send that reaches a subscriber, past a write the ceiling refused,
+    /// and are carried once.
+    #[test]
+    fn a_declared_upstream_loss_rides_the_next_send_past_a_refused_write_and_is_carried_once() {
+        let pubsub = open_channel_data_service("declared/pubsub", 2);
+        let subscriber = pubsub.create_subscriber(4).unwrap();
+        let ceiling = 1024usize;
+        let inner = output_writer_with_one_channel(&pubsub, ceiling);
+
+        inner
+            .declare_groups_given_up_upstream_before_the_next_write("out", 2)
+            .unwrap();
+        assert_eq!(
+            inner
+                .bag_counts_by_output_port()
+                .given_up_group_count_snapshot_by_output_port(),
+            std::collections::BTreeMap::from([("out".to_string(), 2)]),
+            "counted on the producer before any write carries it"
+        );
+        inner
+            .write_bytes_with_timestamp(
+                "out",
+                &vec![0u8; ceiling],
+                1,
+                MessageGroupBoundary::StartsGroup,
+            )
+            .expect_err("a frame past the ceiling is refused");
+        inner
+            .write_bytes_with_timestamp("out", b"first", 2, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+        inner
+            .write_bytes_with_timestamp("out", b"second", 3, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+
+        let mut channel_user_headers = Vec::new();
+        while let Some(sample) = subscriber.receive().unwrap() {
+            channel_user_headers.push(*sample.user_header());
+        }
+        assert_eq!(
+            channel_user_headers,
+            vec![
+                DataChannelBagSequenceNumberUserHeader {
+                    sequence_number: 0,
+                    messages_lost_upstream_before_this_one: 2,
+                },
+                DataChannelBagSequenceNumberUserHeader {
+                    sequence_number: 1,
+                    messages_lost_upstream_before_this_one: 0,
+                },
+            ]
+        );
+    }
+
+    /// A declaration on a port no link has reached counts nothing and sends
+    /// nothing, as a write to it does; an undeclared port is refused.
+    #[test]
+    fn a_declared_upstream_loss_on_an_unlinked_declared_port_is_accepted_and_counts_nothing() {
+        let inner = OutputWriterInner::new();
+        inner.declare_output_ports(["out".to_string()]);
+
+        inner
+            .declare_groups_given_up_upstream_before_the_next_write("out", 1)
+            .unwrap();
+        assert!(
+            inner
+                .bag_counts_by_output_port()
+                .given_up_group_count_snapshot_by_output_port()
+                .is_empty()
+        );
+        assert!(
+            inner
+                .declare_groups_given_up_upstream_before_the_next_write("not_declared", 1)
+                .is_err()
         );
     }
 

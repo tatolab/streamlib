@@ -31,7 +31,10 @@ use crate::core::graph::{
 };
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::pubsub::{Event, EventListener, PUBSUB, topics};
-use crate::iceoryx2::{BagsAGapInTheNumberingSaysWereLost, FrameHeader, MessageReadFromInputPort};
+use crate::iceoryx2::{
+    BagsAGapInTheNumberingSaysWereLost, DataChannelBagSequenceNumberUserHeader, FrameHeader,
+    MessageReadFromInputPort,
+};
 
 /// One output port a loaded stream exposes, as it stands now.
 #[derive(Debug, Clone, PartialEq)]
@@ -374,9 +377,10 @@ fn the_source_wiring_its_answer_says(
 }
 
 /// An exposed port's forwarding: each bag's payload, stamp and group flag,
-/// with every bag lost ahead of it — overwritten in the ring, unreadable, or
-/// dropped into a full receiver — told on the next message forwarded. A run is
-/// one publisher's unbroken numbering.
+/// with every message lost ahead of it — overwritten in the ring, unreadable,
+/// dropped into a full receiver, or declared lost upstream by its writer —
+/// told on the next message forwarded. A run is one publisher's unbroken
+/// numbering.
 struct ExposedOutputPortMessageForwarding<OneUnbrokenRun> {
     bags_the_ring_overwrote: BagsAGapInTheNumberingSaysWereLost<OneUnbrokenRun>,
     lost_ahead_of_the_next_message_forwarded: u64,
@@ -392,15 +396,16 @@ impl<OneUnbrokenRun> Default for ExposedOutputPortMessageForwarding<OneUnbrokenR
 }
 
 impl<OneUnbrokenRun: Copy + PartialEq> ExposedOutputPortMessageForwarding<OneUnbrokenRun> {
-    fn message_from_a_bag_numbered(
+    fn message_from_a_bag_headed(
         &mut self,
         run: OneUnbrokenRun,
-        sequence_number: u64,
+        channel_user_header: DataChannelBagSequenceNumberUserHeader,
         framed_bag: &[u8],
     ) -> Option<MessageReadFromInputPort> {
         self.lost_ahead_of_the_next_message_forwarded += self
             .bags_the_ring_overwrote
-            .how_many_were_lost_before(run, sequence_number);
+            .how_many_were_lost_before(run, channel_user_header.sequence_number)
+            + channel_user_header.messages_lost_upstream_before_this_one;
         let Some(payload) = FrameHeader::read_payload_from_slice(framed_bag) else {
             self.lost_ahead_of_the_next_message_forwarded += 1;
             return None;
@@ -428,7 +433,7 @@ impl ReservedSlotBagForwarding for ExposedOutputPortMessageForwarding<UniquePubl
         &mut self,
         bag: BagReceivedOnTheReservedSlot<'_>,
     ) -> Option<MessageReadFromInputPort> {
-        self.message_from_a_bag_numbered(bag.publisher, bag.sequence_number, bag.framed_bag)
+        self.message_from_a_bag_headed(bag.publisher, bag.channel_user_header, bag.framed_bag)
     }
 
     fn dropped_into_a_full_receiver(&mut self, dropped: MessageReadFromInputPort, _channel: &str) {
@@ -798,27 +803,37 @@ mod tests {
         );
     }
 
+    /// A channel user header carrying `sequence_number` and no declared loss.
+    fn numbered(sequence_number: u64) -> DataChannelBagSequenceNumberUserHeader {
+        DataChannelBagSequenceNumberUserHeader {
+            sequence_number,
+            messages_lost_upstream_before_this_one: 0,
+        }
+    }
+
+    /// `payload` framed as `out1` sends it, stamped 7 and starting a group.
+    fn framed(payload: &[u8]) -> Vec<u8> {
+        let mut bag = vec![0u8; FRAME_HEADER_SIZE + payload.len()];
+        FrameHeader::new(
+            "out1",
+            7,
+            payload.len() as u32,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .unwrap()
+        .write_to_slice(&mut bag);
+        bag[FRAME_HEADER_SIZE..].copy_from_slice(payload);
+        bag
+    }
+
     /// A gap in the numbering, an unreadable bag and a message dropped into a
     /// full receiver are each told on the next message forwarded.
     #[test]
     fn the_forwarding_tells_a_gap_an_unreadable_bag_and_a_drop_on_the_next_message() {
         let mut forwarding = ExposedOutputPortMessageForwarding::<u64>::default();
-        let framed = |payload: &[u8]| {
-            let mut bag = vec![0u8; FRAME_HEADER_SIZE + payload.len()];
-            FrameHeader::new(
-                "out1",
-                7,
-                payload.len() as u32,
-                MessageGroupBoundary::StartsGroup,
-            )
-            .unwrap()
-            .write_to_slice(&mut bag);
-            bag[FRAME_HEADER_SIZE..].copy_from_slice(payload);
-            bag
-        };
         let run = 1u64;
         let first = forwarding
-            .message_from_a_bag_numbered(run, 0, &framed(b"a"))
+            .message_from_a_bag_headed(run, numbered(0), &framed(b"a"))
             .unwrap();
         assert_eq!(
             first,
@@ -826,11 +841,11 @@ mod tests {
         );
         assert!(
             forwarding
-                .message_from_a_bag_numbered(run, 3, &[0u8; 4])
+                .message_from_a_bag_headed(run, numbered(3), &[0u8; 4])
                 .is_none()
         );
         let dropped = forwarding
-            .message_from_a_bag_numbered(run, 4, &framed(b"b"))
+            .message_from_a_bag_headed(run, numbered(4), &framed(b"b"))
             .unwrap();
         assert_eq!(
             dropped.lost_since_last_read, 3,
@@ -839,11 +854,38 @@ mod tests {
         forwarding.count_a_message_dropped_into_a_full_receiver(dropped);
         assert_eq!(
             forwarding
-                .message_from_a_bag_numbered(run, 5, &framed(b"c"))
+                .message_from_a_bag_headed(run, numbered(5), &framed(b"c"))
                 .unwrap()
                 .lost_since_last_read,
             4,
             "the dropped message and the losses it carried"
+        );
+    }
+
+    /// A loss the writer declared upstream is told on the message carrying it,
+    /// even when that message is the run's first.
+    #[test]
+    fn the_forwarding_tells_a_declared_upstream_loss_on_the_message_carrying_it() {
+        let mut forwarding = ExposedOutputPortMessageForwarding::<u64>::default();
+        let run = 1u64;
+        let first_carrying_two_lost_upstream = DataChannelBagSequenceNumberUserHeader {
+            sequence_number: 0,
+            messages_lost_upstream_before_this_one: 2,
+        };
+        assert_eq!(
+            forwarding
+                .message_from_a_bag_headed(run, first_carrying_two_lost_upstream, &framed(b"a"))
+                .unwrap()
+                .lost_since_last_read,
+            2
+        );
+        assert_eq!(
+            forwarding
+                .message_from_a_bag_headed(run, numbered(1), &framed(b"b"))
+                .unwrap()
+                .lost_since_last_read,
+            0,
+            "a declared loss is told once"
         );
     }
 
