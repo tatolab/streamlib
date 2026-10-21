@@ -548,6 +548,9 @@ pub struct ProcessorLossCountSnapshot {
     /// Bags sent per output port with a channel — what the losses downstream
     /// are counted against.
     pub written_bags_by_output_port: BTreeMap<String, u64>,
+    /// Groups given up upstream per output port whose writer gave one up, and
+    /// no other.
+    pub given_up_groups_by_output_port: BTreeMap<String, u64>,
 }
 
 impl HelperPlacedProcessorLossCounts {

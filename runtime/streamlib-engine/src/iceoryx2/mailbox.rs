@@ -41,9 +41,9 @@ pub type PortMailboxEvictionNotice = Arc<dyn Fn() + Send + Sync>;
 struct PortMailboxQueuedFrame {
     payload: Vec<u8>,
     dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
-    /// The link's bags lost before reaching the mailbox, as the count stood
+    /// The link's messages lost before reaching the mailbox, as the count stood
     /// when this frame was queued.
-    dropped_before_reaching_the_mailbox_when_queued: u64,
+    lost_before_reaching_the_mailbox_when_queued: u64,
     /// The link this frame arrived on, so a read can name it. `None` on the
     /// manual-injection path, which has no link behind it.
     inbound_link_name: Option<InboundLinkName>,
@@ -65,7 +65,7 @@ impl PortMailboxQueuedFrame {
     fn taken_by_a_reader(self) -> PortMailboxDeliveredBag {
         if let Some(counter) = &self.dropped_bag_counter {
             counter.note_a_bag_taken_off_the_mailbox(
-                self.dropped_before_reaching_the_mailbox_when_queued,
+                self.lost_before_reaching_the_mailbox_when_queued,
             );
         }
         PortMailboxDeliveredBag {
@@ -175,8 +175,8 @@ impl PortMailbox {
         let measure = self.measure_of(&payload);
         self.push_frame(PortMailboxQueuedFrame {
             payload,
-            dropped_before_reaching_the_mailbox_when_queued: dropped_bag_counter
-                .dropped_before_reaching_the_mailbox(),
+            lost_before_reaching_the_mailbox_when_queued: dropped_bag_counter
+                .lost_before_reaching_the_mailbox(),
             dropped_bag_counter: Some(dropped_bag_counter.clone()),
             inbound_link_name: Some(inbound_link_name.clone()),
             measure,
@@ -190,7 +190,7 @@ impl PortMailbox {
         self.push_frame(PortMailboxQueuedFrame {
             payload,
             dropped_bag_counter: None,
-            dropped_before_reaching_the_mailbox_when_queued: 0,
+            lost_before_reaching_the_mailbox_when_queued: 0,
             inbound_link_name: None,
             measure,
         });

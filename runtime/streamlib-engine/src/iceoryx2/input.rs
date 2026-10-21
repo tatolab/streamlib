@@ -961,7 +961,9 @@ impl InputMailboxesInner {
     /// bags a jump in the sequence number says the ring overwrote, on an
     /// `ordered` port — a `newest` port passing over bags is the profile working
     /// — and a frame too short to carry a header or bound to a port with no
-    /// mailbox, which consumed a number and reaches no reader.
+    /// mailbox, which consumed a number and reaches no reader. The messages a
+    /// writer declared lost upstream of it are told to an `ordered` port's
+    /// reader and counted on no link.
     ///
     /// This is called automatically by `read()` and `has_data()`, but can be
     /// called explicitly if needed.
@@ -977,21 +979,30 @@ impl InputMailboxesInner {
                         break;
                     }
                 };
+                let channel_user_header = *sample.user_header();
                 let bags_the_ring_overwrote =
                     bound.bags_the_ring_overwrote.how_many_were_lost_before(
                         sample.origin(),
-                        sample.user_header().sequence_number,
+                        channel_user_header.sequence_number,
                     );
                 let slice: &[u8] = sample.payload();
                 let ports = self.ports.lock();
                 let port_config = ports.get(&bound.local_port);
-                if bags_the_ring_overwrote > 0
-                    && port_config
-                        .is_some_and(|port| port.mailbox.read_mode().a_bag_passed_over_is_lost())
+                if port_config
+                    .is_some_and(|port| port.mailbox.read_mode().a_bag_passed_over_is_lost())
                 {
-                    bound
-                        .dropped_bag_counter
-                        .record_dropped_bags(bags_the_ring_overwrote);
+                    if bags_the_ring_overwrote > 0 {
+                        bound
+                            .dropped_bag_counter
+                            .record_dropped_bags(bags_the_ring_overwrote);
+                    }
+                    if channel_user_header.messages_lost_upstream_before_this_one > 0 {
+                        bound
+                            .dropped_bag_counter
+                            .record_messages_the_writer_declared_lost_upstream(
+                                channel_user_header.messages_lost_upstream_before_this_one,
+                            );
+                    }
                 }
                 if slice.len() < FRAME_HEADER_SIZE {
                     bound.dropped_bag_counter.record_one_dropped_bag();
@@ -1089,7 +1100,7 @@ impl InputMailboxesInner {
                 WhereABagTakenOffTheMailboxGoes::ToTheReader => {
                     delivered.dropped_bag_counter.as_ref().map_or(
                         0,
-                        InboundLinkDroppedBagCounter::take_dropped_bags_the_reader_has_not_been_told_of,
+                        InboundLinkDroppedBagCounter::take_lost_messages_the_reader_has_not_been_told_of,
                     )
                 }
                 WhereABagTakenOffTheMailboxGoes::IntoTheStageWhileItIsInstalled(_) => 0,
@@ -1150,7 +1161,7 @@ impl InputMailboxesInner {
                         (
                             feeding
                                 .dropped_bag_counter
-                                .take_dropped_bags_the_reader_has_not_been_told_of(),
+                                .take_lost_messages_the_reader_has_not_been_told_of(),
                             Some(feeding.inbound_link_name.clone()),
                         )
                     });
@@ -1601,7 +1612,7 @@ mod tests {
     use super::*;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::test_support::CapturedTracingWarnings;
-    use crate::iceoryx2::PortKey;
+    use crate::iceoryx2::{DataChannelBagUserHeader, PortKey};
 
     fn unique_suffix(tag: &str) -> String {
         format!(
@@ -1652,9 +1663,12 @@ mod tests {
         /// Send `bytes` as one sample carrying the next sequence number.
         fn send_numbered(&self, bytes: &[u8]) {
             let mut sample = self.publisher.loan_slice_uninit(bytes.len()).unwrap();
-            sample.user_header_mut().sequence_number = self
-                .next_sequence_number
-                .replace(self.next_sequence_number.get() + 1);
+            *sample.user_header_mut() = DataChannelBagUserHeader {
+                sequence_number: self
+                    .next_sequence_number
+                    .replace(self.next_sequence_number.get() + 1),
+                messages_lost_upstream_before_this_one: 0,
+            };
             sample.write_from_slice(bytes).send().unwrap();
         }
     }
@@ -2221,6 +2235,104 @@ mod tests {
             ))
         );
         assert_eq!(mailboxes.read_raw("in").unwrap(), None);
+    }
+
+    /// A port fed by a native output writer over one link `L-declared`, read
+    /// as `read_mode`, and the writer publishing its `out` port.
+    fn a_port_read_as_fed_by_a_native_writer(
+        tag: &str,
+        read_mode: ReadMode,
+    ) -> (InputMailboxesInner, crate::iceoryx2::OutputWriterInner) {
+        let channel = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&unique_suffix(tag), 2, 16)
+            .unwrap();
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 16, read_mode);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-declared",
+            &InboundLinkName::from("psource/out"),
+            channel.create_subscriber(16).unwrap(),
+        );
+        (mailboxes, output_writer_publishing_onto(&channel, "out"))
+    }
+
+    fn write_starting_a_group(output_writer: &crate::iceoryx2::OutputWriterInner, payload: &str) {
+        output_writer
+            .write_bytes_with_timestamp(
+                "out",
+                payload.as_bytes(),
+                0,
+                MessageGroupBoundary::StartsGroup,
+            )
+            .unwrap();
+    }
+
+    /// Groups a writer declared given up upstream reach an `ordered` reader on
+    /// the next message as `lost_since_last_read`, and never as the link's
+    /// drop: the link lost nothing.
+    #[test]
+    fn a_declared_upstream_loss_reaches_lost_since_last_read_on_an_ordered_port() {
+        let (mailboxes, output_writer) =
+            a_port_read_as_fed_by_a_native_writer("declared/ordered", ReadMode::ReadNextInOrder);
+
+        write_starting_a_group(&output_writer, "before");
+        output_writer
+            .declare_groups_given_up_upstream_before_the_next_write("out", 2)
+            .unwrap();
+        write_starting_a_group(&output_writer, "after");
+        write_starting_a_group(&output_writer, "later");
+
+        assert_eq!(
+            payloads_and_losses_read_off(&mailboxes, "in"),
+            [("before", 0), ("after", 2), ("later", 0)]
+                .map(|(payload, lost)| (payload.to_string(), lost)),
+        );
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-declared".to_string(), 0)]),
+            "a loss upstream of the writer is never the link's drop"
+        );
+    }
+
+    /// A link's first sample is its numbering's baseline, yet a loss declared
+    /// on it is told: the count rides its own header field.
+    #[test]
+    fn a_declared_upstream_loss_on_a_links_first_sample_is_still_counted() {
+        let (mailboxes, output_writer) =
+            a_port_read_as_fed_by_a_native_writer("declared/first", ReadMode::ReadNextInOrder);
+
+        output_writer
+            .declare_groups_given_up_upstream_before_the_next_write("out", 1)
+            .unwrap();
+        write_starting_a_group(&output_writer, "first");
+
+        assert_eq!(
+            payloads_and_losses_read_off(&mailboxes, "in"),
+            [("first".to_string(), 1)],
+        );
+    }
+
+    /// A `newest` port passing over messages is the profile working, so a loss
+    /// declared upstream is not one either.
+    #[test]
+    fn a_newest_port_does_not_count_a_declared_upstream_loss() {
+        let (mailboxes, output_writer) =
+            a_port_read_as_fed_by_a_native_writer("declared/newest", ReadMode::SkipToLatest);
+
+        output_writer
+            .declare_groups_given_up_upstream_before_the_next_write("out", 3)
+            .unwrap();
+        write_starting_a_group(&output_writer, "latest");
+
+        assert_eq!(
+            payloads_and_losses_read_off(&mailboxes, "in"),
+            [("latest".to_string(), 0)],
+        );
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-declared".to_string(), 0)]),
+        );
     }
 
     /// Every message a port hands a reader, as its payload and its
@@ -3594,6 +3706,50 @@ mod tests {
             .expect("a bag")
             .payload_bytes;
         assert_eq!(read_back, published);
+    }
+
+    /// A loss declared upstream reaches an `audio_window` port's reader on the
+    /// window cut from the block that carried it.
+    #[test]
+    fn a_declared_upstream_loss_reaches_the_window_cut_from_the_block_carrying_it() {
+        let channel = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&unique_suffix("declared/window"), 2, 16)
+            .unwrap();
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_windowed_port(
+            "in",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-declared",
+            &InboundLinkName::from("pmic/audio"),
+            channel.create_subscriber(16).unwrap(),
+        );
+        let output_writer = output_writer_publishing_onto(&channel, "audio");
+        let write_block_at = |first_sample_timestamp_ns: i64| {
+            output_writer
+                .write_bytes_with_timestamp(
+                    "audio",
+                    &mono_audio_block_body(512, 16_000, first_sample_timestamp_ns),
+                    first_sample_timestamp_ns,
+                    MessageGroupBoundary::StartsGroup,
+                )
+                .unwrap();
+        };
+
+        write_block_at(0);
+        output_writer
+            .declare_groups_given_up_upstream_before_the_next_write("audio", 1)
+            .unwrap();
+        write_block_at(64_000_000);
+
+        let losses_told_per_window: Vec<u64> =
+            std::iter::from_fn(|| mailboxes.read_raw("in").unwrap())
+                .map(|window| window.lost_since_last_read)
+                .collect();
+        assert_eq!(losses_told_per_window, [0, 1]);
     }
 
     /// The accumulator is not a second drop site: bags stay in the counted

@@ -88,7 +88,7 @@ pub use node::{
 };
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
 pub use payload::{
-    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelBagSequenceNumberUserHeader,
+    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelBagUserHeader,
     FRAME_HEADER_FLAG_STARTS_GROUP, FRAME_HEADER_FLAGS_SIZE, FRAME_HEADER_PAYLOAD_LEN_SIZE,
     FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader, FramePayloadRefusal,
     MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,

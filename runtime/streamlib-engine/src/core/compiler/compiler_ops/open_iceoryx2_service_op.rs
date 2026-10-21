@@ -2811,6 +2811,56 @@ mod tests {
         );
     }
 
+    /// Groups a producer's writer gave up upstream show under its output port
+    /// on the producer, and the downstream link that carried the declaration
+    /// renders no drop, while its reader is told of them.
+    ///
+    /// Fail-without-fix: advance the sequence number instead of carrying the
+    /// declaration in its own field, and the loss renders as the downstream
+    /// link's drop.
+    #[test]
+    fn a_producers_node_renders_the_groups_its_writer_gave_up_and_the_downstream_link_drops_none() {
+        let mut link = NativeLinkWiredForLossCounting::wire(
+            "given-up-groups",
+            DeliveryProfile::Ordered.resolve(),
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        );
+        let source_id = link.source_id.clone();
+        let dest_id = link.dest_id.clone();
+        let link_id = link.link_id.to_string();
+
+        assert!(
+            link.rendered_metrics_of(&source_id)
+                .unwrap()
+                .get("given_up_groups_by_output_port")
+                .is_none(),
+            "a port that has given up nothing renders no key"
+        );
+
+        link.write_bags(1);
+        link.source_output
+            .declare_groups_given_up_upstream_before_the_next_write("out1", 2)
+            .unwrap();
+        link.write_bags(1);
+
+        assert_eq!(
+            link.rendered_metrics_of(&source_id).unwrap()["given_up_groups_by_output_port"],
+            serde_json::json!({ "out1": 2 }),
+        );
+        let lost_told_per_read: Vec<u64> =
+            std::iter::from_fn(|| link.dest_input.read_raw("in1").unwrap())
+                .map(|message| message.lost_since_last_read)
+                .collect();
+        assert_eq!(lost_told_per_read, [0, 2]);
+        let dest_metrics = link.rendered_metrics_of(&dest_id).unwrap();
+        assert_eq!(
+            dest_metrics["dropped_bags_by_link"],
+            serde_json::json!({ link_id.as_str(): 0 }),
+            "a group given up upstream is the producer's loss and no link's"
+        );
+        assert_eq!(dest_metrics["frames_dropped"], serde_json::json!(0));
+    }
+
     /// Every destination is notified and holds a listener, a self-driven one
     /// that never drains it included: iceoryx2 counts repeat notifications in
     /// shared memory and sends no further wakeup until the listener drains, so

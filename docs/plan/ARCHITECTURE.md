@@ -1009,7 +1009,7 @@ entry reads as **message** (the glossary).
   that fail before any delivery consume no number; the other three consume one, because
   iceoryx2 does not report a partial delivery, and a subscriber the failed send never
   reached therefore reads a real loss. **The header is one engine type**,
-  `DataChannelBagSequenceNumberUserHeader`, with its iceoryx2 type name pinned so a move
+  `DataChannelBagUserHeader`, with its iceoryx2 type name pinned so a move
   never changes its identity, and a source-walking gate refuses a data `publish_subscribe`
   builder outside the node wrapper so no site can open a service without it. **A gap and an
   eviction never double-count**: a ring gap is a bag never received and an eviction is a bag
@@ -1045,6 +1045,21 @@ entry reads as **message** (the glossary).
   2026-09-14). [loss-visibility — SHIPPED #2268]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::output::tests::a_write_refused_at_the_ceiling_consumes_no_sequence_number -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics -->
+- **DECIDED** — A message a writer declares lost upstream is carried in the user header beside
+  the sequence number and added to an `ordered` reader's `lost_since_last_read`, never to its
+  link's dropped count; the writer counts it on itself, per output port. Only engine-internal
+  writers declare one. A loss declared after the writer's last write reaches no reader, the
+  producer's count excepted. Owner, 2026-10-20. [relay-track-reading]
+  <!-- verify: cargo test -p streamlib-ipc-types --lib tests::the_channel_user_header_is_two_u64s_under_its_pinned_name -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_declared_upstream_loss_reaches_lost_since_last_read_on_an_ordered_port -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_declared_upstream_loss_on_a_links_first_sample_is_still_counted -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_newest_port_does_not_count_a_declared_upstream_loss -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_declared_upstream_loss_reaches_the_window_cut_from_the_block_carrying_it -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::output::tests::a_declared_upstream_loss_rides_the_next_send_past_a_refused_write_and_is_carried_once -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::exposed_output_port_subscription::tests::the_forwarding_tells_a_declared_upstream_loss_on_the_message_carrying_it -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_producers_node_renders_the_groups_its_writer_gave_up_and_the_downstream_link_drops_none -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_given_up_groups_only_for_output_ports_that_gave_one_up -->
+  <!-- verify: cargo test -p streamlib-python-wheel --lib python_processor_link_data_access::tests::a_loss_declared_upstream_of_a_link_reaches_a_helpers_reader_as_lost_since_last_read -->
 - **DECIDED** — A helper-placed destination's per-link counts reach `graph`. The parent
   creates one blackboard per helper spawn; the helper is its only writer, one entry per
   inbound link holding that link's dropped-bag count, and the parent reads it whenever
@@ -3857,6 +3872,8 @@ entry reads as **message** (the glossary).
   <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order a_reader_joining_a_track_with_cached_history_starts_at_the_live_edge -->
   <!-- verify: cargo test -p streamlib-relay-track-reader --test relay_track_groups_released_in_sequence_order at_a_max_age_of_zero_a_missing_group_is_given_up_only_once_newer_content_runs_past_it -->
   <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_publishes_exposed_ports_at_the_local_relay a_relay_track_source_reading_paired_writes_keeps_every_group -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_given_up_group_reaches_the_reader_of_the_output_as_lost_since_last_read -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib relay_track_source::tests::a_given_up_group_is_counted_on_the_relay_source_and_not_on_the_downstream_link -->
 - **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
   and the `moq-relay` program, each pinned to an exact version the change that builds the
   publisher names (0.3, 0.19, 0.21 and 0.17 lines as of 2026-10-16), and every payload a stock

@@ -430,15 +430,13 @@ impl RelayTrackSourceSession {
                 }
                 released = groups_of_the_track.next_released_group(), if group_being_read.is_none() => {
                     match released {
-                        Ok(Some(ReleasedRelayTrackGroup::InSequence(group))) => {
-                            group_being_read = Some(*group);
-                            the_next_object_starts_a_group = true;
-                        }
-                        Ok(Some(ReleasedRelayTrackGroup::GivenUp { groups })) => {
-                            tracing::debug!(
-                                "RelayTrackSource: {groups} groups of {relay_track_location} \
-                                 were given up"
-                            );
+                        Ok(Some(released)) => {
+                            group_being_read = self
+                                .the_group_to_write_once_any_given_up_groups_are_declared(
+                                    released,
+                                    relay_track_location,
+                                );
+                            the_next_object_starts_a_group = group_being_read.is_some();
                         }
                         Ok(None) => return WhyARelayTrackSessionEnded::TrackEnded(None),
                         Err(refusal) => {
@@ -465,6 +463,42 @@ impl RelayTrackSourceSession {
                     }
                 },
             }
+        }
+    }
+
+    /// The group a release hands over to write, or none where it gave groups
+    /// up, which are declared on the output first.
+    fn the_group_to_write_once_any_given_up_groups_are_declared(
+        &self,
+        released: ReleasedRelayTrackGroup,
+        relay_track_location: &RelayTrackLocation,
+    ) -> Option<moq_net::group::Consumer> {
+        match released {
+            ReleasedRelayTrackGroup::InSequence(group) => Some(*group),
+            ReleasedRelayTrackGroup::GivenUp { groups } => {
+                tracing::debug!(
+                    "RelayTrackSource: {groups} groups of {relay_track_location} were given up"
+                );
+                self.declare_groups_given_up_on_the_track_output(groups);
+                None
+            }
+        }
+    }
+
+    /// Count `given_up_group_count` groups on the output at once, and tell its
+    /// readers of each as one lost message ahead of the next object written.
+    fn declare_groups_given_up_on_the_track_output(&self, given_up_group_count: u64) {
+        if let Err(refusal) = self
+            .outputs
+            .declare_groups_given_up_upstream_before_the_next_write(
+                TRACK_OUTPUT_PORT,
+                given_up_group_count,
+            )
+        {
+            tracing::warn!(
+                "RelayTrackSource: {given_up_group_count} given-up groups reach no reader of \
+                 `{TRACK_OUTPUT_PORT}`: {refusal}"
+            );
         }
     }
 
@@ -747,6 +781,8 @@ impl TrackTimestampRebasedOntoThisMachinesClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use streamlib::sdk::iceoryx2::{InputMailboxesInner, OutputWriterInner};
     use streamlib::sdk::processors::GeneratedProcessor;
     use streamlib::sdk::serde_json::json;
 
@@ -921,6 +957,125 @@ mod tests {
         assert_eq!(
             rebasing.stamp_on_this_machines_clock(None, 7_123_000_000),
             7_123_000_000
+        );
+    }
+
+    fn a_track_location() -> RelayTrackLocation {
+        RelayTrackLocation::of(&config_naming("desk/main.hang", "audio/data"))
+            .expect("the track is located")
+    }
+
+    /// A relay source session writing `track` into an `ordered` port over one
+    /// link `L-downstream`, with the output writer it writes through.
+    fn a_session_writing_into_an_ordered_reader() -> (
+        RelayTrackSourceSession,
+        Arc<OutputWriterInner>,
+        InputMailboxesInner,
+    ) {
+        use streamlib::sdk::iceoryx2::{
+            ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InboundLinkName, ReadMode,
+            TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        };
+        static NEXT_CHANNEL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let channel_name = format!(
+            "test/relay-track-source/{}/{}",
+            std::process::id(),
+            NEXT_CHANNEL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let channel = Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&channel_name, 2, 16)
+            .unwrap();
+        let reader = InputMailboxesInner::new();
+        reader.add_port("in", 16, ReadMode::ReadNextInOrder);
+        reader.add_channel_subscriber(
+            "in",
+            "L-downstream",
+            &InboundLinkName::from("relay_source/track"),
+            channel.create_subscriber(16).unwrap(),
+        );
+        let output_writer = Arc::new(OutputWriterInner::new());
+        output_writer.set_channel_publisher(
+            TRACK_OUTPUT_PORT,
+            channel.create_publisher(64).unwrap(),
+            ChannelEgressConfig {
+                service_name: channel_name,
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                chunk_ceiling_bytes: TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            },
+        );
+        let session = RelayTrackSourceSession::new(
+            OutputWriter::from_inner_arc(Arc::clone(&output_writer)),
+            Duration::from_millis(100),
+        );
+        (session, output_writer, reader)
+    }
+
+    #[test]
+    fn a_given_up_group_reaches_the_reader_of_the_output_as_lost_since_last_read() {
+        let (mut session, _output_writer, reader) = a_session_writing_into_an_ordered_reader();
+
+        session.write_the_object(
+            &an_object(0, b"group-0".to_vec()),
+            MessageGroupBoundary::StartsGroup,
+        );
+        assert!(
+            session
+                .the_group_to_write_once_any_given_up_groups_are_declared(
+                    ReleasedRelayTrackGroup::GivenUp { groups: 1 },
+                    &a_track_location(),
+                )
+                .is_none()
+        );
+        session.write_the_object(
+            &an_object(40_000_000, b"group-2".to_vec()),
+            MessageGroupBoundary::StartsGroup,
+        );
+
+        let payloads_and_losses: Vec<(Vec<u8>, u64)> =
+            std::iter::from_fn(|| reader.read_raw("in").unwrap())
+                .map(|message| (message.payload_bytes, message.lost_since_last_read))
+                .collect();
+        assert_eq!(
+            payloads_and_losses,
+            [(b"group-0".to_vec(), 0), (b"group-2".to_vec(), 1)]
+        );
+    }
+
+    #[test]
+    fn a_given_up_group_is_counted_on_the_relay_source_and_not_on_the_downstream_link() {
+        let (mut session, output_writer, reader) = a_session_writing_into_an_ordered_reader();
+
+        session.write_the_object(
+            &an_object(0, b"group-0".to_vec()),
+            MessageGroupBoundary::StartsGroup,
+        );
+        assert!(
+            session
+                .the_group_to_write_once_any_given_up_groups_are_declared(
+                    ReleasedRelayTrackGroup::GivenUp { groups: 2 },
+                    &a_track_location(),
+                )
+                .is_none()
+        );
+        assert_eq!(
+            output_writer
+                .bag_counts_by_output_port()
+                .given_up_group_count_snapshot_by_output_port(),
+            std::collections::BTreeMap::from([(TRACK_OUTPUT_PORT.to_string(), 2)]),
+            "counted on the relay source at once, before any write carries it"
+        );
+        session.write_the_object(
+            &an_object(60_000_000, b"group-3".to_vec()),
+            MessageGroupBoundary::StartsGroup,
+        );
+        while reader.read_raw("in").unwrap().is_some() {}
+
+        assert_eq!(
+            reader
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_snapshot_by_inbound_link(),
+            std::collections::BTreeMap::from([("L-downstream".to_string(), 0)]),
         );
     }
 

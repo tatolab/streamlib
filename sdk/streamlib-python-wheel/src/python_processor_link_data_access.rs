@@ -930,6 +930,43 @@ mod tests {
         });
     }
 
+    /// Groups an engine-internal writer declared given up upstream reach a
+    /// helper's reader as `lost_since_last_read` on the next message, through
+    /// the same mailboxes a native reader runs.
+    #[test]
+    fn a_loss_declared_upstream_of_a_link_reaches_a_helpers_reader_as_lost_since_last_read() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, destination) = one_wired_link(python, "declared-upstream-loss");
+            source
+                .output_writer
+                .get()
+                .expect("the source wired an output")
+                .declare_groups_given_up_upstream_before_the_next_write("frames_to_downstream", 1)
+                .unwrap();
+            source
+                .write_to_output_port(
+                    python,
+                    "frames_to_downstream",
+                    PyBytes::new(python, b"after the given-up group").as_any(),
+                    None,
+                    true,
+                )
+                .unwrap();
+
+            let (_, message, _) = destination
+                .read_message_naming_its_inbound_link_with_its_payload_cast(
+                    python,
+                    "frames_from_upstream",
+                    None,
+                    None,
+                )
+                .unwrap()
+                .expect("the wired input received nothing");
+            assert_eq!(message.lost_since_last_read, 1);
+        });
+    }
+
     /// `starts_group` lands in the frame header's group flag, which a Rust
     /// reader on the far side of the link observes on the message it reads,
     /// beside the stamp the write gave it.
