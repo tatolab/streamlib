@@ -137,8 +137,10 @@ impl JsonSerializableComponent for ProcessorMetrics {
             "written_bags_by_output_port": written_bags_by_output_port,
         });
         // A map with nothing in it renders no key at all rather than an empty
-        // object: a port that cannot discard samples or give up groups is not
-        // the same as one that has not yet.
+        // object. The discarded-sample map is empty only for a processor with
+        // no link into a windowed port, so its absence says none can discard;
+        // the given-up map holds only ports that have given a group up, so its
+        // absence says none has yet.
         let Some(rendered_keys) = rendered.as_object_mut() else {
             return rendered;
         };

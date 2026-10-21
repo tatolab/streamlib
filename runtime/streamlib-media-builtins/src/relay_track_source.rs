@@ -430,16 +430,13 @@ impl RelayTrackSourceSession {
                 }
                 released = groups_of_the_track.next_released_group(), if group_being_read.is_none() => {
                     match released {
-                        Ok(Some(ReleasedRelayTrackGroup::InSequence(group))) => {
-                            group_being_read = Some(*group);
-                            the_next_object_starts_a_group = true;
-                        }
-                        Ok(Some(ReleasedRelayTrackGroup::GivenUp { groups })) => {
-                            tracing::debug!(
-                                "RelayTrackSource: {groups} groups of {relay_track_location} \
-                                 were given up"
-                            );
-                            self.declare_groups_given_up_on_the_track_output(groups);
+                        Ok(Some(released)) => {
+                            group_being_read = self
+                                .the_group_to_write_once_any_given_up_groups_are_declared(
+                                    released,
+                                    relay_track_location,
+                                );
+                            the_next_object_starts_a_group = group_being_read.is_some();
                         }
                         Ok(None) => return WhyARelayTrackSessionEnded::TrackEnded(None),
                         Err(refusal) => {
@@ -465,6 +462,25 @@ impl RelayTrackSourceSession {
                         group_being_read = None;
                     }
                 },
+            }
+        }
+    }
+
+    /// The group a release hands over to write, or none where it gave groups
+    /// up, which are declared on the output first.
+    fn the_group_to_write_once_any_given_up_groups_are_declared(
+        &self,
+        released: ReleasedRelayTrackGroup,
+        relay_track_location: &RelayTrackLocation,
+    ) -> Option<moq_net::group::Consumer> {
+        match released {
+            ReleasedRelayTrackGroup::InSequence(group) => Some(*group),
+            ReleasedRelayTrackGroup::GivenUp { groups } => {
+                tracing::debug!(
+                    "RelayTrackSource: {groups} groups of {relay_track_location} were given up"
+                );
+                self.declare_groups_given_up_on_the_track_output(groups);
+                None
             }
         }
     }
@@ -944,6 +960,11 @@ mod tests {
         );
     }
 
+    fn a_track_location() -> RelayTrackLocation {
+        RelayTrackLocation::of(&config_naming("desk/main.hang", "audio/data"))
+            .expect("the track is located")
+    }
+
     /// A relay source session writing `track` into an `ordered` port over one
     /// link `L-downstream`, with the output writer it writes through.
     fn a_session_writing_into_an_ordered_reader() -> (
@@ -998,7 +1019,14 @@ mod tests {
             &an_object(0, b"group-0".to_vec()),
             MessageGroupBoundary::StartsGroup,
         );
-        session.declare_groups_given_up_on_the_track_output(1);
+        assert!(
+            session
+                .the_group_to_write_once_any_given_up_groups_are_declared(
+                    ReleasedRelayTrackGroup::GivenUp { groups: 1 },
+                    &a_track_location(),
+                )
+                .is_none()
+        );
         session.write_the_object(
             &an_object(40_000_000, b"group-2".to_vec()),
             MessageGroupBoundary::StartsGroup,
@@ -1022,7 +1050,14 @@ mod tests {
             &an_object(0, b"group-0".to_vec()),
             MessageGroupBoundary::StartsGroup,
         );
-        session.declare_groups_given_up_on_the_track_output(2);
+        assert!(
+            session
+                .the_group_to_write_once_any_given_up_groups_are_declared(
+                    ReleasedRelayTrackGroup::GivenUp { groups: 2 },
+                    &a_track_location(),
+                )
+                .is_none()
+        );
         assert_eq!(
             output_writer
                 .bag_counts_by_output_port()

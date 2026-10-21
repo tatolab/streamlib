@@ -62,8 +62,7 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
 /// before any delivery gives the number back; any other leaves a gap for
 /// whoever missed the bag, which is a real loss to that subscriber. Every
 /// variant is named so an iceoryx2 upgrade adding one does not compile until
-/// it is placed. The number wraps to zero past `u64::MAX` in every build
-/// profile, which a subscriber reads as no gap.
+/// it is placed.
 fn a_send_may_have_delivered(send_outcome: &std::result::Result<usize, SendError>) -> bool {
     match send_outcome {
         Ok(_) => true,
@@ -75,6 +74,18 @@ fn a_send_may_have_delivered(send_outcome: &std::result::Result<usize, SendError
         Err(
             SendError::ConnectionCorrupted | SendError::UnableToDeliver | SendError::InternalError,
         ) => true,
+    }
+}
+
+/// The sequence number the send after one numbered `sent_sequence_number`
+/// carries, given whether that send may have delivered. The number wraps to
+/// zero past `u64::MAX` in every build profile, which a subscriber reads as no
+/// gap.
+fn sequence_number_following_a_send(sent_sequence_number: u64, may_have_delivered: bool) -> u64 {
+    if may_have_delivered {
+        sent_sequence_number.wrapping_add(1)
+    } else {
+        sent_sequence_number
     }
 }
 
@@ -473,8 +484,10 @@ impl OutputWriterInner {
         // loan was taken for — or panicked on a length mismatch.
         let sample = unsafe { sample.assume_init() };
         let send_outcome = sample.send();
-        if a_send_may_have_delivered(&send_outcome) {
-            egress.next_sequence_number = egress.next_sequence_number.wrapping_add(1);
+        let may_have_delivered = a_send_may_have_delivered(&send_outcome);
+        egress.next_sequence_number =
+            sequence_number_following_a_send(egress.next_sequence_number, may_have_delivered);
+        if may_have_delivered {
             egress.messages_lost_upstream_before_the_next_send = 0;
         }
         send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
@@ -1532,6 +1545,13 @@ mod tests {
         use iceoryx2::port::LoanError;
 
         assert!(a_send_may_have_delivered(&Ok(1)));
+        assert_eq!(sequence_number_following_a_send(7, true), 8);
+        assert_eq!(sequence_number_following_a_send(7, false), 7);
+        assert_eq!(
+            sequence_number_following_a_send(u64::MAX, true),
+            0,
+            "the last number wraps to zero rather than overflowing in a debug build"
+        );
         assert!(
             a_send_may_have_delivered(&Ok(0)),
             "a send that reached no subscriber still numbered a bag"

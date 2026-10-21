@@ -439,7 +439,7 @@ impl BagCountsByOutputPort {
 
     /// Every output port whose writer has given up a group upstream of it, and
     /// its given-up total as it stands right now, ordered by port name. A port
-    /// whose writer never gives one up is absent rather than zero.
+    /// whose writer has not given one up yet is absent rather than zero.
     pub fn given_up_group_count_snapshot_by_output_port(&self) -> BTreeMap<String, u64> {
         let mut given_up_groups_by_output_port = self
             .per_output_port
