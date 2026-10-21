@@ -30,11 +30,11 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.54.9" }
-streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.54.9" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.54.10" }
+streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.54.10" }
 streamlib-api-server = { path = "../streamlib-api-server" }
 # The machine runtime lock and the state directory the runtime takes at start.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.54.9" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.54.10" }
 # The interface every relay adapter implements, and every adapter: the machine's
 # local relay, Cloudflare's and moq.pro's.
 streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
