@@ -290,8 +290,7 @@ frame — the surface-id lifetime guarantees end at export. _Avoid_: "export"
 unqualified where the allocation-vs-frame distinction matters.
 
 **Present target** and **Node-owned window**: retired 2026-10-16 with every window — the
-runtime opens none, and a stream is seen through the **preview page**. Entries that still
-use them are facts about the shipped tree until the sharing step's change deletes them.
+runtime opens none, and a stream is seen through the **preview page**.
 
 **Kernel**: a GPU program the engine compiles and runs on its device — compute,
 graphics, or ray-tracing. _Avoid_: "shader" for the whole object (that is its source
