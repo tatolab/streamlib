@@ -6351,6 +6351,7 @@ dependencies = [
  "streamlib-relay-adapter-local",
  "streamlib-relay-adapter-moqpro",
  "streamlib-relay-adapter-sdk",
+ "streamlib-relay-track-reader",
  "streamlib-runtime-client-contract",
  "tempfile",
  "tokio",
