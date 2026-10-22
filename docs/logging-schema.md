@@ -142,9 +142,10 @@ it, and reopens the active name. `tatolab logs --follow` does this.
 A record iceoryx2 emits has target `"iceoryx2"`, its message in `message` and
 where iceoryx2 says it came from in `attrs.origin`, a string — for many records
 the leading part of an iceoryx2 object's `Debug`. Both are written on one line,
-every control character as a space, and bounded: `origin` at 128 bytes and
-`message` at 512. A field cut at its cap ends at a character boundary followed
-by `… [truncated at <cap> bytes]`.
+every control character as a space, and bounded: at most 128 bytes of `origin`
+and 512 of `message` are kept. A longer field is cut at a character boundary
+within its cap and then carries `… [truncated at <cap> bytes]`, so a cut field
+is at most its cap plus that marker.
 
 ## Ordering
 

@@ -20,12 +20,13 @@ use iceoryx2_log::Log;
 use iceoryx2_log::LogLevel;
 use tracing::level_filters::LevelFilter;
 
-/// Most bytes of an iceoryx2 record's `origin` the bridge forwards — enough for
-/// the leading type name of a `from self` record, whose origin is the `Debug`
-/// of the whole iceoryx2 object.
+/// Most bytes of an iceoryx2 record's `origin` the bridge forwards ahead of the
+/// truncation marker — enough for the leading type name of a `from self`
+/// record, whose origin is the `Debug` of the whole iceoryx2 object.
 pub(crate) const ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES: usize = 128;
 
-/// Most bytes of an iceoryx2 record's message the bridge forwards.
+/// Most bytes of an iceoryx2 record's message the bridge forwards ahead of the
+/// truncation marker.
 pub(crate) const ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES: usize = 512;
 
 /// Zero-sized bridge implementing iceoryx2's [`Log`] trait by
