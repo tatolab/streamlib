@@ -16,8 +16,7 @@ use crate::adapter::OpenGlSurfaceAdapter;
 /// Customer-facing handle bound to a single subprocess GL stack.
 ///
 /// Holds a shared reference to an [`OpenGlSurfaceAdapter`]; cheap to
-/// clone. Customers obtain one via the runtime; tests construct one
-/// directly.
+/// clone.
 #[derive(Clone)]
 pub struct OpenGlContext {
     adapter: Arc<OpenGlSurfaceAdapter>,

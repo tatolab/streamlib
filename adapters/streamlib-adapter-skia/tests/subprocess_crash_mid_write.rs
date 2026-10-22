@@ -100,8 +100,6 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
     let request_bytes = serde_json::to_vec(&request).expect("serialize");
     let parent_sock_for_hook = parent_sock;
 
-    // Skia's `MakeGL` bring-up before the `abort()` can take several
-    // hundred ms on a cold cache.
     let skia_helper_cleanup_budget = Duration::from_secs(8);
     let outcome = SubprocessCrashHarness::new(cmd)
         .with_timing(CrashTiming::AfterDelay(Duration::from_millis(400)))
@@ -139,8 +137,8 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
         "cleanup_latency {:?} exceeded budget",
         outcome.cleanup_latency
     );
-    // SIGABRT (the helper's own abort) or SIGKILL (the harness watchdog)
-    // proves the crash path was reached; a setup failure exits with a code.
+    // A signal exit means the helper did not fail setup with an exit code
+    // before its own `abort()` or the harness's scheduled SIGKILL.
     let exit_status = outcome.exit_status.expect("child waited");
     assert!(
         exit_status.signal().is_some(),
