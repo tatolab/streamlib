@@ -22,6 +22,7 @@ from collections.abc import Callable
 import pytest
 
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
+from microphone_device_edge_drops import assert_the_microphone_dropped_no_blocks_at_the_device_edge
 from microphone_source_streams import (
     UNOPENABLE_DEVICE_ID,
     microphone_into_an_audio_block_probe,
@@ -100,9 +101,7 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
     # Checked before the arithmetic below, which a real gap would break: a
     # dropped block is a legitimate outcome of a stalled consumer, and it
     # should fail here by name rather than as a confusing subtraction.
-    assert "dropped at the device edge" not in tatolabd.stderr_text, (
-        f"the source dropped blocks while the probe was reporting:\n{tatolabd.recent_stderr()}"
-    )
+    assert_the_microphone_dropped_no_blocks_at_the_device_edge(tatolabd)
 
     stamps = [reading["first_sample_timestamp_ns"] for reading in readings]
     assert stamps == sorted(set(stamps)), (
