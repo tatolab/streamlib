@@ -28,6 +28,9 @@ from audio_window_streams import (
 )
 from conftest import TatolabdUnderTest
 from local_api_client import LocalApiClient
+from microphone_device_edge_drops import (
+    assert_the_microphone_dropped_no_blocks_at_the_device_edge,
+)
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE, RuntimeProcessUnderTest
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 
@@ -50,16 +53,41 @@ DISCARDED_SAMPLES_TIMEOUT_SECONDS = 30.0
 METRICS_POLL_INTERVAL_SECONDS = 0.2
 
 
-def run_until(
+def run_until_reading_the_graph(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
     stream_function: object,
     awaited_marker_name: str,
-) -> TatolabdUnderTest:
+) -> "tuple[TatolabdUnderTest, dict]":
+    """Run `stream_function` until `awaited_marker_name`, read its `graph` while
+    it still runs, then stop it cleanly."""
     tatolabd = start_tatolabd_running_stream(stream_function)
     tatolabd.await_marker(awaited_marker_name)
+    graph_while_running = tatolabd.local_api_client().call_tool(
+        "graph", {"stream": tatolabd.await_the_latest_attached_stream_loaded()}
+    )
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
-    return tatolabd
+    return tatolabd, graph_while_running
+
+
+def assert_no_windowed_link_discarded_samples(graph_while_running: dict) -> None:
+    """Every link into a windowed port renders zero discarded samples."""
+    discarded_samples_by_windowed_link = {
+        link_id: discarded_samples
+        for graph_node in graph_while_running["nodes"]
+        for link_id, discarded_samples in graph_node["components"]
+        .get("metrics", {})
+        .get("discarded_samples_by_link", {})
+        .items()
+    }
+    assert discarded_samples_by_windowed_link, (
+        "no link into a windowed port rendered a discarded-sample count: "
+        f"{graph_while_running['nodes']}"
+    )
+    assert set(discarded_samples_by_windowed_link.values()) == {0}, (
+        "the window stage flushed and discarded samples before the graph was read: "
+        f"{discarded_samples_by_windowed_link}"
+    )
 
 
 def readings_from(tatolabd: RuntimeProcessUnderTest, marker_name: str, what: str):
@@ -113,22 +141,18 @@ def test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared(
     The rate the machine's device settles on is whatever it settles on; what the
     contract promises is that the consumer never sees it.
     """
-    tatolabd = run_until(
+    tatolabd, graph_while_running = run_until_reading_the_graph(
         start_tatolabd_running_stream, microphone_into_an_exact_window_probe, "WINDOWS_SEEN"
     )
     readings = readings_from(tatolabd, "WINDOWS_SEEN", "window")
     assert len(readings) >= 2, "the cadence assertion needs two windows to subtract"
     assert_every_window_matches_the_contract(readings)
 
-    # Checked before the arithmetic: a discontinuity flush is a legitimate
-    # outcome and re-anchors the run, so it should fail by name rather than as a
-    # confusing subtraction.
-    assert "flushed rather than emitting a window that spans the gap" not in tatolabd.stderr_text, (
-        f"the stage flushed while the probe was reporting:\n{tatolabd.recent_stderr()}"
-    )
-    assert "dropped at the device edge" not in tatolabd.stderr_text, (
-        f"the source dropped blocks while the probe was reporting:\n{tatolabd.recent_stderr()}"
-    )
+    # Checked before the arithmetic: a discontinuity flush and a device-edge drop
+    # are legitimate outcomes that re-anchor the run, so either should fail by
+    # name rather than as a confusing subtraction.
+    assert_no_windowed_link_discarded_samples(graph_while_running)
+    assert_the_microphone_dropped_no_blocks_at_the_device_edge(tatolabd)
 
     stamps = [reading["first_sample_timestamp_ns"] for reading in readings]
     steps = [later - earlier for earlier, later in zip(stamps, stamps[1:])]
@@ -142,16 +166,14 @@ def test_a_hop_below_the_window_rolls_at_the_hops_cadence_not_the_windows(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """A rolling window is still exact-size; only its cadence changes."""
-    tatolabd = run_until(
+    tatolabd, graph_while_running = run_until_reading_the_graph(
         start_tatolabd_running_stream, microphone_into_a_rolling_window_probe, "ROLLING_WINDOWS_SEEN"
     )
     readings = readings_from(tatolabd, "ROLLING_WINDOWS_SEEN", "rolling window")
     assert len(readings) >= 2
     assert_every_window_matches_the_contract(readings)
 
-    assert "flushed rather than emitting a window that spans the gap" not in tatolabd.stderr_text, (
-        f"the stage flushed while the probe was reporting:\n{tatolabd.recent_stderr()}"
-    )
+    assert_no_windowed_link_discarded_samples(graph_while_running)
 
     stamps = [reading["first_sample_timestamp_ns"] for reading in readings]
     steps = [later - earlier for earlier, later in zip(stamps, stamps[1:])]
