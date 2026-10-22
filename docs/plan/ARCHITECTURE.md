@@ -647,7 +647,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   that venv. Undecided: the registry's owner and
   standards, a manager UI, and what the app's own catalog does. [one-runtime-per-machine]
 
-## Consumers — examples & packages — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
+## Consumers — examples & packages — SHIPPED
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
   current authoring idiom, converted gradually and never a contract source: engine
@@ -1869,7 +1869,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
+## Media I/O — camera, audio, codecs — SHIPPED (unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera and audio are native built-in processors
   in the engine tree, statically linked into `tatolabd` — pre-built named blocks added and
@@ -2467,8 +2467,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   built-in is configured (`stream_builder.add(H264Encoder)`), per-frame paths never entering an
   interpreter, serving Python and Rust apps alike. Video blocks are built on the video
   codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple. The runtime decodes no
-  JPEG anywhere: `JpegDecoder` is retired unbuilt, and the parked nvJPEG backend and its
-  `libnvjpeg` probe are deleted. AV1 and VP9 remain ported but unexposed until a consumer demands them.
+  JPEG anywhere. AV1 and VP9 remain ported but unexposed until a consumer demands them.
   The six name the shipped set, not a rule: the next codec follows the built-in criterion in
   §Packages & extension model.
   Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
@@ -2482,9 +2481,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Linux, an RGBA-image → NV12-buffer pass beside the RGBA → YUYV one on Apple — and no new
   RHI primitive was built for codecs. [codec-blocks — SHIPPED #2083, #2084, #2086;
   python-codec-block-api — SHIPPED #2105; opus-mp4-recording-rung — SHIPPED #2125, #2126,
-  #2127, #2128; macos-capability-parity — SHIPPED #2412, #2413; extension-model; amended by
-  jpeg-after-the-robotics-cut: `JpegDecoder` is retired with robotics out of scope, and the
-  nvJPEG tree and probe go with it (owner, 2026-10-04)]
+  #2127, #2128; macos-capability-parity — SHIPPED #2412, #2413; extension-model]
+  Rejected: a `JpegDecoder` built-in, or a vendor JPEG backend such as nvJPEG behind one —
+  its one consumer was a drone video path, and robotics is out of scope (owner, 2026-10-04).
   Rejected: a muxer built-in writing a stream's tracks to a file — a stream's last mile is
   the user's, through any MoQ client of a relay, never the runtime's (owner, 2026-10-17).
 - **DECIDED** — The video codec backend seam has the video device seam's shape: a
@@ -2701,12 +2700,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The held codec consumers resolve through this align, per §Consumers: a held
   codec package is mined for its logic and deletes in the change that ships its block, and a
   codec proof example deletes into the engine-owned proof rig — its job becomes the rig's
-  job, and a test owns its fixtures. `packages/jpeg`, `examples/jpeg-psnr` and the fixture
-  that drives it (`e2e_fixture_psnr_jpeg.sh`) delete outright: their block is retired,
-  nothing is mined and no rig job is owed.
-  [codec-blocks — SHIPPED #2087; opus-mp4-recording-rung — SHIPPED #2129; amended by
-  jpeg-after-the-robotics-cut: the JPEG package, example and fixture delete outright (owner,
-  2026-10-04)]
+  job, and a test owns its fixtures.
+  [codec-blocks — SHIPPED #2087; opus-mp4-recording-rung — SHIPPED #2129]
 - **OPEN** — Audio plugins (CLAP / VST3 / LV2): intended, do not build until a
   concrete consumer demands a specific plugin. Direction: CLAP first; the plugin runs
   out-of-process in its own helper over the engine's IPC transport, never in the app
