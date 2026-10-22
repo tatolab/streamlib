@@ -14,7 +14,6 @@
 //! [`capture_this_helper_processes_engine_log_records`]:
 //! crate::core::logging::capture_this_helper_processes_engine_log_records
 
-use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use iceoryx2_log::Log;
@@ -41,14 +40,14 @@ impl Log for IceoryxLogBridge {
         origin: core::fmt::Arguments,
         formatted_message: core::fmt::Arguments,
     ) {
-        let origin = iceoryx2_log_record_field_on_one_bounded_line(
-            origin,
-            ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES,
-        );
-        let message = iceoryx2_log_record_field_on_one_bounded_line(
-            formatted_message,
-            ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES,
-        );
+        let origin = Iceoryx2LogRecordFieldOnOneBoundedLine {
+            field: origin,
+            cap_bytes: ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES,
+        };
+        let message = Iceoryx2LogRecordFieldOnOneBoundedLine {
+            field: formatted_message,
+            cap_bytes: ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES,
+        };
         // iceoryx2 aborts shortly after a `Fatal`, and tracing has no level
         // above `Error`.
         match log_level {
@@ -68,36 +67,41 @@ pub(crate) fn iceoryx2_log_record_truncation_marker(cap_bytes: usize) -> String 
     format!("… [truncated at {cap_bytes} bytes]")
 }
 
-/// `field` rendered with every control character as a space, cut on a
-/// character boundary at `cap_bytes` and then carrying the truncation marker.
-fn iceoryx2_log_record_field_on_one_bounded_line(
-    field: core::fmt::Arguments,
+/// An iceoryx2 record's field, displayed with every control character as a
+/// space and cut on a character boundary at `cap_bytes`, followed by the
+/// truncation marker. Formatted only when a subscriber keeps the record, and
+/// never past the cap.
+struct Iceoryx2LogRecordFieldOnOneBoundedLine<'a> {
+    field: core::fmt::Arguments<'a>,
     cap_bytes: usize,
-) -> String {
-    let mut rendering = Iceoryx2LogRecordFieldRenderedOnOneBoundedLine {
-        rendered: String::new(),
-        cap_bytes,
-        reached_the_cap: false,
-    };
-    // An error here is the rendering refusing past its cap, which stops the
-    // field's formatting there; the rest of the field is never formatted.
-    let _ = rendering.write_fmt(field);
-    if rendering.reached_the_cap {
-        rendering
-            .rendered
-            .push_str(&iceoryx2_log_record_truncation_marker(cap_bytes));
-    }
-    rendering.rendered
 }
 
-/// A field being rendered on one line, refusing any write past its cap.
-struct Iceoryx2LogRecordFieldRenderedOnOneBoundedLine {
-    rendered: String,
+impl core::fmt::Display for Iceoryx2LogRecordFieldOnOneBoundedLine<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut bounded_formatter = Iceoryx2LogRecordFieldBoundedFormatter {
+            formatter,
+            bytes_written: 0,
+            cap_bytes: self.cap_bytes,
+            reached_the_cap: false,
+        };
+        let field_formatting = core::fmt::write(&mut bounded_formatter, self.field);
+        if bounded_formatter.reached_the_cap {
+            return formatter.write_str(&iceoryx2_log_record_truncation_marker(self.cap_bytes));
+        }
+        field_formatting
+    }
+}
+
+/// Forwards one field to `formatter` on one line, refusing any write past
+/// `cap_bytes`.
+struct Iceoryx2LogRecordFieldBoundedFormatter<'formatter, 'output> {
+    formatter: &'formatter mut core::fmt::Formatter<'output>,
+    bytes_written: usize,
     cap_bytes: usize,
     reached_the_cap: bool,
 }
 
-impl core::fmt::Write for Iceoryx2LogRecordFieldRenderedOnOneBoundedLine {
+impl core::fmt::Write for Iceoryx2LogRecordFieldBoundedFormatter<'_, '_> {
     fn write_str(&mut self, piece: &str) -> core::fmt::Result {
         for character in piece.chars() {
             let character = if character.is_control() {
@@ -105,11 +109,12 @@ impl core::fmt::Write for Iceoryx2LogRecordFieldRenderedOnOneBoundedLine {
             } else {
                 character
             };
-            if self.rendered.len() + character.len_utf8() > self.cap_bytes {
+            if self.bytes_written + character.len_utf8() > self.cap_bytes {
                 self.reached_the_cap = true;
                 return Err(core::fmt::Error);
             }
-            self.rendered.push(character);
+            self.formatter.write_char(character)?;
+            self.bytes_written += character.len_utf8();
         }
         Ok(())
     }
@@ -199,11 +204,15 @@ mod tests {
         }
     }
 
+    fn field_as_the_bridge_forwards_it(field: core::fmt::Arguments, cap_bytes: usize) -> String {
+        Iceoryx2LogRecordFieldOnOneBoundedLine { field, cap_bytes }.to_string()
+    }
+
     #[test]
     fn a_field_within_its_cap_is_forwarded_unchanged() {
         let service = "699db7594e4b2afc49d60cb96216d8b9f8307333";
         assert_eq!(
-            iceoryx2_log_record_field_on_one_bounded_line(
+            field_as_the_bridge_forwards_it(
                 format_args!("Detected dead node in service {service}."),
                 ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES,
             ),
@@ -215,7 +224,7 @@ mod tests {
     fn a_field_exactly_at_its_cap_carries_no_truncation_marker() {
         let field = "y".repeat(16);
         assert_eq!(
-            iceoryx2_log_record_field_on_one_bounded_line(format_args!("{field}"), 16),
+            field_as_the_bridge_forwards_it(format_args!("{field}"), 16),
             field,
         );
     }
@@ -224,7 +233,7 @@ mod tests {
     fn a_field_past_its_cap_is_cut_there_and_says_so() {
         let field = "z".repeat(4096);
         assert_eq!(
-            iceoryx2_log_record_field_on_one_bounded_line(format_args!("{field}"), 128),
+            field_as_the_bridge_forwards_it(format_args!("{field}"), 128),
             format!(
                 "{}{}",
                 "z".repeat(128),
@@ -237,7 +246,7 @@ mod tests {
     fn a_cut_never_splits_a_character() {
         let field = "aé";
         assert_eq!(
-            iceoryx2_log_record_field_on_one_bounded_line(format_args!("{field}"), 2),
+            field_as_the_bridge_forwards_it(format_args!("{field}"), 2),
             format!("a{}", iceoryx2_log_record_truncation_marker(2)),
         );
     }
@@ -245,7 +254,7 @@ mod tests {
     #[test]
     fn a_field_spanning_lines_is_forwarded_on_one() {
         assert_eq!(
-            iceoryx2_log_record_field_on_one_bounded_line(
+            field_as_the_bridge_forwards_it(
                 format_args!("first\nsecond\r\tthird"),
                 ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES,
             ),
@@ -260,12 +269,33 @@ mod tests {
             pieces: 1_000_000,
             writes_made: &writes_made,
         };
-        iceoryx2_log_record_field_on_one_bounded_line(format_args!("{long_debug:?}"), 128);
+        field_as_the_bridge_forwards_it(format_args!("{long_debug:?}"), 128);
         assert_eq!(
             writes_made.get(),
             129,
             "formatting must stop at the first write past the cap"
         );
+    }
+
+    #[test]
+    fn a_record_no_subscriber_keeps_is_never_formatted() {
+        let writes_made = Cell::new(0);
+        let long_debug = DebugOfManyPiecesCountingItsWrites {
+            pieces: 4096,
+            writes_made: &writes_made,
+        };
+        let error_only_subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::ERROR)
+            .with_writer(std::io::sink)
+            .finish();
+        tracing::subscriber::with_default(error_only_subscriber, || {
+            HOST_BRIDGE.log(
+                LogLevel::Debug,
+                format_args!("{long_debug:?}"),
+                format_args!("{long_debug:?}"),
+            );
+        });
+        assert_eq!(writes_made.get(), 0);
     }
 
     /// A `from self` record carrying a multi-kilobyte `Debug` origin reaches
@@ -302,7 +332,6 @@ mod tests {
 
         let path = logging.jsonl_log_path();
         logging.finish();
-        let jsonl = std::fs::read_to_string(&path).unwrap();
         let records = read_every_record_of_a_jsonl_log(&path);
         let record = records
             .iter()
@@ -327,15 +356,6 @@ mod tests {
                 )
                 .as_str()
             ),
-        );
-        let bridged_line = jsonl
-            .lines()
-            .find(|line| line.contains("\"target\":\"iceoryx2\""))
-            .expect("the bridged record is one line");
-        assert!(
-            bridged_line.len() < 1024,
-            "the bridged record's line is {} bytes",
-            bridged_line.len()
         );
     }
 

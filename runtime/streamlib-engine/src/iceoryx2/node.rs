@@ -1662,6 +1662,25 @@ mod tests {
     const STALE_HOLDER_DEEPER_DEPTH: usize = 16;
     const STALE_HOLDER_MAX_SUBSCRIBERS: usize = 4;
 
+    /// Re-run the stale-holder test as a holder process that creates the
+    /// shallow channel under `domain_root` and is killed holding it.
+    fn leave_a_dead_holder_of_the_shallow_stale_holder_channel(domain_root: &std::path::Path) {
+        let holder = crate::core::test_support::rerun_this_test_in_a_child_process(
+            "iceoryx2::node::tests::a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind",
+            STALE_HOLDER_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+            domain_root.as_os_str(),
+        );
+        // The signal and not merely a non-zero exit: a holder that panicked
+        // before it created its shallow service would also exit non-zero, and
+        // a later open would then create a fresh service and prove nothing.
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&holder.status),
+            Some(libc::SIGKILL),
+            "the holder must die where it stood, holding its service: {}",
+            String::from_utf8_lossy(&holder.stderr),
+        );
+    }
+
     /// A long-lived node's deeper open gets past a shallow service whose only
     /// holder died, because iceoryx2 reclaims a service's dead holders on open.
     ///
@@ -1700,28 +1719,7 @@ mod tests {
         let long_lived_node = Iceoryx2Node::new(&domain_root, "streamlib-test/long-lived")
             .expect("the long-lived node opens first");
 
-        let holder = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "iceoryx2::node::tests::a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind",
-                "--exact",
-                "--test-threads=1",
-            ])
-            .env(
-                STALE_HOLDER_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
-                &domain_root,
-            )
-            .output()
-            .expect("the test binary re-runs this test in a holder process");
-        // The signal and not merely a non-zero exit: a holder that panicked
-        // before it created its shallow service would also exit non-zero, and
-        // the deeper open below would then create a fresh service and prove
-        // nothing.
-        assert_eq!(
-            std::os::unix::process::ExitStatusExt::signal(&holder.status),
-            Some(libc::SIGKILL),
-            "the holder must die where it stood, holding its service: {}",
-            String::from_utf8_lossy(&holder.stderr),
-        );
+        leave_a_dead_holder_of_the_shallow_stale_holder_channel(&domain_root);
         let shallow_service_the_holder_left =
             <ipc::Service as iceoryx2::service::Service>::details(
                 &iceoryx2_service_name_of(STALE_HOLDER_CHANNEL_SERVICE_NAME).unwrap(),
@@ -1777,24 +1775,24 @@ mod tests {
             LoggingTunables, StreamlibLoggingConfig,
             install_iceoryx2_log_bridge_at_the_engines_configured_level,
         };
+        use streamlib_runtime_client_contract::runtime_log_event::RuntimeLogEvent;
 
         let Some(domain_root) =
             std::env::var_os(BOUNDED_RECLAIM_RECORD_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
         else {
             let domain = domain_root_parent_within_the_socket_path_budget();
-            let observer = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
+            let domain_root = domain.path().join("iox2");
+            let observer =
+                crate::core::test_support::rerun_this_test_in_a_child_process_with_environment(
                     "iceoryx2::node::tests::an_open_reclaiming_a_dead_holder_logs_its_builder_bounded",
-                    "--exact",
-                    "--test-threads=1",
-                ])
-                .env(
-                    BOUNDED_RECLAIM_RECORD_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
-                    domain.path().join("iox2"),
-                )
-                .env("RUST_LOG", "info")
-                .output()
-                .expect("the test binary re-runs this test in an observer process");
+                    &[
+                        (
+                            BOUNDED_RECLAIM_RECORD_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                            domain_root.as_os_str(),
+                        ),
+                        ("RUST_LOG", std::ffi::OsStr::new("info")),
+                    ],
+                );
             assert!(
                 observer.status.success(),
                 "the observer process failed: {}{}",
@@ -1821,24 +1819,7 @@ mod tests {
 
         let long_lived_node = Iceoryx2Node::new(&domain_root, "streamlib-test/long-lived")
             .expect("the long-lived node opens first");
-        let holder = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "iceoryx2::node::tests::a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind",
-                "--exact",
-                "--test-threads=1",
-            ])
-            .env(
-                STALE_HOLDER_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
-                &domain_root,
-            )
-            .output()
-            .expect("the test binary re-runs the stale-holder test in a holder process");
-        assert_eq!(
-            std::os::unix::process::ExitStatusExt::signal(&holder.status),
-            Some(libc::SIGKILL),
-            "the holder must die where it stood, holding its service: {}",
-            String::from_utf8_lossy(&holder.stderr),
-        );
+        leave_a_dead_holder_of_the_shallow_stale_holder_channel(&domain_root);
         long_lived_node
             .open_or_create_service(
                 STALE_HOLDER_CHANNEL_SERVICE_NAME,
@@ -1854,46 +1835,39 @@ mod tests {
             .filter(|record| record.target == "iceoryx2")
             .collect();
 
+        let origin_of = |record: &RuntimeLogEvent| -> String {
+            record
+                .attrs
+                .get("origin")
+                .and_then(|origin| origin.as_str())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let origin_truncation_marker =
+            iceoryx2_log_record_truncation_marker(ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES);
+        let most_forwarded_origin_bytes =
+            ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES + origin_truncation_marker.len();
+        let most_forwarded_message_bytes = ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES
+            + iceoryx2_log_record_truncation_marker(ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES).len();
+
         let reclaim_record = iceoryx2_records
             .iter()
             .find(|record| record.message.starts_with("Detected dead node"))
             .expect("the open logs the dead holder it reclaims");
         assert!(
-            reclaim_record
-                .attrs
-                .get("origin")
-                .and_then(|origin| origin.as_str())
-                .is_some_and(
-                    |origin| origin.ends_with(&iceoryx2_log_record_truncation_marker(
-                        ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES
-                    ))
-                ),
+            origin_of(reclaim_record).ends_with(&origin_truncation_marker),
             "the reclaim record's origin is the open's whole builder, so it is cut: {:?}",
-            reclaim_record.attrs.get("origin"),
+            origin_of(reclaim_record),
         );
         for record in &iceoryx2_records {
-            let origin = record
-                .attrs
-                .get("origin")
-                .and_then(|origin| origin.as_str())
-                .unwrap_or_default();
+            let origin = origin_of(record);
             assert!(
-                origin.len()
-                    <= ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES
-                        + iceoryx2_log_record_truncation_marker(
-                            ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES
-                        )
-                        .len(),
+                origin.len() <= most_forwarded_origin_bytes,
                 "an iceoryx2 origin of {} bytes reached the log",
                 origin.len()
             );
             assert!(
-                record.message.len()
-                    <= ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES
-                        + iceoryx2_log_record_truncation_marker(
-                            ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES
-                        )
-                        .len(),
+                record.message.len() <= most_forwarded_message_bytes,
                 "an iceoryx2 message of {} bytes reached the log",
                 record.message.len()
             );
