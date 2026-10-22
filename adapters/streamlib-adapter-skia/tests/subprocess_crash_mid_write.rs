@@ -102,9 +102,10 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
 
     // Skia's `MakeGL` bring-up before the `abort()` can take several
     // hundred ms on a cold cache.
+    let skia_helper_cleanup_budget = Duration::from_secs(8);
     let outcome = SubprocessCrashHarness::new(cmd)
         .with_timing(CrashTiming::AfterDelay(Duration::from_millis(400)))
-        .with_cleanup_timeout(Duration::from_secs(8))
+        .with_cleanup_timeout(skia_helper_cleanup_budget)
         .with_post_spawn(move |_child| {
             streamlib_surface_client::send_message_with_fds(
                 &parent_sock_for_hook,
@@ -134,7 +135,7 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
     }
 
     assert!(
-        outcome.cleanup_latency < Duration::from_secs(8),
+        outcome.cleanup_latency < skia_helper_cleanup_budget,
         "cleanup_latency {:?} exceeded budget",
         outcome.cleanup_latency
     );
