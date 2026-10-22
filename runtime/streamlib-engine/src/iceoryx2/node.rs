@@ -1088,10 +1088,9 @@ mod tests {
         );
     }
 
-    /// End-to-end smoke test for the 200 Hz two-stage pipeline shape that
-    /// motivated this engine fix (the MAVLink stress test in PR #836:
-    /// UdpSource → Decoder → Encoder → UdpSink at 200 Hz, where each
-    /// stage's drain window was tight against scheduler jitter).
+    /// End-to-end smoke test for a 200 Hz two-stage pipeline shape
+    /// (UdpSource → Decoder → Encoder → UdpSink), where each stage's drain
+    /// window is tight against scheduler jitter.
     ///
     /// Producer publishes at 200 Hz to service S1; a relay thread drains
     /// S1 and republishes to S2 while periodically pausing to simulate
@@ -1349,7 +1348,7 @@ mod tests {
         );
     }
 
-    /// PowerOfTwo growth (#1421): a publisher primed with a small
+    /// PowerOfTwo growth: a publisher primed with a small
     /// `expected_payload_bytes` HINT must still loan — and deliver — a slice far
     /// larger than the hint, because [`Iceoryx2Service::create_publisher`] opens
     /// under [`iceoryx2::prelude::AllocationStrategy::PowerOfTwo`] and grows the
@@ -1400,7 +1399,7 @@ mod tests {
         assert_eq!(received.payload()[oversized - 1], 0xCD);
     }
 
-    /// End-to-end #1549 reconnect cycle: connect → disconnect → reconnect a
+    /// End-to-end reconnect cycle: connect → disconnect → reconnect a
     /// persistent source+destination pair the way the compiler op wires it, and
     /// prove the per-link reclaim releases both iceoryx2 services so the reconnect
     /// recreates them fresh — reproducing (and defeating) BOTH reported errors:
@@ -1415,8 +1414,7 @@ mod tests {
     ///   reopen is rejected.
     ///
     /// Fail-without-fix: revert `OutputWriterInner::remove_channel_link` /
-    /// `InputMailboxesInner::remove_channel_link` to no-ops (the pre-#1549
-    /// `close_iceoryx2_service` behaviour) and the reconnect's `create_notifier`
+    /// `InputMailboxesInner::remove_channel_link` to no-ops and the reconnect's `create_notifier`
     /// trips `ExceedsMaxSupportedNotifiers` and the deeper `open_or_create_service`
     /// trips `DoesNotSupportRequestedMinBufferSize` — the two `.expect`s panic.
     #[test]
@@ -1509,7 +1507,7 @@ mod tests {
         );
 
         // Reconnect at a DEEPER ring depth. Both `.expect`s inside `connect`
-        // (create_notifier + open_or_create_service) are the #1549 trip-wires.
+        // (create_notifier + open_or_create_service) are the trip-wires.
         connect(64);
         assert!(out_inner.has_channel_publisher("out"));
         assert!(in_inner.has_listener());
@@ -1752,6 +1750,154 @@ mod tests {
             STALE_HOLDER_DEEPER_DEPTH,
             "the recreated service must carry the depth this open asked for"
         );
+    }
+
+    /// Set only in the child process the bounded-reclaim-record test re-runs
+    /// itself in, naming the domain root it opens.
+    const BOUNDED_RECLAIM_RECORD_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_BOUNDED_RECLAIM_RECORD_CHILD_ICEORYX2_DOMAIN_ROOT";
+
+    /// The record iceoryx2 0.10 writes as an open reclaims a service's dead
+    /// holder — a `from self` record whose origin is the open's whole service
+    /// builder — reaches the JSONL with that origin cut at its cap.
+    ///
+    /// Runs in a child process: iceoryx2 takes one logger per process, for
+    /// good, so the bridge is installed there before anything touches
+    /// iceoryx2, rather than racing every other test in this binary for it.
+    #[test]
+    fn an_open_reclaiming_a_dead_holder_logs_its_builder_bounded() {
+        use crate::core::logging::iceoryx2_log_bridge::{
+            ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES, ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES,
+            iceoryx2_log_record_truncation_marker,
+        };
+        use crate::core::logging::one_stream_log_file_written_on_a_test_thread::{
+            OneStreamLogFileWrittenOnThisTestThread, read_every_record_of_a_jsonl_log,
+        };
+        use crate::core::logging::{
+            LoggingTunables, StreamlibLoggingConfig,
+            install_iceoryx2_log_bridge_at_the_engines_configured_level,
+        };
+
+        let Some(domain_root) =
+            std::env::var_os(BOUNDED_RECLAIM_RECORD_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+        else {
+            let domain = domain_root_parent_within_the_socket_path_budget();
+            let observer = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "iceoryx2::node::tests::an_open_reclaiming_a_dead_holder_logs_its_builder_bounded",
+                    "--exact",
+                    "--test-threads=1",
+                ])
+                .env(
+                    BOUNDED_RECLAIM_RECORD_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                    domain.path().join("iox2"),
+                )
+                .env("RUST_LOG", "info")
+                .output()
+                .expect("the test binary re-runs this test in an observer process");
+            assert!(
+                observer.status.success(),
+                "the observer process failed: {}{}",
+                String::from_utf8_lossy(&observer.stdout),
+                String::from_utf8_lossy(&observer.stderr),
+            );
+            return;
+        };
+        let domain_root = std::path::PathBuf::from(domain_root);
+
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let logging = OneStreamLogFileWrittenOnThisTestThread::install(
+            StreamlibLoggingConfig {
+                service_name: "test".into(),
+                pretty_log_mirror_stream: None,
+                intercept_stdio: false,
+                tunables: LoggingTunables::default(),
+            },
+            "RtestBoundedReclaimRecord",
+            project_directory.path(),
+        );
+        install_iceoryx2_log_bridge_at_the_engines_configured_level();
+
+        let long_lived_node = Iceoryx2Node::new(&domain_root, "streamlib-test/long-lived")
+            .expect("the long-lived node opens first");
+        let holder = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "iceoryx2::node::tests::a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env(
+                STALE_HOLDER_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                &domain_root,
+            )
+            .output()
+            .expect("the test binary re-runs the stale-holder test in a holder process");
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&holder.status),
+            Some(libc::SIGKILL),
+            "the holder must die where it stood, holding its service: {}",
+            String::from_utf8_lossy(&holder.stderr),
+        );
+        long_lived_node
+            .open_or_create_service(
+                STALE_HOLDER_CHANNEL_SERVICE_NAME,
+                STALE_HOLDER_MAX_SUBSCRIBERS,
+                STALE_HOLDER_DEEPER_DEPTH,
+            )
+            .expect("the open gets past the service its dead holder left");
+
+        let path = logging.jsonl_log_path();
+        logging.finish();
+        let iceoryx2_records: Vec<_> = read_every_record_of_a_jsonl_log(&path)
+            .into_iter()
+            .filter(|record| record.target == "iceoryx2")
+            .collect();
+
+        let reclaim_record = iceoryx2_records
+            .iter()
+            .find(|record| record.message.starts_with("Detected dead node"))
+            .expect("the open logs the dead holder it reclaims");
+        assert!(
+            reclaim_record
+                .attrs
+                .get("origin")
+                .and_then(|origin| origin.as_str())
+                .is_some_and(
+                    |origin| origin.ends_with(&iceoryx2_log_record_truncation_marker(
+                        ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES
+                    ))
+                ),
+            "the reclaim record's origin is the open's whole builder, so it is cut: {:?}",
+            reclaim_record.attrs.get("origin"),
+        );
+        for record in &iceoryx2_records {
+            let origin = record
+                .attrs
+                .get("origin")
+                .and_then(|origin| origin.as_str())
+                .unwrap_or_default();
+            assert!(
+                origin.len()
+                    <= ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES
+                        + iceoryx2_log_record_truncation_marker(
+                            ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES
+                        )
+                        .len(),
+                "an iceoryx2 origin of {} bytes reached the log",
+                origin.len()
+            );
+            assert!(
+                record.message.len()
+                    <= ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES
+                        + iceoryx2_log_record_truncation_marker(
+                            ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES
+                        )
+                        .len(),
+                "an iceoryx2 message of {} bytes reached the log",
+                record.message.len()
+            );
+        }
     }
 
     #[test]
