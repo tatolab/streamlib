@@ -1835,14 +1835,13 @@ mod tests {
             .filter(|record| record.target == "iceoryx2")
             .collect();
 
-        let origin_of = |record: &RuntimeLogEvent| -> String {
+        fn origin_of(record: &RuntimeLogEvent) -> &str {
             record
                 .attrs
                 .get("origin")
                 .and_then(|origin| origin.as_str())
                 .unwrap_or_default()
-                .to_owned()
-        };
+        }
         let origin_truncation_marker =
             iceoryx2_log_record_truncation_marker(ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES);
         let most_forwarded_origin_bytes =

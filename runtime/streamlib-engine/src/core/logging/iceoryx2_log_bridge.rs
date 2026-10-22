@@ -63,8 +63,20 @@ impl Log for IceoryxLogBridge {
 }
 
 /// What a field cut at `cap_bytes` ends with.
+struct Iceoryx2LogRecordTruncationMarker {
+    cap_bytes: usize,
+}
+
+impl core::fmt::Display for Iceoryx2LogRecordTruncationMarker {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "… [truncated at {} bytes]", self.cap_bytes)
+    }
+}
+
+/// What a field cut at `cap_bytes` ends with, as text.
+#[cfg(test)]
 pub(crate) fn iceoryx2_log_record_truncation_marker(cap_bytes: usize) -> String {
-    format!("… [truncated at {cap_bytes} bytes]")
+    Iceoryx2LogRecordTruncationMarker { cap_bytes }.to_string()
 }
 
 /// An iceoryx2 record's field, displayed with every control character as a
@@ -86,7 +98,12 @@ impl core::fmt::Display for Iceoryx2LogRecordFieldOnOneBoundedLine<'_> {
         };
         let field_formatting = core::fmt::write(&mut bounded_formatter, self.field);
         if bounded_formatter.reached_the_cap {
-            return formatter.write_str(&iceoryx2_log_record_truncation_marker(self.cap_bytes));
+            return core::fmt::Display::fmt(
+                &Iceoryx2LogRecordTruncationMarker {
+                    cap_bytes: self.cap_bytes,
+                },
+                formatter,
+            );
         }
         field_formatting
     }
