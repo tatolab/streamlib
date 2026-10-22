@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `streamlib.vulkan.raw_handles()` — escape hatch for power-user
-//! customers that need direct Vulkan handle access (custom RHIs,
-//! integration with another engine, debug tooling).
+//! [`raw_handles`] and [`crate::VulkanContext::raw_handles`] — escape hatch
+//! for power-user customers that need direct Vulkan handle access (custom
+//! RHIs, integration with another engine, debug tooling).
 //!
 //! The `acquire_*` API on [`crate::VulkanContext`] is the path of least
 //! resistance and handles sync + layout transitions; this is the "you
@@ -23,13 +23,6 @@ use vulkanalia::vk;
 /// can cross any binding boundary — `ash::Image::from_raw`,
 /// `vulkanalia::vk::Image::from_raw`, custom FFI shims, polyglot SDKs.
 /// The customer reconstructs the typed wrapper their binding wants.
-///
-/// `#[repr(C)]` so the layout matches
-/// [`streamlib_adapter_vulkan_abi::RawVulkanHandlesRepr`] byte-for-byte
-/// — the host's cdylib-facing `raw_handles` vtable slot writes through
-/// the repr type and consumers projecting between them rely on the
-/// shared layout. Locked by
-/// `host_vtable::tier1_null_handle_tests::raw_vulkan_handles_repr_matches_source_layout`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RawVulkanHandles {
