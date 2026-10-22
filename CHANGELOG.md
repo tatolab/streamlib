@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.1](https://github.com/tatolab/streamlib/compare/v0.55.0...v0.55.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **engine:** bound every iceoryx2 log record the bridge forwards ([#2913](https://github.com/tatolab/streamlib/issues/2913)) ([83c4913](https://github.com/tatolab/streamlib/commit/83c49139137bbbc69616fc39ab2dc206880bb745))
+
 ## [0.55.0](https://github.com/tatolab/streamlib/compare/v0.54.12...v0.55.0) (2026-10-22)
 
 
