@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.55.0](https://github.com/tatolab/streamlib/compare/v0.54.12...v0.55.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** HostVulkanDevice::third_party_gpu_capabilities and the ThirdPartyGpuCapabilities re-export are removed, and the vulkan-jpeg crate leaves the workspace.
+
+### Miscellaneous
+
+* **engine:** the JPEG leftovers are gone — sdk/vulkan-jpeg, the nvJPEG tree and probe, the held JPEG consumers and their fixture ([#2908](https://github.com/tatolab/streamlib/issues/2908)) ([0eef212](https://github.com/tatolab/streamlib/commit/0eef21239f90a641f824562802402f8dd413e572))
+
 ## [0.54.12](https://github.com/tatolab/streamlib/compare/v0.54.11...v0.54.12) (2026-10-21)
 
 
