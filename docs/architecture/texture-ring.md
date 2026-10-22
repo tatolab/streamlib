@@ -27,8 +27,7 @@ it. Hand-rolling a parallel ring inside a consumer is the
 anti-pattern this abstraction exists to prevent.
 
 For GPU-native producers that write to ring slots via a compute
-kernel (camera, future GPU-decoded JPEG / H.264 / H.265 output)
-the same ring shape applies — the only difference is whether the
+kernel (camera, etc.) the same ring shape applies — the only difference is whether the
 consumer fills a slot via `copy_pixel_buffer_to_texture` (CPU
 upload) or by dispatching its own compute kernel directly against
 the slot's `texture`. The ring doesn't care.
@@ -203,7 +202,7 @@ pipeline → async pipeline) and a separate engine concern.
 4. **Drop the ring in `teardown` / `stop`.** The `Drop` impl
    unregisters slot entries from the texture cache.
 
-### GPU-native producers (camera, future JPEG decoder, etc.)
+### GPU-native producers (camera, etc.)
 
 Same ring construction (privileged, setup-time). Per-frame:
 
@@ -273,7 +272,7 @@ implementations
 ([`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md)
 — "search first, extend never parallel").
 Decode-output texture rings were the *unspoken* shape across
-H.264 / H.265 / `bgra_file_source` / future JPEG / camera —
+H.264 / H.265 / `bgra_file_source` / camera —
 every consumer hand-rolled the same pattern (or worse, the
 decoders escalated every frame and allocated a fresh
 `VkImage`). Lifting the shape into the engine:
@@ -320,8 +319,6 @@ constructed in `setup()`).
   - `GpuContextFullAccess::create_texture_ring`,
     `GpuContextLimitedAccess::copy_pixel_buffer_to_texture` in
     `runtime/streamlib-engine/src/core/context/gpu_context.rs`
-- **Consumer (compute-kernel fill)**:
-  - `sdk/vulkan-jpeg/src/vulkan_compute_backend.rs`
 - **Related abstractions**:
   - [`texture-registration.md`](texture-registration.md) —
     per-surface lifecycle record the ring populates at

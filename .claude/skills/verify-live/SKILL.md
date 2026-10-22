@@ -16,7 +16,7 @@ Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, t
 3. **Affects an encoder or decoder?** → **encoder/decoder round trip** — the colour rig (below), a sender stream encoding and a receiver stream decoding, run for both codecs.
 4. **Only camera / GPU-compute / GPU-texture, no codec?** → **camera-or-kernel through the encoder** — the `tatolab new` scaffold, its source or effect swapped for the change's, its encoder's track read and decoded.
 5. **Frame-ordering / timestamp / drop-sensitive?** → **v4l2loopback motion** (a `testsrc2` source with a visible per-frame counter, so a drop/repeat shows by eye) through the same scaffold, plus `timestamp_ns` in the dump's `objects.jsonl`.
-6. **Color-path change?** → the **PSNR fixture rigs** (below), with at least one negative-injection mode to prove the gate isn't vacuous.
+6. **Color-path change?** → the **PSNR fixture rig** (below), with at least one negative-injection mode to prove the gate isn't vacuous.
 7. **Audio — capture, playback, the device seam, an audio built-in?** → not this skill. The **audio loopback rigs** (below) measure a known signal rather than pixels, and `/verify-audio` drives them.
 8. **An extension wheel that carries media over a network — WHIP/WHEP?** → the **networking arm** (below). Same decode-back lock as the codec rigs, with a real endpoint in the middle.
 
@@ -62,12 +62,11 @@ The same reader, the same decode, the same audit and PSNR scoring. What doesn't 
 ### Naming the camera
 A stream opens the camera its `CameraSource` `device_id` config names (`stream_builder.add(CameraSource, config={"device_id": "/dev/videoN"})`), else the first one found. `STREAMLIB_CAMERA_DEVICE` is read only by the runtime-backed camera tests' stream (`tests/stream-on-runtime/camera_under_test.py`), never by the engine, and a stream reads the runtime's environment, never `tatolab run`'s — so set it on the `tatolabd` the stream loads into.
 
-## PSNR rigs
-Two fixture rigs guard the color path; each has bug-injection modes that must deterministically FAIL to prove the gate is live:
+## PSNR rig
+One fixture rig guards the color path; it has bug-injection modes that must deterministically FAIL to prove the gate is live:
 - **`e2e_fixture_psnr_test_pattern.sh <out> h264|h265`** — the encode colour gate and the codec round trip, no camera: a sender stream (`TestPatternSource` → encoder, its port exposed) and a receiver stream (`RelayTrackSource` → decoder) on one runtime, the sender's track read with `tatolab-read-track`, decoded by the rig's ffmpeg, and scored with `cargo xtask psnr bar-colors` — each SMPTE bar's median colour against a per-codec baseline (`psnr_test_pattern_bar_colors_baseline_<codec>.tsv`) at ±0.05. The receiver's decode is proven by its decoder's frame count off `graph`. Negative `INJECT_BUG=bt601-bt709` / `swap-channels` / `swap-chroma` must FAIL naming bars. Range-swap is refused; the fixture's header says why. `BASELINE_CAPTURE=1` re-takes a codec's baseline. The engine decoder's pixels are not in this rig's path, so its H.265 conformance-window crop is gated by `cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip` on the rig, whose extent assertion is the only thing that fails when the window stops reaching published frames.
-- **`e2e_fixture_psnr_jpeg.sh <out>`** — GPU JPEG decode. Still on the *pre-#2085* shape: it drives the `jpeg-psnr` example and scores with ffmpeg, because the JPEG rung is held (#1212). It implements the three colour modes in its own `case` statement and refuses `swap-chroma` by name.
 
-**PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout). Chroma has one floor and no acceptable band: either U or V under 30 dB fails the frame outright. For the video rig the bar lock and the injection modes live in `cargo xtask psnr` — pure GPU-free image math whose unit tests run in CI, so the scorer itself is gated even though the runs that feed it are not; ffmpeg decodes but does not score. The JPEG rig still scores with ffmpeg.
+**PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout). Chroma has one floor and no acceptable band: either U or V under 30 dB fails the frame outright. For the video rig the bar lock and the injection modes live in `cargo xtask psnr` — pure GPU-free image math whose unit tests run in CI, so the scorer itself is gated even though the runs that feed it are not; ffmpeg decodes but does not score.
 
 ## Networking arm
 

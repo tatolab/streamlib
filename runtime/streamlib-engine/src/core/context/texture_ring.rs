@@ -117,11 +117,7 @@ impl TextureRingSlot {
         unsafe { std::str::from_utf8_unchecked(&self.surface_id_bytes[..len]) }
     }
 
-    /// Index of this slot within the ring's slot vector. Public for
-    /// callers who need the slot identity beyond the `surface_id`
-    /// (e.g. third-party backends that cache per-slot CUDA imports —
-    /// see the parked nvJPEG backend at
-    /// `vulkan/_nvjpeg_impl_pending_/resources.rs`).
+    /// Index of this slot within the ring's slot vector.
     pub fn slot_index(&self) -> u32 {
         self.slot_index
     }

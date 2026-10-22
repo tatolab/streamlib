@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "sdk/streamlib-error", # engine-free: canonical Error + Result
-    "sdk/vulkan-jpeg", # engine-free JPEG decoder — CPU parser + Huffman entropy decode + fused Vulkan-compute kernel (nvJPEG backend parked in the engine)
     "xtask",                    # Development tasks (cargo xtask <command>)
     "sdk/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
     "runtime/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
