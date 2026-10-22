@@ -103,6 +103,9 @@ struct Iceoryx2LogRecordFieldBoundedFormatter<'formatter, 'output> {
 
 impl core::fmt::Write for Iceoryx2LogRecordFieldBoundedFormatter<'_, '_> {
     fn write_str(&mut self, piece: &str) -> core::fmt::Result {
+        if self.reached_the_cap {
+            return Err(core::fmt::Error);
+        }
         for character in piece.chars() {
             let character = if character.is_control() {
                 ' '
@@ -248,6 +251,25 @@ mod tests {
         assert_eq!(
             field_as_the_bridge_forwards_it(format_args!("{field}"), 2),
             format!("a{}", iceoryx2_log_record_truncation_marker(2)),
+        );
+    }
+
+    /// A `Debug` that carries on writing after a write it was refused.
+    struct DebugIgnoringItsWriteErrors;
+
+    impl core::fmt::Debug for DebugIgnoringItsWriteErrors {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let _ = formatter.write_str("abé");
+            let _ = formatter.write_str("Z");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn nothing_after_the_cut_is_forwarded_even_when_the_field_ignores_the_refusal() {
+        assert_eq!(
+            field_as_the_bridge_forwards_it(format_args!("{DebugIgnoringItsWriteErrors:?}"), 3),
+            format!("ab{}", iceoryx2_log_record_truncation_marker(3)),
         );
     }
 
