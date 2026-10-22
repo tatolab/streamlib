@@ -137,6 +137,16 @@ it, and reopens the active name. `tatolab logs --follow` does this.
 | `channel` | string | yes | `"fd1"` (stdout) or `"fd2"` (stderr) when `intercepted: true`. `null` otherwise. |
 | `attrs` | object<string, any> | yes (default `{}`) | User-supplied structured fields captured from the emitting call site. For Rust, anything passed to `tracing::info!(foo = 123, bar = "abc", "msg")` other than the well-known fields above; for a Python event, the `**attrs` / `attrs` object passed to `tatolab.stream.log.*`. |
 
+### iceoryx2's records
+
+A record iceoryx2 emits has target `"iceoryx2"`, its message in `message` and
+where iceoryx2 says it came from in `attrs.origin`, a string — for many records
+the leading part of an iceoryx2 object's `Debug`. Both are written on one line,
+every control character as a space, and bounded: at most 128 bytes of `origin`
+and 512 of `message` are kept. A longer field is cut at a character boundary
+within its cap and then carries `… [truncated at <cap> bytes]`, so a cut field
+is at most its cap plus that marker.
+
 ## Ordering
 
 - **Within a stream**: file order — rotated segments by ascending `seq`,

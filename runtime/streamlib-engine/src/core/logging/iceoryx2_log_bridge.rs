@@ -20,8 +20,18 @@ use iceoryx2_log::Log;
 use iceoryx2_log::LogLevel;
 use tracing::level_filters::LevelFilter;
 
+/// Most bytes of an iceoryx2 record's `origin` the bridge forwards ahead of the
+/// truncation marker — enough for the leading type name of a `from self`
+/// record, whose origin is the `Debug` of the whole iceoryx2 object.
+pub(crate) const ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES: usize = 128;
+
+/// Most bytes of an iceoryx2 record's message the bridge forwards ahead of the
+/// truncation marker.
+pub(crate) const ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES: usize = 512;
+
 /// Zero-sized bridge implementing iceoryx2's [`Log`] trait by
-/// forwarding records into the streamlib tracing pipeline.
+/// forwarding records into the streamlib tracing pipeline, each field on one
+/// line and bounded by its cap.
 pub struct IceoryxLogBridge;
 
 impl Log for IceoryxLogBridge {
@@ -31,29 +41,103 @@ impl Log for IceoryxLogBridge {
         origin: core::fmt::Arguments,
         formatted_message: core::fmt::Arguments,
     ) {
-        // `tracing::*!` macros take compile-time log levels; dispatch
-        // through a match so iceoryx2's runtime LogLevel maps to the
-        // matching tracing level. `Fatal` collapses to `Error` —
-        // tracing has no separate fatal level and iceoryx2 emits
-        // `Fatal` for genuinely-process-ending conditions that
-        // iceoryx2 itself will abort on shortly after.
+        let origin = Iceoryx2LogRecordFieldOnOneBoundedLine {
+            field: origin,
+            cap_bytes: ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES,
+        };
+        let message = Iceoryx2LogRecordFieldOnOneBoundedLine {
+            field: formatted_message,
+            cap_bytes: ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES,
+        };
+        // iceoryx2 aborts shortly after a `Fatal`, and tracing has no level
+        // above `Error`.
         match log_level {
-            LogLevel::Trace => {
-                tracing::trace!(target: "iceoryx2", origin = %origin, "{}", formatted_message)
-            }
-            LogLevel::Debug => {
-                tracing::debug!(target: "iceoryx2", origin = %origin, "{}", formatted_message)
-            }
-            LogLevel::Info => {
-                tracing::info!(target: "iceoryx2", origin = %origin, "{}", formatted_message)
-            }
-            LogLevel::Warn => {
-                tracing::warn!(target: "iceoryx2", origin = %origin, "{}", formatted_message)
-            }
+            LogLevel::Trace => tracing::trace!(target: "iceoryx2", origin = %origin, "{message}"),
+            LogLevel::Debug => tracing::debug!(target: "iceoryx2", origin = %origin, "{message}"),
+            LogLevel::Info => tracing::info!(target: "iceoryx2", origin = %origin, "{message}"),
+            LogLevel::Warn => tracing::warn!(target: "iceoryx2", origin = %origin, "{message}"),
             LogLevel::Error | LogLevel::Fatal => {
-                tracing::error!(target: "iceoryx2", origin = %origin, "{}", formatted_message)
+                tracing::error!(target: "iceoryx2", origin = %origin, "{message}")
             }
         }
+    }
+}
+
+/// What a field cut at `cap_bytes` ends with.
+struct Iceoryx2LogRecordTruncationMarker {
+    cap_bytes: usize,
+}
+
+impl core::fmt::Display for Iceoryx2LogRecordTruncationMarker {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "… [truncated at {} bytes]", self.cap_bytes)
+    }
+}
+
+/// What a field cut at `cap_bytes` ends with, as text.
+#[cfg(test)]
+pub(crate) fn iceoryx2_log_record_truncation_marker(cap_bytes: usize) -> String {
+    Iceoryx2LogRecordTruncationMarker { cap_bytes }.to_string()
+}
+
+/// An iceoryx2 record's field, displayed with every control character as a
+/// space and cut on a character boundary at `cap_bytes`, followed by the
+/// truncation marker. Formatted only when a subscriber keeps the record, and
+/// never past the cap.
+struct Iceoryx2LogRecordFieldOnOneBoundedLine<'a> {
+    field: core::fmt::Arguments<'a>,
+    cap_bytes: usize,
+}
+
+impl core::fmt::Display for Iceoryx2LogRecordFieldOnOneBoundedLine<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut bounded_formatter = Iceoryx2LogRecordFieldBoundedFormatter {
+            formatter,
+            bytes_written: 0,
+            cap_bytes: self.cap_bytes,
+            reached_the_cap: false,
+        };
+        let field_formatting = core::fmt::write(&mut bounded_formatter, self.field);
+        if bounded_formatter.reached_the_cap {
+            return core::fmt::Display::fmt(
+                &Iceoryx2LogRecordTruncationMarker {
+                    cap_bytes: self.cap_bytes,
+                },
+                formatter,
+            );
+        }
+        field_formatting
+    }
+}
+
+/// Forwards one field to `formatter` on one line, refusing any write past
+/// `cap_bytes`.
+struct Iceoryx2LogRecordFieldBoundedFormatter<'formatter, 'output> {
+    formatter: &'formatter mut core::fmt::Formatter<'output>,
+    bytes_written: usize,
+    cap_bytes: usize,
+    reached_the_cap: bool,
+}
+
+impl core::fmt::Write for Iceoryx2LogRecordFieldBoundedFormatter<'_, '_> {
+    fn write_str(&mut self, piece: &str) -> core::fmt::Result {
+        if self.reached_the_cap {
+            return Err(core::fmt::Error);
+        }
+        for character in piece.chars() {
+            let character = if character.is_control() {
+                ' '
+            } else {
+                character
+            };
+            if self.bytes_written + character.len_utf8() > self.cap_bytes {
+                self.reached_the_cap = true;
+                return Err(core::fmt::Error);
+            }
+            self.formatter.write_char(character)?;
+            self.bytes_written += character.len_utf8();
+        }
+        Ok(())
     }
 }
 
@@ -113,7 +197,207 @@ fn iceoryx2_log_level_for(tracing_level: LevelFilter) -> Option<LogLevel> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
+    use serial_test::serial;
+    use streamlib_runtime_client_contract::runtime_log_event::LogLevel as RuntimeLogEventLevel;
+
     use super::*;
+    use crate::core::logging::one_stream_log_file_written_on_a_test_thread::{
+        OneStreamLogFileWrittenOnThisTestThread, read_every_record_of_a_jsonl_log,
+    };
+    use crate::core::logging::{LoggingTunables, StreamlibLoggingConfig};
+
+    /// A `Debug` as long as `pieces` single-byte writes, counting how many it
+    /// was let make.
+    struct DebugOfManyPiecesCountingItsWrites<'a> {
+        pieces: usize,
+        writes_made: &'a Cell<usize>,
+    }
+
+    impl core::fmt::Debug for DebugOfManyPiecesCountingItsWrites<'_> {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            for _ in 0..self.pieces {
+                self.writes_made.set(self.writes_made.get() + 1);
+                formatter.write_str("x")?;
+            }
+            Ok(())
+        }
+    }
+
+    fn field_as_the_bridge_forwards_it(field: core::fmt::Arguments, cap_bytes: usize) -> String {
+        Iceoryx2LogRecordFieldOnOneBoundedLine { field, cap_bytes }.to_string()
+    }
+
+    #[test]
+    fn a_field_within_its_cap_is_forwarded_unchanged() {
+        let service = "699db7594e4b2afc49d60cb96216d8b9f8307333";
+        assert_eq!(
+            field_as_the_bridge_forwards_it(
+                format_args!("Detected dead node in service {service}."),
+                ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES,
+            ),
+            format!("Detected dead node in service {service}."),
+        );
+    }
+
+    #[test]
+    fn a_field_exactly_at_its_cap_carries_no_truncation_marker() {
+        let field = "y".repeat(16);
+        assert_eq!(
+            field_as_the_bridge_forwards_it(format_args!("{field}"), 16),
+            field,
+        );
+    }
+
+    #[test]
+    fn a_field_past_its_cap_is_cut_there_and_says_so() {
+        let field = "z".repeat(4096);
+        assert_eq!(
+            field_as_the_bridge_forwards_it(format_args!("{field}"), 128),
+            format!(
+                "{}{}",
+                "z".repeat(128),
+                iceoryx2_log_record_truncation_marker(128)
+            ),
+        );
+    }
+
+    #[test]
+    fn a_cut_never_splits_a_character() {
+        let field = "aé";
+        assert_eq!(
+            field_as_the_bridge_forwards_it(format_args!("{field}"), 2),
+            format!("a{}", iceoryx2_log_record_truncation_marker(2)),
+        );
+    }
+
+    /// A `Debug` that carries on writing after a write it was refused.
+    struct DebugIgnoringItsWriteErrors;
+
+    impl core::fmt::Debug for DebugIgnoringItsWriteErrors {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let _ = formatter.write_str("abé");
+            let _ = formatter.write_str("Z");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn nothing_after_the_cut_is_forwarded_even_when_the_field_ignores_the_refusal() {
+        assert_eq!(
+            field_as_the_bridge_forwards_it(format_args!("{DebugIgnoringItsWriteErrors:?}"), 3),
+            format!("ab{}", iceoryx2_log_record_truncation_marker(3)),
+        );
+    }
+
+    #[test]
+    fn a_field_spanning_lines_is_forwarded_on_one() {
+        assert_eq!(
+            field_as_the_bridge_forwards_it(
+                format_args!("first\nsecond\r\tthird"),
+                ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES,
+            ),
+            "first second  third",
+        );
+    }
+
+    #[test]
+    fn a_field_past_its_cap_is_not_formatted_beyond_it() {
+        let writes_made = Cell::new(0);
+        let long_debug = DebugOfManyPiecesCountingItsWrites {
+            pieces: 1_000_000,
+            writes_made: &writes_made,
+        };
+        field_as_the_bridge_forwards_it(format_args!("{long_debug:?}"), 128);
+        assert_eq!(
+            writes_made.get(),
+            129,
+            "formatting must stop at the first write past the cap"
+        );
+    }
+
+    #[test]
+    fn a_record_no_subscriber_keeps_is_never_formatted() {
+        let writes_made = Cell::new(0);
+        let long_debug = DebugOfManyPiecesCountingItsWrites {
+            pieces: 4096,
+            writes_made: &writes_made,
+        };
+        let error_only_subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::ERROR)
+            .with_writer(std::io::sink)
+            .finish();
+        tracing::subscriber::with_default(error_only_subscriber, || {
+            HOST_BRIDGE.log(
+                LogLevel::Debug,
+                format_args!("{long_debug:?}"),
+                format_args!("{long_debug:?}"),
+            );
+        });
+        assert_eq!(writes_made.get(), 0);
+    }
+
+    /// A `from self` record carrying a multi-kilobyte `Debug` origin reaches
+    /// the stream's JSONL as one schema-valid line, its origin cut at the cap.
+    #[test]
+    #[serial]
+    fn a_record_with_a_multi_kilobyte_origin_reaches_the_jsonl_bounded() {
+        unsafe { std::env::set_var("RUST_LOG", "debug") };
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let logging = OneStreamLogFileWrittenOnThisTestThread::install(
+            StreamlibLoggingConfig {
+                service_name: "test".into(),
+                pretty_log_mirror_stream: None,
+                intercept_stdio: false,
+                tunables: LoggingTunables::default(),
+            },
+            "RtestIceoryx2Bound",
+            project_directory.path(),
+        );
+
+        let writes_made = Cell::new(0);
+        let builder_sized_debug = DebugOfManyPiecesCountingItsWrites {
+            pieces: 8 * 1024,
+            writes_made: &writes_made,
+        };
+        HOST_BRIDGE.log(
+            LogLevel::Warn,
+            format_args!("{builder_sized_debug:?}"),
+            format_args!(
+                "Detected dead node in service 699db.\nTrying to cleanup stale resources."
+            ),
+        );
+
+        let path = logging.jsonl_log_path();
+        logging.finish();
+        let records = read_every_record_of_a_jsonl_log(&path);
+        let record = records
+            .iter()
+            .find(|record| record.target == "iceoryx2")
+            .expect("the bridged record reaches the stream's JSONL");
+
+        assert_eq!(record.level, RuntimeLogEventLevel::Warn);
+        assert_eq!(
+            record.message,
+            "Detected dead node in service 699db. Trying to cleanup stale resources."
+        );
+        assert_eq!(
+            record
+                .attrs
+                .get("origin")
+                .and_then(|origin| origin.as_str()),
+            Some(
+                format!(
+                    "{}{}",
+                    "x".repeat(ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES),
+                    iceoryx2_log_record_truncation_marker(ICEORYX2_LOG_RECORD_ORIGIN_CAP_BYTES)
+                )
+                .as_str()
+            ),
+        );
+    }
 
     /// Every level a subscriber can admit maps onto the iceoryx2 level that
     /// lets exactly that much through.
