@@ -1,34 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `streamlib_adapter_skia::tests::subprocess_crash_mid_write` —
-//! exercises the public `SubprocessCrashHarness` from
-//! `streamlib-surface-adapter::testing` against a subprocess that has
-//! built a full `SkiaGlContext` on top of the OpenGL adapter, drawn
-//! into a Skia canvas, and then `abort()`s before its drop hook can
-//! call `flush_and_submit_surface`.
-//!
-//! The harness spawns the helper subprocess
-//! (`skia_adapter_subprocess_helper`), the helper imports a DMA-BUF
-//! passed via SCM_RIGHTS into its own EGL+GL stack, brings up Skia,
-//! issues a draw on the canvas, then — per the `crash-mid-write`
-//! role — `abort()`s with the write guard still live. The host-side
-//! observation closure watches the inherited pipe FD and reports
-//! cleanup once the kernel reaps the subprocess.
-//!
-//! Independent of the Python bridge — exercises the Rust adapter
-//! directly against `HostVulkanDevice`. The Python wrapper rides the
-//! same code paths transitively (`streamlib.adapters.skia.SkiaContext`
-//! composes on `OpenGLContext`, just as `SkiaGlContext` does in Rust).
-//!
-//! Mirror of
-//! `streamlib-adapter-opengl/tests/subprocess_crash_mid_write.rs` —
-//! the wrappage difference is that the helper here also constructs a
-//! `SkiaGlContext` and acquires a Skia write guard before the abort,
-//! exercising the additional drop-order chain
-//! (`SkiaGlWriteView::drop` → `flush_and_submit_surface` →
+//! A subprocess that holds a live Skia write guard on an imported DMA-BUF
+//! `abort()`s; the host observes the kernel reaping it even though the drop
+//! chain (`SkiaGlWriteView::drop` → `flush_and_submit_surface` →
 //! `lock_make_current` → `OpenGlSurfaceAdapter::end_write_access` →
-//! `glFinish`) that the OpenGL adapter test alone does not cover.
+//! `glFinish`) never runs.
 
 #![cfg(target_os = "linux")]
 
@@ -66,8 +43,6 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
         }
     };
 
-    // Allocate a host render-target DMA-BUF the subprocess will import
-    // through EGL + GL + Skia.
     let texture = gpu
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
@@ -81,10 +56,8 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
         .expect("dma_buf_plane_layout");
     let modifier = texture.vulkan_inner().chosen_drm_format_modifier();
 
-    // Pipe pair — the parent observes EOF on the read end once the
-    // subprocess is reaped (kernel closes the inherited write end on
-    // exit / SIGKILL). Standard "did cleanup fire?" observation
-    // primitive, mirror of the OpenGL adapter's crash test.
+    // The parent observes EOF on the read end once the kernel closes the
+    // child's inherited write end on exit / SIGKILL.
     let mut pipe_fds = [-1i32; 2];
     unsafe {
         let r = libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC);
@@ -97,8 +70,7 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
     let read_fd = pipe_fds[0];
     let write_fd = pipe_fds[1];
 
-    // The helper reads the surface descriptor + DMA-BUF fd over a
-    // socketpair (SCM_RIGHTS) — set that up here.
+    // The helper reads the surface descriptor + DMA-BUF fd over SCM_RIGHTS.
     let (parent_sock, child_sock) = UnixStream::pair().expect("socketpair");
     let child_fd = child_sock.into_raw_fd();
     unsafe {
@@ -117,12 +89,9 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
     let request = serde_json::json!({
         "width": 64u32,
         "height": 64u32,
-        // Vulkan `Bgra8Unorm` is "memory: B,G,R,A". DRM_FORMAT_ARGB8888
-        // is the matching fourcc on a little-endian host — see
-        // `streamlib-adapter-opengl/tests/common.rs` for the full
-        // reasoning. Using ABGR8888 here would silently swap R↔B on
-        // every GL-side write because the EGL importer trusts the
-        // declared fourcc.
+        // Vulkan `Bgra8Unorm` is memory B,G,R,A, which is DRM_FORMAT_ARGB8888
+        // on a little-endian host; the EGL importer trusts the declared
+        // fourcc, so ABGR8888 would swap R↔B on every GL-side write.
         "drm_fourcc": DRM_FORMAT_ARGB8888,
         "drm_format_modifier": modifier,
         "plane_offset": plane[0].0,
@@ -131,12 +100,8 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
     let request_bytes = serde_json::to_vec(&request).expect("serialize");
     let parent_sock_for_hook = parent_sock;
 
-    // Bump the cleanup timeout vs. the OpenGL adapter's 3s budget.
-    // The Skia helper does noticeably more work in `crash-mid-write`
-    // (constructs `SkiaGlContext` via `MakeGL`, acquires a write
-    // guard, issues a Skia draw) before reaching the `abort()`. On a
-    // cold cache that startup can run several hundred ms — give the
-    // harness room without regressing on signal.
+    // Skia's `MakeGL` bring-up before the `abort()` can take several
+    // hundred ms on a cold cache.
     let outcome = SubprocessCrashHarness::new(cmd)
         .with_timing(CrashTiming::AfterDelay(Duration::from_millis(400)))
         .with_cleanup_timeout(Duration::from_secs(8))
@@ -173,14 +138,8 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
         "cleanup_latency {:?} exceeded budget",
         outcome.cleanup_latency
     );
-    // Discriminate "actually got into the crash path" from "died at
-    // setup": helper's own `abort()` raises SIGABRT, the harness's
-    // watchdog SIGKILLs if the helper out-runs the AfterDelay window.
-    // Either is a signal-terminated exit (no exit code). A `die()` /
-    // `ExitCode(1)` from a setup-time failure (e.g. `EglRuntime::new`,
-    // `SkiaGlContext::new`, `register_host_surface`) returns
-    // `signal() == None`, which we want to fail-loud rather than
-    // silently green via a mere `!success()` check.
+    // SIGABRT (the helper's own abort) or SIGKILL (the harness watchdog)
+    // proves the crash path was reached; a setup failure exits with a code.
     let exit_status = outcome.exit_status.expect("child waited");
     assert!(
         exit_status.signal().is_some(),
@@ -189,9 +148,7 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
          which means setup failed before the crash path was reached"
     );
 
-    // Keep the host texture live until after the harness asserts the
-    // child exited — the registered DMA-BUF FD has to remain valid
-    // while the subprocess is importing it.
+    // The DMA-BUF must stay valid while the subprocess imports it.
     drop(texture);
     drop(gpu);
 }
