@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-api-server"
-version = "1.0.0"
+version.workspace = true
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "The local API a host serves for a streamlib engine — graph inspection per loaded stream, node catalogs, channel taps, WebSocket event streaming, MCP, OpenAPI spec."

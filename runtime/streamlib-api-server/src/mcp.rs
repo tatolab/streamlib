@@ -4,7 +4,8 @@
 //! The runtime's MCP server, served by the official SDK, `rmcp`.
 //!
 //! [`LocalApiMcpServerHandler`] is the runtime's whole MCP surface: its tools
-//! are the control vocabulary — the observation verbs `graph` and `logs`; the
+//! are the control vocabulary — the observation verbs `graph`, `logs` and
+//! `describe_runtime`; the
 //! graph-mutation verbs `add_node`, `remove_node`,
 //! `connect` and `disconnect`, each naming a node by its name; and the stream
 //! actions `run_stream`, `stop_stream`, `start_stream`, `remove_stream`,
@@ -77,11 +78,11 @@ const SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATE
 /// Server identity carried in every result's `serverInfo`.
 const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 
-/// Server version carried in `serverInfo` — the api-server crate version.
+/// Server version carried in `serverInfo` — the runtime's crate version.
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings schema; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings schema; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -511,6 +512,11 @@ struct RemoveRelayToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct ListRelaysToolArguments {}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct DescribeRuntimeToolArguments {}
 
 /// A tool's answer: its result, or the message an `isError` result carries.
 type ToolCallAnswer = Result<CallToolResult, String>;
@@ -951,6 +957,19 @@ impl LocalApiMcpServerHandler {
             .await?;
         serialized_tool_result("list_relays", &ListRelaysToolResult { relays })
     }
+
+    #[tool(
+        description = "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream."
+    )]
+    async fn describe_runtime(
+        &self,
+        Parameters(DescribeRuntimeToolArguments {}): Parameters<DescribeRuntimeToolArguments>,
+    ) -> ToolCallAnswer {
+        serialized_tool_result(
+            "describe_runtime",
+            &self.operations_on_the_loaded_streams.describe_this_runtime(),
+        )
+    }
 }
 
 fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamState {
@@ -1139,6 +1158,7 @@ pub(crate) mod tests {
     use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
     use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
     use streamlib::sdk::error::Result;
+    use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
     use streamlib::sdk::runtime::{
         BoxFuture, OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations,
     };
@@ -1224,6 +1244,7 @@ pub(crate) mod tests {
         "configure_relay",
         "remove_relay",
         "list_relays",
+        "describe_runtime",
     ];
 
     /// The tools that act on one stream, each naming it with a required
@@ -1384,6 +1405,12 @@ pub(crate) mod tests {
         assert_eq!(
             discovered.server_info().map(|server_info| server_info.name),
             Some(MCP_SERVER_NAME.to_string())
+        );
+        assert_eq!(
+            discovered
+                .server_info()
+                .map(|server_info| server_info.version),
+            Some(the_workspace_package_version())
         );
         assert!(discovered.capabilities.tools.is_some(), "{discovered:?}");
         assert!(
@@ -1579,6 +1606,38 @@ pub(crate) mod tests {
             matches!(subscription.end(), Some(SubscriptionEnd::Graceful(_))),
             "the stream closes with the listen request's own final result"
         );
+    }
+
+    /// `[workspace.package] version` in the workspace manifest: the version every runtime crate
+    /// takes.
+    fn the_workspace_package_version() -> String {
+        let workspace_manifest_text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml"),
+        )
+        .expect("the workspace manifest reads");
+        workspace_manifest_text
+            .lines()
+            .skip_while(|line| line.trim() != "[workspace.package]")
+            .find_map(|line| line.trim().strip_prefix("version = "))
+            .map(|quoted_version| quoted_version.trim_matches('"').to_owned())
+            .expect("the workspace manifest names a package version")
+    }
+
+    #[tokio::test]
+    async fn describe_runtime_answers_the_runtimes_description_and_names_no_stream() {
+        let described = tool_call_result(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "describe_runtime",
+            json!({}),
+        )
+        .await;
+        let described: DescribeRuntimeToolResult =
+            serde_json::from_value(first_text_block_json(&described)).unwrap();
+        assert_eq!(
+            described,
+            crate::control_plane_stub_support::the_stub_runtimes_description()
+        );
+        assert!(!TOOLS_THAT_REQUIRE_A_STREAM.contains(&"describe_runtime"));
     }
 
     #[tokio::test]

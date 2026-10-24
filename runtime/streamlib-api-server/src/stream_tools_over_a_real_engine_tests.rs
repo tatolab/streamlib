@@ -322,6 +322,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     fn this_machines_name(&self) -> &streamlib::sdk::runtime::MachineName {
         self.engine.this_machines_name()
     }
+    fn describe_this_runtime(
+        &self,
+    ) -> streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult {
+        self.engine.describe_this_runtime()
+    }
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
         stream_name: &str,

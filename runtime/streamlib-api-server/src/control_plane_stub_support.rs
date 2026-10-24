@@ -177,6 +177,18 @@ pub(crate) fn the_stub_machine() -> &'static ::streamlib::sdk::runtime::MachineN
     })
 }
 
+/// The description a stub runtime answers `describe_runtime` with: a fixed
+/// version, build id, uptime and own-log folder.
+pub(crate) fn the_stub_runtimes_description()
+-> ::streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult {
+    ::streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult {
+        version: "0.0.0-stub".to_owned(),
+        build_id: "0.0.0-stub+unknown.stub".to_owned(),
+        up_for_ms: 266_400_000,
+        runtime_log_directory: Some(::std::path::PathBuf::from("/stub-state/logs")),
+    }
+}
+
 /// The one stream a stub runtime loads: the stub itself.
 pub(crate) const STUB_STREAM_NAME: &str = "stub-stream";
 
@@ -215,7 +227,8 @@ pub(crate) fn the_stub_runtime_takes_no_stream_action(
 }
 
 /// Implement [`OperationsOnTheStreamsLoadedInThisRuntime`] for a stub
-/// `RuntimeOperations` type as a runtime that loads one stream, the stub:
+/// `RuntimeOperations` type as a runtime described by
+/// [`the_stub_runtimes_description`] that loads one stream, the stub:
 /// every call naming it reaches a clone of the stub (whose state is shared
 /// behind `Arc`s); the node catalog is the native registry's,
 /// and its interpreter described nothing; the stub stream's log holds no
@@ -227,6 +240,12 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
         impl ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime for $stub_type {
             fn this_machines_name(&self) -> &::streamlib::sdk::runtime::MachineName {
                 $crate::control_plane_stub_support::the_stub_machine()
+            }
+            fn describe_this_runtime(
+                &self,
+            ) -> ::streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult
+            {
+                $crate::control_plane_stub_support::the_stub_runtimes_description()
             }
             fn runtime_operations_of_the_stream_a_call_names(
                 &self,

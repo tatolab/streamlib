@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
 use super::MachineName;
@@ -93,6 +94,8 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
     /// The name this machine is addressed by, read once as the runtime starts.
     pub(crate) machine_name: Arc<MachineName>,
+    /// When this engine's construction began, the origin of its uptime.
+    instant_this_engine_started: Instant,
     /// The streams loaded in this runtime, keyed by their URL-safe cast name.
     pub(crate) streams_loaded_in_this_runtime:
         Mutex<BTreeMap<String, Arc<LoadedStreamInThisRuntime>>>,
@@ -493,6 +496,7 @@ impl Runner {
     pub fn new_with_construction_options(
         construction_options: RunnerConstructionOptions,
     ) -> Result<Arc<Self>> {
+        let instant_this_engine_started = Instant::now();
         let RunnerConstructionOptions {
             pretty_log_mirror_stream,
             runtime_own_log_directory,
@@ -604,6 +608,7 @@ impl Runner {
             engine_resources_shared_by_every_stream: Arc::new(EngineResourcesSharedByEveryStream {
                 runtime_id,
                 machine_name,
+                instant_this_engine_started,
                 streams_loaded_in_this_runtime: Mutex::new(BTreeMap::new()),
                 streams_out_of_the_table_until_their_end_is_recorded: Mutex::new(Vec::new()),
                 gpu_context_created_by_the_first_stream_start: Mutex::new(None),
@@ -700,6 +705,22 @@ impl Runner {
             .runtime_own_log
             .as_ref()
             .and_then(|runtime_own_log| runtime_own_log.jsonl_log_path())
+    }
+
+    /// This runtime's version, build id, monotonic uptime and the folder its own log is written
+    /// to.
+    pub fn describe_this_runtime(&self) -> DescribeRuntimeToolResult {
+        let engine_resources = &self.engine_resources_shared_by_every_stream;
+        DescribeRuntimeToolResult {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            build_id: crate::core::helper_process_transport::ENGINE_BUILD_ID.to_owned(),
+            up_for_ms: u64::try_from(engine_resources.instant_this_engine_started.elapsed().as_millis())
+                .unwrap_or(u64::MAX),
+            runtime_log_directory: self
+                .runtime_own_log_path()
+                .and_then(std::path::Path::parent)
+                .map(std::path::Path::to_path_buf),
+        }
     }
 
     /// The runtime directory this runtime resolved as it was built.
@@ -3898,6 +3919,55 @@ mod tests {
             assert!(line_on_disk.get("sequence").is_none(), "{line_on_disk}");
         }
         runner.unload_stream("main").expect("the stream unloads");
+    }
+
+    #[test]
+    #[serial]
+    fn a_runtimes_uptime_never_decreases_and_grows_once_a_millisecond_has_passed() {
+        let runner = Runner::new().expect("the engine builds");
+        let first_up_for_ms = runner.describe_this_runtime().up_for_ms;
+        let first_read_measured_at = Instant::now();
+        assert!(runner.describe_this_runtime().up_for_ms >= first_up_for_ms);
+        while first_read_measured_at.elapsed() < Duration::from_millis(2) {
+            std::thread::yield_now();
+        }
+        assert!(
+            runner.describe_this_runtime().up_for_ms > first_up_for_ms,
+            "2 ms past the first read, the uptime is larger than its {first_up_for_ms} ms"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_runtimes_build_id_starts_with_its_version_and_it_names_no_log_folder_without_one() {
+        let runtime_description = Runner::new()
+            .expect("the engine builds")
+            .describe_this_runtime();
+        assert_eq!(runtime_description.version, env!("CARGO_PKG_VERSION"));
+        assert!(
+            runtime_description
+                .build_id
+                .starts_with(&format!("{}+", runtime_description.version)),
+            "{runtime_description:?}"
+        );
+        assert_eq!(runtime_description.runtime_log_directory, None);
+    }
+
+    #[test]
+    #[serial]
+    fn a_runtime_given_an_own_log_directory_names_it_as_its_log_folder() {
+        let state_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let runtime_own_log_directory = state_directory.path().join("logs");
+        let runner = Runner::new_with_construction_options(RunnerConstructionOptions {
+            runtime_own_log_directory: Some(runtime_own_log_directory.clone()),
+            ..RunnerConstructionOptions::default()
+        })
+        .expect("the runner constructs");
+        assert_eq!(
+            runner.describe_this_runtime().runtime_log_directory,
+            Some(runtime_own_log_directory)
+        );
     }
 
     /// With a runtime own-log directory, the records no stream emitted are
