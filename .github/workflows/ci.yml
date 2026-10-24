@@ -78,7 +78,9 @@ jobs:
   # Everything that needs no test build.
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
+    # built on this image, and cargo cannot see which libpython a cached artifact links.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -168,7 +170,9 @@ jobs:
   # fails the job.
   test-linux:
     name: Unit Test (Linux)
-    runs-on: ubuntu-latest
+    # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
+    # built on this image, and cargo cannot see which libpython a cached artifact links.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -351,7 +355,9 @@ jobs:
   # the lavapipe the unit carries), and the first-party extension's.
   integration-test-linux:
     name: Integration test (Linux)
-    runs-on: ubuntu-latest
+    # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
+    # built on this image, and cargo cannot see which libpython a cached artifact links.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
