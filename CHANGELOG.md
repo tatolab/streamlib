@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.2](https://github.com/tatolab/streamlib/compare/v0.55.1...v0.55.2) (2026-10-24)
+
+
+### Features
+
+* **local-api:** serve the runtime's version, uptime and own-log folder as describe_runtime ([#2924](https://github.com/tatolab/streamlib/issues/2924)) ([7748935](https://github.com/tatolab/streamlib/commit/7748935bd04b5aaa7eaaa7c0779f1b0af1df51c4))
+
 ## [0.55.1](https://github.com/tatolab/streamlib/compare/v0.55.0...v0.55.1) (2026-10-22)
 
 
