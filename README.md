@@ -435,7 +435,8 @@ machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. The ser
 runtime and comes and goes with it, and a stream the host loads attached lives as long as the
 host's connection.
 
-The tools are `graph` and `logs` to observe; `add_node`, `connect`, `disconnect` and
+The tools are `graph`, `logs` and `describe_runtime` — the runtime's version, build id, uptime
+and the folder of its own log — to observe; `add_node`, `connect`, `disconnect` and
 `remove_node` to change a running graph; `run_stream`, `stop_stream`, `start_stream`,
 `remove_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
 `add_relay`, `configure_relay`, `remove_relay` and `list_relays` to manage the relays it joins. Every tool

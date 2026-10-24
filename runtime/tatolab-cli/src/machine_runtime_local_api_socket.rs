@@ -80,7 +80,7 @@ pub(crate) fn something_answers_at(local_api_socket_path: &Path) -> bool {
 
 /// `machine_runtime_lock_holder` when it runs as a uid other than `this_users_uid`: a runtime
 /// that serves another user's socket, not this one's.
-fn holder_serving_another_user(
+pub(crate) fn holder_serving_another_user(
     machine_runtime_lock_holder: Option<MachineRuntimeLockHolder>,
     this_users_uid: u32,
 ) -> Option<MachineRuntimeLockHolder> {

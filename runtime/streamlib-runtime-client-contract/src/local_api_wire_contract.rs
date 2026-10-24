@@ -228,6 +228,20 @@ pub struct ExposePortToolResult {
     pub not_recorded_because: Option<String>,
 }
 
+/// The `describe_runtime` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DescribeRuntimeToolResult {
+    /// The runtime's crate version.
+    pub version: String,
+    /// `<crate version>+<git sha>.<per-build nonce>`, the build the helper check compares.
+    pub build_id: String,
+    /// Monotonic milliseconds since this runtime's engine started; a restart resets it.
+    pub up_for_ms: u64,
+    /// The folder the runtime's own log is written to, absolute for `tatolabd`; `None` when it
+    /// keeps none.
+    pub runtime_log_directory: Option<PathBuf>,
+}
+
 /// The `add_relay` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddRelayToolResult {
@@ -369,6 +383,33 @@ mod tests {
             serde_json::to_string(&ListedRelayConnectionState::NotJoined { why: None }).unwrap(),
             r#"{"state":"not_joined"}"#
         );
+    }
+
+    #[test]
+    fn a_runtime_description_names_its_log_folder_or_null_when_it_keeps_none() {
+        let described = |runtime_log_directory: Option<&str>| DescribeRuntimeToolResult {
+            version: "0.55.1".to_owned(),
+            build_id: "0.55.1+0123abc.9f8e7d".to_owned(),
+            up_for_ms: 266_400_000,
+            runtime_log_directory: runtime_log_directory.map(PathBuf::from),
+        };
+        for (description, expected_wire_text) in [
+            (
+                described(Some("/home/u/.local/state/tatolab/logs")),
+                r#"{"version":"0.55.1","build_id":"0.55.1+0123abc.9f8e7d","up_for_ms":266400000,"runtime_log_directory":"/home/u/.local/state/tatolab/logs"}"#,
+            ),
+            (
+                described(None),
+                r#"{"version":"0.55.1","build_id":"0.55.1+0123abc.9f8e7d","up_for_ms":266400000,"runtime_log_directory":null}"#,
+            ),
+        ] {
+            let wire_text = serde_json::to_string(&description).unwrap();
+            assert_eq!(wire_text, expected_wire_text);
+            assert_eq!(
+                serde_json::from_str::<DescribeRuntimeToolResult>(&wire_text).unwrap(),
+                description
+            );
+        }
     }
 
     /// Each stream-action result in the order and spelling the runtime writes its keys.

@@ -464,6 +464,63 @@ def test_every_verb_that_reaches_the_runtime_fails_at_once_naming_the_socket_and
     )
 
 
+def test_describe_runtime_answers_the_running_tatolabd_its_uptime_growing_and_reset_by_a_restart(
+    private_machine_directories: PrivateMachineDirectories,
+    run_tatolab_observation_verb: "Callable[..., subprocess.CompletedProcess[str]]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+):
+    """`describe_runtime` names the running `tatolabd`'s version and build, the
+    folder under the test's state directory its own log is written to, and a
+    monotonic uptime that grows and that a restart resets; `tatolab --version`
+    shows the same runtime, and `runtime: not running` without one."""
+    without_a_runtime = run_tatolab_observation_verb("--version")
+    assert without_a_runtime.returncode == 0, without_a_runtime.stderr
+    cli_version_line, runtime_line = without_a_runtime.stdout.splitlines()
+    assert runtime_line == "runtime: not running", without_a_runtime.stdout
+    cli_version = cli_version_line.removeprefix("tatolab ")
+
+    tatolabd = start_tatolabd()
+    first_description = tatolabd.local_api_client().call_tool("describe_runtime")
+    first_description_measured_at = time.monotonic()
+
+    assert first_description["version"] == cli_version, first_description
+    assert first_description["build_id"].startswith(f"{cli_version}+"), first_description
+    runtime_log_directory = Path(first_description["runtime_log_directory"])
+    assert runtime_log_directory.is_absolute(), first_description
+    machine_directories = private_machine_directories.machine_directories
+    assert runtime_log_directory == machine_directories.runtime_log_directory, first_description
+    assert list(runtime_log_directory.glob("tatolabd-*.jsonl")), (
+        f"no tatolabd-*.jsonl in {runtime_log_directory}"
+    )
+
+    versioned = run_tatolab_observation_verb("--version")
+    assert versioned.returncode == 0, versioned.stderr
+    runtime_line = versioned.stdout.splitlines()[1]
+    assert runtime_line.startswith(
+        f"runtime {cli_version} ({first_description['build_id']}), up "
+    ), versioned.stdout
+    assert runtime_line.endswith(f", log {runtime_log_directory}"), versioned.stdout
+
+    while time.monotonic() - first_description_measured_at < 1.0:
+        time.sleep(STREAM_LISTING_POLL_INTERVAL_SECONDS)
+    second_description = tatolabd.local_api_client().call_tool("describe_runtime")
+    assert second_description["up_for_ms"] > first_description["up_for_ms"], (
+        first_description,
+        second_description,
+    )
+
+    old_tatolabd_stopping_at = time.monotonic()
+    restarted_tatolabd = restart_tatolabd(tatolabd, start_tatolabd)
+    restarted_local_api = restarted_tatolabd.local_api_client()
+    description_after_the_restart = restarted_local_api.call_tool("describe_runtime")
+    measured_since_stopping_the_old_tatolabd_ms = (
+        time.monotonic() - old_tatolabd_stopping_at
+    ) * 1000
+    assert (
+        description_after_the_restart["up_for_ms"] <= measured_since_stopping_the_old_tatolabd_ms
+    ), (description_after_the_restart, measured_since_stopping_the_old_tatolabd_ms)
+
+
 # --- a stopped kept stream, with no started stream --------------------------------
 
 

@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
+
 use super::operations::RuntimeOperations;
 use super::{
     LoadedStreamAndTheOutputPortsItExposes, LoadedStreamTag, MachineName,
@@ -25,8 +27,9 @@ pub struct LogRecordsPageOfOneLoadedStream {
     pub records_page: LoadedStreamLogRecordsPage,
 }
 
-/// What the local API reaches a runtime through: the stream a call names, a
-/// stream's node catalog and log records, and the stream actions.
+/// What the local API reaches a runtime through: the runtime's description, the
+/// stream a call names, a stream's node catalog and log records, and the stream
+/// actions.
 ///
 /// Every stream action blocks — a load runs a compile and describes — so the
 /// local API calls each from a blocking task.
@@ -35,6 +38,9 @@ pub struct LogRecordsPageOfOneLoadedStream {
 pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// This machine's name, the first part of every address.
     fn this_machines_name(&self) -> &MachineName;
+
+    /// [`Runner::describe_this_runtime`].
+    fn describe_this_runtime(&self) -> DescribeRuntimeToolResult;
 
     /// The operations on the loaded stream `stream_name` names. Refused with
     /// [`Error::NotFound`](crate::core::error::Error::NotFound) naming the loaded streams when it is not loaded.
@@ -114,6 +120,10 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
     fn this_machines_name(&self) -> &MachineName {
         self.machine_name()
+    }
+
+    fn describe_this_runtime(&self) -> DescribeRuntimeToolResult {
+        Runner::describe_this_runtime(self)
     }
 
     fn runtime_operations_of_the_stream_a_call_names(

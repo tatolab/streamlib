@@ -5806,7 +5806,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-api-server"
-version = "1.0.0"
+version = "0.55.1"
 dependencies = [
  "axum",
  "futures-util",
@@ -5826,6 +5826,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "toml 0.8.23",
  "tower",
  "tower-http",
  "tracing",

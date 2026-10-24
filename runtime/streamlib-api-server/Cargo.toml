@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-api-server"
-version = "1.0.0"
+version.workspace = true
 edition = "2024"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "The local API a host serves for a streamlib engine — graph inspection per loaded stream, node catalogs, channel taps, WebSocket event streaming, MCP, OpenAPI spec."
@@ -76,6 +76,8 @@ tokio-util = "0.7"
 rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-unix-socket"] }
 tempfile = "3"
 serial_test = "3.2"
+# The handshake test reads `[workspace.package] version` from the workspace manifest.
+toml.workspace = true
 # The request-trace level test drives a request under a real `EnvFilter` and
 # captures what reached the subscriber.
 tracing-subscriber.workspace = true

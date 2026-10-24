@@ -4,12 +4,14 @@
 //! `tatolab`: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `streams` and
 //! `expose` load and manage the streams the machine's runtime holds; `relays` and `relay` list,
 //! add, configure and remove the relays it joins; and `graph`, `logs` and `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
-//! machine's users the virtual camera's loopback device, once. No verb starts a runtime.
+//! machine's users the virtual camera's loopback device, once; `--version` adds the runtime's
+//! description to the CLI's own version. No verb starts a runtime.
 
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
 #![allow(clippy::disallowed_macros)]
 
 mod attached_stream_on_the_runtime;
+mod cli_and_runtime_version_flag;
 mod local_api_connection;
 mod local_api_mcp_stdio_pipe;
 mod local_api_mcp_tool_client;
@@ -39,7 +41,7 @@ mod runtime_log_line_fixtures;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use streamlib_runtime_client_contract::local_api_wire_contract::ExposePortLevel;
 
 use crate::attached_stream_on_the_runtime::AttachedStreamVerb;
@@ -82,14 +84,18 @@ impl TatolabCommandFailure {
 #[derive(Parser)]
 #[command(
     name = "tatolab",
-    version,
+    disable_version_flag = true,
+    arg_required_else_help = true,
     about = "Tatolab — write a stream project, run it on this machine's runtime, and manage and \
              observe the streams the runtime holds.",
     disable_help_subcommand = true
 )]
 struct TatolabCommandLine {
+    /// Print this CLI's version and, when a runtime answers, the runtime's description.
+    #[arg(short = 'V', long = "version")]
+    print_the_cli_and_runtime_versions: bool,
     #[command(subcommand)]
-    verb: TatolabVerb,
+    verb: Option<TatolabVerb>,
 }
 
 #[derive(Subcommand)]
@@ -230,7 +236,33 @@ fn caller_working_directory() -> Result<PathBuf, TatolabCommandFailure> {
 
 fn main() -> ExitCode {
     let command_line = TatolabCommandLine::parse();
-    let command_outcome = match command_line.verb {
+    let command_outcome = match (
+        command_line.print_the_cli_and_runtime_versions,
+        command_line.verb,
+    ) {
+        (true, _) => cli_and_runtime_version_flag::print_the_cli_and_runtime_versions(),
+        (false, Some(verb)) => run_one_verb(verb),
+        (false, None) => TatolabCommandLine::command()
+            .error(
+                clap::error::ErrorKind::MissingSubcommand,
+                "name a verb, or pass --version",
+            )
+            .exit(),
+    };
+    match command_outcome {
+        Ok(exit_code) => ExitCode::from(exit_code),
+        Err(command_failure) => {
+            if let Some(message_for_the_user) = command_failure.message_for_the_user {
+                eprintln!("error: {message_for_the_user}");
+            }
+            ExitCode::from(command_failure.exit_code)
+        }
+    }
+}
+
+/// Run `verb` to its outcome.
+fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
+    match verb {
         TatolabVerb::New { directory } => {
             scaffold_new_stream_project::scaffold_new_stream_project(&directory).map(|()| 0)
         }
@@ -309,14 +341,5 @@ fn main() -> ExitCode {
                     &mut grant_target_machine,
                 )
             }),
-    };
-    match command_outcome {
-        Ok(exit_code) => ExitCode::from(exit_code),
-        Err(command_failure) => {
-            if let Some(message_for_the_user) = command_failure.message_for_the_user {
-                eprintln!("error: {message_for_the_user}");
-            }
-            ExitCode::from(command_failure.exit_code)
-        }
     }
 }
