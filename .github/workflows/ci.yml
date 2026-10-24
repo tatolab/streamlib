@@ -649,7 +649,7 @@ jobs:
           cargo test --locked -p streamlib -p streamlib-macros \
             -p streamlib-processor-schema -p streamlib-ipc-types \
             -p streamlib-error --lib
-          # The machine runtime lock's fcntl takes, refusals and probes run here
+          # The macOS machine runtime lock's takes, refusals and probes run here
           # and nowhere else.
           cargo test --locked -p streamlib-runtime-client-contract
           cargo test --locked -p streamlib-runtime-client-contract \
@@ -862,17 +862,6 @@ jobs:
           rm -rf target/tatolab-runtime
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
-
-      # The machine lock is the root-owned file Tatolab.app creates at first
-      # launch; a runner has no app.
-      - name: The machine runtime lock the app would create
-        run: |
-          machine_runtime_lock_directory="/Library/Application Support/Tatolab"
-          sudo mkdir -p "$machine_runtime_lock_directory"
-          sudo touch "$machine_runtime_lock_directory/runtime.lock"
-          sudo chown root "$machine_runtime_lock_directory" "$machine_runtime_lock_directory/runtime.lock"
-          sudo chmod 0755 "$machine_runtime_lock_directory"
-          sudo chmod 0666 "$machine_runtime_lock_directory/runtime.lock"
 
       # The wheel's own suite on the unit's own wheel: the casts, a processor
       # interpreter's bootstrap and helper process, and the

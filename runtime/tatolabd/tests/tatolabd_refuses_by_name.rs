@@ -14,11 +14,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use common::{
-    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, http_get_body_on_loopback,
-    run_to_exit_within, the_refusal_of,
+    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, run_to_exit_within,
+    the_refusal_of,
 };
 use streamlib::sdk::processor_interpreter::lend_directory_in_the_runtime_unit;
-use streamlib_runtime_client_contract::local_api_wire_contract::MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH;
 #[cfg(target_os = "macos")]
 use streamlib_runtime_client_contract::machine_directories_test_root::TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE;
 
@@ -77,8 +76,8 @@ fn a_test_build_without_its_machine_root_is_refused_naming_the_variable() {
 }
 
 /// The kernel names the first runtime to the second: its user, its pid and
-/// its executable. On macOS the first answers its pid on the lock's own port
-/// once it serves its loopback HTTP, which the second waits for.
+/// its executable. On macOS the first answers its pid on the lock's own port,
+/// served before it logs that it is serving.
 #[test]
 fn a_second_tatolabd_on_the_machine_is_refused_naming_the_first_ones_user_pid_and_executable() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
@@ -86,9 +85,6 @@ fn a_second_tatolabd_on_the_machine_is_refused_naming_the_first_ones_user_pid_an
     let mut first_runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command(&runtime_unit.tatolabd),
     );
-    if let Some(loopback_http_port) = machine_root.loopback_http_port_on_macos() {
-        wait_until_the_lock_holder_route_answers_on(loopback_http_port);
-    }
 
     let refusal = run_tatolabd_to_its_refusal(&runtime_unit, &machine_root, &[]);
 
@@ -141,20 +137,6 @@ fn a_test_build_naming_no_loopback_http_port_is_refused_at_the_machine_runtime_l
         )),
         "{refusal}"
     );
-}
-
-fn wait_until_the_lock_holder_route_answers_on(loopback_http_port: u16) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while http_get_body_on_loopback(loopback_http_port, MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH)
-        .is_none()
-    {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the first runtime did not answer {MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH} on \
-             127.0.0.1:{loopback_http_port} within 30 s"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }
 
 /// A local API socket another live process answers on refuses the start

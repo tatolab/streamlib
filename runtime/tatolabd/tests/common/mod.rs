@@ -222,12 +222,6 @@ impl TatolabTestMachineRoot {
         self.machine_root.path()
     }
 
-    /// The loopback HTTP port every `tatolabd` on this machine binds on macOS,
-    /// where that bind is the machine runtime lock; `None` on Linux.
-    pub fn loopback_http_port_on_macos(&self) -> Option<u16> {
-        self.loopback_http_port_on_macos
-    }
-
     /// The runtime directory a test build resolves: `<root>/run/`.
     pub fn runtime_directory(&self) -> PathBuf {
         self.path().join("run")

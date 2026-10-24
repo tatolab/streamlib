@@ -60,6 +60,7 @@ import importlib.util
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -119,10 +120,9 @@ ENGINE_VARIABLES_NOT_INHERITED = (
 #: `sun_path` holds 104 bytes on macOS. pytest's own `tmp_path` overruns it.
 SHORT_TEMPORARY_DIRECTORY = Path("/tmp")
 
-#: The macOS lock file's directory and file modes a test build expects: the
-#: production shape, owned by this user rather than root.
-MACHINE_RUNTIME_LOCK_DIRECTORY_MODE = 0o755
-MACHINE_RUNTIME_LOCK_FILE_MODE = 0o666
+#: The variable a test build reads its loopback HTTP listener's port from; on
+#: macOS its bind is the machine runtime lock, so a test build there needs one.
+TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_LOOPBACK_HTTP_PORT"
 
 #: The Vulkan loader's own variables naming the driver files to load. Pointed
 #: at a path that does not exist, they leave the loader no driver, so a stream
@@ -247,31 +247,27 @@ class PrivateMachineDirectories:
 
     `environment` is the suite's own minus the engine variables a runtime must
     not inherit, with `TATOLAB_TEST_MACHINE_ROOT` naming the root and
-    `STREAMLIB_HOME` a directory under it. `XDG_RUNTIME_DIR` stays the user's,
-    so their PipeWire, PulseAudio and Wayland sessions stay reachable.
+    `STREAMLIB_HOME` a directory under it. On macOS it names this root's own
+    loopback HTTP port too, `loopback_http_port_on_macos`, whose bind is the
+    machine runtime lock there. `XDG_RUNTIME_DIR` stays the user's, so their
+    PipeWire, PulseAudio and Wayland sessions stay reachable.
     """
 
     machine_directories: MachineDirectoriesUnderATestRoot
     streamlib_home: Path
     environment: "dict[str, str]"
+    loopback_http_port_on_macos: "int | None"
 
 
 @pytest.fixture
 def private_machine_directories() -> "Iterator[PrivateMachineDirectories]":
-    """This test's machine root, made fresh and removed afterwards.
-
-    On macOS the lock directory and file a test build expects are made as the
-    machine's installer makes them, owned by this user: `<root>/lock/` 0755 and
-    `<root>/lock/runtime.lock` 0666.
-    """
+    """This test's machine root, made fresh and removed afterwards."""
     root = Path(tempfile.mkdtemp(prefix="tl-", dir=SHORT_TEMPORARY_DIRECTORY))
     root.chmod(0o700)
     machine_directories = MachineDirectoriesUnderATestRoot(root=root)
-    if sys.platform == "darwin":
-        machine_directories.machine_runtime_lock_directory.mkdir()
-        machine_directories.machine_runtime_lock_directory.chmod(MACHINE_RUNTIME_LOCK_DIRECTORY_MODE)
-        machine_directories.machine_runtime_lock_file.touch()
-        machine_directories.machine_runtime_lock_file.chmod(MACHINE_RUNTIME_LOCK_FILE_MODE)
+    loopback_http_port_on_macos = (
+        a_tcp_port_free_on_loopback() if sys.platform == "darwin" else None
+    )
     streamlib_home = root / "home"
     streamlib_home.mkdir()
     environment = {
@@ -281,14 +277,23 @@ def private_machine_directories() -> "Iterator[PrivateMachineDirectories]":
     }
     environment[TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE] = str(root)
     environment["STREAMLIB_HOME"] = str(streamlib_home)
+    if loopback_http_port_on_macos is not None:
+        environment[TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE] = str(loopback_http_port_on_macos)
     try:
         yield PrivateMachineDirectories(
             machine_directories=machine_directories,
             streamlib_home=streamlib_home,
             environment=environment,
+            loopback_http_port_on_macos=loopback_http_port_on_macos,
         )
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def a_tcp_port_free_on_loopback() -> int:
+    """A TCP port nothing holds on `127.0.0.1` now."""
+    with socket.create_server(("127.0.0.1", 0)) as probe:
+        return probe.getsockname()[1]
 
 
 def environment_overlaid_with(

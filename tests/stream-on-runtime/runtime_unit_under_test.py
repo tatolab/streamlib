@@ -78,9 +78,9 @@ class MachineDirectoriesUnderATestRoot:
     """The machine directories a test build keeps under one root, each by its path.
 
     The layout is the client contract's `TestMachineRoot`: the runtime
-    directory `R/run/`, the state directory `R/state/`, and on macOS the lock
-    file `R/lock/runtime.lock`; on Linux the lock is the abstract socket
-    `tatolab-runtime:R`, which lives with no file.
+    directory `R/run/` and the state directory `R/state/`. On Linux the lock is
+    the abstract socket `tatolab-runtime:R`, which lives with no file; on macOS
+    it is the loopback HTTP port the test names.
     """
 
     root: Path
@@ -109,16 +109,6 @@ class MachineDirectoriesUnderATestRoot:
     def runtime_log_directory(self) -> Path:
         """`R/state/logs/`, the runtime's own JSONL log."""
         return self.state_directory / "logs"
-
-    @property
-    def machine_runtime_lock_directory(self) -> Path:
-        """`R/lock/`, the directory the macOS lock file sits in."""
-        return self.root / "lock"
-
-    @property
-    def machine_runtime_lock_file(self) -> Path:
-        """`R/lock/runtime.lock`, the macOS lock file a test build expects owned by this user."""
-        return self.machine_runtime_lock_directory / "runtime.lock"
 
 
 def runtime_unit_directory_named_by_the_environment() -> Path:

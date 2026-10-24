@@ -20,6 +20,7 @@ import os
 import re
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -164,10 +165,9 @@ TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_MACHINE_ROOT"
 #: fit `sun_path`, and macOS's per-user temporary directory is too long for it.
 SHORT_TEMPORARY_DIRECTORY = "/tmp"
 
-#: The modes the machine's installer gives the macOS machine runtime lock's
-#: directory and file, which a test build expects under its root.
-MACHINE_RUNTIME_LOCK_DIRECTORY_MODE = 0o755
-MACHINE_RUNTIME_LOCK_FILE_MODE = 0o666
+#: The variable a test build of the runtime reads its loopback HTTP port from;
+#: on macOS that port's bind is the machine runtime lock, so it must be set there.
+TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_LOOPBACK_HTTP_PORT"
 
 #: Covers starting each Python node's interpreter to describe it, on a cold runner.
 LOAD_DEADLINE_SECONDS = 120.0
@@ -241,23 +241,17 @@ class TatolabdWithNoVulkanDriver:
 
 @pytest.fixture(scope="module")
 def short_machine_root() -> "Iterator[Path]":
-    """A fresh machine root a test build keeps its runtime, state and lock under.
-
-    On macOS the lock directory and file a test build expects are made as the
-    machine's installer makes them.
-    """
+    """A fresh machine root a test build keeps its runtime and state under, and
+    on Linux its lock."""
     with tempfile.TemporaryDirectory(
         prefix="tl-", dir=SHORT_TEMPORARY_DIRECTORY
     ) as machine_root_path:
-        machine_root = Path(machine_root_path)
-        if sys.platform == "darwin":
-            machine_runtime_lock_directory = machine_root / "lock"
-            machine_runtime_lock_directory.mkdir()
-            machine_runtime_lock_directory.chmod(MACHINE_RUNTIME_LOCK_DIRECTORY_MODE)
-            machine_runtime_lock_file = machine_runtime_lock_directory / "runtime.lock"
-            machine_runtime_lock_file.touch()
-            machine_runtime_lock_file.chmod(MACHINE_RUNTIME_LOCK_FILE_MODE)
-        yield machine_root
+        yield Path(machine_root_path)
+
+
+def _a_tcp_port_free_on_loopback() -> int:
+    with socket.create_server(("127.0.0.1", 0)) as probe:
+        return probe.getsockname()[1]
 
 
 @pytest.fixture(scope="module")
@@ -301,6 +295,9 @@ def tatolabd_with_no_vulkan_driver(
     environment["XDG_STATE_HOME"] = str(state_home)
     if sys.platform == "darwin":
         environment["HOME"] = str(state_home)
+        environment[TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE] = str(
+            _a_tcp_port_free_on_loopback()
+        )
     tatolabd = TatolabdWithNoVulkanDriver(
         subprocess.Popen(
             [str(tatolabd_executable)],
