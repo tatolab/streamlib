@@ -765,30 +765,39 @@ mod macos_loopback_port_lock {
         }
     }
 
-    /// Name a pid through libproc (`<libproc.h>`): its uid from its BSD info,
-    /// its executable from its path.
+    /// Name a pid through libproc (`<libproc.h>`): its uid from its short BSD
+    /// info and its executable from its path, the two flavors xnu answers for
+    /// another user's process; the full BSD info is refused across users.
     fn holder_named_by_pid(
         address: SocketAddrV4,
         pid: i32,
     ) -> Result<MachineRuntimeLockHolder, MachineRuntimeLockRefusal> {
-        // SAFETY: `proc_bsdinfo` is plain data; all-zero is a valid value.
-        let mut bsd_info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-        let bsd_info_size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        // SAFETY: the buffer is a live `proc_bsdinfo` of exactly the size passed.
+        // SAFETY: `proc_bsdshortinfo` is plain data; all-zero is a valid value.
+        let mut short_bsd_info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+        let short_bsd_info_size = std::mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
+        // SAFETY: the buffer is a live `proc_bsdshortinfo` of exactly the size passed.
         let written = unsafe {
             libc::proc_pidinfo(
                 pid,
-                libc::PROC_PIDTBSDINFO,
+                libc::PROC_PIDT_SHORTBSDINFO,
                 0,
-                (&mut bsd_info as *mut libc::proc_bsdinfo).cast::<libc::c_void>(),
-                bsd_info_size,
+                (&mut short_bsd_info as *mut libc::proc_bsdshortinfo).cast::<libc::c_void>(),
+                short_bsd_info_size,
             )
         };
-        if written != bsd_info_size {
+        if written != short_bsd_info_size {
+            let source = if written <= 0 {
+                std::io::Error::last_os_error()
+            } else {
+                std::io::Error::other(format!(
+                    "libproc wrote {written} of the {short_bsd_info_size} bytes of its short BSD \
+                     info"
+                ))
+            };
             return Err(MachineRuntimeLockRefusal::HeldByAProcessThatCannotBeNamed {
                 lock: displayed_lock_name(address),
                 pid,
-                source: std::io::Error::last_os_error(),
+                source,
             });
         }
         let mut executable_path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
@@ -806,8 +815,8 @@ mod macos_loopback_port_lock {
             ))
         });
         Ok(MachineRuntimeLockHolder {
-            user_name: user_name_of_uid(bsd_info.pbi_uid),
-            uid: bsd_info.pbi_uid,
+            user_name: user_name_of_uid(short_bsd_info.pbsi_uid),
+            uid: short_bsd_info.pbsi_uid,
             pid,
             executable,
         })

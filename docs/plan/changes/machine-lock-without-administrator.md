@@ -97,8 +97,9 @@ listener**, which serves the listing and `/watch` and is a separate server.
   file too.
 
 **What the kernel will tell an unprivileged prober on macOS**
-- **For any pid,** `proc_pidinfo` and `proc_pidpath` name its uid and executable. That is how
-  `holder_named_by_pid` already names another user's holder.
+- **For any pid,** `proc_pidinfo(PROC_PIDT_SHORTBSDINFO)` and `proc_pidpath` name its uid and
+  executable. The full `PROC_PIDTBSDINFO` is refused for another user's process, so
+  `holder_named_by_pid` reads the short flavor.
 - **For a TCP port,** finding which pid holds it means enumerating that process's descriptors
   (`PROC_PIDLISTFDS`). The kernel refuses that for another user's process, which is why `lsof`
   without root lists only your own sockets.
