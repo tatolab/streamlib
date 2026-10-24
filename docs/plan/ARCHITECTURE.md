@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — SHIPPED (unbuilt: `H264Encoder`'s CPU arm)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -3378,7 +3378,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
   Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721]
 
-## Control plane & observability — SHIPPED
+## Control plane & observability — IN-FLIGHT (→ runtime-description)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
