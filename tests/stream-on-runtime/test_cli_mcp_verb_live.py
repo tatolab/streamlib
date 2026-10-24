@@ -54,6 +54,7 @@ CONTROL_TOOL_NAMES = {
     "configure_relay",
     "remove_relay",
     "list_relays",
+    "describe_runtime",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"

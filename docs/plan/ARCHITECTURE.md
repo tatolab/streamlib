@@ -119,11 +119,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   it with the project as the import root (the graph's JSON on stdout, a failed compile's
   traceback as the error), describes the Python types and loads; the compile's cross-floor
   warnings come back in the reply and the CLI prints them on stderr. The runtime compiles, so
-  an agent loads exactly as the CLI does. `graph`, `logs`, `mcp`, `relays` and `relay` speak
-  the local API, and `new` writes the embedded scaffold. Only `<project>/.venv/bin/python` is
+  an agent loads exactly as the CLI does. `graph`, `logs`, `mcp`, `relays`, `relay` and
+  `--version` speak the local API, and `new` writes the embedded scaffold. Only `<project>/.venv/bin/python` is
   taken; a relocated venv is refused by name until a need appears. Owner, 2026-10-02.
   [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
-  moq-relays — SHIPPED #2871]
+  moq-relays — SHIPPED #2871; runtime-description]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
   socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
   it; on macOS it is an `fcntl` lock on a root-owned 0666 regular file in root-owned
@@ -3390,12 +3390,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   hosted in-process by the engine itself. The MCP tool set is the canonical
   control vocabulary; the CLI is a pure JSON-RPC client of it — agents and humans use
   the same verbs; REST/WS routes serve the same operations for programmatic clients.
-  The served MCP tool set is exactly the observation verbs `graph` and `logs`, the four
+  The served MCP tool set is exactly the observation verbs `graph`, `logs` and
+  `describe_runtime` — the runtime's version, build id, monotonic uptime and its own log's
+  folder — the four
   graph-mutation verbs — `add_node`, `remove_node`, `connect` and `disconnect` — the six
   stream actions — `run_stream`, `stop_stream`, `start_stream`, `remove_stream`,
   `list_streams` and `expose_port` (§Product) — and the four relay verbs — `add_relay`,
   `configure_relay`, `remove_relay` and `list_relays` (§Networking, the adapters); `health` is
-  a REST route, not a tool. The runtime has no shutdown verb: it stays on as a service does, stopped by
+  a REST route, not a tool. The MCP handshake's server version is the runtime's crate
+  version. The runtime has no shutdown verb: it stays on as a service does, stopped by
   the service manager or a signal, and `stop_stream` ends a client's work. Rejected: a control plane that never mutates the graph, code being the
   source of truth and the edit loop `dev` — a dynamic graph an agent cannot add to is not
   worth having (owner, 2026-09-06). A mutation compiles inside the call, so the caller learns whether
@@ -3425,7 +3428,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library; mcp-served-with-the-node — SHIPPED #1712;
   agent-readable-processor-catalog — SHIPPED #2232; local-transport-hardening —
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
-  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871]
+  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
+  runtime-description]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
@@ -3460,12 +3464,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and `relay remove`, a secret given only from a file or standard input; the `mcp` verb; and
   one machine-setup verb, `enable-virtual-camera`, which installs the
   loopback permission the virtual camera's loopback door needs behind the desktop's
-  password prompt and touches no node. The CLI stays a pure client of the local API; the
+  password prompt and touches no node. `--version` prints the CLI's version and, when a
+  runtime answers, the runtime's description. The CLI stays a pure client of the local API; the
   control plane exists to observe and drive *running* nodes, not to embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
   tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
-  #2711, #2721, #2722; moq-relays — SHIPPED #2871]
+  #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description]
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
   local API socket and the iceoryx2 domain. On Linux it is
