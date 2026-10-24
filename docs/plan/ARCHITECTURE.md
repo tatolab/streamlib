@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description; unbuilt: `H264Encoder`'s CPU arm)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, machine-lock-without-administrator; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -139,7 +139,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   function, `stopped` or `failed` and why, its crash count and the owner's exposure rulings —
   and, under `logs/`, the runtime's own log, which belongs to no project. A stream's logs and
   pipeline cache stay under its project's `.streamlib/`. Owner, 2026-10-02.
-  [runtime-hosting — SHIPPED #2711, #2713]
+  [runtime-hosting — SHIPPED #2711, #2713; machine-lock-without-administrator]
 - **DECIDED** — The tests divide as the code does. The stream suite
   (`sdk/tatolab-stream/tests`) is pure Python in a venv holding only `tatolab-stream` —
   declarations, the builder and its name resolution, compile, the generated built-ins, the
@@ -3197,7 +3197,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [shutdown-ladder; local-transport-hardening — SHIPPED #2266; package-split-and-lend —
   SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722]
 
-## Distribution & versioning — SHIPPED (unbuilt: the Rust crate's `tatolab-stream` name)
+## Distribution & versioning — IN-FLIGHT (→ machine-lock-without-administrator; unbuilt: the Rust crate's `tatolab-stream` name)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
@@ -3377,7 +3377,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   tatolabd.service`; it installs no runtime, so the installer stays Linux's one way to install
   the runtime, and with no service the app points at the installer. Beyond its live stream
   list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
-  Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721]
+  Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721;
+  machine-lock-without-administrator]
 
 ## Control plane & observability — IN-FLIGHT (→ runtime-description)
 
