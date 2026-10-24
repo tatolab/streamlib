@@ -9,21 +9,16 @@
 //! machine to it, and the kernel frees it when the holder dies. A probe's
 //! connection stays in the listen queue until it is accepted, closed or not, so
 //! the holder accepts and drops every one; a full queue would leave the holder
-//! unnameable. On macOS it is
-//! an `fcntl` write lock on a root-owned 0666 file in a root-owned directory,
-//! which any user may take and none may replace.
+//! unnameable. On macOS it is the loopback HTTP listener's own socket,
+//! `127.0.0.1:4446`, which any process may bind first and no other may bind
+//! beside it. macOS names no other user's port holder, so the holder answers
+//! its pid on the listener and the prober reads who runs that pid from libproc.
 
 use std::fmt;
 use std::path::PathBuf;
 
 /// The abstract unix socket name the Linux machine runtime lock binds, without its leading NUL.
 pub const MACHINE_RUNTIME_LOCK_ABSTRACT_SOCKET_NAME: &str = "tatolab-runtime";
-
-/// The root-owned directory the macOS machine runtime lock file sits in.
-pub const MACHINE_RUNTIME_LOCK_DIRECTORY_ON_MACOS: &str = "/Library/Application Support/Tatolab";
-
-/// The macOS machine runtime lock file's name inside its directory.
-pub const MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS: &str = "runtime.lock";
 
 /// The process holding the machine runtime lock, as far as the kernel names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,33 +65,13 @@ pub enum MachineRuntimeLockRefusal {
         pid: i32,
         source: std::io::Error,
     },
-    /// The lock's directory or file does not exist.
-    #[error(
-        "the machine runtime lock cannot be taken: {missing_path} does not exist. Tatolab.app \
-         creates it at first launch; to create it from a terminal, run: {creation_commands}"
-    )]
-    LockLocationIsMissing {
-        missing_path: PathBuf,
-        creation_commands: String,
-    },
-    /// The lock's directory or file has a type, owner or mode anyone could subvert.
-    #[error(
-        "the machine runtime lock cannot be trusted: the {property} of {path} is {found}, and it \
-         must be {required}"
-    )]
-    LockLocationCannotBeTrusted {
-        path: PathBuf,
-        property: &'static str,
-        found: String,
-        required: String,
-    },
     /// The operating system refused an operation the lock needs.
     #[error("the machine runtime lock {lock} could not be taken: {source}")]
     CouldNotBeTaken {
         lock: String,
         source: std::io::Error,
     },
-    /// This test build's machine root was refused.
+    /// This test build's machine root, or on macOS its loopback HTTP port, was refused.
     #[cfg(feature = "machine-directories-under-a-test-root")]
     #[error(transparent)]
     TestMachineRoot(#[from] crate::machine_directories_test_root::TestMachineRootRefusal),
@@ -109,7 +84,7 @@ pub struct MachineRuntimeLock {
     _listening_abstract_socket:
         linux_abstract_socket_lock::ListeningAbstractSocketWithItsQueueDrained,
     #[cfg(target_os = "macos")]
-    _locked_file: macos_fcntl_lock::LockedMachineRuntimeLockFile,
+    bound_loopback_http_listener: macos_loopback_port_lock::LoopbackHttpListenerBoundAsTheLock,
 }
 
 impl MachineRuntimeLock {
@@ -117,6 +92,15 @@ impl MachineRuntimeLock {
     pub fn take() -> Result<Self, MachineRuntimeLockRefusal> {
         let location = MachineRuntimeLockLocation::for_this_build()?;
         take_the_machine_runtime_lock_at(&location)
+    }
+
+    /// The bound loopback HTTP listener for the runtime to serve on, the first time it is asked
+    /// for. The lock keeps a descriptor of its own, so the port stays bound until the lock drops.
+    #[cfg(target_os = "macos")]
+    pub fn take_the_bound_loopback_http_listener(&mut self) -> Option<std::net::TcpListener> {
+        self.bound_loopback_http_listener
+            .listener_handed_over_for_serving
+            .take()
     }
 }
 
@@ -133,11 +117,7 @@ struct MachineRuntimeLockLocation {
     #[cfg(target_os = "linux")]
     abstract_socket_name: String,
     #[cfg(target_os = "macos")]
-    lock_directory: PathBuf,
-    #[cfg(target_os = "macos")]
-    lock_file: PathBuf,
-    #[cfg(target_os = "macos")]
-    expected_owner_uid: u32,
+    loopback_http_listener_address: std::net::SocketAddrV4,
 }
 
 impl MachineRuntimeLockLocation {
@@ -147,32 +127,35 @@ impl MachineRuntimeLockLocation {
             #[cfg(target_os = "linux")]
             abstract_socket_name: MACHINE_RUNTIME_LOCK_ABSTRACT_SOCKET_NAME.to_string(),
             #[cfg(target_os = "macos")]
-            lock_directory: PathBuf::from(MACHINE_RUNTIME_LOCK_DIRECTORY_ON_MACOS),
-            #[cfg(target_os = "macos")]
-            lock_file: PathBuf::from(MACHINE_RUNTIME_LOCK_DIRECTORY_ON_MACOS)
-                .join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS),
-            #[cfg(target_os = "macos")]
-            expected_owner_uid: 0,
+            loopback_http_listener_address: std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                crate::local_api_wire_contract::LOOPBACK_HTTP_LISTENER_DEFAULT_PORT,
+            ),
         })
     }
 
-    #[cfg(feature = "machine-directories-under-a-test-root")]
+    #[cfg(all(feature = "machine-directories-under-a-test-root", target_os = "linux"))]
     fn for_this_build() -> Result<Self, MachineRuntimeLockRefusal> {
         let test_machine_root =
             crate::machine_directories_test_root::TestMachineRoot::from_the_environment()?;
         Ok(Self {
-            #[cfg(target_os = "linux")]
             abstract_socket_name: test_machine_root.machine_runtime_lock_abstract_socket_name(
                 MACHINE_RUNTIME_LOCK_ABSTRACT_SOCKET_NAME,
             ),
-            #[cfg(target_os = "macos")]
-            lock_directory: test_machine_root.machine_runtime_lock_directory(),
-            #[cfg(target_os = "macos")]
-            lock_file: test_machine_root
-                .machine_runtime_lock_directory()
-                .join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS),
-            #[cfg(target_os = "macos")]
-            expected_owner_uid: crate::streamlib_runtime_directory::current_process_uid(),
+        })
+    }
+
+    /// A test build still needs its machine root, and binds the loopback HTTP port its test
+    /// names, never the machine's own.
+    #[cfg(all(feature = "machine-directories-under-a-test-root", target_os = "macos"))]
+    fn for_this_build() -> Result<Self, MachineRuntimeLockRefusal> {
+        crate::machine_directories_test_root::TestMachineRoot::from_the_environment()?;
+        Ok(Self {
+            loopback_http_listener_address: std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                crate::machine_directories_test_root::test_loopback_http_port_from_the_environment(
+                )?,
+            ),
         })
     }
 }
@@ -200,7 +183,9 @@ fn take_the_machine_runtime_lock_at(
     location: &MachineRuntimeLockLocation,
 ) -> Result<MachineRuntimeLock, MachineRuntimeLockRefusal> {
     Ok(MachineRuntimeLock {
-        _locked_file: macos_fcntl_lock::take(location)?,
+        bound_loopback_http_listener: macos_loopback_port_lock::take(
+            location.loopback_http_listener_address,
+        )?,
     })
 }
 
@@ -208,7 +193,7 @@ fn take_the_machine_runtime_lock_at(
 fn holder_of_the_machine_runtime_lock_at(
     location: &MachineRuntimeLockLocation,
 ) -> Result<Option<MachineRuntimeLockHolder>, MachineRuntimeLockRefusal> {
-    macos_fcntl_lock::holder(location)
+    macos_loopback_port_lock::holder(location.loopback_http_listener_address)
 }
 
 /// The passwd user name of `uid`, when it has one.
@@ -589,398 +574,195 @@ mod linux_abstract_socket_lock {
     }
 }
 
-/// The type, owner and mode checks the macOS lock's directory and file must
-/// pass, as pure functions over their metadata so every refusal is testable on
-/// every floor.
+/// Asking whatever listens on a loopback port which pid serves it, as the
+/// loopback HTTP listener answers on its holder route, within a bound so a
+/// holder that never answers never hangs the caller.
 #[cfg(any(target_os = "macos", test))]
-mod lock_location_trust_check {
-    use std::os::unix::fs::MetadataExt;
-    use std::path::Path;
+mod loopback_http_listener_pid_probe {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, SocketAddrV4, TcpStream};
+    use std::time::{Duration, Instant};
 
-    use super::MachineRuntimeLockRefusal;
+    use crate::local_api_wire_contract::{
+        MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH, MachineRuntimeLockHolderPidAnswer,
+    };
 
-    /// The only mode the lock file is trusted at: every user may open it to
-    /// take the lock, so whoever starts first is the machine's runtime.
-    const MACHINE_RUNTIME_LOCK_FILE_MODE: u32 = 0o666;
+    /// How long a probe waits, in all, to connect and read the answer.
+    pub(super) const LOOPBACK_HTTP_LISTENER_PID_PROBE_BOUND: Duration = Duration::from_secs(2);
 
-    /// The mode the creation commands give the lock's directory: every user
-    /// must traverse it to open the lock file.
-    const MACHINE_RUNTIME_LOCK_DIRECTORY_MODE: u32 = 0o755;
+    /// The longest answer a probe reads before it judges the listener not to answer.
+    const LARGEST_PID_ANSWER_READ_BYTES: usize = 64 * 1024;
 
-    /// The permission bits that let a group or other replace an entry in a directory.
-    const GROUP_AND_OTHER_WRITE_BITS: u32 = 0o022;
-
-    /// What kind of entry stands at a lock path, as `lstat` sees it.
+    /// What asking the port for its holder's pid found.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(super) enum LockPathEntryKind {
-        Directory,
-        RegularFile,
-        Symlink,
-        OtherEntry,
+    pub(super) enum LoopbackHttpListenerPidAnswer {
+        /// Nothing listens on the port.
+        NothingListens,
+        /// The listener answered this pid.
+        Answered(i32),
+        /// Something accepted the connection and gave no well-formed answer within the bound.
+        DoesNotAnswer,
     }
 
-    impl LockPathEntryKind {
-        fn described(self) -> &'static str {
-            match self {
-                Self::Directory => "a directory",
-                Self::RegularFile => "a regular file",
-                Self::Symlink => "a symlink",
-                Self::OtherEntry => "neither a regular file nor a directory",
+    pub(super) fn ask_the_loopback_http_listener_for_its_pid(
+        address: SocketAddrV4,
+        probe_bound: Duration,
+    ) -> std::io::Result<LoopbackHttpListenerPidAnswer> {
+        let deadline = Instant::now() + probe_bound;
+        let mut connection = match TcpStream::connect_timeout(&SocketAddr::V4(address), probe_bound)
+        {
+            Ok(connection) => connection,
+            Err(failure) if failure.kind() == std::io::ErrorKind::ConnectionRefused => {
+                return Ok(LoopbackHttpListenerPidAnswer::NothingListens);
             }
-        }
-    }
-
-    /// The parts of a lock path's metadata the trust checks read.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(super) struct LockPathMetadata {
-        pub(super) kind: LockPathEntryKind,
-        pub(super) owner_uid: u32,
-        pub(super) mode: u32,
-    }
-
-    impl LockPathMetadata {
-        /// From metadata that did not follow a symlink (`lstat`, or `fstat` of an open descriptor).
-        pub(super) fn from_unfollowed_metadata(metadata: &std::fs::Metadata) -> Self {
-            let file_type = metadata.file_type();
-            let kind = if file_type.is_symlink() {
-                LockPathEntryKind::Symlink
-            } else if file_type.is_dir() {
-                LockPathEntryKind::Directory
-            } else if file_type.is_file() {
-                LockPathEntryKind::RegularFile
-            } else {
-                LockPathEntryKind::OtherEntry
-            };
-            Self {
-                kind,
-                owner_uid: metadata.uid(),
-                mode: metadata.mode() & 0o7777,
+            Err(failure) if failure.kind() == std::io::ErrorKind::TimedOut => {
+                return Ok(LoopbackHttpListenerPidAnswer::DoesNotAnswer);
             }
-        }
-    }
-
-    fn described_uid(uid: u32) -> String {
-        if uid == 0 {
-            "uid 0 (root)".to_string()
-        } else {
-            format!("uid {uid}")
-        }
-    }
-
-    fn cannot_be_trusted(
-        path: &Path,
-        property: &'static str,
-        found: String,
-        required: String,
-    ) -> MachineRuntimeLockRefusal {
-        MachineRuntimeLockRefusal::LockLocationCannotBeTrusted {
-            path: path.to_path_buf(),
-            property,
-            found,
-            required,
-        }
-    }
-
-    /// Refuse a lock path that is not of `expected_kind`, or that `expected_owner_uid` does not
-    /// own.
-    fn refuse_unless_kind_and_owner(
-        path: &Path,
-        metadata: LockPathMetadata,
-        expected_kind: LockPathEntryKind,
-        required_kind_text: &str,
-        expected_owner_uid: u32,
-    ) -> Result<(), MachineRuntimeLockRefusal> {
-        if metadata.kind != expected_kind {
-            return Err(cannot_be_trusted(
-                path,
-                "type",
-                metadata.kind.described().to_string(),
-                required_kind_text.to_string(),
-            ));
-        }
-        if metadata.owner_uid != expected_owner_uid {
-            return Err(cannot_be_trusted(
-                path,
-                "owner",
-                described_uid(metadata.owner_uid),
-                described_uid(expected_owner_uid),
-            ));
-        }
-        Ok(())
-    }
-
-    /// The lock's directory must be a real directory the expected owner owns,
-    /// which no group or other can write into.
-    pub(super) fn refuse_a_lock_directory_that_cannot_be_trusted(
-        path: &Path,
-        metadata: LockPathMetadata,
-        expected_owner_uid: u32,
-    ) -> Result<(), MachineRuntimeLockRefusal> {
-        refuse_unless_kind_and_owner(
-            path,
-            metadata,
-            LockPathEntryKind::Directory,
-            "a real directory, not a symlink",
-            expected_owner_uid,
-        )?;
-        if metadata.mode & GROUP_AND_OTHER_WRITE_BITS != 0 {
-            return Err(cannot_be_trusted(
-                path,
-                "mode",
-                format!("{:04o}", metadata.mode),
-                "writable by its owner only (no group or other write bit)".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// The lock file must be a regular file the expected owner owns, at exactly 0666.
-    pub(super) fn refuse_a_lock_file_that_cannot_be_trusted(
-        path: &Path,
-        metadata: LockPathMetadata,
-        expected_owner_uid: u32,
-    ) -> Result<(), MachineRuntimeLockRefusal> {
-        refuse_unless_kind_and_owner(
-            path,
-            metadata,
-            LockPathEntryKind::RegularFile,
-            "a regular file, not a symlink",
-            expected_owner_uid,
-        )?;
-        if metadata.mode != MACHINE_RUNTIME_LOCK_FILE_MODE {
-            return Err(cannot_be_trusted(
-                path,
-                "mode",
-                format!("{:04o}", metadata.mode),
-                format!("exactly {MACHINE_RUNTIME_LOCK_FILE_MODE:04o}"),
-            ));
-        }
-        Ok(())
-    }
-
-    /// The shell commands that create the lock's directory and file, run with
-    /// `sudo` when they must be owned by root.
-    pub(super) fn the_commands_that_create_the_lock_location(
-        lock_directory: &Path,
-        lock_file: &Path,
-        expected_owner_uid: u32,
-    ) -> String {
-        let administrator = if expected_owner_uid == 0 { "sudo " } else { "" };
-        format!(
-            "{administrator}mkdir -p \"{directory}\" && \
-             {administrator}chmod {MACHINE_RUNTIME_LOCK_DIRECTORY_MODE:04o} \"{directory}\" && \
-             {administrator}touch \"{file}\" && \
-             {administrator}chmod {MACHINE_RUNTIME_LOCK_FILE_MODE:04o} \"{file}\"",
-            directory = lock_directory.display(),
-            file = lock_file.display(),
+            Err(failure) => return Err(failure),
+        };
+        Ok(
+            match the_pid_answered_on_before(&mut connection, deadline) {
+                Some(pid) => LoopbackHttpListenerPidAnswer::Answered(pid),
+                None => LoopbackHttpListenerPidAnswer::DoesNotAnswer,
+            },
         )
+    }
+
+    /// The pid a `200` answering a [`MachineRuntimeLockHolderPidAnswer`] names; `None` for any
+    /// other exchange, one still unfinished at `deadline` included.
+    fn the_pid_answered_on_before(connection: &mut TcpStream, deadline: Instant) -> Option<i32> {
+        let time_left = || {
+            deadline
+                .checked_duration_since(Instant::now())
+                .filter(|time_left| !time_left.is_zero())
+        };
+        connection.set_write_timeout(Some(time_left()?)).ok()?;
+        connection
+            .write_all(
+                format!(
+                    "GET {MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH} HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+                     Connection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .ok()?;
+        let mut answer = Vec::new();
+        let mut read_buffer = [0u8; 4096];
+        loop {
+            connection.set_read_timeout(Some(time_left()?)).ok()?;
+            match connection.read(&mut read_buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    answer.extend_from_slice(&read_buffer[..read]);
+                    if answer.len() > LARGEST_PID_ANSWER_READ_BYTES {
+                        return None;
+                    }
+                }
+                Err(failure) if failure.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return None,
+            }
+        }
+        let (head, body) = std::str::from_utf8(&answer).ok()?.split_once("\r\n\r\n")?;
+        let mut status_line = head.lines().next()?.split_whitespace();
+        if !status_line.next()?.starts_with("HTTP/1.") || status_line.next()? != "200" {
+            return None;
+        }
+        let MachineRuntimeLockHolderPidAnswer { pid } = serde_json::from_str(body).ok()?;
+        (pid > 0).then_some(pid)
     }
 }
 
 #[cfg(target_os = "macos")]
-mod macos_fcntl_lock {
-    use std::fs::File;
-    use std::os::fd::AsRawFd;
+mod macos_loopback_port_lock {
+    use std::net::{SocketAddrV4, TcpListener};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::path::PathBuf;
 
-    use super::lock_location_trust_check::{
-        LockPathMetadata, refuse_a_lock_directory_that_cannot_be_trusted,
-        refuse_a_lock_file_that_cannot_be_trusted, the_commands_that_create_the_lock_location,
+    use super::loopback_http_listener_pid_probe::{
+        LOOPBACK_HTTP_LISTENER_PID_PROBE_BOUND, LoopbackHttpListenerPidAnswer,
+        ask_the_loopback_http_listener_for_its_pid,
     };
-    use super::{
-        MachineRuntimeLockHolder, MachineRuntimeLockLocation, MachineRuntimeLockRefusal,
-        user_name_of_uid,
-    };
+    use super::{MachineRuntimeLockHolder, MachineRuntimeLockRefusal, user_name_of_uid};
 
-    /// An `fcntl` lock is the process's, not the descriptor's: a second take in
-    /// this process would succeed, and closing any descriptor of the file —
-    /// a probe's included — would release it. So this process remembers it holds it.
-    static THIS_PROCESS_HOLDS_THE_MACHINE_RUNTIME_LOCK: AtomicBool = AtomicBool::new(false);
-
-    /// The open lock file whose write lock this process holds until it drops.
+    /// The lock's bound listener, kept until the lock drops, and a second descriptor of it for
+    /// the runtime to serve the loopback HTTP listener on.
     #[derive(Debug)]
-    pub(super) struct LockedMachineRuntimeLockFile {
-        _lock_file: File,
+    pub(super) struct LoopbackHttpListenerBoundAsTheLock {
+        _listener_kept_by_the_lock: TcpListener,
+        pub(super) listener_handed_over_for_serving: Option<TcpListener>,
     }
 
-    impl Drop for LockedMachineRuntimeLockFile {
-        fn drop(&mut self) {
-            THIS_PROCESS_HOLDS_THE_MACHINE_RUNTIME_LOCK.store(false, Ordering::SeqCst);
-        }
+    /// How a refusal names the lock: the loopback port.
+    pub(super) fn displayed_lock_name(address: SocketAddrV4) -> String {
+        format!("the loopback port {address}")
     }
 
-    fn displayed_lock_name(lock_file: &Path) -> String {
-        format!("the lock file {}", lock_file.display())
-    }
-
-    fn could_not_be_taken(lock_file: &Path, source: std::io::Error) -> MachineRuntimeLockRefusal {
+    fn could_not_be_taken(
+        address: SocketAddrV4,
+        source: std::io::Error,
+    ) -> MachineRuntimeLockRefusal {
         MachineRuntimeLockRefusal::CouldNotBeTaken {
-            lock: displayed_lock_name(lock_file),
+            lock: displayed_lock_name(address),
             source,
         }
     }
 
-    fn lock_location_is_missing(
-        location: &MachineRuntimeLockLocation,
-        missing_path: &Path,
-    ) -> MachineRuntimeLockRefusal {
-        MachineRuntimeLockRefusal::LockLocationIsMissing {
-            missing_path: missing_path.to_path_buf(),
-            creation_commands: the_commands_that_create_the_lock_location(
-                &location.lock_directory,
-                &location.lock_file,
-                location.expected_owner_uid,
-            ),
-        }
-    }
-
-    /// `lstat` both paths and refuse a missing or untrusted one by name.
-    fn refuse_a_lock_location_that_is_missing_or_untrusted(
-        location: &MachineRuntimeLockLocation,
-    ) -> Result<(), MachineRuntimeLockRefusal> {
-        for (path, refuse_it_unless_trusted) in [
-            (
-                &location.lock_directory,
-                refuse_a_lock_directory_that_cannot_be_trusted
-                    as fn(&Path, LockPathMetadata, u32) -> Result<(), MachineRuntimeLockRefusal>,
-            ),
-            (
-                &location.lock_file,
-                refuse_a_lock_file_that_cannot_be_trusted,
-            ),
-        ] {
-            let metadata = match std::fs::symlink_metadata(path) {
-                Ok(metadata) => metadata,
-                Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(lock_location_is_missing(location, path));
-                }
-                Err(failure) => return Err(could_not_be_taken(path, failure)),
-            };
-            refuse_it_unless_trusted(
-                path,
-                LockPathMetadata::from_unfollowed_metadata(&metadata),
-                location.expected_owner_uid,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Open the lock file without following a symlink, and check the file
-    /// actually opened, so a swap after the `lstat` is refused too.
-    fn open_the_trusted_lock_file(
-        location: &MachineRuntimeLockLocation,
-    ) -> Result<File, MachineRuntimeLockRefusal> {
-        refuse_a_lock_location_that_is_missing_or_untrusted(location)?;
-        let lock_file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&location.lock_file)
-            .map_err(|failure| match failure.kind() {
-                std::io::ErrorKind::NotFound => {
-                    lock_location_is_missing(location, &location.lock_file)
-                }
-                _ => could_not_be_taken(&location.lock_file, failure),
-            })?;
-        let opened_metadata = lock_file
-            .metadata()
-            .map_err(|failure| could_not_be_taken(&location.lock_file, failure))?;
-        refuse_a_lock_file_that_cannot_be_trusted(
-            &location.lock_file,
-            LockPathMetadata::from_unfollowed_metadata(&opened_metadata),
-            location.expected_owner_uid,
-        )?;
-        Ok(lock_file)
-    }
-
-    fn whole_file_write_lock_request() -> libc::flock {
-        // SAFETY: `flock` is plain data; all-zero is a valid value.
-        let mut request: libc::flock = unsafe { std::mem::zeroed() };
-        request.l_type = libc::F_WRLCK as libc::c_short;
-        request.l_whence = libc::SEEK_SET as libc::c_short;
-        request.l_start = 0;
-        request.l_len = 0;
-        request
-    }
-
-    /// The pid of the process whose lock conflicts with a whole-file write
-    /// lock, or `None` when nothing does any more.
-    fn pid_of_the_conflicting_lock_holder(lock_file: &File) -> std::io::Result<Option<i32>> {
-        let mut request = whole_file_write_lock_request();
-        // SAFETY: `request` is a live `flock` the call reads and overwrites.
-        let status = unsafe { libc::fcntl(lock_file.as_raw_fd(), libc::F_GETLK, &mut request) };
-        if status != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok((request.l_type != libc::F_UNLCK as libc::c_short).then_some(request.l_pid))
-    }
-
     pub(super) fn take(
-        location: &MachineRuntimeLockLocation,
-    ) -> Result<LockedMachineRuntimeLockFile, MachineRuntimeLockRefusal> {
-        if THIS_PROCESS_HOLDS_THE_MACHINE_RUNTIME_LOCK.load(Ordering::SeqCst) {
-            return Err(MachineRuntimeLockRefusal::HeldByAnotherRuntime {
-                holder: holder_named_by_pid(&location.lock_file, std::process::id() as i32)?,
-            });
-        }
-        let lock_file = open_the_trusted_lock_file(location)?;
-        // A second attempt covers a holder that exited between the refused lock and the query.
-        for _attempt in 0..2 {
-            let request = whole_file_write_lock_request();
-            // SAFETY: `request` is a live `flock` the call only reads.
-            let status = unsafe { libc::fcntl(lock_file.as_raw_fd(), libc::F_SETLK, &request) };
-            if status == 0 {
-                THIS_PROCESS_HOLDS_THE_MACHINE_RUNTIME_LOCK.store(true, Ordering::SeqCst);
-                return Ok(LockedMachineRuntimeLockFile {
-                    _lock_file: lock_file,
-                });
-            }
-            let failure = std::io::Error::last_os_error();
-            if !matches!(failure.raw_os_error(), Some(libc::EAGAIN | libc::EACCES)) {
-                return Err(could_not_be_taken(&location.lock_file, failure));
-            }
-            match pid_of_the_conflicting_lock_holder(&lock_file)
-                .map_err(|failure| could_not_be_taken(&location.lock_file, failure))?
-            {
-                Some(holder_pid) => {
-                    return Err(MachineRuntimeLockRefusal::HeldByAnotherRuntime {
-                        holder: holder_named_by_pid(&location.lock_file, holder_pid)?,
+        address: SocketAddrV4,
+    ) -> Result<LoopbackHttpListenerBoundAsTheLock, MachineRuntimeLockRefusal> {
+        // A second attempt covers a holder that exited between the refused bind and the probe.
+        for attempt in 0..2 {
+            match TcpListener::bind(address) {
+                Ok(listener_kept_by_the_lock) => {
+                    let listener_handed_over_for_serving = listener_kept_by_the_lock
+                        .try_clone()
+                        .map_err(|source| could_not_be_taken(address, source))?;
+                    return Ok(LoopbackHttpListenerBoundAsTheLock {
+                        _listener_kept_by_the_lock: listener_kept_by_the_lock,
+                        listener_handed_over_for_serving: Some(listener_handed_over_for_serving),
                     });
                 }
-                None => continue,
+                Err(failure) if failure.kind() == std::io::ErrorKind::AddrInUse => {}
+                Err(failure) => return Err(could_not_be_taken(address, failure)),
+            }
+            match holder(address)? {
+                Some(holder) => {
+                    return Err(MachineRuntimeLockRefusal::HeldByAnotherRuntime { holder });
+                }
+                None if attempt == 0 => continue,
+                None => break,
             }
         }
         Err(MachineRuntimeLockRefusal::HeldByAProcessThatDoesNotAnswer {
-            lock: displayed_lock_name(&location.lock_file),
+            lock: displayed_lock_name(address),
         })
     }
 
     pub(super) fn holder(
-        location: &MachineRuntimeLockLocation,
+        address: SocketAddrV4,
     ) -> Result<Option<MachineRuntimeLockHolder>, MachineRuntimeLockRefusal> {
-        if THIS_PROCESS_HOLDS_THE_MACHINE_RUNTIME_LOCK.load(Ordering::SeqCst) {
-            return holder_named_by_pid(&location.lock_file, std::process::id() as i32).map(Some);
-        }
-        let lock_file = match open_the_trusted_lock_file(location) {
-            Ok(lock_file) => lock_file,
-            Err(MachineRuntimeLockRefusal::LockLocationIsMissing { .. }) => return Ok(None),
-            Err(refusal) => return Err(refusal),
-        };
-        match pid_of_the_conflicting_lock_holder(&lock_file)
-            .map_err(|failure| could_not_be_taken(&location.lock_file, failure))?
+        match ask_the_loopback_http_listener_for_its_pid(
+            address,
+            LOOPBACK_HTTP_LISTENER_PID_PROBE_BOUND,
+        )
+        .map_err(|source| could_not_be_taken(address, source))?
         {
-            Some(holder_pid) => holder_named_by_pid(&location.lock_file, holder_pid).map(Some),
-            None => Ok(None),
+            LoopbackHttpListenerPidAnswer::NothingListens => Ok(None),
+            LoopbackHttpListenerPidAnswer::Answered(pid) => {
+                holder_named_by_pid(address, pid).map(Some)
+            }
+            LoopbackHttpListenerPidAnswer::DoesNotAnswer => {
+                Err(MachineRuntimeLockRefusal::HeldByAProcessThatDoesNotAnswer {
+                    lock: displayed_lock_name(address),
+                })
+            }
         }
     }
 
     /// Name a pid through libproc (`<libproc.h>`): its uid from its BSD info,
     /// its executable from its path.
-    fn holder_named_by_pid(
-        lock_file: &Path,
+    pub(super) fn holder_named_by_pid(
+        address: SocketAddrV4,
         pid: i32,
     ) -> Result<MachineRuntimeLockHolder, MachineRuntimeLockRefusal> {
         // SAFETY: `proc_bsdinfo` is plain data; all-zero is a valid value.
@@ -998,7 +780,7 @@ mod macos_fcntl_lock {
         };
         if written != bsd_info_size {
             return Err(MachineRuntimeLockRefusal::HeldByAProcessThatCannotBeNamed {
-                lock: displayed_lock_name(lock_file),
+                lock: displayed_lock_name(address),
                 pid,
                 source: std::io::Error::last_os_error(),
             });
@@ -1028,21 +810,13 @@ mod macos_fcntl_lock {
 
 #[cfg(test)]
 mod tests {
-    use super::lock_location_trust_check::{
-        LockPathEntryKind, LockPathMetadata, refuse_a_lock_directory_that_cannot_be_trusted,
-        refuse_a_lock_file_that_cannot_be_trusted, the_commands_that_create_the_lock_location,
-    };
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
     use std::path::Path;
-
-    const ROOT_UID: u32 = 0;
-
-    fn refusal_text(outcome: Result<(), MachineRuntimeLockRefusal>) -> String {
-        match outcome {
-            Ok(()) => panic!("the check must refuse"),
-            Err(refusal) => refusal.to_string(),
-        }
-    }
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn the_holder_reads_as_user_uid_pid_and_executable() {
@@ -1067,312 +841,210 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_root_owned_owner_only_writable_directory_and_a_root_owned_0666_file_are_trusted() {
-        let directory = Path::new(MACHINE_RUNTIME_LOCK_DIRECTORY_ON_MACOS);
-        for mode in [0o755, 0o700, 0o1755] {
-            refuse_a_lock_directory_that_cannot_be_trusted(
-                directory,
-                LockPathMetadata {
-                    kind: LockPathEntryKind::Directory,
-                    owner_uid: ROOT_UID,
-                    mode,
-                },
-                ROOT_UID,
+    /// A loopback port free when chosen.
+    fn a_free_loopback_port() -> u16 {
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    /// An HTTP/1.1 answer of `status_line` carrying `body`, closing its connection.
+    fn an_http_answer(status_line: &str, body: &str) -> Vec<u8> {
+        format!(
+            "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    /// A test thread answering every connection to its listener with the same
+    /// bytes, once it has read the request's head, until it drops.
+    struct TestThreadAnsweringEveryConnection {
+        stop_answering: Arc<AtomicBool>,
+        answering_thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl TestThreadAnsweringEveryConnection {
+        fn start(listener: TcpListener, answer: Vec<u8>) -> Self {
+            listener.set_nonblocking(true).unwrap();
+            let stop_answering = Arc::new(AtomicBool::new(false));
+            let stop_answering_seen_by_the_thread = Arc::clone(&stop_answering);
+            let answering_thread = std::thread::spawn(move || {
+                while !stop_answering_seen_by_the_thread.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut connection, _peer_address)) => {
+                            let _ = connection.set_nonblocking(false);
+                            let _ = connection.set_read_timeout(Some(Duration::from_secs(5)));
+                            read_the_request_head(&mut connection);
+                            let _ = connection.write_all(&answer);
+                        }
+                        Err(_) => std::thread::sleep(Duration::from_millis(1)),
+                    }
+                }
+            });
+            Self {
+                stop_answering,
+                answering_thread: Some(answering_thread),
+            }
+        }
+
+        /// Answering this process's pid, as the loopback HTTP listener answers its holder route.
+        #[cfg(target_os = "macos")]
+        fn answering_this_processes_pid(listener: TcpListener) -> Self {
+            Self::start(
+                listener,
+                an_http_answer(
+                    "HTTP/1.1 200 OK",
+                    &format!(r#"{{"pid":{}}}"#, std::process::id()),
+                ),
             )
-            .unwrap();
-        }
-        refuse_a_lock_file_that_cannot_be_trusted(
-            &directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS),
-            LockPathMetadata {
-                kind: LockPathEntryKind::RegularFile,
-                owner_uid: ROOT_UID,
-                mode: 0o666,
-            },
-            ROOT_UID,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn a_lock_directory_of_the_wrong_type_owner_or_mode_is_refused_by_name() {
-        let directory = Path::new(MACHINE_RUNTIME_LOCK_DIRECTORY_ON_MACOS);
-        let trusted = LockPathMetadata {
-            kind: LockPathEntryKind::Directory,
-            owner_uid: ROOT_UID,
-            mode: 0o755,
-        };
-        for (metadata, property, found, required) in [
-            (
-                LockPathMetadata {
-                    kind: LockPathEntryKind::Symlink,
-                    ..trusted
-                },
-                "type",
-                "a symlink",
-                "a real directory",
-            ),
-            (
-                LockPathMetadata {
-                    kind: LockPathEntryKind::RegularFile,
-                    ..trusted
-                },
-                "type",
-                "a regular file",
-                "a real directory",
-            ),
-            (
-                LockPathMetadata {
-                    owner_uid: 501,
-                    ..trusted
-                },
-                "owner",
-                "uid 501",
-                "uid 0 (root)",
-            ),
-            (
-                LockPathMetadata {
-                    mode: 0o775,
-                    ..trusted
-                },
-                "mode",
-                "0775",
-                "no group or other write bit",
-            ),
-            (
-                LockPathMetadata {
-                    mode: 0o757,
-                    ..trusted
-                },
-                "mode",
-                "0757",
-                "no group or other write bit",
-            ),
-            (
-                LockPathMetadata {
-                    mode: 0o1777,
-                    ..trusted
-                },
-                "mode",
-                "1777",
-                "no group or other write bit",
-            ),
-        ] {
-            let refusal = refusal_text(refuse_a_lock_directory_that_cannot_be_trusted(
-                directory, metadata, ROOT_UID,
-            ));
-            assert!(
-                refusal.contains(MACHINE_RUNTIME_LOCK_DIRECTORY_ON_MACOS),
-                "{refusal}"
-            );
-            assert!(refusal.contains(&format!("the {property} of")), "{refusal}");
-            assert!(refusal.contains(&format!("is {found}")), "{refusal}");
-            assert!(refusal.contains(required), "{refusal}");
         }
     }
 
-    #[test]
-    fn a_lock_file_of_the_wrong_type_owner_or_mode_is_refused_by_name() {
-        let lock_file = Path::new(MACHINE_RUNTIME_LOCK_DIRECTORY_ON_MACOS)
-            .join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS);
-        let trusted = LockPathMetadata {
-            kind: LockPathEntryKind::RegularFile,
-            owner_uid: ROOT_UID,
-            mode: 0o666,
-        };
-        for (metadata, property, found, required) in [
-            (
-                LockPathMetadata {
-                    kind: LockPathEntryKind::Symlink,
-                    ..trusted
-                },
-                "type",
-                "a symlink",
-                "a regular file",
-            ),
-            (
-                LockPathMetadata {
-                    kind: LockPathEntryKind::Directory,
-                    ..trusted
-                },
-                "type",
-                "a directory",
-                "a regular file",
-            ),
-            (
-                LockPathMetadata {
-                    kind: LockPathEntryKind::OtherEntry,
-                    ..trusted
-                },
-                "type",
-                "neither a regular file nor a directory",
-                "a regular file",
-            ),
-            (
-                LockPathMetadata {
-                    owner_uid: 501,
-                    ..trusted
-                },
-                "owner",
-                "uid 501",
-                "uid 0 (root)",
-            ),
-            (
-                LockPathMetadata {
-                    mode: 0o644,
-                    ..trusted
-                },
-                "mode",
-                "0644",
-                "exactly 0666",
-            ),
-            (
-                LockPathMetadata {
-                    mode: 0o600,
-                    ..trusted
-                },
-                "mode",
-                "0600",
-                "exactly 0666",
-            ),
-            (
-                LockPathMetadata {
-                    mode: 0o777,
-                    ..trusted
-                },
-                "mode",
-                "0777",
-                "exactly 0666",
-            ),
-            (
-                LockPathMetadata {
-                    mode: 0o4666,
-                    ..trusted
-                },
-                "mode",
-                "4666",
-                "exactly 0666",
-            ),
-        ] {
-            let refusal = refusal_text(refuse_a_lock_file_that_cannot_be_trusted(
-                &lock_file, metadata, ROOT_UID,
-            ));
-            assert!(
-                refusal.contains(&lock_file.display().to_string()),
-                "{refusal}"
-            );
-            assert!(refusal.contains(&format!("the {property} of")), "{refusal}");
-            assert!(refusal.contains(&format!("is {found}")), "{refusal}");
-            assert!(refusal.contains(required), "{refusal}");
+    impl Drop for TestThreadAnsweringEveryConnection {
+        fn drop(&mut self) {
+            self.stop_answering.store(true, Ordering::SeqCst);
+            if let Some(answering_thread) = self.answering_thread.take() {
+                let _ = answering_thread.join();
+            }
         }
     }
 
-    #[test]
-    fn a_test_roots_lock_is_trusted_owned_by_the_current_uid_and_refused_owned_by_root() {
-        let this_uid = crate::streamlib_runtime_directory::current_process_uid();
-        let lock_file = Path::new("/tmp/tl-abcd/lock/runtime.lock");
-        let owned_by_this_uid = LockPathMetadata {
-            kind: LockPathEntryKind::RegularFile,
-            owner_uid: this_uid,
-            mode: 0o666,
+    fn read_the_request_head(connection: &mut TcpStream) {
+        let mut request_head = Vec::new();
+        let mut read_byte = [0u8; 1];
+        while !request_head.ends_with(b"\r\n\r\n") {
+            match connection.read(&mut read_byte) {
+                Ok(1) => request_head.push(read_byte[0]),
+                _ => return,
+            }
+        }
+    }
+
+    /// Each answer the pid probe can read off a listener, against a stub on a free port.
+    mod loopback_http_listener_pid_probe_outcomes {
+        use super::super::loopback_http_listener_pid_probe::{
+            LOOPBACK_HTTP_LISTENER_PID_PROBE_BOUND, LoopbackHttpListenerPidAnswer,
+            ask_the_loopback_http_listener_for_its_pid,
         };
-        refuse_a_lock_file_that_cannot_be_trusted(lock_file, owned_by_this_uid, this_uid).unwrap();
-        if this_uid != ROOT_UID {
-            let refusal = refusal_text(refuse_a_lock_file_that_cannot_be_trusted(
-                lock_file,
-                LockPathMetadata {
-                    owner_uid: ROOT_UID,
-                    ..owned_by_this_uid
-                },
-                this_uid,
-            ));
-            assert!(
-                refusal.contains(&format!("is uid 0 (root), and it must be uid {this_uid}")),
-                "{refusal}"
+        use super::*;
+
+        const A_SHORT_PROBE_BOUND: Duration = Duration::from_millis(300);
+
+        fn a_listener_on_a_free_loopback_port() -> (TcpListener, SocketAddrV4) {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let SocketAddr::V4(address) = listener.local_addr().unwrap() else {
+                panic!("a loopback listener has an IPv4 address");
+            };
+            (listener, address)
+        }
+
+        fn what_a_probe_reads_off_a_stub_answering(
+            answer: Vec<u8>,
+        ) -> LoopbackHttpListenerPidAnswer {
+            let (listener, address) = a_listener_on_a_free_loopback_port();
+            let _stub = TestThreadAnsweringEveryConnection::start(listener, answer);
+            ask_the_loopback_http_listener_for_its_pid(
+                address,
+                LOOPBACK_HTTP_LISTENER_PID_PROBE_BOUND,
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn a_stub_answering_pid_1_is_answered_as_pid_1() {
+            assert_eq!(
+                what_a_probe_reads_off_a_stub_answering(an_http_answer(
+                    "HTTP/1.1 200 OK",
+                    r#"{"pid":1}"#
+                )),
+                LoopbackHttpListenerPidAnswer::Answered(1)
             );
         }
-    }
 
-    #[test]
-    fn metadata_read_without_following_a_symlink_feeds_the_checks_what_is_on_disk() {
-        use std::os::unix::fs::PermissionsExt;
-        let this_uid = crate::streamlib_runtime_directory::current_process_uid();
-        let scratch_directory =
-            crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-        let lock_directory = scratch_directory.path().join("lock");
-        std::fs::create_dir(&lock_directory).unwrap();
-        std::fs::set_permissions(&lock_directory, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let lock_file = lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS);
-        std::fs::write(&lock_file, b"").unwrap();
-        std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o666)).unwrap();
-        let symlink_to_the_lock_file = lock_directory.join("a-symlink");
-        std::os::unix::fs::symlink(&lock_file, &symlink_to_the_lock_file).unwrap();
-        let unfollowed = |path: &Path| {
-            LockPathMetadata::from_unfollowed_metadata(&std::fs::symlink_metadata(path).unwrap())
-        };
+        /// The kernel accepts the connection into the stub's queue, and nothing reads it.
+        #[test]
+        fn a_stub_that_accepts_and_never_answers_does_not_answer_within_the_bound() {
+            let (_listener, address) = a_listener_on_a_free_loopback_port();
+            let probe_started = Instant::now();
 
-        refuse_a_lock_directory_that_cannot_be_trusted(
-            &lock_directory,
-            unfollowed(&lock_directory),
-            this_uid,
-        )
-        .unwrap();
-        refuse_a_lock_file_that_cannot_be_trusted(&lock_file, unfollowed(&lock_file), this_uid)
-            .unwrap();
-        let refusal = refusal_text(refuse_a_lock_file_that_cannot_be_trusted(
-            &symlink_to_the_lock_file,
-            unfollowed(&symlink_to_the_lock_file),
-            this_uid,
-        ));
-        assert!(refusal.contains("the type of"), "{refusal}");
-        assert!(refusal.contains("is a symlink"), "{refusal}");
-    }
+            let answer =
+                ask_the_loopback_http_listener_for_its_pid(address, A_SHORT_PROBE_BOUND).unwrap();
 
-    #[test]
-    fn the_missing_lock_refusal_names_the_exact_commands_that_create_it() {
-        let lock_directory = Path::new(MACHINE_RUNTIME_LOCK_DIRECTORY_ON_MACOS);
-        let lock_file = lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS);
-        let refusal = MachineRuntimeLockRefusal::LockLocationIsMissing {
-            missing_path: lock_directory.to_path_buf(),
-            creation_commands: the_commands_that_create_the_lock_location(
-                lock_directory,
-                &lock_file,
-                ROOT_UID,
-            ),
+            assert_eq!(answer, LoopbackHttpListenerPidAnswer::DoesNotAnswer);
+            assert!(
+                probe_started.elapsed() < A_SHORT_PROBE_BOUND * 10,
+                "the probe took {:?}",
+                probe_started.elapsed()
+            );
         }
-        .to_string();
-        assert!(
-            refusal.contains(
-                "sudo mkdir -p \"/Library/Application Support/Tatolab\" && sudo chmod 0755 \
-                 \"/Library/Application Support/Tatolab\" && sudo touch \
-                 \"/Library/Application Support/Tatolab/runtime.lock\" && sudo chmod 0666 \
-                 \"/Library/Application Support/Tatolab/runtime.lock\""
-            ),
-            "{refusal}"
-        );
-        assert!(
-            refusal.contains("Tatolab.app creates it at first launch"),
-            "{refusal}"
-        );
-        assert!(
-            refusal.contains("/Library/Application Support/Tatolab does not exist"),
-            "{refusal}"
-        );
+
+        #[test]
+        fn a_stub_answering_anything_but_a_pid_does_not_answer() {
+            for answer in [
+                b"garbage".to_vec(),
+                an_http_answer("HTTP/1.1 200 OK", "garbage"),
+                an_http_answer("HTTP/1.1 200 OK", r#"{"pid":"one"}"#),
+                an_http_answer("HTTP/1.1 200 OK", r#"{"pid":0}"#),
+                an_http_answer("HTTP/1.1 404 Not Found", r#"{"pid":1}"#),
+                an_http_answer("HTTP/1.1 421 Misdirected Request", r#"{"pid":1}"#),
+            ] {
+                assert_eq!(
+                    what_a_probe_reads_off_a_stub_answering(answer.clone()),
+                    LoopbackHttpListenerPidAnswer::DoesNotAnswer,
+                    "{}",
+                    String::from_utf8_lossy(&answer)
+                );
+            }
+        }
+
+        #[test]
+        fn a_port_nothing_listens_on_is_answered_by_nothing() {
+            let (listener, address) = a_listener_on_a_free_loopback_port();
+            drop(listener);
+
+            assert_eq!(
+                ask_the_loopback_http_listener_for_its_pid(address, A_SHORT_PROBE_BOUND).unwrap(),
+                LoopbackHttpListenerPidAnswer::NothingListens
+            );
+        }
+
+        /// Pid 1 runs as root, another user's process to this test: its name
+        /// comes from the kernel, never from the stub.
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn a_stub_answering_pid_1_is_named_root_running_launchd() {
+            let (listener, address) = a_listener_on_a_free_loopback_port();
+            let _stub = TestThreadAnsweringEveryConnection::start(
+                listener,
+                an_http_answer("HTTP/1.1 200 OK", r#"{"pid":1}"#),
+            );
+
+            assert_eq!(
+                super::super::macos_loopback_port_lock::holder(address).unwrap(),
+                Some(MachineRuntimeLockHolder {
+                    user_name: Some("root".to_string()),
+                    uid: 0,
+                    pid: 1,
+                    executable: Some(PathBuf::from("/sbin/launchd")),
+                })
+            );
+        }
     }
 
     /// The tests that take and probe a real lock at a location no real runtime
-    /// and no other test uses. They run one at a time because a macOS process
-    /// holds at most one machine runtime lock, wherever it lives.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// and no other test uses. They run one at a time, so no child process one
+    /// of them spawns inherits a lock another holds.
     mod taken_and_probed_on_this_floor {
         use super::*;
         use crate::test_support::{
             assert_the_child_process_ran_the_test, rerun_this_test_in_a_child_process,
             spawn_this_test_from_a_test_binary,
         };
-        use std::ffi::{OsStr, OsString};
-        use std::io::Read;
-        use std::time::{Duration, Instant};
+        use std::ffi::OsString;
 
         /// Set only in the child process that holds the lock while its parent is refused.
         const HOLD_THE_LOCK_CHILD_ENVIRONMENT_VARIABLE: &str =
@@ -1390,11 +1062,9 @@ mod tests {
 
         const PROBING_CHILD_TEST_PATH: &str = "machine_runtime_lock::tests::taken_and_probed_on_this_floor::probes_and_refused_takes_by_the_holder_leave_the_lock_held";
 
-        /// A lock location only one test uses, removed with it.
+        /// A lock location only one test uses.
         struct LockLocationOnlyThisTestUses {
             location: MachineRuntimeLockLocation,
-            #[cfg(target_os = "macos")]
-            _scratch_directory: tempfile::TempDir,
         }
 
         impl LockLocationOnlyThisTestUses {
@@ -1414,33 +1084,33 @@ mod tests {
                 }
             }
 
-            /// A `lock/` directory at 0755 holding `runtime.lock` at 0666, both
-            /// owned by this uid, as a test root's harness lays them out.
+            /// A loopback port free when chosen, which no real runtime binds.
             #[cfg(target_os = "macos")]
             fn new() -> Self {
-                use std::os::unix::fs::PermissionsExt;
-                let scratch_directory =
-                    crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-                let lock_directory = a_lock_directory_at_0755_in(scratch_directory.path());
-                let lock_file = lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS);
-                std::fs::write(&lock_file, b"").unwrap();
-                std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o666))
-                    .unwrap();
                 Self {
-                    location: lock_location_in(lock_directory),
-                    _scratch_directory: scratch_directory,
+                    location: MachineRuntimeLockLocation {
+                        loopback_http_listener_address: SocketAddrV4::new(
+                            Ipv4Addr::LOCALHOST,
+                            a_free_loopback_port(),
+                        ),
+                    },
                 }
             }
 
             /// What a child process is handed to find this location again.
-            fn handed_to_a_child(&self) -> &OsStr {
+            fn handed_to_a_child(&self) -> OsString {
                 #[cfg(target_os = "linux")]
                 {
-                    OsStr::new(&self.location.abstract_socket_name)
+                    OsString::from(&self.location.abstract_socket_name)
                 }
                 #[cfg(target_os = "macos")]
                 {
-                    self.location.lock_directory.as_os_str()
+                    OsString::from(
+                        self.location
+                            .loopback_http_listener_address
+                            .port()
+                            .to_string(),
+                    )
                 }
             }
         }
@@ -1454,27 +1124,36 @@ mod tests {
             }
             #[cfg(target_os = "macos")]
             {
-                lock_location_in(PathBuf::from(handed))
+                MachineRuntimeLockLocation {
+                    loopback_http_listener_address: SocketAddrV4::new(
+                        Ipv4Addr::LOCALHOST,
+                        handed.into_string().unwrap().parse().unwrap(),
+                    ),
+                }
             }
         }
 
-        #[cfg(target_os = "macos")]
-        fn lock_location_in(lock_directory: PathBuf) -> MachineRuntimeLockLocation {
-            MachineRuntimeLockLocation {
-                lock_file: lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS),
-                lock_directory,
-                expected_owner_uid: crate::streamlib_runtime_directory::current_process_uid(),
-            }
+        /// A lock this test holds, answering its holder route on macOS as
+        /// `tatolabd` does once it serves its loopback HTTP listener.
+        struct LockHeldAndAnsweringAsItsHolder {
+            #[cfg(target_os = "macos")]
+            _holder_route_answered: TestThreadAnsweringEveryConnection,
+            _held_lock: MachineRuntimeLock,
         }
 
-        #[cfg(target_os = "macos")]
-        fn a_lock_directory_at_0755_in(scratch_directory: &Path) -> PathBuf {
-            use std::os::unix::fs::PermissionsExt;
-            let lock_directory = scratch_directory.join("lock");
-            std::fs::create_dir(&lock_directory).unwrap();
-            std::fs::set_permissions(&lock_directory, std::fs::Permissions::from_mode(0o755))
-                .unwrap();
-            lock_directory
+        fn take_and_answer_as_its_holder(
+            location: &MachineRuntimeLockLocation,
+        ) -> LockHeldAndAnsweringAsItsHolder {
+            #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+            let mut held_lock = take_the_machine_runtime_lock_at(location).unwrap();
+            LockHeldAndAnsweringAsItsHolder {
+                #[cfg(target_os = "macos")]
+                _holder_route_answered:
+                    TestThreadAnsweringEveryConnection::answering_this_processes_pid(
+                        held_lock.take_the_bound_loopback_http_listener().unwrap(),
+                    ),
+                _held_lock: held_lock,
+            }
         }
 
         /// The holder with its executable canonicalized, since `/proc/<pid>/exe`
@@ -1518,7 +1197,7 @@ mod tests {
          {
             if let Some(handed) = std::env::var_os(HOLD_THE_LOCK_CHILD_ENVIRONMENT_VARIABLE) {
                 let location = the_location_a_parent_handed_this_child(handed);
-                let _held_lock = take_the_machine_runtime_lock_at(&location).unwrap();
+                let _held_lock = take_and_answer_as_its_holder(&location);
                 std::fs::write(
                     std::env::var_os(HOLDING_CHILD_READY_FILE_ENVIRONMENT_VARIABLE).unwrap(),
                     b"",
@@ -1653,7 +1332,7 @@ mod tests {
         #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
         fn a_second_take_in_this_process_is_refused_naming_this_process() {
             let lock = LockLocationOnlyThisTestUses::new();
-            let _held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
+            let _held_lock = take_and_answer_as_its_holder(&lock.location);
 
             let refusal = take_the_machine_runtime_lock_at(&lock.location).unwrap_err();
 
@@ -1690,7 +1369,7 @@ mod tests {
             }
 
             let lock = LockLocationOnlyThisTestUses::new();
-            let _held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
+            let _held_lock = take_and_answer_as_its_holder(&lock.location);
             for _probe_round in 0..3 {
                 assert_eq!(
                     holder_of_the_machine_runtime_lock_at(&lock.location)
@@ -1707,7 +1386,7 @@ mod tests {
             let child = rerun_this_test_in_a_child_process(
                 PROBING_CHILD_TEST_PATH,
                 PROBE_THE_PARENTS_LOCK_CHILD_ENVIRONMENT_VARIABLE,
-                lock.handed_to_a_child(),
+                &lock.handed_to_a_child(),
             );
             assert!(
                 child.status.success(),
@@ -1737,7 +1416,7 @@ mod tests {
                 None
             );
 
-            let held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
+            let held_lock = take_and_answer_as_its_holder(&lock.location);
             assert_eq!(
                 holder_of_the_machine_runtime_lock_at(&lock.location)
                     .unwrap()
@@ -1877,124 +1556,67 @@ mod tests {
         #[cfg(target_os = "macos")]
         #[test]
         #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
-        fn a_symlinked_lock_file_is_refused_as_a_symlink_by_the_take_and_the_probe() {
-            use std::os::unix::fs::PermissionsExt;
-            let scratch_directory =
-                crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-            let lock_directory = a_lock_directory_at_0755_in(scratch_directory.path());
-            let a_file_elsewhere = scratch_directory.path().join("a-file-elsewhere");
-            std::fs::write(&a_file_elsewhere, b"").unwrap();
-            std::fs::set_permissions(&a_file_elsewhere, std::fs::Permissions::from_mode(0o666))
-                .unwrap();
-            std::os::unix::fs::symlink(
-                &a_file_elsewhere,
-                lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS),
-            )
-            .unwrap();
-            let location = lock_location_in(lock_directory);
+        fn a_take_on_a_free_port_hands_over_its_bound_listener_once_and_keeps_the_port_bound() {
+            let lock = LockLocationOnlyThisTestUses::new();
+            let address = lock.location.loopback_http_listener_address;
+            let mut held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
+
+            let handed_over_listener = held_lock.take_the_bound_loopback_http_listener().unwrap();
+            assert_eq!(
+                handed_over_listener.local_addr().unwrap(),
+                SocketAddr::V4(address)
+            );
+            assert!(held_lock.take_the_bound_loopback_http_listener().is_none());
+            drop(handed_over_listener);
+
+            assert_eq!(
+                TcpListener::bind(address).unwrap_err().kind(),
+                std::io::ErrorKind::AddrInUse,
+                "the port must stay bound while the lock is held"
+            );
+        }
+
+        /// Without a server answering the holder route, a second take and a
+        /// probe meet a bound port that names nobody.
+        #[cfg(target_os = "macos")]
+        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn a_second_take_while_the_holder_serves_no_answer_is_refused_naming_the_port() {
+            let lock = LockLocationOnlyThisTestUses::new();
+            let _held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
+
+            let refusal = take_the_machine_runtime_lock_at(&lock.location).unwrap_err();
+
+            assert_eq!(
+                refusal.to_string(),
+                format!(
+                    "another runtime holds this machine: the loopback port {} is held by a \
+                     process that does not answer",
+                    lock.location.loopback_http_listener_address
+                )
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn a_foreign_listener_on_the_port_is_refused_as_a_process_that_does_not_answer() {
+            let lock = LockLocationOnlyThisTestUses::new();
+            let _foreign_listener =
+                TcpListener::bind(lock.location.loopback_http_listener_address).unwrap();
+            let expected_refusal = format!(
+                "another runtime holds this machine: the loopback port {} is held by a process \
+                 that does not answer",
+                lock.location.loopback_http_listener_address
+            );
 
             let refusals = [
-                take_the_machine_runtime_lock_at(&location).unwrap_err(),
-                holder_of_the_machine_runtime_lock_at(&location).unwrap_err(),
+                take_the_machine_runtime_lock_at(&lock.location).unwrap_err(),
+                holder_of_the_machine_runtime_lock_at(&lock.location).unwrap_err(),
             ];
 
             for refusal in refusals {
-                let MachineRuntimeLockRefusal::LockLocationCannotBeTrusted {
-                    path,
-                    property,
-                    found,
-                    ..
-                } = &refusal
-                else {
-                    panic!("a symlinked lock file must be refused as untrusted: {refusal}");
-                };
-                assert_eq!(path, &location.lock_file);
-                assert_eq!(*property, "type");
-                assert_eq!(found, "a symlink");
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        #[test]
-        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
-        fn a_missing_lock_location_is_refused_naming_the_commands_that_create_it_and_probes_as_free()
-         {
-            let scratch_directory =
-                crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-            let without_its_file =
-                lock_location_in(a_lock_directory_at_0755_in(scratch_directory.path()));
-            let without_its_directory =
-                lock_location_in(scratch_directory.path().join("never-made"));
-
-            for (location, missing_path) in [
-                (&without_its_file, &without_its_file.lock_file),
-                (
-                    &without_its_directory,
-                    &without_its_directory.lock_directory,
-                ),
-            ] {
-                let refusal = take_the_machine_runtime_lock_at(location).unwrap_err();
-                let MachineRuntimeLockRefusal::LockLocationIsMissing {
-                    missing_path: refused_missing_path,
-                    creation_commands,
-                } = &refusal
-                else {
-                    panic!("a missing lock location must be refused as missing: {refusal}");
-                };
-                assert_eq!(refused_missing_path, missing_path);
-                assert!(
-                    creation_commands.contains(&format!(
-                        "mkdir -p \"{}\"",
-                        location.lock_directory.display()
-                    )),
-                    "{creation_commands}"
-                );
-                assert!(
-                    creation_commands.contains(&format!(
-                        "chmod 0755 \"{}\"",
-                        location.lock_directory.display()
-                    )),
-                    "{creation_commands}"
-                );
-                assert!(
-                    creation_commands
-                        .contains(&format!("chmod 0666 \"{}\"", location.lock_file.display())),
-                    "{creation_commands}"
-                );
-                assert_eq!(
-                    holder_of_the_machine_runtime_lock_at(location).unwrap(),
-                    None
-                );
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        #[test]
-        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
-        fn a_lock_file_at_any_mode_but_0666_is_refused_naming_its_mode() {
-            use std::os::unix::fs::PermissionsExt;
-            let lock = LockLocationOnlyThisTestUses::new();
-            for mode in [0o644, 0o600, 0o777] {
-                std::fs::set_permissions(
-                    &lock.location.lock_file,
-                    std::fs::Permissions::from_mode(mode),
-                )
-                .unwrap();
-
-                let refusal = take_the_machine_runtime_lock_at(&lock.location).unwrap_err();
-
-                let MachineRuntimeLockRefusal::LockLocationCannotBeTrusted {
-                    path,
-                    property,
-                    found,
-                    ..
-                } = &refusal
-                else {
-                    panic!("a lock file at mode {mode:04o} must be refused: {refusal}");
-                };
-                assert_eq!(path, &lock.location.lock_file);
-                assert_eq!(*property, "mode");
-                assert_eq!(found, &format!("{mode:04o}"));
+                assert_eq!(refusal.to_string(), expected_refusal);
             }
         }
     }
@@ -2004,7 +1626,9 @@ mod tests {
     #[cfg(feature = "machine-directories-under-a-test-root")]
     mod under_a_test_machine_root {
         use super::*;
-        use crate::machine_directories_test_root::TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE;
+        use crate::machine_directories_test_root::{
+            TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE, TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE,
+        };
         use crate::streamlib_runtime_directory::StreamlibRuntimeDirectory;
         use crate::tatolab_state_directory::TatolabStateDirectory;
         use std::os::unix::fs::PermissionsExt;
@@ -2012,6 +1636,11 @@ mod tests {
         /// Set only in the child process the unset-root test re-runs itself in.
         const UNSET_TEST_MACHINE_ROOT_CHILD_ENVIRONMENT_VARIABLE: &str =
             "STREAMLIB_TEST_UNSET_TEST_MACHINE_ROOT_CHILD";
+
+        /// Set only in the child process the unset-port test re-runs itself in.
+        #[cfg(target_os = "macos")]
+        const UNSET_TEST_LOOPBACK_HTTP_PORT_CHILD_ENVIRONMENT_VARIABLE: &str =
+            "STREAMLIB_TEST_UNSET_TEST_LOOPBACK_HTTP_PORT_CHILD";
 
         fn mode_of(path: &Path) -> u32 {
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777
@@ -2042,22 +1671,30 @@ mod tests {
                 assert_eq!(state_directory.path(), test_machine_root.join("state"));
                 assert_eq!(mode_of(state_directory.path()), 0o700);
 
-                #[cfg(target_os = "macos")]
-                {
-                    let lock_directory = test_machine_root.join("lock");
-                    std::fs::create_dir(&lock_directory).unwrap();
-                    std::fs::set_permissions(
-                        &lock_directory,
-                        std::fs::Permissions::from_mode(0o755),
-                    )
-                    .unwrap();
-                    let lock_file = lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS);
-                    std::fs::write(&lock_file, b"").unwrap();
-                    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o666))
-                        .unwrap();
-                }
                 assert_eq!(holder_of_the_machine_runtime_lock().unwrap(), None);
-                let _held_lock = MachineRuntimeLock::take().unwrap();
+                #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+                let mut held_lock = MachineRuntimeLock::take().unwrap();
+                #[cfg(target_os = "macos")]
+                let _holder_route_answered = {
+                    let handed_over_listener =
+                        held_lock.take_the_bound_loopback_http_listener().unwrap();
+                    let test_loopback_http_port: u16 =
+                        std::env::var(TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE)
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                    assert_eq!(
+                        handed_over_listener.local_addr().unwrap(),
+                        SocketAddr::from((Ipv4Addr::LOCALHOST, test_loopback_http_port))
+                    );
+                    assert_ne!(
+                        test_loopback_http_port,
+                        crate::local_api_wire_contract::LOOPBACK_HTTP_LISTENER_DEFAULT_PORT
+                    );
+                    TestThreadAnsweringEveryConnection::answering_this_processes_pid(
+                        handed_over_listener,
+                    )
+                };
                 let this_pid = std::process::id() as i32;
                 assert_eq!(
                     holder_of_the_machine_runtime_lock()
@@ -2078,6 +1715,7 @@ mod tests {
                         "the test build took the real machine's lock"
                     );
                 }
+                drop(held_lock);
                 return;
             }
 
@@ -2086,11 +1724,22 @@ mod tests {
                 .prefix("tl-")
                 .tempdir_in("/tmp")
                 .unwrap();
-            let child = crate::test_support::rerun_this_test_in_a_child_process(
-                "machine_runtime_lock::tests::under_a_test_machine_root::the_test_root_moves_the_runtime_directory_the_state_directory_and_the_lock",
-                TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE,
-                test_machine_root.path().as_os_str(),
-            );
+            let test_loopback_http_port = a_free_loopback_port();
+            let child =
+                crate::test_support::rerun_this_test_in_a_child_process_with_its_environment(
+                    "machine_runtime_lock::tests::under_a_test_machine_root::the_test_root_moves_the_runtime_directory_the_state_directory_and_the_lock",
+                    |child_command| {
+                        child_command
+                            .env(
+                                TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE,
+                                test_machine_root.path(),
+                            )
+                            .env(
+                                TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE,
+                                test_loopback_http_port.to_string(),
+                            );
+                    },
+                );
             assert!(
                 child.status.success(),
                 "the test-root arm failed in the child: {}{}",
@@ -2141,6 +1790,57 @@ mod tests {
             assert!(
                 child.status.success(),
                 "the unset-root arm failed in the child: {}{}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr),
+            );
+        }
+
+        /// The macOS lock is the test's loopback HTTP port, so a test build
+        /// naming none takes no lock at all, never the machine's own.
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn a_test_build_naming_no_loopback_http_port_is_refused_at_the_lock_naming_the_variable() {
+            if std::env::var_os(UNSET_TEST_LOOPBACK_HTTP_PORT_CHILD_ENVIRONMENT_VARIABLE).is_some()
+            {
+                for refusal in [
+                    MachineRuntimeLock::take().unwrap_err().to_string(),
+                    holder_of_the_machine_runtime_lock()
+                        .unwrap_err()
+                        .to_string(),
+                ] {
+                    assert!(
+                        refusal.starts_with(&format!(
+                            "{TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE} is not set"
+                        )),
+                        "{refusal}"
+                    );
+                }
+                return;
+            }
+
+            let test_machine_root = tempfile::Builder::new()
+                .prefix("tl-")
+                .tempdir_in("/tmp")
+                .unwrap();
+            let child =
+                crate::test_support::rerun_this_test_in_a_child_process_with_its_environment(
+                    "machine_runtime_lock::tests::under_a_test_machine_root::a_test_build_naming_no_loopback_http_port_is_refused_at_the_lock_naming_the_variable",
+                    |child_command| {
+                        child_command
+                            .env(
+                                UNSET_TEST_LOOPBACK_HTTP_PORT_CHILD_ENVIRONMENT_VARIABLE,
+                                "1",
+                            )
+                            .env(
+                                TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE,
+                                test_machine_root.path(),
+                            )
+                            .env_remove(TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE);
+                    },
+                );
+            assert!(
+                child.status.success(),
+                "the unset-port arm failed in the child: {}{}",
                 String::from_utf8_lossy(&child.stdout),
                 String::from_utf8_lossy(&child.stderr),
             );

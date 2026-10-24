@@ -15,8 +15,10 @@ name = "streamlib_runtime_client_contract"
 path = "src/lib.rs"
 
 [features]
-# Test builds only, never a release: the runtime directory, the state directory and the machine
-# runtime lock all move under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
+# Test builds only, never a release: the runtime directory, the state directory and the Linux
+# machine runtime lock all move under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be
+# set; the macOS lock is the loopback port TATOLAB_TEST_LOOPBACK_HTTP_PORT names, which must be set
+# there too.
 machine-directories-under-a-test-root = []
 
 [dependencies]
