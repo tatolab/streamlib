@@ -184,13 +184,16 @@ Proposed:
   - Any other bind failure is `CouldNotBeTaken`.
   - A bind is per socket, so a second take in the same process fails the same way, and the
     `AtomicBool` goes.
-- **Handing the listener over.** `MachineRuntimeLock` gives up its bound listener
-  (`take_the_bound_loopback_http_listener()`, macOS only), and `tatolabd` serves the listing
-  on it.
+- **Handing the listener over.** `MachineRuntimeLock` hands over a second descriptor of its
+  bound listener (`take_the_bound_loopback_http_listener()`, macOS only), and `tatolabd` serves
+  the listing on it.
+  - The lock keeps its own descriptor until the process exits, so a serve that is skipped,
+    fails or stops at shutdown never frees the port.
   - `serve_the_loopback_http_listener` takes an already-bound `std::net::TcpListener` in place
-    of a port. That one signature serves both platforms.
-  - On Linux, `tatolabd` binds 4446 itself as today, and a held port still only leaves it
-    without the listing.
+    of a port, and sets it non-blocking itself. That one signature serves both platforms; a
+    caller wanting a free port binds port 0.
+  - On Linux, `tatolabd` binds 4446 itself, in `loopback_http_listener_of_this_runtime.rs`,
+    and a held port still only leaves it without the listing.
 - **Test builds.** In a test build on macOS the lock's port is
   `TATOLAB_TEST_LOOPBACK_HTTP_PORT`, and a test build that names none is refused by name at
   the lock. This keeps "a test build never binds the machine's own port", which is code fact,
