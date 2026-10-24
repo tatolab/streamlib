@@ -120,8 +120,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   traceback as the error), describes the Python types and loads; the compile's cross-floor
   warnings come back in the reply and the CLI prints them on stderr. The runtime compiles, so
   an agent loads exactly as the CLI does. `graph`, `logs`, `mcp`, `relays`, `relay` and
-  `--version` speak the local API, and `new` writes the embedded scaffold. Only `<project>/.venv/bin/python` is
-  taken; a relocated venv is refused by name until a need appears. Owner, 2026-10-02.
+  `--version` speak the local API, and `new` writes the embedded scaffold. Only
+  `<project>/.venv/bin/python` is taken; a relocated venv is refused by name until a need
+  appears. Owner, 2026-10-02.
   [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
   moq-relays — SHIPPED #2871; runtime-description]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
@@ -3391,14 +3392,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   control vocabulary; the CLI is a pure JSON-RPC client of it — agents and humans use
   the same verbs; REST/WS routes serve the same operations for programmatic clients.
   The served MCP tool set is exactly the observation verbs `graph`, `logs` and
-  `describe_runtime` — the runtime's version, build id, monotonic uptime and its own log's
-  folder — the four
-  graph-mutation verbs — `add_node`, `remove_node`, `connect` and `disconnect` — the six
-  stream actions — `run_stream`, `stop_stream`, `start_stream`, `remove_stream`,
-  `list_streams` and `expose_port` (§Product) — and the four relay verbs — `add_relay`,
-  `configure_relay`, `remove_relay` and `list_relays` (§Networking, the adapters); `health` is
-  a REST route, not a tool. The MCP handshake's server version is the runtime's crate
-  version. The runtime has no shutdown verb: it stays on as a service does, stopped by
+  `describe_runtime` (the runtime's version, build id, monotonic uptime and its own log's
+  folder), the four graph-mutation verbs — `add_node`, `remove_node`, `connect` and
+  `disconnect` — the six stream actions — `run_stream`, `stop_stream`, `start_stream`,
+  `remove_stream`, `list_streams` and `expose_port` (§Product) — and the four relay verbs —
+  `add_relay`, `configure_relay`, `remove_relay` and `list_relays` (§Networking, the
+  adapters); `health` is a REST route, not a tool. The MCP handshake's server version is the
+  runtime's crate version. The runtime has no shutdown verb: it stays on as a service does, stopped by
   the service manager or a signal, and `stop_stream` ends a client's work. Rejected: a control plane that never mutates the graph, code being the
   source of truth and the edit loop `dev` — a dynamic graph an agent cannot add to is not
   worth having (owner, 2026-09-06). A mutation compiles inside the call, so the caller learns whether

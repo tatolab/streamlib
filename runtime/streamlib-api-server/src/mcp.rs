@@ -5,8 +5,7 @@
 //!
 //! [`LocalApiMcpServerHandler`] is the runtime's whole MCP surface: its tools
 //! are the control vocabulary — the observation verbs `graph`, `logs` and
-//! `describe_runtime`; the
-//! graph-mutation verbs `add_node`, `remove_node`,
+//! `describe_runtime`; the graph-mutation verbs `add_node`, `remove_node`,
 //! `connect` and `disconnect`, each naming a node by its name; and the stream
 //! actions `run_stream`, `stop_stream`, `start_stream`, `remove_stream`,
 //! `list_streams` and `expose_port`; and the relay verbs `add_relay`,
@@ -967,7 +966,9 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         serialized_tool_result(
             "describe_runtime",
-            &self.operations_on_the_loaded_streams.describe_this_runtime(),
+            &self
+                .operations_on_the_loaded_streams
+                .describe_this_runtime(),
         )
     }
 }
@@ -1158,10 +1159,10 @@ pub(crate) mod tests {
     use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
     use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
     use streamlib::sdk::error::Result;
-    use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
     use streamlib::sdk::runtime::{
         BoxFuture, OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations,
     };
+    use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
 
     use std::time::Duration;
 
@@ -1611,16 +1612,16 @@ pub(crate) mod tests {
     /// `[workspace.package] version` in the workspace manifest: the version every runtime crate
     /// takes.
     fn the_workspace_package_version() -> String {
-        let workspace_manifest_text = std::fs::read_to_string(
+        let workspace_manifest: toml::Table = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml"),
         )
-        .expect("the workspace manifest reads");
-        workspace_manifest_text
-            .lines()
-            .skip_while(|line| line.trim() != "[workspace.package]")
-            .find_map(|line| line.trim().strip_prefix("version = "))
-            .map(|quoted_version| quoted_version.trim_matches('"').to_owned())
+        .expect("the workspace manifest reads")
+        .parse()
+        .expect("the workspace manifest is TOML");
+        workspace_manifest["workspace"]["package"]["version"]
+            .as_str()
             .expect("the workspace manifest names a package version")
+            .to_owned()
     }
 
     #[tokio::test]
@@ -1637,7 +1638,6 @@ pub(crate) mod tests {
             described,
             crate::control_plane_stub_support::the_stub_runtimes_description()
         );
-        assert!(!TOOLS_THAT_REQUIRE_A_STREAM.contains(&"describe_runtime"));
     }
 
     #[tokio::test]

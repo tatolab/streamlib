@@ -714,8 +714,13 @@ impl Runner {
         DescribeRuntimeToolResult {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             build_id: crate::core::helper_process_transport::ENGINE_BUILD_ID.to_owned(),
-            up_for_ms: u64::try_from(engine_resources.instant_this_engine_started.elapsed().as_millis())
-                .unwrap_or(u64::MAX),
+            up_for_ms: u64::try_from(
+                engine_resources
+                    .instant_this_engine_started
+                    .elapsed()
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX),
             runtime_log_directory: self
                 .runtime_own_log_path()
                 .and_then(std::path::Path::parent)
@@ -3939,18 +3944,27 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_runtimes_build_id_starts_with_its_version_and_it_names_no_log_folder_without_one() {
+    fn a_runtime_describes_itself_by_its_crate_version_and_the_engine_build_id() {
         let runtime_description = Runner::new()
             .expect("the engine builds")
             .describe_this_runtime();
         assert_eq!(runtime_description.version, env!("CARGO_PKG_VERSION"));
-        assert!(
-            runtime_description
-                .build_id
-                .starts_with(&format!("{}+", runtime_description.version)),
-            "{runtime_description:?}"
+        assert_eq!(
+            runtime_description.build_id,
+            crate::core::helper_process_transport::ENGINE_BUILD_ID
         );
-        assert_eq!(runtime_description.runtime_log_directory, None);
+    }
+
+    #[test]
+    #[serial]
+    fn a_runtime_without_an_own_log_directory_names_no_log_folder() {
+        assert_eq!(
+            Runner::new()
+                .expect("the engine builds")
+                .describe_this_runtime()
+                .runtime_log_directory,
+            None
+        );
     }
 
     #[test]

@@ -7,12 +7,18 @@
 use std::time::Duration;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
+use streamlib_runtime_client_contract::machine_runtime_lock::{
+    MachineRuntimeLockHolder, holder_of_the_machine_runtime_lock,
+};
+use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
 
 use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::{
     OBSERVATION_VERB_TOOL_CALL_TIMEOUT, call_one_local_api_tool,
 };
-use crate::machine_runtime_local_api_socket::local_api_socket_of_the_running_runtime;
+use crate::machine_runtime_local_api_socket::{
+    holder_serving_another_user, local_api_socket_of_the_running_runtime,
+};
 use crate::stream_actions_on_the_runtime::tool_result_from;
 use crate::verb_standard_output::write_verb_standard_output;
 
@@ -31,11 +37,18 @@ pub(crate) fn print_the_cli_and_runtime_versions() -> Result<u8, TatolabCommandF
     ))
 }
 
-/// The runtime's description line; `runtime: not running` when nothing answers, and `runtime: `
-/// followed by the failure when the runtime answers but cannot describe itself.
+/// The runtime's description line; `runtime: not running` when nothing answers this user's
+/// socket, naming the holder of the machine runtime lock when it serves another user; and
+/// `runtime: ` followed by the failure when the runtime answers but cannot describe itself.
 fn runtime_line_of_the_machines_runtime() -> String {
     let Ok(local_api_socket_path) = local_api_socket_of_the_running_runtime() else {
-        return NO_RUNTIME_ANSWERS_RUNTIME_LINE.to_owned();
+        return runtime_line_when_nothing_answers(
+            holder_serving_another_user(
+                holder_of_the_machine_runtime_lock().ok().flatten(),
+                current_process_uid(),
+            )
+            .as_ref(),
+        );
     };
     call_one_local_api_tool(
         &local_api_socket_path,
@@ -51,6 +64,20 @@ fn runtime_line_of_the_machines_runtime() -> String {
         |describe_failure| format!("runtime: {describe_failure}"),
         |runtime_description| rendered_runtime_description_line(&runtime_description),
     )
+}
+
+/// `runtime: not running`, followed by who holds the machine's runtime when it serves another
+/// user's socket.
+fn runtime_line_when_nothing_answers(
+    holder_serving_another_user: Option<&MachineRuntimeLockHolder>,
+) -> String {
+    match holder_serving_another_user {
+        None => NO_RUNTIME_ANSWERS_RUNTIME_LINE.to_owned(),
+        Some(holder_serving_another_user) => format!(
+            "{NO_RUNTIME_ANSWERS_RUNTIME_LINE}; the machine's runtime is held by \
+             {holder_serving_another_user}, serving that user's socket, not yours"
+        ),
+    }
 }
 
 /// `runtime <version> (<build_id>), up <d>d <h>h <m>m, log <folder>`, the log segment reading
@@ -116,6 +143,24 @@ mod tests {
         assert_eq!(
             rendered_runtime_description_line(&a_runtime_description(None)),
             "runtime 0.55.1 (0.55.1+0123abc.9f8e7d), up 3d 2h 7m, keeps no own log"
+        );
+    }
+
+    #[test]
+    fn nothing_answering_names_a_runtime_held_for_another_user() {
+        assert_eq!(
+            runtime_line_when_nothing_answers(None),
+            "runtime: not running"
+        );
+        assert_eq!(
+            runtime_line_when_nothing_answers(Some(&MachineRuntimeLockHolder {
+                user_name: Some("other".to_owned()),
+                uid: 1001,
+                pid: 4242,
+                executable: Some(PathBuf::from("/opt/tatolab/bin/tatolabd")),
+            })),
+            "runtime: not running; the machine's runtime is held by user other (uid 1001), pid \
+             4242, /opt/tatolab/bin/tatolabd, serving that user's socket, not yours"
         );
     }
 

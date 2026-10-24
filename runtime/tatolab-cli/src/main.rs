@@ -11,6 +11,7 @@
 #![allow(clippy::disallowed_macros)]
 
 mod attached_stream_on_the_runtime;
+mod cli_and_runtime_version_flag;
 mod local_api_connection;
 mod local_api_mcp_stdio_pipe;
 mod local_api_mcp_tool_client;
@@ -19,7 +20,6 @@ mod machine_runtime_local_api_socket;
 mod process_signal_handling;
 mod project_source_change_watcher;
 mod relay_verbs_on_the_runtime;
-mod runtime_description_verb;
 mod runtime_log_files_reader;
 mod runtime_logs_verb;
 mod runtime_observation_verbs;
@@ -240,7 +240,7 @@ fn main() -> ExitCode {
         command_line.print_the_cli_and_runtime_versions,
         command_line.verb,
     ) {
-        (true, _) => runtime_description_verb::print_the_cli_and_runtime_versions(),
+        (true, _) => cli_and_runtime_version_flag::print_the_cli_and_runtime_versions(),
         (false, Some(verb)) => run_one_verb(verb),
         (false, None) => TatolabCommandLine::command()
             .error(
