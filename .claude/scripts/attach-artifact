@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# attach-artifact — put evidence files (decoded frames, spectrograms, logs, videos) in the public R2
+# bucket behind https://gh-artifact.tatolab.com, check each one is served whole, and print the URL
+# and the markdown that shows it in a PR or an issue.
+#
+# Usage:
+#   attach-artifact <key-prefix> <file>...   upload each file to <key-prefix>/<its file name>
+#   attach-artifact --remove <key>...        delete objects, and check each one is gone
+#   attach-artifact --url <key>...           print the public URL of each key
+#
+# <key-prefix> names where the evidence belongs: <repo>/<pr-N|issue-N>/<topic>, e.g.
+# streamlib/pr-2920/verify-live. Lowercase letters, digits, '.', '_' and '-' only.
+#
+# Credentials come from the Infisical project Tatolab (env prod), never from the shell:
+# CLOUDFLARE_DEPLOY_API_TOKEN reaches wrangler as CLOUDFLARE_API_TOKEN inside `infisical run`, so
+# no value is ever printed. Run it from a checkout linked to that project (`.infisical.json`).
+#
+# Everything uploaded is public to anyone with the URL. Never upload a secret, a signing identity,
+# a token, or a home path that names someone other than the owner.
+set -euo pipefail
+
+readonly BUCKET="github-artifacts"
+readonly PUBLIC_ORIGIN="https://gh-artifact.tatolab.com"
+readonly WRANGLER_PACKAGE="wrangler@4"
+readonly KEY_PREFIX_PATTERN='^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)+$'
+readonly FILE_NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+readonly CHECK_ATTEMPTS=3
+
+usage() {
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" >&2
+  exit 2
+}
+
+fail() {
+  echo "attach-artifact: $*" >&2
+  exit 1
+}
+
+# The Content-Type a file is served with, by its extension; refused for a type that would run as a
+# page or script on tatolab.com.
+content_type_of() {
+  local extension
+  extension="$(printf '%s' "${1##*.}" | tr '[:upper:]' '[:lower:]')"
+  case "$extension" in
+    png) echo "image/png" ;;
+    jpg | jpeg) echo "image/jpeg" ;;
+    gif) echo "image/gif" ;;
+    webp) echo "image/webp" ;;
+    mp4) echo "video/mp4" ;;
+    webm) echo "video/webm" ;;
+    mov) echo "video/quicktime" ;;
+    wav) echo "audio/wav" ;;
+    mp3) echo "audio/mpeg" ;;
+    pdf) echo "application/pdf" ;;
+    json) echo "application/json" ;;
+    txt | log | jsonl | csv | md) echo "text/plain; charset=utf-8" ;;
+    html | htm | svg | js | mjs | xhtml)
+      fail "$1: a .$extension file would run as a page or script on gh-artifact.tatolab.com; attach a screenshot, or rename it .txt to share its source"
+      ;;
+    *) echo "application/octet-stream" ;;
+  esac
+}
+
+# The markdown that shows `url` in a PR or issue: an image inline, anything else as a link.
+markdown_for() {
+  local file_name="$1" url="$2"
+  case "$(content_type_of "$file_name")" in
+    image/*) echo "![${file_name}](${url})" ;;
+    *) echo "[${file_name}](${url})" ;;
+  esac
+}
+
+public_url_of() {
+  echo "${PUBLIC_ORIGIN}/$1"
+}
+
+# The `.infisical.json` that links this directory or one above it to an Infisical project.
+infisical_link_above_here() {
+  local directory="$PWD"
+  while [ "$directory" != "/" ]; do
+    [ -f "$directory/.infisical.json" ] && return 0
+    directory="$(dirname "$directory")"
+  done
+  return 1
+}
+
+# Run wrangler with the Tatolab Cloudflare token, inside `infisical run` so the value never reaches
+# this shell or its output.
+wrangler_with_the_tatolab_token() {
+  infisical_link_above_here || fail "this checkout is not linked to Infisical: run \`infisical init\` here and choose the project Tatolab (it writes an untracked .infisical.json)"
+  infisical run --env prod --silent -- \
+    sh -c 'CLOUDFLARE_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN" exec "$@"' sh \
+    npx -y "$WRANGLER_PACKAGE" "$@"
+}
+
+# The Content-Length the public URL answers with; empty when it does not answer 200.
+served_length_of() {
+  curl -sI "$1" | tr -d '\r' | awk 'tolower($1) == "http/2" || tolower($1) ~ /^http\// { status = $2 } tolower($1) == "content-length:" { length_ = $2 } END { if (status == 200) print length_ }'
+}
+
+served_status_of() {
+  curl -s -o /dev/null -w '%{http_code}' -I "$1"
+}
+
+upload() {
+  local key_prefix="$1"
+  shift
+  [[ "$key_prefix" =~ $KEY_PREFIX_PATTERN ]] || fail "$key_prefix is not <repo>/<pr-N|issue-N>/<topic> in lowercase letters, digits, '.', '_' and '-'"
+  [ "$#" -gt 0 ] || usage
+  local file
+  for file in "$@"; do
+    [ -f "$file" ] || fail "$file is not a file"
+    [[ "$(basename "$file")" =~ $FILE_NAME_PATTERN ]] || fail "$file: name it with letters, digits, '.', '_' and '-' only, so its URL needs no escaping"
+    content_type_of "$file" >/dev/null
+  done
+  for file in "$@"; do
+    local file_name key url local_length served_length attempt
+    file_name="$(basename "$file")"
+    key="${key_prefix}/${file_name}"
+    url="$(public_url_of "$key")"
+    wrangler_with_the_tatolab_token r2 object put "${BUCKET}/${key}" --file "$file" --content-type "$(content_type_of "$file")" --remote >/dev/null ||
+      fail "$file was not uploaded: wrangler refused (run it by hand without >/dev/null to see why)"
+    local_length="$(wc -c <"$file" | tr -d ' ')"
+    served_length=""
+    for attempt in $(seq 1 "$CHECK_ATTEMPTS"); do
+      served_length="$(served_length_of "$url")"
+      [ "$served_length" = "$local_length" ] && break
+      sleep "$attempt"
+    done
+    [ "$served_length" = "$local_length" ] || fail "$url serves ${served_length:-nothing} bytes, not the $local_length of $file"
+    echo "$url"
+    echo "  $(markdown_for "$file_name" "$url")"
+  done
+}
+
+remove() {
+  [ "$#" -gt 0 ] || usage
+  local key url
+  for key in "$@"; do
+    [[ "$(dirname "$key")" =~ $KEY_PREFIX_PATTERN && "$(basename "$key")" =~ $FILE_NAME_PATTERN ]] || fail "$key is not a key this script uploads to"
+    url="$(public_url_of "$key")"
+    wrangler_with_the_tatolab_token r2 object delete "${BUCKET}/${key}" --remote >/dev/null ||
+      fail "$key was not deleted: wrangler refused (run it by hand without >/dev/null to see why)"
+    [ "$(served_status_of "$url")" = "404" ] || fail "$url still answers after the delete; the CDN may hold it for a while"
+    echo "removed $url"
+  done
+}
+
+[ "$#" -gt 0 ] || usage
+case "$1" in
+  -h | --help) usage ;;
+  --remove)
+    shift
+    remove "$@"
+    ;;
+  --url)
+    shift
+    [ "$#" -gt 0 ] || usage
+    for key in "$@"; do public_url_of "$key"; done
+    ;;
+  -*) usage ;;
+  *) upload "$@" ;;
+esac
