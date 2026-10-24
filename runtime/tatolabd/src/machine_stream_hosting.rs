@@ -48,12 +48,15 @@ const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10)
 /// stream has ended, tear the engine down, end `runtime_run_in_progress_record`
 /// cleanly, and return the status `tatolabd` exits with. A start refused
 /// before it counts `how_the_previous_run_ended` drops the record, which puts
-/// that crash back for the next start.
+/// that crash back for the next start. The loopback HTTP is served on
+/// `loopback_http_listener_bound_by_the_machine_runtime_lock` when the lock
+/// bound it.
 pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     tatolab_state_directory: &TatolabStateDirectory,
     processor_interpreter_lend_directory: PathBuf,
     mut runtime_run_in_progress_record: RuntimeRunInProgressRecord,
     how_the_previous_run_ended: &HowThePreviousRuntimeRunEnded,
+    loopback_http_listener_bound_by_the_machine_runtime_lock: Option<std::net::TcpListener>,
 ) -> ExitCode {
     let engine = match Runner::new_with_construction_options(RunnerConstructionOptions {
         pretty_log_mirror_stream: PrettyLogMirrorStandardStream::StandardError,
@@ -109,8 +112,11 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
                 &engine,
                 joined_relay_instances.clone(),
             )?);
-            loopback_http_listener =
-                serve_the_loopback_http_listener_of_this_runtime(&engine, &lend_directory);
+            loopback_http_listener = serve_the_loopback_http_listener_of_this_runtime(
+                &engine,
+                &lend_directory,
+                loopback_http_listener_bound_by_the_machine_runtime_lock,
+            );
             exposed_port_publisher = start_the_exposed_port_publisher(
                 &engine,
                 joined_relay_instances.relays_the_publisher_dials(),

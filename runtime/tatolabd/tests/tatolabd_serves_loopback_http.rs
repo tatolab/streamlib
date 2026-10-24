@@ -3,8 +3,9 @@
 
 //! `tatolabd` serving its loopback HTTP beside its local API: the listing of
 //! the machine's streams at `/`, and the preview page staged beside its lend at
-//! `/watch`. A test build binds the port its test names and none otherwise.
-//! Built with `--features machine-directories-under-a-test-root`.
+//! `/watch`. A test build binds the port its test names; on macOS that bind is
+//! the machine runtime lock. Built with
+//! `--features machine-directories-under-a-test-root`.
 
 #![cfg(feature = "machine-directories-under-a-test-root")]
 
@@ -51,6 +52,7 @@ fn the_runtime_lists_its_streams_and_serves_the_page_staged_beside_its_lend() {
     assert_eq!(watch_page.as_deref(), Some(STAGED_WATCH_PAGE));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_test_build_naming_no_port_serves_no_loopback_http() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();

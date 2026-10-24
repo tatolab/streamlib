@@ -452,11 +452,12 @@ async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
         .expect("the catalogued node is added");
     let served = crate::serve_the_loopback_http_listener(
         loaded.operations_on_the_loaded_streams(),
-        0,
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .expect("a free loopback port binds"),
         tempfile::tempdir().unwrap().path().to_path_buf(),
         &tokio::runtime::Handle::current(),
     )
-    .expect("a free loopback port binds");
+    .expect("a bound loopback listener is served");
 
     let (_, nothing_exposed) =
         crate::loopback_http_listener::tests::http_get(served.bound_address(), "/").await;

@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The runtime's HTTP on loopback, carrying what is not real time: `GET /`
-//! lists the machine's loaded streams and the output ports each exposes, and
+//! lists the machine's loaded streams and the output ports each exposes,
 //! `GET /watch/<machine>/<stream>[/<node>/<port>]` serves the preview page from
-//! its directory in the runtime unit. It serves no media and binds nothing but
-//! `127.0.0.1`; what a port carries is read as a track at a relay.
+//! its directory in the runtime unit, and `GET /machine-runtime-lock-holder`
+//! answers the serving process's pid. It serves no media and listens on
+//! nothing but `127.0.0.1`; what a port carries is read as a track at a relay.
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,15 +24,15 @@ use streamlib::sdk::graph::OutputPortExposureLevel;
 use streamlib::sdk::runtime::{
     ExposedOutputPortOfALoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
 };
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH, MachineRuntimeLockHolderPidAnswer,
+};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt as _;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::axum_router_served_until_stopped::AxumRouterServedUntilStopped;
 use crate::handlers::error_response;
-
-/// The port the loopback HTTP listener binds when nothing names another.
-pub const LOOPBACK_HTTP_LISTENER_DEFAULT_PORT: u16 = 4446;
 
 /// The route prefix the preview page is served under.
 const WATCH_PAGE_ROUTE_PREFIX: &str = "/watch";
@@ -106,6 +107,10 @@ fn build_loopback_http_router(
         ));
     axum::Router::new()
         .route("/", get(the_listing_of_the_machines_streams))
+        .route(
+            MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH,
+            get(the_pid_of_this_process),
+        )
         .route(WATCH_PAGE_ROUTE_PREFIX, get(a_file_of_the_watch_page))
         .route(
             &format!("{WATCH_PAGE_ROUTE_PREFIX}/{{*watch_page_path}}"),
@@ -144,6 +149,12 @@ async fn answer_only_requests_naming_loopback_as_their_host(
         )
             .into_response(),
     }
+}
+
+async fn the_pid_of_this_process() -> Json<MachineRuntimeLockHolderPidAnswer> {
+    Json(MachineRuntimeLockHolderPidAnswer {
+        pid: std::process::id() as i32,
+    })
 }
 
 async fn the_listing_of_the_machines_streams(
@@ -239,25 +250,22 @@ impl LoopbackHttpListenerServedForAnEngine {
 }
 
 /// Serve the loopback HTTP listener over `operations_on_the_loaded_streams` on
-/// `127.0.0.1:port` until the returned holder is dropped, on `tokio_handle`,
-/// serving the preview page out of `watch_page_directory`. Port 0 binds a free
-/// port, which [`LoopbackHttpListenerServedForAnEngine::bound_address`] names.
-/// A port another process holds is refused here.
+/// `bound_listener`, a listener the caller bound on `127.0.0.1`, until the
+/// returned holder is dropped, on `tokio_handle`, serving the preview page out
+/// of `watch_page_directory`.
 pub fn serve_the_loopback_http_listener(
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-    port: u16,
+    bound_listener: std::net::TcpListener,
     watch_page_directory: PathBuf,
     tokio_handle: &tokio::runtime::Handle,
 ) -> Result<LoopbackHttpListenerServedForAnEngine> {
-    let requested_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
     let refused = |failure: std::io::Error| {
         Error::Runtime(format!(
-            "the loopback HTTP listener cannot listen on {requested_address}: {failure}"
+            "the loopback HTTP listener cannot serve on its bound listener: {failure}"
         ))
     };
-    let bound_listener = std::net::TcpListener::bind(requested_address).map_err(refused)?;
-    bound_listener.set_nonblocking(true).map_err(refused)?;
     let bound_address = bound_listener.local_addr().map_err(refused)?;
+    bound_listener.set_nonblocking(true).map_err(refused)?;
     let loopback_http_listener = {
         let _entered_tokio_runtime = tokio_handle.enter();
         tokio::net::TcpListener::from_std(bound_listener).map_err(refused)?
@@ -278,7 +286,7 @@ pub fn serve_the_loopback_http_listener(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::net::{IpAddr, UdpSocket};
+    use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -326,11 +334,12 @@ pub(crate) mod tests {
     ) -> LoopbackHttpListenerServedForAnEngine {
         serve_the_loopback_http_listener(
             a_control_plane_router_stub_runtime(),
-            0,
+            std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .expect("a free loopback port binds"),
             watch_page_directory,
             &tokio::runtime::Handle::current(),
         )
-        .expect("a free loopback port binds")
+        .expect("a bound loopback listener is served")
     }
 
     /// A page directory holding an entry file and one asset.
@@ -443,15 +452,47 @@ pub(crate) mod tests {
         assert!(body.contains(&no_page_here.display().to_string()), "{body}");
     }
 
-    /// The listener serves no media and no control: nothing but the listing and
-    /// the page answers.
+    /// The machine runtime lock's prober reads who runs the pid from the
+    /// kernel; only the pid is the listener's to say.
     #[tokio::test(flavor = "multi_thread")]
     #[serial_test::serial(tcp_listeners_of_this_test_process)]
-    async fn nothing_but_the_listing_and_the_page_is_served() {
+    async fn the_lock_holder_route_answers_this_processes_pid_alone() {
         let watch_page_directory = a_watch_page_directory();
         let served = served_over_the_stub_runtime(watch_page_directory.path().to_path_buf());
 
-        for served_path in ["/", "/watch/desk/camera"] {
+        assert_eq!(
+            http_get(
+                served.bound_address(),
+                MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH
+            )
+            .await,
+            (200, format!(r#"{{"pid":{}}}"#, std::process::id()))
+        );
+        assert_eq!(
+            http_get_naming_the_host(
+                served.bound_address(),
+                "attacker.example",
+                MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH
+            )
+            .await
+            .0,
+            421
+        );
+    }
+
+    /// The listener serves no media and no control: nothing but the listing,
+    /// the page and the lock holder's pid answers.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
+    async fn nothing_but_the_listing_the_page_and_the_lock_holders_pid_is_served() {
+        let watch_page_directory = a_watch_page_directory();
+        let served = served_over_the_stub_runtime(watch_page_directory.path().to_path_buf());
+
+        for served_path in [
+            "/",
+            "/watch/desk/camera",
+            MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH,
+        ] {
             assert_eq!(
                 http_get(served.bound_address(), served_path).await.0,
                 200,
@@ -465,28 +506,6 @@ pub(crate) mod tests {
                 "{path}"
             );
         }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::serial(tcp_listeners_of_this_test_process)]
-    async fn a_port_another_process_holds_is_refused_naming_it() {
-        let held = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let held_port = held.local_addr().unwrap().port();
-
-        let refusal = serve_the_loopback_http_listener(
-            a_control_plane_router_stub_runtime(),
-            held_port,
-            tempfile::tempdir().unwrap().path().to_path_buf(),
-            &tokio::runtime::Handle::current(),
-        )
-        .expect_err("a held port is refused");
-
-        assert!(
-            refusal
-                .to_string()
-                .contains(&format!("127.0.0.1:{held_port}")),
-            "{refusal}"
-        );
     }
 
     /// This host's address on its route off the machine, when it has one —
