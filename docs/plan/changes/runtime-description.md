@@ -98,8 +98,12 @@ state directory's layout.
   (`runtime.rs:549-554`).
 - **What the engine already exposes:** `Runner::runtime_own_log_path()` gives the active
   segment, or `None` (`runtime.rs:697-703`).
-- **The path is absolute:** a relative `XDG_STATE_HOME` is skipped
-  (`tatolab_state_directory.rs:158-163`).
+- **The path is absolute for `tatolabd`:** a relative `XDG_STATE_HOME` is skipped
+  (`tatolab_state_directory.rs:158-163`) and a relative `HOME` is refused (`:171-173`), so the
+  state directory, and its `logs/`, is always absolute.
+- **Other `Runner`s:** `RunnerConstructionOptions::runtime_own_log_directory` is a public
+  `PathBuf` that the constructor never normalizes. A Rust app's `Runner` given a relative
+  directory writes its log, and would report its folder, as given.
 
 **How the local API reaches the engine**
 - **The entry point:** `serve_the_local_api_for_an_engine(engine: &Arc<Runner>, …)`
@@ -156,7 +160,8 @@ pub struct DescribeRuntimeToolResult {
     pub build_id: String,
     /// Monotonic milliseconds since this runtime's engine started; a restart resets it.
     pub up_for_ms: u64,
-    /// The absolute folder the runtime's own log is written to; `None` when it keeps none.
+    /// The folder the runtime's own log is written to, absolute for `tatolabd`; `None` when it
+    /// keeps none.
     pub runtime_log_directory: Option<PathBuf>,
 }
 ```
@@ -175,6 +180,8 @@ pub struct DescribeRuntimeToolResult {
 - **The first line:** `tatolab --version` keeps printing its own `tatolab 0.55.1` first.
 - **When a runtime answers:** it adds `runtime <version> (<build_id>), up <d>d <h>h <m>m, log
   <runtime_log_directory>`.
+- **When the runtime keeps no own log:** the segment reads `keeps no own log` in place of `log
+  <runtime_log_directory>` (session, 2026-10-24).
 - **When none answers:** it adds `runtime: not running` and still exits 0, because a version
   query never fails on a missing runtime.
 - **No new verb:** the CLI entry's verb list (`:3456-3468`) is unchanged. `--version` replaces
@@ -235,17 +242,22 @@ description". The verb list is unchanged.
   - `tools/list` equals the 17 names;
   - the handshake's `serverInfo.version` equals `CARGO_PKG_VERSION`.
 - **Engine:**
-  - a fresh `Runner`'s `up_for_ms` grows between two reads;
+  - a fresh `Runner`'s `up_for_ms` never decreases between two reads. It is larger once the
+    test's own monotonic clock has measured at least 2 ms past the first read, because two
+    immediate reads can share a millisecond;
   - `runtime_log_directory` is `None` without an own-log directory, and is the given directory
     with one;
   - `build_id` starts with `version` + `+`.
 - **CLI, against the stub runtime:**
   - `--version` prints both lines;
+  - with a runtime keeping no own log, the runtime line reads `keeps no own log`;
   - with no runtime, it prints `runtime: not running` and exits 0.
 - **Live (`tests/stream-on-runtime/`):**
   - `describe_runtime` on a running `tatolabd` answers its version, a `runtime_log_directory`
-    under the test state root that holds a `tatolabd-*.jsonl`, and an `up_for_ms` that grows;
-  - after a `tatolabd` restart, `up_for_ms` is smaller than before.
+    under the test state root that holds a `tatolabd-*.jsonl`, and an `up_for_ms` that is
+    larger on a second call made once the test's monotonic clock has measured at least 1 s;
+  - after a `tatolabd` restart, `up_for_ms` is no larger than the time the test measured from
+    stopping the old process to that call.
 
 **Decided — no recorded fixture; the wire-text test and the live test stand in for it (owner,
 2026-10-24).** The ticket asked for "a contract fixture of its result recorded from a running
