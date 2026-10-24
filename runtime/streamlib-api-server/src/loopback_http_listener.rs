@@ -250,21 +250,31 @@ impl LoopbackHttpListenerServedForAnEngine {
 }
 
 /// Serve the loopback HTTP listener over `operations_on_the_loaded_streams` on
-/// `bound_listener`, a listener the caller bound on `127.0.0.1`, until the
-/// returned holder is dropped, on `tokio_handle`, serving the preview page out
-/// of `watch_page_directory`.
+/// `bound_listener` until the returned holder is dropped, on `tokio_handle`,
+/// serving the preview page out of `watch_page_directory`. A listener bound
+/// anywhere but loopback is refused.
 pub fn serve_the_loopback_http_listener(
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     bound_listener: std::net::TcpListener,
     watch_page_directory: PathBuf,
     tokio_handle: &tokio::runtime::Handle,
 ) -> Result<LoopbackHttpListenerServedForAnEngine> {
+    let bound_address = bound_listener.local_addr().map_err(|failure| {
+        Error::Runtime(format!(
+            "the loopback HTTP listener cannot read its bound listener's address: {failure}"
+        ))
+    })?;
+    if !bound_address.ip().is_loopback() {
+        return Err(Error::Runtime(format!(
+            "the loopback HTTP listener serves only on loopback, and its listener is bound on \
+             {bound_address}"
+        )));
+    }
     let refused = |failure: std::io::Error| {
         Error::Runtime(format!(
-            "the loopback HTTP listener cannot serve on its bound listener: {failure}"
+            "the loopback HTTP listener cannot serve on {bound_address}: {failure}"
         ))
     };
-    let bound_address = bound_listener.local_addr().map_err(refused)?;
     bound_listener.set_nonblocking(true).map_err(refused)?;
     let loopback_http_listener = {
         let _entered_tokio_runtime = tokio_handle.enter();
@@ -506,6 +516,27 @@ pub(crate) mod tests {
                 "{path}"
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
+    async fn a_listener_bound_off_loopback_is_refused_naming_its_address() {
+        let bound_on_every_interface =
+            std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let bound_address = bound_on_every_interface.local_addr().unwrap();
+
+        let refusal = serve_the_loopback_http_listener(
+            a_control_plane_router_stub_runtime(),
+            bound_on_every_interface,
+            tempfile::tempdir().unwrap().path().to_path_buf(),
+            &tokio::runtime::Handle::current(),
+        )
+        .expect_err("a listener off loopback is refused");
+
+        assert!(
+            refusal.to_string().contains(&bound_address.to_string()),
+            "{refusal}"
+        );
     }
 
     /// This host's address on its route off the machine, when it has one —

@@ -37,9 +37,9 @@ pub(crate) fn the_loopback_http_listener_the_machine_runtime_lock_bound(
 
 /// Serve `engine`'s loopback HTTP until the returned holder is dropped, the
 /// preview page read from beside `lend_directory`, on
-/// `bound_by_the_machine_runtime_lock` when the lock bound it. Otherwise the
-/// runtime binds its port here, and a port another process holds leaves it
-/// running without the listener, said once.
+/// `bound_by_the_machine_runtime_lock` — the macOS lock's socket. With none, as
+/// on Linux, the runtime binds its port here, and a port another process holds
+/// leaves it running without the listener, said once.
 pub(crate) fn serve_the_loopback_http_listener_of_this_runtime(
     engine: &Arc<Runner>,
     lend_directory: &Path,

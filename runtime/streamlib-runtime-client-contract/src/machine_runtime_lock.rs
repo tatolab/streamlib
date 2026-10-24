@@ -20,7 +20,8 @@ use std::path::PathBuf;
 /// The abstract unix socket name the Linux machine runtime lock binds, without its leading NUL.
 pub const MACHINE_RUNTIME_LOCK_ABSTRACT_SOCKET_NAME: &str = "tatolab-runtime";
 
-/// The process holding the machine runtime lock, as far as the kernel names it.
+/// The process holding the machine runtime lock: on Linux as the kernel names it, on macOS the
+/// pid its listener answers, with the user and executable libproc reads for that pid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineRuntimeLockHolder {
     /// The holder's user name, when its uid has a passwd entry.
@@ -50,7 +51,7 @@ impl fmt::Display for MachineRuntimeLockHolder {
 /// Why the machine runtime lock was not taken, or its holder not named.
 #[derive(Debug, thiserror::Error)]
 pub enum MachineRuntimeLockRefusal {
-    /// Another process holds the lock, named by the kernel.
+    /// Another process holds the lock, and is named.
     #[error("another runtime holds this machine: {holder}")]
     HeldByAnotherRuntime { holder: MachineRuntimeLockHolder },
     /// Something holds the lock's name but answers nothing that names it.
@@ -99,8 +100,7 @@ impl MachineRuntimeLock {
     #[cfg(target_os = "macos")]
     pub fn take_the_bound_loopback_http_listener(&mut self) -> Option<std::net::TcpListener> {
         self.bound_loopback_http_listener
-            .listener_handed_over_for_serving
-            .take()
+            .take_the_listener_handed_over_for_serving()
     }
 }
 
@@ -621,10 +621,10 @@ mod loopback_http_listener_pid_probe {
             Err(failure) => return Err(failure),
         };
         Ok(
-            match the_pid_answered_on_before(&mut connection, deadline) {
-                Some(pid) => LoopbackHttpListenerPidAnswer::Answered(pid),
-                None => LoopbackHttpListenerPidAnswer::DoesNotAnswer,
-            },
+            the_pid_answered_on_before(&mut connection, deadline).map_or(
+                LoopbackHttpListenerPidAnswer::DoesNotAnswer,
+                LoopbackHttpListenerPidAnswer::Answered,
+            ),
         )
     }
 
@@ -689,11 +689,17 @@ mod macos_loopback_port_lock {
     #[derive(Debug)]
     pub(super) struct LoopbackHttpListenerBoundAsTheLock {
         _listener_kept_by_the_lock: TcpListener,
-        pub(super) listener_handed_over_for_serving: Option<TcpListener>,
+        listener_handed_over_for_serving: Option<TcpListener>,
+    }
+
+    impl LoopbackHttpListenerBoundAsTheLock {
+        pub(super) fn take_the_listener_handed_over_for_serving(&mut self) -> Option<TcpListener> {
+            self.listener_handed_over_for_serving.take()
+        }
     }
 
     /// How a refusal names the lock: the loopback port.
-    pub(super) fn displayed_lock_name(address: SocketAddrV4) -> String {
+    fn displayed_lock_name(address: SocketAddrV4) -> String {
         format!("the loopback port {address}")
     }
 
@@ -761,7 +767,7 @@ mod macos_loopback_port_lock {
 
     /// Name a pid through libproc (`<libproc.h>`): its uid from its BSD info,
     /// its executable from its path.
-    pub(super) fn holder_named_by_pid(
+    fn holder_named_by_pid(
         address: SocketAddrV4,
         pid: i32,
     ) -> Result<MachineRuntimeLockHolder, MachineRuntimeLockRefusal> {
@@ -842,6 +848,7 @@ mod tests {
     }
 
     /// A loopback port free when chosen.
+    #[cfg(any(target_os = "macos", feature = "machine-directories-under-a-test-root"))]
     fn a_free_loopback_port() -> u16 {
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .unwrap()
@@ -1678,10 +1685,8 @@ mod tests {
                 let _holder_route_answered = {
                     let handed_over_listener =
                         held_lock.take_the_bound_loopback_http_listener().unwrap();
-                    let test_loopback_http_port: u16 =
-                        std::env::var(TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE)
-                            .unwrap()
-                            .parse()
+                    let test_loopback_http_port =
+                        crate::machine_directories_test_root::test_loopback_http_port_from_the_environment()
                             .unwrap();
                     assert_eq!(
                         handed_over_listener.local_addr().unwrap(),
