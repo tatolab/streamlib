@@ -1,7 +1,6 @@
 # machine-lock-without-administrator
 
-> **Awaiting the owner.** One `[NEEDS DECISION]` below — how the macOS holder is named —
-> blocks approval.
+> **Approved by the owner, 2026-10-24**, with Decided 1 as recommended (A).
 
 Built from #2927. On macOS the machine lock is an `fcntl` lock on a root-owned 0666 file in
 root-owned `/Library/Application Support/Tatolab/`. Root has to create that file, so
@@ -105,12 +104,12 @@ listener**, which serves the listing and `/watch` and is a separate server.
   without root lists only your own sockets.
 - So the port alone cannot name another user's holder. Something has to say which pid it is.
 
-## [NEEDS DECISION] 1 — how the macOS holder is named
+## Decided 1 — how the macOS holder is named: A (owner, 2026-10-24)
 
 The issue leaves this to design: is the port enough on its own, or does something beside it
 name the holder?
 
-- **A — The holder answers its pid on the port, and the kernel names the pid.** *(Recommended.)*
+- **A — The holder answers its pid on the port, and the kernel names the pid.** *(Chosen.)*
   - **The route:** the loopback listener serves `GET /machine-runtime-lock-holder`, which
     answers `{"pid":<i32>}`.
   - **The prober:** it reads the uid and the executable for that pid through the existing
@@ -132,16 +131,16 @@ name the holder?
       `local_api_wire_contract.rs` beside the other wire types;
     - the probe is a blocking `std::net::TcpStream` `GET` carrying `Host: 127.0.0.1`, inside
       the contract crate, so it adds no new dependency.
-- **B — The holder answers the whole holder, `{user_name, uid, pid, executable}`.** This is
+- Rejected: **B — The holder answers the whole holder, `{user_name, uid, pid, executable}`.** This is
   simpler: no libproc call on the probe. But every field is self-reported, so a squatter could
   claim to be anyone, and the shape duplicates what the kernel already names from a pid.
-- **C — The port alone.** The refusal names `127.0.0.1:4446` and no holder. This fails the
+- Rejected: **C — The port alone.** The refusal names `127.0.0.1:4446` and no holder. This fails the
   issue's "the refusal names the holder", so it is not recommended.
 
 ## MODIFIED: §Product — the machine lock and the state directory (`:128-142`)
 
 The macOS half changes. The Linux half and the state-directory half stay word for word.
-Proposed, with A:
+Proposed:
 
 > On macOS it is the loopback HTTP listener's own socket, `127.0.0.1:4446`, which `tatolabd`
 > binds at start, before the state directory, and the listener later serves. No file is
