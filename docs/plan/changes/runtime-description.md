@@ -1,7 +1,7 @@
 # runtime-description
 
-> **Proposed 2026-10-24, not approved.** It carries four `[NEEDS DECISION]` blocks. It cannot
-> be approved until the owner settles them.
+> **Approved by the owner, 2026-10-24**, with its four decisions as recommended ("I agree with
+> your decisions") and the contract-fixture question settled the same day.
 
 Built from #2922. A local API client can't tell which runtime it is talking to, how long that
 runtime has been up, or where the runtime writes its own log. `GET /health` answers `ok`, and no
@@ -118,38 +118,34 @@ state directory's layout.
 - **No runtime is a refusal:** it is refused by name and exits 1
   (`machine_runtime_local_api_socket.rs:92-108`, `main.rs:313-320`).
 
-## [NEEDS DECISION] 1 — what serves the description
+## Decided 1 — a new observation tool serves the description (owner, 2026-10-24)
 
 The plan says `health` "is a REST route, not a tool". It also says the CLI "stays a pure client
 of the local API" and is "a pure JSON-RPC client" of the MCP tool set (`:3391-3392`).
 
-- **(a)** `GET /health` answers JSON in place of `ok`. This is REST only, so the CLI could not
-  show the values without stepping outside JSON-RPC. It also rewrites the live suite's readiness
-  probe and three socket tests.
-- **(b) — recommended.** A new observation tool, `describe_runtime`, beside `list_streams` and
-  `list_relays`. It takes no arguments and no `stream`.
-  - The app and the CLI read the one verb, and `/health` stays a body-free liveness probe
-    answering `ok`.
+- **The tool:** `describe_runtime`, beside `list_streams` and `list_relays`. It takes no
+  arguments and no `stream`.
+  - The app and the CLI read the one verb.
   - The "exactly" list grows to 17, and `describe_runtime` stays out of
     `TOOLS_THAT_REQUIRE_A_STREAM` (`mcp.rs:1231-1241`).
-  - It extends the existing control vocabulary rather than standing a second surface beside it.
-- **(c)** Both the tool and the same JSON on `/health`: two shapes kept in step, for no client
-  that needs the second.
+- **`GET /health` is unchanged.** It stays a liveness probe answering `ok`.
+- Rejected: a JSON body on `GET /health` — the CLI, a pure JSON-RPC client, could not read it,
+  and every live test's readiness probe reads its `ok` (owner, 2026-10-24).
 
-## [NEEDS DECISION] 2 — which version, and the MCP handshake
+## Decided 2 — the crate version and the build id, and the handshake's version (owner, 2026-10-24)
 
-- **(a)** The crate version only, `0.55.1`.
-- **(b) — recommended.** The crate version and `ENGINE_BUILD_ID`.
-  - The build id tells apart two builds of one version: a macOS runtime started before an update
-    still runs the old binary. The id is already composed and compiled in, and the helper check
-    already names it in a refusal, so serving it reveals nothing new to the owning user.
-  - **Also recommended:** `serverInfo.version` in the MCP handshake becomes the workspace crate
-    version, replacing the api-server crate's `1.0.0`. Any MCP host then shows the version the
-    runtime really is. Without it an MCP host reports `1.0.0` beside a tool answering `0.55.1`.
+- **The version:** the crate version, `0.55.1`.
+- **The build id:** `ENGINE_BUILD_ID`.
+  - It tells apart two builds of one version: a macOS runtime started before an update still
+    runs the old binary.
+  - The id is already composed and compiled in, and the helper check already names it in a
+    refusal, so serving it reveals nothing new to the owning user.
+- **The MCP handshake:** `serverInfo.version` becomes the workspace crate version, replacing the
+  api-server crate's `1.0.0`. Any MCP host then shows the version the runtime really is.
 
-## [NEEDS DECISION] 3 — the result's shape
+## Decided 3 — the result's shape (owner, 2026-10-24)
 
-Recommended, in `local_api_wire_contract.rs` beside the other tool results:
+In `local_api_wire_contract.rs`, beside the other tool results:
 
 ```rust
 /// The `describe_runtime` tool's result.
@@ -167,37 +163,25 @@ pub struct DescribeRuntimeToolResult {
 
 - **Wire text:**
   `{"version":"0.55.1","build_id":"0.55.1+<sha>.<nonce>","up_for_ms":266400000,"runtime_log_directory":"/home/u/.local/state/tatolab/logs"}`.
-- **Why `up_for_ms`:** it matches the wire's one other duration, `rejoining_after_ms`. The ticket
-  sketched `up_for_seconds`; milliseconds cost the app nothing for "up 3d 2h".
+- **Why `up_for_ms`:** it matches the wire's one other duration, `rejoining_after_ms`.
 - **Why `runtime_log_directory` can be null:** it is the parent of
   `Runner::runtime_own_log_path()`, not the configured directory. A runtime whose log failed to
   open, or a Rust app's `Runner` that keeps none, answers `null` rather than naming a folder
   holding no log. Stream logs stay per project (#2916) and are not this field.
-- **Alternatives:**
-  - `up_for_seconds`;
-  - always naming the configured directory;
-  - also serving the machine's name. That one is left out: `graph` already carries it as
-    `machine`.
+- **Not served:** the machine's name. `graph` already carries it as `machine`.
 
-## [NEEDS DECISION] 4 — where the CLI shows it
+## Decided 4 — `tatolab --version` shows it (owner, 2026-10-24)
 
-- **(a) — recommended.** `tatolab --version` keeps printing its own `tatolab 0.55.1` first. When
-  a runtime answers, it adds `runtime <version> (<build_id>), up <d>d <h>h <m>m, log
+- **The first line:** `tatolab --version` keeps printing its own `tatolab 0.55.1` first.
+- **When a runtime answers:** it adds `runtime <version> (<build_id>), up <d>d <h>h <m>m, log
   <runtime_log_directory>`.
-  - When none answers, it adds `runtime: not running` and still exits 0, because a version query
-    never fails on a missing runtime.
-  - It adds no verb, so the CLI entry's verb list (`:3456-3468`) is unchanged.
-  - `--version` replaces clap's built-in with the CLI's own flag.
-- **(b)** A new verb, `tatolab runtime`, which prints the four values and exits 1 when no
-  runtime answers, as every other runtime verb does. It adds a verb to the list at `:3456-3468`,
-  and `--version` stays clap's.
-- **Shared by both:** `--json` is not proposed. `tatolab mcp` already gives raw tool results to
-  a script.
+- **When none answers:** it adds `runtime: not running` and still exits 0, because a version
+  query never fails on a missing runtime.
+- **No new verb:** the CLI entry's verb list (`:3456-3468`) is unchanged. `--version` replaces
+  clap's built-in with the CLI's own flag.
+- **No `--json`:** `tatolab mcp` already gives raw tool results to a script.
 
 ## ADDED: the runtime's description, served by the engine
-
-Written against the recommendations. A different answer to 1-4 rewrites this section before
-approval.
 
 - **On the trait:** `OperationsOnTheStreamsLoadedInThisRuntime` gains `describe_this_runtime()
   -> DescribeRuntimeToolResult`. This extends the one trait the local API reaches the engine
@@ -212,7 +196,7 @@ approval.
   instructions.
 - **The handshake:** `MCP_SERVER_VERSION` reads the workspace version. For example, the
   api-server crate takes `version.workspace = true` in place of its own `1.0.0`.
-- **The CLI:** `tatolab --version` per decision 4(a), parsing `DescribeRuntimeToolResult` as
+- **The CLI:** `tatolab --version` per Decided 4, parsing `DescribeRuntimeToolResult` as
   `streams` parses `ListStreamsToolResult`.
 
 ## MODIFIED: §Control plane & observability — the one control plane (`:3389-3398`)
@@ -227,14 +211,12 @@ approval.
 
 ## MODIFIED: §Control plane & observability — the CLI (`:3456-3468`)
 
-Under 4(a), it adds "`--version` prints the CLI's version and, when a runtime answers, the
-runtime's description". Under 4(b), it adds `runtime` to the observation verbs `graph` and
-`logs`.
+It adds "`--version` prints the CLI's version and, when a runtime answers, the runtime's
+description". The verb list is unchanged.
 
 ## MODIFIED: §Product — `tatolabd` (`:109-126`)
 
-- "`graph`, `logs`, `mcp`, `relays` and `relay` speak the local API" names the CLI surface 4
-  settles: `--version`, or `runtime`.
+- "`graph`, `logs`, `mcp`, `relays` and `relay` speak the local API" adds `--version`.
 - The state-directory entry (`:127-141`) is unchanged. The served folder is its `logs/`.
 
 ## Not modified
@@ -275,9 +257,8 @@ runtime".
 
 ## Tickets
 
-One tracer bullet once approved: #2922. Needs no rig.
+One tracer bullet: #2922. Needs no rig.
 
 ## REMOVED
 
-None. The change only adds: under the recommendations, `/health`'s `ok` and every existing tool
-stay.
+None. The change only adds: `/health`'s `ok` and every existing tool stay.
