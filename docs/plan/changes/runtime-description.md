@@ -265,8 +265,9 @@ runtime's description". Under 4(b), it adds `runtime` to the observation verbs `
     under the test state root that holds a `tatolabd-*.jsonl`, and an `up_for_ms` that grows;
   - after a `tatolabd` restart, `up_for_ms` is smaller than before.
 
-**Assumption — the ticket's "contract fixture recorded from a running runtime" is the wire-text
-test plus the live test above.**
+**Decided — no recorded fixture; the wire-text test and the live test stand in for it (owner,
+2026-10-24).** The ticket asked for "a contract fixture of its result recorded from a running
+runtime".
 - No recorded-fixture mechanism exists in the tree. The two shipped tool results are pinned this
   way, and adding a recorder for one tool would be a parallel system.
 - If tatolab-app needs a JSON file to test its parser against, it copies the wire-text test's
