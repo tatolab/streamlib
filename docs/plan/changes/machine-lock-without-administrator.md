@@ -97,9 +97,9 @@ listener**, which serves the listing and `/watch` and is a separate server.
   file too.
 
 **What the kernel will tell an unprivileged prober on macOS**
-- **For any pid,** `proc_pidinfo(PROC_PIDT_SHORTBSDINFO)` and `proc_pidpath` name its uid and
-  executable. The full `PROC_PIDTBSDINFO` is refused for another user's process, so
-  `holder_named_by_pid` reads the short flavor.
+- **For any pid,** `proc_pidpath` names its executable and `proc_pidinfo(PROC_PIDT_SHORTBSDINFO)`
+  its uid. The full `PROC_PIDTBSDINFO` that `holder_named_by_pid` reads on `main` is refused for
+  another user's process, so it cannot name another user's holder today.
 - **For a TCP port,** finding which pid holds it means enumerating that process's descriptors
   (`PROC_PIDLISTFDS`). The kernel refuses that for another user's process, which is why `lsof`
   without root lists only your own sockets.
@@ -185,6 +185,8 @@ Proposed:
   - Any other bind failure is `CouldNotBeTaken`.
   - A bind is per socket, so a second take in the same process fails the same way, and the
     `AtomicBool` goes.
+  - `holder_named_by_pid` reads the uid from `PROC_PIDT_SHORTBSDINFO`, which xnu answers for
+    another user's process.
 - **Handing the listener over.** `MachineRuntimeLock` hands over a second descriptor of its
   bound listener (`take_the_bound_loopback_http_listener()`, macOS only), and `tatolabd` serves
   the listing on it.
