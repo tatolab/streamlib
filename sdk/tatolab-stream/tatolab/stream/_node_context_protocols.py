@@ -364,6 +364,18 @@ class LinkInputDataReader(Protocol):
         """
         ...
 
+    def count_the_message_last_read_as_lost(self, port_name: str) -> None:
+        """Count the message last read from `port_name` as lost on the link that delivered it.
+
+        For a message whose frame is gone by the time it is read — its producer
+        recycled the frame before this node's claim, which the read's `into`
+        cast raises naming the recycling. The loss lands in the link's dropped
+        count `graph` renders and in the next message's `lost_since_last_read`,
+        never as an error. Each message counts once; raises `RuntimeError` when
+        nothing read from the port since its last count came over a link.
+        """
+        ...
+
     def inbound_link_names(self, port_name: str) -> list[str]:
         """Every link feeding `port_name`, in wiring order.
 

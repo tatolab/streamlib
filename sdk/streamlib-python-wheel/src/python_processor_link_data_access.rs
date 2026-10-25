@@ -725,6 +725,25 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// Whether a message is waiting on `port_name`, without consuming it.
+    /// Count the message last read from `port_name` as lost on the inbound
+    /// link that delivered it, once — into the link's dropped count the
+    /// parent's `graph` renders, through the helper's board.
+    pub(crate) fn count_the_message_last_read_from_input_port_as_lost(
+        &self,
+        port_name: &str,
+    ) -> PyResult<()> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
+            return Err(PyRuntimeError::new_err(format!(
+                "no link has reached input port '{port_name}', so nothing read from it can be \
+                 counted as lost"
+            )));
+        };
+        input_mailboxes
+            .count_the_message_last_read_as_lost(port_name)
+            .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
+    }
+
     pub(crate) fn input_port_has_data(
         &self,
         python: Python<'_>,
@@ -1216,6 +1235,14 @@ mod tests {
                 Some((21, 4, 0)),
                 "the four messages the eight-deep ring overwrote land on the link's slot at the \
                  read"
+            );
+            destination
+                .count_the_message_last_read_from_input_port_as_lost("frames_from_upstream")
+                .expect("the message the link delivered is countable");
+            assert_eq!(
+                slot_counts(),
+                Some((21, 5, 0)),
+                "a message the reader counts lost lands on the link's slot as it is counted"
             );
 
             destination
