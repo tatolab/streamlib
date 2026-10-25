@@ -297,6 +297,26 @@ impl PythonProcessorLinkDataAccess {
         Ok(Some((payload, message, inbound_link_name)))
     }
 
+    /// Count the message last read from `port_name` as lost on the inbound
+    /// link that delivered it, once — into the link's dropped count the
+    /// parent's `graph` renders, through the helper's board.
+    pub(crate) fn count_the_message_last_read_from_input_port_as_lost(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+    ) -> PyResult<()> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
+            return Err(PyRuntimeError::new_err(format!(
+                "no link has reached input port '{port_name}', so nothing read from it can be \
+                 counted as lost"
+            )));
+        };
+        python
+            .detach(|| input_mailboxes.count_the_message_last_read_as_lost(port_name))
+            .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
+    }
+
     /// Every inbound link feeding `port_name`, in wiring order.
     pub(crate) fn inbound_links_of_input_port(&self, port_name: &str) -> PyResult<Vec<String>> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
@@ -722,26 +742,6 @@ impl PythonProcessorLinkDataAccess {
             )),
             None => Ok((None, None)),
         }
-    }
-
-    /// Count the message last read from `port_name` as lost on the inbound
-    /// link that delivered it, once — into the link's dropped count the
-    /// parent's `graph` renders, through the helper's board.
-    pub(crate) fn count_the_message_last_read_from_input_port_as_lost(
-        &self,
-        python: Python<'_>,
-        port_name: &str,
-    ) -> PyResult<()> {
-        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
-            return Err(PyRuntimeError::new_err(format!(
-                "no link has reached input port '{port_name}', so nothing read from it can be \
-                 counted as lost"
-            )));
-        };
-        python
-            .detach(|| input_mailboxes.count_the_message_last_read_as_lost(port_name))
-            .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
     }
 
     /// Whether a message is waiting on `port_name`, without consuming it.

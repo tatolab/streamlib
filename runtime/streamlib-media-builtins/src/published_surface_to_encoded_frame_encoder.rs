@@ -980,6 +980,10 @@ mod frame_claimed_from_the_read_through_the_encode_tests {
     use std::sync::{Arc, Mutex};
 
     use streamlib::sdk::context::GpuContext;
+    use streamlib::sdk::iceoryx2::{
+        ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner,
+        OutputWriterInner, ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    };
     use streamlib::sdk::rhi::{PixelFormat, pool_slot_key_of_surface_id};
 
     use super::*;
@@ -1037,6 +1041,55 @@ mod frame_claimed_from_the_read_through_the_encode_tests {
             mastering_display: None,
             texture_layout: None,
         }
+    }
+
+    /// The encoder's `video` port, fed `frame` over one link
+    /// `L-into-the-encoder`, the mailboxes behind it, and the upstream writer,
+    /// which must outlive the read: a sample its dropped publisher sent is
+    /// never received.
+    fn an_input_port_reading_one_published_frame(
+        frame: &VideoFrame,
+    ) -> (InputMailboxes, Arc<InputMailboxesInner>, OutputWriter) {
+        let channel_name = format!("test/encoder-input/{}", std::process::id());
+        let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+        let channel = iceoryx2_node
+            .open_or_create_service(&channel_name, 2, 16)
+            .unwrap();
+        let input_mailboxes = Arc::new(InputMailboxesInner::new());
+        input_mailboxes.add_port("video", 16, ReadMode::ReadNextInOrder);
+        input_mailboxes.add_channel_subscriber(
+            "video",
+            "L-into-the-encoder",
+            &InboundLinkName::from("upstream/video"),
+            channel.create_subscriber(16).unwrap(),
+        );
+        let upstream_writer = Arc::new(OutputWriterInner::new());
+        upstream_writer.set_channel_publisher(
+            "video",
+            channel.create_publisher(1024).unwrap(),
+            ChannelEgressConfig {
+                service_name: channel_name.clone(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 1024,
+                chunk_ceiling_bytes: TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            },
+        );
+        upstream_writer.add_channel_link(
+            "video",
+            "L-into-the-encoder",
+            iceoryx2_node
+                .open_or_create_notify_service(&format!("{channel_name}/notify"), 1)
+                .unwrap()
+                .create_notifier()
+                .unwrap(),
+        );
+        let upstream_writer = OutputWriter::from_inner_arc(upstream_writer);
+        upstream_writer.write_msgpack("video", frame).unwrap();
+        (
+            InputMailboxes::from_inner_arc(Arc::clone(&input_mailboxes)),
+            input_mailboxes,
+            upstream_writer,
+        )
     }
 
     fn encode_body_over(
@@ -1132,17 +1185,24 @@ mod frame_claimed_from_the_read_through_the_encode_tests {
             "the pool never republished {recycled_slot}"
         );
 
-        let outcome = encode_body
-            .encode_one_published_surface(
+        let (inputs, input_mailboxes, _upstream_writer) =
+            an_input_port_reading_one_published_frame(&recycled_frame);
+        encode_body
+            .encode_the_next_published_surface_on_input_port(
                 &HardwareVideoEncoderConfig::default(),
-                &recycled_frame,
-                &mut Vec::new(),
+                &inputs,
+                "video",
+                &OutputWriter::from_inner_arc(Arc::new(OutputWriterInner::new())),
+                "encoded_video",
             )
             .expect("a recycled frame is a loss, never an error");
 
         assert_eq!(
-            outcome,
-            PublishedSurfaceEncodeOutcome::RecycledByItsProducerBeforeTheClaim
+            input_mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_snapshot_by_inbound_link(),
+            std::collections::BTreeMap::from([("L-into-the-encoder".to_string(), 1)]),
+            "the recycled frame is a drop on the link it arrived on"
         );
         assert_eq!(encode_body.frames_that_failed_to_encode, 0);
         assert_eq!(
