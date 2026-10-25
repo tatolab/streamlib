@@ -12,10 +12,10 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.55.2" }
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.55.2" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.55.3" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.55.3" }
 # The shape `list_relays` answers in, which the CLI parses.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.55.2" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.55.3" }
 schemars = "0.8"
 secrecy = "0.10.3"
 serde = { workspace = true }
