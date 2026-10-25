@@ -287,6 +287,10 @@ struct PortConfig {
     mailbox: PortMailbox,
     /// How this port windows what arrives on it.
     audio_windowing: InstalledInputPortAudioWindowing,
+    /// The dropped-bag counter of the link that delivered the bag last handed
+    /// to the reader, until the reader counts that bag lost. `None` before any
+    /// read, after the count, and for a bag no link delivered or a window.
+    dropped_bag_counter_of_the_bag_last_handed_to_the_reader: Option<InboundLinkDroppedBagCounter>,
 }
 
 /// How one port windows what arrives on it.
@@ -368,6 +372,7 @@ fn windowed_port_config(
                 latest_queued_source_audio_format,
             )),
         )),
+        dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
     }
 }
 
@@ -512,6 +517,7 @@ impl InputMailboxesInner {
             PortConfig {
                 mailbox: PortMailbox::new(buffer_size, read_mode),
                 audio_windowing: InstalledInputPortAudioWindowing::NotWindowed,
+                dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
             },
         );
     }
@@ -555,6 +561,7 @@ impl InputMailboxesInner {
                     ),
                 ),
                 audio_windowing: InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat,
+                dropped_bag_counter_of_the_bag_last_handed_to_the_reader: None,
             },
         );
     }
@@ -1081,8 +1088,10 @@ impl InputMailboxesInner {
         where_the_bag_goes: WhereABagTakenOffTheMailboxGoes<'_>,
     ) -> Result<Option<BagBodyForTheReader>> {
         let (delivered, lost_since_last_read) = {
-            let ports = self.ports.lock();
-            let port_config = ports.get(port).ok_or_else(|| unknown_input_port(port))?;
+            let mut ports = self.ports.lock();
+            let port_config = ports
+                .get_mut(port)
+                .ok_or_else(|| unknown_input_port(port))?;
             if let WhereABagTakenOffTheMailboxGoes::IntoTheStageWhileItIsInstalled(stage) =
                 where_the_bag_goes
                 && !port_config.audio_windowing.installs_stage(stage)
@@ -1098,6 +1107,8 @@ impl InputMailboxesInner {
             };
             let lost_since_last_read = match where_the_bag_goes {
                 WhereABagTakenOffTheMailboxGoes::ToTheReader => {
+                    port_config.dropped_bag_counter_of_the_bag_last_handed_to_the_reader =
+                        delivered.dropped_bag_counter.clone();
                     delivered.dropped_bag_counter.as_ref().map_or(
                         0,
                         InboundLinkDroppedBagCounter::take_lost_messages_the_reader_has_not_been_told_of,
@@ -1248,6 +1259,35 @@ impl InputMailboxesInner {
             deserialize_msgpack_payload(&message.payload_bytes)?,
             inbound_link_name,
         )))
+    }
+
+    /// Count the message last read from `port` as lost on the inbound link
+    /// that delivered it, once.
+    ///
+    /// For a reader that took a message and found what it names gone — a frame
+    /// its producer recycled before the reader's claim. The loss lands in the
+    /// link's dropped count `graph` renders and in the next message's
+    /// `lost_since_last_read` from that link, never as an error. Refused by name
+    /// when nothing read from the port since its last count came over a link:
+    /// no read yet, that message already counted, a bag no link delivered, or a
+    /// window.
+    pub fn count_the_message_last_read_as_lost(&self, port: &str) -> Result<()> {
+        let dropped_bag_counter = self
+            .ports
+            .lock()
+            .get_mut(port)
+            .ok_or_else(|| unknown_input_port(port))?
+            .dropped_bag_counter_of_the_bag_last_handed_to_the_reader
+            .take()
+            .ok_or_else(|| {
+                Error::Link(format!(
+                    "no message read from input port '{port}' since its last counted loss came \
+                     over a link, so there is no link to count this loss on — nothing was read, \
+                     the message was already counted, no link delivered it, or it was a window"
+                ))
+            })?;
+        dropped_bag_counter.record_one_bag_its_reader_counted_lost_after_taking_it();
+        Ok(())
     }
 
     /// Check if a port has any payloads available. This first
@@ -1486,6 +1526,20 @@ impl InputMailboxes {
             return Ok(None);
         };
         inner.read_msgpack_from_inbound_link(&cast_exposed_name_to_url_safe(port)?)
+    }
+
+    /// Count the message last read from `port` as lost on the inbound link
+    /// that delivered it, once: what a reader does when what the message names
+    /// is gone, such as a frame its producer recycled before the reader's
+    /// claim.
+    pub fn count_the_message_last_read_as_lost(&self, port: &str) -> Result<()> {
+        let Some(inner) = self.host_inner() else {
+            return Err(Error::Link(format!(
+                "InputMailboxes not wired (port='{port}'): nothing has been read, so there is \
+                 no message to count as lost"
+            )));
+        };
+        inner.count_the_message_last_read_as_lost(&cast_exposed_name_to_url_safe(port)?)
     }
 
     /// Every inbound link feeding `port`, in wiring order.
@@ -2349,6 +2403,148 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// A pool slot resource nothing in this process holds, so its ring rehands
+    /// it as soon as its turn comes round.
+    struct PoolSlotNothingInThisProcessHolds;
+
+    impl crate::core::context::lease_aware_pool_slot_ring::LeaseAwarePoolSlotResource
+        for PoolSlotNothingInThisProcessHolds
+    {
+        fn is_held_in_this_process(&self) -> bool {
+            false
+        }
+    }
+
+    /// A consumer held until its producer has lapped a three-slot output ring
+    /// reads the oldest queued frame, finds its id recycled at the claim, and
+    /// counts it lost: one drop on the link `graph` renders, told to the next
+    /// read from that link, and nothing raised.
+    ///
+    /// Fail-without-fix: with no read-side count, the recycled frame is lost
+    /// with the link reporting no drops and the next read told of none.
+    #[test]
+    fn a_frame_its_producer_recycled_before_the_read_is_counted_lost_on_its_link() {
+        use crate::core::context::lease_aware_pool_slot_ring::{
+            ANY_ONE_UNHELD_SLOT_IS_REUSABLE, LeaseAwarePoolMintedFrameGenerations,
+            LeaseAwarePoolSlotRing,
+        };
+
+        let mut producer_output_ring = LeaseAwarePoolSlotRing::default();
+        for pool_slot_key in ["slot-a", "slot-b", "slot-c"] {
+            producer_output_ring
+                .push_fresh_slot(pool_slot_key.to_string(), PoolSlotNothingInThisProcessHolds);
+        }
+        let minted_frame_generations = LeaseAwarePoolMintedFrameGenerations::default();
+        let (mailboxes, output_writer) = a_port_read_as_fed_by_a_native_writer(
+            "recycled-before-the-read",
+            ReadMode::ReadNextInOrder,
+        );
+
+        for _ in 0..=producer_output_ring.slot_count() {
+            let slot_index = producer_output_ring
+                .hand_off_a_reusable_slot(
+                    ANY_ONE_UNHELD_SLOT_IS_REUSABLE,
+                    None,
+                    &minted_frame_generations,
+                )
+                .expect("nothing holds a slot, so the producer never waits");
+            write_starting_a_group(
+                &output_writer,
+                &producer_output_ring
+                    .slot(slot_index)
+                    .currently_published_frame_id(),
+            );
+        }
+
+        let read_claimed_and_lost_since_last_read: Vec<(String, bool, u64)> =
+            std::iter::from_fn(|| mailboxes.read_raw("in").unwrap())
+                .map(|message| {
+                    let surface_id = String::from_utf8(message.payload_bytes).unwrap();
+                    let claim = minted_frame_generations
+                        .refusal_of_a_retired_frame_id_named(&surface_id)
+                        .expect("every id names a slot the ring owns");
+                    let claimed = match claim {
+                        Ok(()) => true,
+                        Err(Error::SurfaceFrameRecycled { .. }) => {
+                            mailboxes
+                                .count_the_message_last_read_as_lost("in")
+                                .expect("a message a link delivered is countable");
+                            false
+                        }
+                        Err(other) => panic!("only a recycled frame is refused: {other}"),
+                    };
+                    (surface_id, claimed, message.lost_since_last_read)
+                })
+                .collect();
+
+        assert_eq!(
+            read_claimed_and_lost_since_last_read,
+            [
+                ("slot-a#1", false, 0),
+                ("slot-b#1", true, 1),
+                ("slot-c#1", true, 0),
+                ("slot-a#2", true, 0),
+            ]
+            .map(|(surface_id, claimed, lost)| (surface_id.to_string(), claimed, lost)),
+        );
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-declared".to_string(), 1)]),
+        );
+    }
+
+    /// A loss is counted once per message a link delivered: before any read,
+    /// and a second time for one message, there is nothing to count, and each
+    /// is refused naming the port.
+    #[test]
+    fn counting_a_message_lost_needs_one_a_link_delivered_and_counts_it_once() {
+        let (mailboxes, output_writer) =
+            a_port_read_as_fed_by_a_native_writer("counted-once", ReadMode::ReadNextInOrder);
+        let refusal_before_any_read = mailboxes
+            .count_the_message_last_read_as_lost("in")
+            .expect_err("nothing has been read");
+        assert!(
+            refusal_before_any_read.to_string().contains("'in'"),
+            "got: {refusal_before_any_read}"
+        );
+
+        write_starting_a_group(&output_writer, "only");
+        mailboxes.read_raw("in").unwrap().expect("one message");
+        mailboxes
+            .count_the_message_last_read_as_lost("in")
+            .expect("the message a link delivered is countable");
+        assert!(
+            mailboxes.count_the_message_last_read_as_lost("in").is_err(),
+            "one message is one loss"
+        );
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-declared".to_string(), 1)]),
+        );
+        assert!(matches!(
+            mailboxes.count_the_message_last_read_as_lost("not-a-port"),
+            Err(Error::Link(refusal)) if refusal.contains("Unknown input port")
+        ));
+    }
+
+    /// A bag no link delivered — a manually injected frame — has no link to
+    /// count its loss on, and is refused rather than charged to another.
+    #[test]
+    fn a_message_no_link_delivered_is_not_counted_lost_on_any_link() {
+        let (mailboxes, _output_writer) = a_port_read_as_fed_by_a_native_writer(
+            "injected-not-countable",
+            ReadMode::ReadNextInOrder,
+        );
+        assert!(mailboxes.route(wire_frame_stamping("in", 0, 3, b"raw")));
+        mailboxes.read_raw("in").unwrap().expect("the injected bag");
+
+        assert!(mailboxes.count_the_message_last_read_as_lost("in").is_err());
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-declared".to_string(), 0)]),
+        );
     }
 
     /// Bags the ring overwrote behind bags already queued are told to the first

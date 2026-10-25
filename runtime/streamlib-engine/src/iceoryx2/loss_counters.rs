@@ -130,16 +130,17 @@ impl<Count: CountWithACumulativeTotal> CumulativeCountsByName<Count> {
 /// The split is what places a loss on the right message. A message lost before
 /// its bag reached the mailbox is ahead of every bag queued after the loss was
 /// counted, so a queued bag carries that part as it stood when it was queued. A bag the
-/// mailbox evicted was the oldest queued, so it is ahead of every bag of the
-/// link still queued, and a bag reads that part as it stands when it is taken.
-/// Each part lands on the right bag only while every push and pop of the link's
-/// mailbox is serialized, as `InputMailboxesInner` serializes them under its
-/// port map lock.
+/// mailbox evicted was the oldest queued, and a bag its reader counted lost had
+/// already been taken, so each is ahead of every bag of the link still queued,
+/// and a bag reads that part as it stands when it is taken. Each part lands on
+/// the right bag only while every push and pop of the link's mailbox is
+/// serialized, as `InputMailboxesInner` serializes them under its port map
+/// lock, and a reader counts a bag lost on the thread that takes its bags.
 #[derive(Default)]
 struct InboundLinkDroppedBagCount {
     dropped_bags: CumulativeCount,
     lost_before_reaching_the_mailbox: AtomicU64,
-    evicted_from_the_mailbox: AtomicU64,
+    lost_ahead_of_every_bag_still_queued: AtomicU64,
     lost_ahead_of_the_latest_bag_taken_off_the_mailbox: AtomicU64,
     lost_and_told_to_the_reader: AtomicU64,
 }
@@ -150,10 +151,11 @@ impl CountWithACumulativeTotal for InboundLinkDroppedBagCount {
     }
 }
 
-/// One inbound link's cumulative count of bags lost before anything read them.
+/// One inbound link's cumulative count of bags lost.
 ///
-/// A bag the subscriber ring overwrote, one the port's mailbox evicted, and one
-/// dropped at receive all land here. Handed to every mailbox entry that arrived
+/// A bag the subscriber ring overwrote, one the port's mailbox evicted, one
+/// dropped at receive, and one its reader read and then counted lost all land
+/// here. Handed to every mailbox entry that arrived
 /// on that link, so an eviction is attributed to the link whose bag was lost
 /// rather than to the link that happened to push. Cloning shares the count.
 ///
@@ -192,8 +194,18 @@ impl InboundLinkDroppedBagCounter {
 
     /// Record one bag of this link's that the mailbox evicted to make room.
     pub(super) fn record_one_bag_evicted_from_the_mailbox(&self) {
+        self.record_one_bag_lost_ahead_of_every_bag_still_queued();
+    }
+
+    /// Record one bag of this link's that its reader took and then counted
+    /// lost, because what the bag named was gone by the time it was read.
+    pub(super) fn record_one_bag_its_reader_counted_lost_after_taking_it(&self) {
+        self.record_one_bag_lost_ahead_of_every_bag_still_queued();
+    }
+
+    fn record_one_bag_lost_ahead_of_every_bag_still_queued(&self) {
         self.0
-            .evicted_from_the_mailbox
+            .lost_ahead_of_every_bag_still_queued
             .fetch_add(1, Ordering::Relaxed);
         self.0.dropped_bags.add(1);
     }
@@ -213,13 +225,17 @@ impl InboundLinkDroppedBagCounter {
 
     /// Note a bag taken off the mailbox that had
     /// `lost_before_reaching_the_mailbox_when_queued` ahead of it when it was
-    /// queued; every eviction counted so far is ahead of it too.
+    /// queued; every eviction and every bag its reader counted lost so far is
+    /// ahead of it too.
     pub(super) fn note_a_bag_taken_off_the_mailbox(
         &self,
         lost_before_reaching_the_mailbox_when_queued: u64,
     ) {
         let lost_ahead_of_it = lost_before_reaching_the_mailbox_when_queued
-            + self.0.evicted_from_the_mailbox.load(Ordering::Relaxed);
+            + self
+                .0
+                .lost_ahead_of_every_bag_still_queued
+                .load(Ordering::Relaxed);
         self.0
             .lost_ahead_of_the_latest_bag_taken_off_the_mailbox
             .fetch_max(lost_ahead_of_it, Ordering::Relaxed);
