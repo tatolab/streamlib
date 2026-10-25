@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.4](https://github.com/tatolab/streamlib/compare/v0.55.3...v0.55.4) (2026-10-25)
+
+
+### Bug Fixes
+
+* **engine:** a frame recycled before its consumer reads it is a counted drop on its link, not a process() failure ([#2933](https://github.com/tatolab/streamlib/issues/2933)) ([49ef429](https://github.com/tatolab/streamlib/commit/49ef4294792ce9bab7c71c819cafdc3d2916f833))
+
 ## [0.55.3](https://github.com/tatolab/streamlib/compare/v0.55.2...v0.55.3) (2026-10-25)
 
 
