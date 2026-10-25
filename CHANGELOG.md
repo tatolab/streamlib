@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.3](https://github.com/tatolab/streamlib/compare/v0.55.2...v0.55.3) (2026-10-25)
+
+
+### Features
+
+* **runtime:** the macOS machine lock is the loopback port, so first run needs no administrator password ([#2929](https://github.com/tatolab/streamlib/issues/2929)) ([d948d0b](https://github.com/tatolab/streamlib/commit/d948d0ba38e8720e37af72c8ce14ad4dfee83ec2))
+
 ## [0.55.2](https://github.com/tatolab/streamlib/compare/v0.55.1...v0.55.2) (2026-10-24)
 
 
