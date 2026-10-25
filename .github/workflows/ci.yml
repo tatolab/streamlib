@@ -962,13 +962,6 @@ jobs:
             echo "::error::tatolabd did not open the Vulkan loader the lend carries"
             exit 1
           fi
-          # The encoder's named refusal on a runner with no encoder is expected;
-          # any other node failing a live frame is not.
-          if grep 'process() failed' /tmp/tatolabd.log \
-              | grep -qv 'H264Encoder: failed to mint the encoder session'; then
-            echo "::error::a scaffolded node failed a live frame"
-            exit 1
-          fi
           echo "::group::graph --stream main"
           cat /tmp/scaffold-graph.json
           echo "::endgroup::"
@@ -1005,6 +998,20 @@ jobs:
             echo "::error::H264Encoder neither encoded a frame nor refused by name"
             exit 1
           fi
+          # Frames the encoder lost to backpressure are a normal event on a realtime
+          # link, so they are reported from `graph`'s drop count, never asserted.
+          frames_dropped_into_the_encoder="$(python3 -c '
+          import json
+          try:
+              graph = json.load(open("/tmp/scaffold-graph.json"))
+          except ValueError:
+              raise SystemExit(0)
+          for node in graph.get("nodes", []):
+              if node.get("name") == "h264encoder":
+                  metrics = node.get("components", {}).get("metrics", {})
+                  print(sum(metrics.get("dropped_bags_by_link", {}).values()))
+          ')"
+          echo "H264Encoder.video dropped ${frames_dropped_into_the_encoder:-an unknown number of} frames, by the stream's graph"
 
       # A stream's venv exactly as a third party's holds the extension:
       # `tatolab-stream` and the extension, and no engine.

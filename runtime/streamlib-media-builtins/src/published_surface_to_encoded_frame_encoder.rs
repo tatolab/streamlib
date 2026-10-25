@@ -32,7 +32,7 @@ use streamlib::sdk::context::{
 use streamlib::sdk::descriptors::VideoEntry;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::hang_legacy_container_media_frame::write_hang_legacy_container_media_frame;
-use streamlib::sdk::iceoryx2::{MessageGroupBoundary, OutputWriter};
+use streamlib::sdk::iceoryx2::{InputMailboxes, MessageGroupBoundary, OutputWriter};
 use streamlib::sdk::schemars::JsonSchema;
 use streamlib::sdk::video_bitstream::parameter_sets_of_annex_b_access_unit;
 
@@ -97,6 +97,17 @@ pub struct EncodedAccessUnitAwaitingPublication {
     pub timestamp_ns: i64,
 }
 
+/// What became of one published surface handed to the encoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+enum PublishedSurfaceEncodeOutcome {
+    /// Encoded, or discarded after a failed session mint.
+    ConsumedByTheEncoder,
+    /// Its producer recycled the frame before the encoder claimed it: a loss
+    /// on the link it arrived on, never an encode failure.
+    RecycledByItsProducerBeforeTheClaim,
+}
+
 /// One minted encoder session plus the upstream facts it was minted from —
 /// what a later frame is checked against to notice a renegotiated upstream.
 struct EncodeSessionMintedFromUpstream {
@@ -140,6 +151,7 @@ pub struct PublishedSurfaceToEncodedFrameEncoder<Identity: HardwareVideoCodecPro
     refused_write_report_schedule: CumulativeCountReportThreshold,
     frames_encoded: u64,
     frames_that_failed_to_encode: u64,
+    frames_recycled_by_their_producer_before_the_claim: u64,
     codec_identity: PhantomData<Identity>,
 }
 
@@ -164,6 +176,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> Default
             ),
             frames_encoded: 0,
             frames_that_failed_to_encode: 0,
+            frames_recycled_by_their_producer_before_the_claim: 0,
             codec_identity: PhantomData,
         }
     }
@@ -193,6 +206,8 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         tracing::info!(
             frames_encoded = self.frames_encoded,
             frames_that_failed_to_encode = self.frames_that_failed_to_encode,
+            frames_recycled_by_their_producer_before_the_claim =
+                self.frames_recycled_by_their_producer_before_the_claim,
             access_units_dropped_after_a_refused_write =
                 self.access_units_dropped_after_a_refused_write,
             "{}: teardown",
@@ -203,8 +218,39 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         Ok(())
     }
 
-    /// Encode one published surface, handing back every access unit it
-    /// completed.
+    /// Read the next published surface off `input_port`, encode it, and
+    /// publish every access unit it completed on `output_port`.
+    ///
+    /// A frame its producer recycled before the encoder claimed it is counted
+    /// lost on the link it arrived on, and the node carries on.
+    pub fn encode_the_next_published_surface_on_input_port(
+        &mut self,
+        config: &HardwareVideoEncoderConfig,
+        inputs: &InputMailboxes,
+        input_port: &str,
+        outputs: &OutputWriter,
+        output_port: &str,
+    ) -> Result<()> {
+        if !inputs.has_data(input_port) {
+            return Ok(());
+        }
+        let frame: VideoFrame = inputs.read_msgpack(input_port)?;
+
+        // Every access unit the encode staged is written even when the call
+        // errored, so a failure part way through a frame's packets never
+        // discards the ones already produced.
+        let mut staged = Vec::new();
+        let encode_outcome = self.encode_one_published_surface(config, &frame, &mut staged);
+        self.publish_to_output_port(outputs, output_port, staged)?;
+        match encode_outcome? {
+            PublishedSurfaceEncodeOutcome::ConsumedByTheEncoder => Ok(()),
+            PublishedSurfaceEncodeOutcome::RecycledByItsProducerBeforeTheClaim => {
+                inputs.count_the_message_last_read_as_lost(input_port)
+            }
+        }
+    }
+
+    /// Encode one published surface, staging every access unit it completed.
     ///
     /// The frame is claimed against its producer's reuse from the read
     /// through the encode, so a session mint outlasting the producer's
@@ -212,28 +258,33 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     /// drained and discarded, so upstream still sees a live consumer and the
     /// escalate gate is not re-taken at camera cadence on a machine with no
     /// encode queue.
-    pub fn encode_one_published_surface(
+    fn encode_one_published_surface(
         &mut self,
         config: &HardwareVideoEncoderConfig,
         frame: &VideoFrame,
         staged: &mut Vec<EncodedAccessUnitAwaitingPublication>,
-    ) -> Result<()> {
+    ) -> Result<PublishedSurfaceEncodeOutcome> {
         if self.encode_session.is_none() && self.session_mint_already_failed {
-            return Ok(());
+            return Ok(PublishedSurfaceEncodeOutcome::ConsumedByTheEncoder);
         }
         let claimed = self
             .gpu_context
             .as_ref()
             .ok_or_else(gpu_context_not_initialized::<Identity>)?
             .claim_surface_against_producer_reuse(&frame.surface_id);
-        let _frame_claimed_against_producer_reuse =
-            claimed.map_err(|refusal| self.count_an_encode_failure(refusal))?;
-        self.encode_one_claimed_surface(config, frame, staged)
-    }
-
-    fn count_an_encode_failure(&mut self, cause: impl std::fmt::Display) -> Error {
-        self.frames_that_failed_to_encode += 1;
-        encode_failure_naming_the_encoder::<Identity>(cause)
+        let _frame_claimed_against_producer_reuse = match claimed {
+            Ok(frame_claimed_against_producer_reuse) => frame_claimed_against_producer_reuse,
+            Err(Error::SurfaceFrameRecycled { .. }) => {
+                self.frames_recycled_by_their_producer_before_the_claim += 1;
+                return Ok(PublishedSurfaceEncodeOutcome::RecycledByItsProducerBeforeTheClaim);
+            }
+            Err(refusal) => {
+                self.frames_that_failed_to_encode += 1;
+                return Err(encode_failure_naming_the_encoder::<Identity>(refusal));
+            }
+        };
+        self.encode_one_claimed_surface(config, frame, staged)?;
+        Ok(PublishedSurfaceEncodeOutcome::ConsumedByTheEncoder)
     }
 
     fn encode_one_claimed_surface(
@@ -337,7 +388,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     /// entry a mint owes the port first so it lands ahead of the first media
     /// frame it describes. A refused entry drops the staged access units, so
     /// the next frame is encoded as a sync point.
-    pub fn publish_to_output_port(
+    fn publish_to_output_port(
         &mut self,
         outputs: &OutputWriter,
         output_port: &str,
@@ -929,6 +980,10 @@ mod frame_claimed_from_the_read_through_the_encode_tests {
     use std::sync::{Arc, Mutex};
 
     use streamlib::sdk::context::GpuContext;
+    use streamlib::sdk::iceoryx2::{
+        ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner,
+        OutputWriterInner, ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    };
     use streamlib::sdk::rhi::{PixelFormat, pool_slot_key_of_surface_id};
 
     use super::*;
@@ -988,6 +1043,55 @@ mod frame_claimed_from_the_read_through_the_encode_tests {
         }
     }
 
+    /// The encoder's `video` port, fed `frame` over one link
+    /// `L-into-the-encoder`, the mailboxes behind it, and the upstream writer,
+    /// which must outlive the read: a sample its dropped publisher sent is
+    /// never received.
+    fn an_input_port_reading_one_published_frame(
+        frame: &VideoFrame,
+    ) -> (InputMailboxes, Arc<InputMailboxesInner>, OutputWriter) {
+        let channel_name = format!("test/encoder-input/{}", std::process::id());
+        let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+        let channel = iceoryx2_node
+            .open_or_create_service(&channel_name, 2, 16)
+            .unwrap();
+        let input_mailboxes = Arc::new(InputMailboxesInner::new());
+        input_mailboxes.add_port("video", 16, ReadMode::ReadNextInOrder);
+        input_mailboxes.add_channel_subscriber(
+            "video",
+            "L-into-the-encoder",
+            &InboundLinkName::from("upstream/video"),
+            channel.create_subscriber(16).unwrap(),
+        );
+        let upstream_writer = Arc::new(OutputWriterInner::new());
+        upstream_writer.set_channel_publisher(
+            "video",
+            channel.create_publisher(1024).unwrap(),
+            ChannelEgressConfig {
+                service_name: channel_name.clone(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 1024,
+                chunk_ceiling_bytes: TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            },
+        );
+        upstream_writer.add_channel_link(
+            "video",
+            "L-into-the-encoder",
+            iceoryx2_node
+                .open_or_create_notify_service(&format!("{channel_name}/notify"), 1)
+                .unwrap()
+                .create_notifier()
+                .unwrap(),
+        );
+        let upstream_writer = OutputWriter::from_inner_arc(upstream_writer);
+        upstream_writer.write_msgpack("video", frame).unwrap();
+        (
+            InputMailboxes::from_inner_arc(Arc::clone(&input_mailboxes)),
+            input_mailboxes,
+            upstream_writer,
+        )
+    }
+
     fn encode_body_over(
         gpu_context: &GpuContextLimitedAccess,
         slot_of_each_frame_published_during_the_encode: &Arc<Mutex<Vec<String>>>,
@@ -1029,13 +1133,14 @@ mod frame_claimed_from_the_read_through_the_encode_tests {
         );
         let frame = a_frame_nothing_but_the_encoder_holds(&gpu_context);
 
-        encode_body
+        let outcome = encode_body
             .encode_one_published_surface(
                 &HardwareVideoEncoderConfig::default(),
                 &frame,
                 &mut Vec::new(),
             )
             .expect("the frame encodes");
+        assert_eq!(outcome, PublishedSurfaceEncodeOutcome::ConsumedByTheEncoder);
 
         let slot_being_encoded = pool_slot_key_of_surface_id(&frame.surface_id);
         let published_during_the_encode = slot_of_each_frame_published_during_the_encode
@@ -1059,7 +1164,7 @@ mod frame_claimed_from_the_read_through_the_encode_tests {
         not(feature = "hardware-tests"),
         ignore = "needs a Vulkan device (lavapipe will do). Run with --features streamlib-media-builtins/hardware-tests. See docs/testing-hardware.md"
     )]
-    fn a_frame_recycled_before_its_read_is_refused_naming_the_recycling_and_counted() {
+    fn a_frame_recycled_before_its_claim_is_a_loss_and_never_an_encode_failure() {
         let gpu_context = GpuContext::init_for_platform_sync()
             .expect("a GPU device")
             .limited_access();
@@ -1080,19 +1185,30 @@ mod frame_claimed_from_the_read_through_the_encode_tests {
             "the pool never republished {recycled_slot}"
         );
 
-        let refusal = encode_body
-            .encode_one_published_surface(
+        let (inputs, input_mailboxes, _upstream_writer) =
+            an_input_port_reading_one_published_frame(&recycled_frame);
+        encode_body
+            .encode_the_next_published_surface_on_input_port(
                 &HardwareVideoEncoderConfig::default(),
-                &recycled_frame,
-                &mut Vec::new(),
+                &inputs,
+                "video",
+                &OutputWriter::from_inner_arc(Arc::new(OutputWriterInner::new())),
+                "encoded_video",
             )
-            .expect_err("a recycled frame is not encoded");
+            .expect("a recycled frame is a loss, never an error");
 
-        assert!(
-            refusal.to_string().contains("names a recycled frame"),
-            "got: {refusal}"
+        assert_eq!(
+            input_mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_snapshot_by_inbound_link(),
+            std::collections::BTreeMap::from([("L-into-the-encoder".to_string(), 1)]),
+            "the recycled frame is a drop on the link it arrived on"
         );
-        assert_eq!(encode_body.frames_that_failed_to_encode, 1);
+        assert_eq!(encode_body.frames_that_failed_to_encode, 0);
+        assert_eq!(
+            encode_body.frames_recycled_by_their_producer_before_the_claim,
+            1
+        );
         assert!(
             slot_of_each_frame_published_during_the_encode
                 .lock()

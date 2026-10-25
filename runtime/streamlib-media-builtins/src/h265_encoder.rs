@@ -16,7 +16,6 @@ use streamlib::sdk::processors::ReactiveProcessor;
 
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
 use crate::published_surface_to_encoded_frame_encoder::PublishedSurfaceToEncodedFrameEncoder;
-use crate::video_frame::VideoFrame;
 
 /// What makes the shared encode body this built-in.
 pub struct H265EncoderCodecIdentity;
@@ -39,6 +38,8 @@ impl HardwareVideoCodecProcessorIdentity for H265EncoderCodecIdentity {
                   the port's catalog entry is a `VideoEntry` naming the codec string the \
                   stream's SPS spells and the coded extent, with no `description`. A frame the \
                   encoder cannot consume is logged and dropped while the node keeps running; a \
+                  frame its producer recycled before the encoder claimed it is counted as a \
+                  drop on the `video` link, never an error; a \
                   write the channel ceiling refuses makes the next frame a keyframe. The \
                   session mints from the first frame's dimensions and re-mints when the \
                   upstream extent changes.\n\n\
@@ -65,20 +66,13 @@ impl ReactiveProcessor for H265Encoder::Processor {
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        if !self.inputs.has_data("video") {
-            return Ok(());
-        }
-        let frame: VideoFrame = self.inputs.read_msgpack("video")?;
-
-        // Every access unit the encode staged is written even when the call
-        // errored, so a failure part way through a frame's packets never
-        // discards the ones already produced.
-        let mut staged = Vec::new();
-        let encode_outcome =
-            self.encode_body
-                .encode_one_published_surface(&self.config, &frame, &mut staged);
         self.encode_body
-            .publish_to_output_port(&self.outputs, "encoded_video", staged)?;
-        encode_outcome
+            .encode_the_next_published_surface_on_input_port(
+                &self.config,
+                &self.inputs,
+                "video",
+                &self.outputs,
+                "encoded_video",
+            )
     }
 }

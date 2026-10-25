@@ -177,9 +177,10 @@ class H264Encoder(BuiltInNode[H264EncoderConfig]):
     keyframe. A keyframe opens a group. After its first frame the port's catalog entry
     is a `VideoEntry` naming the codec string the stream's SPS spells and the coded
     extent, with no `description`. A frame the encoder cannot consume is logged and
-    dropped while the node keeps running; a write the channel ceiling refuses makes the
-    next frame a keyframe. The session mints from the first frame's dimensions and
-    re-mints when the upstream extent changes.
+    dropped while the node keeps running; a frame its producer recycled before the
+    encoder claimed it is counted as a drop on the `video` link, never an error; a write
+    the channel ceiling refuses makes the next frame a keyframe. The session mints from
+    the first frame's dimensions and re-mints when the upstream extent changes.
 
     On a device without a hardware encoder for the codec the session fails to mint: the
     failure latches and every later frame is discarded with one error line; no exception
@@ -291,9 +292,10 @@ class H265Encoder(BuiltInNode[H265EncoderConfig]):
     keyframe. A keyframe opens a group. After its first frame the port's catalog entry
     is a `VideoEntry` naming the codec string the stream's SPS spells and the coded
     extent, with no `description`. A frame the encoder cannot consume is logged and
-    dropped while the node keeps running; a write the channel ceiling refuses makes the
-    next frame a keyframe. The session mints from the first frame's dimensions and
-    re-mints when the upstream extent changes.
+    dropped while the node keeps running; a frame its producer recycled before the
+    encoder claimed it is counted as a drop on the `video` link, never an error; a write
+    the channel ceiling refuses makes the next frame a keyframe. The session mints from
+    the first frame's dimensions and re-mints when the upstream extent changes.
 
     On a device without a hardware encoder for the codec the session fails to mint: the
     failure latches and every later frame is discarded with one error line; no exception

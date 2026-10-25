@@ -434,7 +434,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   one, on terms equally open to any authored class, and takes none for a consumer
   that reads the payload untyped. Publish-to-claim transit rides pool depth, and so
   does an untyped read: the strictness dial is also the safety dial — depth bounds
-  the window, and outwaiting it is an error, never somebody else's pixels. The
+  the window, and outwaiting it loses the frame, never serves somebody else's pixels:
+  the claim refuses the id by name as recycled, and the consumer counts the message
+  as a drop on the link it arrived on, a loss and never an error (owner,
+  2026-10-24). The
   engine inspects no message content anywhere. The producer never waits on a consumer:
   its node's output pool skips leased slots and grows to its cap; at the cap, or past
   the runtime's memory budget (§Graphics), the producer drops its own frame — a slow
@@ -850,7 +853,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, and is deliberately uncounted. In the tree, the mailbox eviction, the subscriber
   ring's overwrite, the two receive-seam
   discards and a write refused at the channel ceiling are each counted where they happen and
-  rendered under `metrics`, for a helper-placed processor as for an app-process one. A
+  rendered under `metrics`, for a helper-placed processor as for an app-process one, and so
+  is a message its reader counts lost after reading it. A
   `graph` that reports no drops is proof that none happened, with the two residuals the
   entries below state.
   [delivery-profile-vocabulary — SHIPPED #2023; loss-visibility — SHIPPED #2268, #2269,
@@ -905,6 +909,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   link's dropped count; the writer counts it on itself, per output port. Only engine-internal
   writers declare one. A loss declared after the writer's last write reaches no reader, the
   producer's count excepted. Owner, 2026-10-20. [relay-track-reading — SHIPPED #2900]
+- **DECIDED** — A message its reader counts lost after reading it is its link's drop. A
+  reader that took a message and found what it names gone — a frame its producer recycled
+  before the claim — calls `count_the_message_last_read_as_lost(port)` on its inputs, one
+  method in Rust and Python. It adds one to the dropped count of the link that delivered the
+  port's last message, mirrored onto a helper's board like every count, and the next message
+  read from that link carries it in `lost_since_last_read`. It counts on `ordered` and
+  `newest` ports alike, because the reader took that message rather than passing over it.
+  Each message counts once: a call with nothing read since the last count, a bag no link
+  delivered, or a window is refused by name. The reader knows the message is gone; the
+  engine only counts it, and still inspects no payload. Owner, 2026-10-24.
+  [recycled-frame-is-a-counted-drop — SHIPPED #2933]
 - **DECIDED** — A helper-placed destination's per-link counts reach `graph`. The parent
   creates one blackboard per helper spawn; the helper is its only writer, one entry per
   inbound link holding that link's dropped-message count, and the parent reads it whenever
