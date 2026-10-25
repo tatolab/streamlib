@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, machine-lock-without-administrator; unbuilt: `H264Encoder`'s CPU arm)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -127,19 +127,27 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   moq-relays — SHIPPED #2871; runtime-description]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
   socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
-  it; on macOS it is an `fcntl` lock on a root-owned 0666 regular file in root-owned
-  `/Library/Application Support/Tatolab/`, which the app's first-launch administrator prompt
-  creates — any other type, owner or mode is refused by name, and a missing one is refused
-  naming the commands that create it. A second `tatolabd`, or any squatter, is refused naming
-  its user, pid and executable (peer credentials, `F_GETLK`); any user may take the one
-  runtime first, and the CLI names the holder too. The state directory is
+  it. On macOS it is the loopback HTTP listener's own socket, `127.0.0.1:4446`, which
+  `tatolabd` binds at start, before the state directory, and the listener later serves. No
+  file is involved and nothing is created by root, so on macOS a held port refuses the
+  runtime and never leaves it running without the listing. A second `tatolabd`, or any
+  squatter, is refused naming its user, pid and executable. On Linux these come from peer
+  credentials. On macOS the holder answers its pid on `GET /machine-runtime-lock-holder` and
+  the prober reads the user and executable for that pid from libproc. Something on the port
+  that does not answer is refused naming the port. Any user may take the one runtime first,
+  and on macOS any process may hold the port first: a weaker guarantee than a root-owned
+  file, accepted so that first run needs no administrator password (owner, 2026-10-24). The
+  CLI names the holder too. The state directory is
   `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or `~/Library/Application
   Support/Tatolab/`: `streams/<stream>.json` per kept stream, written atomically with mode
   0600 — the graph compiled at load, the project directory and interpreter, the stream
   function, `stopped` or `failed` and why, its crash count and the owner's exposure rulings —
   and, under `logs/`, the runtime's own log, which belongs to no project. A stream's logs and
-  pipeline cache stay under its project's `.streamlib/`. Owner, 2026-10-02.
-  [runtime-hosting — SHIPPED #2711, #2713; machine-lock-without-administrator]
+  pipeline cache stay under its project's `.streamlib/`. Owner, 2026-10-02 and 2026-10-24.
+  [runtime-hosting — SHIPPED #2711, #2713; machine-lock-without-administrator — SHIPPED #2929]
+  Rejected: a lock file on macOS — root-owned behind a first-launch administrator prompt, or
+  world-writable in `/tmp` or `/Users/Shared` — the first asks a password at first run, the
+  second gives the port's guarantee plus a stale file to clean up (owner, 2026-10-24).
 - **DECIDED** — The tests divide as the code does. The stream suite
   (`sdk/tatolab-stream/tests`) is pure Python in a venv holding only `tatolab-stream` —
   declarations, the builder and its name resolution, compile, the generated built-ins, the
@@ -2933,15 +2941,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   all alike. A user with no account sees and uses their own streams through the local relay
   (owner, 2026-09-30). [one-runtime-per-machine; moq-relays — SHIPPED #2853, #2855, #2864]
 - **DECIDED** — The runtime's HTTP is on loopback only and carries what is not real time:
-  the listing of the machine's streams and exposed ports, and the preview page. Its paths are
+  the listing of the machine's streams and exposed ports, the preview page, and at
+  `/machine-runtime-lock-holder` the serving runtime's pid, which names the macOS machine
+  lock's holder (§Product). Its paths are
   the address: `/watch/<machine>/<stream>` opens the preview on a broadcast with its tracks to
   pick from, `/watch/<machine>/<stream>/<node>/<port>` straight onto one track. The listing
   shows private and public ports; an internal port is listed and not served. The runtime's
   HTTP serves no media and listens nowhere but loopback; what the local relay's own listener
   serves over HTTP beside its tracks — its certificate fingerprint, its WebSocket path and the
   relay program's `/fetch` — is the relay's, under the same grant as the tracks. The read-only
-  MCP, the bounded-sample form and the snapshot form are not built. Owner, 2026-10-16 and
-  2026-10-17. [moq-relays — SHIPPED #2860, #2864]
+  MCP, the bounded-sample form and the snapshot form are not built. Owner, 2026-10-16,
+  2026-10-17 and 2026-10-24. [moq-relays — SHIPPED #2860, #2864;
+  machine-lock-without-administrator — SHIPPED #2929]
   Rejected: live forms over HTTP served by the runtime — MPEG-TS, HLS, raw H.264, fMP4 — and a
   `whep` form (owner, 2026-10-04).
   Rejected: a snapshot form — one PNG of a port's latest frame, the runtime reading the port's
@@ -3197,7 +3208,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [shutdown-ladder; local-transport-hardening — SHIPPED #2266; package-split-and-lend —
   SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722]
 
-## Distribution & versioning — IN-FLIGHT (→ machine-lock-without-administrator; unbuilt: the Rust crate's `tatolab-stream` name)
+## Distribution & versioning — IN-FLIGHT (unbuilt: the Rust crate's `tatolab-stream` name, and `Tatolab.app`'s first launch without an administrator prompt)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
@@ -3357,7 +3368,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `.dmg`. The bundle holds `Contents/MacOS/tatolabd`; an `SMAppService.agent` (plist in
   `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit); the CLI as
   `Contents/MacOS/tatolab-cli`, a name that does not case-fold onto the app's own executable on a
-  default APFS volume, which `/usr/local/bin/tatolab` links to; and the lend laid out by
+  default APFS volume, which the `tatolab` command links to; and the lend laid out by
   Apple's code rules — every Mach-O under `Contents/Frameworks/tatolab-runtime/` at its path
   below `tatolab/runtime/`, the lend in `Contents/Resources/lend/` with each Mach-O a relative
   link into it — which `tatolabd` finds from `Contents/MacOS/`, `dladdr` finding
@@ -3365,8 +3376,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Tatolab", covers both; opening the app registers the agent unless the user turned the switch
   off, which it remembers, and on `.requiresApproval` opens Login Items. The menu shows whether
   the runtime is up and its stream count (`list_streams`); Quit quits the app, never the
-  runtime. First launch links `tatolab` into `/usr/local/bin` and creates the machine lock's
-  directory behind one administrator prompt. `Info.plist` carries the camera, microphone,
+  runtime. First launch asks for no administrator password. It links `tatolab` into a folder
+  in the user's home directory, and offers a link in `/usr/local/bin`, behind an
+  administrator prompt, as an option. `Info.plist` carries the camera, microphone,
   local-network and Documents, Desktop and Downloads usage strings; the app and `tatolabd`
   carry the hardened-runtime device entitlements; every Mach-O is signed with the Developer ID
   and the `.dmg` notarised and stapled, the seven `APPLE_*` secrets synced from Infisical into
@@ -3377,8 +3389,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   tatolabd.service`; it installs no runtime, so the installer stays Linux's one way to install
   the runtime, and with no service the app points at the installer. Beyond its live stream
   list, graph and logs, the app's stream actions and the rest of its GUI are the app step's.
-  Owner, 2026-10-02 and 2026-10-11. [runtime-hosting — SHIPPED #2721;
-  machine-lock-without-administrator]
+  Owner, 2026-10-02, 2026-10-11 and 2026-10-24. [runtime-hosting — SHIPPED #2721;
+  machine-lock-without-administrator — SHIPPED #2929]
 
 ## Control plane & observability — IN-FLIGHT (→ runtime-description)
 
@@ -3505,7 +3517,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   connect probe naming the path and a stale file replaced — carrying the router and control
   vocabulary unchanged; no network address serves control, and a client dials the one socket.
   The runtime's HTTP is a separate listener that changes nothing — on loopback only, serving
-  the listing and `/watch` by address (§Networking) — because a browser cannot dial a socket. A runtime is never
+  the listing, `/watch` by address and the lock holder's pid (§Networking) — because a
+  browser cannot dial a socket. A runtime is never
   driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
