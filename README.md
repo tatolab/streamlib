@@ -651,9 +651,6 @@ Not built yet: the macOS app, serving an exposed port off the machine, and Windo
   serves that user's socket, not yours.
 - **`another runtime holds this machine: …`** — `tatolabd` is already running; the refusal names
   its user, pid and executable.
-- **`the machine runtime lock cannot be taken: /Library/Application Support/Tatolab … does not
-  exist`** (macOS) — Tatolab.app creates the lock at first launch; without it, run the `sudo`
-  commands the refusal names, once.
 - **`No display surface available: … neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor DISPLAY is
   set`** — the runtime started with no desktop session to give it a display, and its log said so at
   the start. Logging in to one restarts the installed service with it; a runtime started by hand

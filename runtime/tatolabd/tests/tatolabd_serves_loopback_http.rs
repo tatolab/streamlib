@@ -3,8 +3,9 @@
 
 //! `tatolabd` serving its loopback HTTP beside its local API: the listing of
 //! the machine's streams at `/`, and the preview page staged beside its lend at
-//! `/watch`. A test build binds the port its test names and none otherwise.
-//! Built with `--features machine-directories-under-a-test-root`.
+//! `/watch`. A test build binds the port its test names; on macOS that bind is
+//! the machine runtime lock. Built with
+//! `--features machine-directories-under-a-test-root`.
 
 #![cfg(feature = "machine-directories-under-a-test-root")]
 
@@ -51,6 +52,7 @@ fn the_runtime_lists_its_streams_and_serves_the_page_staged_beside_its_lend() {
     assert_eq!(watch_page.as_deref(), Some(STAGED_WATCH_PAGE));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_test_build_naming_no_port_serves_no_loopback_http() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
@@ -66,6 +68,33 @@ fn a_test_build_naming_no_port_serves_no_loopback_http() {
             .standard_error()
             .contains(TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE),
         "the runtime says why it serves no loopback HTTP:\n{}",
+        runtime.standard_error()
+    );
+}
+
+/// On Linux the loopback HTTP is not the lock, so a port another process
+/// holds leaves the runtime serving without it, naming the port.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_loopback_http_port_another_process_holds_leaves_the_runtime_serving_without_it() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let held_loopback_http_port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let held_port = held_loopback_http_port.local_addr().unwrap().port();
+    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
+    tatolabd_command.env(
+        TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE,
+        held_port.to_string(),
+    );
+
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
+    runtime.interrupt_and_expect_a_clean_exit();
+
+    assert!(
+        runtime.standard_error().contains(&format!(
+            "the loopback HTTP listener cannot listen on 127.0.0.1:{held_port}"
+        )),
+        "the runtime names the held port it serves no loopback HTTP on:\n{}",
         runtime.standard_error()
     );
 }

@@ -14,12 +14,14 @@ there — with no device.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -33,6 +35,32 @@ RETIRED_NODE_REGISTRY_DIRECTORY_NAME = "nodes"
 
 #: How every verb refuses when nothing answers at the socket, before it names the socket.
 NO_RUNTIME_REFUSAL_PREFIX = "no runtime is running on this machine: nothing answers at "
+
+#: The loopback HTTP route a runtime answers its pid on, which names it as the macOS lock's holder.
+MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH = "/machine-runtime-lock-holder"
+
+LOCK_HOLDER_ROUTE_ANSWER_TIMEOUT_SECONDS = 30.0
+
+
+def await_the_lock_holder_route_on(loopback_http_port: int) -> None:
+    """Wait until a runtime answers its pid on `127.0.0.1:loopback_http_port`, which it serves
+    after its local API."""
+    deadline = time.monotonic() + LOCK_HOLDER_ROUTE_ANSWER_TIMEOUT_SECONDS
+    while True:
+        connection = http.client.HTTPConnection("127.0.0.1", loopback_http_port, timeout=2.0)
+        try:
+            connection.request("GET", MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH)
+            if connection.getresponse().status == 200:
+                return
+        except OSError:
+            pass
+        finally:
+            connection.close()
+        assert time.monotonic() < deadline, (
+            f"nothing answered {MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH} on "
+            f"127.0.0.1:{loopback_http_port} within {LOCK_HOLDER_ROUTE_ANSWER_TIMEOUT_SECONDS} s"
+        )
+        time.sleep(0.05)
 
 
 def iceoryx2_node_details_in(runtime_directory: Path) -> "set[Path]":
@@ -104,8 +132,11 @@ def test_every_verb_with_no_runtime_refuses_naming_the_socket_and_how_to_start_o
 
 def test_a_second_tatolabd_is_refused_naming_the_one_holding_the_machine(
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
+    private_machine_directories: PrivateMachineDirectories,
 ):
     first_tatolabd = start_tatolabd()
+    if private_machine_directories.loopback_http_port_on_macos is not None:
+        await_the_lock_holder_route_on(private_machine_directories.loopback_http_port_on_macos)
 
     second_tatolabd = start_tatolabd(wait_until_serving=False)
     assert second_tatolabd.await_exit() == 1, second_tatolabd.recent_stderr()

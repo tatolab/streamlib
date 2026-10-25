@@ -97,8 +97,9 @@ listener**, which serves the listing and `/watch` and is a separate server.
   file too.
 
 **What the kernel will tell an unprivileged prober on macOS**
-- **For any pid,** `proc_pidinfo` and `proc_pidpath` name its uid and executable. That is how
-  `holder_named_by_pid` already names another user's holder.
+- **For any pid,** `proc_pidpath` names its executable and `proc_pidinfo(PROC_PIDT_SHORTBSDINFO)`
+  its uid. The full `PROC_PIDTBSDINFO` that `holder_named_by_pid` reads on `main` is refused for
+  another user's process, so it cannot name another user's holder today.
 - **For a TCP port,** finding which pid holds it means enumerating that process's descriptors
   (`PROC_PIDLISTFDS`). The kernel refuses that for another user's process, which is why `lsof`
   without root lists only your own sockets.
@@ -184,13 +185,18 @@ Proposed:
   - Any other bind failure is `CouldNotBeTaken`.
   - A bind is per socket, so a second take in the same process fails the same way, and the
     `AtomicBool` goes.
-- **Handing the listener over.** `MachineRuntimeLock` gives up its bound listener
-  (`take_the_bound_loopback_http_listener()`, macOS only), and `tatolabd` serves the listing
-  on it.
+  - `holder_named_by_pid` reads the uid from `PROC_PIDT_SHORTBSDINFO`, which xnu answers for
+    another user's process.
+- **Handing the listener over.** `MachineRuntimeLock` hands over a second descriptor of its
+  bound listener (`take_the_bound_loopback_http_listener()`, macOS only), and `tatolabd` serves
+  the listing on it.
+  - The lock keeps its own descriptor until the process exits, so a serve that is skipped,
+    fails or stops at shutdown never frees the port.
   - `serve_the_loopback_http_listener` takes an already-bound `std::net::TcpListener` in place
-    of a port. That one signature serves both platforms.
-  - On Linux, `tatolabd` binds 4446 itself as today, and a held port still only leaves it
-    without the listing.
+    of a port, and sets it non-blocking itself. That one signature serves both platforms; a
+    caller wanting a free port binds port 0.
+  - On Linux, `tatolabd` binds 4446 itself, in `loopback_http_listener_of_this_runtime.rs`,
+    and a held port still only leaves it without the listing.
 - **Test builds.** In a test build on macOS the lock's port is
   `TATOLAB_TEST_LOOPBACK_HTTP_PORT`, and a test build that names none is refused by name at
   the lock. This keeps "a test build never binds the machine's own port", which is code fact,

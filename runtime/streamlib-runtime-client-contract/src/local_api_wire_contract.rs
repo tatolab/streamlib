@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The names a runtime's local API speaks on its socket, and the shape of each tool result a
-//! client parses, written once for the runtime that serves them and every client that calls them.
+//! The names a runtime's local API speaks on its socket and its loopback HTTP listener on its
+//! port, and the shape of each result a client parses, written once for the runtime that serves
+//! them and every client that calls them.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -242,6 +243,22 @@ pub struct DescribeRuntimeToolResult {
     pub runtime_log_directory: Option<PathBuf>,
 }
 
+/// The port the loopback HTTP listener binds on `127.0.0.1` when nothing names another; on macOS
+/// its bind is the machine runtime lock.
+pub const LOOPBACK_HTTP_LISTENER_DEFAULT_PORT: u16 = 4446;
+
+/// The loopback HTTP listener's route answering the pid of the process serving it, as a
+/// [`MachineRuntimeLockHolderPidAnswer`].
+pub const MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH: &str = "/machine-runtime-lock-holder";
+
+/// `GET` [`MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH`]'s answer: the serving process's pid, which a
+/// prober names through the kernel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineRuntimeLockHolderPidAnswer {
+    /// The pid of the process serving the loopback HTTP listener.
+    pub pid: i32,
+}
+
 /// The `add_relay` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddRelayToolResult {
@@ -410,6 +427,17 @@ mod tests {
                 description
             );
         }
+    }
+
+    #[test]
+    fn the_machine_runtime_lock_holders_answer_is_its_pid_alone() {
+        let answer = MachineRuntimeLockHolderPidAnswer { pid: 4242 };
+        let wire_text = serde_json::to_string(&answer).unwrap();
+        assert_eq!(wire_text, r#"{"pid":4242}"#);
+        assert_eq!(
+            serde_json::from_str::<MachineRuntimeLockHolderPidAnswer>(&wire_text).unwrap(),
+            answer
+        );
     }
 
     /// Each stream-action result in the order and spelling the runtime writes its keys.

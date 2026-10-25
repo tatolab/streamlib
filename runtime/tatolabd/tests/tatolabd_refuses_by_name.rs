@@ -18,6 +18,8 @@ use common::{
     the_refusal_of,
 };
 use streamlib::sdk::processor_interpreter::lend_directory_in_the_runtime_unit;
+#[cfg(target_os = "macos")]
+use streamlib_runtime_client_contract::machine_directories_test_root::TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE;
 
 const A_REFUSAL_EXITS_WITHIN: Duration = Duration::from_secs(60);
 
@@ -74,7 +76,8 @@ fn a_test_build_without_its_machine_root_is_refused_naming_the_variable() {
 }
 
 /// The kernel names the first runtime to the second: its user, its pid and
-/// its executable.
+/// its executable. On macOS the first answers its pid on the lock's own port,
+/// served before it logs that it is serving.
 #[test]
 fn a_second_tatolabd_on_the_machine_is_refused_naming_the_first_ones_user_pid_and_executable() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
@@ -111,6 +114,29 @@ fn a_second_tatolabd_on_the_machine_is_refused_naming_the_first_ones_user_pid_an
         "{refusal}"
     );
     first_runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// On macOS the lock is the test's loopback HTTP port, so a test build naming
+/// none is refused at the lock rather than binding the machine's own.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_test_build_naming_no_loopback_http_port_is_refused_at_the_machine_runtime_lock() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
+    tatolabd_command.env_remove(TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE);
+
+    let refusal = the_refusal_of(&run_to_exit_within(
+        tatolabd_command,
+        A_REFUSAL_EXITS_WITHIN,
+    ));
+
+    assert!(
+        refusal.contains(&format!(
+            "{TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE} is not set"
+        )),
+        "{refusal}"
+    );
 }
 
 /// A local API socket another live process answers on refuses the start

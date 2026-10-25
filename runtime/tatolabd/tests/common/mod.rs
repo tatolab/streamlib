@@ -191,12 +191,14 @@ pub fn http_get_body_on_loopback(port: u16, path: &str) -> Option<String> {
 }
 
 /// The machine a test's `tatolabd` runs on: `TATOLAB_TEST_MACHINE_ROOT`, under
-/// which its lock, runtime directory and state directory sit, plus its
-/// `STREAMLIB_HOME` and a project directory.
+/// which its runtime directory and state directory sit, and on Linux its lock,
+/// plus its `STREAMLIB_HOME` and a project directory. On macOS its lock is the
+/// loopback HTTP port it names, one of its own.
 ///
 /// Short and under `/tmp`, so the local API socket's path fits `sun_path`.
 pub struct TatolabTestMachineRoot {
     machine_root: tempfile::TempDir,
+    loopback_http_port_on_macos: Option<u16>,
 }
 
 impl TatolabTestMachineRoot {
@@ -209,10 +211,11 @@ impl TatolabTestMachineRoot {
             std::fs::create_dir_all(machine_root.path().join(directory))
                 .expect("a directory under the machine root is created");
         }
-        if cfg!(target_os = "macos") {
-            the_macos_lock_file_a_test_build_takes(machine_root.path());
+        Self {
+            machine_root,
+            loopback_http_port_on_macos: cfg!(target_os = "macos")
+                .then(|| a_port_free_for_udp_and_tcp_on("127.0.0.1")),
         }
-        Self { machine_root }
     }
 
     pub fn path(&self) -> &Path {
@@ -278,6 +281,13 @@ impl TatolabTestMachineRoot {
             .env_remove("STREAMLIB_QUIET")
             .env_remove("STREAMLIB_DANGEROUSLY_DEFER_LOGGING_TO_HOST")
             .stdin(Stdio::null());
+        if let Some(loopback_http_port) = self.loopback_http_port_on_macos {
+            use streamlib_runtime_client_contract::machine_directories_test_root::TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE;
+            tatolabd_command.env(
+                TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE,
+                loopback_http_port.to_string(),
+            );
+        }
         tatolabd_command
     }
 
@@ -291,21 +301,6 @@ impl TatolabTestMachineRoot {
             .env("VK_ICD_FILENAMES", &no_vulkan_driver_file);
         tatolabd_command
     }
-}
-
-/// The macOS lock a test build takes: `<root>/lock/runtime.lock`, mode 0666,
-/// in a 0755 directory, both owned by the test's own user.
-fn the_macos_lock_file_a_test_build_takes(machine_root: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let lock_directory = machine_root.join("lock");
-    std::fs::create_dir_all(&lock_directory).expect("the lock directory is created");
-    std::fs::set_permissions(&lock_directory, std::fs::Permissions::from_mode(0o755))
-        .expect("the lock directory is 0755");
-    let lock_file = lock_directory.join("runtime.lock");
-    std::fs::write(&lock_file, "").expect("the lock file is created");
-    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o666))
-        .expect("the lock file is 0666");
 }
 
 /// A stream of one test pattern.

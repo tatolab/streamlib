@@ -35,7 +35,12 @@ from typing import Any
 
 import pytest
 
-from conftest import AttachedTatolabRun, TatolabdUnderTest
+from conftest import (
+    TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE,
+    AttachedTatolabRun,
+    TatolabdUnderTest,
+    a_tcp_port_free_on_loopback,
+)
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
 from stream_runs_on_tatolabd import TatolabRunOfAProject
@@ -132,10 +137,6 @@ FIRST_BAG_WRITTEN_TIMEOUT_SECONDS = 30.0
 
 #: The one stream every project here compiles to.
 STREAM_NAME = "main"
-
-#: The variable a test build of `tatolabd` reads its loopback HTTP port from;
-#: unset, it serves no loopback HTTP.
-TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_LOOPBACK_HTTP_PORT"
 
 #: The engine's line once the attached stream's unload has finished.
 THE_STREAM_STOPPED_LOG_LINE = f"[stop] The stream `{STREAM_NAME}` stopped"
@@ -418,12 +419,6 @@ def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_a
 
     attached.interrupt()
     assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
-
-
-def a_tcp_port_free_on_loopback() -> int:
-    """A TCP port nothing holds on `127.0.0.1` now."""
-    with socket.create_server(("127.0.0.1", 0)) as probe:
-        return probe.getsockname()[1]
 
 
 def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:

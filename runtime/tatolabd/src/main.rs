@@ -70,10 +70,14 @@ fn main() -> ExitCode {
 
     // Held until the process exits: the kernel frees it with the process,
     // whichever way the process ends.
-    let _machine_runtime_lock = match MachineRuntimeLock::take() {
+    let mut machine_runtime_lock = match MachineRuntimeLock::take() {
         Ok(machine_runtime_lock) => machine_runtime_lock,
         Err(refusal) => return write_refusal_to_standard_error(&refusal.to_string()),
     };
+    let loopback_http_listener_bound_by_the_machine_runtime_lock =
+        loopback_http_listener_of_this_runtime::the_loopback_http_listener_the_machine_runtime_lock_bound(
+            &mut machine_runtime_lock,
+        );
     let tatolab_state_directory = match TatolabStateDirectory::resolve() {
         Ok(tatolab_state_directory) => tatolab_state_directory,
         Err(refusal) => return write_refusal_to_standard_error(&refusal.to_string()),
@@ -92,6 +96,7 @@ fn main() -> ExitCode {
             processor_interpreter_lend_directory,
             runtime_run_in_progress_record,
             &how_the_previous_run_ended,
+            loopback_http_listener_bound_by_the_machine_runtime_lock,
         )
     }));
     match hosted {
