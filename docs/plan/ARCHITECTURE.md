@@ -919,6 +919,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Each message counts once: a call with nothing read since the last count, a bag no link
   delivered, or a window is refused by name. The reader knows the message is gone; the
   engine only counts it, and still inspects no payload. Owner, 2026-10-24.
+  [recycled-frame-is-a-counted-drop — SHIPPED #2933]
 - **DECIDED** — A helper-placed destination's per-link counts reach `graph`. The parent
   creates one blackboard per helper spawn; the helper is its only writer, one entry per
   inbound link holding that link's dropped-message count, and the parent reads it whenever
