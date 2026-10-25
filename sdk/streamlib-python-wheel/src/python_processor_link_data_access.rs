@@ -724,12 +724,12 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
-    /// Whether a message is waiting on `port_name`, without consuming it.
     /// Count the message last read from `port_name` as lost on the inbound
     /// link that delivered it, once — into the link's dropped count the
     /// parent's `graph` renders, through the helper's board.
     pub(crate) fn count_the_message_last_read_from_input_port_as_lost(
         &self,
+        python: Python<'_>,
         port_name: &str,
     ) -> PyResult<()> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
@@ -739,11 +739,12 @@ impl PythonProcessorLinkDataAccess {
                  counted as lost"
             )));
         };
-        input_mailboxes
-            .count_the_message_last_read_as_lost(port_name)
+        python
+            .detach(|| input_mailboxes.count_the_message_last_read_as_lost(port_name))
             .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
     }
 
+    /// Whether a message is waiting on `port_name`, without consuming it.
     pub(crate) fn input_port_has_data(
         &self,
         python: Python<'_>,
@@ -1237,7 +1238,7 @@ mod tests {
                  read"
             );
             destination
-                .count_the_message_last_read_from_input_port_as_lost("frames_from_upstream")
+                .count_the_message_last_read_from_input_port_as_lost(python, "frames_from_upstream")
                 .expect("the message the link delivered is countable");
             assert_eq!(
                 slot_counts(),

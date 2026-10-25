@@ -388,7 +388,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     /// entry a mint owes the port first so it lands ahead of the first media
     /// frame it describes. A refused entry drops the staged access units, so
     /// the next frame is encoded as a sync point.
-    pub fn publish_to_output_port(
+    fn publish_to_output_port(
         &mut self,
         outputs: &OutputWriter,
         output_port: &str,

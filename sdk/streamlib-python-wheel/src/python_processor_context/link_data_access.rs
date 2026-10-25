@@ -131,10 +131,14 @@ impl PythonLinkInputDataReader {
     /// Count the message last read from `port_name` as lost on the link that
     /// delivered it, once — for a message whose frame its producer recycled
     /// before this node's claim.
-    fn count_the_message_last_read_as_lost(&self, port_name: &str) -> PyResult<()> {
+    fn count_the_message_last_read_as_lost(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+    ) -> PyResult<()> {
         self.link_data_access
             .get()
-            .count_the_message_last_read_from_input_port_as_lost(port_name)
+            .count_the_message_last_read_from_input_port_as_lost(python, port_name)
     }
 
     /// Every link feeding `port_name`, in wiring order.
