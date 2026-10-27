@@ -3549,14 +3549,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the verb exits when the runtime closes its side; the runtime going away exits it non-zero
   with one stderr line naming the runtime; no live runtime at launch is a one-line refusal
   naming the socket and how to start the runtime. Run over ssh — `ssh <machine> <cli> mcp` — it is how an agent
-  changes a stream on another machine. No network listener serves MCP. The runtime serves
-  only the latest MCP revision `rmcp` speaks, 2026-07-28 (stateless: no `initialize`
-  handshake and no session); a host that speaks only an earlier revision is refused with the
-  protocol's own unsupported-version error naming the served revision.
+  changes a stream on another machine. No network listener serves MCP. `/mcp/stdio` serves
+  every MCP revision `rmcp` speaks and prefers the latest, 2026-07-28 (stateless: no
+  `initialize` handshake and no session): a host at the latest revision discovers it and
+  picks it, and a host that still opens with `initialize` — Claude Desktop among them — is
+  answered at the revision it named, or at the newest revision with a handshake when it
+  named one the runtime does not know. `POST /mcp` serves the latest revision alone, since
+  it demands the per-request metadata no earlier revision carries; a request at an earlier
+  revision is refused with the protocol's own unsupported-version error naming it.
   `subscriptions/listen` is acknowledged with an empty set — `listChanged` stays `false` —
   and held until cancelled or the local API stops. Agents hosted in a cloud, which can
   neither launch a command nor reach a machine's loopback, are not served by the local API.
-  Owner, 2026-10-01; `rmcp`, owner, 2026-10-06. [local-api — SHIPPED #2665, #2667]
+  Owner, 2026-10-01; `rmcp`, owner, 2026-10-06; earlier revisions over `/mcp/stdio`, owner,
+  2026-10-27. [local-api — SHIPPED #2665, #2667]
 - **DECIDED** — `graph` returns every stream the runtime holds, and every stream action the CLI
   has — `run` attached, `run -d`, `stop`, `start`, `rm`, `streams`, `expose` — is also a tool,
   beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can. One

@@ -286,7 +286,7 @@ fn socket_path_to_dial(local_api_socket_path: &Path) -> Option<String> {
     absolute_socket_path.to_str().map(str::to_owned)
 }
 
-/// `server/discover` at the latest revision, the only one a runtime's local API serves.
+/// `server/discover` at the latest revision, the one `POST /mcp` and `/mcp/stdio` both serve.
 fn latest_revision_discover_lifecycle() -> ClientLifecycleMode {
     ClientLifecycleMode::Discover {
         preferred_versions: vec![ProtocolVersion::LATEST],
