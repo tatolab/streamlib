@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.7](https://github.com/tatolab/streamlib/compare/v0.55.6...v0.55.7) (2026-10-27)
+
+
+### Bug Fixes
+
+* **api-server:** /mcp/stdio serves the MCP hosts that still open with initialize, Claude Desktop among them ([#2947](https://github.com/tatolab/streamlib/issues/2947)) ([6e3f2be](https://github.com/tatolab/streamlib/commit/6e3f2bef73fa230296ec97917637e0b5df1a3e60))
+
 ## [0.55.6](https://github.com/tatolab/streamlib/compare/v0.55.5...v0.55.6) (2026-10-27)
 
 
