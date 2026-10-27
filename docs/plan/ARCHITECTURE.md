@@ -3447,8 +3447,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `streamlib://node-catalog`, every node type it can add with its description, derived
   config schema and ports — `/api/registry`'s document; `streamlib://graph`, the `graph`
   tool's; and `streamlib://relay-adapter-catalog`, each relay adapter's kind, the name and
-  icon people see it by — the icon the provider's own logo as a `data:` URI the adapter
-  carries, never fetched — its doc and its settings schema, its secrets marked `writeOnly` —
+  icon people see it by — the icon is the provider's own logo, a `data:` URI the adapter
+  carries and never fetches — its doc and its settings schema, its secrets marked `writeOnly` —
   `/api/relay-adapters`' document. It also serves
   three prompts, recipes rendered against the live graph and the catalog —
   `insert_node_between_linked_nodes`, `fan_output_to_another_consumer` and

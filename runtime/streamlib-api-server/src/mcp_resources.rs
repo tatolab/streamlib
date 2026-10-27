@@ -46,7 +46,7 @@ pub(crate) fn resources_list_result() -> ListResourcesResult {
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
         Resource::new(RELAY_ADAPTER_CATALOG_RESOURCE_URI, "relay-adapter-catalog")
             .with_title("Relay-adapter catalog")
-            .with_description("Every relay adapter compiled into the runtime, under `adapters`: its `kind`, as `add_relay` takes it, what it joins (`doc`), and its `settings_schema` (JSON Schema 2020-12; the keys `add_relay` and `configure_relay` take in `settings`), each secret marked `writeOnly` — kept in the OS secret store and listed by `list_relays` only as set or unset.")
+            .with_description("Every relay adapter compiled into the runtime, under `adapters`: its `kind`, as `add_relay` takes it, the name people read it by (`display_name`), the provider's logo as an inline `data:` URI an `<img>` shows (`display_icon_data_uri`), what it joins (`doc`), and its `settings_schema` (JSON Schema 2020-12; the keys `add_relay` and `configure_relay` take in `settings`), each secret marked `writeOnly` — kept in the OS secret store and listed by `list_relays` only as set or unset.")
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
     ])
 }

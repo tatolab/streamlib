@@ -860,6 +860,10 @@ mod tests {
     /// The token a provider's relay URL carries in its path.
     const URL_BORNE_TOKEN: &str = "tok-7c1f0e9b";
 
+    /// The icon every test adapter carries: a one-rectangle SVG.
+    const TEST_RELAY_ADAPTER_DISPLAY_ICON_SVG: &str =
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#;
+
     /// A hosted relay standing in for a provider: its URL carries a token,
     /// so the whole URL is a secret.
     #[derive(Deserialize, streamlib_relay_adapter_sdk::schemars::JsonSchema)]
@@ -897,7 +901,7 @@ mod tests {
         }
 
         fn display_icon_svg() -> &'static str {
-            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#
+            TEST_RELAY_ADAPTER_DISPLAY_ICON_SVG
         }
 
         fn relay_id(&self) -> &RelayInstanceId {
@@ -991,7 +995,7 @@ mod tests {
                 kind: "built-in-only".to_string(),
                 display_name: "Built-in only".to_string(),
                 display_icon_data_uri: RelayAdapterCatalogEntry::display_icon_data_uri_of_the_svg(
-                    r#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#,
+                    TEST_RELAY_ADAPTER_DISPLAY_ICON_SVG,
                 ),
                 doc: "A relay every machine has.".to_string(),
                 settings_schema: json!({"type": "object", "properties": {}}),
@@ -1140,6 +1144,18 @@ mod tests {
                     .to_string()
             })
             .unwrap_or_else(|| panic!("`{relay_id}` is not handed to the publisher"))
+    }
+
+    #[test]
+    fn an_adapters_catalog_entry_carries_its_display_name_and_its_icon_as_a_data_uri() {
+        let catalog_entry = RelayAdapterCatalogEntry::of_the_adapter::<ProviderRelayAdapter>();
+        assert_eq!(catalog_entry.display_name, "Provider");
+        assert_eq!(
+            catalog_entry.display_icon_data_uri,
+            RelayAdapterCatalogEntry::display_icon_data_uri_of_the_svg(
+                TEST_RELAY_ADAPTER_DISPLAY_ICON_SVG
+            )
+        );
     }
 
     #[test]

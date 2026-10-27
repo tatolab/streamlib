@@ -356,15 +356,11 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_entry_names_moq_pro_for_people_and_carries_its_svg_logo() {
+    fn the_catalog_entry_names_moq_pro_for_people_and_its_icon_is_an_svg_document() {
         let catalog_entry = RelayAdapterCatalogEntry::of_the_adapter::<MoqProRelayAdapter>();
         assert_eq!(catalog_entry.display_name, "moq.pro");
         let display_icon_svg = MoqProRelayAdapter::display_icon_svg();
         assert!(display_icon_svg.contains("<svg "));
         assert!(display_icon_svg.trim_end().ends_with("</svg>"));
-        assert_eq!(
-            catalog_entry.display_icon_data_uri,
-            RelayAdapterCatalogEntry::display_icon_data_uri_of_the_svg(display_icon_svg)
-        );
     }
 }

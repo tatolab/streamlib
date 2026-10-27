@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 
 use crate::control_plane_stub_support::{
     LocalApiServedOnAFreshSocket, RelayInstancesOfThisMachineStub, RelayInstancesStubCall,
-    STUB_RELAY_ADAPTER_DISPLAY_ICON_DATA_URI, STUB_RELAY_ADAPTER_DISPLAY_NAME,
-    STUB_RELAY_ADAPTER_KIND,
+    STUB_RELAY_ADAPTER_DISPLAY_NAME, STUB_RELAY_ADAPTER_KIND,
+    stub_relay_adapter_display_icon_data_uri,
 };
 use crate::mcp::tests::{
     ControlPlaneMcpDispatchStubRuntime, first_text_block_json, mcp_transport_to,
@@ -207,9 +207,12 @@ async fn the_relay_adapter_catalog_resource_lists_each_adapter_with_its_secrets_
             .collect::<Vec<_>>(),
         ["Local relay", STUB_RELAY_ADAPTER_DISPLAY_NAME]
     );
-    assert!(adapters.iter().all(
-        |adapter| adapter["display_icon_data_uri"] == STUB_RELAY_ADAPTER_DISPLAY_ICON_DATA_URI
-    ));
+    assert!(
+        adapters
+            .iter()
+            .all(|adapter| adapter["display_icon_data_uri"]
+                == stub_relay_adapter_display_icon_data_uri().as_str())
+    );
     assert_eq!(
         adapters[1]["settings_schema"]["properties"]["token"]["writeOnly"],
         true
@@ -234,7 +237,7 @@ async fn get_relay_adapters_serves_the_same_catalog_as_the_resource() {
     );
     assert_eq!(
         catalog["adapters"][1]["display_icon_data_uri"],
-        STUB_RELAY_ADAPTER_DISPLAY_ICON_DATA_URI
+        stub_relay_adapter_display_icon_data_uri()
     );
     assert_eq!(
         catalog["adapters"][1]["settings_schema"]["properties"]["token"]["writeOnly"],
