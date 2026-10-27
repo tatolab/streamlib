@@ -11,7 +11,6 @@
 mod moqpro_relay_instance_settings;
 mod moqpro_relay_token;
 
-use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_adapter_sdk::{
     BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter,
     RelayAdapterCatalogEntry, RelayAdapterInstanceMaker, RelayAdapterKind, RelayAdapterRefusal,
@@ -21,7 +20,7 @@ use streamlib_relay_adapter_sdk::{
 use tokio::sync::watch;
 
 pub use moqpro_relay_instance_settings::{
-    MOQPRO_RELAY_URL, MoqProProjectId, MoqProRelayInstanceSettings, MoqProRelaySettingsRefusal,
+    MOQPRO_RELAY_URL, MoqProProjectId, MoqProProjectIdRefusal, MoqProRelayInstanceSettings,
 };
 pub use moqpro_relay_token::{
     MOQPRO_PUBLISH_TOKEN_LIFETIME, MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER, MoqProProjectSigningKey,
@@ -103,7 +102,7 @@ impl RelayAdapter for MoqProRelayAdapter {
     fn join(&mut self, settings: serde_json::Value) -> Result<JoinedRelay, RelayAdapterRefusal> {
         let settings: MoqProRelayInstanceSettings =
             relay_instance_settings_from_json(&self.relay_id, settings)?;
-        let dial_url: Url = settings.the_projects_dial_url();
+        let dial_url = settings.the_projects_dial_url();
         let signing_key = MoqProProjectSigningKey::read_from(settings.signing_key.expose_secret())
             .map_err(|refusal| self.settings_refused(refusal))?;
         let joined = JoinedMoqProProject {
@@ -180,6 +179,7 @@ mod tests {
     use moq_auth::{Algorithm, Key, KeyId, Pattern};
     use std::time::{Duration, Instant};
     use streamlib_relay_adapter_sdk::secrecy::ExposeSecret;
+    use streamlib_relay_adapter_sdk::url::Url;
 
     fn a_project_key() -> Key {
         Key::generate(

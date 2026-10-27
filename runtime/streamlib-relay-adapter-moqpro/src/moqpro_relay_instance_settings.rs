@@ -25,12 +25,12 @@ impl MoqProProjectId {
 }
 
 impl TryFrom<String> for MoqProProjectId {
-    type Error = MoqProRelaySettingsRefusal;
+    type Error = MoqProProjectIdRefusal;
 
     fn try_from(project_id: String) -> Result<Self, Self::Error> {
         let trimmed = project_id.trim();
         if trimmed.is_empty() || trimmed.contains('/') {
-            return Err(MoqProRelaySettingsRefusal::ProjectIdNotOnePathSegment { project_id });
+            return Err(MoqProProjectIdRefusal::ProjectIdNotOnePathSegment { project_id });
         }
         Ok(Self(trimmed.to_string()))
     }
@@ -52,12 +52,12 @@ pub struct MoqProRelayInstanceSettings {
 
 /// Why a moq.pro instance's project id was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MoqProRelaySettingsRefusal {
+pub enum MoqProProjectIdRefusal {
     /// The project id is empty or names more than one path segment.
     ProjectIdNotOnePathSegment { project_id: String },
 }
 
-impl std::fmt::Display for MoqProRelaySettingsRefusal {
+impl std::fmt::Display for MoqProProjectIdRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ProjectIdNotOnePathSegment { project_id } => write!(

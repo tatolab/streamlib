@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-relay-adapter-moqpro"
-description = "moq.pro's hosted MoQ relays: one project per instance, its signing key held in the OS secret store, each dial carrying a JWT the adapter mints for the machine's own broadcasts and renews before it expires."
+description = "moq.pro's hosted MoQ relay: one project per instance, its signing key held in the OS secret store, each dial carrying a JWT the adapter mints for the machine's own broadcasts and renews before it expires."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
