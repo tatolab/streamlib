@@ -14,10 +14,10 @@ publish = false
 [dependencies]
 # The relay-adapter catalog's icon `data:` URI.
 base64 = "0.22"
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.55.4" }
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.55.4" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.55.5" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.55.5" }
 # The shape `list_relays` answers in, which the CLI parses.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.55.4" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.55.5" }
 schemars = "0.8"
 secrecy = "0.10.3"
 serde = { workspace = true }
