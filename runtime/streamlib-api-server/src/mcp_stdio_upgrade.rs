@@ -184,7 +184,9 @@ pub(crate) mod tests {
         ClientCapabilities, Implementation, ProtocolVersion, ReadResourceRequestParams,
         RequestMetaObject, SubscriptionFilter,
     };
-    use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RunningService, SubscriptionEnd};
+    use rmcp::service::{
+        ClientLifecycleMode, ClientServiceExt, RunningService, ServiceExt, SubscriptionEnd,
+    };
     use serde_json::{Value, json};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
@@ -194,7 +196,8 @@ pub(crate) mod tests {
         LocalApiServedOnAFreshSocket, STUB_STREAM_NAME, response_head_over_the_socket,
     };
     use crate::mcp::tests::{
-        ControlPlaneMcpDispatchStubRuntime, assert_names_exactly_the_control_vocabulary,
+        ControlPlaneMcpDispatchStubRuntime, HandshakeRevisionMcpClient,
+        assert_names_exactly_the_control_vocabulary,
     };
     use crate::mcp_resources::{LIVE_GRAPH_RESOURCE_URI, RELAY_ADAPTER_CATALOG_RESOURCE_URI};
 
@@ -389,6 +392,101 @@ pub(crate) mod tests {
             1,
             "{relay_adapter_catalog:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn discover_over_the_upgraded_stream_lists_every_revision_and_a_latest_client_negotiates_the_latest()
+     {
+        let served = served_over_a_slow_add_node();
+        let mut lines = McpStdioLines::upgraded_on(&served).await;
+
+        lines.send_request(1, "server/discover", json!({})).await;
+        let discovered = lines.next_message().await;
+        assert_eq!(
+            discovered["result"]["supportedVersions"],
+            json!(ProtocolVersion::KNOWN_VERSIONS),
+            "{discovered}"
+        );
+
+        let client = rmcp_client_over_the_upgraded_stream(&served).await;
+        assert_eq!(
+            client
+                .peer_info()
+                .map(|server_info| server_info.protocol_version.clone()),
+            Some(ProtocolVersion::LATEST)
+        );
+    }
+
+    /// An MCP host that still opens with `initialize` — Claude Desktop among
+    /// them — is answered at the revision it named and served the same tools.
+    #[tokio::test]
+    async fn an_initialize_handshake_is_answered_at_the_revision_it_names_and_serves_the_tools() {
+        for handshake_protocol_version in [
+            ProtocolVersion::V_2024_11_05,
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::LATEST_WITH_INITIALIZE,
+        ] {
+            let served = served_over_a_slow_add_node();
+            let client = HandshakeRevisionMcpClient {
+                handshake_protocol_version: handshake_protocol_version.clone(),
+            }
+            .serve_with_lifecycle(
+                upgraded_mcp_stdio_stream(&served).await,
+                ClientLifecycleMode::Initialize,
+            )
+            .await
+            .unwrap_or_else(|refusal| panic!("{handshake_protocol_version}: {refusal}"));
+
+            assert_eq!(
+                client
+                    .peer_info()
+                    .map(|server_info| server_info.protocol_version.clone()),
+                Some(handshake_protocol_version.clone())
+            );
+            let tools = client.list_all_tools().await.unwrap();
+            assert_names_exactly_the_control_vocabulary(
+                tools.iter().map(|tool| tool.name.as_ref()).collect(),
+            );
+            client.cancel().await.unwrap();
+        }
+    }
+
+    /// A handshake naming a revision the node does not know is answered at the
+    /// newest revision that still has a handshake, for the host to accept or
+    /// refuse.
+    #[tokio::test]
+    async fn an_initialize_handshake_naming_an_unknown_revision_is_answered_at_the_newest_with_a_handshake()
+     {
+        let served = served_over_a_slow_add_node();
+        let mut lines = McpStdioLines::upgraded_on(&served).await;
+
+        lines
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-10-07",
+                    "capabilities": {},
+                    "clientInfo": { "name": "mcp-stdio-test", "version": "0" },
+                },
+            }))
+            .await;
+        let answer = lines.next_message().await;
+        assert_eq!(
+            answer["result"]["protocolVersion"],
+            json!(ProtocolVersion::LATEST_WITH_INITIALIZE),
+            "{answer}"
+        );
+
+        lines
+            .send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+            .await;
+        lines
+            .send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }))
+            .await;
+        let tools = lines.next_message().await;
+        assert!(tools["result"]["tools"].is_array(), "{tools}");
     }
 
     #[tokio::test]

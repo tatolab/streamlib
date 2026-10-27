@@ -71,8 +71,17 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 use tokio_util::sync::CancellationToken;
 
-/// The only protocol revision the runtime serves: the latest `rmcp` implements.
-const SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
+/// The protocol revisions `POST /mcp` serves: the latest `rmcp` implements
+/// alone, since the endpoint demands the per-request metadata no earlier
+/// revision carries.
+const MCP_PROTOCOL_VERSIONS_SERVED_OVER_POST_MCP: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
+
+/// The protocol revisions a `/mcp/stdio` connection serves: every one `rmcp`
+/// implements, so a host that still opens with an `initialize` handshake is
+/// answered at the newest revision it named that has one, and a host at the
+/// latest revision discovers and picks the latest.
+const MCP_PROTOCOL_VERSIONS_SERVED_OVER_MCP_STDIO: &[ProtocolVersion] =
+    ProtocolVersion::KNOWN_VERSIONS;
 
 /// Server identity carried in every result's `serverInfo`.
 const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
@@ -296,7 +305,7 @@ impl LocalApiMcpServerHandler {
 
 /// `/mcp`'s service: `rmcp`'s Streamable HTTP transport over one
 /// [`LocalApiMcpServerHandler`], stateless, serving only
-/// [`SERVED_MCP_PROTOCOL_VERSIONS`].
+/// [`MCP_PROTOCOL_VERSIONS_SERVED_OVER_POST_MCP`].
 pub(crate) fn local_api_mcp_streamable_http_service(
     handler: LocalApiMcpServerHandler,
 ) -> StreamableHttpService<LocalApiMcpServerHandler, NeverSessionManager> {
@@ -1019,7 +1028,14 @@ impl ServerHandler for LocalApiMcpServerHandler {
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-        Cow::Borrowed(SERVED_MCP_PROTOCOL_VERSIONS)
+        match self.mcp_connection {
+            LocalApiMcpConnection::OneShotStreamableHttpRequest => {
+                Cow::Borrowed(MCP_PROTOCOL_VERSIONS_SERVED_OVER_POST_MCP)
+            }
+            LocalApiMcpConnection::McpStdio(_) => {
+                Cow::Borrowed(MCP_PROTOCOL_VERSIONS_SERVED_OVER_MCP_STDIO)
+            }
+        }
     }
 
     /// No list ever changes under a host, so a listen is acknowledged with
@@ -1388,7 +1404,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn discover_answers_the_latest_revision_alone_with_the_tools_resources_and_prompts_capabilities()
+    async fn discover_over_post_mcp_answers_the_latest_revision_alone_with_the_tools_resources_and_prompts_capabilities()
      {
         let (_served, client) =
             connected_mcp_client(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
@@ -1426,8 +1442,8 @@ pub(crate) mod tests {
     }
 
     /// A client that knows the handshake revisions only.
-    struct HandshakeRevisionMcpClient {
-        handshake_protocol_version: ProtocolVersion,
+    pub(crate) struct HandshakeRevisionMcpClient {
+        pub(crate) handshake_protocol_version: ProtocolVersion,
     }
 
     impl rmcp::ClientHandler for HandshakeRevisionMcpClient {
@@ -1441,7 +1457,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn an_initialize_handshake_is_refused_with_the_unsupported_version_error_naming_the_latest()
+    async fn an_initialize_handshake_over_post_mcp_is_refused_with_the_unsupported_version_error_naming_the_latest()
      {
         for handshake_protocol_version in [
             ProtocolVersion::V_2025_06_18,
@@ -1560,7 +1576,8 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_client_speaking_only_a_handshake_revision_finds_no_compatible_revision() {
+    async fn a_client_speaking_only_a_handshake_revision_finds_no_compatible_revision_over_post_mcp()
+     {
         let served =
             LocalApiServedOnAFreshSocket::over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()));
         let refusal = ()
