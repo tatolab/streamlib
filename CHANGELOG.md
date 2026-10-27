@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.6](https://github.com/tatolab/streamlib/compare/v0.55.5...v0.55.6) (2026-10-27)
+
+
+### Features
+
+* **relays:** moq.pro is dialed at its one relay — the relay_url setting is gone ([#2942](https://github.com/tatolab/streamlib/issues/2942)) ([101ca17](https://github.com/tatolab/streamlib/commit/101ca17ba25994a8809306e86376d23d41f55216))
+
 ## [0.55.5](https://github.com/tatolab/streamlib/compare/v0.55.4...v0.55.5) (2026-10-27)
 
 
