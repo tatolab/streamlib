@@ -892,6 +892,14 @@ mod tests {
             "A hosted relay standing in for a provider."
         }
 
+        fn display_name() -> &'static str {
+            "Provider"
+        }
+
+        fn display_icon_svg() -> &'static str {
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#
+        }
+
         fn relay_id(&self) -> &RelayInstanceId {
             &self.relay_id
         }
@@ -981,6 +989,10 @@ mod tests {
         fn catalog_entry(&self) -> RelayAdapterCatalogEntry {
             RelayAdapterCatalogEntry {
                 kind: "built-in-only".to_string(),
+                display_name: "Built-in only".to_string(),
+                display_icon_data_uri: RelayAdapterCatalogEntry::display_icon_data_uri_of_the_svg(
+                    r#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#,
+                ),
                 doc: "A relay every machine has.".to_string(),
                 settings_schema: json!({"type": "object", "properties": {}}),
             }

@@ -85,6 +85,14 @@ impl RelayAdapter for MoqProRelayAdapter {
          project's key, which is kept as a secret. Serves public ports, under the project."
     }
 
+    fn display_name() -> &'static str {
+        "moq.pro"
+    }
+
+    fn display_icon_svg() -> &'static str {
+        include_str!("moqpro_relay_adapter_display_icon.svg")
+    }
+
     fn relay_id(&self) -> &RelayInstanceId {
         &self.relay_id
     }
@@ -345,5 +353,18 @@ mod tests {
         adapter.leave();
         assert!(adapter.credential_for_dial().is_none());
         assert_eq!(*adapter.events().borrow(), RelayConnectionState::NotJoined);
+    }
+
+    #[test]
+    fn the_catalog_entry_names_moq_pro_for_people_and_carries_its_svg_logo() {
+        let catalog_entry = RelayAdapterCatalogEntry::of_the_adapter::<MoqProRelayAdapter>();
+        assert_eq!(catalog_entry.display_name, "moq.pro");
+        let display_icon_svg = MoqProRelayAdapter::display_icon_svg();
+        assert!(display_icon_svg.contains("<svg "));
+        assert!(display_icon_svg.trim_end().ends_with("</svg>"));
+        assert_eq!(
+            catalog_entry.display_icon_data_uri,
+            RelayAdapterCatalogEntry::display_icon_data_uri_of_the_svg(display_icon_svg)
+        );
     }
 }

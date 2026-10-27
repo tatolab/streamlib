@@ -681,6 +681,12 @@ pub(crate) async fn response_head_over_the_socket(
 /// The adapter kind the relay stub catalogs beside the local one.
 pub(crate) const STUB_RELAY_ADAPTER_KIND: &str = "stub-provider";
 
+/// The name people read for the stub's hosted adapter.
+pub(crate) const STUB_RELAY_ADAPTER_DISPLAY_NAME: &str = "Stub Provider";
+
+/// The icon both stub adapters carry: a one-rectangle SVG.
+pub(crate) const STUB_RELAY_ADAPTER_DISPLAY_ICON_DATA_URI: &str = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0Lz48L3N2Zz4=";
+
 /// One call the relay stub took, in its own words, secrets and all.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RelayInstancesStubCall {
@@ -724,6 +730,8 @@ impl ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine
         vec![
             ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
                 kind: "local".to_string(),
+                display_name: "Local relay".to_string(),
+                display_icon_data_uri: STUB_RELAY_ADAPTER_DISPLAY_ICON_DATA_URI.to_string(),
                 doc: "The machine's own relay, built in.".to_string(),
                 settings_schema: ::serde_json::json!({
                     "type": "object",
@@ -732,6 +740,8 @@ impl ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine
             },
             ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
                 kind: STUB_RELAY_ADAPTER_KIND.to_string(),
+                display_name: STUB_RELAY_ADAPTER_DISPLAY_NAME.to_string(),
+                display_icon_data_uri: STUB_RELAY_ADAPTER_DISPLAY_ICON_DATA_URI.to_string(),
                 doc: "A hosted relay standing in for a provider.".to_string(),
                 settings_schema: ::serde_json::json!({
                     "type": "object",

@@ -6078,6 +6078,7 @@ dependencies = [
 name = "streamlib-relay-adapter-sdk"
 version = "0.55.4"
 dependencies = [
+ "base64 0.22.1",
  "schemars 0.8.22",
  "secrecy",
  "serde",
