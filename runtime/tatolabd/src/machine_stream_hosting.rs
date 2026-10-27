@@ -24,8 +24,9 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
 use streamlib_relay_adapter_cloudflare::CloudflareRelayAdapterInstanceMaker;
+use streamlib_relay_adapter_local::LocalRelayAdapterInstanceMaker;
 use streamlib_relay_adapter_moqpro::MoqProRelayAdapterInstanceMaker;
-use streamlib_relay_adapter_sdk::RelayAdapterInstanceMaker;
+use streamlib_relay_adapter_sdk::{MachineName, RelayAdapterInstanceMaker};
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
 use crate::exposed_port_publisher::start_the_exposed_port_publisher;
@@ -195,31 +196,42 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     ExitCode::from(exit_status)
 }
 
-/// Every relay instance this runtime holds, each joined: the local relay's
-/// two built in, then each `relays.json` records, through the local,
-/// Cloudflare and moq.pro adapters. A test build adds the secret-holding test
+/// The relay adapters compiled into this runtime: the local relay's,
+/// Cloudflare's and moq.pro's. A test build adds the secret-holding test
 /// relay's adapter.
-fn join_every_relay_instance_of_this_runtime(
-    engine: &Runner,
-    tatolab_state_directory: &TatolabStateDirectory,
-) -> RelayInstancesOfThisRuntime {
+fn relay_adapter_makers_of_this_runtime(
+    local_relay_adapter_maker: LocalRelayAdapterInstanceMaker,
+    machine_name: &MachineName,
+) -> Vec<Box<dyn RelayAdapterInstanceMaker>> {
     #[cfg_attr(
         not(feature = "machine-directories-under-a-test-root"),
         expect(unused_mut, reason = "a test build adds an adapter")
     )]
-    let mut adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> = vec![
-        Box::new(the_local_relay_adapter_of_this_runtime(engine)),
+    let mut relay_adapter_makers: Vec<Box<dyn RelayAdapterInstanceMaker>> = vec![
+        Box::new(local_relay_adapter_maker),
         Box::new(CloudflareRelayAdapterInstanceMaker),
         Box::new(MoqProRelayAdapterInstanceMaker::for_the_machine(
-            engine.machine_name().clone(),
+            machine_name.clone(),
         )),
     ];
     #[cfg(feature = "machine-directories-under-a-test-root")]
-    adapter_makers.push(Box::new(
+    relay_adapter_makers.push(Box::new(
         crate::secret_holding_test_relay_adapter::SecretHoldingTestRelayAdapterInstanceMaker,
     ));
+    relay_adapter_makers
+}
+
+/// Every relay instance this runtime holds, each joined: the local relay's
+/// two built in, then each `relays.json` records.
+fn join_every_relay_instance_of_this_runtime(
+    engine: &Runner,
+    tatolab_state_directory: &TatolabStateDirectory,
+) -> RelayInstancesOfThisRuntime {
     RelayInstancesOfThisRuntime::join_every_relay_instance(
-        adapter_makers,
+        relay_adapter_makers_of_this_runtime(
+            the_local_relay_adapter_of_this_runtime(engine),
+            engine.machine_name(),
+        ),
         RelayInstancesRecordFile::at(tatolab_state_directory.relay_instances_record_path()),
         the_relay_secret_store_of_this_machine(
             tatolab_state_directory.relay_secrets_fallback_file_path(),
@@ -402,6 +414,98 @@ fn tear_the_engine_down(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+
+    /// The value of the attribute `attribute_name` on the root `<svg>`.
+    fn root_svg_attribute<'svg>(
+        svg_document: &'svg str,
+        attribute_name: &str,
+    ) -> Option<&'svg str> {
+        let root_element = &svg_document[svg_document.find("<svg")?..];
+        let root_element = &root_element[..root_element.find('>')?];
+        let attribute_prefix = format!("{attribute_name}=\"");
+        let value_start = root_element
+            .match_indices(&attribute_prefix)
+            .find(|(at, _)| root_element[..*at].ends_with(char::is_whitespace))?
+            .0
+            + attribute_prefix.len();
+        let value = &root_element[value_start..];
+        Some(&value[..value.find('"')?])
+    }
+
+    /// The width and height an `<img>` gives the SVG before any CSS: its root
+    /// `width` and `height` when it has both, its `viewBox`'s otherwise.
+    fn intrinsic_width_and_height_of_the_svg_in_an_img(svg_document: &str) -> (f64, f64) {
+        let length = |attribute_value: &str| {
+            attribute_value
+                .trim_end_matches(char::is_alphabetic)
+                .parse::<f64>()
+                .unwrap()
+        };
+        if let (Some(width), Some(height)) = (
+            root_svg_attribute(svg_document, "width"),
+            root_svg_attribute(svg_document, "height"),
+        ) {
+            return (length(width), length(height));
+        }
+        let view_box_numbers = root_svg_attribute(svg_document, "viewBox")
+            .unwrap()
+            .split(|separator: char| separator.is_whitespace() || separator == ',')
+            .filter(|number| !number.is_empty())
+            .map(|number| number.parse::<f64>().unwrap())
+            .collect::<Vec<_>>();
+        (view_box_numbers[2], view_box_numbers[3])
+    }
+
+    #[test]
+    fn an_svgs_size_in_an_img_is_its_width_and_height_before_its_view_box() {
+        assert_eq!(
+            intrinsic_width_and_height_of_the_svg_in_an_img(
+                r#"<svg stroke-width="9" width="66" height="30" viewBox="0 0 82 82"/>"#
+            ),
+            (66.0, 30.0)
+        );
+        assert_eq!(
+            intrinsic_width_and_height_of_the_svg_in_an_img(
+                "<!DOCTYPE svg>\n<svg width=\"420pt\"\n height=\"420pt\" viewBox=\"-51 -51 522 300\">"
+            ),
+            (420.0, 420.0)
+        );
+        assert_eq!(
+            intrinsic_width_and_height_of_the_svg_in_an_img(
+                r#"<svg viewBox="0,0,1024,1024"><svg width="1" height="2"/></svg>"#
+            ),
+            (1024.0, 1024.0)
+        );
+    }
+
+    #[test]
+    fn every_relay_adapters_display_icon_is_square_in_an_img() {
+        let relay_adapter_makers = relay_adapter_makers_of_this_runtime(
+            LocalRelayAdapterInstanceMaker::running_no_local_relay("a test".to_string()),
+            &MachineName::from_a_hostname("desk").unwrap(),
+        );
+        for relay_adapter_maker in relay_adapter_makers {
+            let catalog_entry = relay_adapter_maker.catalog_entry();
+            let svg_document = BASE64_STANDARD
+                .decode(
+                    catalog_entry
+                        .display_icon_data_uri
+                        .strip_prefix("data:image/svg+xml;base64,")
+                        .unwrap(),
+                )
+                .unwrap();
+            let (width, height) = intrinsic_width_and_height_of_the_svg_in_an_img(
+                std::str::from_utf8(&svg_document).unwrap(),
+            );
+            assert_eq!(
+                width, height,
+                "`{}`'s icon is not square",
+                catalog_entry.kind
+            );
+        }
+    }
 
     #[test]
     fn a_clean_run_and_a_dropped_engine_write_nothing() {

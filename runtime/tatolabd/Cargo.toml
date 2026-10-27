@@ -67,6 +67,8 @@ zbus-secret-service-keyring-store = { version = "=1.0.1", features = ["rt-async-
 apple-native-keyring-store = { version = "=1.0.2", features = ["keychain"] }
 
 [dev-dependencies]
+# The relay-adapter catalog's icons, read back from their `data:` URIs.
+base64 = "0.22"
 # The tests read a relay as every reader of one does.
 streamlib-relay-track-reader = { path = "../streamlib-relay-track-reader" }
 tokio = { version = "1.48.0", features = ["rt"] }

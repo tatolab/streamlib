@@ -25,7 +25,7 @@ pub use url;
 
 pub use relay_instances_of_this_machine::{
     BuiltInRelayInstance, RelayAdapterCatalogEntry, RelayAdapterInstanceMaker,
-    RelayInstanceControlRefusal, RelayInstancesOfThisMachine, display_icon_svg_canvas_size,
+    RelayInstanceControlRefusal, RelayInstancesOfThisMachine,
 };
 pub use relay_secret_setting::{RelaySecretSetting, secret_setting_names_in_the_schema};
 
