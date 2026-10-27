@@ -17,35 +17,44 @@ use crate::relay_adapter_setting_field::{
     RelaySettingFieldType,
 };
 
-/// How a person enters a [`RelaySecretSetting`]: the field type it is listed
-/// as.
-pub trait RelaySecretSettingEntry {
+/// How a person enters a [`RelaySecretSetting`]: as a string, a URL or a
+/// file, the field types a secret, always text, can be listed as.
+pub trait HowARelaySecretIsEntered:
+    sealed_to_the_text_field_types::SealedToTheTextFieldTypes
+{
     /// The field type the relay-adapter catalog lists the secret as.
     fn field_type() -> RelaySettingFieldType;
 }
 
-/// A secret entered as one line of text, such as an API key.
-pub struct RelaySecretEnteredAsString;
+mod sealed_to_the_text_field_types {
+    pub trait SealedToTheTextFieldTypes {}
+    impl SealedToTheTextFieldTypes for super::RelaySecretEnteredAsString {}
+    impl SealedToTheTextFieldTypes for super::RelaySecretEnteredAsUrl {}
+    impl SealedToTheTextFieldTypes for super::RelaySecretEnteredAsFile {}
+}
 
-impl RelaySecretSettingEntry for RelaySecretEnteredAsString {
+/// A secret entered as one line of text, such as an API key.
+pub enum RelaySecretEnteredAsString {}
+
+impl HowARelaySecretIsEntered for RelaySecretEnteredAsString {
     fn field_type() -> RelaySettingFieldType {
         RelaySettingFieldType::String
     }
 }
 
 /// A secret entered as a URL, such as one whose path carries a token.
-pub struct RelaySecretEnteredAsUrl;
+pub enum RelaySecretEnteredAsUrl {}
 
-impl RelaySecretSettingEntry for RelaySecretEnteredAsUrl {
+impl HowARelaySecretIsEntered for RelaySecretEnteredAsUrl {
     fn field_type() -> RelaySettingFieldType {
         RelaySettingFieldType::Url
     }
 }
 
 /// A secret entered as a file's text, such as a signing key.
-pub struct RelaySecretEnteredAsFile;
+pub enum RelaySecretEnteredAsFile {}
 
-impl RelaySecretSettingEntry for RelaySecretEnteredAsFile {
+impl HowARelaySecretIsEntered for RelaySecretEnteredAsFile {
     fn field_type() -> RelaySettingFieldType {
         RelaySettingFieldType::File
     }
@@ -55,12 +64,12 @@ impl RelaySecretSettingEntry for RelaySecretEnteredAsFile {
 /// relay-adapter catalog flags it secret, so the runtime keeps it in the OS
 /// secret store and never in `relays.json`, and lists it only as set or
 /// unset; it never prints.
-pub struct RelaySecretSetting<Entry: RelaySecretSettingEntry> {
+pub struct RelaySecretSetting<Entry: HowARelaySecretIsEntered> {
     secret: SecretString,
     entered_as: PhantomData<fn() -> Entry>,
 }
 
-impl<Entry: RelaySecretSettingEntry> RelaySecretSetting<Entry> {
+impl<Entry: HowARelaySecretIsEntered> RelaySecretSetting<Entry> {
     /// The secret, for the one call that hands it to the provider.
     pub fn expose_secret(&self) -> &str {
         self.secret.expose_secret()
@@ -72,13 +81,13 @@ impl<Entry: RelaySecretSettingEntry> RelaySecretSetting<Entry> {
     }
 }
 
-impl<Entry: RelaySecretSettingEntry> Clone for RelaySecretSetting<Entry> {
+impl<Entry: HowARelaySecretIsEntered> Clone for RelaySecretSetting<Entry> {
     fn clone(&self) -> Self {
         Self::from(self.secret.clone())
     }
 }
 
-impl<Entry: RelaySecretSettingEntry> From<SecretString> for RelaySecretSetting<Entry> {
+impl<Entry: HowARelaySecretIsEntered> From<SecretString> for RelaySecretSetting<Entry> {
     fn from(secret: SecretString) -> Self {
         Self {
             secret,
@@ -87,19 +96,19 @@ impl<Entry: RelaySecretSettingEntry> From<SecretString> for RelaySecretSetting<E
     }
 }
 
-impl<Entry: RelaySecretSettingEntry> fmt::Debug for RelaySecretSetting<Entry> {
+impl<Entry: HowARelaySecretIsEntered> fmt::Debug for RelaySecretSetting<Entry> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("RelaySecretSetting([REDACTED])")
     }
 }
 
-impl<'de, Entry: RelaySecretSettingEntry> Deserialize<'de> for RelaySecretSetting<Entry> {
+impl<'de, Entry: HowARelaySecretIsEntered> Deserialize<'de> for RelaySecretSetting<Entry> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         String::deserialize(deserializer).map(|secret| Self::from(SecretString::from(secret)))
     }
 }
 
-impl<Entry: RelaySecretSettingEntry> schemars::JsonSchema for RelaySecretSetting<Entry> {
+impl<Entry: HowARelaySecretIsEntered> schemars::JsonSchema for RelaySecretSetting<Entry> {
     fn is_referenceable() -> bool {
         false
     }

@@ -25,16 +25,15 @@ pub use streamlib_processor_schema::ProcessorConfigJsonSchema as RelaySettingsJs
 pub use url;
 
 pub use relay_adapter_setting_field::{
-    RelayAdapterSettingField, RelaySettingFieldType, RelaySettingFieldTypeUndeclarable,
-    relay_adapter_setting_fields_of,
+    RelayAdapterSettingField, RelaySettingFieldType, relay_adapter_setting_fields_of,
 };
 pub use relay_instances_of_this_machine::{
     BuiltInRelayInstance, RelayAdapterCatalogEntry, RelayAdapterInstanceMaker,
     RelayInstanceControlRefusal, RelayInstancesOfThisMachine,
 };
 pub use relay_secret_setting::{
-    RelaySecretEnteredAsFile, RelaySecretEnteredAsString, RelaySecretEnteredAsUrl,
-    RelaySecretSetting, RelaySecretSettingEntry,
+    HowARelaySecretIsEntered, RelaySecretEnteredAsFile, RelaySecretEnteredAsString,
+    RelaySecretEnteredAsUrl, RelaySecretSetting,
 };
 
 /// The query parameter a moq-auth server reads a session's token from.

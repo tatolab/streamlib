@@ -19,6 +19,7 @@ pub(crate) const RELAY_SETTING_SECRET_SCHEMA_KEYWORD: &str = "x-relay-setting-se
 
 /// How a person enters a setting: the control a form draws it with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RelaySettingFieldType {
     /// One line of text.
@@ -30,7 +31,10 @@ pub enum RelaySettingFieldType {
     /// On or off.
     Boolean,
     /// One of `options`.
-    Select { options: Vec<String> },
+    Select {
+        /// The values it takes.
+        options: Vec<String>,
+    },
     /// A list of text values.
     StringList,
     /// A file's text, picked as a file or pasted.
@@ -39,6 +43,7 @@ pub enum RelaySettingFieldType {
 
 /// One setting of a relay adapter, as the relay-adapter catalog lists it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct RelayAdapterSettingField {
     /// The key `add_relay` and `configure_relay` take it under in `settings`.
     pub name: String,
@@ -54,6 +59,7 @@ pub struct RelayAdapterSettingField {
     pub doc: String,
     /// Its value when an instance's settings leave it out, when it has one.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Option<Object>))]
     pub default: Option<Value>,
 }
 
@@ -70,28 +76,28 @@ pub fn relay_adapter_setting_fields_of<S: RelaySettingsJsonSchema>() -> Vec<Rela
 /// A settings field whose Rust type maps to no [`RelaySettingFieldType`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("the setting `{setting_name}` has no field type: its schema is {property_schema}")]
-pub struct RelaySettingFieldTypeUndeclarable {
-    pub setting_name: String,
-    pub property_schema: String,
+pub(crate) struct RelaySettingFieldTypeUndeclarable {
+    setting_name: String,
+    property_schema: String,
 }
 
 fn relay_adapter_setting_fields_in_the_schema(
-    settings_schema: &Value,
+    settings_type_schema: &Value,
 ) -> Result<Vec<RelayAdapterSettingField>, RelaySettingFieldTypeUndeclarable> {
-    let definitions = settings_schema["$defs"].as_object();
-    let required_names: Vec<&str> = settings_schema["required"]
+    let definitions = settings_type_schema["$defs"].as_object();
+    let required_names: Vec<&str> = settings_type_schema["required"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .collect();
-    settings_schema["properties"]
+    let mut fields = settings_type_schema["properties"]
         .as_object()
         .into_iter()
         .flatten()
         .map(|(setting_name, property_schema)| {
-            let resolved_schema = the_value_schema_of_the_property(property_schema, definitions);
-            let field_type = the_field_type_of(&resolved_schema).ok_or_else(|| {
+            let value_schema = the_value_schema_of_the_property(property_schema, definitions);
+            let field_type = the_field_type_of(value_schema).ok_or_else(|| {
                 RelaySettingFieldTypeUndeclarable {
                     setting_name: setting_name.clone(),
                     property_schema: property_schema.to_string(),
@@ -100,11 +106,11 @@ fn relay_adapter_setting_fields_in_the_schema(
             Ok(RelayAdapterSettingField {
                 name: setting_name.clone(),
                 field_type,
-                secret: resolved_schema[RELAY_SETTING_SECRET_SCHEMA_KEYWORD] == Value::Bool(true),
+                secret: value_schema[RELAY_SETTING_SECRET_SCHEMA_KEYWORD] == Value::Bool(true),
                 required: required_names.contains(&setting_name.as_str()),
                 doc: property_schema["description"]
                     .as_str()
-                    .or_else(|| resolved_schema["description"].as_str())
+                    .or_else(|| value_schema["description"].as_str())
                     .unwrap_or_default()
                     .to_string(),
                 default: property_schema
@@ -113,47 +119,64 @@ fn relay_adapter_setting_fields_in_the_schema(
                     .cloned(),
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    fields.sort_by(|field, other_field| field.name.cmp(&other_field.name));
+    Ok(fields)
 }
+
+/// The schema a `$ref` that resolves to nothing stands for.
+static NO_SCHEMA: Value = Value::Null;
 
 /// The schema of the value itself: a `$ref` resolved against `definitions`,
 /// and the wrapper schemars writes around a documented reference
 /// (`allOf: [x]`) or an `Option` of one (`anyOf: [x, {"type": "null"}]`)
 /// taken off.
-fn the_value_schema_of_the_property(
-    property_schema: &Value,
-    definitions: Option<&Map<String, Value>>,
-) -> Value {
+fn the_value_schema_of_the_property<'schema>(
+    property_schema: &'schema Value,
+    definitions: Option<&'schema Map<String, Value>>,
+) -> &'schema Value {
     if let Some(reference) = property_schema["$ref"].as_str() {
         let definition_name = reference.rsplit('/').next().unwrap_or_default();
         return definitions
             .and_then(|definitions| definitions.get(definition_name))
-            .map(|definition| the_value_schema_of_the_property(definition, definitions))
-            .unwrap_or(Value::Null);
+            .map_or(&NO_SCHEMA, |definition| {
+                the_value_schema_of_the_property(definition, definitions)
+            });
     }
     for wrapper_keyword in ["allOf", "anyOf"] {
-        if let Some(wrapped) = property_schema[wrapper_keyword].as_array() {
-            let not_null: Vec<&Value> = wrapped
-                .iter()
-                .filter(|subschema| subschema["type"] != "null")
-                .collect();
-            if let [value_schema] = not_null.as_slice() {
-                return the_value_schema_of_the_property(value_schema, definitions);
-            }
+        if let Some(value_schema) =
+            property_schema[wrapper_keyword]
+                .as_array()
+                .and_then(|wrapped| {
+                    the_only_item(
+                        wrapped
+                            .iter()
+                            .filter(|subschema| subschema["type"] != "null"),
+                    )
+                })
+        {
+            return the_value_schema_of_the_property(value_schema, definitions);
         }
     }
-    property_schema.clone()
+    property_schema
 }
 
 fn the_field_type_of(value_schema: &Value) -> Option<RelaySettingFieldType> {
     if let Some(declared) = value_schema.get(RELAY_SETTING_FIELD_TYPE_SCHEMA_KEYWORD) {
-        return serde_json::from_value(declared.clone()).ok();
+        return RelaySettingFieldType::deserialize(declared).ok();
     }
     if let Some(variants) = value_schema["enum"].as_array() {
         let options = variants
             .iter()
             .filter(|variant| !variant.is_null())
             .map(|variant| variant.as_str().map(str::to_string))
+            .collect::<Option<Vec<_>>>()?;
+        return Some(RelaySettingFieldType::Select { options });
+    }
+    if let Some(documented_variants) = value_schema["oneOf"].as_array() {
+        let options = documented_variants
+            .iter()
+            .map(the_one_value_of_a_documented_unit_variant)
             .collect::<Option<Vec<_>>>()?;
         return Some(RelaySettingFieldType::Select { options });
     }
@@ -168,28 +191,41 @@ fn the_field_type_of(value_schema: &Value) -> Option<RelaySettingFieldType> {
     }
 }
 
+/// The one value of a unit variant schemars writes into a `oneOf` because it
+/// carries a doc comment: `{"type": "string", "enum": [<value>]}`.
+fn the_one_value_of_a_documented_unit_variant(variant_schema: &Value) -> Option<String> {
+    the_only_item(variant_schema["enum"].as_array()?.iter())?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// The schema's `type`, with the `null` an `Option` adds left out.
 fn the_one_non_null_instance_type(value_schema: &Value) -> Option<&str> {
     match &value_schema["type"] {
         Value::String(instance_type) => Some(instance_type),
-        Value::Array(instance_types) => match instance_types
-            .iter()
-            .filter_map(Value::as_str)
-            .filter(|instance_type| *instance_type != "null")
-            .collect::<Vec<_>>()
-            .as_slice()
-        {
-            [instance_type] => Some(instance_type),
-            _ => None,
-        },
+        Value::Array(instance_types) => the_only_item(
+            instance_types
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|instance_type| *instance_type != "null"),
+        ),
         _ => None,
     }
+}
+
+/// The one item `items` yields, or `None` when it yields none or several.
+fn the_only_item<I: Iterator>(mut items: I) -> Option<I::Item> {
+    let only_item = items.next()?;
+    items.next().is_none().then_some(only_item)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RelaySecretEnteredAsFile, RelaySecretEnteredAsUrl, RelaySecretSetting};
+    use crate::{
+        RelaySecretEnteredAsFile, RelaySecretEnteredAsString, RelaySecretEnteredAsUrl,
+        RelaySecretSetting,
+    };
 
     #[derive(Debug, Deserialize, schemars::JsonSchema)]
     #[serde(rename_all = "snake_case")]
@@ -197,6 +233,16 @@ mod tests {
     enum ProviderRegion {
         Us,
         Eu,
+    }
+
+    #[derive(Debug, Deserialize, schemars::JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    #[allow(dead_code)]
+    enum ProviderTier {
+        /// The tier with no charge.
+        Free,
+        /// The tier a plan pays for.
+        Paid,
     }
 
     /// A provider's settings, one of each field type.
@@ -211,6 +257,9 @@ mod tests {
         /// The project's signing key file.
         #[serde(default)]
         signing_key: Option<RelaySecretSetting<RelaySecretEnteredAsFile>>,
+        /// The provider's API key.
+        #[serde(default)]
+        api_key: Option<RelaySecretSetting<RelaySecretEnteredAsString>>,
         /// The port it listens on.
         #[serde(default)]
         port: Option<u16>,
@@ -225,6 +274,8 @@ mod tests {
         /// The tags it carries.
         #[serde(default)]
         tags: Vec<String>,
+        /// The tier it is billed at.
+        tier: ProviderTier,
     }
 
     fn the_field_named<'f>(
@@ -247,11 +298,18 @@ mod tests {
             ("project_name", RelaySettingFieldType::String),
             ("relay_url_carrying_a_token", RelaySettingFieldType::Url),
             ("signing_key", RelaySettingFieldType::File),
+            ("api_key", RelaySettingFieldType::String),
             ("port", RelaySettingFieldType::Number),
             ("records", RelaySettingFieldType::Boolean),
             ("region", region_options.clone()),
             ("fallback_region", region_options),
             ("tags", RelaySettingFieldType::StringList),
+            (
+                "tier",
+                RelaySettingFieldType::Select {
+                    options: vec!["free".to_string(), "paid".to_string()],
+                },
+            ),
         ] {
             assert_eq!(
                 the_field_named(&fields, name).field_type,
@@ -279,7 +337,10 @@ mod tests {
             .map(|field| field.name.as_str())
             .collect();
         secret_names.sort();
-        assert_eq!(secret_names, ["relay_url_carrying_a_token", "signing_key"]);
+        assert_eq!(
+            secret_names,
+            ["api_key", "relay_url_carrying_a_token", "signing_key"]
+        );
     }
 
     #[test]
@@ -293,8 +354,29 @@ mod tests {
         required_names.sort();
         assert_eq!(
             required_names,
-            ["project_name", "region", "relay_url_carrying_a_token"]
+            [
+                "project_name",
+                "region",
+                "relay_url_carrying_a_token",
+                "tier"
+            ]
         );
+    }
+
+    #[test]
+    fn a_defaulted_field_carries_its_rust_default_and_no_other_field_carries_one() {
+        let fields = relay_adapter_setting_fields_of::<ProviderSettingsOfEveryFieldType>();
+        assert_eq!(
+            the_field_named(&fields, "records").default,
+            Some(serde_json::json!(false))
+        );
+        assert_eq!(
+            the_field_named(&fields, "tags").default,
+            Some(serde_json::json!([]))
+        );
+        for name in ["project_name", "port", "signing_key", "region"] {
+            assert_eq!(the_field_named(&fields, name).default, None, "{name}");
+        }
     }
 
     #[test]
