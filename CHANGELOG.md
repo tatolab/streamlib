@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.5](https://github.com/tatolab/streamlib/compare/v0.55.4...v0.55.5) (2026-10-27)
+
+
+### Features
+
+* **relays:** each relay adapter names itself and carries its icon in the relay-adapter catalog ([#2940](https://github.com/tatolab/streamlib/issues/2940)) ([f2130fd](https://github.com/tatolab/streamlib/commit/f2130fd7d729bf36dc0d0872f1b633bce50896f9))
+
 ## [0.55.4](https://github.com/tatolab/streamlib/compare/v0.55.3...v0.55.4) (2026-10-25)
 
 
