@@ -365,6 +365,14 @@ impl RelayAdapter for LocalRelayAdapter {
          it. Where each listens is never a setting."
     }
 
+    fn display_name() -> &'static str {
+        "Local relay"
+    }
+
+    fn display_icon_svg() -> &'static str {
+        include_str!("local_relay_adapter_display_icon.svg")
+    }
+
     fn relay_id(&self) -> &RelayInstanceId {
         &self.relay_id
     }
@@ -590,5 +598,14 @@ mod tests {
             local_relay_executable_beside(Path::new("/opt/tatolab/bin/tatolabd")),
             Some(PathBuf::from("/opt/tatolab/bin/moq-relay"))
         );
+    }
+
+    #[test]
+    fn the_catalog_entry_names_the_local_relay_for_people_and_its_icon_is_an_svg_document() {
+        let catalog_entry = RelayAdapterCatalogEntry::of_the_adapter::<LocalRelayAdapter>();
+        assert_eq!(catalog_entry.display_name, "Local relay");
+        let display_icon_svg = LocalRelayAdapter::display_icon_svg();
+        assert!(display_icon_svg.contains("<svg "));
+        assert!(display_icon_svg.trim_end().ends_with("</svg>"));
     }
 }

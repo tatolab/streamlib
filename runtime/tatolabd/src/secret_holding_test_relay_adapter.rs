@@ -41,6 +41,14 @@ impl RelayAdapter for SecretHoldingTestRelayAdapter {
         "A test build's relay whose settings hold a secret; it joins nothing."
     }
 
+    fn display_name() -> &'static str {
+        "Secret-holding test relay"
+    }
+
+    fn display_icon_svg() -> &'static str {
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect/></svg>"#
+    }
+
     fn relay_id(&self) -> &RelayInstanceId {
         &self.relay_id
     }

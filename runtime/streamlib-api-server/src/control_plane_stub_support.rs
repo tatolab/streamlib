@@ -681,6 +681,20 @@ pub(crate) async fn response_head_over_the_socket(
 /// The adapter kind the relay stub catalogs beside the local one.
 pub(crate) const STUB_RELAY_ADAPTER_KIND: &str = "stub-provider";
 
+/// The name people read for the stub's hosted adapter.
+pub(crate) const STUB_RELAY_ADAPTER_DISPLAY_NAME: &str = "Stub Provider";
+
+/// The icon both stub adapters carry: a one-rectangle SVG.
+const STUB_RELAY_ADAPTER_DISPLAY_ICON_SVG: &str =
+    r#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#;
+
+/// The `data:` URI the relay stub catalogs for each adapter's icon.
+pub(crate) fn stub_relay_adapter_display_icon_data_uri() -> String {
+    ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry::display_icon_data_uri_of_the_svg(
+        STUB_RELAY_ADAPTER_DISPLAY_ICON_SVG,
+    )
+}
+
 /// One call the relay stub took, in its own words, secrets and all.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RelayInstancesStubCall {
@@ -724,6 +738,8 @@ impl ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine
         vec![
             ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
                 kind: "local".to_string(),
+                display_name: "Local relay".to_string(),
+                display_icon_data_uri: stub_relay_adapter_display_icon_data_uri(),
                 doc: "The machine's own relay, built in.".to_string(),
                 settings_schema: ::serde_json::json!({
                     "type": "object",
@@ -732,6 +748,8 @@ impl ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine
             },
             ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
                 kind: STUB_RELAY_ADAPTER_KIND.to_string(),
+                display_name: STUB_RELAY_ADAPTER_DISPLAY_NAME.to_string(),
+                display_icon_data_uri: stub_relay_adapter_display_icon_data_uri(),
                 doc: "A hosted relay standing in for a provider.".to_string(),
                 settings_schema: ::serde_json::json!({
                     "type": "object",

@@ -270,6 +270,18 @@ pub trait RelayAdapter: Send {
     where
         Self: Sized;
 
+    /// This adapter's name as people read it, such as `moq.pro`, as the
+    /// relay-adapter catalog lists it.
+    fn display_name() -> &'static str
+    where
+        Self: Sized;
+
+    /// This adapter's icon, an SVG document of the provider's own logo on a
+    /// square canvas, as the relay-adapter catalog lists it.
+    fn display_icon_svg() -> &'static str
+    where
+        Self: Sized;
+
     /// This instance's id.
     fn relay_id(&self) -> &RelayInstanceId;
 

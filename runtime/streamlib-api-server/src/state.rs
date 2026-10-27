@@ -29,6 +29,10 @@ pub(crate) struct RelayAdapterCatalogResponse {
 pub(crate) struct RelayAdapterCatalogResponseAdapter {
     /// The adapter's kind, as `add_relay` takes it.
     pub kind: String,
+    /// The adapter's name as people read it, such as `moq.pro`.
+    pub display_name: String,
+    /// The adapter's icon as a `data:` URI an `<img>` shows.
+    pub display_icon_data_uri: String,
     /// What the adapter joins.
     pub doc: String,
     /// The JSON Schema of an instance's settings; each secret is `writeOnly`.
@@ -40,12 +44,16 @@ impl From<RelayAdapterCatalogEntry> for RelayAdapterCatalogResponseAdapter {
     fn from(
         RelayAdapterCatalogEntry {
             kind,
+            display_name,
+            display_icon_data_uri,
             doc,
             settings_schema,
         }: RelayAdapterCatalogEntry,
     ) -> Self {
         Self {
             kind,
+            display_name,
+            display_icon_data_uri,
             doc,
             settings_schema,
         }

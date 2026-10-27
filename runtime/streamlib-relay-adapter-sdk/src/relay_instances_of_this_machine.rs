@@ -5,6 +5,8 @@
 //! configuring, removing and listing relay instances. `tatolabd` answers them;
 //! its local API serves them.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use streamlib_runtime_client_contract::local_api_wire_contract::ListedRelayInstance;
@@ -18,6 +20,10 @@ use crate::{RelayAdapter, RelayAdapterRefusal, RelayInstanceId};
 pub struct RelayAdapterCatalogEntry {
     /// The adapter's kind, as `add_relay` takes it.
     pub kind: String,
+    /// The adapter's name as people read it.
+    pub display_name: String,
+    /// The adapter's icon as a `data:` URI an `<img>` shows.
+    pub display_icon_data_uri: String,
     /// What the adapter joins.
     pub doc: String,
     /// The JSON Schema of an instance's settings, each secret `writeOnly`.
@@ -29,9 +35,19 @@ impl RelayAdapterCatalogEntry {
     pub fn of_the_adapter<A: RelayAdapter>() -> Self {
         Self {
             kind: A::kind().to_string(),
+            display_name: A::display_name().to_string(),
+            display_icon_data_uri: Self::display_icon_data_uri_of_the_svg(A::display_icon_svg()),
             doc: A::doc().to_string(),
             settings_schema: A::settings_schema(),
         }
+    }
+
+    /// The `data:` URI that carries `svg_document` whole.
+    pub fn display_icon_data_uri_of_the_svg(svg_document: &str) -> String {
+        format!(
+            "data:image/svg+xml;base64,{}",
+            BASE64_STANDARD.encode(svg_document)
+        )
     }
 
     /// The settings of this adapter that are secrets.
@@ -122,4 +138,20 @@ pub trait RelayInstancesOfThisMachine: Send + Sync {
 
     /// Every instance, each secret listed only as set or unset.
     fn list_relays(&self) -> Vec<ListedRelayInstance>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_display_icon_data_uri_carries_the_svg_whole_as_base64() {
+        let svg_document = r##"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="#fff"/></svg>"##;
+        let data_uri = RelayAdapterCatalogEntry::display_icon_data_uri_of_the_svg(svg_document);
+        let base64_payload = data_uri.strip_prefix("data:image/svg+xml;base64,").unwrap();
+        assert_eq!(
+            BASE64_STANDARD.decode(base64_payload).unwrap(),
+            svg_document.as_bytes()
+        );
+    }
 }

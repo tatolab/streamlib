@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 
 use crate::control_plane_stub_support::{
     LocalApiServedOnAFreshSocket, RelayInstancesOfThisMachineStub, RelayInstancesStubCall,
-    STUB_RELAY_ADAPTER_KIND,
+    STUB_RELAY_ADAPTER_DISPLAY_NAME, STUB_RELAY_ADAPTER_KIND,
+    stub_relay_adapter_display_icon_data_uri,
 };
 use crate::mcp::tests::{
     ControlPlaneMcpDispatchStubRuntime, first_text_block_json, mcp_transport_to,
@@ -200,6 +201,19 @@ async fn the_relay_adapter_catalog_resource_lists_each_adapter_with_its_secrets_
     );
     assert!(adapters.iter().all(|adapter| adapter["doc"].is_string()));
     assert_eq!(
+        adapters
+            .iter()
+            .map(|adapter| adapter["display_name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["Local relay", STUB_RELAY_ADAPTER_DISPLAY_NAME]
+    );
+    assert!(
+        adapters
+            .iter()
+            .all(|adapter| adapter["display_icon_data_uri"]
+                == stub_relay_adapter_display_icon_data_uri().as_str())
+    );
+    assert_eq!(
         adapters[1]["settings_schema"]["properties"]["token"]["writeOnly"],
         true
     );
@@ -217,6 +231,14 @@ async fn get_relay_adapters_serves_the_same_catalog_as_the_resource() {
     assert!(status_line.contains(" 200 "), "{status_line}");
     let catalog: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(catalog["adapters"][0]["kind"], "local");
+    assert_eq!(
+        catalog["adapters"][1]["display_name"],
+        STUB_RELAY_ADAPTER_DISPLAY_NAME
+    );
+    assert_eq!(
+        catalog["adapters"][1]["display_icon_data_uri"],
+        stub_relay_adapter_display_icon_data_uri()
+    );
     assert_eq!(
         catalog["adapters"][1]["settings_schema"]["properties"]["token"]["writeOnly"],
         true
