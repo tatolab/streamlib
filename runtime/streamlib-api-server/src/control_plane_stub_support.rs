@@ -741,23 +741,40 @@ impl ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine
                 display_name: "Local relay".to_string(),
                 display_icon_data_uri: stub_relay_adapter_display_icon_data_uri(),
                 doc: "The machine's own relay, built in.".to_string(),
-                settings_schema: ::serde_json::json!({
-                    "type": "object",
-                    "properties": {"port": {"type": ["integer", "null"]}}
-                }),
+                settings: vec![::streamlib_relay_adapter_sdk::RelayAdapterSettingField {
+                    name: "port".to_string(),
+                    field_type: ::streamlib_relay_adapter_sdk::RelaySettingFieldType::Number,
+                    secret: false,
+                    required: false,
+                    doc: "The port the listener takes.".to_string(),
+                    default: None,
+                }],
             },
             ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
                 kind: STUB_RELAY_ADAPTER_KIND.to_string(),
                 display_name: STUB_RELAY_ADAPTER_DISPLAY_NAME.to_string(),
                 display_icon_data_uri: stub_relay_adapter_display_icon_data_uri(),
                 doc: "A hosted relay standing in for a provider.".to_string(),
-                settings_schema: ::serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "region": {"type": "string"},
-                        "token": {"type": "string", "writeOnly": true}
-                    }
-                }),
+                settings: vec![
+                    ::streamlib_relay_adapter_sdk::RelayAdapterSettingField {
+                        name: "region".to_string(),
+                        field_type: ::streamlib_relay_adapter_sdk::RelaySettingFieldType::Select {
+                            options: vec!["us".to_string(), "eu".to_string()],
+                        },
+                        secret: false,
+                        required: false,
+                        doc: "The region the relay runs in.".to_string(),
+                        default: None,
+                    },
+                    ::streamlib_relay_adapter_sdk::RelayAdapterSettingField {
+                        name: "token".to_string(),
+                        field_type: ::streamlib_relay_adapter_sdk::RelaySettingFieldType::String,
+                        secret: true,
+                        required: true,
+                        doc: "The provider's API token.".to_string(),
+                        default: None,
+                    },
+                ],
             },
         ]
     }

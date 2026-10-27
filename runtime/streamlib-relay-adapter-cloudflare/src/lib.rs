@@ -17,8 +17,9 @@ use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_adapter_sdk::{
     BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter,
     RelayAdapterCatalogEntry, RelayAdapterInstanceMaker, RelayAdapterKind, RelayAdapterRefusal,
-    RelayConnectionState, RelayConnectionStateReceiver, RelayDialCredential, RelayInstanceId,
-    RelaySecretSetting, RelaySettingsJsonSchema, relay_instance_settings_from_json,
+    RelayAdapterSettingField, RelayConnectionState, RelayConnectionStateReceiver,
+    RelayDialCredential, RelayInstanceId, RelaySecretEnteredAsUrl, RelaySecretSetting,
+    relay_adapter_setting_fields_of, relay_instance_settings_from_json,
 };
 use tokio::sync::watch;
 
@@ -42,7 +43,7 @@ pub(crate) struct CloudflareRelayInstanceSettings {
     /// The relay's publish-and-subscribe URL as Cloudflare returns it,
     /// `https://draft-16.cloudflare.mediaoverquic.com/<token>`; its token rides
     /// the path, so the whole URL is a secret.
-    pub(crate) relay_url: RelaySecretSetting,
+    pub(crate) relay_url: RelaySecretSetting<RelaySecretEnteredAsUrl>,
 }
 
 /// A Cloudflare relay URL read as the relay's address and the token in its
@@ -171,8 +172,8 @@ impl RelayAdapter for CloudflareRelayAdapter {
         &self.relay_id
     }
 
-    fn settings_schema() -> serde_json::Value {
-        CloudflareRelayInstanceSettings::processor_config_schema_document()
+    fn setting_fields() -> Vec<RelayAdapterSettingField> {
+        relay_adapter_setting_fields_of::<CloudflareRelayInstanceSettings>()
     }
 
     fn join(&mut self, settings: serde_json::Value) -> Result<JoinedRelay, RelayAdapterRefusal> {
@@ -238,6 +239,7 @@ impl RelayAdapterInstanceMaker for CloudflareRelayAdapterInstanceMaker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use streamlib_relay_adapter_sdk::RelaySettingFieldType;
     use streamlib_relay_adapter_sdk::secrecy::ExposeSecret;
 
     const TOKEN: &str = "cf0Tk-7d2e_91ab";
@@ -255,16 +257,16 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_takes_the_relay_url_alone_as_a_secret() {
+    fn the_catalog_lists_the_relay_url_alone_as_a_required_secret_url() {
         let entry = CloudflareRelayAdapterInstanceMaker.catalog_entry();
         assert_eq!(entry.kind, "cloudflare");
-        let properties = entry.settings_schema["properties"].as_object().unwrap();
-        assert_eq!(properties.keys().collect::<Vec<_>>(), ["relay_url"]);
-        assert_eq!(entry.secret_setting_names(), ["relay_url"]);
-        assert_eq!(
-            entry.settings_schema["required"],
-            serde_json::json!(["relay_url"])
-        );
+        let [relay_url] = entry.settings.as_slice() else {
+            panic!("{:#?}", entry.settings)
+        };
+        assert_eq!(relay_url.name, "relay_url");
+        assert_eq!(relay_url.field_type, RelaySettingFieldType::Url);
+        assert!(relay_url.secret);
+        assert!(relay_url.required);
     }
 
     #[test]

@@ -26,8 +26,9 @@ use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_adapter_sdk::{
     BroadcastPath, BuiltInRelayInstance, JoinedRelay, MachineName, OutputPortExposureLevel,
     RelayAdapter, RelayAdapterCatalogEntry, RelayAdapterInstanceMaker, RelayAdapterKind,
-    RelayAdapterRefusal, RelayConnectionState, RelayConnectionStateReceiver, RelayDialCredential,
-    RelayInstanceId, RelaySettingsJsonSchema, relay_instance_settings_from_json,
+    RelayAdapterRefusal, RelayAdapterSettingField, RelayConnectionState,
+    RelayConnectionStateReceiver, RelayDialCredential, RelayInstanceId,
+    relay_adapter_setting_fields_of, relay_instance_settings_from_json,
 };
 
 pub use local_relay_admission::{
@@ -377,8 +378,8 @@ impl RelayAdapter for LocalRelayAdapter {
         &self.relay_id
     }
 
-    fn settings_schema() -> serde_json::Value {
-        LocalRelayInstanceSettings::processor_config_schema_document()
+    fn setting_fields() -> Vec<RelayAdapterSettingField> {
+        relay_adapter_setting_fields_of::<LocalRelayInstanceSettings>()
     }
 
     fn join(&mut self, settings: serde_json::Value) -> Result<JoinedRelay, RelayAdapterRefusal> {
@@ -588,7 +589,14 @@ mod tests {
         let entry =
             LocalRelayAdapterInstanceMaker::running_no_local_relay(String::new()).catalog_entry();
         assert_eq!(entry.kind, "local");
-        assert!(entry.settings_schema["properties"]["port"].is_object());
+        assert_eq!(
+            entry
+                .settings
+                .iter()
+                .map(|setting| setting.name.as_str())
+                .collect::<Vec<_>>(),
+            ["port"]
+        );
         assert!(entry.secret_setting_names().is_empty());
     }
 

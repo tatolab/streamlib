@@ -5,49 +5,101 @@
 //! carrying one.
 
 use std::fmt;
+use std::marker::PhantomData;
 
 use schemars::r#gen::SchemaGenerator;
-use schemars::schema::{InstanceType, Metadata, Schema, SchemaObject};
+use schemars::schema::{InstanceType, Schema, SchemaObject};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Deserializer};
 
-/// A secret field of an adapter's settings. Its schema is a `writeOnly`
-/// string, so the runtime keeps it in the OS secret store and never in
-/// `relays.json`, and lists it only as set or unset; it never prints.
-#[derive(Clone)]
-pub struct RelaySecretSetting(SecretString);
+use crate::relay_adapter_setting_field::{
+    RELAY_SETTING_FIELD_TYPE_SCHEMA_KEYWORD, RELAY_SETTING_SECRET_SCHEMA_KEYWORD,
+    RelaySettingFieldType,
+};
 
-impl RelaySecretSetting {
+/// How a person enters a [`RelaySecretSetting`]: the field type it is listed
+/// as.
+pub trait RelaySecretSettingEntry {
+    /// The field type the relay-adapter catalog lists the secret as.
+    fn field_type() -> RelaySettingFieldType;
+}
+
+/// A secret entered as one line of text, such as an API key.
+pub struct RelaySecretEnteredAsString;
+
+impl RelaySecretSettingEntry for RelaySecretEnteredAsString {
+    fn field_type() -> RelaySettingFieldType {
+        RelaySettingFieldType::String
+    }
+}
+
+/// A secret entered as a URL, such as one whose path carries a token.
+pub struct RelaySecretEnteredAsUrl;
+
+impl RelaySecretSettingEntry for RelaySecretEnteredAsUrl {
+    fn field_type() -> RelaySettingFieldType {
+        RelaySettingFieldType::Url
+    }
+}
+
+/// A secret entered as a file's text, such as a signing key.
+pub struct RelaySecretEnteredAsFile;
+
+impl RelaySecretSettingEntry for RelaySecretEnteredAsFile {
+    fn field_type() -> RelaySettingFieldType {
+        RelaySettingFieldType::File
+    }
+}
+
+/// A secret field of an adapter's settings, entered as `Entry` says. The
+/// relay-adapter catalog flags it secret, so the runtime keeps it in the OS
+/// secret store and never in `relays.json`, and lists it only as set or
+/// unset; it never prints.
+pub struct RelaySecretSetting<Entry: RelaySecretSettingEntry> {
+    secret: SecretString,
+    entered_as: PhantomData<fn() -> Entry>,
+}
+
+impl<Entry: RelaySecretSettingEntry> RelaySecretSetting<Entry> {
     /// The secret, for the one call that hands it to the provider.
     pub fn expose_secret(&self) -> &str {
-        self.0.expose_secret()
+        self.secret.expose_secret()
     }
 
     /// The secret as the [`SecretString`] it is held in.
     pub fn as_secret_string(&self) -> &SecretString {
-        &self.0
+        &self.secret
     }
 }
 
-impl From<SecretString> for RelaySecretSetting {
+impl<Entry: RelaySecretSettingEntry> Clone for RelaySecretSetting<Entry> {
+    fn clone(&self) -> Self {
+        Self::from(self.secret.clone())
+    }
+}
+
+impl<Entry: RelaySecretSettingEntry> From<SecretString> for RelaySecretSetting<Entry> {
     fn from(secret: SecretString) -> Self {
-        Self(secret)
+        Self {
+            secret,
+            entered_as: PhantomData,
+        }
     }
 }
 
-impl fmt::Debug for RelaySecretSetting {
+impl<Entry: RelaySecretSettingEntry> fmt::Debug for RelaySecretSetting<Entry> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("RelaySecretSetting([REDACTED])")
     }
 }
 
-impl<'de> Deserialize<'de> for RelaySecretSetting {
+impl<'de, Entry: RelaySecretSettingEntry> Deserialize<'de> for RelaySecretSetting<Entry> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer).map(|secret| Self(SecretString::from(secret)))
+        String::deserialize(deserializer).map(|secret| Self::from(SecretString::from(secret)))
     }
 }
 
-impl schemars::JsonSchema for RelaySecretSetting {
+impl<Entry: RelaySecretSettingEntry> schemars::JsonSchema for RelaySecretSetting<Entry> {
     fn is_referenceable() -> bool {
         false
     }
@@ -57,66 +109,32 @@ impl schemars::JsonSchema for RelaySecretSetting {
     }
 
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        SchemaObject {
+        let mut schema = SchemaObject {
             instance_type: Some(InstanceType::String.into()),
-            metadata: Some(Box::new(Metadata {
-                write_only: true,
-                ..Default::default()
-            })),
             ..Default::default()
-        }
-        .into()
+        };
+        schema.extensions.insert(
+            RELAY_SETTING_FIELD_TYPE_SCHEMA_KEYWORD.to_string(),
+            serde_json::to_value(Entry::field_type())
+                .expect("a relay setting field type always serializes"),
+        );
+        schema.extensions.insert(
+            RELAY_SETTING_SECRET_SCHEMA_KEYWORD.to_string(),
+            serde_json::Value::Bool(true),
+        );
+        schema.into()
     }
-}
-
-/// The settings named by `settings_schema` whose schema is `writeOnly`: the
-/// secrets.
-pub fn secret_setting_names_in_the_schema(settings_schema: &serde_json::Value) -> Vec<String> {
-    settings_schema["properties"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter(|(_, property_schema)| {
-            property_schema["writeOnly"] == serde_json::Value::Bool(true)
-        })
-        .map(|(setting_name, _)| setting_name.clone())
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RelaySettingsJsonSchema;
 
-    /// A provider's settings: an endpoint whose URL carries a token, an
-    /// optional key, and a region that is no secret.
-    #[derive(Debug, Deserialize, schemars::JsonSchema)]
-    #[serde(deny_unknown_fields)]
+    #[derive(Debug, Deserialize)]
     struct ProviderSettings {
-        /// The relay's URL, its token in the path.
-        relay_url_carrying_a_token: RelaySecretSetting,
-        #[serde(default)]
+        relay_url_carrying_a_token: RelaySecretSetting<RelaySecretEnteredAsUrl>,
         #[allow(dead_code)]
-        signing_key: Option<RelaySecretSetting>,
-        #[serde(default)]
-        #[allow(dead_code)]
-        region: Option<String>,
-    }
-
-    #[test]
-    fn each_secret_field_and_no_other_is_write_only_in_the_schema() {
-        let schema = ProviderSettings::processor_config_schema_document();
-        let mut secret_names = secret_setting_names_in_the_schema(&schema);
-        secret_names.sort();
-        assert_eq!(
-            secret_names,
-            ["relay_url_carrying_a_token", "signing_key"],
-            "{schema:#}"
-        );
-        assert_eq!(
-            schema["properties"]["relay_url_carrying_a_token"]["description"],
-            "The relay's URL, its token in the path."
-        );
+        region: String,
     }
 
     #[test]

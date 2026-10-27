@@ -6,7 +6,10 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
-use streamlib_relay_adapter_sdk::{RelayAdapterCatalogEntry, RelayInstancesOfThisMachine};
+use streamlib_relay_adapter_sdk::{
+    RelayAdapterCatalogEntry, RelayAdapterSettingField, RelayInstancesOfThisMachine,
+    RelaySettingFieldType,
+};
 use utoipa::OpenApi;
 
 /// Shared HTTP handler state.
@@ -35,9 +38,8 @@ pub(crate) struct RelayAdapterCatalogResponseAdapter {
     pub display_icon_data_uri: String,
     /// What the adapter joins.
     pub doc: String,
-    /// The JSON Schema of an instance's settings; each secret is `writeOnly`.
-    #[schema(value_type = Object)]
-    pub settings_schema: serde_json::Value,
+    /// The settings an instance takes, each as the field a form draws.
+    pub settings: Vec<RelayAdapterCatalogResponseSetting>,
 }
 
 impl From<RelayAdapterCatalogEntry> for RelayAdapterCatalogResponseAdapter {
@@ -47,7 +49,7 @@ impl From<RelayAdapterCatalogEntry> for RelayAdapterCatalogResponseAdapter {
             display_name,
             display_icon_data_uri,
             doc,
-            settings_schema,
+            settings,
         }: RelayAdapterCatalogEntry,
     ) -> Self {
         Self {
@@ -55,7 +57,97 @@ impl From<RelayAdapterCatalogEntry> for RelayAdapterCatalogResponseAdapter {
             display_name,
             display_icon_data_uri,
             doc,
-            settings_schema,
+            settings: settings.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// One setting of a [`RelayAdapterCatalogResponseAdapter`].
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct RelayAdapterCatalogResponseSetting {
+    /// The key `add_relay` and `configure_relay` take it under in `settings`.
+    pub name: String,
+    /// How a person enters it: the control a form draws it with.
+    #[serde(rename = "type")]
+    pub field_type: RelayAdapterCatalogResponseSettingFieldType,
+    /// The values a `select` takes; present for a `select` alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+    /// Whether it is kept in the OS secret store and listed by `list_relays`
+    /// only as set or unset.
+    pub secret: bool,
+    /// Whether an instance's settings must carry it.
+    pub required: bool,
+    /// What it is.
+    pub doc: String,
+    /// Its value when an instance's settings leave it out, when it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub default: Option<serde_json::Value>,
+}
+
+/// The field type of a [`RelayAdapterCatalogResponseSetting`].
+#[derive(Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RelayAdapterCatalogResponseSettingFieldType {
+    /// One line of text.
+    String,
+    /// A URL.
+    Url,
+    /// A number.
+    Number,
+    /// On or off.
+    Boolean,
+    /// One of `options`.
+    Select,
+    /// A list of text values.
+    StringList,
+    /// A file's text, picked as a file or pasted.
+    File,
+}
+
+impl From<RelayAdapterSettingField> for RelayAdapterCatalogResponseSetting {
+    fn from(
+        RelayAdapterSettingField {
+            name,
+            field_type,
+            secret,
+            required,
+            doc,
+            default,
+        }: RelayAdapterSettingField,
+    ) -> Self {
+        let (field_type, options) = match field_type {
+            RelaySettingFieldType::String => {
+                (RelayAdapterCatalogResponseSettingFieldType::String, None)
+            }
+            RelaySettingFieldType::Url => (RelayAdapterCatalogResponseSettingFieldType::Url, None),
+            RelaySettingFieldType::Number => {
+                (RelayAdapterCatalogResponseSettingFieldType::Number, None)
+            }
+            RelaySettingFieldType::Boolean => {
+                (RelayAdapterCatalogResponseSettingFieldType::Boolean, None)
+            }
+            RelaySettingFieldType::Select { options } => (
+                RelayAdapterCatalogResponseSettingFieldType::Select,
+                Some(options),
+            ),
+            RelaySettingFieldType::StringList => (
+                RelayAdapterCatalogResponseSettingFieldType::StringList,
+                None,
+            ),
+            RelaySettingFieldType::File => {
+                (RelayAdapterCatalogResponseSettingFieldType::File, None)
+            }
+        };
+        Self {
+            name,
+            field_type,
+            options,
+            secret,
+            required,
+            doc,
+            default,
         }
     }
 }
@@ -107,3 +199,37 @@ pub(crate) struct ErrorResponse {
     )
 )]
 pub(crate) struct ApiDoc;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_served_setting_is_the_relay_adapter_sdks_field_as_it_serializes() {
+        for field_type in [
+            RelaySettingFieldType::String,
+            RelaySettingFieldType::Url,
+            RelaySettingFieldType::Number,
+            RelaySettingFieldType::Boolean,
+            RelaySettingFieldType::Select {
+                options: vec!["us".to_string(), "eu".to_string()],
+            },
+            RelaySettingFieldType::StringList,
+            RelaySettingFieldType::File,
+        ] {
+            let field = RelayAdapterSettingField {
+                name: "setting".to_string(),
+                field_type,
+                secret: true,
+                required: false,
+                doc: "A setting.".to_string(),
+                default: Some(serde_json::json!(4443)),
+            };
+            assert_eq!(
+                serde_json::to_value(RelayAdapterCatalogResponseSetting::from(field.clone()))
+                    .unwrap(),
+                serde_json::to_value(&field).unwrap()
+            );
+        }
+    }
+}

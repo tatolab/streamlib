@@ -5,6 +5,7 @@
 //! against this one, compiled into `tatolabd`; adding a relay never edits the
 //! daemon.
 
+mod relay_adapter_setting_field;
 mod relay_instances_of_this_machine;
 mod relay_secret_setting;
 
@@ -23,11 +24,18 @@ pub use streamlib::sdk::runtime::MachineName;
 pub use streamlib_processor_schema::ProcessorConfigJsonSchema as RelaySettingsJsonSchema;
 pub use url;
 
+pub use relay_adapter_setting_field::{
+    RelayAdapterSettingField, RelaySettingFieldType, RelaySettingFieldTypeUndeclarable,
+    relay_adapter_setting_fields_of,
+};
 pub use relay_instances_of_this_machine::{
     BuiltInRelayInstance, RelayAdapterCatalogEntry, RelayAdapterInstanceMaker,
     RelayInstanceControlRefusal, RelayInstancesOfThisMachine,
 };
-pub use relay_secret_setting::{RelaySecretSetting, secret_setting_names_in_the_schema};
+pub use relay_secret_setting::{
+    RelaySecretEnteredAsFile, RelaySecretEnteredAsString, RelaySecretEnteredAsUrl,
+    RelaySecretSetting, RelaySecretSettingEntry,
+};
 
 /// The query parameter a moq-auth server reads a session's token from.
 pub const RELAY_DIAL_TOKEN_QUERY_PARAMETER: &str = "jwt";
@@ -285,9 +293,9 @@ pub trait RelayAdapter: Send {
     /// This instance's id.
     fn relay_id(&self) -> &RelayInstanceId;
 
-    /// The JSON Schema of the settings [`join`](Self::join) reads, known with
-    /// no instance.
-    fn settings_schema() -> serde_json::Value
+    /// The settings [`join`](Self::join) reads, known with no instance:
+    /// [`relay_adapter_setting_fields_of`] the adapter's settings type.
+    fn setting_fields() -> Vec<RelayAdapterSettingField>
     where
         Self: Sized;
 

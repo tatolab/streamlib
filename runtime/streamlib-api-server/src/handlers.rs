@@ -325,7 +325,7 @@ pub(crate) async fn get_registry(
     path = "/api/relay-adapters",
     tag = "relays",
     responses(
-        (status = 200, description = "Every relay adapter compiled into the runtime: its kind, as `add_relay` takes it, the name people read it by, the provider's logo as an inline `data:` URI, what it joins, and its settings schema (JSON Schema 2020-12), each secret marked `writeOnly`", body = RelayAdapterCatalogResponse)
+        (status = 200, description = "Every relay adapter compiled into the runtime: its kind, as `add_relay` takes it, the name people read it by, the provider's logo as an inline `data:` URI, what it joins, and its settings, each with its name, its field type, whether it is secret, whether it is required, its doc and its default", body = RelayAdapterCatalogResponse)
     )
 )]
 pub(crate) async fn get_relay_adapters(State(state): State<AppState>) -> Response {

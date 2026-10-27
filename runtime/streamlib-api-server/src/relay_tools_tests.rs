@@ -179,7 +179,8 @@ async fn list_relays_names_each_secret_set_or_unset_and_each_connection_state() 
 }
 
 #[tokio::test]
-async fn the_relay_adapter_catalog_resource_lists_each_adapter_with_its_secrets_write_only() {
+async fn the_relay_adapter_catalog_resource_lists_each_adapter_with_its_settings_and_secrets_flagged()
+ {
     let served = RelayToolsServed::over_a_relay_stub().await;
     let read = served
         .client
@@ -214,9 +215,37 @@ async fn the_relay_adapter_catalog_resource_lists_each_adapter_with_its_secrets_
                 == stub_relay_adapter_display_icon_data_uri().as_str())
     );
     assert_eq!(
-        adapters[1]["settings_schema"]["properties"]["token"]["writeOnly"],
-        true
+        adapters[1]["settings"],
+        json!([
+            {
+                "name": "region",
+                "type": "select",
+                "options": ["us", "eu"],
+                "secret": false,
+                "required": false,
+                "doc": "The region the relay runs in.",
+            },
+            {
+                "name": "token",
+                "type": "string",
+                "secret": true,
+                "required": true,
+                "doc": "The provider's API token.",
+            },
+        ])
     );
+    for adapter in adapters {
+        assert_eq!(
+            adapter.as_object().unwrap().keys().collect::<Vec<_>>(),
+            [
+                "kind",
+                "display_name",
+                "display_icon_data_uri",
+                "doc",
+                "settings"
+            ]
+        );
+    }
 }
 
 #[tokio::test]
@@ -239,8 +268,6 @@ async fn get_relay_adapters_serves_the_same_catalog_as_the_resource() {
         catalog["adapters"][1]["display_icon_data_uri"],
         stub_relay_adapter_display_icon_data_uri()
     );
-    assert_eq!(
-        catalog["adapters"][1]["settings_schema"]["properties"]["token"]["writeOnly"],
-        true
-    );
+    assert_eq!(catalog["adapters"][1]["settings"][1]["name"], "token");
+    assert_eq!(catalog["adapters"][1]["settings"][1]["secret"], true);
 }
