@@ -56,6 +56,27 @@ impl RelayAdapterCatalogEntry {
     }
 }
 
+/// The width and height of the root `<svg>` element's `viewBox`, or `None`
+/// when it has none an adapter's icon could be drawn by.
+pub fn display_icon_svg_canvas_size(svg_document: &str) -> Option<(f64, f64)> {
+    let root_element_start = svg_document.find("<svg")?;
+    let root_element = &svg_document[root_element_start..];
+    let root_element = &root_element[..root_element.find('>')?];
+    let view_box_start = root_element.find("viewBox=\"")? + "viewBox=\"".len();
+    let view_box = &root_element[view_box_start..];
+    let view_box = &view_box[..view_box.find('"')?];
+    let numbers = view_box
+        .split(|separator: char| separator.is_whitespace() || separator == ',')
+        .filter(|number| !number.is_empty())
+        .map(str::parse::<f64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    match numbers.as_slice() {
+        [_, _, width, height] if *width > 0.0 && *height > 0.0 => Some((*width, *height)),
+        _ => None,
+    }
+}
+
 /// A relay instance present on every machine with no one adding it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuiltInRelayInstance {
@@ -143,6 +164,24 @@ pub trait RelayInstancesOfThisMachine: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_svgs_canvas_size_is_its_root_view_box_width_and_height() {
+        assert_eq!(
+            display_icon_svg_canvas_size(
+                "<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"\n viewBox=\"-8 -26 82 82\"><svg viewBox=\"0 0 1 2\"/></svg>"
+            ),
+            Some((82.0, 82.0))
+        );
+        assert_eq!(
+            display_icon_svg_canvas_size(r#"<svg viewBox="0,0,66,30"></svg>"#),
+            Some((66.0, 30.0))
+        );
+        assert_eq!(
+            display_icon_svg_canvas_size(r#"<svg width="10" height="10"></svg>"#),
+            None
+        );
+    }
 
     #[test]
     fn a_display_icon_data_uri_carries_the_svg_whole_as_base64() {

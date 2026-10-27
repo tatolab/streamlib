@@ -25,7 +25,7 @@ pub use url;
 
 pub use relay_instances_of_this_machine::{
     BuiltInRelayInstance, RelayAdapterCatalogEntry, RelayAdapterInstanceMaker,
-    RelayInstanceControlRefusal, RelayInstancesOfThisMachine,
+    RelayInstanceControlRefusal, RelayInstancesOfThisMachine, display_icon_svg_canvas_size,
 };
 pub use relay_secret_setting::{RelaySecretSetting, secret_setting_names_in_the_schema};
 
@@ -276,8 +276,8 @@ pub trait RelayAdapter: Send {
     where
         Self: Sized;
 
-    /// This adapter's icon, an SVG document of the provider's own logo, as
-    /// the relay-adapter catalog lists it.
+    /// This adapter's icon, an SVG document of the provider's own logo on a
+    /// square canvas, as the relay-adapter catalog lists it.
     fn display_icon_svg() -> &'static str
     where
         Self: Sized;
