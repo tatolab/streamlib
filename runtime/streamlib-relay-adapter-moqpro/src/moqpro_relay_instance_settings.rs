@@ -8,8 +8,8 @@ use streamlib_relay_adapter_sdk::RelaySecretSetting;
 use streamlib_relay_adapter_sdk::url::Url;
 
 /// moq.pro's one relay cluster, every project served at its path under it;
-/// `https://cdn.moq.pro` names the same cluster.
-pub const MOQPRO_RELAY_URL: &str = "https://cdn.moq.dev";
+/// `https://cdn.moq.dev` names the same cluster.
+pub const MOQPRO_RELAY_URL: &str = "https://cdn.moq.pro";
 
 /// A moq.pro project's id, trimmed and one path segment: the root every token
 /// is minted under and the path the relay is dialed at.
@@ -102,7 +102,7 @@ mod tests {
     fn the_project_is_dialed_at_its_path_on_moq_pros_relay() {
         assert_eq!(
             settings("pb1xchshwmyjy").the_projects_dial_url().as_str(),
-            "https://cdn.moq.dev/pb1xchshwmyjy"
+            "https://cdn.moq.pro/pb1xchshwmyjy"
         );
     }
 
@@ -118,7 +118,7 @@ mod tests {
     fn a_project_id_a_url_reserves_a_character_of_is_dialed_as_one_path_segment() {
         assert_eq!(
             settings("pb1?x#y").the_projects_dial_url().as_str(),
-            "https://cdn.moq.dev/pb1%3Fx%23y"
+            "https://cdn.moq.pro/pb1%3Fx%23y"
         );
     }
 
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(settings.project_id.as_str(), "pb1test");
         assert_eq!(
             settings.the_projects_dial_url().as_str(),
-            "https://cdn.moq.dev/pb1test"
+            "https://cdn.moq.pro/pb1test"
         );
     }
 
@@ -136,7 +136,7 @@ mod tests {
     fn a_setting_it_does_not_take_is_refused_naming_it() {
         for setting_it_does_not_take in ["root", "relay_url"] {
             let mut settings = serde_json::json!({"project_id": "pb1", "signing_key": "{}"});
-            settings[setting_it_does_not_take] = serde_json::json!("https://cdn.moq.pro");
+            settings[setting_it_does_not_take] = serde_json::json!("https://cdn.moq.dev");
             let refused = serde_json::from_value::<MoqProRelayInstanceSettings>(settings)
                 .unwrap_err()
                 .to_string();

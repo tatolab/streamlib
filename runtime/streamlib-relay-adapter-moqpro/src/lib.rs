@@ -236,7 +236,7 @@ mod tests {
         let key = a_project_key();
         let mut adapter = an_instance();
         let joined = adapter.join(settings_with(&key)).unwrap();
-        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.dev/pb1test");
+        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.pro/pb1test");
         assert_eq!(*adapter.events().borrow(), RelayConnectionState::Joined);
 
         let credential = adapter.credential_for_dial().unwrap();
@@ -301,7 +301,7 @@ mod tests {
                 "project_id",
             ),
             (
-                serde_json::json!({"project_id": "pb1test", "signing_key": serde_json::to_string(&key).unwrap(), "relay_url": "https://cdn.moq.pro"}),
+                serde_json::json!({"project_id": "pb1test", "signing_key": serde_json::to_string(&key).unwrap(), "relay_url": "https://cdn.moq.dev"}),
                 "relay_url",
             ),
         ] {
@@ -321,7 +321,7 @@ mod tests {
         settings["project_id"] = serde_json::json!(" pb1test ");
         let mut adapter = an_instance();
         let joined = adapter.join(settings).unwrap();
-        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.dev/pb1test");
+        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.pro/pb1test");
         let dial_url = adapter
             .credential_for_dial()
             .unwrap()
