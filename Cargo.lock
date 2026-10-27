@@ -6308,6 +6308,7 @@ name = "tatolabd"
 version = "0.55.4"
 dependencies = [
  "apple-native-keyring-store",
+ "base64 0.22.1",
  "bytes",
  "clap",
  "hang",
