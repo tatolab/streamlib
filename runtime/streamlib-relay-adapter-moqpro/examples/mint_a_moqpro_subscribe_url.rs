@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `mint_a_moqpro_subscribe_url <project_id> <broadcast> [relay_url]`, the
+//! `mint_a_moqpro_subscribe_url <project_id> <broadcast>`, the
 //! project's signing key on stdin: writes to stdout the URL a reader dials to
 //! subscribe to `broadcast` alone for ten minutes, its token in the query.
 //! The key and the URL are secrets, so neither is ever an argument.
@@ -30,15 +30,12 @@ fn main() -> ExitCode {
 
 fn write_the_subscribe_url() -> Result<(), String> {
     let mut arguments = std::env::args().skip(1);
-    let (Some(project_id), Some(broadcast), relay_url, None) = (
-        arguments.next(),
-        arguments.next(),
-        arguments.next(),
-        arguments.next(),
-    ) else {
+    let (Some(project_id), Some(broadcast), None) =
+        (arguments.next(), arguments.next(), arguments.next())
+    else {
         return Err(
-            "usage: mint_a_moqpro_subscribe_url <project_id> <broadcast> [relay_url], the \
-             signing key on stdin"
+            "usage: mint_a_moqpro_subscribe_url <project_id> <broadcast>, the signing key on \
+             stdin"
                 .to_string(),
         );
     };
@@ -49,11 +46,8 @@ fn write_the_subscribe_url() -> Result<(), String> {
     let settings = MoqProRelayInstanceSettings {
         project_id: MoqProProjectId::try_from(project_id).map_err(|refusal| refusal.to_string())?,
         signing_key: SecretString::from(signing_key).into(),
-        relay_url,
     };
-    let dial_url = settings
-        .the_projects_dial_url()
-        .map_err(|refusal| refusal.to_string())?;
+    let dial_url = settings.the_projects_dial_url();
     let issued_at = SystemTime::now();
     let claims = moq_auth::Claims::default()
         .with_root(settings.project_id.as_str())

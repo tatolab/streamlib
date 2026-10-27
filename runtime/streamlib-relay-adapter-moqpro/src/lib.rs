@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! moq.pro's hosted MoQ relays. Each instance is one moq.pro project, dialed
-//! at the project's path on moq.pro's relays with a JWT the adapter signs with
+//! moq.pro's hosted MoQ relay. Each instance is one moq.pro project, dialed
+//! at the project's path on moq.pro's relay with a JWT the adapter signs with
 //! the project's key: rooted at the project, granting publish to this
 //! machine's own broadcasts alone, and renewed before it expires. The key
 //! mints read and write for every broadcast of the project, so it lives in the
@@ -11,7 +11,6 @@
 mod moqpro_relay_instance_settings;
 mod moqpro_relay_token;
 
-use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_adapter_sdk::{
     BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter,
     RelayAdapterCatalogEntry, RelayAdapterInstanceMaker, RelayAdapterKind, RelayAdapterRefusal,
@@ -21,8 +20,7 @@ use streamlib_relay_adapter_sdk::{
 use tokio::sync::watch;
 
 pub use moqpro_relay_instance_settings::{
-    MOQPRO_DEFAULT_RELAY_URL, MoqProProjectId, MoqProRelayInstanceSettings,
-    MoqProRelaySettingsRefusal,
+    MOQPRO_RELAY_URL, MoqProProjectId, MoqProProjectIdRefusal, MoqProRelayInstanceSettings,
 };
 pub use moqpro_relay_token::{
     MOQPRO_PUBLISH_TOKEN_LIFETIME, MOQPRO_PUBLISH_TOKEN_RENEWED_AFTER, MoqProProjectSigningKey,
@@ -81,7 +79,7 @@ impl RelayAdapter for MoqProRelayAdapter {
     }
 
     fn doc() -> &'static str {
-        "A moq.pro project, dialed at its path on moq.pro's relays with a token signed by the \
+        "A moq.pro project, dialed at its path on moq.pro's relay with a token signed by the \
          project's key, which is kept as a secret. Serves public ports, under the project."
     }
 
@@ -104,9 +102,7 @@ impl RelayAdapter for MoqProRelayAdapter {
     fn join(&mut self, settings: serde_json::Value) -> Result<JoinedRelay, RelayAdapterRefusal> {
         let settings: MoqProRelayInstanceSettings =
             relay_instance_settings_from_json(&self.relay_id, settings)?;
-        let dial_url: Url = settings
-            .the_projects_dial_url()
-            .map_err(|refusal| self.settings_refused(refusal))?;
+        let dial_url = settings.the_projects_dial_url();
         let signing_key = MoqProProjectSigningKey::read_from(settings.signing_key.expose_secret())
             .map_err(|refusal| self.settings_refused(refusal))?;
         let joined = JoinedMoqProProject {
@@ -183,6 +179,7 @@ mod tests {
     use moq_auth::{Algorithm, Key, KeyId, Pattern};
     use std::time::{Duration, Instant};
     use streamlib_relay_adapter_sdk::secrecy::ExposeSecret;
+    use streamlib_relay_adapter_sdk::url::Url;
 
     fn a_project_key() -> Key {
         Key::generate(
@@ -208,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_takes_the_project_the_key_as_a_secret_and_an_optional_relay_url() {
+    fn the_schema_takes_the_project_and_the_key_as_a_secret() {
         let entry = MoqProRelayAdapterInstanceMaker::for_the_machine(the_machine()).catalog_entry();
         assert_eq!(entry.kind, "moqpro");
         let mut properties = entry.settings_schema["properties"]
@@ -218,7 +215,7 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         properties.sort();
-        assert_eq!(properties, ["project_id", "relay_url", "signing_key"]);
+        assert_eq!(properties, ["project_id", "signing_key"]);
         assert_eq!(entry.secret_setting_names(), ["signing_key"]);
         let mut required = entry.settings_schema["required"]
             .as_array()
@@ -239,7 +236,7 @@ mod tests {
         let key = a_project_key();
         let mut adapter = an_instance();
         let joined = adapter.join(settings_with(&key)).unwrap();
-        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.dev/pb1test");
+        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.pro/pb1test");
         assert_eq!(*adapter.events().borrow(), RelayConnectionState::Joined);
 
         let credential = adapter.credential_for_dial().unwrap();
@@ -285,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_or_a_relay_url_it_cannot_use_is_refused_naming_the_relay_and_no_key_material() {
+    fn a_key_or_a_setting_it_cannot_use_is_refused_naming_the_relay_and_no_key_material() {
         let key = a_project_key();
         let jwk = serde_json::to_value(&key).unwrap();
         let private_scalar = jwk["d"].as_str().unwrap().to_string();
@@ -304,7 +301,7 @@ mod tests {
                 "project_id",
             ),
             (
-                serde_json::json!({"project_id": "pb1test", "signing_key": serde_json::to_string(&key).unwrap(), "relay_url": "http://cdn.moq.dev"}),
+                serde_json::json!({"project_id": "pb1test", "signing_key": serde_json::to_string(&key).unwrap(), "relay_url": "https://cdn.moq.dev"}),
                 "relay_url",
             ),
         ] {
@@ -318,25 +315,13 @@ mod tests {
     }
 
     #[test]
-    fn a_relay_url_given_is_dialed_at_the_projects_path_under_it() {
-        let key = a_project_key();
-        let mut settings = settings_with(&key);
-        settings["relay_url"] = serde_json::json!("https://relay.example/moq/");
-        let joined = an_instance().join(settings).unwrap();
-        assert_eq!(
-            joined.dial_url.as_str(),
-            "https://relay.example/moq/pb1test"
-        );
-    }
-
-    #[test]
     fn a_project_id_with_stray_space_roots_its_tokens_at_the_path_it_dials() {
         let key = a_project_key();
         let mut settings = settings_with(&key);
         settings["project_id"] = serde_json::json!(" pb1test ");
         let mut adapter = an_instance();
         let joined = adapter.join(settings).unwrap();
-        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.dev/pb1test");
+        assert_eq!(joined.dial_url.as_str(), "https://cdn.moq.pro/pb1test");
         let dial_url = adapter
             .credential_for_dial()
             .unwrap()

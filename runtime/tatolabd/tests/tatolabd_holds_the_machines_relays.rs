@@ -181,7 +181,7 @@ fn a_relays_secret_reaches_no_log_line_even_where_rust_log_admits_trace() {
 /// The token a Cloudflare relay's URL carries in its path.
 const CLOUDFLARE_URL_BORNE_TOKEN: &str = "cf-token-8a3d61b2";
 
-/// A local port nothing answers, so each hosted relay is dialed and redialed.
+/// A local port nothing answers, so the Cloudflare relay is dialed and redialed.
 fn a_port_nothing_answers() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -227,7 +227,6 @@ fn a_hosted_relays_token_and_signing_key_reach_no_log_line_listing_or_file_at_tr
             json!({
                 "project_id": "pb1test",
                 "signing_key": project_key_jwk.to_string(),
-                "relay_url": format!("https://127.0.0.1:{unanswered_port}"),
             })
         )["relay_id"],
         "moqpro-1"
@@ -239,17 +238,12 @@ fn a_hosted_relays_token_and_signing_key_reach_no_log_line_listing_or_file_at_tr
     assert_eq!(cloudflare["settings"], json!({}));
     assert_eq!(cloudflare["secrets"], json!({"relay_url": "set"}));
     let moqpro = the_relay_listed(&listing, "moqpro-1");
-    assert_eq!(
-        moqpro["settings"],
-        json!({"project_id": "pb1test", "relay_url": format!("https://127.0.0.1:{unanswered_port}")})
-    );
+    assert_eq!(moqpro["settings"], json!({"project_id": "pb1test"}));
     assert_eq!(moqpro["secrets"], json!({"signing_key": "set"}));
-    for listed in [cloudflare, moqpro] {
-        assert_ne!(
-            listed["connection_state"]["state"], "joined",
-            "no session of the publisher's connects to a port nothing answers: {listed}"
-        );
-    }
+    assert_ne!(
+        cloudflare["connection_state"]["state"], "joined",
+        "no session of the publisher's connects to a port nothing answers: {cloudflare}"
+    );
     let graph =
         call_a_tool_over_the_local_api(&machine_root.local_api_socket_path(), "graph", json!({}));
     let relays_record =
