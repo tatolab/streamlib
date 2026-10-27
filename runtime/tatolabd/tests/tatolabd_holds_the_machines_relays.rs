@@ -227,7 +227,6 @@ fn a_hosted_relays_token_and_signing_key_reach_no_log_line_listing_or_file_at_tr
             json!({
                 "project_id": "pb1test",
                 "signing_key": project_key_jwk.to_string(),
-                "relay_url": format!("https://127.0.0.1:{unanswered_port}"),
             })
         )["relay_id"],
         "moqpro-1"
@@ -239,15 +238,13 @@ fn a_hosted_relays_token_and_signing_key_reach_no_log_line_listing_or_file_at_tr
     assert_eq!(cloudflare["settings"], json!({}));
     assert_eq!(cloudflare["secrets"], json!({"relay_url": "set"}));
     let moqpro = the_relay_listed(&listing, "moqpro-1");
-    assert_eq!(
-        moqpro["settings"],
-        json!({"project_id": "pb1test", "relay_url": format!("https://127.0.0.1:{unanswered_port}")})
-    );
+    assert_eq!(moqpro["settings"], json!({"project_id": "pb1test"}));
     assert_eq!(moqpro["secrets"], json!({"signing_key": "set"}));
     for listed in [cloudflare, moqpro] {
         assert_ne!(
             listed["connection_state"]["state"], "joined",
-            "no session of the publisher's connects to a port nothing answers: {listed}"
+            "no session of the publisher's is admitted at a port nothing answers or with a key \
+             no moq.pro project holds: {listed}"
         );
     }
     let graph =

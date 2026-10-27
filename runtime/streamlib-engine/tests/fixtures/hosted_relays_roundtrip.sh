@@ -51,8 +51,6 @@
 #                             the project and its JWK. Fall back to
 #                             MOQPRO_PROJECT_ID or MOQPRO_PROJECT, and
 #                             MOQPRO_JWK_JSON.
-#   STREAMLIB_MOQPRO_RELAY_URL  the project's relays (default the adapter's,
-#                             https://cdn.moq.dev)
 #   ARMS                      the arms to run (default "cloudflare moqpro")
 #   OBJECT_COUNT              encoded frames read back and measured (default 20)
 #   JOIN_DEADLINE_SECONDS     how long a relay has to be listed joined (default 60)
@@ -130,7 +128,6 @@ the_cloudflare_relay_url_with_the_path() {
 : "${STREAMLIB_CLOUDFLARE_MOQ_SUBSCRIBE_URL:=$(the_cloudflare_relay_url_with_the_path "${CLOUDFLARE_MOQ_SUB_TOKEN:-}")}"
 : "${STREAMLIB_MOQPRO_PROJECT_ID:=${MOQPRO_PROJECT_ID:-${MOQPRO_PROJECT:-}}}"
 : "${STREAMLIB_MOQPRO_SIGNING_KEY:=${MOQPRO_JWK_JSON:-}}"
-: "${STREAMLIB_MOQPRO_RELAY_URL:=}"
 
 declare -A ARM_OUTCOME=()
 declare -A ARM_REASON=()
@@ -163,7 +160,7 @@ STREAMLIB_MOQPRO_SIGNING_KEY, or put MOQPRO_PROJECT_ID and MOQPRO_JWK_JSON in th
     esac
 done
 export STREAMLIB_CLOUDFLARE_MOQ_PUBLISH_URL STREAMLIB_CLOUDFLARE_MOQ_SUBSCRIBE_URL \
-    STREAMLIB_MOQPRO_PROJECT_ID STREAMLIB_MOQPRO_SIGNING_KEY STREAMLIB_MOQPRO_RELAY_URL
+    STREAMLIB_MOQPRO_PROJECT_ID STREAMLIB_MOQPRO_SIGNING_KEY
 
 report_every_arm() {
     local arm exit_status=0
@@ -306,7 +303,7 @@ for arm in "${ARMS_TO_RUN[@]}"; do
                 '{"relay_url": os.environ["STREAMLIB_CLOUDFLARE_MOQ_PUBLISH_URL"]}')" ;;
         moqpro)
             relay_id="$(add_the_relay moqpro \
-                '{key: value for key, value in {"project_id": os.environ["STREAMLIB_MOQPRO_PROJECT_ID"], "signing_key": os.environ["STREAMLIB_MOQPRO_SIGNING_KEY"], "relay_url": os.environ["STREAMLIB_MOQPRO_RELAY_URL"] or None}.items() if value is not None}')" ;;
+                '{"project_id": os.environ["STREAMLIB_MOQPRO_PROJECT_ID"], "signing_key": os.environ["STREAMLIB_MOQPRO_SIGNING_KEY"]}')" ;;
     esac
     if [ -z "$relay_id" ]; then
         arm_failed "$arm" "tatolab relay add refused: $(cat "$OUTPUT_DIR/relay_add_$arm.log")"
@@ -353,11 +350,9 @@ the_subscribe_url_of() {
     case "$1" in
         cloudflare) printf '%s' "$STREAMLIB_CLOUDFLARE_MOQ_SUBSCRIBE_URL" ;;
         moqpro)
-            local -a relay_url_argument=()
-            [ -z "$STREAMLIB_MOQPRO_RELAY_URL" ] || relay_url_argument=("$STREAMLIB_MOQPRO_RELAY_URL")
             printf '%s' "$STREAMLIB_MOQPRO_SIGNING_KEY" \
                 | "$MOQPRO_SUBSCRIBE_URL_MINTER" "$STREAMLIB_MOQPRO_PROJECT_ID" \
-                    "$SENDER_BROADCAST" "${relay_url_argument[@]}"
+                    "$SENDER_BROADCAST"
             ;;
     esac
 }
