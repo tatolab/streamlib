@@ -59,7 +59,6 @@ pub struct RelayAdapterSettingField {
     pub doc: String,
     /// Its value when an instance's settings leave it out, when it has one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "utoipa", schema(value_type = Option<Object>))]
     pub default: Option<Value>,
 }
 
@@ -166,19 +165,14 @@ fn the_field_type_of(value_schema: &Value) -> Option<RelaySettingFieldType> {
         return RelaySettingFieldType::deserialize(declared).ok();
     }
     if let Some(variants) = value_schema["enum"].as_array() {
-        let options = variants
-            .iter()
-            .filter(|variant| !variant.is_null())
-            .map(|variant| variant.as_str().map(str::to_string))
-            .collect::<Option<Vec<_>>>()?;
-        return Some(RelaySettingFieldType::Select { options });
+        return the_select_of_the_variants(variants.iter());
     }
-    if let Some(documented_variants) = value_schema["oneOf"].as_array() {
-        let options = documented_variants
+    if let Some(variant_groups) = value_schema["oneOf"].as_array() {
+        let variants = variant_groups
             .iter()
-            .map(the_one_value_of_a_documented_unit_variant)
+            .map(|variant_group| variant_group["enum"].as_array())
             .collect::<Option<Vec<_>>>()?;
-        return Some(RelaySettingFieldType::Select { options });
+        return the_select_of_the_variants(variants.into_iter().flatten());
     }
     match the_one_non_null_instance_type(value_schema)? {
         "string" => Some(RelaySettingFieldType::String),
@@ -191,12 +185,17 @@ fn the_field_type_of(value_schema: &Value) -> Option<RelaySettingFieldType> {
     }
 }
 
-/// The one value of a unit variant schemars writes into a `oneOf` because it
-/// carries a doc comment: `{"type": "string", "enum": [<value>]}`.
-fn the_one_value_of_a_documented_unit_variant(variant_schema: &Value) -> Option<String> {
-    the_only_item(variant_schema["enum"].as_array()?.iter())?
-        .as_str()
-        .map(str::to_string)
+/// A `select` of a unit-variant enum's values, or `None` when one is not a
+/// string. schemars writes the undocumented variants as one `enum` and each
+/// documented one as its own `{"enum": [<value>]}` in a `oneOf`.
+fn the_select_of_the_variants<'schema>(
+    variants: impl Iterator<Item = &'schema Value>,
+) -> Option<RelaySettingFieldType> {
+    let options = variants
+        .filter(|variant| !variant.is_null())
+        .map(|variant| variant.as_str().map(str::to_string))
+        .collect::<Option<Vec<_>>>()?;
+    Some(RelaySettingFieldType::Select { options })
 }
 
 /// The schema's `type`, with the `null` an `Option` adds left out.
@@ -233,6 +232,16 @@ mod tests {
     enum ProviderRegion {
         Us,
         Eu,
+    }
+
+    #[derive(Debug, Deserialize, schemars::JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    #[allow(dead_code)]
+    enum ProviderSupportLevel {
+        Community,
+        Standard,
+        /// Answered within the hour.
+        Priority,
     }
 
     #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -276,6 +285,8 @@ mod tests {
         tags: Vec<String>,
         /// The tier it is billed at.
         tier: ProviderTier,
+        /// The support it is answered with.
+        support_level: ProviderSupportLevel,
     }
 
     fn the_field_named<'f>(
@@ -305,6 +316,16 @@ mod tests {
             ("fallback_region", region_options),
             ("tags", RelaySettingFieldType::StringList),
             (
+                "support_level",
+                RelaySettingFieldType::Select {
+                    options: vec![
+                        "community".to_string(),
+                        "standard".to_string(),
+                        "priority".to_string(),
+                    ],
+                },
+            ),
+            (
                 "tier",
                 RelaySettingFieldType::Select {
                     options: vec!["free".to_string(), "paid".to_string()],
@@ -320,12 +341,22 @@ mod tests {
     }
 
     #[test]
-    fn the_fields_are_listed_in_name_order() {
-        let fields = relay_adapter_setting_fields_of::<ProviderSettingsOfEveryFieldType>();
-        let names: Vec<&str> = fields.iter().map(|field| field.name.as_str()).collect();
-        let mut names_in_order = names.clone();
-        names_in_order.sort();
-        assert_eq!(names, names_in_order);
+    fn the_fields_are_listed_in_name_order_whatever_order_the_schema_holds_them_in() {
+        let fields = relay_adapter_setting_fields_in_the_schema(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "zeta": {"type": "string"},
+                "alpha": {"type": "string"},
+            },
+        }))
+        .unwrap();
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "zeta"]
+        );
     }
 
     #[test]
@@ -358,6 +389,7 @@ mod tests {
                 "project_name",
                 "region",
                 "relay_url_carrying_a_token",
+                "support_level",
                 "tier"
             ]
         );
