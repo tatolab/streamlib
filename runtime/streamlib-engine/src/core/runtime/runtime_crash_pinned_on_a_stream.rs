@@ -60,35 +60,35 @@ const RUN_IN_PROGRESS_RECORD_BEING_BEGUN: libc::c_int = -2;
 /// handler can read it without allocating or locking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StreamThisThreadWorksFor {
-    name_bytes: [u8; LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH],
-    name_length: u8,
+    stream_id_bytes: [u8; LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH],
+    stream_id_length: u8,
 }
 
 impl StreamThisThreadWorksFor {
     /// No stream: a thread a crash on implicates none.
     pub(crate) const NONE: Self = Self {
-        name_bytes: [0; LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH],
-        name_length: 0,
+        stream_id_bytes: [0; LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH],
+        stream_id_length: 0,
     };
 
-    /// The stream `stream_id` names, cut at the longest name a thread
+    /// The stream `stream_id` names, cut at the longest id a thread
     /// carries.
     pub(crate) fn of_the_stream_id(stream_id: &str) -> Self {
         let mut stream = Self::NONE;
         let carried = stream_id
             .len()
             .min(LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH);
-        stream.name_bytes[..carried].copy_from_slice(&stream_id.as_bytes()[..carried]);
-        stream.name_length = carried as u8;
+        stream.stream_id_bytes[..carried].copy_from_slice(&stream_id.as_bytes()[..carried]);
+        stream.stream_id_length = carried as u8;
         stream
     }
 
-    fn name_bytes(&self) -> &[u8] {
-        &self.name_bytes[..usize::from(self.name_length)]
+    fn stream_id_bytes(&self) -> &[u8] {
+        &self.stream_id_bytes[..usize::from(self.stream_id_length)]
     }
 
     fn is_none(&self) -> bool {
-        self.name_length == 0
+        self.stream_id_length == 0
     }
 }
 
@@ -413,7 +413,7 @@ pub(crate) fn pin_the_runtimes_crash_on_each_stream(stream_ids: &[String], cause
     let cause = a_cause_fit_for_one_record_line(cause);
     for stream_id in stream_ids {
         append_a_crash_line(
-            StreamThisThreadWorksFor::of_the_stream_id(stream_id).name_bytes(),
+            StreamThisThreadWorksFor::of_the_stream_id(stream_id).stream_id_bytes(),
             &[cause.as_bytes()],
         );
     }
@@ -454,7 +454,7 @@ pub fn pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread(
     let cause = a_cause_fit_for_one_record_line(&format!(
         "a panic that escaped the main thread: {what_it_said}{location}"
     ));
-    append_a_crash_line(stream.name_bytes(), &[cause.as_bytes()]);
+    append_a_crash_line(stream.stream_id_bytes(), &[cause.as_bytes()]);
 }
 
 /// Remove the run-in-progress record as the owner ends the process at once —
@@ -604,7 +604,7 @@ extern "C" fn pin_the_crash_on_the_threads_stream_then_hand_the_signal_on(
         b""
     };
     append_a_crash_line(
-        stream.name_bytes(),
+        stream.stream_id_bytes(),
         &[signal_name.as_bytes(), while_a_panic_unwound],
     );
     hand_the_signal_on(signal, signal_information, signal_context);
@@ -765,13 +765,13 @@ mod tests {
     }
 
     #[test]
-    fn a_stream_name_past_the_longest_a_thread_carries_is_cut() {
+    fn a_stream_id_past_the_longest_a_thread_carries_is_cut() {
         let long_name = "s".repeat(80);
 
         let carried = StreamThisThreadWorksFor::of_the_stream_id(&long_name);
 
         assert_eq!(
-            carried.name_bytes(),
+            carried.stream_id_bytes(),
             &long_name.as_bytes()[..LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH]
         );
         assert!(StreamThisThreadWorksFor::NONE.is_none());

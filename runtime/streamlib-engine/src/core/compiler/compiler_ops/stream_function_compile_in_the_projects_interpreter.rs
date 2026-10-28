@@ -311,14 +311,14 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
 /// Whether `standard_output` is a compile document but for its missing
 /// `stream_function`, as a `tatolab-stream` older than the runtime prints it.
 fn is_a_compile_document_naming_no_stream_function(standard_output: &[u8]) -> bool {
-    serde_json::from_slice::<serde_json::Value>(standard_output)
-        .ok()
-        .and_then(|document| document.as_object().cloned())
-        .is_some_and(|document| {
-            document.contains_key("stream_graph")
-                && document.contains_key("project_directory")
-                && !document.contains_key("stream_function")
-        })
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(standard_output) else {
+        return false;
+    };
+    document.as_object().is_some_and(|fields| {
+        fields.contains_key("stream_graph")
+            && fields.contains_key("project_directory")
+            && !fields.contains_key("stream_function")
+    })
 }
 
 /// Whether `standard_error` is the interpreter's own report that it could not

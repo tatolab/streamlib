@@ -1645,12 +1645,9 @@ mod tests {
                         stream_function: format!("stream:{function_name}"),
                     }
                     .stream_id();
-                    match project_directory_by_stream_id
+                    project_directory_by_stream_id
                         .insert(stream_id, project_directory.clone())
-                    {
-                        Some(colliding) => Some((colliding, project_directory)),
-                        None => None,
-                    }
+                        .map(|colliding| (colliding, project_directory))
                 })
                 .expect("two locations whose ids collide");
             let project_at = |project_directory: PathBuf| {
