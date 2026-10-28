@@ -237,7 +237,6 @@ impl AnEngineKeepingItsStreamsInATemporaryStateDirectory {
                 &GraphSnapshot::from_graph_document(the_graph_of_a_function_named(function))
                     .expect("the graph parses"),
                 OptionsForLoadingOneStream::in_stream_environment(project.stream_environment())
-                    .with_stream_id(&stream_id)
                     .with_display_name(function)
                     .at_stream_location(project.location_of(function)),
             )
@@ -409,9 +408,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         };
         let stream = self.engine.load_an_empty_stream(
             OptionsForLoadingOneStream::in_project_directory(self.project_directory.path())
-                .with_stream_id(&stream_id)
-                .with_display_name(&stream_id)
-                .at_stream_location(stream_location.clone()),
+                .with_stream_id(&stream_id),
         )?;
         self.each_run_by_its_stream_id
             .lock()

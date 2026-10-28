@@ -312,6 +312,7 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
             "exposed": [{"node": "h264encoder", "port": "encoded_video", "level": "public"}],
         },
         "project_directory": str(app_directory),
+        "stream_function": "stream:main",
     }
 
 

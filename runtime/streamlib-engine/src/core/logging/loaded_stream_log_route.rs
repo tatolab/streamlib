@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Where the records one loaded stream emits go: the stream's name and its
+//! Where the records one loaded stream emits go: the stream's id and its
 //! runtime's id, stamped on each record, and the stream's own JSONL file.
 //!
 //! A thread carries a route from the moment it is entered until the entry
@@ -49,7 +49,7 @@ pub const RUNTIME_OWN_LOG_INSTANCE_NAME: &str = "tatolabd";
 /// Whose records a log route carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LogRouteOwner {
-    /// One loaded stream, by its URL-safe cast name.
+    /// One loaded stream, by its id.
     LoadedStream(String),
     /// The runtime itself: the records no stream emitted, which no reader
     /// pages through, so none is held in memory.
@@ -199,7 +199,7 @@ impl LoadedStreamLogRoute {
             )),
             stream_a_thread_carrying_it_works_for: match &owner {
                 LogRouteOwner::LoadedStream(stream_id) => {
-                    StreamThisThreadWorksFor::named(stream_id)
+                    StreamThisThreadWorksFor::of_the_stream_id(stream_id)
                 }
                 LogRouteOwner::TheRuntimeItself => StreamThisThreadWorksFor::NONE,
             },

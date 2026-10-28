@@ -402,13 +402,18 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
         rendered_table.push('\n');
     }
     for listed_stream in listed_streams {
-        if let Some(failed_because) = &listed_stream.failed_because {
-            let stream_id = &listed_stream.stream;
-            rendered_table.push_str(&format!(
+        let Some(failed_because) = &listed_stream.failed_because else {
+            continue;
+        };
+        let stream_id = &listed_stream.stream;
+        let failed_line = match listed_stream.location {
+            Some(_) => format!(
                 "{stream_id} failed: {failed_because}. `tatolab start {stream_id}` retries it, \
                  `tatolab rm {stream_id}` forgets it.\n"
-            ));
-        }
+            ),
+            None => format!("{stream_id} failed: {failed_because}.\n"),
+        };
+        rendered_table.push_str(&failed_line);
     }
     rendered_table
 }
@@ -758,8 +763,7 @@ mod tests {
              cam-main-0a1b2c  main  kept    4      /srv/cam  stream:main\n\
              main             main  failed  -      -         -\n\
              \n\
-             main failed: an earlier runtime recorded it. `tatolab start main` retries it, \
-             `tatolab rm main` forgets it.\n"
+             main failed: an earlier runtime recorded it.\n"
         );
     }
 

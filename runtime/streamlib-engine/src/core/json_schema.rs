@@ -275,7 +275,7 @@ pub struct MachineWideRegistryResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeTypesDescribedInOneStreamOutput {
-    /// The stream's name.
+    /// The stream's id.
     pub stream: String,
     /// The types described in its interpreter, which only this stream adds.
     pub nodes: Vec<ProcessorDescriptorOutput>,

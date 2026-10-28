@@ -215,7 +215,8 @@ fn a_loaded_stream_renders_its_name_and_its_exposures_at_their_levels_and_round_
 
 #[test]
 #[serial]
-fn a_loaded_stream_name_is_recorded_in_its_cast_and_one_casting_to_nothing_is_refused() {
+fn a_loaded_stream_is_keyed_by_the_cast_of_the_name_its_load_gives_and_one_casting_to_nothing_is_refused()
+ {
     let camera = register_test_type("StreamNameCastCamera", "_unused_in", "video");
 
     let project_directory = tempfile::tempdir().expect("a project directory");
@@ -234,11 +235,15 @@ fn a_loaded_stream_name_is_recorded_in_its_cast_and_one_casting_to_nothing_is_re
     assert!(
         Arc::ptr_eq(
             &runner
-                .loaded_stream_of_the_id("My Stream")
-                .expect("a lookup casts the name it is given"),
+                .loaded_stream_of_the_id("my-stream")
+                .expect("a lookup takes the stream id"),
             &stream
         ),
-        "a lookup by the uncast name finds the stream"
+        "a lookup by the id the name cast to finds the stream"
+    );
+    assert!(
+        runner.loaded_stream_of_the_id("My Stream").is_err(),
+        "a lookup matches the id exactly and never casts what it is given"
     );
 
     let refusal = the_refusal_of(
@@ -264,7 +269,7 @@ fn a_loaded_stream_name_is_recorded_in_its_cast_and_one_casting_to_nothing_is_re
 /// from and the way out; the first stream is left as it was.
 #[test]
 #[serial]
-fn a_stream_name_already_loaded_is_refused_naming_where_the_first_came_from() {
+fn a_stream_id_already_loaded_is_refused_naming_where_the_first_came_from() {
     let camera = register_test_type("LoadedTwiceCamera", "_unused_in", "video");
 
     let first_project_directory = tempfile::tempdir().expect("a project directory");
@@ -300,7 +305,7 @@ fn a_stream_name_already_loaded_is_refused_naming_where_the_first_came_from() {
         refusal.contains(&first_project_directory.path().display().to_string()),
         "the refusal must name where the first stream came from: {refusal}"
     );
-    assert!(refusal.contains("--name"), "{refusal}");
+    assert!(refusal.contains("with_stream_id"), "{refusal}");
     assert_eq!(runner.ids_of_the_loaded_streams(), ["main"]);
     assert_eq!(
         the_graph_document_of(&first)["nodes"]
@@ -372,7 +377,7 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
     )
     .to_string();
     assert!(
-        unnamed_refusal.contains("names no stream") && unnamed_refusal.contains("--name"),
+        unnamed_refusal.contains("names no stream") && unnamed_refusal.contains("with_stream_id"),
         "{unnamed_refusal}"
     );
     assert!(runner.ids_of_the_loaded_streams().is_empty());

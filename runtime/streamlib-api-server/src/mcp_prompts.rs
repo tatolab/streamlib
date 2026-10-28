@@ -172,12 +172,12 @@ impl LocalApiMcpServerHandler {
         let node_catalog = operations_on_the_loaded_streams
             .node_catalog_of_the_stream_a_call_names(stream_id)
             .map_err(|refusal| prompt_stream_refusal(&refusal))?;
-        let stream_name_as_graph_reports_it = live_graph
+        let stream_id_as_the_graph_reports_it = live_graph
             .stream
             .clone()
             .unwrap_or_else(|| stream_id.to_string());
         Ok(recipe_for(&live_graph, &node_catalog)?
-            .prompt_result(&stream_name_as_graph_reports_it, description))
+            .prompt_result(&stream_id_as_the_graph_reports_it, description))
     }
 }
 

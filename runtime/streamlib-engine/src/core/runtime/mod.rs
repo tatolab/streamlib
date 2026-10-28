@@ -78,7 +78,7 @@ pub use operations_on_the_streams_loaded_in_this_runtime::{
 };
 pub use runtime::{
     EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
-    StreamLoadObservingMachineShutdownRequests,
+    StreamLoadObservingMachineShutdownRequests, WhatALoadedStreamIsKeyedBy,
 };
 pub use runtime_crash_pinned_on_a_stream::{
     CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, RuntimeRunInProgressRecord,

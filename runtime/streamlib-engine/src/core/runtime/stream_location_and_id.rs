@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::core::graph::{EXPOSED_NAME_MAXIMUM_LENGTH, cast_exposed_name_to_url_safe};
 
 /// Longest a stream id is, in characters: the exposed-name cast's bound.
-const STREAM_ID_MAXIMUM_LENGTH: usize = EXPOSED_NAME_MAXIMUM_LENGTH;
+pub(crate) const STREAM_ID_MAXIMUM_LENGTH: usize = EXPOSED_NAME_MAXIMUM_LENGTH;
 
 /// How many hex digits of the location's SHA-256 a stream id carries.
 const STREAM_ID_HASH_HEX_DIGITS: usize = 6;
@@ -87,7 +87,10 @@ impl StreamLocation {
         location_hash.update(b"\n");
         location_hash.update(self.stream_function.as_bytes());
         let digest = location_hash.finalize();
-        let mut hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let mut hex: String = digest[..STREAM_ID_HASH_HEX_DIGITS.div_ceil(2)]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         hex.truncate(STREAM_ID_HASH_HEX_DIGITS);
         hex
     }
@@ -106,7 +109,7 @@ impl std::fmt::Display for StreamLocation {
 }
 
 /// `cast_parts` — a folder and a function at most — cut so together they hold
-/// at most `characters_left` ASCII characters: an even share each, the first
+/// at most `characters_left` ASCII characters: an even share each, the second
 /// taking the odd one out, and a part shorter than its share leaving the rest to
 /// the other. A part cut on the separator drops it.
 fn parts_cut_to_share(cast_parts: Vec<String>, characters_left: usize) -> Vec<String> {

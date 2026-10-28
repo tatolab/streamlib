@@ -40,7 +40,7 @@ const PROGRESS_NOTE_READ_BUDGET: Duration = Duration::from_millis(100);
 /// Every thread this process has abandoned, counted as each is abandoned.
 static THREADS_ABANDONED_IN_THIS_PROCESS: AtomicUsize = AtomicUsize::new(0);
 
-/// Each stream a thread was abandoned for, by its cast name, which the end
+/// Each stream a thread was abandoned for, by its id, which the end
 /// past the bound pins the runtime's crash on.
 static STREAMS_WHOSE_THREADS_WERE_ABANDONED: parking_lot::Mutex<Vec<String>> =
     parking_lot::Mutex::new(Vec::new());

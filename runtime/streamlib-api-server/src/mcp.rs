@@ -146,7 +146,7 @@ impl StreamsAttachedToOneMcpStdioConnection {
             .lock()
             .iter()
             .flatten()
-            .map(|(_stream_name, stream_tag)| *stream_tag)
+            .map(|(_stream_id, stream_tag)| *stream_tag)
             .collect()
     }
 
@@ -184,10 +184,10 @@ impl StreamsAttachedToOneMcpStdioConnection {
             .unwrap_or_default();
         for (stream_id, stream_tag) in attached_streams {
             let operations_on_the_loaded_streams = Arc::clone(operations_on_the_loaded_streams);
-            let unload_stream_name = stream_id.clone();
+            let stream_id_to_unload = stream_id.clone();
             match tokio::task::spawn_blocking(move || {
                 operations_on_the_loaded_streams
-                    .unload_the_attached_stream_if_still_the_same(&unload_stream_name, stream_tag)
+                    .unload_the_attached_stream_if_still_the_same(&stream_id_to_unload, stream_tag)
             })
             .await
             {
@@ -834,7 +834,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `attached` (lives as long as the connection that ran it), `kept`, `stopped`, or `failed` (implicated in the runtime's last two crashes in a row, could not re-load at its start, or recorded by an earlier runtime; skipped at the start until `start_stream` retries it), with the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
+        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `attached` (lives as long as the connection that ran it), `kept`, `stopped`, or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until `start_stream` retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_stream` forgetting it), with the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
     )]
     async fn list_streams(
         &self,

@@ -588,12 +588,21 @@ fn read_a_stream_record(
     }
     let record = StreamRecord::deserialize(&record_document)
         .map_err(|not_a_record| failure(format!("it is not a stream record: {not_a_record}")))?;
-    if record.stream_id != record_file_stem {
+    let recorded_stream_id = &record.stream_id;
+    if *recorded_stream_id != record_file_stem {
         return Err(failure(format!(
-            "it records the stream `{}`, whose record is `{}.{STREAM_RECORD_FILE_EXTENSION}` \
-             and not this file, so no stream action on `{record_file_stem}` reaches it; rename \
-             it or remove it",
-            record.stream_id, record.stream_id
+            "it records the stream `{recorded_stream_id}`, whose record is \
+             `{recorded_stream_id}.{STREAM_RECORD_FILE_EXTENSION}` and not this file, so no \
+             stream action on `{record_file_stem}` reaches it; rename it or remove it"
+        )));
+    }
+    let location_stream_id = record.location.stream_id();
+    if *recorded_stream_id != location_stream_id {
+        return Err(failure(format!(
+            "it records the stream `{recorded_stream_id}` at {}, whose stream id is \
+             `{location_stream_id}`; a stream's id is the one its location computes to, so \
+             remove this record and run the stream again",
+            record.location
         )));
     }
     Ok(StreamRecordAsRead::Current(record))
@@ -858,6 +867,32 @@ mod tests {
         );
         let refusal = records.read("zz-copy").unwrap_err();
         assert_eq!(refusal.path, renamed_copy);
+    }
+
+    #[test]
+    fn a_record_whose_id_is_not_the_one_its_location_computes_to_is_reported_naming_both() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let mut record = a_record_of("camera-app", "preview");
+        record.stream_id = "camera-app-preview-000000".to_string();
+        std::fs::write(
+            records
+                .streams_directory()
+                .join("camera-app-preview-000000.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let refusal = records
+            .read("camera-app-preview-000000")
+            .unwrap_err()
+            .to_string();
+
+        assert!(refusal.contains("`camera-app-preview-000000`"), "{refusal}");
+        assert!(
+            refusal.contains(&format!("`{}`", record.location.stream_id())),
+            "{refusal}"
+        );
     }
 
     #[test]

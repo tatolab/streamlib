@@ -158,9 +158,9 @@ pub enum StreamListingState {
     Kept,
     /// Kept, and stopped by its owner.
     Stopped,
-    /// Kept, and failed: it kept crashing the runtime, could not re-load at
-    /// its start, or was recorded by an earlier runtime. Skipped at the start
-    /// until `start_stream` retries it.
+    /// Kept, and failed: it kept crashing the runtime or could not re-load at
+    /// its start, and is skipped at the start until `start_stream` retries it;
+    /// or it was recorded by an earlier runtime, and is never loaded.
     Failed,
 }
 
@@ -272,11 +272,10 @@ pub(crate) struct StreamActionsOfTheEngine {
     one_stream_action_at_a_time: Mutex<()>,
 }
 
-/// One stream a stream action loads: its id, display name and location, the
-/// graph and the owner's rulings, where its interpreters start, and how it is
-/// held.
+/// One stream a stream action loads, under the id its location computes to:
+/// its display name and location, the graph and the owner's rulings, where its
+/// interpreters start, and how it is held.
 struct OneStreamAStreamActionLoads<'load> {
-    stream_id: &'load str,
     display_name: &'load str,
     stream_location: &'load StreamLocation,
     graph_json: &'load serde_json::Value,
@@ -289,7 +288,6 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
     /// The kept stream `record` records, its rulings applied.
     fn recorded_by(record: &'load StreamRecord) -> Self {
         Self {
-            stream_id: &record.stream_id,
             display_name: &record.display_name,
             stream_location: &record.location,
             graph_json: &record.graph,
@@ -388,9 +386,11 @@ impl Runner {
             holding,
             stream_tags_attached_to_the_caller,
         } = request;
-        let records_to_keep_it_in = match (holding, self.stream_records()) {
-            (LoadedStreamHolding::Attached, _) => None,
-            (LoadedStreamHolding::Kept, Some(stream_records)) => Some(stream_records),
+        let how_this_run_is_held = match (holding, self.stream_records()) {
+            (LoadedStreamHolding::Attached, _) => HowARunIsHeld::Attached,
+            (LoadedStreamHolding::Kept, Some(stream_records)) => {
+                HowARunIsHeld::KeptIn(stream_records)
+            }
             (LoadedStreamHolding::Kept, None) => {
                 return Err(Error::Configuration(format!(
                     "the stream in {} was not kept: this runtime keeps no stream, because its \
@@ -423,14 +423,6 @@ impl Runner {
         let stream_environment = compiled.stream_environment;
         let graph_json = compiled.graph_json;
         let compile_warnings = compiled.compile_warnings;
-        let display_name_of_a_new_stream =
-            display_name_the_run_gives.clone().unwrap_or_else(|| {
-                graph_json
-                    .get("stream")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(&stream_id)
-                    .to_string()
-            });
 
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let loaded = self.loaded_stream_of_the_id_when_loaded(&stream_id);
@@ -445,15 +437,11 @@ impl Runner {
             Some(StreamRecordAsRead::Current(record)) => Some(record),
             Some(StreamRecordAsRead::RecordedByAnEarlierRuntime(_)) | None => None,
         };
-        match (holding, records_to_keep_it_in, record, loaded) {
-            (
-                LoadedStreamHolding::Kept,
-                Some(records_to_keep_it_in),
-                Some(previous_record),
-                loaded,
-            ) if loaded
-                .as_ref()
-                .is_none_or(|loaded| loaded.holding() == LoadedStreamHolding::Kept) =>
+        match (how_this_run_is_held, record, loaded) {
+            (HowARunIsHeld::KeptIn(records_to_keep_it_in), Some(previous_record), loaded)
+                if loaded
+                    .as_ref()
+                    .is_none_or(|loaded| loaded.holding() == LoadedStreamHolding::Kept) =>
             {
                 let display_name = display_name_the_run_gives
                     .unwrap_or_else(|| previous_record.display_name.clone());
@@ -470,14 +458,12 @@ impl Runner {
                     compile_warnings,
                 )
             }
-            (LoadedStreamHolding::Attached, _, Some(kept_record), _) => {
-                Err(Error::GraphError(format!(
-                    "the stream `{stream_id}` from {stream_location} is kept by this runtime{}; \
+            (HowARunIsHeld::Attached, Some(kept_record), _) => Err(Error::GraphError(format!(
+                "the stream `{stream_id}` from {stream_location} is kept by this runtime{}; \
                      `run -d` replaces it, and `rm` forgets it",
-                    the_state_a_refusal_names_a_kept_record_by(&kept_record)
-                )))
-            }
-            (LoadedStreamHolding::Attached, _, None, Some(loaded))
+                the_state_a_refusal_names_a_kept_record_by(&kept_record)
+            ))),
+            (HowARunIsHeld::Attached, None, Some(loaded))
                 if loaded.holding() == LoadedStreamHolding::Attached
                     && stream_tags_attached_to_the_caller
                         .iter()
@@ -506,13 +492,20 @@ impl Runner {
                     compile_warnings,
                 )
             }
-            (_, _, _, Some(loaded)) => Err(a_stream_id_already_loaded_refusal(
+            (_, _, Some(loaded)) => Err(a_stream_id_already_loaded_refusal(
                 &loaded,
                 STOP_IT_FIRST_TO_LOAD_THIS_ONE,
             )),
-            (_, _, _, None) => {
+            (how_this_run_is_held, _, None) => {
+                let display_name_of_a_new_stream =
+                    display_name_the_run_gives.unwrap_or_else(|| {
+                        graph_json
+                            .get("stream")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(&stream_id)
+                            .to_string()
+                    });
                 let stream = self.load_and_start_a_stream(OneStreamAStreamActionLoads {
-                    stream_id: &stream_id,
                     display_name: &display_name_of_a_new_stream,
                     stream_location: &stream_location,
                     graph_json: &graph_json,
@@ -520,8 +513,8 @@ impl Runner {
                     stream_environment: stream_environment.clone(),
                     holding,
                 })?;
-                match records_to_keep_it_in {
-                    Some(records_to_keep_it_in) => {
+                match how_this_run_is_held {
+                    HowARunIsHeld::KeptIn(records_to_keep_it_in) => {
                         let record = StreamRecord::of_a_running_stream(
                             stream_location.clone(),
                             display_name_of_a_new_stream.clone(),
@@ -536,7 +529,7 @@ impl Runner {
                             return Err(write_refusal);
                         }
                     }
-                    None => {
+                    HowARunIsHeld::Attached => {
                         stream.remember_the_attached_stream_run_source(AttachedStreamRunSource {
                             graph_json,
                             stream_environment,
@@ -1265,7 +1258,6 @@ impl Runner {
             "what attached it ran its stream function again",
         );
         match self.load_and_start_a_stream(OneStreamAStreamActionLoads {
-            stream_id: &stream_id,
             display_name: &display_name,
             stream_location: &stream_location,
             graph_json: &run_source.graph_json,
@@ -1287,7 +1279,6 @@ impl Runner {
             }
             Err(replace_refusal) => {
                 match self.load_and_start_a_stream(OneStreamAStreamActionLoads {
-                    stream_id: &stream_id,
                     display_name: previously_loaded.display_name(),
                     stream_location: previously_loaded
                         .stream_location()
@@ -1353,7 +1344,6 @@ impl Runner {
         stream_to_load: OneStreamAStreamActionLoads<'_>,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         let OneStreamAStreamActionLoads {
-            stream_id,
             display_name,
             stream_location,
             graph_json,
@@ -1370,7 +1360,6 @@ impl Runner {
         let stream = match self.load_stream_held_as_unless_a_machine_shutdown_is_requested(
             &graph,
             OptionsForLoadingOneStream::in_stream_environment(stream_environment)
-                .with_stream_id(stream_id)
                 .with_display_name(display_name)
                 .at_stream_location(stream_location.clone()),
             holding,
@@ -1378,8 +1367,8 @@ impl Runner {
             StreamLoadObservingMachineShutdownRequests::Loaded(stream) => stream,
             StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest => {
                 return Err(Error::Runtime(format!(
-                    "the stream `{stream_id}` was not loaded: the machine is shutting every \
-                     stream down"
+                    "the stream `{}` was not loaded: the machine is shutting every stream down",
+                    stream_location.stream_id()
                 )));
             }
         };
@@ -1399,6 +1388,13 @@ impl Runner {
         }
         Ok(stream)
     }
+}
+
+/// How a run holds the stream it loads: recorded in the runtime's streams
+/// directory, or attached to its caller.
+enum HowARunIsHeld<'records> {
+    KeptIn(&'records StreamRecordsInTheStateDirectory),
+    Attached,
 }
 
 /// An attached run's compile of one location, ready to replace the stream the
@@ -1611,7 +1607,8 @@ mod tests {
     /// A project whose `.venv/bin/python` is a shell script standing in for
     /// the compile entry.
     struct ProjectWithAStubCompile {
-        project_directory: tempfile::TempDir,
+        project_directory: PathBuf,
+        _directory_removed_on_drop: Arc<tempfile::TempDir>,
     }
 
     impl ProjectWithAStubCompile {
@@ -1620,25 +1617,74 @@ mod tests {
         }
 
         fn compiling_warning(graph: serde_json::Value, warnings: &[&str]) -> Self {
-            let project = Self::with_no_venv();
-            directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
-                &project.path().join(".venv").join("bin"),
-                0o755,
-            )
-            .expect("the venv's bin directory");
-            project.compile_to_warning(graph, warnings);
-            project
+            Self::with_no_venv().given_a_venv_compiling_warning(graph, warnings)
         }
 
         fn with_no_venv() -> Self {
+            let temporary_directory =
+                a_temporary_directory_at_owner_only_mode().expect("a project directory");
             Self {
-                project_directory: a_temporary_directory_at_owner_only_mode()
-                    .expect("a project directory"),
+                project_directory: temporary_directory.path().to_path_buf(),
+                _directory_removed_on_drop: Arc::new(temporary_directory),
             }
         }
 
+        /// Two projects with no venv, at two locations whose function
+        /// `function_name` computes to one stream id: project folders of one
+        /// name, searched under one parent until their hashes' six hex digits
+        /// collide.
+        fn two_with_no_venv_whose_ids_collide(function_name: &str) -> (Self, Self) {
+            let parent =
+                Arc::new(a_temporary_directory_at_owner_only_mode().expect("a parent directory"));
+            let mut project_directory_by_stream_id = std::collections::HashMap::new();
+            let (first, second) = (0u32..)
+                .find_map(|attempt| {
+                    let project_directory = parent.path().join(attempt.to_string()).join("rig");
+                    let stream_id = StreamLocation {
+                        project_directory: project_directory.clone(),
+                        stream_function: format!("stream:{function_name}"),
+                    }
+                    .stream_id();
+                    match project_directory_by_stream_id
+                        .insert(stream_id, project_directory.clone())
+                    {
+                        Some(colliding) => Some((colliding, project_directory)),
+                        None => None,
+                    }
+                })
+                .expect("two locations whose ids collide");
+            let project_at = |project_directory: PathBuf| {
+                directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+                    &project_directory,
+                    0o700,
+                )
+                .expect("the project directory");
+                Self {
+                    project_directory,
+                    _directory_removed_on_drop: Arc::clone(&parent),
+                }
+            };
+            (project_at(first), project_at(second))
+        }
+
+        /// This project, given a venv whose compile writes each of `warnings`
+        /// and prints `graph`.
+        fn given_a_venv_compiling_warning(
+            self,
+            graph: serde_json::Value,
+            warnings: &[&str],
+        ) -> Self {
+            directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+                &self.path().join(".venv").join("bin"),
+                0o755,
+            )
+            .expect("the venv's bin directory");
+            self.compile_to_warning(graph, warnings);
+            self
+        }
+
         fn path(&self) -> &Path {
-            self.project_directory.path()
+            &self.project_directory
         }
 
         fn interpreter(&self) -> PathBuf {
@@ -1780,20 +1826,17 @@ mod tests {
     }
 
     /// The function `function_name` of `project` loaded attached under the id
-    /// `stream_id`, at `stream_location`, not started.
+    /// its location computes to, not started.
     fn a_stream_loaded_attached_at(
         runner: &Runner,
         project: &ProjectWithAStubCompile,
         function_name: &str,
-        stream_id: &str,
-        stream_location: &StreamLocation,
     ) -> Arc<LoadedStreamInThisRuntime> {
         let graph_json = the_graph_of_a_function_named(function_name, serde_json::json!([]));
         runner
             .load_a_stream_with_the_owners_rulings(OneStreamAStreamActionLoads {
-                stream_id,
                 display_name: function_name,
-                stream_location,
+                stream_location: &project.location_of(function_name),
                 graph_json: &graph_json,
                 rulings: &[],
                 stream_environment: project.stream_environment(),
@@ -1809,14 +1852,7 @@ mod tests {
         project: &ProjectWithAStubCompile,
         function_name: &str,
     ) -> Arc<LoadedStreamInThisRuntime> {
-        let stream_location = project.location_of(function_name);
-        a_stream_loaded_attached_at(
-            runner,
-            project,
-            function_name,
-            &stream_location.stream_id(),
-            &stream_location,
-        )
+        a_stream_loaded_attached_at(runner, project, function_name)
     }
 
     fn the_exposures_graph_renders_for(stream: &LoadedStreamInThisRuntime) -> serde_json::Value {
@@ -1881,20 +1917,16 @@ mod tests {
     fn a_run_whose_id_a_loaded_stream_of_another_location_holds_is_refused_naming_both() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
-            "camera",
-            serde_json::json!([]),
-        ));
-        let camera = project.stream_id_of("camera");
-        let other_project = ProjectWithAStubCompile::with_no_venv();
-        let other_location = other_project.location_of("camera");
-        let holder = a_stream_loaded_attached_at(
-            &runner,
-            &other_project,
-            "camera",
-            &camera,
-            &other_location,
+        let (project, other_project) =
+            ProjectWithAStubCompile::two_with_no_venv_whose_ids_collide("camera");
+        let project = project.given_a_venv_compiling_warning(
+            the_graph_of_a_function_named("camera", serde_json::json!([])),
+            &[],
         );
+        let camera = project.stream_id_of("camera");
+        let other_location = other_project.location_of("camera");
+        assert_eq!(other_location.stream_id(), camera);
+        let holder = a_stream_loaded_attached_at(&runner, &other_project, "camera");
 
         for holding in [LoadedStreamHolding::Attached, LoadedStreamHolding::Kept] {
             let refusal = refusal_of(runner.run_stream(RunStreamRequest {
@@ -1963,13 +1995,15 @@ mod tests {
     #[serial]
     fn a_run_whose_id_a_record_of_another_location_holds_is_refused_naming_both_whatever_its_state()
     {
-        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
-            "camera",
-            serde_json::json!([]),
-        ));
+        let (project, other_project) =
+            ProjectWithAStubCompile::two_with_no_venv_whose_ids_collide("camera");
+        let project = project.given_a_venv_compiling_warning(
+            the_graph_of_a_function_named("camera", serde_json::json!([])),
+            &[],
+        );
         let camera = project.stream_id_of("camera");
-        let other_project = ProjectWithAStubCompile::with_no_venv();
         let other_location = other_project.location_of("camera");
+        assert_eq!(other_location.stream_id(), camera);
 
         let holder_states: [(&str, fn(&mut StreamRecord)); 3] = [
             ("stopped", |record| record.stopped = true),
@@ -1981,10 +2015,7 @@ mod tests {
         for (state, mark) in holder_states {
             let state_directory = tempfile::tempdir().unwrap();
             let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
-            let mut holder = StreamRecord {
-                stream_id: camera.clone(),
-                ..a_kept_record_of(&other_project, "camera", serde_json::json!([]))
-            };
+            let mut holder = a_kept_record_of(&other_project, "camera", serde_json::json!([]));
             mark(&mut holder);
             records_in(state_directory.path()).write(&holder).unwrap();
 
@@ -3412,6 +3443,54 @@ mod tests {
     }
 
     // The tests below start streams, which needs the engine's GPU context.
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn two_worktrees_of_one_project_run_side_by_side_under_two_ids_and_neither_is_refused() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let main_worktree = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "main",
+            serde_json::json!([]),
+        ));
+        let second_worktree = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "main",
+            serde_json::json!([]),
+        ));
+
+        let first = runner
+            .run_stream(main_worktree.run_request(LoadedStreamHolding::Kept))
+            .expect("the first worktree's stream runs");
+        let second = runner
+            .run_stream(second_worktree.run_request(LoadedStreamHolding::Kept))
+            .expect("the second worktree's stream runs beside it");
+
+        assert_eq!(first.stream_id, main_worktree.stream_id_of("main"));
+        assert_eq!(second.stream_id, second_worktree.stream_id_of("main"));
+        assert_ne!(first.stream_id, second.stream_id);
+        assert_eq!(
+            (first.display_name.as_str(), second.display_name.as_str()),
+            ("main", "main")
+        );
+        let mut loaded_ids = runner.ids_of_the_loaded_streams();
+        loaded_ids.sort();
+        let mut expected_ids = vec![first.stream_id.clone(), second.stream_id.clone()];
+        expected_ids.sort();
+        assert_eq!(loaded_ids, expected_ids);
+        assert!(the_current_record_in(state_directory.path(), &first.stream_id).is_some());
+        assert!(the_current_record_in(state_directory.path(), &second.stream_id).is_some());
+
+        let rerun = runner
+            .run_stream(main_worktree.run_request(LoadedStreamHolding::Kept))
+            .expect("the first worktree runs again");
+        assert_eq!(rerun.stream_id, first.stream_id, "a re-run keeps its id");
+        assert!(rerun.replaced_the_kept_record);
+        assert_eq!(records_in(state_directory.path()).read_every().len(), 2);
+    }
 
     #[cfg_attr(
         not(feature = "hardware-tests"),

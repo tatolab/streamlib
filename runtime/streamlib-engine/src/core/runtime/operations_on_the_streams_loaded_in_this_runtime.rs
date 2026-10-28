@@ -64,10 +64,10 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         stream_id: &str,
     ) -> Result<Vec<ProcessorDescriptor>>;
 
-    /// The cast names of the loaded streams, in order.
+    /// The ids of the loaded streams, in order.
     fn ids_of_the_loaded_streams(&self) -> Vec<String>;
 
-    /// Every loaded stream, in name order, with the output ports it exposes
+    /// Every loaded stream, in id order, with the output ports it exposes
     /// now — one read of the stream table. Blocks while a stream compiles, so
     /// the local API calls it from a blocking task.
     fn every_loaded_stream_and_the_output_ports_it_exposes(

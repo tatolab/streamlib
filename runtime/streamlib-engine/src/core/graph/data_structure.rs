@@ -35,7 +35,7 @@ pub struct Graph {
     /// The petgraph DiGraph storing processors as nodes and links as edges.
     digraph: DiGraph<ProcessorNode, Link>,
 
-    /// The name of the stream this graph was loaded as, until then `None`.
+    /// The id of the stream this graph was loaded as, until then `None`.
     loaded_stream_id: Option<String>,
 
     /// The node types this graph's stream resolves.
@@ -112,12 +112,12 @@ impl Graph {
         self.state = state;
     }
 
-    /// The name of the stream this graph was loaded as, if it was loaded as one.
+    /// The id of the stream this graph was loaded as, if it was loaded as one.
     pub fn loaded_stream_id(&self) -> Option<&str> {
         self.loaded_stream_id.as_deref()
     }
 
-    /// Record the name of the stream this graph was loaded as.
+    /// Record the id of the stream this graph was loaded as.
     pub fn set_loaded_stream_id(&mut self, stream_id: String) {
         self.loaded_stream_id = Some(stream_id);
     }

@@ -406,17 +406,42 @@ pub struct RunnerConstructionOptions {
     pub runtime_own_log_directory: Option<PathBuf>,
 }
 
+/// Where a loaded stream's id comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WhatALoadedStreamIsKeyedBy {
+    /// The location its code lives at: its id is the one the location
+    /// computes to.
+    ItsLocation(StreamLocation),
+    /// The id its host gave it, cast.
+    TheIdItsHostGave(String),
+}
+
+impl WhatALoadedStreamIsKeyedBy {
+    /// The id the load asks for, before the cast.
+    fn requested_stream_id(&self) -> String {
+        match self {
+            Self::ItsLocation(stream_location) => stream_location.stream_id(),
+            Self::TheIdItsHostGave(stream_id) => stream_id.clone(),
+        }
+    }
+
+    /// The location, when the stream is keyed by one.
+    fn into_stream_location(self) -> Option<StreamLocation> {
+        match self {
+            Self::ItsLocation(stream_location) => Some(stream_location),
+            Self::TheIdItsHostGave(_) => None,
+        }
+    }
+}
+
 /// What a host chooses as it loads one stream into a [`Runner`].
 #[derive(Debug, Clone, Default)]
 pub struct OptionsForLoadingOneStream {
-    /// The stream's id, cast, overriding the name the graph carries. Required
-    /// when the graph names none, and for an empty stream.
-    pub stream_id: Option<String>,
+    /// Where the stream's id comes from; the name the graph carries, cast, when
+    /// none is given. Required for an empty stream.
+    pub keyed_by: Option<WhatALoadedStreamIsKeyedBy>,
     /// The label the stream is shown under; the stream id when none is given.
     pub display_name: Option<String>,
-    /// Where the stream's code lives, for a stream `run_stream` compiled from
-    /// a project.
-    pub stream_location: Option<StreamLocation>,
     /// The stream's project directory, when no stream environment is given.
     pub project_directory: Option<PathBuf>,
     /// Where the stream's processor interpreters start; its project directory
@@ -445,7 +470,9 @@ impl OptionsForLoadingOneStream {
     /// These options, loading the stream under the id `stream_id`, cast.
     pub fn with_stream_id(self, stream_id: impl Into<String>) -> Self {
         Self {
-            stream_id: Some(stream_id.into()),
+            keyed_by: Some(WhatALoadedStreamIsKeyedBy::TheIdItsHostGave(
+                stream_id.into(),
+            )),
             ..self
         }
     }
@@ -458,11 +485,20 @@ impl OptionsForLoadingOneStream {
         }
     }
 
-    /// These options, recording that the stream's code lives at `stream_location`.
+    /// These options, loading the stream under the id its code's location
+    /// `stream_location` computes to.
     pub fn at_stream_location(self, stream_location: StreamLocation) -> Self {
         Self {
-            stream_location: Some(stream_location),
+            keyed_by: Some(WhatALoadedStreamIsKeyedBy::ItsLocation(stream_location)),
             ..self
+        }
+    }
+
+    /// The id the load asks for, before the cast: the key's, else `graph_stream`.
+    fn requested_stream_id(&self, graph_stream: Option<&str>) -> Option<String> {
+        match &self.keyed_by {
+            Some(keyed_by) => Some(keyed_by.requested_stream_id()),
+            None => graph_stream.map(str::to_string),
         }
     }
 
@@ -798,9 +834,9 @@ impl Runner {
     /// Load `graph` as a stream: built in a scope of its own and published to
     /// the stream table only once every node, link and exposure is in.
     ///
-    /// The stream's name — `load_options`' else the graph's, cast URL-safe —
-    /// is refused when it casts to nothing, when there is none, and when a
-    /// stream of that name is loaded; a graph holding no node is refused. A
+    /// The stream's id — `load_options`' key, else the graph's name, cast
+    /// URL-safe — is refused when it casts to nothing, when there is none, and
+    /// when a stream of that id is loaded; a graph holding no node is refused. A
     /// load refused anywhere after that is torn down through the stream's own
     /// stop and inserts nothing.
     pub fn load_stream_from_graph_snapshot(
@@ -943,9 +979,10 @@ impl Runner {
         load_options: OptionsForLoadingOneStream,
         teardown_watchdog_budget: Duration,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        self.refuse_a_load_while_the_machine_shuts_down(load_options.stream_id.as_deref())?;
+        let requested_stream_id = load_options.requested_stream_id(None);
+        self.refuse_a_load_while_the_machine_shuts_down(requested_stream_id.as_deref())?;
         let stream_id =
-            the_cast_stream_id_a_load_names(load_options.stream_id.as_deref(), "an empty stream")?;
+            the_cast_stream_id_a_load_names(requested_stream_id.as_deref(), "an empty stream")?;
         let stream = self.build_a_stream(
             stream_id,
             load_options,
@@ -1239,12 +1276,10 @@ impl Runner {
         load_options: OptionsForLoadingOneStream,
         holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let requested_stream_name = load_options
-            .stream_id
-            .as_deref()
-            .or(graph.stream.as_deref());
-        self.refuse_a_load_while_the_machine_shuts_down(requested_stream_name)?;
-        let stream_id = the_cast_stream_id_a_load_names(requested_stream_name, "the graph")?;
+        let requested_stream_id = load_options.requested_stream_id(graph.stream.as_deref());
+        self.refuse_a_load_while_the_machine_shuts_down(requested_stream_id.as_deref())?;
+        let stream_id =
+            the_cast_stream_id_a_load_names(requested_stream_id.as_deref(), "the graph")?;
         if graph.nodes.is_empty() {
             return Err(Error::GraphError(format!(
                 "the stream `{stream_id}` holds no node — a stream whose function adds \
@@ -1277,7 +1312,9 @@ impl Runner {
                     .display_name
                     .unwrap_or_else(|| stream_id.clone()),
                 stream_id,
-                stream_location: load_options.stream_location,
+                stream_location: load_options
+                    .keyed_by
+                    .and_then(WhatALoadedStreamIsKeyedBy::into_stream_location),
             },
             project_directory,
             load_options.stream_environment,
@@ -1361,14 +1398,14 @@ impl Runner {
 
     fn refuse_a_load_while_the_machine_shuts_down(
         &self,
-        requested_stream_name: Option<&str>,
+        requested_stream_id: Option<&str>,
     ) -> Result<()> {
         if !crate::core::runtime::is_the_machines_shutdown_requested() {
             return Ok(());
         }
         Err(Error::Runtime(format!(
             "the stream `{}` was not loaded: the machine is shutting every stream down",
-            requested_stream_name.unwrap_or("(unnamed)")
+            requested_stream_id.unwrap_or("(unnamed)")
         )))
     }
 
@@ -3791,7 +3828,7 @@ mod tests {
         let runtime_id = runner.runtime_id().to_string();
         let first_token = "token-from-a-thread-the-first-stream-spawned";
         let second_token = "token-of-the-second-stream";
-        for (stream_log, stream_id, own_token, other_stream_name, other_token) in [
+        for (stream_log, stream_id, own_token, other_stream_id, other_token) in [
             (&first_log, "first", first_token, "second", second_token),
             (&second_log, "second", second_token, "first", first_token),
         ] {
@@ -3800,7 +3837,7 @@ mod tests {
                 assert_eq!(record.stream.as_deref(), Some(stream_id), "{record:?}");
                 assert_eq!(record.runtime_id, runtime_id, "{record:?}");
                 assert!(
-                    !record.message.contains(&format!("`{other_stream_name}`"))
+                    !record.message.contains(&format!("`{other_stream_id}`"))
                         && record.message != other_token
                         && record.message != "token-no-stream-emitted",
                     "the log of `{stream_id}` holds a record it did not emit: {record:?}"

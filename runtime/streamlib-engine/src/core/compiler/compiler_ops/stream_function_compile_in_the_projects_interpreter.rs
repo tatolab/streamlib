@@ -273,6 +273,14 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
         &standard_output_bytes,
     )
     .map_err(|not_a_compile_document| {
+        if is_a_compile_document_naming_no_stream_function(&standard_output_bytes) {
+            return Error::Configuration(format!(
+                "the stream function in {project} compiled, and the project's `tatolab-stream` \
+                 is older than this runtime: its compile document names no `stream_function`, \
+                 which the stream's id is computed from. Run `uv sync` in {project} to take a \
+                 `tatolab-stream` as new as the runtime"
+            ));
+        }
         Error::Runtime(format!(
             "the stream function in {project} compiled, and `{interpreter_shown}`'s \
                      standard output is not the compile document ({not_a_compile_document}); it \
@@ -298,6 +306,19 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
             .map(str::to_string)
             .collect(),
     })
+}
+
+/// Whether `standard_output` is a compile document but for its missing
+/// `stream_function`, as a `tatolab-stream` older than the runtime prints it.
+fn is_a_compile_document_naming_no_stream_function(standard_output: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(standard_output)
+        .ok()
+        .and_then(|document| document.as_object().cloned())
+        .is_some_and(|document| {
+            document.contains_key("stream_graph")
+                && document.contains_key("project_directory")
+                && !document.contains_key("stream_function")
+        })
 }
 
 /// Whether `standard_error` is the interpreter's own report that it could not
@@ -431,6 +452,27 @@ mod tests {
             "the project directory is the one the compile entry reported, and the \
              interpreter the venv's as spelled"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn a_compile_document_naming_no_stream_function_is_refused_pointing_at_uv_sync() {
+        let project = ProjectWithAStubVenvInterpreter::running(&format!(
+            "cat <<COMPILED\n{}\nCOMPILED",
+            serde_json::json!({
+                "stream_graph": a_compiled_graph(),
+                "project_directory": "/srv/an-older-tatolab-stream",
+            })
+        ));
+
+        let refusal = project
+            .compile(None, None)
+            .expect_err("a document naming no stream function is refused")
+            .to_string();
+
+        assert!(refusal.contains("older than this runtime"), "{refusal}");
+        assert!(refusal.contains("`stream_function`"), "{refusal}");
+        assert!(refusal.contains("uv sync"), "{refusal}");
     }
 
     #[test]

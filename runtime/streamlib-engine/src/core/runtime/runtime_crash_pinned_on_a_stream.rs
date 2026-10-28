@@ -4,7 +4,7 @@
 //! Pinning a crash of the runtime on the stream whose thread crashed it.
 //!
 //! `docs/plan/ARCHITECTURE.md` §Processor model, failure isolation: a
-//! thread working for a stream carries the stream's name; handlers for the
+//! thread working for a stream carries the stream's id; handlers for the
 //! fatal signals on the alternate stack, a hook on a panic that ends the
 //! process, and the ends past a watchdog each append the crashing thread's
 //! stream to the run-in-progress record — a file opened at the runtime's start
@@ -22,11 +22,12 @@ use std::sync::atomic::{AtomicI32, AtomicPtr, Ordering};
 use std::sync::{Once, OnceLock};
 
 use super::loaded_stream::what_a_panic_said;
+use super::stream_location_and_id::STREAM_ID_MAXIMUM_LENGTH;
 use crate::core::{Error, Result};
 
-/// The longest stream name a thread carries for its crash: a stream's cast
-/// name is at most 63 bytes.
-const LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH: usize = 63;
+/// The longest stream id a thread carries for its crash: every id whole, its
+/// hash included, so a crash count finds the stream by its exact id.
+const LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH: usize = STREAM_ID_MAXIMUM_LENGTH;
 
 /// The longest line one crash appends to the run-in-progress record.
 const LONGEST_RUN_IN_PROGRESS_RECORD_LINE: usize = 512;
@@ -55,28 +56,28 @@ const LATEST_PANICS_KEPT_FOR_AN_ESCAPE_TO_MATCH: usize = 16;
 /// The file descriptor slot's value while a run's record is being begun.
 const RUN_IN_PROGRESS_RECORD_BEING_BEGUN: libc::c_int = -2;
 
-/// The stream a thread works for, by its cast name, held where a fatal-signal
+/// The stream a thread works for, by its id, held where a fatal-signal
 /// handler can read it without allocating or locking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StreamThisThreadWorksFor {
-    name_bytes: [u8; LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH],
+    name_bytes: [u8; LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH],
     name_length: u8,
 }
 
 impl StreamThisThreadWorksFor {
     /// No stream: a thread a crash on implicates none.
     pub(crate) const NONE: Self = Self {
-        name_bytes: [0; LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH],
+        name_bytes: [0; LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH],
         name_length: 0,
     };
 
     /// The stream `stream_id` names, cut at the longest name a thread
     /// carries.
-    pub(crate) fn named(stream_id: &str) -> Self {
+    pub(crate) fn of_the_stream_id(stream_id: &str) -> Self {
         let mut stream = Self::NONE;
         let carried = stream_id
             .len()
-            .min(LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH);
+            .min(LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH);
         stream.name_bytes[..carried].copy_from_slice(&stream_id.as_bytes()[..carried]);
         stream.name_length = carried as u8;
         stream
@@ -230,7 +231,7 @@ impl HowThePreviousRuntimeRunEnded {
 /// What the previous run's crash was pinned on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CrashOfThePreviousRuntimeRun {
-    /// Each stream the crash was pinned on, by its cast name, with the first
+    /// Each stream the crash was pinned on, by its id, with the first
     /// cause pinned on it.
     pub causes_by_implicated_stream: BTreeMap<String, String>,
     /// Each cause pinned on a thread no stream owns. With none here and no
@@ -412,7 +413,7 @@ pub(crate) fn pin_the_runtimes_crash_on_each_stream(stream_ids: &[String], cause
     let cause = a_cause_fit_for_one_record_line(cause);
     for stream_id in stream_ids {
         append_a_crash_line(
-            StreamThisThreadWorksFor::named(stream_id).name_bytes(),
+            StreamThisThreadWorksFor::of_the_stream_id(stream_id).name_bytes(),
             &[cause.as_bytes()],
         );
     }
@@ -767,11 +768,11 @@ mod tests {
     fn a_stream_name_past_the_longest_a_thread_carries_is_cut() {
         let long_name = "s".repeat(80);
 
-        let carried = StreamThisThreadWorksFor::named(&long_name);
+        let carried = StreamThisThreadWorksFor::of_the_stream_id(&long_name);
 
         assert_eq!(
             carried.name_bytes(),
-            &long_name.as_bytes()[..LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH]
+            &long_name.as_bytes()[..LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH]
         );
         assert!(StreamThisThreadWorksFor::NONE.is_none());
     }

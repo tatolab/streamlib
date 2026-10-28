@@ -26,7 +26,7 @@ use crate::iceoryx2::Iceoryx2Node;
 /// its log route.
 #[derive(Debug)]
 pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
-    /// The runtime id, cast name and tag the stream's events carry.
+    /// The runtime id, stream id and tag the stream's events carry.
     pub(crate) identity: LoadedStreamIdentity,
     /// The directory the stream's project lives in.
     pub(crate) project_directory: Arc<std::path::Path>,
