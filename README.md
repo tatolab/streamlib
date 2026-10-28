@@ -363,14 +363,16 @@ tatolab enable-virtual-camera [--print]
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
-- **`STREAM`**, in every verb naming one stream, is its stream id, or a display name exactly one
-  stream holds. Omitted, it is the one stream loaded from the working directory, stopped and failed
-  ones included. An argument several streams match, or none, is refused listing each candidate's
-  id and display name.
+- **`STREAM`**, in `stop`, `start`, `rm`, `rename`, `expose` and `logs --stream`, is a stream id,
+  or a display name exactly one stream holds. Omitted, it is the one stream loaded from the
+  working directory, stopped and failed ones included. An argument several streams match, or none,
+  is refused listing each candidate's id and display name. `graph --stream` is the exception: it
+  takes a stream id, and omitted it means every loaded stream.
 - **`stop`** unloads a stream; a kept one stays stopped across the runtime's restarts until
   **`start`** loads it again. `start` also retries a failed stream. **`rm`** unloads a stream and
   forgets it. **`rename`** shows a stream under another display name — any text, never part of
-  its address — which holds across the runtime's restarts and re-loads without `--name`.
+  its address. A kept stream records it, so it holds across the runtime's restarts and re-loads
+  without `--name`; an attached stream keeps it for as long as that load lives.
 - **`expose`** sets how far one output port is readable, live: private (readable by this machine's
   other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
   its stream). A reader the new level no longer allows is cut at once. On a kept stream the level
@@ -453,7 +455,7 @@ host's connection.
 The tools are `graph`, `logs` and `describe_runtime` — the runtime's version, build id, uptime
 and the folder of its own log — to observe; `add_node`, `connect`, `disconnect` and
 `remove_node` to change a running graph; `run_stream`, `stop_stream`, `start_stream`,
-`remove_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
+`remove_stream`, `rename_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
 `add_relay`, `configure_relay`, `remove_relay` and `list_relays` to manage the relays it joins. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every

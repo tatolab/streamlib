@@ -162,7 +162,6 @@ impl StreamLoadRequest {
             display_name: stream_load_arguments
                 .requested_display_name
                 .as_ref()
-                .filter(|display_name| !display_name.is_empty())
                 .map(|display_name| utf8_text_of("--name", display_name))
                 .transpose()?,
         })
@@ -593,7 +592,7 @@ mod tests {
         )
         .unwrap();
         let from_nothing = StreamLoadRequest::from_arguments(
-            &load_arguments(None, None, Some("")),
+            &load_arguments(None, None, None),
             Path::new("/srv/project"),
         )
         .unwrap();
@@ -605,6 +604,20 @@ mod tests {
         assert_eq!(
             serde_json::Value::Object(from_nothing.run_stream_tool_arguments(true)),
             json!({"project_directory": "/srv/project", "keep": true})
+        );
+    }
+
+    #[test]
+    fn an_empty_name_is_sent_for_the_runtime_to_refuse_never_dropped_as_no_name() {
+        let named_nothing = StreamLoadRequest::from_arguments(
+            &load_arguments(None, None, Some("")),
+            Path::new("/srv/project"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::Value::Object(named_nothing.run_stream_tool_arguments(true)),
+            json!({"project_directory": "/srv/project", "name": "", "keep": true})
         );
     }
 
