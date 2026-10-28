@@ -310,7 +310,11 @@ A file may define several streams. With more than one, name the one to run:
 `tatolab dev stream.py:<function>`, or `tatolab run <module>:<function>` for a stream in an
 installed package.
 `-f FILE` runs another entry file in place of `stream.py`, `--dir DIR` resolves against another
-project directory, and `--name NAME` loads the stream under a name other than its function's.
+project directory, and `--name NAME` shows the stream under a name other than its function's.
+A stream is keyed and addressed by its **stream id**, `<folder>-<function>-<hash>`, which the
+runtime computes from where its code lives: the project directory, resolved, and the stream
+function as `module:function`. Two checkouts of one project get two ids, and running a project
+again replaces its stream under the same id.
 
 ## The `tatolab` CLI
 
@@ -345,14 +349,14 @@ tatolab enable-virtual-camera [--print]
   the stream's records in your terminal, and the stream lives as long as the command — Ctrl-C, a
   closed terminal or a killed `tatolab` unloads it. `-d` hands it to the runtime to keep instead:
   `run` prints one line and returns, and the runtime loads the stream again at each of its own
-  starts until `stop` or `rm`. `TARGET` is `<file>.py[:<function>]` or `<module>:<function>`. A
-  name already loaded or kept is refused naming the project that holds it; `--name` loads the
-  stream under another.
+  starts until `stop` or `rm`. `TARGET` is `<file>.py[:<function>]` or `<module>:<function>`. Each
+  prints the stream id the other verbs take.
 - **`dev`** is `run` attached, run again on every saved edit to a `.py` file or `pyproject.toml`
   in the project; the runtime replaces the running stream only once the edit compiles.
   When the runtime goes away, `dev` waits for it and loads the stream again.
-- **`streams`** lists the streams the runtime holds: each one's name, whether it is attached, kept,
-  stopped or failed, its node count and its project, and why each failed one failed. A kept
+- **`streams`** lists the streams the runtime holds: each one's id and display name, whether it is
+  attached, kept, stopped or failed, its node count, its project and its stream function, and why
+  each failed one failed. A kept
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
@@ -399,23 +403,24 @@ $ tatolab graph | jq -r .machine
 desk
 
 $ curl -s http://127.0.0.1:4446/
-{"machine":"desk","streams":[{"name":"main","exposed_output_ports":[{"node":"h264encoder","port":"encoded_video","level":"public",...}]}]}
+{"machine":"desk","streams":[{"stream":"hello-main-3f2a9c","exposed_output_ports":[{"node":"h264encoder","port":"encoded_video","level":"public",...}]}]}
 ```
 
 `graph` shows every node's state and counters, so it says whether data is moving; `logs` reads
 what every node logged, Rust and Python alike. What a port carries is read the way anyone reads it:
-an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the
+an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the
 machine's local relay, which answers on this machine at `http://127.0.0.1:4443`.
-`http://127.0.0.1:4446/watch/desk/main` plays the stream's video in a browser, and any MoQ client
-reads its tracks — this repository's `tatolab-read-track` writes a track's objects to files:
+`http://127.0.0.1:4446/watch/desk/hello-main-3f2a9c` plays the stream's video in a browser, and
+any MoQ client reads its tracks — this repository's `tatolab-read-track` writes a track's objects
+to files:
 
 ```console
-$ cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/main.hang h264encoder/encoded_video --count 30 --out frames/
+$ cargo run -p tatolab-read-track -- http://127.0.0.1:4443 desk/hello-main-3f2a9c.hang h264encoder/encoded_video --count 30 --out frames/
 ```
 
 An `H264Encoder`'s track files, concatenated, are an H.264 stream any decoder plays; an
 `H265Encoder`'s are an HEVC one. A port that is not exposed is internal to its stream: `tatolab
-expose main <node> <port>` makes it a track on this machine. A raw frame's port carries a GPU
+expose hello-main-3f2a9c <node> <port>` makes it a track on this machine. A raw frame's port carries a GPU
 surface's id, which means nothing outside the runtime, so to see a mid-graph frame, connect an
 encoder to it and expose the encoder.
 

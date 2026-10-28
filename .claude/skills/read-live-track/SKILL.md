@@ -10,7 +10,7 @@ Reads a port the way any user reads one: as a MoQ subscriber at a relay. The run
 ## Steps
 
 ### 1. Get the address from the live graph
-Run `inspect-live-graph` and read the machine's name (`machine`), the stream's name (`stream`), the node's `name` and the output port under its `ports.outputs`. A port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang`:
+Run `inspect-live-graph` and read the machine's name (`machine`), the stream id (`stream`), the node's `name` and the output port under its `ports.outputs`. A port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang`:
 ```
 stream lab, node encoder, port encoded_video, machine desk
 → broadcast desk/lab.hang, track encoder/encoded_video
@@ -39,11 +39,11 @@ The directory holds one `object-NNNNNN.bin` per object, `objects.jsonl` indexing
 Interpreting it:
 - **`--count` objects written, sizes non-zero** — the port is producing.
 - **`timestamp_ns` advancing at the expected cadence** — live data rather than a stuck producer.
-- **`0 of M objects … arrived within …`** — most often the broadcast was never announced: the reader waits for `<machine>/<stream>.hang` rather than refusing it, so a misspelt machine or stream, or a stream with nothing exposed, ends here. Check the address against `graph` and the port against `exposed` (or `curl -s http://127.0.0.1:4446/`) first; then that the node is `Running` and its counters move (`inspect-live-graph`).
+- **`0 of M objects … arrived within …`** — most often the broadcast was never announced: the reader waits for `<machine>/<stream id>.hang` rather than refusing it, so a misspelt machine or stream, or a stream with nothing exposed, ends here. Check the address against `graph` and the port against `exposed` (or `curl -s http://127.0.0.1:4446/`) first; then that the node is `Running` and its counters move (`inspect-live-graph`).
 - **`N of M objects … arrived within …`, N above 0** — the port is slow or quiet; read again with a larger `--wait-at-most`.
 - **`the track … was refused`** — the broadcast is announced but does not carry that track; re-read the port's name off the graph.
 
 ## Notes
 - Read-only toward the stream: a subscriber never blocks the producer or disturbs its other readers. Exposing is the one change, and it is the user's own verb.
 - An internal port is seen through its stream's logs alone unless it is exposed or a node is chained off it.
-- In a browser, `http://127.0.0.1:4446/watch/<machine>/<stream>/<node>/<port>` plays an encoded video track.
+- In a browser, `http://127.0.0.1:4446/watch/<machine>/<stream id>/<node>/<port>` plays an encoded video track.

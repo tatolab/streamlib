@@ -11,12 +11,12 @@ Ends a stream's work without touching the runtime. The machine's runtime stays o
 
 ### 1. Stop or remove it
 ```bash
-tatolab stop <stream>
+tatolab stop <stream id>
 ```
-Unloads the stream. A kept stream is recorded `stopped` and stays stopped across the runtime's restarts until `tatolab start <stream>`; an attached stream's `tatolab run` ends. A warning that the stop was not recorded means a restart of the runtime loads the kept stream again.
+Unloads the stream. A kept stream is recorded `stopped` and stays stopped across the runtime's restarts until `tatolab start <stream id>`; an attached stream's `tatolab run` ends. A warning that the stop was not recorded means a restart of the runtime loads the kept stream again.
 
 ```bash
-tatolab rm <stream>
+tatolab rm <stream id>
 ```
 Unloads the stream and forgets it — the way to clear a kept, stopped or failed stream for good.
 

@@ -17,9 +17,9 @@ mkdir -p "$EVIDENCE_DIR"
 (Use a `-before` and an `-after` directory around a change.)
 
 ### 2. Snapshot the live graph
-`graph` renders every node's config, so a stream whose nodes carry secrets (a WHIP or WHEP endpoint carries its key in the URL) never has its graph saved: read it in a pipe (`tatolab graph --stream <stream> | jq '.nodes[] | {name, ports}'`), record what you need by hand, and leave `graph.json` out of the bundle. Any other stream's graph is saved:
+`graph` renders every node's config, so a stream whose nodes carry secrets (a WHIP or WHEP endpoint carries its key in the URL) never has its graph saved: read it in a pipe (`tatolab graph --stream <stream id> | jq '.nodes[] | {name, ports}'`), record what you need by hand, and leave `graph.json` out of the bundle. Any other stream's graph is saved:
 ```bash
-tatolab graph --stream <stream> > "$EVIDENCE_DIR/graph.json"
+tatolab graph --stream <stream id> > "$EVIDENCE_DIR/graph.json"
 ```
 Read the addresses of the ports you want to read out of it — the `machine`, the `stream`, and each node's `name` and output port (see `inspect-live-graph`).
 
@@ -27,16 +27,16 @@ Read the addresses of the ports you want to read out of it — the `machine`, th
 Repeat per port, exposing an internal one first (`read-live-track`). `RELAY_URL` is the local relay's loopback listener of the runtime the stream runs on: `http://127.0.0.1:4443` for the machine's runtime, the `TATOLAB_TEST_LOCAL_RELAY_LOOPBACK_PORT` its `tatolabd` was given for a runtime of the session's own (`drive-running-stream`):
 ```bash
 RELAY_URL=http://127.0.0.1:4443
-target/release/tatolab-read-track "$RELAY_URL" <machine>/<stream>.hang <encoder>/encoded_video \
+target/release/tatolab-read-track "$RELAY_URL" <machine>/<stream id>.hang <encoder>/encoded_video \
   --count 30 --out "$EVIDENCE_DIR/track-<encoder>-encoded_video"
-target/release/tatolab-read-track "$RELAY_URL" <machine>/<stream>.hang microphonesource/audio \
+target/release/tatolab-read-track "$RELAY_URL" <machine>/<stream id>.hang microphonesource/audio \
   --count 30 --out "$EVIDENCE_DIR/track-microphonesource-audio"
 ```
 Each directory holds one file per object, `objects.jsonl` indexing each file with its group and timestamp — an object's size is its file's — and the track's catalog entry. An encoded video track decodes to PNGs with ffmpeg (`verify-live` § Reading pixels); any other holds the records as the node wrote them.
 
 ### 4. Capture the stream's log records
 ```bash
-tatolab logs --stream <stream> > "$EVIDENCE_DIR/logs.txt"
+tatolab logs --stream <stream id> > "$EVIDENCE_DIR/logs.txt"
 ```
 Reads the records the runtime holds for that loaded stream, by sequence number, and returns; `-f` would keep following. `--level`, `--source`, `--processor`, `--pipeline` and `--rhi` narrow them. A stream already unloaded is read off disk instead, from its project directory (or with `STREAMLIB_HOME=<project>`), whose `.streamlib/logs/` holds its log files: `tatolab logs --list` names them, and `tatolab logs <name>` renders one.
 
