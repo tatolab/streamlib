@@ -2315,7 +2315,6 @@ sys.exit(0)
         let compile_command = super::super::stream_function_compile_in_the_projects_interpreter::stream_function_compile_command(
             Path::new("/home/someone/my_app"),
             None,
-            None,
             Path::new(LEND_DIRECTORY_FOR_TEST),
         )
         .expect("the test directories hold no path-list separator");

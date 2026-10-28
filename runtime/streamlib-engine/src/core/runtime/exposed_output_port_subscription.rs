@@ -59,6 +59,8 @@ pub struct ExposedOutputPortOfALoadedStream {
 pub struct LoadedStreamAndTheOutputPortsItExposes {
     /// The stream's id.
     pub stream_id: String,
+    /// The label the stream is shown under.
+    pub display_name: String,
     /// The output ports it exposes, private or public.
     pub exposed_output_ports: Vec<ExposedOutputPortOfALoadedStream>,
 }

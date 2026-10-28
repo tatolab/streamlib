@@ -310,7 +310,9 @@ A file may define several streams. With more than one, name the one to run:
 `tatolab dev stream.py:<function>`, or `tatolab run <module>:<function>` for a stream in an
 installed package.
 `-f FILE` runs another entry file in place of `stream.py`, `--dir DIR` resolves against another
-project directory, and `--name NAME` shows the stream under a name other than its function's.
+project directory, and `--name NAME` shows the stream under a display name other than its
+function's; a load without it keeps the display name the stream has, and `tatolab rename` changes
+it.
 A stream is keyed and addressed by its **stream id**, `<folder>-<function>-<hash>`, which the
 runtime computes from where its code lives: the project directory, resolved, and the stream
 function as `module:function`. Two checkouts of one project get two ids, and running a project
@@ -324,10 +326,11 @@ tatolab run [TARGET] [-f FILE] [--dir DIR] [--name NAME] [-d | --detach]
 tatolab dev [TARGET] [-f FILE] [--dir DIR] [--name NAME]
 
 tatolab streams
-tatolab stop STREAM
-tatolab start STREAM
-tatolab rm STREAM
-tatolab expose STREAM NODE PORT [--public | --remove]
+tatolab stop [STREAM]
+tatolab start [STREAM]
+tatolab rm [STREAM]
+tatolab rename [STREAM] DISPLAY_NAME
+tatolab expose [STREAM] NODE PORT [--public | --remove]
 
 tatolab relays
 tatolab relay add ADAPTER [--settings-file PATH]
@@ -335,7 +338,7 @@ tatolab relay set RELAY_ID [KEY=VALUE ...] [--secret FIELD (--from-file PATH | -
 tatolab relay rm RELAY_ID
 
 tatolab graph [--stream STREAM]
-tatolab logs (--stream STREAM | RUNTIME_ID-STREAM) [-f | --follow] [--processor ID] [--pipeline ID]
+tatolab logs [--stream STREAM | RUNTIME_ID-STREAM] [-f | --follow] [--processor ID] [--pipeline ID]
              [--rhi] [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
 tatolab logs --list
 tatolab mcp
@@ -360,9 +363,16 @@ tatolab enable-virtual-camera [--print]
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
+- **`STREAM`**, in `stop`, `start`, `rm`, `rename`, `expose` and `logs --stream`, is a stream id,
+  or a display name exactly one stream holds. Omitted, it is the one stream loaded from the
+  working directory, stopped and failed ones included. An argument several streams match, or none,
+  is refused listing each candidate's id and display name. `graph --stream` is the exception: it
+  takes a stream id, and omitted it means every loaded stream.
 - **`stop`** unloads a stream; a kept one stays stopped across the runtime's restarts until
   **`start`** loads it again. `start` also retries a failed stream. **`rm`** unloads a stream and
-  forgets it.
+  forgets it. **`rename`** shows a stream under another display name — any text, never part of
+  its address. A kept stream records it, so it holds across the runtime's restarts and re-loads
+  without `--name`; an attached stream keeps it for as long as that load lives.
 - **`expose`** sets how far one output port is readable, live: private (readable by this machine's
   other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
   its stream). A reader the new level no longer allows is cut at once. On a kept stream the level
@@ -377,11 +387,12 @@ tatolab enable-virtual-camera [--print]
   node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
   one stream's graph alone, in the shape a load takes. The machine's name is its hostname, less a
   trailing mDNS `.local`, cast to lowercase URL-safe.
-- **`logs --stream`** reads a loaded stream's records from the runtime, rendered the way the runtime
-  prints them; `--follow` keeps reading as records land. Without `--stream` it reads a stream's
-  JSONL log on disk. Run it in the stream's project directory, where the runtime writes each
-  stream's log: `--list` shows the stream logs there, each named `<runtime_id>-<stream>`, and
-  `RUNTIME_ID-STREAM` renders one. The other flags filter what either shows.
+- **`logs`** reads a loaded stream's records from the runtime — `--stream`'s, or the one loaded
+  from the working directory — rendered the way the runtime prints them; `--follow` keeps reading
+  as records land. `--list` and `RUNTIME_ID-STREAM` read a stream's JSONL log on disk instead. Run
+  them in the stream's project directory, where the runtime writes each stream's log: `--list`
+  shows the stream logs there, each named `<runtime_id>-<stream>`, and `RUNTIME_ID-STREAM` renders
+  one. The other flags filter what either shows.
 - **`mcp`** connects an MCP host to the runtime over its own stdin and stdout; see below.
 - **`enable-virtual-camera`** installs, once, the permission a `VirtualCameraSink` needs for its
   loopback camera: the `v4l2loopback` module loaded with no devices, and its control node handed to
@@ -389,8 +400,8 @@ tatolab enable-virtual-camera [--print]
   (`sudo` in a headless shell), Linux only; `--print` writes the files and commands for a hand
   install and changes nothing.
 
-Every verb but `new`, `enable-virtual-camera` and `logs` without `--stream` (which reads the JSONL
-on disk) talks to the runtime through its local socket, at one fixed path per user. With no runtime
+Every verb but `new`, `enable-virtual-camera` and `logs --list` or `logs RUNTIME_ID-STREAM` (which
+read the JSONL on disk) talks to the runtime through its local socket, at one fixed path per user. With no runtime
 running, each refuses at once, naming the socket and `tatolabd` as the way to start one.
 
 ## Inspect a running stream
@@ -403,13 +414,14 @@ $ tatolab graph | jq -r .machine
 desk
 
 $ curl -s http://127.0.0.1:4446/
-{"machine":"desk","streams":[{"stream":"hello-main-3f2a9c","exposed_output_ports":[{"node":"h264encoder","port":"encoded_video","level":"public",...}]}]}
+{"machine":"desk","streams":[{"stream":"hello-main-3f2a9c","display_name":"main","exposed_output_ports":[{"node":"h264encoder","port":"encoded_video","level":"public",...}]}]}
 ```
 
 `graph` shows every node's state and counters, so it says whether data is moving; `logs` reads
 what every node logged, Rust and Python alike. What a port carries is read the way anyone reads it:
 an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the
 machine's local relay, which answers on this machine at `http://127.0.0.1:4443`.
+`http://127.0.0.1:4446/watch` lists the loaded streams by display name and id, and
 `http://127.0.0.1:4446/watch/desk/hello-main-3f2a9c` plays the stream's video in a browser, and
 any MoQ client reads its tracks — this repository's `tatolab-read-track` writes a track's objects
 to files:
@@ -443,7 +455,7 @@ host's connection.
 The tools are `graph`, `logs` and `describe_runtime` — the runtime's version, build id, uptime
 and the folder of its own log — to observe; `add_node`, `connect`, `disconnect` and
 `remove_node` to change a running graph; `run_stream`, `stop_stream`, `start_stream`,
-`remove_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
+`remove_stream`, `rename_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds; and
 `add_relay`, `configure_relay`, `remove_relay` and `list_relays` to manage the relays it joins. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every

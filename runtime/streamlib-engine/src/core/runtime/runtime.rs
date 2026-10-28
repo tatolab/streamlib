@@ -343,6 +343,7 @@ impl EngineResourcesSharedByEveryStream {
             .iter()
             .map(|stream| LoadedStreamAndTheOutputPortsItExposes {
                 stream_id: stream.stream_id().to_string(),
+                display_name: stream.display_name(),
                 exposed_output_ports: stream.exposed_output_ports(),
             })
             .collect()

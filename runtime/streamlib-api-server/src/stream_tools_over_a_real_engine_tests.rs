@@ -4,8 +4,8 @@
 //! The stream tools over a real engine: a stream attached over a `/mcp/stdio`
 //! connection unloads when the connection drops while a kept one stays,
 //! `logs` pages a stream's records by sequence number, and `list_streams`,
-//! `stop_stream`, `start_stream`, `remove_stream` and `expose_port` act by
-//! stream id on an engine keeping its streams in a temporary state directory.
+//! `stop_stream`, `start_stream`, `remove_stream`, `rename_stream` and
+//! `expose_port` act by stream id on an engine keeping its streams in a temporary state directory.
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose
@@ -30,8 +30,8 @@ use streamlib::sdk::runtime::{
     LoadedStreamTag, LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
     OptionsForLoadingOneStream, OutputPortExposureOutcome, RunStreamRequest, Runner,
     RuntimeOperations, StreamEnvironment, StreamListing, StreamLocation, StreamRecord,
-    StreamRecordAsRead, StreamRecordsInTheStateDirectory, StreamRemoveOutcome, StreamRunOutcome,
-    StreamStartOutcome, StreamStopOutcome,
+    StreamRecordAsRead, StreamRecordsInTheStateDirectory, StreamRemoveOutcome, StreamRenameOutcome,
+    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
 };
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
@@ -420,7 +420,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             });
         Ok(StreamRunOutcome {
             stream_id: stream.stream_id().to_string(),
-            display_name: stream.display_name().to_string(),
+            display_name: stream.display_name(),
             stream_location,
             stream_tag: stream.stream_tag(),
             node_count: 0,
@@ -436,6 +436,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     }
     fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome> {
         OperationsOnTheStreamsLoadedInThisRuntime::remove_stream(self.engine.as_ref(), stream_id)
+    }
+    fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome> {
+        OperationsOnTheStreamsLoadedInThisRuntime::rename_stream(
+            self.engine.as_ref(),
+            stream_id,
+            display_name,
+        )
     }
     fn list_streams(&self) -> Vec<StreamListing> {
         OperationsOnTheStreamsLoadedInThisRuntime::list_streams(self.engine.as_ref())
@@ -1011,6 +1018,80 @@ async fn stop_start_and_remove_act_on_the_streams_the_runtime_holds() {
         .expect_err("a stream the runtime no longer holds is refused");
     assert!(
         refusal.contains(&parked) && refusal.contains("Loaded: none"),
+        "{refusal}"
+    );
+}
+
+/// `rename_stream` shows a stream under a new display name by its id alone:
+/// a recorded stream's record carries it, a loaded one's listing shows it,
+/// and the id the call named is the id it answers.
+#[tokio::test(flavor = "multi_thread")]
+async fn rename_stream_shows_a_stream_under_a_new_display_name_and_records_a_recorded_one() {
+    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
+    let live = engine.an_attached_stream_loaded_without_its_start(&project, "live");
+    let parked = engine.a_kept_stream_recorded_and_not_loaded(&project, "parked", true);
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        async move {
+            tool_answer(
+                &tool_call_result(operations_on_the_loaded_streams, tool_name, arguments).await,
+            )
+        }
+    };
+
+    assert_eq!(
+        call(
+            "rename_stream",
+            json!({ "stream": parked, "display_name": "Hello camera" })
+        )
+        .await
+        .unwrap(),
+        json!({ "stream": parked, "display_name": "Hello camera" })
+    );
+    assert_eq!(
+        call(
+            "rename_stream",
+            json!({ "stream": live, "display_name": "Desk mic" })
+        )
+        .await
+        .unwrap(),
+        json!({ "stream": live, "display_name": "Desk mic" })
+    );
+
+    assert_eq!(
+        engine
+            .current_record_of(&parked)
+            .expect("the record is there")
+            .display_name,
+        "Hello camera"
+    );
+    let listed = call("list_streams", json!({})).await.unwrap();
+    let shown_as: Vec<(&str, &str)> = listed["streams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|listed| {
+            (
+                listed["stream"].as_str().unwrap(),
+                listed["display_name"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    let mut expected = vec![
+        (live.as_str(), "Desk mic"),
+        (parked.as_str(), "Hello camera"),
+    ];
+    expected.sort_unstable();
+    assert_eq!(shown_as, expected);
+    let refusal = call(
+        "rename_stream",
+        json!({ "stream": "Hello camera", "display_name": "Other" }),
+    )
+    .await
+    .expect_err("a display name is never an id");
+    assert!(
+        refusal.contains("`Hello camera`") && refusal.contains(&parked),
         "{refusal}"
     );
 }

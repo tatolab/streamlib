@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The streams the machine's runtime holds, managed one call at a time: `run -d`, `stop`,
-//! `start`, `rm`, `streams` and `expose`, each the local API tool of the same purpose, and the
-//! one line or table each prints. `run` attached and `dev` share the load request.
+//! `start`, `rm`, `rename`, `streams` and `expose`, each the local API tool of the same purpose,
+//! and the one line or table each prints. A verb naming one stream resolves its stream argument
+//! to an id through `list_streams` first. `run` attached and `dev` share the load request.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -13,13 +14,15 @@ use clap::Args;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    RemoveStreamToolResult, RunStreamToolResult, STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
-    STREAM_LOAD_TOOL_CALL_TIMEOUT, StartStreamToolResult, StopStreamToolResult,
+    RemoveStreamToolResult, RenameStreamToolResult, RunStreamToolResult,
+    STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
+    StartStreamToolResult, StopStreamToolResult,
 };
 
 use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
+use crate::stream_argument_resolution_through_the_listing::stream_id_the_stream_argument_names_on_the_running_runtime;
 use crate::verb_output_table::rendered_padded_table;
 use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard_output};
 
@@ -34,6 +37,8 @@ pub(crate) enum StreamActionTool {
     StartStream,
     /// Unloads a stream and forgets its record.
     RemoveStream,
+    /// Shows a stream under another display name.
+    RenameStream,
     /// Lists the streams the runtime holds.
     ListStreams,
     /// Sets one output port's exposure level.
@@ -48,6 +53,7 @@ impl StreamActionTool {
             StreamActionTool::StopStream => "stop_stream",
             StreamActionTool::StartStream => "start_stream",
             StreamActionTool::RemoveStream => "remove_stream",
+            StreamActionTool::RenameStream => "rename_stream",
             StreamActionTool::ListStreams => "list_streams",
             StreamActionTool::ExposePort => "expose_port",
         }
@@ -61,11 +67,22 @@ impl StreamActionTool {
             }
             StreamActionTool::StopStream
             | StreamActionTool::RemoveStream
+            | StreamActionTool::RenameStream
             | StreamActionTool::ExposePort => STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
             StreamActionTool::ListStreams => OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         }
     }
 }
+
+/// The short help of a verb's stream argument.
+pub(crate) const STREAM_ARGUMENT_HELP: &str = "The stream: its id, or a display name only it holds \
+    (default: the stream loaded from the working directory)";
+
+/// The long help of a verb's stream argument.
+pub(crate) const STREAM_ARGUMENT_LONG_HELP: &str = "The stream: a stream id, or a display name \
+    exactly one stream holds. Omitted, it is the one stream loaded from the working directory, \
+    stopped and failed ones included. An argument several streams match, or none, is refused \
+    listing each candidate's id and display name.";
 
 /// What `streams` prints when the runtime holds none.
 const NO_STREAMS_IN_THIS_RUNTIME_LINE: &str = "No streams in this runtime.\n";
@@ -91,21 +108,22 @@ pub(crate) struct StreamLoadArguments {
     /// walk-up).
     #[arg(long = "dir", value_name = "DIR")]
     pub(crate) requested_project_directory: Option<OsString>,
-    /// Load the stream under this name instead of its function's.
+    /// Show the stream under this display name instead of its function's; a re-load without it
+    /// keeps the name the stream has.
     #[arg(long = "name", value_name = "NAME")]
-    pub(crate) requested_stream_name: Option<OsString>,
+    pub(crate) requested_display_name: Option<OsString>,
 }
 
 /// What `run` and `dev` ask the runtime to load: a project, the stream function in it, and the
-/// name to load it under.
+/// display name to show it under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StreamLoadRequest {
     /// The absolute project directory the runtime compiles in.
     pub(crate) project_directory: String,
     /// TARGET or FILE verbatim; `None` for the sole @stream in stream.py.
     pub(crate) stream_function: Option<String>,
-    /// The name asked for; `None` for the function's own.
-    pub(crate) stream_name: Option<String>,
+    /// The display name asked for; `None` keeps the one the stream has.
+    pub(crate) display_name: Option<String>,
 }
 
 impl StreamLoadRequest {
@@ -141,11 +159,10 @@ impl StreamLoadRequest {
                 .filter(|stream_function| !stream_function.is_empty())
                 .map(|stream_function| utf8_text_of("the stream to load", stream_function))
                 .transpose()?,
-            stream_name: stream_load_arguments
-                .requested_stream_name
+            display_name: stream_load_arguments
+                .requested_display_name
                 .as_ref()
-                .filter(|stream_name| !stream_name.is_empty())
-                .map(|stream_name| utf8_text_of("--name", stream_name))
+                .map(|display_name| utf8_text_of("--name", display_name))
                 .transpose()?,
         })
     }
@@ -165,8 +182,8 @@ impl StreamLoadRequest {
             run_stream_arguments
                 .insert("stream_function".to_owned(), stream_function.clone().into());
         }
-        if let Some(stream_name) = &self.stream_name {
-            run_stream_arguments.insert("name".to_owned(), stream_name.clone().into());
+        if let Some(display_name) = &self.display_name {
+            run_stream_arguments.insert("name".to_owned(), display_name.clone().into());
         }
         run_stream_arguments.insert("keep".to_owned(), keep.into());
         run_stream_arguments
@@ -225,7 +242,7 @@ pub(crate) fn call_one_tool_reading_its_result<ToolResult: DeserializeOwned>(
 
 /// Call `tool` once on the machine's running runtime, bounded by its own timeout, and read its
 /// result as `ToolResult`.
-fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
+pub(crate) fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
     tool: StreamActionTool,
     tool_arguments: serde_json::Map<String, serde_json::Value>,
 ) -> Result<ToolResult, TatolabCommandFailure> {
@@ -278,11 +295,12 @@ pub(crate) fn stop_stream_tool_arguments(
     stream_tool_arguments(stream)
 }
 
-/// `tatolab stop STREAM`.
-pub(crate) fn stop_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
+/// `tatolab stop [STREAM]`.
+pub(crate) fn stop_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
     let stop_stream_result: StopStreamToolResult = call_one_stream_action_tool(
         StreamActionTool::StopStream,
-        stop_stream_tool_arguments(stream),
+        stop_stream_tool_arguments(&stream),
     )?;
     if let Some(not_recorded_warning) = stop_not_recorded_warning_line(&stop_stream_result) {
         write_verb_standard_error(&not_recorded_warning);
@@ -316,10 +334,13 @@ fn stop_not_recorded_warning_line(stop_stream_result: &StopStreamToolResult) -> 
         })
 }
 
-/// `tatolab start STREAM`.
-pub(crate) fn start_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
-    let start_stream_result: StartStreamToolResult =
-        call_one_stream_action_tool(StreamActionTool::StartStream, stream_tool_arguments(stream))?;
+/// `tatolab start [STREAM]`.
+pub(crate) fn start_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
+    let start_stream_result: StartStreamToolResult = call_one_stream_action_tool(
+        StreamActionTool::StartStream,
+        stream_tool_arguments(&stream),
+    )?;
     write_verb_standard_output(&format!(
         "{} started ({})\n",
         start_stream_result.stream,
@@ -327,11 +348,12 @@ pub(crate) fn start_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
     ))
 }
 
-/// `tatolab rm STREAM`.
-pub(crate) fn remove_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
+/// `tatolab rm [STREAM]`.
+pub(crate) fn remove_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
     let remove_stream_result: RemoveStreamToolResult = call_one_stream_action_tool(
         StreamActionTool::RemoveStream,
-        stream_tool_arguments(stream),
+        stream_tool_arguments(&stream),
     )?;
     write_verb_standard_output(&rendered_removed_stream_line(&remove_stream_result))
 }
@@ -350,6 +372,30 @@ fn rendered_removed_stream_line(remove_stream_result: &RemoveStreamToolResult) -
         "{} removed{what_removing_did}\n",
         remove_stream_result.stream
     )
+}
+
+/// `tatolab rename [STREAM] DISPLAY_NAME`, its positionals as given.
+pub(crate) fn rename_stream(
+    stream_then_display_name: &[String],
+) -> Result<u8, TatolabCommandFailure> {
+    let (stream_argument, display_name) = match stream_then_display_name {
+        [display_name] => (None, display_name),
+        [stream, display_name] => (Some(stream.as_str()), display_name),
+        _ => {
+            return Err(TatolabCommandFailure::refused(
+                "rename takes [STREAM] DISPLAY_NAME".to_owned(),
+            ));
+        }
+    };
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
+    let mut rename_stream_arguments = stream_tool_arguments(&stream);
+    rename_stream_arguments.insert("display_name".to_owned(), display_name.as_str().into());
+    let rename_stream_result: RenameStreamToolResult =
+        call_one_stream_action_tool(StreamActionTool::RenameStream, rename_stream_arguments)?;
+    write_verb_standard_output(&format!(
+        "{} is shown as \"{}\"\n",
+        rename_stream_result.stream, rename_stream_result.display_name
+    ))
 }
 
 /// `tatolab streams`.
@@ -432,16 +478,25 @@ fn expose_port_tool_arguments(
     expose_port_arguments
 }
 
-/// `tatolab expose STREAM NODE PORT [--public | --remove]`: `private`, `public` or `internal`.
+/// `tatolab expose [STREAM] NODE PORT [--public | --remove]`, its positionals as given:
+/// `private`, `public` or `internal`.
 pub(crate) fn expose_port(
-    stream: &str,
-    node: &str,
-    port: &str,
+    stream_then_node_then_port: &[String],
     requested_level: ExposePortLevel,
 ) -> Result<u8, TatolabCommandFailure> {
+    let (stream_argument, node, port) = match stream_then_node_then_port {
+        [node, port] => (None, node, port),
+        [stream, node, port] => (Some(stream.as_str()), node, port),
+        _ => {
+            return Err(TatolabCommandFailure::refused(
+                "expose takes [STREAM] NODE PORT".to_owned(),
+            ));
+        }
+    };
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
     let expose_port_result: ExposePortToolResult = call_one_stream_action_tool(
         StreamActionTool::ExposePort,
-        expose_port_tool_arguments(stream, node, port, requested_level),
+        expose_port_tool_arguments(&stream, node, port, requested_level),
     )?;
     if let Some(not_recorded_warning) = exposure_not_recorded_warning_line(&expose_port_result) {
         write_verb_standard_error(&not_recorded_warning);
@@ -500,13 +555,13 @@ mod tests {
     fn load_arguments(
         requested_stream_target: Option<&str>,
         requested_entry_file: Option<&str>,
-        requested_stream_name: Option<&str>,
+        requested_display_name: Option<&str>,
     ) -> StreamLoadArguments {
         StreamLoadArguments {
             requested_stream_target: requested_stream_target.map(OsString::from),
             requested_entry_file: requested_entry_file.map(OsString::from),
             requested_project_directory: None,
-            requested_stream_name: requested_stream_name.map(OsString::from),
+            requested_display_name: requested_display_name.map(OsString::from),
         }
     }
 
@@ -537,7 +592,7 @@ mod tests {
         )
         .unwrap();
         let from_nothing = StreamLoadRequest::from_arguments(
-            &load_arguments(None, None, Some("")),
+            &load_arguments(None, None, None),
             Path::new("/srv/project"),
         )
         .unwrap();
@@ -549,6 +604,20 @@ mod tests {
         assert_eq!(
             serde_json::Value::Object(from_nothing.run_stream_tool_arguments(true)),
             json!({"project_directory": "/srv/project", "keep": true})
+        );
+    }
+
+    #[test]
+    fn an_empty_name_is_sent_for_the_runtime_to_refuse_never_dropped_as_no_name() {
+        let named_nothing = StreamLoadRequest::from_arguments(
+            &load_arguments(None, None, Some("")),
+            Path::new("/srv/project"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::Value::Object(named_nothing.run_stream_tool_arguments(true)),
+            json!({"project_directory": "/srv/project", "name": "", "keep": true})
         );
     }
 

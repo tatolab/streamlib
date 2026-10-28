@@ -420,19 +420,14 @@ class StreamBuilder:
         }
 
 
-def compile_stream_to_graph(
-    stream_function: Callable[[StreamBuilder], object], *, name: str | None = None
-) -> dict[str, Any]:
+def compile_stream_to_graph(stream_function: Callable[[StreamBuilder], object]) -> dict[str, Any]:
     """Run a `@stream` function once over a fresh `StreamBuilder` and return the graph it built."""
     if not is_stream_function(stream_function):
         raise TypeError(
             f"{stream_function!r} is not a stream: decorate it with @stream — a "
             f"module-level `def` taking one `StreamBuilder`"
         )
-    stream_name = (
-        name if name is not None else getattr(stream_function, _STREAM_NAME_ATTRIBUTE)
-    )
-    stream_builder = StreamBuilder(stream_name)
+    stream_builder = StreamBuilder(getattr(stream_function, _STREAM_NAME_ATTRIBUTE))
     stream_function(stream_builder)
     return stream_builder._compiled_graph()
 

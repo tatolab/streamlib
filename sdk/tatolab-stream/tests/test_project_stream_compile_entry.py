@@ -364,7 +364,7 @@ def test_the_app_does_not_see_the_launchers_arguments(anchor_directory: Path):
         f"open({str(argv_probe)!r}, 'w').write(json.dumps(sys.argv))\n" + MINIMAL_STREAM_SOURCE,
     )
 
-    compiled_document(run_compile_entry(anchor_directory, "--name", "desk"))
+    compiled_document(run_compile_entry(anchor_directory, "--dir", "desk"))
 
     assert json.loads(argv_probe.read_text()) == [str(entry_file)], (
         "the app must see only its own path, as `python stream.py` gives it"
@@ -676,15 +676,7 @@ def test_a_module_targets_refusal_names_the_file_its_module_resolved_to(anchor_d
     ) in message
 
 
-def test_name_overrides_the_streams_own_name_and_is_cast(anchor_directory: Path):
-    write_app(anchor_directory, "stream.py", MINIMAL_STREAM_SOURCE)
-
-    document = compiled_document(run_compile_entry(anchor_directory, "--name", "Front Rig"))
-
-    assert document["stream_graph"]["stream"] == "front-rig"
-
-
-def test_a_name_that_casts_to_nothing_is_refused_before_the_entry_runs(anchor_directory: Path):
+def test_the_compile_takes_no_name_and_names_the_graph_by_its_function(anchor_directory: Path):
     ran = anchor_directory / "entry-ran.txt"
     write_app(
         anchor_directory,
@@ -692,10 +684,13 @@ def test_a_name_that_casts_to_nothing_is_refused_before_the_entry_runs(anchor_di
         f"open({str(ran)!r}, 'w').write('ran')\n" + MINIMAL_STREAM_SOURCE,
     )
 
-    message = refusal_of(run_compile_entry(anchor_directory, "--name", "!!!"))
+    refused = run_compile_entry(anchor_directory, "--name", "Front Rig")
 
-    assert "--name '!!!' cannot name a stream" in message
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "unrecognized arguments: --name" in refused.stderr
     assert not ran.exists(), "a refused flag must not cost the entry file a run"
+    document = compiled_document(run_compile_entry(anchor_directory))
+    assert document["stream_graph"]["stream"] == "main"
 
 
 def test_several_streams_are_refused_listing_each_with_its_description(anchor_directory: Path):

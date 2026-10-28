@@ -66,8 +66,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     AddRelayToolResult, ConfigureRelayToolResult, ExposePortLevel, ExposePortToolResult,
     ListRelaysToolResult, ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState,
     LoadedStreamInstance, LogsToolResult, LogsToolResultRecord, RemoveRelayToolResult,
-    RemoveStreamToolResult, RunStreamToolResult, StartStreamToolResult, StopStreamToolResult,
-    StreamLocationOnTheWire,
+    RemoveStreamToolResult, RenameStreamToolResult, RunStreamToolResult, StartStreamToolResult,
+    StopStreamToolResult, StreamLocationOnTheWire,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -90,7 +90,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` lists them, each by its stream id with its display name and location, attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to show it under another display name — and answers its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, the same location replaces its stream under the same id. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` lists them, each by its stream id with its display name and location, attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to show it under another display name — and answers its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, the same location replaces its stream under the same id. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, `rename_stream` shows one under another display name — recorded, and never changing its id, address or broadcast — and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -436,6 +436,18 @@ struct RunStreamToolArguments {
 struct StreamActionToolArguments {
     #[schemars(description = STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION)]
     stream: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RenameStreamToolArguments {
+    #[schemars(description = STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
+    #[schemars(
+        description = "The label to show the stream under: any text with something to show, never cast and never unique. The stream id, its address and its broadcast stay as they are."
+    )]
+    display_name: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -829,6 +841,30 @@ impl LocalApiMcpServerHandler {
                 stream: removed.stream_id,
                 unloaded: removed.unloaded,
                 forgotten: removed.forgotten,
+            },
+        )
+    }
+
+    #[tool(
+        description = "Show a stream under another display name. Its stream id, address and broadcast stay as they are, so no reader of its ports is cut off. A recorded stream's record is rewritten first, so a rename survives a runtime restart and a re-load that gives no `name`; a rename whose record cannot be written is refused with the stream shown as it was. Answers the stream id as `stream` and the `display_name` it is shown under now."
+    )]
+    async fn rename_stream(
+        &self,
+        Parameters(RenameStreamToolArguments {
+            stream,
+            display_name,
+        }): Parameters<RenameStreamToolArguments>,
+    ) -> ToolCallAnswer {
+        let renamed = self
+            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+                operations_on_the_loaded_streams.rename_stream(&stream, &display_name)
+            })
+            .await?;
+        serialized_tool_result(
+            "rename_stream",
+            &RenameStreamToolResult {
+                stream: renamed.stream_id,
+                display_name: renamed.display_name,
             },
         )
     }
@@ -1257,6 +1293,7 @@ pub(crate) mod tests {
         "stop_stream",
         "start_stream",
         "remove_stream",
+        "rename_stream",
         "list_streams",
         "expose_port",
         "add_relay",
@@ -1277,6 +1314,7 @@ pub(crate) mod tests {
         "stop_stream",
         "start_stream",
         "remove_stream",
+        "rename_stream",
         "expose_port",
     ];
 
@@ -2394,6 +2432,21 @@ pub(crate) mod tests {
                 "remove_stream",
                 json!({ "stream": STUB_STREAM_ID, "force": true }),
                 "force",
+            ),
+            (
+                "rename_stream",
+                json!({ "stream": STUB_STREAM_ID }),
+                "display_name",
+            ),
+            (
+                "rename_stream",
+                json!({ "display_name": "Desk camera" }),
+                "stream",
+            ),
+            (
+                "rename_stream",
+                json!({ "stream": STUB_STREAM_ID, "display_name": "Desk", "name": "Desk" }),
+                "name",
             ),
             (
                 "list_streams",

@@ -48,6 +48,7 @@ CONTROL_TOOL_NAMES = {
     "stop_stream",
     "start_stream",
     "remove_stream",
+    "rename_stream",
     "list_streams",
     "expose_port",
     "add_relay",

@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab`: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `streams` and
-//! `expose` load and manage the streams the machine's runtime holds; `relays` and `relay` list,
+//! `tatolab`: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `rename`,
+//! `streams` and `expose` load and manage the streams the machine's runtime holds; `relays` and `relay` list,
 //! add, configure and remove the relays it joins; and `graph`, `logs` and `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
 //! machine's users the virtual camera's loopback device, once; `--version` adds the runtime's
 //! description to the CLI's own version. No verb starts a runtime.
@@ -25,6 +25,7 @@ mod runtime_logs_verb;
 mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
 mod stream_actions_on_the_runtime;
+mod stream_argument_resolution_through_the_listing;
 mod stream_log_records_from_the_runtime;
 mod verb_output_table;
 mod verb_standard_output;
@@ -45,7 +46,9 @@ use clap::{CommandFactory, Parser, Subcommand};
 use streamlib_runtime_client_contract::local_api_wire_contract::ExposePortLevel;
 
 use crate::attached_stream_on_the_runtime::AttachedStreamVerb;
-use crate::stream_actions_on_the_runtime::StreamLoadArguments;
+use crate::stream_actions_on_the_runtime::{
+    STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP, StreamLoadArguments,
+};
 use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
@@ -136,18 +139,32 @@ enum TatolabVerb {
     },
     /// Stop a stream: unload it, and keep a kept one stopped across restarts.
     Stop {
-        /// The stream to stop, as `tatolab streams` names it.
-        stream: String,
+        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
+        stream: Option<String>,
     },
     /// Load a stopped kept stream again, or retry a failed one.
     Start {
-        /// The stream to start, as `tatolab streams` names it.
-        stream: String,
+        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
+        stream: Option<String>,
     },
     /// Remove a stream: unload it and forget it.
     Rm {
-        /// The stream to remove, as `tatolab streams` names it.
-        stream: String,
+        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
+        stream: Option<String>,
+    },
+    /// Show a stream under another display name; its id and address stay as they are.
+    #[command(
+        override_usage = "tatolab rename [STREAM] <DISPLAY_NAME>",
+        after_long_help = STREAM_ARGUMENT_LONG_HELP,
+        long_about = "Show a stream under another display name — any text, never cast and never \
+                      unique. Its id, its address and its broadcast stay as they are, so no reader \
+                      of its ports is cut off, and the name holds across restarts and re-loads \
+                      without --name."
+    )]
+    Rename {
+        /// [STREAM], as every stream verb takes it, then the display name to show it under.
+        #[arg(value_names = ["STREAM", "DISPLAY_NAME"], num_args = 1..=2, required = true)]
+        stream_then_display_name: Vec<String>,
     },
     /// List the streams the runtime holds: attached, kept, stopped or failed, and why each failed.
     Streams,
@@ -159,13 +176,15 @@ enum TatolabVerb {
                       longer allows is cut at once — and a kept stream records it, over what its \
                       function exposes, across restarts."
     )]
+    #[command(
+        override_usage = "tatolab expose [STREAM] <NODE> <PORT> [--public | --remove]",
+        after_long_help = STREAM_ARGUMENT_LONG_HELP
+    )]
     Expose {
-        /// The stream the port belongs to.
-        stream: String,
-        /// The node, by its name in the stream's graph.
-        node: String,
-        /// The output port, by its name on the node.
-        port: String,
+        /// [STREAM], as every stream verb takes it; the node by its name in the stream's graph;
+        /// and the output port by its name on the node.
+        #[arg(value_names = ["STREAM", "NODE", "PORT"], num_args = 2..=3, required = true)]
+        stream_then_node_then_port: Vec<String>,
         /// Make the port public instead of private.
         #[arg(long = "public", conflicts_with = "remove")]
         public: bool,
@@ -199,9 +218,11 @@ enum TatolabVerb {
     },
     /// Read a loaded stream's records from the runtime, or its JSONL log file.
     #[command(
-        long_about = "With --stream, reads that loaded stream's records as the runtime holds them, \
-                      by sequence number; -f keeps following. With RUNTIME_ID-STREAM, renders that \
-                      stream's on-disk JSONL log exactly as the runtime mirrored it."
+        long_about = "Reads a loaded stream's records as the runtime holds them, by sequence \
+                      number — the stream --stream names, by its id or a display name only it \
+                      holds, or the one loaded from the working directory; -f keeps following. \
+                      With RUNTIME_ID-STREAM, renders that stream's on-disk JSONL log exactly as \
+                      the runtime mirrored it; --list names each one."
     )]
     Logs(runtime_logs_verb::RuntimeLogsVerbArguments),
     /// Connect an MCP host to the runtime over this command's stdin and stdout.
@@ -228,7 +249,7 @@ enum TatolabVerb {
 }
 
 /// The working directory a project defaults to.
-fn caller_working_directory() -> Result<PathBuf, TatolabCommandFailure> {
+pub(crate) fn caller_working_directory() -> Result<PathBuf, TatolabCommandFailure> {
     std::env::current_dir().map_err(|io_failure| {
         TatolabCommandFailure::refused(format!("cannot read the working directory: {io_failure}"))
     })
@@ -294,20 +315,25 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
                 &caller_working_directory,
             )
         }),
-        TatolabVerb::Stop { stream } => stream_actions_on_the_runtime::stop_stream(&stream),
-        TatolabVerb::Start { stream } => stream_actions_on_the_runtime::start_stream(&stream),
-        TatolabVerb::Rm { stream } => stream_actions_on_the_runtime::remove_stream(&stream),
+        TatolabVerb::Stop { stream } => {
+            stream_actions_on_the_runtime::stop_stream(stream.as_deref())
+        }
+        TatolabVerb::Start { stream } => {
+            stream_actions_on_the_runtime::start_stream(stream.as_deref())
+        }
+        TatolabVerb::Rm { stream } => {
+            stream_actions_on_the_runtime::remove_stream(stream.as_deref())
+        }
+        TatolabVerb::Rename {
+            stream_then_display_name,
+        } => stream_actions_on_the_runtime::rename_stream(&stream_then_display_name),
         TatolabVerb::Streams => stream_actions_on_the_runtime::list_streams(),
         TatolabVerb::Expose {
-            stream,
-            node,
-            port,
+            stream_then_node_then_port,
             public,
             remove,
         } => stream_actions_on_the_runtime::expose_port(
-            &stream,
-            &node,
-            &port,
+            &stream_then_node_then_port,
             match (public, remove) {
                 (true, _) => ExposePortLevel::Public,
                 (false, true) => ExposePortLevel::Internal,

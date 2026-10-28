@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
 use super::graph_change_listener::GraphChangeListener;
@@ -125,8 +125,8 @@ pub struct LoadedStreamInThisRuntime {
     /// What an attached `run_stream` compiled this stream from; unset for
     /// every other load.
     attached_stream_run_source: OnceLock<AttachedStreamRunSource>,
-    /// The label the stream is shown under.
-    display_name: String,
+    /// The label the stream is shown under, which a rename replaces.
+    display_name: RwLock<String>,
     /// Where the stream's code lives; `None` for a stream a library host loads.
     stream_location: Option<StreamLocation>,
 }
@@ -292,7 +292,7 @@ impl LoadedStreamInThisRuntime {
             this_stream: this_stream.clone(),
             holding,
             attached_stream_run_source: OnceLock::new(),
-            display_name,
+            display_name: RwLock::new(display_name),
             stream_location,
         }))
     }
@@ -307,8 +307,13 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// The label the stream is shown under.
-    pub fn display_name(&self) -> &str {
-        &self.display_name
+    pub fn display_name(&self) -> String {
+        self.display_name.read().clone()
+    }
+
+    /// Show the stream under `display_name` from now on.
+    pub(crate) fn rename(&self, display_name: String) {
+        *self.display_name.write() = display_name;
     }
 
     /// Where the stream's code lives; `None` for a stream a library host loads.

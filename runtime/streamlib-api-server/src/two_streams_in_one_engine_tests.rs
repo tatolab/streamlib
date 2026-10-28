@@ -459,8 +459,8 @@ async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
     assert_eq!(
         nothing_exposed["streams"],
         json!([
-            { "stream": "first", "exposed_output_ports": [] },
-            { "stream": "second", "exposed_output_ports": [] },
+            { "stream": "first", "display_name": "first", "exposed_output_ports": [] },
+            { "stream": "second", "display_name": "second", "exposed_output_ports": [] },
         ])
     );
 
@@ -472,6 +472,7 @@ async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
         .first
         .set_output_port_exposure_level("idle-in-first", "video", OutputPortExposureLevel::Private)
         .unwrap();
+    loaded.engine.rename_stream("first", "Desk camera").unwrap();
     let (status_code, listing) =
         crate::loopback_http_listener::tests::http_get(served.bound_address(), "/").await;
 
@@ -481,9 +482,13 @@ async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
     let [first, second] = [0, 1].map(|stream| listing["streams"][stream].clone());
     assert_eq!(
         second,
-        json!({ "stream": "second", "exposed_output_ports": [] })
+        json!({ "stream": "second", "display_name": "second", "exposed_output_ports": [] })
     );
     assert_eq!(first["stream"], "first");
+    assert_eq!(
+        first["display_name"], "Desk camera",
+        "a rename shows in the listing under the same id"
+    );
     let mut exposed_output_ports = first["exposed_output_ports"]
         .as_array()
         .expect("a stream lists its exposed ports")
