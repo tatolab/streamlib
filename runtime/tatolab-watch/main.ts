@@ -3,7 +3,8 @@
 
 // The preview page: plays the broadcast `/watch/<machine>/<stream id>` names off
 // the machine's local relay, pinned to the video track `<node>/<port>` when the
-// path names one.
+// path names one; at `/watch` alone it lists the machine's loaded streams, each
+// by its display name and id, to open one.
 
 import * as Watch from "@moq/watch";
 
@@ -127,9 +128,46 @@ function playTheWatchedAddress(address: WatchedAddress): void {
 	showWhatIsPlaying();
 }
 
+// The runtime's `GET /` listing, as far as this page reads it.
+type ListingOfTheMachinesStreams = {
+	machine: string;
+	streams: { stream: string; display_name: string }[];
+};
+
+async function listTheMachinesStreamsToPickFrom(): Promise<void> {
+	let listing: ListingOfTheMachinesStreams;
+	try {
+		const answer = await fetch("/");
+		if (!answer.ok) {
+			throw new Error(`the runtime answered ${answer.status}`);
+		}
+		listing = (await answer.json()) as ListingOfTheMachinesStreams;
+	} catch (listingFailure) {
+		showTheStatus(`the machine's streams could not be listed: ${listingFailure}`);
+		return;
+	}
+	showTheStatus(
+		listing.streams.length === 0
+			? `no stream is loaded on ${listing.machine}`
+			: `pick a stream loaded on ${listing.machine}`,
+	);
+	elementById<HTMLUListElement>("watch-streams").replaceChildren(
+		...listing.streams.map(({ stream, display_name }) => {
+			const item = document.createElement("li");
+			const link = document.createElement("a");
+			link.href = watchPagePathOf({ machine: listing.machine, stream, trackOfOneNodesPort: undefined });
+			link.textContent = display_name;
+			const streamId = document.createElement("code");
+			streamId.textContent = stream;
+			item.append(link, " ", streamId);
+			return item;
+		}),
+	);
+}
+
 const watchedAddress = watchedAddressFromThePath(location.pathname);
 if (watchedAddress) {
 	playTheWatchedAddress(watchedAddress);
 } else {
-	showTheStatus("open /watch/<machine>/<stream id> or /watch/<machine>/<stream id>/<node>/<port>");
+	void listTheMachinesStreamsToPickFrom();
 }
