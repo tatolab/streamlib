@@ -1025,17 +1025,6 @@ def test_a_builder_refusal_inside_a_stream_function_propagates() -> None:
         compile_stream_to_graph(a_stream_with_a_typed_duplicate)
 
 
-def test_a_name_given_at_compile_overrides_the_functions_and_is_cast() -> None:
-    graph = compile_stream_to_graph(every_kind_of_node, name="Front Camera Rig")
-
-    assert graph["stream"] == "front-camera-rig"
-
-
-def test_a_name_given_at_compile_casting_to_nothing_is_refused_naming_it() -> None:
-    with pytest.raises(ExposedNameCastsToNothingError, match="'---'"):
-        compile_stream_to_graph(every_kind_of_node, name="---")
-
-
 def test_a_function_that_is_not_a_stream_is_refused_naming_the_decorator() -> None:
     with pytest.raises(TypeError, match="decorate it with @stream"):
         compile_stream_to_graph(not_decorated)

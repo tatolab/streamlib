@@ -103,8 +103,8 @@ pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
     KeptStreamReloadAtTheStart, LoadedStreamHolding, OutputPortExposureOutcome,
     RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_KEPT_STREAM, RunStreamRequest, StreamListing,
-    StreamListingState, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome,
-    StreamStopOutcome,
+    StreamListingState, StreamRemoveOutcome, StreamRenameOutcome, StreamRunOutcome,
+    StreamStartOutcome, StreamStopOutcome,
 };
 pub use stream_environment::StreamEnvironment;
 pub use stream_location_and_id::StreamLocation;

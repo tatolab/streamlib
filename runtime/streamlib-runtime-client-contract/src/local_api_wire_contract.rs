@@ -137,6 +137,15 @@ pub struct RemoveStreamToolResult {
     pub forgotten: bool,
 }
 
+/// The `rename_stream` tool's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameStreamToolResult {
+    /// The stream's id, which a rename leaves as it was.
+    pub stream: String,
+    /// The label the stream is shown under now.
+    pub display_name: String,
+}
+
 /// The `list_streams` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListStreamsToolResult {

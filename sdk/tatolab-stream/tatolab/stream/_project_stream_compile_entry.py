@@ -7,7 +7,7 @@
 and `tatolab dev`.
 
 The runtime starts it as `<venv python> -I -m tatolab.stream._project_stream_compile_entry
---verb {run,dev} [TARGET] [-f FILE] [--dir DIR] [--name NAME]`, with the anchor
+--verb {run,dev} [TARGET] [-f FILE] [--dir DIR]`, with the anchor
 directory as the working directory; `--dir` is only how the caller's command spelled
 it. On success stdout carries exactly one JSON object,
 `{"stream_graph": ..., "project_directory": ..., "stream_function": "<module>:<qualname>"}`,
@@ -45,7 +45,6 @@ from ._project_stream_entry_execution import (
     execute_app_entry_file,
     import_stream_entry_module,
     project_directory_the_stream_entry_imports_from,
-    refuse_a_stream_name_that_casts_to_nothing,
     select_stream_function,
     stream_function_location,
     stream_functions_defined_in,
@@ -166,12 +165,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "commands; the anchor itself is the working directory."
         ),
     )
-    parser.add_argument(
-        "--name",
-        dest="requested_stream_name",
-        metavar="NAME",
-        help="Compile the stream under this name instead of its function's.",
-    )
     return parser
 
 
@@ -218,14 +211,11 @@ def compile_the_requested_stream(
     anchor_directory_as_typed: Optional[str],
     requested_entry_file: Optional[Path],
     requested_stream_target: Optional[str],
-    requested_stream_name: Optional[str],
 ) -> Optional[dict[str, Any]]:
     """The compiled document, or `None` once an app failure's traceback is printed."""
     resolved_stream_entry = resolve_stream_entry(
         verb, anchor_directory, requested_entry_file, requested_stream_target
     )
-    if requested_stream_name is not None:
-        refuse_a_stream_name_that_casts_to_nothing(requested_stream_name)
     entry_described = resolved_stream_entry.described_for_the_user()
 
     _print_the_cross_floor_warning_block(anchor_directory)
@@ -256,7 +246,7 @@ def compile_the_requested_stream(
         stream_functions_defined_in(entry_namespace, str(entry_namespace.get("__name__", ""))),
     )
     try:
-        stream_graph = compile_stream_to_graph(stream_function, name=requested_stream_name)
+        stream_graph = compile_stream_to_graph(stream_function)
     except Exception as compile_failure:  # noqa: BLE001 — reported as the app's own
         print_app_failure(entry_described, compile_failure)
         return None
@@ -285,7 +275,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             anchor_directory_as_typed=arguments.anchor_directory_as_typed,
             requested_entry_file=arguments.requested_entry_file,
             requested_stream_target=arguments.requested_stream_target,
-            requested_stream_name=arguments.requested_stream_name,
         )
     except ProjectStreamCompileRefusalError as refusal:
         os.close(compiled_document_stdout_descriptor)

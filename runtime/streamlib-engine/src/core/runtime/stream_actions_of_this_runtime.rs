@@ -3,7 +3,7 @@
 
 //! The stream actions a runtime takes for its owner: run a project's stream
 //! function, attached or kept, under the stream id its location computes to;
-//! stop, start and remove a stream; list what the runtime holds; set a port's
+//! stop, start, remove and rename a stream; list what the runtime holds; set a port's
 //! exposure; re-load the kept streams at start; and unload an attached stream
 //! when what attached it goes.
 
@@ -69,9 +69,8 @@ pub struct RunStreamRequest {
     /// `x.py`, `mod.sub:fn` — or `None` for the sole `@stream` in the
     /// project's `stream.py`.
     pub stream_function: Option<String>,
-    /// The display name the load gives the stream; the compile names the graph
-    /// by it too. `None` keeps a replaced stream's display name, and shows a
-    /// new one under its function's name.
+    /// The display name the load gives the stream. `None` keeps a replaced
+    /// stream's display name, and shows a new one under its function's name.
     pub display_name: Option<String>,
     /// Whether the runtime keeps the stream, recording it in its state
     /// directory, or it is attached to what ran it.
@@ -146,6 +145,15 @@ pub struct StreamRemoveOutcome {
     pub unloaded: bool,
     /// Whether the stream was recorded and its record is now gone.
     pub forgotten: bool,
+}
+
+/// A stream [`Runner::rename_stream`] shows under a new display name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamRenameOutcome {
+    /// The stream's id, which a rename leaves as it was.
+    pub stream_id: String,
+    /// The label the stream is shown under now.
+    pub display_name: String,
 }
 
 /// The state one stream of [`Runner::list_streams`] is in.
@@ -386,6 +394,9 @@ impl Runner {
             holding,
             stream_tags_attached_to_the_caller,
         } = request;
+        if let Some(display_name) = &display_name_the_run_gives {
+            refuse_a_display_name_with_nothing_to_show(display_name)?;
+        }
         let how_this_run_is_held = match (holding, self.stream_records()) {
             (LoadedStreamHolding::Attached, _) => HowARunIsHeld::Attached,
             (LoadedStreamHolding::Kept, Some(stream_records)) => {
@@ -415,7 +426,6 @@ impl Runner {
         let compiled = compile_the_stream_function_in_the_projects_interpreter(
             &project_directory,
             stream_function.as_deref(),
-            display_name_the_run_gives.as_deref(),
             lend_directory,
         )?;
         let stream_location = compiled.stream_location;
@@ -476,7 +486,7 @@ impl Runner {
                     ));
                 };
                 let display_name =
-                    display_name_the_run_gives.unwrap_or_else(|| loaded.display_name().to_string());
+                    display_name_the_run_gives.unwrap_or_else(|| loaded.display_name());
                 self.replace_an_attached_stream(
                     loaded,
                     previous_run_source,
@@ -717,6 +727,45 @@ impl Runner {
         })
     }
 
+    /// Show the stream whose id is `stream_id` under `display_name`, leaving
+    /// its id, address and broadcast as they are. A recorded stream's record
+    /// is rewritten first, so a rename whose record cannot be written is
+    /// refused with the stream shown as it was; a loaded stream is shown under
+    /// the new name once it is recorded. Refused for a display name with
+    /// nothing to show, a record an earlier runtime wrote, and an id the
+    /// runtime holds no stream of.
+    pub fn rename_stream(
+        &self,
+        stream_id: &str,
+        display_name: &str,
+    ) -> Result<StreamRenameOutcome> {
+        refuse_a_display_name_with_nothing_to_show(display_name)?;
+        let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
+        let loaded = self.loaded_stream_of_the_id_when_loaded(stream_id);
+        let record = self
+            .current_stream_record_of_the_id(stream_id)
+            .map_err(|unreadable| {
+                Error::Runtime(format!(
+                    "the stream `{stream_id}` was not renamed: {unreadable}"
+                ))
+            })?;
+        match (record, &loaded) {
+            (None, None) => return Err(self.a_stream_this_runtime_does_not_hold(stream_id)),
+            (Some(mut record), _) => {
+                record.display_name = display_name.to_string();
+                self.write_a_stream_record(&record)?;
+            }
+            (None, Some(_)) => {}
+        }
+        if let Some(loaded) = loaded {
+            loaded.rename(display_name.to_string());
+        }
+        Ok(StreamRenameOutcome {
+            stream_id: stream_id.to_string(),
+            display_name: display_name.to_string(),
+        })
+    }
+
     /// Every stream the runtime holds, by id: each loaded stream, then each
     /// record not loaded — one an earlier runtime wrote listed failed. A record
     /// that cannot be read is logged and left out.
@@ -726,7 +775,7 @@ impl Runner {
             .iter()
             .map(|stream| StreamListing {
                 stream_id: stream.stream_id().to_string(),
-                display_name: stream.display_name().to_string(),
+                display_name: stream.display_name(),
                 stream_location: stream.stream_location().cloned(),
                 state: stream.holding().into(),
                 node_count: Some(stream.node_count()),
@@ -1278,8 +1327,9 @@ impl Runner {
                 })
             }
             Err(replace_refusal) => {
+                let previous_display_name = previously_loaded.display_name();
                 match self.load_and_start_a_stream(OneStreamAStreamActionLoads {
-                    display_name: previously_loaded.display_name(),
+                    display_name: &previous_display_name,
                     stream_location: previously_loaded
                         .stream_location()
                         .unwrap_or(&stream_location),
@@ -1460,6 +1510,18 @@ fn refuse_an_id_another_location_holds(
 
 /// Log what the runtime's previous run crashed on, a crash no stream owns as
 /// the runtime bug it is.
+/// Refuse a display name that is empty or only whitespace: a stream is always
+/// shown under something.
+fn refuse_a_display_name_with_nothing_to_show(display_name: &str) -> Result<()> {
+    if display_name.trim().is_empty() {
+        return Err(Error::Configuration(format!(
+            "{display_name:?} cannot be a stream's display name: it shows nothing; a display \
+             name is any text with something to show"
+        )));
+    }
+    Ok(())
+}
+
 fn log_the_previous_runtime_runs_crash(crash: &CrashOfThePreviousRuntimeRun) {
     for (stream_id, cause) in &crash.causes_by_implicated_stream {
         tracing::error!(
@@ -2711,6 +2773,184 @@ mod tests {
 
     #[test]
     #[serial]
+    fn renaming_a_kept_stream_rewrites_its_record_then_its_table_entry_and_a_restart_keeps_the_name()
+     {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let camera = project.stream_id_of("camera");
+        let microphone = project.stream_id_of("microphone");
+        {
+            let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+            let running = a_kept_stream_loaded_without_its_start(
+                &runner,
+                state_directory.path(),
+                &a_kept_record_of(&project, "camera", serde_json::json!([])),
+            );
+            let mut stopped = a_kept_record_of(&project, "microphone", serde_json::json!([]));
+            stopped.stopped = true;
+            records_in(state_directory.path()).write(&stopped).unwrap();
+
+            let renamed = runner
+                .rename_stream(&camera, "Hello camera")
+                .expect("the loaded kept stream is renamed");
+            runner
+                .rename_stream(&microphone, "  Desk mic ✨  ")
+                .expect("the stopped stream is renamed");
+
+            assert_eq!(
+                renamed,
+                StreamRenameOutcome {
+                    stream_id: camera.clone(),
+                    display_name: "Hello camera".to_string(),
+                }
+            );
+            assert_eq!(running.display_name(), "Hello camera");
+            assert_eq!(running.stream_id(), camera, "a rename never changes the id");
+            assert_eq!(
+                the_record_of(state_directory.path(), &camera).display_name,
+                "Hello camera"
+            );
+            assert_eq!(
+                the_record_of(state_directory.path(), &microphone),
+                StreamRecord {
+                    display_name: "  Desk mic ✨  ".to_string(),
+                    ..stopped
+                },
+                "the display name is recorded as given, never cast, and nothing else changes"
+            );
+        }
+
+        let fresh_runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+
+        let shown_as: Vec<(String, String)> = fresh_runner
+            .list_streams()
+            .into_iter()
+            .map(|listing| (listing.stream_id, listing.display_name))
+            .collect();
+        let mut expected = vec![
+            (camera, "Hello camera".to_string()),
+            (microphone, "  Desk mic ✨  ".to_string()),
+        ];
+        expected.sort();
+        assert_eq!(shown_as, expected);
+    }
+
+    #[test]
+    #[serial]
+    fn a_rename_whose_record_cannot_be_written_is_refused_and_the_stream_is_shown_as_it_was() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let streams_directory = state_directory.path().join("streams");
+        let runner = a_runner_keeping_its_streams_in(Some(&streams_directory));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let camera = project.stream_id_of("camera");
+        let running = a_kept_stream_loaded_without_its_start(
+            &runner,
+            &streams_directory,
+            &a_kept_record_of(&project, "camera", serde_json::json!([])),
+        );
+
+        let refused = {
+            let _refusing_writes = StreamsDirectoryRefusingWrites::from_now_on(&streams_directory);
+            runner.rename_stream(&camera, "Hello camera")
+        };
+
+        refusal_of(refused);
+        assert_eq!(running.display_name(), "camera");
+        assert_eq!(
+            the_record_of(&streams_directory, &camera).display_name,
+            "camera"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn renaming_a_loaded_kept_stream_whose_record_is_unreadable_is_refused_naming_the_record() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let camera = project.stream_id_of("camera");
+        let running = a_kept_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_kept_record_of(&project, "camera", serde_json::json!([])),
+        );
+
+        for_each_unreadable_record_of(
+            state_directory.path(),
+            &camera,
+            |record_path, unreadable_bytes| {
+                let refusal = refusal_of(runner.rename_stream(&camera, "Hello camera"));
+
+                assert!(
+                    refusal.contains(&record_path.display().to_string()),
+                    "{refusal}"
+                );
+                assert_eq!(running.display_name(), "camera");
+                assert_eq!(std::fs::read(record_path).unwrap(), unreadable_bytes);
+            },
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn renaming_an_attached_stream_shows_it_under_the_name_and_records_nothing() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let attached = an_attached_stream_loaded_without_its_start(&runner, &project, "camera");
+
+        runner
+            .rename_stream(&project.stream_id_of("camera"), "Hello camera")
+            .expect("the attached stream is renamed");
+
+        assert_eq!(attached.display_name(), "Hello camera");
+        assert_eq!(runner.list_streams()[0].display_name, "Hello camera");
+        assert!(records_in(state_directory.path()).read_every().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_rename_is_refused_for_a_name_showing_nothing_an_id_held_by_no_stream_and_an_earlier_record()
+     {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let attached = an_attached_stream_loaded_without_its_start(&runner, &project, "camera");
+        let camera = project.stream_id_of("camera");
+        std::fs::write(
+            state_directory.path().join("main.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2,
+                "stream_name": "main",
+                "project_directory": "/home/someone/hello",
+                "interpreter": "/home/someone/hello/.venv/bin/python",
+                "stream_function": null,
+                "graph": {"stream": "main", "nodes": [], "links": []},
+                "stopped": false,
+                "failed_because": null,
+                "runtime_crashes_in_a_row_implicating_it": 0,
+                "exposure_rulings": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        for showing_nothing in ["", "   ", "\t\n"] {
+            let refusal = refusal_of(runner.rename_stream(&camera, showing_nothing));
+
+            assert!(refusal.contains("shows nothing"), "{refusal}");
+        }
+        let refusal = refusal_of(runner.rename_stream("absent", "Hello"));
+        assert!(refusal.contains("`absent`"), "{refusal}");
+        assert!(refusal.contains(&camera), "{refusal}");
+        let refusal = refusal_of(runner.rename_stream("main", "Hello"));
+        assert!(refusal.contains("was not renamed"), "{refusal}");
+        assert!(refusal.contains("earlier runtime"), "{refusal}");
+        assert_eq!(attached.display_name(), "camera");
+    }
+
+    #[test]
+    #[serial]
     fn the_listing_names_each_stream_by_id_display_name_and_location_and_one_not_loaded_counts_no_node()
      {
         let state_directory = tempfile::tempdir().unwrap();
@@ -3579,7 +3819,7 @@ mod tests {
     )]
     #[test]
     #[serial]
-    fn a_kept_run_of_the_records_location_replaces_it_under_its_id_keeping_its_display_name_and_rulings()
+    fn a_kept_run_of_the_records_location_replaces_it_under_its_id_keeping_its_renamed_display_name_and_rulings()
      {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
@@ -3589,11 +3829,9 @@ mod tests {
         ));
         let camera = project.stream_id_of("camera");
         let first = runner
-            .run_stream(RunStreamRequest {
-                display_name: Some("Front camera".to_string()),
-                ..project.run_request(LoadedStreamHolding::Kept)
-            })
+            .run_stream(project.run_request(LoadedStreamHolding::Kept))
             .unwrap();
+        runner.rename_stream(&camera, "Front camera").unwrap();
         runner
             .expose_port(&camera, "source", "out1", OutputPortExposureLevel::Internal)
             .unwrap();
@@ -3613,12 +3851,15 @@ mod tests {
             .run_stream(project.run_request(LoadedStreamHolding::Kept))
             .expect("the kept stream is replaced");
 
-        assert_eq!(first.display_name, "Front camera");
+        assert_eq!(
+            first.display_name, "camera",
+            "a new stream is shown under its function's name"
+        );
         assert!(replaced.replaced_the_kept_record);
         assert_eq!(replaced.stream_id, camera);
         assert_eq!(
             replaced.display_name, "Front camera",
-            "a run giving no display name keeps the recorded one"
+            "a run giving no display name keeps the renamed one"
         );
         assert_eq!(
             replaced.compile_warnings,

@@ -335,6 +335,15 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "remove_stream",
                 ))
             }
+            fn rename_stream(
+                &self,
+                _stream_id: &str,
+                _display_name: &str,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamRenameOutcome> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "rename_stream",
+                ))
+            }
             fn list_streams(&self) -> Vec<::streamlib::sdk::runtime::StreamListing> {
                 vec![::streamlib::sdk::runtime::StreamListing {
                     stream_id: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),

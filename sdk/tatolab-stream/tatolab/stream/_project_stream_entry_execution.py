@@ -15,7 +15,6 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Optional
 
-from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._project_stream_entry_resolution import (
     STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE,
     ProjectStreamCompileRefusalError,
@@ -31,7 +30,6 @@ __all__ = [
     "execute_app_entry_file",
     "import_stream_entry_module",
     "project_directory_the_stream_entry_imports_from",
-    "refuse_a_stream_name_that_casts_to_nothing",
     "select_stream_function",
     "stream_function_location",
     "stream_functions_defined_in",
@@ -187,16 +185,6 @@ def _no_stream_defined_refusal(verb: str, entry_described: str) -> ProjectStream
         "Name another entry file with `-f <file>`, or the stream itself with "
         f"{stream_target_forms(verb)}."
     )
-
-
-def refuse_a_stream_name_that_casts_to_nothing(requested_stream_name: str) -> None:
-    """Refuse a `--name` the exposed-name cast leaves nothing of, before any entry runs."""
-    try:
-        cast_exposed_name_to_url_safe(requested_stream_name)
-    except ExposedNameCastsToNothingError as casts_to_nothing:
-        raise ProjectStreamCompileRefusalError(
-            f"--name {requested_stream_name!r} cannot name a stream: {casts_to_nothing}"
-        ) from casts_to_nothing
 
 
 def project_directory_the_stream_entry_imports_from(

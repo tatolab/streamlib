@@ -83,19 +83,17 @@ pub(crate) fn the_projects_venv_interpreter(project_directory: &Path) -> PathBuf
 
 /// Compile `stream_function` of the project in `project_directory` — or the
 /// sole `@stream` in its `stream.py` when none is named — in the project's
-/// venv interpreter, as `stream_name` when one is given.
+/// venv interpreter.
 ///
 /// A machine shutdown requested while it runs kills the compile and refuses it.
 pub(crate) fn compile_the_stream_function_in_the_projects_interpreter(
     project_directory: &Path,
     stream_function: Option<&str>,
-    stream_name: Option<&str>,
     lend_directory: &Path,
 ) -> Result<StreamFunctionCompiledInTheProjectsInterpreter> {
     compile_the_stream_function_in_the_projects_interpreter_within(
         project_directory,
         stream_function,
-        stream_name,
         lend_directory,
         STREAM_FUNCTION_COMPILE_BOUND,
         &crate::core::runtime::is_the_machines_shutdown_requested,
@@ -109,7 +107,6 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter(
 pub(crate) fn stream_function_compile_command(
     project_directory: &Path,
     stream_function: Option<&str>,
-    stream_name: Option<&str>,
     lend_directory: &Path,
 ) -> Result<Command> {
     let mut command = stream_interpreter_command_in_its_project_directory(
@@ -131,9 +128,6 @@ pub(crate) fn stream_function_compile_command(
     if let Some(stream_function) = stream_function {
         command.arg(stream_function);
     }
-    if let Some(stream_name) = stream_name {
-        command.args(["--name", stream_name]);
-    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -149,7 +143,6 @@ pub(crate) fn stream_function_compile_command(
 pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     project_directory: &Path,
     stream_function: Option<&str>,
-    stream_name: Option<&str>,
     lend_directory: &Path,
     compile_bound: Duration,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
@@ -174,12 +167,8 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
         )));
     }
 
-    let mut command = stream_function_compile_command(
-        project_directory,
-        stream_function,
-        stream_name,
-        lend_directory,
-    )?;
+    let mut command =
+        stream_function_compile_command(project_directory, stream_function, lend_directory)?;
     let mut child =
         spawn_outside_every_iceoryx2_listener_bind(&mut command).map_err(|spawn_failure| {
             Error::Runtime(format!(
@@ -370,21 +359,18 @@ mod tests {
         fn compile(
             &self,
             stream_function: Option<&str>,
-            stream_name: Option<&str>,
         ) -> Result<StreamFunctionCompiledInTheProjectsInterpreter> {
-            self.compile_within(stream_function, stream_name, STREAM_FUNCTION_COMPILE_BOUND)
+            self.compile_within(stream_function, STREAM_FUNCTION_COMPILE_BOUND)
         }
 
         fn compile_within(
             &self,
             stream_function: Option<&str>,
-            stream_name: Option<&str>,
             compile_bound: Duration,
         ) -> Result<StreamFunctionCompiledInTheProjectsInterpreter> {
             compile_the_stream_function_in_the_projects_interpreter_within(
                 self.path(),
                 stream_function,
-                stream_name,
                 Path::new(LEND_DIRECTORY_FOR_TEST),
                 compile_bound,
                 &|| false,
@@ -392,7 +378,7 @@ mod tests {
         }
 
         fn refusal_of(&self, stream_function: Option<&str>) -> String {
-            match self.compile(stream_function, None) {
+            match self.compile(stream_function) {
                 Ok(compiled) => panic!("the compile was refused, and it returned {compiled:?}"),
                 Err(refusal) => refusal.to_string(),
             }
@@ -432,7 +418,7 @@ mod tests {
         ));
 
         let compiled = project
-            .compile(None, None)
+            .compile(None)
             .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
 
         assert_eq!(compiled.graph_json, a_compiled_graph());
@@ -466,7 +452,7 @@ mod tests {
         ));
 
         let refusal = project
-            .compile(None, None)
+            .compile(None)
             .expect_err("a document naming no stream function is refused")
             .to_string();
 
@@ -487,7 +473,7 @@ mod tests {
         ));
 
         let compiled = project
-            .compile(None, None)
+            .compile(None)
             .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
 
         assert_eq!(
@@ -505,7 +491,7 @@ mod tests {
         let project = ProjectWithAStubVenvInterpreter::running(&print_the_compile_document("$PWD"));
 
         let compiled = project
-            .compile(None, None)
+            .compile(None)
             .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
 
         assert_eq!(compiled.compile_warnings, Vec::<String>::new());
@@ -513,7 +499,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn the_compile_runs_the_entry_module_in_the_project_with_the_target_and_name_it_was_given() {
+    fn the_compile_runs_the_entry_module_in_the_project_with_the_target_it_was_given() {
         let project = ProjectWithAStubVenvInterpreter::running(&format!(
             "printf '%s\\n' \"$@\" > \"$PWD/arguments\"\nprintf '%s' \"$PYTHONPATH\" > \
              \"$PWD/python-path\"\n{}",
@@ -521,12 +507,11 @@ mod tests {
         ));
 
         project
-            .compile(Some("stream.py:main"), Some("Front Camera"))
+            .compile(Some("stream.py:main"))
             .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
         assert_eq!(
             std::fs::read_to_string(project.path().join("arguments")).unwrap(),
-            "-I\n-m\ntatolab.stream._project_stream_compile_entry\n--verb\nrun\nstream.py:main\n\
-             --name\nFront Camera\n",
+            "-I\n-m\ntatolab.stream._project_stream_compile_entry\n--verb\nrun\nstream.py:main\n",
             "the arguments land in the project directory, so the script ran there"
         );
         assert_eq!(
@@ -535,12 +520,12 @@ mod tests {
         );
 
         project
-            .compile(None, None)
+            .compile(None)
             .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
         assert_eq!(
             std::fs::read_to_string(project.path().join("arguments")).unwrap(),
             "-I\n-m\ntatolab.stream._project_stream_compile_entry\n--verb\nrun\n",
-            "no target and no name leaves the entry to find the sole `@stream`"
+            "no target leaves the entry to find the sole `@stream`"
         );
     }
 
@@ -550,7 +535,6 @@ mod tests {
         let command = stream_function_compile_command(
             Path::new("/home/someone/my_app"),
             Some("mod.sub:fn"),
-            None,
             Path::new(LEND_DIRECTORY_FOR_TEST),
         )
         .expect("the test directories hold no path-list separator");
@@ -592,7 +576,6 @@ mod tests {
 
         let refusal = compile_the_stream_function_in_the_projects_interpreter(
             project_directory.path(),
-            None,
             None,
             Path::new(LEND_DIRECTORY_FOR_TEST),
         )
@@ -679,7 +662,7 @@ mod tests {
         let started = Instant::now();
 
         let refusal = project
-            .compile_within(None, None, Duration::from_millis(500))
+            .compile_within(None, Duration::from_millis(500))
             .expect_err("a compile past its bound is refused")
             .to_string();
 
@@ -702,7 +685,6 @@ mod tests {
 
         let refusal = compile_the_stream_function_in_the_projects_interpreter_within(
             project.path(),
-            None,
             None,
             Path::new(LEND_DIRECTORY_FOR_TEST),
             STREAM_FUNCTION_COMPILE_BOUND,

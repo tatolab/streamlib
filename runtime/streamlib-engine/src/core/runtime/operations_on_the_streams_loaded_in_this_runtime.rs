@@ -9,7 +9,7 @@ use super::operations::RuntimeOperations;
 use super::{
     LoadedStreamAndTheOutputPortsItExposes, LoadedStreamTag, MachineName,
     OutputPortExposureOutcome, RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome,
-    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+    StreamRenameOutcome, StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::Result;
@@ -96,6 +96,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::remove_stream`].
     fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome>;
+
+    /// [`Runner::rename_stream`].
+    fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome>;
 
     /// [`Runner::list_streams`].
     fn list_streams(&self) -> Vec<StreamListing>;
@@ -190,6 +193,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome> {
         Runner::remove_stream(self, stream_id)
+    }
+
+    fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome> {
+        Runner::rename_stream(self, stream_id, display_name)
     }
 
     fn list_streams(&self) -> Vec<StreamListing> {
