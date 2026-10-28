@@ -1,7 +1,7 @@
 # stream-identity-and-persistence
 
-> **Status: proposed, awaiting the owner's approval.** One `[NEEDS DECISION]` below (a Rust
-> app's stream).
+> **Approved by the owner, 2026-10-28:** the proposal was merged as #2955, and Decided 5
+> (a Rust app's stream) was settled as option A ("a is fine").
 
 Built from #2950 and the align merged in #2954 (§Product: "A stream's location, id and display
 name" and "Every loaded stream persists"; ADR `docs/decisions/stream-identity-and-persistence.md`).
@@ -133,7 +133,7 @@ Paths are under `runtime/` unless marked otherwise.
 
 ## Decided 3 — every load is recorded (owner, 2026-10-27)
 
-- **One holding.** `LoadedStreamHolding` and the attached machinery go. Every `run_stream` load
+- **Every `run_stream` load is recorded.** The attached machinery goes. Every `run_stream` load
   writes a record before it starts, and the exposure rulings are recorded for every stream.
 - **Replace.** A load of a recorded location replaces it under the same id, keeping the display
   name (unless the load gives one) and the rulings. The running stream unloads only once the
@@ -179,28 +179,21 @@ Paths are under `runtime/` unless marked otherwise.
 - **`streams`** prints `ID  NAME  STATE  NODES  PROJECT  FUNCTION`, with state `running`,
   `stopped` or `failed`.
 
-## [NEEDS DECISION] — a Rust app's stream
+## Decided 5 — a Rust app's stream (owner, 2026-10-28)
 
-**The gap.** The Rust `App` (`sdk/streamlib-sdk/src/sdk/app.rs:82-88`) and any library-hosted
-`Runner` load a stream into the app's own engine:
-- it has no `@stream` function, so it has no location;
-- it has no state directory;
-- it is held `Attached` today.
+The Rust `App` (`sdk/streamlib-sdk/src/sdk/app.rs:82-88`) and any library-hosted `Runner` load
+a stream into the app's own engine. That stream has no `@stream` location and no state
+directory.
+- **Its id.** It keeps the id its host names, cast, as `App` does with
+  `THE_STREAM_NAME_AN_APP_LOADS`, and its display name defaults to the same name.
+- **Its lifetime.** It is never recorded and lives as long as its host process.
+- **Scope of the other rules.** The location, the hash and persistence apply to `run_stream`
+  loads in `tatolabd`.
+- **The holding.** `LoadedStreamHolding` keeps two variants, `RecordedByTheRuntime` and
+  `LivesWithTheHostProcess`. Nothing is "attached".
 
-The plan's location → id rule and its persistence rule are both written for streams the runtime
-compiles from a project.
-
-- **A (recommended):** a stream a library host loads keeps the id its host names, cast, as
-  `App` does today with `THE_STREAM_NAME_AN_APP_LOADS`. It is unrecorded, and it lives as long as
-  its host process, under a holding named for that (e.g.
-  `LoadedStreamHolding::LivesWithTheHostProcess`), never "attached". The location, the hash and
-  persistence apply to `run_stream` loads in `tatolabd`.
-- **B:** give a Rust app a location too: its cargo project directory plus the binary's name,
-  hashed the same way. Addresses are uniform across languages, at the cost of defining a Rust
-  location that nothing else uses.
-
-Recommendation: A. Rust authoring has no consumer pressing on addresses, and A keeps the change
-inside the runtime the decision was about.
+Rejected: a cargo-project location for a Rust app, hashed the same way — it defines a Rust
+location nothing else uses (owner, 2026-10-28).
 
 ## MODIFIED: §Product (`ARCHITECTURE.md:109-128, 130-150, 201-251, 296-298`)
 
@@ -304,7 +297,8 @@ Derived by `/derive-tickets`, as two tracer bullets, identity first:
 
 ## REMOVED
 
-- REMOVED: LoadedStreamHolding
+- REMOVED: LoadedStreamHolding::Attached
+- REMOVED: LoadedStreamHolding::Kept
 - REMOVED: StreamsAttachedToOneMcpStdioConnection
 - REMOVED: close_and_unload_every_attached_stream
 - REMOVED: attach_or_unload_once_closed
