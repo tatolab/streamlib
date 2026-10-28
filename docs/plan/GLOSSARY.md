@@ -22,9 +22,22 @@ predates the markers.
 
 **Stream** _(user)_: the unit a person writes and runs — today's app: a function decorated
 `@stream` that builds a graph, in a directory with `pyproject.toml` and one venv that may hold
-several; named by its function; it may expose ports. The function builds it through the
-`StreamBuilder` it is handed. _Avoid_: "app", "pipeline", "dataflow", "workflow", "graph"
-for the unit.
+several; it may expose ports. The function builds it through the `StreamBuilder` it is handed.
+Once loaded it persists until stopped or removed. _Avoid_: "app", "pipeline", "dataflow",
+"workflow", "graph" for the unit; "attached stream", "kept stream", "detach" (every loaded
+stream persists).
+
+**Location** _(crosses)_: what a stream is — its project directory and its stream function.
+Loading the same location again replaces the stream; a moved directory is a new stream.
+_Avoid_: "source" (the relay source node's word), "origin" (MoQ's), "path" alone.
+
+**Stream id** _(crosses)_: the handle computed from a stream's location — the folder, the
+function and a short hash — and the stream part of every address; never chosen, never
+renamed. _Avoid_: "stream name", "name" for the handle.
+
+**Display name** _(user)_: the label a person reads for a stream or a pack — never an
+address or a key, never unique; a stream's is recorded by the runtime and renamable.
+_Avoid_: "name" for the label where a stream id could be meant.
 
 **Pack** _(user)_: one ordinary Python distribution carrying nodes and streams for others to
 use — the unit a registry lists and `add` installs into a project, never beside the runtime.
@@ -97,9 +110,9 @@ surface (the engine is the library inside it).
 **Machine** _(user)_: what a runtime is addressed as — the first chunk of an address: its
 hostname, cast; a containerised runtime is its own machine. _Avoid_: "host", "device", "runtime name" (retired).
 
-**Address** _(crosses)_: the path `<machine>/<stream>/<node>/<port>`, the same string on
+**Address** _(crosses)_: the path `<machine>/<stream id>/<node>/<port>`, the same string on
 every surface — the `/watch` path names it, and at a relay it is the track `<node>/<port>` of
-the broadcast `<machine>/<stream>.hang`. _Avoid_: "channel name", "mesh address", "service
+the broadcast `<machine>/<stream id>.hang`. _Avoid_: "channel name", "mesh address", "service
 name", "remote link" (retired).
 
 **Exposure** _(crosses)_: who outside a stream may read one of its output ports — **internal**
@@ -357,7 +370,7 @@ a first-party capability — a built-in is now the exception the criterion admit
 
 Retired by the 2026-09-30 one-runtime-per-machine pivot (see
 `docs/decisions/one-runtime-per-machine.md`): **App** — say **stream**; **Node** in its
-live-runtime sense — say **runtime**; **Display name** — say **name**; **Runtime name** — a
+live-runtime sense — say **runtime**; **Runtime name** — a
 runtime is addressed by its **machine**; **Remote link** — a link spelled by two addresses;
 **Control plane** — say **local API**; **Processor catalog** — say **node catalog**; **Graph
 description** — say **graph**; "helper" and "helper process" — say **processor interpreter**;

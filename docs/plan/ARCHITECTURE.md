@@ -11,7 +11,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 Reading rule since the 2026-09-30 pivot (`[one-runtime-per-machine]`): the glossary's vocabulary
 is the plan's. Until the rename change re-spells older entries, read them through it — "app" as
 **stream**, "processor" on a user surface as **node**, "node" meaning a live runtime as
-**runtime** (one per machine), "display name" as **name**, "control plane" as **local API**,
+**runtime** (one per machine), "control plane" as **local API**,
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
@@ -47,7 +47,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   builder is a `StreamBuilder`, its API `add`/`connect`/`expose`.
   [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2618,
   #2655; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
-  #2682]
+  #2682; amended by stream-identity-and-persistence: `--name` sets the display name]
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; messages/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
@@ -124,7 +124,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `<project>/.venv/bin/python` is taken; a relocated venv is refused by name until a need
   appears. Owner, 2026-10-02.
   [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
-  moq-relays — SHIPPED #2871; runtime-description]
+  moq-relays — SHIPPED #2871; runtime-description; amended by stream-identity-and-persistence:
+  `run_stream` takes no `keep`]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
   socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
   it. On macOS it is the loopback HTTP listener's own socket, `127.0.0.1:4446`, which
@@ -144,7 +145,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   function, `stopped` or `failed` and why, its crash count and the owner's exposure rulings —
   and, under `logs/`, the runtime's own log, which belongs to no project. A stream's logs and
   pipeline cache stay under its project's `.streamlib/`. Owner, 2026-10-02 and 2026-10-24.
-  [runtime-hosting — SHIPPED #2711, #2713; machine-lock-without-administrator — SHIPPED #2929]
+  [runtime-hosting — SHIPPED #2711, #2713; machine-lock-without-administrator — SHIPPED #2929;
+  amended by stream-identity-and-persistence: a record per stream, named by its stream id, with
+  its location and display name]
   Rejected: a lock file on macOS — root-owned behind a first-launch administrator prompt, or
   world-writable in `/tmp` or `/Users/Shared` — the first asks a password at first run, the
   second gives the port's guarantee plus a stale file to clean up (owner, 2026-10-24).
@@ -223,7 +226,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   mode unless it solves a real problem; it runs on very low-power devices; a stream that
   exposes devices stays long-running. Testing a stream without a full runtime is separate
   work, outside this pivot. Owner, 2026-10-01. [one-runtime-per-machine; runtime-hosting —
-  SHIPPED #2711, #2713]
+  SHIPPED #2711, #2713; amended by stream-identity-and-persistence: every load is recorded —
+  no attached stream and no `run -d`; `run` returns once loaded and `logs -f` / `dev` follow]
 - **DECIDED** — The stream actions, as built. `keep: false` binds a stream to the connection
   carrying the call — `/mcp/stdio`, which `tatolab run` and `tatolab mcp` both hold — and it
   unloads when that connection closes (Ctrl-C, a closed terminal, a killed CLI, an MCP host
@@ -242,7 +246,51 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   is recorded before it changes live, so a crash can only tighten a port, never reopen it.
   `dev` is `run` plus a watch re-loading on save, and after a crash it waits and loads again.
   The service restarts a crashed `tatolabd` and its kept streams return. Owner, 2026-10-02.
-  [runtime-hosting — SHIPPED #2711, #2713]
+  [runtime-hosting — SHIPPED #2711, #2713; amended by stream-identity-and-persistence: no
+  `keep` and no attached state; a load of a recorded location replaces it under its stream id;
+  every tool names a stream by its id; `rename_stream`]
+- **DECIDED** — A stream's location, id and display name. A stream is identified by its
+  **location**: its project directory's absolute path, symlinks resolved, and its stream function
+  as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
+  the location alone, `<folder>-<function>-<hash>`: the project directory's last component and
+  the function's name, each cast as every exposed name is (§Networking), and the first six hex
+  digits of a SHA-256 over the location, folder and function truncated so the id fits the
+  cast's 63 characters with the hash whole; a folder or function casting to nothing is left
+  out, so no spelling refuses a stream. Two locations whose ids would be equal are refused
+  naming both. The stream id is the stream part of the address and of the broadcast
+  (§Networking), the key of the stream's record and logs, and what every local-API tool naming
+  a stream takes. A moved project directory is a new stream. Its **display name** is a label
+  the runtime records, never written in code and never unique: it defaults to the function's
+  name, `--name` or `run_stream {name}` sets it at a load, `rename_stream {stream,
+  display_name}` or `tatolab rename <stream> <display name>` changes it, and a re-load without
+  `--name` keeps it. A CLI verb's stream argument is a stream id, or a display name exactly one
+  stream holds; omitted, it is the one stream recorded from the working directory — stopped and failed
+  included; an ambiguous
+  or unmatched argument, or a directory with none or several, is refused listing the
+  candidates' ids and display names. `run_stream` returns the id and the display name;
+  `list_streams` lists each stream's id, display name, location, state (and why, when failed)
+  and node count. Owner, 2026-10-27. [stream-identity-and-persistence]
+  Rejected: a stream named by its function, a second load of the name refused with `--name` the
+  way out — every scaffolded `main` collides once every load persists (owner, 2026-10-27).
+  Rejected: the display name in the address — a rename would cut off every reader of the
+  stream's ports (owner, 2026-10-27).
+- **DECIDED** — Every loaded stream persists. A stream loaded into the runtime — by
+  `Tatolab.app`, `tatolab run` or an agent's `run_stream` — is recorded and re-loaded at every
+  start unless stopped or failed; there is no attached stream, `run_stream` takes no `keep`,
+  `tatolab run` has no `-d`, and a closing `/mcp/stdio` connection unloads nothing. A stream is
+  running, stopped or failed — the two-crashes-in-a-row and cannot-re-load rules apply to every
+  stream — and only `stop` / `stop_stream` and `rm` / `remove_stream` end one. A load of a
+  location already loaded or recorded replaces that stream under the same id, keeping its
+  display name unless the load gives one, and the owner's exposure rulings; the running stream is unloaded only once the
+  compile succeeded, and a refused load re-loads it. `tatolab run` loads and returns, printing
+  the stream id, the display name and how to follow it (`tatolab logs -f`); it exits 0 once
+  the load is accepted and 1 naming the reason when it is refused. `tatolab logs -f` follows a
+  stream's records and `tatolab dev` follows them and re-loads on save; Ctrl-C ends the
+  following, never the stream. A runtime crash ends `logs -f` with an error naming it; `dev`
+  names the crash and keeps running, waits for the runtime, which re-loads the stream from its
+  record, and follows again. Owner, 2026-10-27. [stream-identity-and-persistence]
+  Rejected: `run` following the stream with Ctrl-C detaching only the terminal — Ctrl-C would
+  read as stop; `dev` and `logs -f` follow (owner, 2026-10-27).
 - **DECIDED** — Several streams in one project or package: a stream is a decorated function,
   `@stream def camera_rig(stream_builder: StreamBuilder)`, and a file or a package may define
   as many as it likes; the bare `setup(stream)` retires rather than living beside it, and a
@@ -252,7 +300,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runs the sole `@stream` in `stream.py` and refuses by name when there are several
   (owner, 2026-10-01); `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one. A
   package declaring its streams under an entry-point group is the packs OPEN's.
-  [one-runtime-per-machine; stream-graph — SHIPPED #2618; authoring-names — SHIPPED #2682]
+  [one-runtime-per-machine; stream-graph — SHIPPED #2618; authoring-names — SHIPPED #2682;
+  amended by stream-identity-and-persistence: the display name defaults to the function's]
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
   stays flat and addresses stay `<machine>/<stream>/<node>/<port>`; no group label and no nested
@@ -1453,7 +1502,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   down for a few seconds is the equivalent of a fundamental Docker issue crashing everything;
   one engine is easier to run and to get bug reports for, and an engine per stream multiplies
   the ways things can fail. An engine per stream is not a fallback. [one-runtime-per-machine;
-  runtime-hosting — SHIPPED #2704, #2713]
+  runtime-hosting — SHIPPED #2704, #2713; amended by stream-identity-and-persistence: every
+  stream re-loads and is subject to the crash count — there is no attached stream]
 
 ## Graphics (RHI / GPU) — SHIPPED
 
@@ -2859,7 +2909,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `runtime_id` stays per-run — logs, iceoryx2 names, the surface-sharing service — and is
   never an address.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
-  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715]
+  package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715; amended by
+  stream-identity-and-persistence: the address's and the broadcast's stream part is the stream id]
 - **DECIDED** — A link's ends are both on this machine, in one stream. As built, a link end
   is `{node, port}`, a port of this stream's graph; the graph holds one link collection, which
   every traversal walks. A snapshot whose link end names a stream or a machine is refused by
@@ -2927,7 +2978,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02. [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2658;
-  runtime-hosting — SHIPPED #2715]
+  runtime-hosting — SHIPPED #2715; amended by stream-identity-and-persistence: the address's
+  stream part is the stream id, and two locations are told apart by its hash, never refused by
+  name]
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
   that relay's credential assigns. The engine names the machine by its hostname cast and reads
   nothing of Tailscale; a relay adapter's root prefixes the broadcast at that relay.
@@ -3482,7 +3535,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   generated schema and the prompt fixture — and no mesh key. Every channel reserves one
   subscriber slot beyond its fixed cap, the exposed-port publisher's, and no other.
   [zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; package-split-and-lend — SHIPPED
-  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853]
+  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853; amended by
+  stream-identity-and-persistence: `rename_stream` is a stream action]
 - **DECIDED** — The api-server is engine-side infrastructure in the `runtime/` tree: it is
   hosted — statically linked, never dlopen'd — by `tatolabd` (and by the `streamlib` crate
   for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —
@@ -3500,7 +3554,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
   tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
-  #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description]
+  #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description; amended by
+  stream-identity-and-persistence: `rename` is a stream verb]
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
   local API socket and the iceoryx2 domain. On Linux it is
@@ -3566,4 +3621,5 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   has — `run` attached, `run -d`, `stop`, `start`, `rm`, `streams`, `expose` — is also a tool,
   beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can. One
   runtime per machine owned by one user (§Product) means one socket per machine. Owner,
-  2026-10-01; confirmed 2026-10-02. [local-api; runtime-hosting — SHIPPED #2711]
+  2026-10-01; confirmed 2026-10-02. [local-api; runtime-hosting — SHIPPED #2711; amended by
+  stream-identity-and-persistence: no `run` attached and no `run -d`; `rename` is also a tool]
