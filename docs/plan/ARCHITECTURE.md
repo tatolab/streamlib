@@ -3407,7 +3407,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Owner, 2026-10-02, 2026-10-11 and 2026-10-24. [runtime-hosting — SHIPPED #2721;
   machine-lock-without-administrator — SHIPPED #2929]
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
