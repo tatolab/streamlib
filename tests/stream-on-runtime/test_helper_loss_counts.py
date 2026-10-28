@@ -180,7 +180,7 @@ def node_named(graph: "dict[str, Any]", name: str) -> "dict[str, Any]":
 
 @dataclass(frozen=True)
 class LossCountingStreamRunning:
-    """The loss-counting stream, run attached on this test's `tatolabd`."""
+    """The loss-counting stream, run on this test's `tatolabd`."""
 
     tatolabd: TatolabdUnderTest
     local_api: LocalApiClient
@@ -233,7 +233,7 @@ def launch_the_loss_counting_node(
             "STREAMLIB_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION": str(HELPER_LINK_CEILING_BYTES)
         },
     )
-    tatolab_run = tatolabd.run_stream_attached(
+    tatolab_run = tatolabd.run_stream(
         TatolabRunOfAProject(working_directory=project_directory)
     )
     stream_id = tatolab_run.await_loaded()["stream_id"]

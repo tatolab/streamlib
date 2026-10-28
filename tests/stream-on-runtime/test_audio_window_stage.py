@@ -63,7 +63,7 @@ def run_until_reading_the_graph(
     tatolabd = start_tatolabd_running_stream(stream_function)
     tatolabd.await_marker(awaited_marker_name)
     graph_while_running = tatolabd.local_api_client().call_tool(
-        "graph", {"stream": tatolabd.await_the_latest_attached_stream_loaded()}
+        "graph", {"stream": tatolabd.await_the_latest_stream_loaded()}
     )
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -361,7 +361,7 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
         }
     )
     tatolabd = start_tatolabd()
-    tatolab_run = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory))
+    tatolab_run = tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory))
     stream_id = tatolab_run.await_loaded()["stream_id"]
     local_api = tatolabd.local_api_client()
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
@@ -375,10 +375,7 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
         f"discarded samples on {link_id}",
         tatolabd,
     )
-    tatolab_run.interrupt()
-    assert tatolab_run.await_exit() == 0, (
-        f"`tatolab run` must exit cleanly on SIGINT:\n{tatolab_run.recent_stderr()}"
-    )
+    assert tatolab_run.stop_the_stream() == 0
 
     assert set(metrics) == {
         "frames_dropped",

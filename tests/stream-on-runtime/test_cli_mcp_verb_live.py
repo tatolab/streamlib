@@ -66,13 +66,13 @@ def mcp_verb_command(runtime_unit: RuntimeUnitUnderTest) -> "list[str]":
     return [str(runtime_unit.tatolab_executable), "mcp"]
 
 
-def a_runtime_holding_one_attached_stream(
+def a_runtime_running_one_stream(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ) -> TatolabdUnderTest:
     app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
     tatolabd = start_tatolabd()
-    tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory)).await_loaded(
+    tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory)).await_loaded(
         timeout=NODE_READY_TIMEOUT_SECONDS
     )
     return tatolabd
@@ -96,8 +96,8 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    tatolabd = a_runtime_holding_one_attached_stream(make_tatolab_project, start_tatolabd)
-    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
+    tatolabd = a_runtime_running_one_stream(make_tatolab_project, start_tatolabd)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
     verb_command = mcp_verb_command(runtime_unit)
     verb = StdioServerParameters(
         command=verb_command[0],
@@ -168,7 +168,7 @@ def test_closing_stdin_ends_the_verb_promptly(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    a_runtime_holding_one_attached_stream(make_tatolab_project, start_tatolabd)
+    a_runtime_running_one_stream(make_tatolab_project, start_tatolabd)
     verb = start_the_verb(runtime_unit, private_machine_directories.environment)
 
     started = time.monotonic()
@@ -185,7 +185,7 @@ def test_the_runtime_dying_ends_the_verb_non_zero_with_one_line_naming_its_socke
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    tatolabd = a_runtime_holding_one_attached_stream(make_tatolab_project, start_tatolabd)
+    tatolabd = a_runtime_running_one_stream(make_tatolab_project, start_tatolabd)
     verb = start_the_verb(runtime_unit, private_machine_directories.environment)
     # Wait until the verb holds an open stream, so the kill lands on a live pipe.
     assert verb.stdin is not None

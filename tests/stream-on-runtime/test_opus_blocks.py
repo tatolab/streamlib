@@ -106,7 +106,7 @@ def start_the_opus_round_trip(
 ) -> TatolabdUnderTest:
     """The round trip started on `tatolabd`, once every node is Running."""
     tatolabd = start_tatolabd_running_stream(stereo_tone_through_the_opus_pair_probed_on_both_links)
-    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
+    stream_id = tatolabd.await_the_latest_stream_loaded()
     tatolabd.local_api_client().await_every_node_running(
         stream=stream_id, timeout=READINESS_TIMEOUT_SECONDS
     )

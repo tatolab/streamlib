@@ -11,9 +11,10 @@ machine's. Whatever a test started is killed however it ends, and the root is
 removed.
 
 A stream reaches the runtime only as a user's does: `tatolab run` from a
-project directory, attached (the stream lives as long as that `tatolab run`, a
-Ctrl-C to it stops the stream) or `-d` (the runtime keeps it). What a test
-hands a loading fixture — `stream_or_graph` — is one of:
+project directory, which loads it, prints its id and returns — the runtime
+records the stream and runs it until `tatolab stop` or `tatolab rm` — or
+`tatolab dev`, which loads it and follows it. What a test hands a loading
+fixture — `stream_or_graph` — is one of:
 
 - a `@stream` function of one of the suite's `*_streams.py` (or other non-test)
   modules, run as `tatolab run <module>:<function> [--name <display_name>]` from
@@ -34,7 +35,7 @@ Fixtures, each documented where it is defined:
 - `runtime_unit` — the runtime unit under test; one without the test-root marker ends the session.
 - `private_machine_directories` — this test's machine root, its directories and environment.
 - `start_tatolabd` — start this test's `tatolabd`; returns a `TatolabdUnderTest`.
-- `start_tatolabd_running_stream` — start `tatolabd`, then run a stream on it attached.
+- `start_tatolabd_running_stream` — start `tatolabd`, then run a stream on it with `tatolab run`.
 - `run_stream_on_tatolabd_with_no_vulkan_driver` — the GPU-free run: loaded and refused at the GPU, or refused at the load.
 - `make_tatolab_project` — a project directory whose `.venv` is the suite venv.
 - `run_tatolab` / `start_tatolab` — any `tatolab` command to completion, or started.
@@ -44,18 +45,20 @@ Fixtures, each documented where it is defined:
 `TatolabdUnderTest` is the started `tatolabd`: every wait of a
 `RuntimeProcessUnderTest` (marker lines of every loaded stream land on its
 standard error), plus `local_api_socket_path`, `await_serving()`,
-`local_api_client()` and `run_stream_attached(stream_or_graph, ...)` →
-`AttachedTatolabRun`. `tatolabd.interrupt()` is a machine shutdown:
-every loaded stream is unloaded and `tatolabd` exits; `AttachedTatolabRun.interrupt()`
-is a user's Ctrl-C to `tatolab run`, which stops that one stream, and
-`AttachedTatolabRun.await_loaded()` waits for its note naming the stream it
-loaded — `tatolabd.await_the_latest_attached_stream_loaded()` for the latest
-one, returning that name. The local API serves every stream the runtime holds, so the client's
+`local_api_client()` and `run_stream(stream_or_graph, ...)` →
+`TatolabRunOrDevOnTheRuntime`. `tatolabd.interrupt()` is a machine shutdown:
+every loaded stream is unloaded and `tatolabd` exits.
+`TatolabRunOrDevOnTheRuntime.await_loaded()` waits for the line naming the
+stream it loaded — `tatolabd.await_the_latest_stream_loaded()` for the latest
+one, returning its id — and `stop_the_stream()` runs `tatolab stop <id>`, the
+one way a test ends that stream short of the machine shutdown; a Ctrl-C to
+`dev` ends the following and leaves the stream loaded. The local API serves every stream the runtime holds, so the client's
 waits on one stream's graph name it: `await_every_node_running(stream=...)`.
 """
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import os
 import re
@@ -138,10 +141,11 @@ STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN = re.compile(
     r"\[stop\] Queued removal of (?P<processor_count>\d+) processor\(s\)"
 )
 
-#: What an attached `tatolab run` (or `dev`) notes on standard error once its stream loaded and started.
-ATTACHED_STREAM_LOADED_NOTE_PATTERN = re.compile(
-    r"^tatolab(?: dev)?: (?P<stream_id>\S+) loaded \((?P<node_count>\d+) nodes?, "
-    r"project (?P<project_directory>.+)\); Ctrl-C stops it$"
+#: The line naming the stream a load started: `tatolab run`'s first line on standard output, or
+#: `tatolab dev`'s note on standard error, prefixed `tatolab dev: `.
+RUNNING_STREAM_LINE_PATTERN = re.compile(
+    r'^(?:tatolab dev: )?(?P<stream_id>\S+) running as "(?P<display_name>.*)" '
+    r"\(project (?P<project_directory>.+), (?P<stream_function>[^,]+)\)$"
 )
 
 TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS = 120.0
@@ -336,29 +340,87 @@ def started_runtime_processes() -> "Iterator[StartedRuntimeProcesses]":
         started_runtime_processes.kill_every_one()
 
 
-class AttachedTatolabRun(RuntimeProcessUnderTest):
-    """A started attached `tatolab run` or `dev`: its stream's records on
-    standard output, its notes and refusal on standard error. A Ctrl-C to it
-    stops the stream."""
+class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
+    """A started `tatolab run` or `tatolab dev`. `run` prints the line naming the
+    stream it loaded on standard output and exits — 0 once the load is accepted,
+    1 with its refusal on standard error. `dev` writes that line as a note on
+    standard error, follows the stream's records on standard output, and runs it
+    again on every settled save; a Ctrl-C to it ends the following and leaves the
+    stream loaded."""
+
+    def __init__(
+        self,
+        process: "subprocess.Popen[str]",
+        *,
+        command_description: str,
+        refusal_line_prefix: str,
+        verb: str,
+        working_directory: Path,
+        tatolab_commands: "TatolabCommandsOfThisTest",
+    ) -> None:
+        super().__init__(
+            process,
+            command_description=command_description,
+            refusal_line_prefix=refusal_line_prefix,
+        )
+        self.verb = verb
+        self.working_directory = working_directory
+        self._tatolab_commands = tatolab_commands
 
     def await_loaded(
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS, occurrence: int = 1
     ) -> "re.Match[str]":
-        """Wait for its `occurrence`-th note that the stream loaded and started;
-        the match's groups are `stream_id`, `node_count` and `project_directory`."""
-        loaded_note_count = 0
+        """Wait for its `occurrence`-th line naming the stream a load started; the
+        match's groups are `stream_id`, `display_name`, `project_directory` and
+        `stream_function`. `run` names one load: it is waited to its exit, and a
+        refused load fails the test with the refusal."""
+        if self.verb != "dev":
+            assert occurrence == 1, "`tatolab run` names the one stream it loaded"
+            exit_status = self.await_exit(timeout=timeout)
+            assert exit_status == 0, (
+                f"`{self.command_description}` exited {exit_status}, its load refused: "
+                f"{self.refusal()}\nstandard error:\n{self.recent_stderr()}"
+            )
+            running_lines = [
+                running_line
+                for running_line in (
+                    RUNNING_STREAM_LINE_PATTERN.match(stdout_line.rstrip("\n"))
+                    for stdout_line in self.stdout_lines
+                )
+                if running_line is not None
+            ]
+            assert running_lines, (
+                f"`{self.command_description}` exited 0 naming no stream; standard output:\n"
+                f"{self.stdout_text}"
+            )
+            return running_lines[0]
+        running_note_count = 0
 
         def observe(line: str) -> Any:
-            nonlocal loaded_note_count
-            loaded_note = ATTACHED_STREAM_LOADED_NOTE_PATTERN.match(line.rstrip("\n"))
-            if loaded_note is None:
+            nonlocal running_note_count
+            running_note = RUNNING_STREAM_LINE_PATTERN.match(line.rstrip("\n"))
+            if running_note is None:
                 return NOT_YET_SEEN
-            loaded_note_count += 1
-            return loaded_note if loaded_note_count == occurrence else NOT_YET_SEEN
+            running_note_count += 1
+            return running_note if running_note_count == occurrence else NOT_YET_SEEN
 
         return self._await_stderr_line_satisfying(
-            observe, f"its note that the stream loaded (occurrence {occurrence})", timeout
+            observe, f"its note that the stream is running (occurrence {occurrence})", timeout
         )
+
+    def stop_the_stream(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> int:
+        """Run `tatolab stop <id>` on the stream this load started, to its exit; return its
+        exit status. The stream is unloaded and recorded stopped."""
+        stream_id = self.await_loaded(timeout=timeout)["stream_id"]
+        stop = self._tatolab_commands.start_tatolab(
+            "stop", stream_id, working_directory=self.working_directory
+        )
+        exit_status = stop.await_exit(timeout=timeout)
+        assert exit_status == 0, (
+            f"`tatolab stop {stream_id}` exited {exit_status}; standard error:\n"
+            f"{stop.recent_stderr()}"
+        )
+        return exit_status
 
 
 @dataclass
@@ -377,7 +439,7 @@ class TatolabCommandsOfThisTest:
         *arguments: "str | Path",
         working_directory: Path,
         extra_environment: "dict[str, str | None] | None" = None,
-        process_class: "type[RuntimeProcessUnderTest]" = RuntimeProcessUnderTest,
+        process_class: "Callable[..., RuntimeProcessUnderTest]" = RuntimeProcessUnderTest,
     ) -> Any:
         """`tatolab <arguments...>` started in a session of its own."""
         process = subprocess.Popen(
@@ -450,8 +512,8 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         )
         self._tatolab_commands = tatolab_commands
         self.machine_directories = tatolab_commands.private_machine_directories.machine_directories
-        #: Each attached `tatolab run` started on this `tatolabd`, in order.
-        self.attached_stream_runs: "list[AttachedTatolabRun]" = []
+        #: Each `tatolab run` or `dev` started on this `tatolabd`, in order.
+        self.stream_runs: "list[TatolabRunOrDevOnTheRuntime]" = []
 
     @property
     def local_api_socket_path(self) -> Path:
@@ -486,15 +548,15 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         self.await_serving(timeout=timeout)
         return LocalApiClient(self.local_api_socket_path)
 
-    def await_the_latest_attached_stream_loaded(
+    def await_the_latest_stream_loaded(
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS
     ) -> str:
-        """Wait for the latest attached `tatolab run`'s note that its stream loaded;
+        """Wait for the latest `tatolab run`'s line naming the stream it loaded;
         return the stream's id."""
-        assert self.attached_stream_runs, "no attached `tatolab run` was started on this tatolabd"
-        return self.attached_stream_runs[-1].await_loaded(timeout=timeout)["stream_id"]
+        assert self.stream_runs, "no `tatolab run` was started on this tatolabd"
+        return self.stream_runs[-1].await_loaded(timeout=timeout)["stream_id"]
 
-    def run_stream_attached(
+    def run_stream(
         self,
         stream_or_graph: StreamOrGraph,
         *,
@@ -503,8 +565,8 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         processor_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
         verb: str = "run",
-    ) -> AttachedTatolabRun:
-        """Start `tatolab run` (or `verb`, such as `dev`) attached on `stream_or_graph`; return it started.
+    ) -> TatolabRunOrDevOnTheRuntime:
+        """Start `tatolab run` (or `verb`, such as `dev`) on `stream_or_graph`; return it started.
 
         `extra_environment` reaches the `tatolab` process alone: a stream's
         processor interpreters inherit `tatolabd`'s environment, never the CLI's.
@@ -515,15 +577,20 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
             project_directory=project_directory,
             processor_interpreter=processor_interpreter,
         )
-        attached_run = self._tatolab_commands.start_tatolab(
+        stream_run = self._tatolab_commands.start_tatolab(
             verb,
             *tatolab_run.tatolab_run_arguments,
             working_directory=tatolab_run.working_directory,
             extra_environment=extra_environment,
-            process_class=AttachedTatolabRun,
+            process_class=functools.partial(
+                TatolabRunOrDevOnTheRuntime,
+                verb=verb,
+                working_directory=tatolab_run.working_directory,
+                tatolab_commands=self._tatolab_commands,
+            ),
         )
-        self.attached_stream_runs.append(attached_run)
-        return attached_run
+        self.stream_runs.append(stream_run)
+        return stream_run
 
 
 @pytest.fixture
@@ -600,16 +667,16 @@ def start_tatolabd(
 def start_tatolabd_running_stream(
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ) -> "Callable[..., TatolabdUnderTest]":
-    """Start this test's `tatolabd`, then run `stream_or_graph` on it with an attached `tatolab run`.
+    """Start this test's `tatolabd`, then run `stream_or_graph` on it with `tatolab run`.
 
     `start_tatolabd_running_stream(stream_or_graph, *, display_name=None,
     project_directory=None, processor_interpreter=None, extra_environment=None,
     working_directory=None) -> TatolabdUnderTest`. `extra_environment` and
     `working_directory` are `tatolabd`'s, so the stream's processor interpreters
     inherit the environment. Returns as soon as `tatolab run` is started, its
-    load not awaited: the attached run is `tatolabd.attached_stream_runs[-1]`,
-    and `await_loaded()` on it waits for the load, while a refused load ends
-    that run with its refusal and leaves `tatolabd` serving.
+    load not awaited: the run is `tatolabd.stream_runs[-1]`, and
+    `await_loaded()` on it waits for the load, while a refused load ends that
+    run with its refusal and leaves `tatolabd` serving.
     """
 
     def start(
@@ -624,7 +691,7 @@ def start_tatolabd_running_stream(
         started_tatolabd = start_tatolabd(
             extra_environment=extra_environment, working_directory=working_directory
         )
-        started_tatolabd.run_stream_attached(
+        started_tatolabd.run_stream(
             stream_or_graph,
             display_name=display_name,
             project_directory=project_directory,
@@ -637,7 +704,7 @@ def start_tatolabd_running_stream(
 
 @dataclass(frozen=True)
 class StreamRunWithNoVulkanDriverOutcome:
-    """How one attached `tatolab run` on a `tatolabd` that reaches no Vulkan driver ended."""
+    """How one `tatolab run` on a `tatolabd` that reaches no Vulkan driver ended."""
 
     #: Whether the stream's graph loaded — its start then refused at the GPU.
     loaded: bool
@@ -664,7 +731,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
     tatolab_commands_of_this_test: TatolabCommandsOfThisTest,
     tmp_path: Path,
 ) -> "Callable[..., StreamRunWithNoVulkanDriverOutcome]":
-    """Run a stream attached on a `tatolabd` that reaches no Vulkan driver, to the end of the run.
+    """Run a stream on a `tatolabd` that reaches no Vulkan driver, to the end of the run.
 
     `run_stream_on_tatolabd_with_no_vulkan_driver(stream_or_graph, *,
     display_name=None, project_directory=None, processor_interpreter=None,
@@ -712,16 +779,16 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             processor_interpreter=processor_interpreter,
         )
         tatolabd_stderr_mark = tatolabd.stderr_line_count()
-        attached_run = tatolabd.run_stream_attached(tatolab_run)
-        exit_status = attached_run.await_exit(timeout=TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS)
-        refusal = attached_run.refusal()
+        stream_run = tatolabd.run_stream(tatolab_run)
+        exit_status = stream_run.await_exit(timeout=TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS)
+        refusal = stream_run.refusal()
         listed_streams = tatolabd.local_api_client().list_streams()
         tatolabd_stderr_text = tatolabd.stderr_text_since(tatolabd_stderr_mark)
         start_began = STREAM_START_BEGAN_LOG_LINE_PATTERN.search(tatolabd_stderr_text)
         unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN.search(tatolabd_stderr_text)
         assert listed_streams == [], (
-            f"`{attached_run.command_description}` ended {exit_status} and left the runtime "
-            f"holding {listed_streams}; standard error:\n{attached_run.recent_stderr()}"
+            f"`{stream_run.command_description}` ended {exit_status} and left the runtime "
+            f"holding {listed_streams}; standard error:\n{stream_run.recent_stderr()}"
         )
         if start_began is not None:
             assert ENGINE_STARTED_LOG_LINE not in tatolabd_stderr_text, (
@@ -729,8 +796,8 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             )
             assert exit_status == 1 and refusal is not None and NO_VULKAN_DRIVER_REFUSAL in refusal, (
                 f"a loaded stream was to be refused for the missing Vulkan driver; "
-                f"`{attached_run.command_description}` ended {exit_status}:\n"
-                f"{attached_run.recent_stderr()}\ntatolabd:\n{tatolabd.recent_stderr()}"
+                f"`{stream_run.command_description}` ended {exit_status}:\n"
+                f"{stream_run.recent_stderr()}\ntatolabd:\n{tatolabd.recent_stderr()}"
             )
         return StreamRunWithNoVulkanDriverOutcome(
             loaded=start_began is not None,
@@ -740,7 +807,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             ),
             refusal=refusal,
             tatolab_run_exit_status=exit_status,
-            tatolab_run_stderr_text=attached_run.stderr_text,
+            tatolab_run_stderr_text=stream_run.stderr_text,
             tatolabd_stderr_text_during_the_run=tatolabd_stderr_text,
             tatolabd=tatolabd,
             tatolab_run=tatolab_run,

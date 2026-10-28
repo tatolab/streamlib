@@ -449,7 +449,7 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
     )
 
     node_states = tatolabd.local_api_client().await_every_node_past_setup(
-        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        stream=tatolabd.await_the_latest_stream_loaded(),
         timeout=READINESS_TIMEOUT_SECONDS,
     )
     refusal = tatolabd.await_stderr_containing("Setup failed:")
@@ -490,7 +490,7 @@ def test_without_the_control_node_a_pipewire_camera_node_appears(
         compile_stream_to_graph(a_test_pattern_into_a_pipewire_camera)
     )
     tatolabd.local_api_client().await_every_node_running(
-        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        stream=tatolabd.await_the_latest_stream_loaded(),
         timeout=READINESS_TIMEOUT_SECONDS,
     )
     (node,) = await_pipewire_camera(camera_name, present=True, tatolabd=tatolabd)
@@ -520,7 +520,7 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
         compile_stream_to_graph(a_test_pattern_into_two_loopback_cameras)
     )
     tatolabd.local_api_client().await_every_node_running(
-        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        stream=tatolabd.await_the_latest_stream_loaded(),
         timeout=READINESS_TIMEOUT_SECONDS,
     )
     first = await_camera(camera_name, present=True, tatolabd=tatolabd)
@@ -556,7 +556,7 @@ def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(
         compile_stream_to_graph(a_test_pattern_into_a_loopback_camera_read_back_as_yuyv)
     )
     tatolabd.local_api_client().await_every_node_running(
-        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        stream=tatolabd.await_the_latest_stream_loaded(),
         timeout=READINESS_TIMEOUT_SECONDS,
     )
     (node,) = await_camera(camera_name, present=True, tatolabd=tatolabd)

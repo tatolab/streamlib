@@ -53,7 +53,7 @@ def catalog_run(
     """
     if "run" not in catalog_run_of_this_module:
         tatolabd = start_tatolabd_running_stream(four_probes_each_configured_its_own_way)
-        stream_id = tatolabd.await_the_latest_attached_stream_loaded()
+        stream_id = tatolabd.await_the_latest_stream_loaded()
         local_api = tatolabd.local_api_client()
         local_api.await_every_node_running(stream=stream_id, timeout=GRAPH_READY_TIMEOUT_SECONDS)
         served = local_api.registry(stream_id)

@@ -141,7 +141,7 @@ def start_the_codec_round_trip(
     """The codec's probed round trip started on `tatolabd`, once every node is Running."""
     tatolabd = start_tatolabd_running_stream(CODEC_ROUND_TRIPS[codec]["probed_stream"])
     tatolabd.local_api_client().await_every_node_running(
-        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        stream=tatolabd.await_the_latest_stream_loaded(),
         timeout=READINESS_TIMEOUT_SECONDS,
     )
     return tatolabd
@@ -186,7 +186,7 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
     # node, read back off the live graph the run loaded.
     rendered_types = the_codec_nodes_rendered_types(
         tatolabd.local_api_client().call_tool(
-            "graph", {"stream": tatolabd.await_the_latest_attached_stream_loaded()}
+            "graph", {"stream": tatolabd.await_the_latest_stream_loaded()}
         ),
         codec,
     )

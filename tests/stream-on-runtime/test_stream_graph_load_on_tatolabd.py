@@ -538,9 +538,9 @@ def test_a_ctrl_c_during_a_loads_describe_ends_tatolabd_at_once(
     assert exit_status == 0, tatolabd.recent_stderr()
     assert STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT in tatolabd.stderr_text, tatolabd.recent_stderr()
     assert interrupt_honoured_within_seconds < HELD_DESCRIBE_DEADLINE_SECONDS / 2
-    (attached_run,) = tatolabd.attached_stream_runs
-    assert attached_run.await_exit() != 0, attached_run.recent_stderr()
-    assert " loaded (" not in attached_run.stderr_text, attached_run.recent_stderr()
+    (stream_run,) = tatolabd.stream_runs
+    assert stream_run.await_exit() != 0, stream_run.recent_stderr()
+    assert " running as " not in stream_run.stdout_text, stream_run.recent_stderr()
 
 
 # ---- a loaded stream, run and read back by name -----------------------------
@@ -551,7 +551,7 @@ def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_local_api(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     tatolabd = start_tatolabd_running_stream(named_pattern_into_a_named_sink)
-    stream_id = tatolabd.attached_stream_runs[-1].await_loaded()["stream_id"]
+    stream_id = tatolabd.stream_runs[-1].await_loaded()["stream_id"]
     local_api = tatolabd.local_api_client()
     local_api.await_every_node_running(
         stream=stream_id, expected_node_names=["loaded-pattern", "loaded-sink"]

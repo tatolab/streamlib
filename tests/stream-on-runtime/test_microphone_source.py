@@ -139,7 +139,7 @@ def test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup(
     a wiring error. Landing on a different device would be worse than failing,
     so the source refuses and the processor never reaches Running."""
     tatolabd = start_tatolabd_running_stream(microphone_source_naming_an_unopenable_device)
-    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
+    stream_id = tatolabd.await_the_latest_stream_loaded()
     node_states = tatolabd.local_api_client().await_every_node_past_setup(
         stream=stream_id, timeout=READINESS_TIMEOUT_SECONDS
     )
