@@ -10,13 +10,9 @@
 //! `rmcp`'s alone: concurrency, `notifications/cancelled`, the in-flight
 //! answers a closing stream still owes, and `subscriptions/listen`.
 //!
-//! Each connection is the lifetime of the streams `run_stream` attached over
-//! it: when it closes — or the local API stops — each is unloaded, unless its
-//! name has since been taken by another load.
+//! A stream `run_stream` loads over a connection is recorded and outlives it.
 //!
-//! `tatolab mcp` and `tatolab run` are the clients: each sends the upgrade.
-
-use std::sync::Arc;
+//! `tatolab mcp` and `tatolab dev` are the clients: each sends the upgrade.
 
 use axum::extract::Request;
 use axum::http::header::{CONNECTION, UPGRADE};
@@ -120,16 +116,13 @@ fn header_lists_token(
         .any(|token| token.trim().eq_ignore_ascii_case(expected_token))
 }
 
-/// Serve one upgraded connection until it closes or the local API stops, then
-/// unload every stream it attached.
+/// Serve one upgraded connection until it closes or the local API stops.
 async fn serve_local_api_mcp_over_the_upgraded_stream(
     handler: LocalApiMcpServerHandler,
     upgraded_stream: TokioIo<hyper::upgrade::Upgraded>,
     local_api_stopping_token: CancellationToken,
 ) {
-    let operations_on_the_loaded_streams = Arc::clone(&handler.operations_on_the_loaded_streams);
-    let (handler_for_this_connection, streams_attached_to_this_connection) =
-        handler.for_one_mcp_stdio_connection();
+    let handler_for_this_connection = handler.for_one_mcp_stdio_connection();
     // Until its first request picks a lifecycle `rmcp` reads without a
     // cancellation token, so the local API stopping has to end that wait here.
     let running_service = tokio::select! {
@@ -151,9 +144,6 @@ async fn serve_local_api_mcp_over_the_upgraded_stream(
         }
         None => {}
     }
-    streams_attached_to_this_connection
-        .close_and_unload_every_attached_stream(&operations_on_the_loaded_streams)
-        .await;
 }
 
 /// Why `error` ended a stream before it served a request, naming no message:

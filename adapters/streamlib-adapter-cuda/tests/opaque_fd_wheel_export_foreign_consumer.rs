@@ -21,7 +21,7 @@
 //!
 //! The stream is the integration suite's own
 //! (`tests/stream-on-runtime/device_exchange_streams.py`), loaded with the
-//! runtime unit's `tatolab run -d` into the unit's `tatolabd`, which compiles
+//! runtime unit's `tatolab run` into the unit's `tatolabd`, which compiles
 //! it in the suite venv and starts its processor interpreters from that same
 //! venv. The unit (`$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else
 //! `target/tatolab-runtime`) is the integration suite's, built by `cargo xtask
@@ -110,7 +110,7 @@ fn runtime_unit_directory() -> PathBuf {
         .unwrap_or_else(|| repository_root().join("target/tatolab-runtime"))
 }
 
-/// The `tatolab run -d` that asks the runtime to load the handoff stream, and
+/// The `tatolab run` that asks the runtime to load the handoff stream, and
 /// the file its output drains into. It runs beside the accept below, so a load
 /// that answers late never holds the probe's connect back; `Drop` kills a run
 /// still waiting when the test ends early.
@@ -328,7 +328,7 @@ impl FinishedProbeHandoff {
         } = self;
         assert!(
             tatolab_run_exit.is_some_and(|exit| exit.success()),
-            "tatolab run -d must load the handoff stream and exit 0; it ended \
+            "tatolab run must load the handoff stream and exit 0; it ended \
              {tatolab_run_exit:?}:\n{tatolab_run_output}\n{tatolabd_diagnostic_tails}"
         );
     }
@@ -480,7 +480,6 @@ fn start_the_probe_stream_and_accept_its_handoff(
         File::create(&tatolab_run_output_capture_path).expect("create the tatolab run capture");
     let tatolab_run_process = Command::new(&tatolab)
         .arg("run")
-        .arg("-d")
         .arg("--dir")
         .arg(stream_on_runtime_suite_directory())
         .arg("--name")

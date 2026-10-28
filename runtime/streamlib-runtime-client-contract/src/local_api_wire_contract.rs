@@ -89,14 +89,12 @@ pub struct RunStreamToolResult {
     pub display_name: String,
     /// This load of it, as its `logs` pages name it.
     pub stream_instance: LoadedStreamInstance,
-    /// Whether the runtime keeps it; else it is attached to the connection that ran it.
-    pub kept: bool,
     /// Where the stream's code lives.
     pub location: StreamLocationOnTheWire,
     /// How many nodes the loaded graph holds.
     pub node_count: usize,
-    /// Whether the load replaced the kept stream of the same location.
-    pub replaced_the_kept_record: bool,
+    /// Whether the load replaced the recorded stream of the same location.
+    pub replaced_a_recorded_stream: bool,
     /// Each line the compile wrote to its standard error, the cross-floor check's warnings
     /// among them; empty when it wrote nothing.
     pub compile_warnings: Vec<String>,
@@ -109,10 +107,8 @@ pub struct StopStreamToolResult {
     pub stream: String,
     /// Always true: a stream the runtime could not unload is refused instead.
     pub stopped: bool,
-    /// Whether the stream is kept, and so recorded stopped.
-    pub kept: bool,
-    /// Present only when a kept stream unloaded and could not be recorded stopped, so a restart
-    /// of the runtime loads it again.
+    /// Present only when a recorded stream unloaded and could not be recorded stopped, so a
+    /// restart of the runtime loads it again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_recorded_because: Option<String>,
 }
@@ -133,7 +129,7 @@ pub struct RemoveStreamToolResult {
     pub stream: String,
     /// Whether the stream was loaded and is now unloaded.
     pub unloaded: bool,
-    /// Whether the stream was kept and its record is now gone.
+    /// Whether the stream was recorded and its record is now gone.
     pub forgotten: bool,
 }
 
@@ -163,7 +159,7 @@ pub struct ListStreamsToolResultStream {
     /// Where the stream's code lives; `null` for a stream a library host loaded, and for a
     /// record an earlier runtime wrote.
     pub location: Option<StreamLocationOnTheWire>,
-    /// Whether it is attached, kept, stopped or failed.
+    /// Whether it is running, stopped or failed.
     pub state: ListedStreamState,
     /// How many nodes its loaded graph holds; `null` when it is not loaded.
     pub node_count: Option<usize>,
@@ -175,14 +171,12 @@ pub struct ListStreamsToolResultStream {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ListedStreamState {
-    /// Loaded, and lives as long as the connection that ran it.
-    Attached,
-    /// Kept by the runtime: loaded, or recorded and not loaded.
-    Kept,
-    /// Kept, and stopped by its owner.
+    /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
+    /// start.
+    Running,
+    /// Stopped by its owner, and left unloaded until `start_stream`.
     Stopped,
-    /// Kept, and failed: skipped at the runtime's start until `start_stream`
-    /// retries it.
+    /// Skipped at the runtime's start until `start_stream` retries it.
     Failed,
 }
 
@@ -190,8 +184,7 @@ impl ListedStreamState {
     /// The state as the wire spells it.
     pub fn wire_spelling(self) -> &'static str {
         match self {
-            ListedStreamState::Attached => "attached",
-            ListedStreamState::Kept => "kept",
+            ListedStreamState::Running => "running",
             ListedStreamState::Stopped => "stopped",
             ListedStreamState::Failed => "failed",
         }
@@ -244,9 +237,9 @@ pub struct ExposePortToolResult {
     pub port: String,
     /// The level the port is at now, or will be at when the stream loads.
     pub level: ExposePortLevel,
-    /// Whether the level was recorded as the owner's ruling on a kept stream.
+    /// Whether the level was recorded as the owner's ruling on the stream's record.
     pub recorded: bool,
-    /// Present only when a kept stream's level was raised live and could not be recorded, so a
+    /// Present only when a recorded stream's level was raised live and could not be recorded, so a
     /// restart of the runtime puts back the level it had; a restriction that cannot be recorded
     /// is refused instead.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -476,16 +469,15 @@ mod tests {
                 stream: "project-main-3f2a9c".to_owned(),
                 display_name: "main".to_owned(),
                 stream_instance: LoadedStreamInstance("4".to_owned()),
-                kept: true,
                 location: StreamLocationOnTheWire {
                     project_directory: PathBuf::from("/srv/project"),
                     stream_function: "stream:main".to_owned(),
                 },
                 node_count: 3,
-                replaced_the_kept_record: false,
+                replaced_a_recorded_stream: false,
                 compile_warnings: vec!["tatolab: one warning".to_owned()],
             }),
-            r#"{"stream":"project-main-3f2a9c","display_name":"main","stream_instance":"4","kept":true,"location":{"project_directory":"/srv/project","stream_function":"stream:main"},"node_count":3,"replaced_the_kept_record":false,"compile_warnings":["tatolab: one warning"]}"#
+            r#"{"stream":"project-main-3f2a9c","display_name":"main","stream_instance":"4","location":{"project_directory":"/srv/project","stream_function":"stream:main"},"node_count":3,"replaced_a_recorded_stream":false,"compile_warnings":["tatolab: one warning"]}"#
         );
         assert_eq!(
             wire_text(&StartStreamToolResult {
@@ -512,7 +504,7 @@ mod tests {
                             project_directory: PathBuf::from("/srv/cam"),
                             stream_function: "stream:main".to_owned(),
                         }),
-                        state: ListedStreamState::Attached,
+                        state: ListedStreamState::Running,
                         node_count: Some(4),
                         failed_because: None,
                     },
@@ -526,7 +518,7 @@ mod tests {
                     },
                 ],
             }),
-            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"attached","node_count":4,"failed_because":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it"}]}"#
+            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"running","node_count":4,"failed_because":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it"}]}"#
         );
         assert_eq!(
             wire_text(&LogsToolResult {
@@ -549,7 +541,6 @@ mod tests {
         let stopped = |not_recorded_because: Option<&str>| StopStreamToolResult {
             stream: "camera".to_owned(),
             stopped: true,
-            kept: true,
             not_recorded_because: not_recorded_because.map(str::to_owned),
         };
         let exposed = |not_recorded_because: Option<&str>| ExposePortToolResult {
@@ -563,11 +554,11 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&stopped(None)).unwrap(),
-            r#"{"stream":"camera","stopped":true,"kept":true}"#
+            r#"{"stream":"camera","stopped":true}"#
         );
         assert_eq!(
             serde_json::to_string(&stopped(Some("cannot write"))).unwrap(),
-            r#"{"stream":"camera","stopped":true,"kept":true,"not_recorded_because":"cannot write"}"#
+            r#"{"stream":"camera","stopped":true,"not_recorded_because":"cannot write"}"#
         );
         assert_eq!(
             serde_json::to_string(&exposed(None)).unwrap(),
@@ -579,7 +570,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<StopStreamToolResult>(
-                r#"{"stream":"camera","stopped":true,"kept":true}"#
+                r#"{"stream":"camera","stopped":true}"#
             )
             .unwrap(),
             stopped(None)
@@ -590,8 +581,7 @@ mod tests {
     #[test]
     fn each_state_and_level_displays_as_the_wire_spells_it() {
         for state in [
-            ListedStreamState::Attached,
-            ListedStreamState::Kept,
+            ListedStreamState::Running,
             ListedStreamState::Stopped,
             ListedStreamState::Failed,
         ] {

@@ -91,7 +91,6 @@ mod against_an_isolated_machine {
 
         for verb_arguments in [
             &["run", "--dir", project_directory][..],
-            &["run", "-d", "--dir", project_directory][..],
             &["dev", "--dir", project_directory][..],
             &["stop", "camera"][..],
             &["start", "camera"][..],

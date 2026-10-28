@@ -42,12 +42,12 @@ mod tests {
     fn each_column_but_the_last_is_padded_to_its_widest_cell() {
         let rows = [
             ["NAME", "STATE", "PROJECT"].map(str::to_owned),
-            ["camera", "kept", "/srv/cam"].map(str::to_owned),
+            ["camera", "failed", "/srv/cam"].map(str::to_owned),
             ["a", "", ""].map(str::to_owned),
         ];
         assert_eq!(
             rendered_padded_table(&rows),
-            "NAME    STATE  PROJECT\ncamera  kept   /srv/cam\na\n"
+            "NAME    STATE   PROJECT\ncamera  failed  /srv/cam\na\n"
         );
     }
 }

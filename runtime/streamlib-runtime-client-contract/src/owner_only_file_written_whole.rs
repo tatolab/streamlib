@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A file only its owner reads, replaced whole or not at all: the kept-stream
+//! A file only its owner reads, replaced whole or not at all: the stream
 //! records, `relays.json` and the relay secrets' fallback file.
 
 use std::io::Write as _;

@@ -204,7 +204,7 @@ FIXTURE_RUNTIME_EXIT_STATUS=""
 #
 # Its state directory sits under <state home>: XDG_STATE_HOME names it on
 # Linux, and HOME on macOS, where the state directory is `$HOME/Library/
-# Application Support/Tatolab`. So it re-loads none of this user's kept streams
+# Application Support/Tatolab`. So it re-loads none of this user's recorded streams
 # and leaves its own log beside the fixture's evidence. The runtime directory
 # and the lock read neither variable, so the local API socket stays where
 # `tatolab` looks. It takes the machine's real runtime lock: when another

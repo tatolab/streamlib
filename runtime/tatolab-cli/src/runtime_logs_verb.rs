@@ -4,7 +4,9 @@
 //! `tatolab logs`: with RUNTIME_ID-STREAM, one loaded stream's on-disk JSONL log rendered as the
 //! runtime mirrored it; with `--list`, the stream logs on disk; otherwise a loaded stream's records
 //! as the machine's runtime holds them, read by sequence number — the stream `--stream` names, by
-//! its id or a display name only it holds, or the one loaded from the working directory.
+//! its id or a display name only it holds, or the one loaded from the working directory. `-f`
+//! follows a loaded stream until Ctrl-C, which leaves it loaded, and ends with an error naming
+//! the runtime's log when the runtime goes away.
 
 use std::fmt::Write as _;
 use std::io::{self, Write};
@@ -29,6 +31,9 @@ use crate::local_api_mcp_tool_client::{
 use crate::machine_runtime_local_api_socket::local_api_socket_of_the_running_runtime;
 use crate::process_signal_handling::{
     an_interrupt_was_delivered_during_the_read, end_the_read_on_interrupt,
+};
+use crate::runtime_gone_while_following_a_stream::{
+    DESCRIBE_RUNTIME_TOOL_NAME, RuntimeLogDirectoryAsDescribed, the_runtime_is_gone,
 };
 use crate::runtime_log_files_reader::{
     RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadFailure, RuntimeLogReadStep,
@@ -240,6 +245,13 @@ fn print_the_records_of_a_loaded_stream(
     route_ctrl_c_to_the_end_of_the_read()?;
     let mut local_api_connection =
         LocalApiConnection::open(&local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)?;
+    let runtime_log_directory = if stream_log_request.follow_appended_records {
+        RuntimeLogDirectoryAsDescribed::from_the_describe_runtime_answer(
+            local_api_connection.call_tool(DESCRIBE_RUNTIME_TOOL_NAME, serde_json::Map::new()),
+        )
+    } else {
+        RuntimeLogDirectoryAsDescribed::NotDescribed
+    };
     let standard_output = io::stdout();
     let mut buffered_standard_output = io::BufWriter::new(standard_output.lock());
     print_stream_log_records_read_from_the_runtime(
@@ -251,9 +263,23 @@ fn print_the_records_of_a_loaded_stream(
         stream_log_request,
         &mut buffered_standard_output,
         &mut io::stderr(),
-        &an_interrupt_was_delivered_during_the_read,
-        STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL,
+        &HowAFollowedReadOfTheRuntimeGoesOn {
+            read_interrupted: &an_interrupt_was_delivered_during_the_read,
+            follow_poll_interval: STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL,
+            runtime_log_directory: &runtime_log_directory,
+        },
     )
+}
+
+/// How a read of a loaded stream's records from the runtime goes on once it reached the newest:
+/// when it ends, how long it waits for more, and where the runtime's log is when it goes away.
+pub(crate) struct HowAFollowedReadOfTheRuntimeGoesOn<'read> {
+    /// Answers true once the read is to end.
+    pub(crate) read_interrupted: &'read dyn Fn() -> bool,
+    /// How long a follow waits after a page that brought nothing.
+    pub(crate) follow_poll_interval: Duration,
+    /// Where the runtime said its own log is, named when it goes away mid-follow.
+    pub(crate) runtime_log_directory: &'read RuntimeLogDirectoryAsDescribed,
 }
 
 fn route_ctrl_c_to_the_end_of_the_read() -> Result<(), TatolabCommandFailure> {
@@ -266,25 +292,48 @@ fn route_ctrl_c_to_the_end_of_the_read() -> Result<(), TatolabCommandFailure> {
 
 /// `stream`'s records, each page read by `read_records_page_after` from a sequence number,
 /// rendered through the request's filters onto `standard_output` from the first record the
-/// runtime holds: to the newest when not following, and on until `read_interrupted` answers true
-/// when following, waiting `follow_poll_interval` after a page that brought nothing.
+/// runtime holds: to the newest when not following, and on as `how_it_goes_on` says when
+/// following. A page naming another load of the stream than the one read is set aside, and that
+/// load is read from its first record. A runtime gone mid-follow ends the read with an error
+/// naming its log.
 pub(crate) fn print_stream_log_records_read_from_the_runtime(
     stream: &str,
     read_records_page_after: &mut dyn FnMut(u64) -> Result<String, LocalApiMcpToolClientFailure>,
     stream_log_request: &OnDiskRuntimeLogRequest,
     standard_output: &mut dyn Write,
     standard_error: &mut dyn Write,
-    read_interrupted: &dyn Fn() -> bool,
-    follow_poll_interval: Duration,
+    how_it_goes_on: &HowAFollowedReadOfTheRuntimeGoesOn<'_>,
 ) -> Result<u8, TatolabCommandFailure> {
     let mut after = 0;
-    while !read_interrupted() {
+    let mut read_instance = None;
+    while !(how_it_goes_on.read_interrupted)() {
         let logs_tool_result_text = read_records_page_after(after).map_err(|logs_failure| {
             let _ = standard_output.flush();
+            if stream_log_request.follow_appended_records && the_runtime_is_gone(&logs_failure) {
+                return TatolabCommandFailure::refused(
+                    how_it_goes_on
+                        .runtime_log_directory
+                        .the_runtime_went_away_message(),
+                );
+            }
             tool_call_failure_worded_as_an_observation_verb_reports_it(LOGS_TOOL_NAME, logs_failure)
+                .into()
         })?;
         let stream_log_records_page = stream_log_records_page_from(&logs_tool_result_text)
             .map_err(TatolabCommandFailure::refused)?;
+        match &read_instance {
+            None => read_instance = Some(stream_log_records_page.stream_instance.clone()),
+            Some(instance_read) if *instance_read != stream_log_records_page.stream_instance => {
+                let _ = writeln!(
+                    standard_error,
+                    "tatolab: {stream} was loaded again — following it from its first record"
+                );
+                read_instance = Some(stream_log_records_page.stream_instance);
+                after = 0;
+                continue;
+            }
+            Some(_) => {}
+        }
         let rendered_records = render_stream_log_records_page(
             stream,
             &stream_log_records_page,
@@ -309,7 +358,7 @@ pub(crate) fn print_stream_log_records_read_from_the_runtime(
             if !stream_log_request.follow_appended_records {
                 return Ok(0);
             }
-            std::thread::sleep(follow_poll_interval);
+            std::thread::sleep(how_it_goes_on.follow_poll_interval);
         }
     }
     match standard_output.flush() {
@@ -627,8 +676,11 @@ mod tests {
             &OnDiskRuntimeLogRequest::default(),
             &mut standard_output,
             &mut Vec::new(),
-            &|| false,
-            Duration::ZERO,
+            &HowAFollowedReadOfTheRuntimeGoesOn {
+                read_interrupted: &|| false,
+                follow_poll_interval: Duration::ZERO,
+                runtime_log_directory: &RuntimeLogDirectoryAsDescribed::NotDescribed,
+            },
         );
 
         assert_eq!(printed.unwrap(), 0);
@@ -659,8 +711,11 @@ mod tests {
             },
             &mut Vec::new(),
             &mut Vec::new(),
-            &read_interrupted,
-            Duration::ZERO,
+            &HowAFollowedReadOfTheRuntimeGoesOn {
+                read_interrupted: &read_interrupted,
+                follow_poll_interval: Duration::ZERO,
+                runtime_log_directory: &RuntimeLogDirectoryAsDescribed::NotDescribed,
+            },
         );
 
         assert_eq!(printed.unwrap(), 0);
@@ -679,8 +734,11 @@ mod tests {
             &OnDiskRuntimeLogRequest::default(),
             &mut Vec::new(),
             &mut Vec::new(),
-            &|| false,
-            Duration::ZERO,
+            &HowAFollowedReadOfTheRuntimeGoesOn {
+                read_interrupted: &|| false,
+                follow_poll_interval: Duration::ZERO,
+                runtime_log_directory: &RuntimeLogDirectoryAsDescribed::NotDescribed,
+            },
         );
 
         assert_eq!(

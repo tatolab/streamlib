@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The one directory the machine's runtime keeps what must outlive it: the
-//! record of each kept stream and the runtime's own log.
+//! record of each stream it runs and its own log.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -101,8 +101,8 @@ impl TatolabStateDirectory {
         &self.path
     }
 
-    /// `<state>/streams/`, one record per kept stream.
-    pub fn kept_streams_directory(&self) -> PathBuf {
+    /// `<state>/streams/`, one record per stream the runtime runs.
+    pub fn streams_directory(&self) -> PathBuf {
         self.path.join("streams")
     }
 
@@ -306,7 +306,7 @@ mod tests {
             assert_eq!(mode, 0o700, "{}", level.display());
         }
         assert_eq!(
-            state_directory.kept_streams_directory(),
+            state_directory.streams_directory(),
             path.join("streams")
         );
         assert_eq!(state_directory.runtime_log_directory(), path.join("logs"));

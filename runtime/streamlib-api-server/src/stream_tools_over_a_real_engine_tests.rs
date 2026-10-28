@@ -1,11 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The stream tools over a real engine: a stream attached over a `/mcp/stdio`
-//! connection unloads when the connection drops while a kept one stays,
-//! `logs` pages a stream's records by sequence number, and `list_streams`,
+//! The stream tools over a real engine: a stream run over a `/mcp/stdio`
+//! connection outlives the connection and the local API, `logs` pages a
+//! stream's records by sequence number, and `list_streams`,
 //! `stop_stream`, `start_stream`, `remove_stream`, `rename_stream` and
-//! `expose_port` act by stream id on an engine keeping its streams in a temporary state directory.
+//! `expose_port` act by stream id on an engine recording its streams in a temporary state
+//! directory.
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose
@@ -27,7 +28,7 @@ use streamlib::sdk::graph::OutputPortExposureLevel;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
-    LoadedStreamTag, LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
+    LogRecordsPageOfOneLoadedStream, OperationsOnTheStreamsLoadedInThisRuntime,
     OptionsForLoadingOneStream, OutputPortExposureOutcome, RunStreamRequest, Runner,
     RuntimeOperations, StreamEnvironment, StreamListing, StreamLocation, StreamRecord,
     StreamRecordAsRead, StreamRecordsInTheStateDirectory, StreamRemoveOutcome, StreamRenameOutcome,
@@ -38,8 +39,8 @@ use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
 use crate::mcp::tests::{first_text_block_json, tool_call_result};
 use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
-/// How long a test waits for what an engine does on another thread — an
-/// unload after a connection dropped, a record reaching a stream's log.
+/// How long a test waits for what an engine does on another thread — a record
+/// reaching a stream's log.
 const WHAT_THE_ENGINE_DOES_ON_ANOTHER_THREAD_LANDS_WITHIN: Duration = Duration::from_secs(10);
 
 /// A native source with one output port, `video`, and nothing to do.
@@ -177,13 +178,13 @@ impl ProjectWhosePythonPrintsAGraph {
 
 /// An engine handed a lend directory, keeping its streams in a temporary
 /// state directory.
-struct AnEngineKeepingItsStreamsInATemporaryStateDirectory {
+struct AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     engine: Arc<Runner>,
     streams_directory: PathBuf,
     _state_directory: tempfile::TempDir,
 }
 
-impl AnEngineKeepingItsStreamsInATemporaryStateDirectory {
+impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     fn new() -> Self {
         register_the_stream_tools_test_source_once();
         let engine = Runner::new().expect("the engine builds");
@@ -195,8 +196,8 @@ impl AnEngineKeepingItsStreamsInATemporaryStateDirectory {
         let state_directory = tempfile::tempdir().expect("a state directory");
         let streams_directory = state_directory.path().join("streams");
         engine
-            .keep_streams_in_the_state_directory(&streams_directory)
-            .expect("the engine keeps its streams there");
+            .record_streams_in_the_state_directory(&streams_directory)
+            .expect("the engine records its streams there");
         Self {
             engine,
             streams_directory,
@@ -224,9 +225,9 @@ impl AnEngineKeepingItsStreamsInATemporaryStateDirectory {
         }
     }
 
-    /// Load `project`'s function `function` as an attached stream, not
+    /// Load `project`'s function `function` as its library host would, not
     /// started, under the id its location computes to, which it returns.
-    fn an_attached_stream_loaded_without_its_start(
+    fn a_stream_its_host_loaded_without_its_start(
         &self,
         project: &ProjectWhosePythonPrintsAGraph,
         function: &str,
@@ -240,13 +241,13 @@ impl AnEngineKeepingItsStreamsInATemporaryStateDirectory {
                     .with_display_name(function)
                     .at_stream_location(project.location_of(function)),
             )
-            .expect("the attached stream loads");
+            .expect("the host loads its stream");
         stream_id
     }
 
-    /// Record `project`'s function `function` as a kept stream, stopped when
-    /// `stopped` says so, and not loaded; returns its id.
-    fn a_kept_stream_recorded_and_not_loaded(
+    /// Record `project`'s function `function`, stopped when `stopped` says so,
+    /// and not loaded; returns its id.
+    fn a_stream_recorded_and_not_loaded(
         &self,
         project: &ProjectWhosePythonPrintsAGraph,
         function: &str,
@@ -293,26 +294,8 @@ async fn tool_call_over_the_connection(
     .unwrap()
 }
 
-/// Poll until `ids_of_the_loaded_streams` reads `expected`, and fail
-/// naming what it read last.
-async fn wait_until_the_loaded_streams_are(engine: &Runner, expected: &[&str]) {
-    let deadline =
-        tokio::time::Instant::now() + WHAT_THE_ENGINE_DOES_ON_ANOTHER_THREAD_LANDS_WITHIN;
-    loop {
-        let loaded = engine.ids_of_the_loaded_streams();
-        if loaded == expected {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the loaded streams never became {expected:?}; they are {loaded:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
 // ============================================================================
-// An attached stream ends with its connection
+// A stream outlives the connection that ran it
 // ============================================================================
 
 /// A cross-floor warning, as a test's compile writes it on its standard error.
@@ -326,16 +309,6 @@ const CROSS_FLOOR_WARNING_A_COMPILE_WROTE: &str =
 struct AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt {
     engine: Arc<Runner>,
     project_directory: tempfile::TempDir,
-    each_run_by_its_stream_id: std::sync::Mutex<Vec<RunHandedTheCallersStreamTags>>,
-}
-
-/// One `run_stream` the test runtime answered: the stream it loaded, the
-/// tags of the caller's attached streams it was handed, and the load's tag.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RunHandedTheCallersStreamTags {
-    stream_id: String,
-    stream_tags_attached_to_the_caller: Vec<LoadedStreamTag>,
-    stream_tag_of_the_load: LoadedStreamTag,
 }
 
 impl AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt {
@@ -343,7 +316,6 @@ impl AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt {
         Self {
             engine: Runner::new().expect("the engine builds"),
             project_directory: tempfile::tempdir().expect("a project directory"),
-            each_run_by_its_stream_id: std::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -410,21 +382,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             OptionsForLoadingOneStream::in_project_directory(self.project_directory.path())
                 .with_stream_id(&stream_id),
         )?;
-        self.each_run_by_its_stream_id
-            .lock()
-            .expect("no test thread panicked holding the runs")
-            .push(RunHandedTheCallersStreamTags {
-                stream_id: stream.stream_id().to_string(),
-                stream_tags_attached_to_the_caller: request.stream_tags_attached_to_the_caller,
-                stream_tag_of_the_load: stream.stream_tag(),
-            });
         Ok(StreamRunOutcome {
             stream_id: stream.stream_id().to_string(),
             display_name: stream.display_name(),
             stream_location,
             stream_tag: stream.stream_tag(),
             node_count: 0,
-            replaced_the_kept_record: false,
+            replaced_a_recorded_stream: false,
             compile_warnings: vec![CROSS_FLOOR_WARNING_A_COMPILE_WROTE.to_string()],
         })
     }
@@ -462,198 +426,74 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             level,
         )
     }
-    fn unload_the_attached_stream_if_still_the_same(
-        &self,
-        stream_id: &str,
-        stream_tag: LoadedStreamTag,
-    ) -> bool {
-        OperationsOnTheStreamsLoadedInThisRuntime::unload_the_attached_stream_if_still_the_same(
-            self.engine.as_ref(),
-            stream_id,
-            stream_tag,
-        )
-    }
 }
 
-fn a_run_request_naming(stream_id: &str, keep: bool) -> Value {
+fn a_run_request_naming(stream_id: &str) -> Value {
     json!({
         "project_directory": "/home/someone/projects/camera",
         "name": stream_id,
-        "keep": keep,
     })
 }
 
-/// The connection is the attached stream's lifetime: dropping it — a killed
-/// CLI, a closed terminal — unloads the stream it attached, while a stream it
-/// ran kept stays loaded.
+/// A stream run over a `/mcp/stdio` connection outlives it: dropping the
+/// connection — a killed CLI, a closed terminal, an MCP host quitting —
+/// unloads nothing, and a new connection lists the stream running.
 #[tokio::test(flavor = "multi_thread")]
-async fn an_attached_stream_unloads_when_its_connection_drops_and_a_kept_one_stays() {
+async fn a_stream_run_over_an_mcp_stdio_connection_outlives_it_and_lists_running() {
     let runtime = Arc::new(AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt::new());
     let engine = Arc::clone(&runtime.engine);
     let served = LocalApiServedOnAFreshSocket::over(runtime);
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
 
-    let attached = tool_answer(
-        &tool_call_over_the_connection(
-            &client,
-            "run_stream",
-            a_run_request_naming("attached-one", false),
-        )
-        .await,
+    let run = tool_answer(
+        &tool_call_over_the_connection(&client, "run_stream", a_run_request_naming("camera")).await,
     )
-    .expect("the attached run is answered");
-    assert_eq!(attached["stream"], "attached-one");
-    assert_eq!(attached["display_name"], "attached-one");
+    .expect("the run is answered");
+    assert_eq!(run["stream"], "camera");
+    assert_eq!(run["display_name"], "camera");
     assert_eq!(
-        attached["location"],
+        run["location"],
         json!({
             "project_directory": "/home/someone/projects/camera",
-            "stream_function": "stream:attached-one",
+            "stream_function": "stream:camera",
         })
     );
-    assert_eq!(attached["kept"], false);
+    assert_eq!(run.get("kept"), None, "a run answers no `kept`: {run}");
     assert_eq!(
-        attached["compile_warnings"],
+        run["compile_warnings"],
         json!([CROSS_FLOOR_WARNING_A_COMPILE_WROTE]),
         "the run's result carries what its compile wrote to its standard error"
     );
-    tool_answer(
-        &tool_call_over_the_connection(
-            &client,
-            "run_stream",
-            a_run_request_naming("kept-one", true),
-        )
-        .await,
-    )
-    .expect("the kept run is answered");
-    wait_until_the_loaded_streams_are(&engine, &["attached-one", "kept-one"]).await;
-
-    drop(client);
-
-    wait_until_the_loaded_streams_are(&engine, &["kept-one"]).await;
-}
-
-/// A closed connection unloads only the load it attached: a stream since
-/// stopped and run again under the same name — by another connection — stays.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_closed_connection_leaves_a_stream_that_took_the_attached_name_since() {
-    let runtime = Arc::new(AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt::new());
-    let engine = Arc::clone(&runtime.engine);
-    let operations_on_the_loaded_streams =
-        Arc::clone(&runtime) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>;
-    let served = LocalApiServedOnAFreshSocket::over(Arc::clone(&operations_on_the_loaded_streams));
-    let client = rmcp_client_over_the_upgraded_stream(&served).await;
-    tool_answer(
-        &tool_call_over_the_connection(
-            &client,
-            "run_stream",
-            a_run_request_naming("camera", false),
-        )
-        .await,
-    )
-    .expect("the attached run is answered");
-    let stopped = tool_answer(
-        &tool_call_over_the_connection(&client, "stop_stream", json!({ "stream": "camera" })).await,
-    )
-    .expect("the attached stream stops");
-    assert_eq!(
-        stopped,
-        json!({ "stream": "camera", "stopped": true, "kept": false })
-    );
-    tool_answer(
-        &tool_call_result(
-            operations_on_the_loaded_streams,
-            "run_stream",
-            a_run_request_naming("camera", true),
-        )
-        .await,
-    )
-    .expect("the one-shot kept run is answered");
 
     drop(client);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     assert_eq!(engine.ids_of_the_loaded_streams(), ["camera"]);
+    let next_session = rmcp_client_over_the_upgraded_stream(&served).await;
+    let listed =
+        tool_answer(&tool_call_over_the_connection(&next_session, "list_streams", json!({})).await)
+            .expect("list_streams answers");
+    assert_eq!(listed["streams"][0]["stream"], "camera", "{listed}");
+    assert_eq!(listed["streams"][0]["state"], "running", "{listed}");
 }
 
-/// An attached run is handed the tags of the streams its own connection
-/// attached, and a kept run or another connection's run none, so the engine
-/// replaces a stream only for the connection that attached it.
+/// Stopping the local API ends every upgraded connection and unloads no
+/// stream run over one.
 #[tokio::test(flavor = "multi_thread")]
-async fn an_attached_run_is_handed_the_stream_tags_its_own_connection_attached_and_no_others() {
-    let runtime = Arc::new(AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt::new());
-    let served = LocalApiServedOnAFreshSocket::over(
-        Arc::clone(&runtime) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>
-    );
-    let first_connection = rmcp_client_over_the_upgraded_stream(&served).await;
-    let second_connection = rmcp_client_over_the_upgraded_stream(&served).await;
-
-    for (connection, stream_id, keep) in [
-        (&first_connection, "camera", false),
-        (&second_connection, "preview", false),
-        (&first_connection, "microphone", false),
-        (&first_connection, "kept-one", true),
-    ] {
-        tool_answer(
-            &tool_call_over_the_connection(
-                connection,
-                "run_stream",
-                a_run_request_naming(stream_id, keep),
-            )
-            .await,
-        )
-        .unwrap_or_else(|refusal| panic!("`{stream_id}` runs: {refusal}"));
-    }
-
-    let each_run = runtime.each_run_by_its_stream_id.lock().unwrap().clone();
-    let stream_tag_of = |stream_id: &str| {
-        each_run
-            .iter()
-            .find(|run| run.stream_id == stream_id)
-            .expect("the stream ran")
-            .stream_tag_of_the_load
-    };
-    let stream_tags_each_run_was_handed: Vec<(&str, Vec<LoadedStreamTag>)> = each_run
-        .iter()
-        .map(|run| {
-            (
-                run.stream_id.as_str(),
-                run.stream_tags_attached_to_the_caller.clone(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        stream_tags_each_run_was_handed,
-        [
-            ("camera", vec![]),
-            ("preview", vec![]),
-            ("microphone", vec![stream_tag_of("camera")]),
-            ("kept-one", vec![]),
-        ]
-    );
-}
-
-/// Stopping the local API ends every upgraded connection, and each unloads
-/// what it attached rather than leaving it to outlive the API.
-#[tokio::test(flavor = "multi_thread")]
-async fn an_attached_stream_unloads_when_the_local_api_stops_serving() {
+async fn a_stream_run_over_an_mcp_stdio_connection_outlives_the_local_api_stopping() {
     let runtime = Arc::new(AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt::new());
     let engine = Arc::clone(&runtime.engine);
     let mut served = LocalApiServedOnAFreshSocket::over(runtime);
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
     tool_answer(
-        &tool_call_over_the_connection(
-            &client,
-            "run_stream",
-            a_run_request_naming("attached-one", false),
-        )
-        .await,
+        &tool_call_over_the_connection(&client, "run_stream", a_run_request_naming("camera")).await,
     )
-    .expect("the attached run is answered");
+    .expect("the run is answered");
 
     served.stop_serving();
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    wait_until_the_loaded_streams_are(&engine, &[]).await;
+    assert_eq!(engine.ids_of_the_loaded_streams(), ["camera"]);
     drop(client);
 }
 
@@ -672,14 +512,10 @@ async fn a_run_and_its_logs_pages_name_the_loads_instance_and_a_re_load_names_an
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
     let run_camera_and_read_its_logs = || async {
         let run = tool_answer(
-            &tool_call_over_the_connection(
-                &client,
-                "run_stream",
-                a_run_request_naming("camera", false),
-            )
-            .await,
+            &tool_call_over_the_connection(&client, "run_stream", a_run_request_naming("camera"))
+                .await,
         )
-        .expect("the attached run is answered");
+        .expect("the run is answered");
         let page = tool_answer(
             &tool_call_over_the_connection(&client, "logs", json!({ "stream": "camera" })).await,
         )
@@ -704,7 +540,7 @@ async fn a_run_and_its_logs_pages_name_the_loads_instance_and_a_re_load_names_an
     tool_answer(
         &tool_call_over_the_connection(&client, "stop_stream", json!({ "stream": "camera" })).await,
     )
-    .expect("the attached stream stops");
+    .expect("the stream stops");
 
     let (re_run, re_loaded_page) = run_camera_and_read_its_logs().await;
 
@@ -827,18 +663,18 @@ async fn logs_pages_a_streams_records_by_sequence_number() {
 }
 
 // ============================================================================
-// list, stop, start, remove and expose against an engine keeping its streams
+// list, stop, start, remove and expose against an engine recording its streams
 // ============================================================================
 
 /// `list_streams` lists each stream by its id with its display name and
 /// location, and every tool resolves a stream by that id exactly.
 #[tokio::test(flavor = "multi_thread")]
 async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_exactly() {
-    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
-    let live = engine.an_attached_stream_loaded_without_its_start(&project, "live");
-    let parked = engine.a_kept_stream_recorded_and_not_loaded(&project, "parked", true);
-    let waiting = engine.a_kept_stream_recorded_and_not_loaded(&project, "waiting", false);
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+    let parked = engine.a_stream_recorded_and_not_loaded(&project, "parked", true);
+    let waiting = engine.a_stream_recorded_and_not_loaded(&project, "waiting", false);
 
     let listed = tool_answer(
         &tool_call_result(
@@ -857,9 +693,9 @@ async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_ex
         })
     };
     let mut expected_streams = vec![
-        json!({ "stream": live, "display_name": "live", "location": location_of("live"), "state": "attached", "node_count": 1, "failed_because": null }),
+        json!({ "stream": live, "display_name": "live", "location": location_of("live"), "state": "running", "node_count": 1, "failed_because": null }),
         json!({ "stream": parked, "display_name": "parked", "location": location_of("parked"), "state": "stopped", "node_count": null, "failed_because": null }),
-        json!({ "stream": waiting, "display_name": "waiting", "location": location_of("waiting"), "state": "kept", "node_count": null, "failed_because": null }),
+        json!({ "stream": waiting, "display_name": "waiting", "location": location_of("waiting"), "state": "running", "node_count": null, "failed_because": null }),
     ];
     expected_streams.sort_by_key(|listed| listed["stream"].as_str().unwrap().to_string());
     assert_eq!(listed, json!({ "streams": expected_streams }));
@@ -890,15 +726,15 @@ async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_ex
     }
 }
 
-/// `expose_port` changes a loaded stream's port live, recording nothing for an
-/// attached one, and records the owner's ruling on a stopped kept stream once
+/// `expose_port` changes a loaded stream's port live, recording nothing for
+/// one its host loaded, and records the owner's ruling on a stopped stream once
 /// its recorded graph holds the node.
 #[tokio::test(flavor = "multi_thread")]
-async fn expose_port_changes_a_loaded_port_live_and_records_a_kept_streams_ruling() {
-    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
+async fn expose_port_changes_a_loaded_port_live_and_records_a_stopped_streams_ruling() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
-    let live = engine.an_attached_stream_loaded_without_its_start(&project, "live");
-    let parked = engine.a_kept_stream_recorded_and_not_loaded(&project, "parked", true);
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+    let parked = engine.a_stream_recorded_and_not_loaded(&project, "parked", true);
 
     let live_exposed = tool_answer(
         &tool_call_result(
@@ -966,10 +802,10 @@ async fn expose_port_changes_a_loaded_port_live_and_records_a_kept_streams_rulin
 /// directory as it says.
 #[tokio::test(flavor = "multi_thread")]
 async fn stop_start_and_remove_act_on_the_streams_the_runtime_holds() {
-    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
-    let live = engine.an_attached_stream_loaded_without_its_start(&project, "live");
-    let parked = engine.a_kept_stream_recorded_and_not_loaded(&project, "parked", true);
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+    let parked = engine.a_stream_recorded_and_not_loaded(&project, "parked", true);
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
         async move {
@@ -983,7 +819,7 @@ async fn stop_start_and_remove_act_on_the_streams_the_runtime_holds() {
         .await
         .expect_err("a loaded stream does not start");
     assert!(
-        refusal.contains("already loaded") && refusal.contains("attached"),
+        refusal.contains("already loaded") && refusal.contains("living with its host process"),
         "{refusal}"
     );
     let refusal = call("start_stream", json!({ "stream": "nothing" }))
@@ -1002,7 +838,7 @@ async fn stop_start_and_remove_act_on_the_streams_the_runtime_holds() {
         call("stop_stream", json!({ "stream": live }))
             .await
             .unwrap(),
-        json!({ "stream": live, "stopped": true, "kept": false })
+        json!({ "stream": live, "stopped": true })
     );
     assert!(engine.engine.ids_of_the_loaded_streams().is_empty());
 
@@ -1027,10 +863,10 @@ async fn stop_start_and_remove_act_on_the_streams_the_runtime_holds() {
 /// and the id the call named is the id it answers.
 #[tokio::test(flavor = "multi_thread")]
 async fn rename_stream_shows_a_stream_under_a_new_display_name_and_records_a_recorded_one() {
-    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
-    let live = engine.an_attached_stream_loaded_without_its_start(&project, "live");
-    let parked = engine.a_kept_stream_recorded_and_not_loaded(&project, "parked", true);
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+    let parked = engine.a_stream_recorded_and_not_loaded(&project, "parked", true);
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
         async move {
@@ -1101,7 +937,7 @@ async fn rename_stream_shows_a_stream_under_a_new_display_name_and_records_a_rec
 /// forgets it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_record_an_earlier_runtime_wrote_is_listed_failed_until_it_is_removed() {
-    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     std::fs::write(
         engine.streams_directory.join("main.json"),
         json!({
@@ -1159,14 +995,14 @@ async fn a_record_an_earlier_runtime_wrote_is_listed_failed_until_it_is_removed(
     );
 }
 
-/// A kept stream whose interpreter is gone does not start, refused naming the
+/// A recorded stream whose interpreter is gone does not start, refused naming the
 /// interpreter and how to bring it back; a run in a project with no venv is
 /// refused pointing at `uv sync`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_uv_sync() {
-    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("gone"));
-    let gone = engine.a_kept_stream_recorded_and_not_loaded(&project, "gone", true);
+    let gone = engine.a_stream_recorded_and_not_loaded(&project, "gone", true);
     std::fs::remove_file(project.interpreter()).expect("the interpreter goes");
 
     let refusal = tool_answer(
@@ -1177,7 +1013,7 @@ async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_
         )
         .await,
     )
-    .expect_err("a kept stream whose interpreter is gone does not start");
+    .expect_err("a recorded stream whose interpreter is gone does not start");
     assert!(
         refusal.contains(&project.interpreter().display().to_string())
             && refusal.contains("uv sync"),
@@ -1189,7 +1025,7 @@ async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "run_stream",
-            json!({ "project_directory": project_with_no_venv.path(), "keep": true }),
+            json!({ "project_directory": project_with_no_venv.path() }),
         )
         .await,
     )
@@ -1209,79 +1045,64 @@ async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_
 // End to end on the engine's own run — the start creates its GPU context
 // ============================================================================
 
-/// A project's stream function run attached over a `/mcp/stdio` connection,
-/// and another kept over a one-shot call: dropping the connection unloads
-/// the attached stream, the kept one runs on, and stop, start and remove act
-/// on it through the tools.
+/// A project's stream function run over a `/mcp/stdio` connection is recorded
+/// and runs on once the connection drops, and stop, start and remove act on it
+/// through the tools.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
-async fn a_run_stream_end_to_end_attached_and_kept_through_stop_start_and_remove() {
-    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
-    let attached_project = ProjectWhosePythonPrintsAGraph::compiling_warning(
-        the_graph_of_a_function_named("attached"),
+async fn a_run_stream_end_to_end_outlives_its_connection_through_stop_start_and_remove() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWhosePythonPrintsAGraph::compiling_warning(
+        the_graph_of_a_function_named("camera"),
         &[CROSS_FLOOR_WARNING_A_COMPILE_WROTE],
     );
-    let kept_project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("kept"));
-    let attached_stream_id = attached_project.stream_id_of("attached");
-    let kept_stream_id = kept_project.stream_id_of("kept");
+    let camera_stream_id = project.stream_id_of("camera");
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
 
-    let attached = tool_answer(
+    let run = tool_answer(
         &tool_call_over_the_connection(
             &client,
             "run_stream",
-            json!({ "project_directory": attached_project.path(), "keep": false }),
+            json!({ "project_directory": project.path() }),
         )
         .await,
     )
-    .expect("the attached stream runs");
+    .expect("the stream runs");
     assert_eq!(
-        attached,
+        run,
         json!({
-            "stream": attached_stream_id,
-            "display_name": "attached",
+            "stream": camera_stream_id,
+            "display_name": "camera",
             "stream_instance": engine
                 .engine
-                .loaded_stream_of_the_id(&attached_stream_id)
+                .loaded_stream_of_the_id(&camera_stream_id)
                 .unwrap()
                 .stream_tag()
                 .to_string(),
-            "kept": false,
             "location": {
-                "project_directory": attached_project.path(),
-                "stream_function": "stream:attached",
+                "project_directory": project.path(),
+                "stream_function": "stream:camera",
             },
             "node_count": 1,
-            "replaced_the_kept_record": false,
+            "replaced_a_recorded_stream": false,
             "compile_warnings": [CROSS_FLOOR_WARNING_A_COMPILE_WROTE],
         })
     );
-    let kept = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "run_stream",
-            json!({ "project_directory": kept_project.path(), "keep": true }),
-        )
-        .await,
-    )
-    .expect("the kept stream runs");
-    assert_eq!(kept["kept"], true);
-    assert_eq!(
-        kept["compile_warnings"],
-        json!([]),
-        "a compile that wrote nothing to its standard error answers no warning"
+    assert!(
+        engine.current_record_of(&camera_stream_id).is_some(),
+        "the run is recorded"
     );
-    let mut both_stream_ids = [attached_stream_id.as_str(), kept_stream_id.as_str()];
-    both_stream_ids.sort();
-    wait_until_the_loaded_streams_are(&engine.engine, &both_stream_ids).await;
 
     drop(client);
-    wait_until_the_loaded_streams_are(&engine.engine, &[kept_stream_id.as_str()]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        engine.engine.ids_of_the_loaded_streams(),
+        [camera_stream_id.clone()]
+    );
 
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
@@ -1292,46 +1113,44 @@ async fn a_run_stream_end_to_end_attached_and_kept_through_stop_start_and_remove
         }
     };
     assert_eq!(
-        call("stop_stream", json!({ "stream": kept_stream_id }))
+        call("stop_stream", json!({ "stream": camera_stream_id }))
             .await
             .unwrap(),
-        json!({ "stream": kept_stream_id, "stopped": true, "kept": true })
+        json!({ "stream": camera_stream_id, "stopped": true })
     );
     assert_eq!(
-        call("start_stream", json!({ "stream": kept_stream_id }))
+        call("start_stream", json!({ "stream": camera_stream_id }))
             .await
             .unwrap(),
-        json!({ "stream": kept_stream_id, "node_count": 1 })
+        json!({ "stream": camera_stream_id, "node_count": 1 })
     );
     assert_eq!(
-        call("remove_stream", json!({ "stream": kept_stream_id }))
+        call("remove_stream", json!({ "stream": camera_stream_id }))
             .await
             .unwrap(),
-        json!({ "stream": kept_stream_id, "unloaded": true, "forgotten": true })
+        json!({ "stream": camera_stream_id, "unloaded": true, "forgotten": true })
     );
     assert!(engine.engine.ids_of_the_loaded_streams().is_empty());
 }
 
-/// `tatolab dev`'s reload: the connection that attached a stream runs it
-/// again and the engine replaces it under the same id and another instance, a
-/// run whose compile fails leaves the running stream loaded and attached,
-/// another connection's run of the location is refused, a run of another
-/// function in the project loads beside it under its own id, and closing the
-/// connection unloads every stream it attached.
+/// `tatolab dev`'s reload: a run of a recorded location replaces its stream
+/// under the same id and another instance, whichever connection carries it; a
+/// run whose compile fails leaves the running stream loaded; a run of another
+/// function in the project loads beside it under its own id; and closing every
+/// connection unloads nothing.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
-async fn an_attached_run_again_on_its_own_connection_replaces_its_stream_and_no_other_connections()
-{
-    let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
+async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project =
         ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
-    let attaching_connection = rmcp_client_over_the_upgraded_stream(&served).await;
+    let first_connection = rmcp_client_over_the_upgraded_stream(&served).await;
     let other_connection = rmcp_client_over_the_upgraded_stream(&served).await;
-    let attached_run = json!({ "project_directory": project.path(), "keep": false });
+    let run = json!({ "project_directory": project.path() });
     let camera_stream_id = project.stream_id_of("camera");
     let stream_tag_loaded_as_camera = || {
         engine
@@ -1341,17 +1160,13 @@ async fn an_attached_run_again_on_its_own_connection_replaces_its_stream_and_no_
             .stream_tag()
     };
 
-    tool_answer(
-        &tool_call_over_the_connection(&attaching_connection, "run_stream", attached_run.clone())
-            .await,
-    )
-    .expect("the attached stream runs");
+    tool_answer(&tool_call_over_the_connection(&first_connection, "run_stream", run.clone()).await)
+        .expect("the stream runs");
     let first_load = stream_tag_loaded_as_camera();
 
     project.fail_to_compile_printing("SyntaxError: invalid syntax");
     let refusal = tool_answer(
-        &tool_call_over_the_connection(&attaching_connection, "run_stream", attached_run.clone())
-            .await,
+        &tool_call_over_the_connection(&first_connection, "run_stream", run.clone()).await,
     )
     .expect_err("a bad save is refused");
     assert!(refusal.contains("SyntaxError"), "{refusal}");
@@ -1362,18 +1177,11 @@ async fn an_attached_run_again_on_its_own_connection_replaces_its_stream_and_no_
     );
 
     project.compile_to_warning(the_graph_of_a_function_named("camera"), &[]);
-    let refusal = tool_answer(
-        &tool_call_over_the_connection(&other_connection, "run_stream", attached_run.clone()).await,
-    )
-    .expect_err("another connection's run of the location is refused");
-    assert!(refusal.contains("already loaded"), "{refusal}");
-    assert_eq!(stream_tag_loaded_as_camera(), first_load);
-
-    let replaced = tool_answer(
-        &tool_call_over_the_connection(&attaching_connection, "run_stream", attached_run).await,
-    )
-    .expect("the attaching connection's run replaces its stream");
+    let replaced =
+        tool_answer(&tool_call_over_the_connection(&other_connection, "run_stream", run).await)
+            .expect("another connection's run of the location replaces its stream");
     assert_eq!(replaced["stream"], camera_stream_id.as_str());
+    assert_eq!(replaced["replaced_a_recorded_stream"], true);
     assert_ne!(stream_tag_loaded_as_camera(), first_load);
     assert_eq!(
         replaced["stream_instance"],
@@ -1384,13 +1192,13 @@ async fn an_attached_run_again_on_its_own_connection_replaces_its_stream_and_no_
     project.compile_to_warning(the_graph_of_a_function_named("studio"), &[]);
     let studio = tool_answer(
         &tool_call_over_the_connection(
-            &attaching_connection,
+            &first_connection,
             "run_stream",
-            json!({ "project_directory": project.path(), "keep": false }),
+            json!({ "project_directory": project.path() }),
         )
         .await,
     )
-    .expect("the attaching connection's run of another function loads it");
+    .expect("a run of another function loads it");
     let studio_stream_id = project.stream_id_of("studio");
     assert_eq!(studio["stream"], studio_stream_id.as_str());
     let mut both_stream_ids = vec![camera_stream_id.clone(), studio_stream_id];
@@ -1398,8 +1206,7 @@ async fn an_attached_run_again_on_its_own_connection_replaces_its_stream_and_no_
     assert_eq!(engine.engine.ids_of_the_loaded_streams(), both_stream_ids);
 
     drop(other_connection);
+    drop(first_connection);
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(engine.engine.ids_of_the_loaded_streams(), both_stream_ids);
-    drop(attaching_connection);
-    wait_until_the_loaded_streams_are(&engine.engine, &[]).await;
 }

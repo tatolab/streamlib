@@ -10,7 +10,6 @@
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
 #![allow(clippy::disallowed_macros)]
 
-mod attached_stream_on_the_runtime;
 mod cli_and_runtime_version_flag;
 mod local_api_connection;
 mod local_api_mcp_stdio_pipe;
@@ -20,12 +19,14 @@ mod machine_runtime_local_api_socket;
 mod process_signal_handling;
 mod project_source_change_watcher;
 mod relay_verbs_on_the_runtime;
+mod runtime_gone_while_following_a_stream;
 mod runtime_log_files_reader;
 mod runtime_logs_verb;
 mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
 mod stream_actions_on_the_runtime;
 mod stream_argument_resolution_through_the_listing;
+mod stream_followed_and_reloaded_on_every_save;
 mod stream_log_records_from_the_runtime;
 mod verb_output_table;
 mod verb_standard_output;
@@ -45,7 +46,6 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 use streamlib_runtime_client_contract::local_api_wire_contract::ExposePortLevel;
 
-use crate::attached_stream_on_the_runtime::AttachedStreamVerb;
 use crate::stream_actions_on_the_runtime::{
     STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP, StreamLoadArguments,
 };
@@ -113,36 +113,38 @@ enum TatolabVerb {
         /// Directory to scaffold the project into.
         directory: PathBuf,
     },
-    /// Load this project's stream into the runtime and follow its records.
+    /// Load this project's stream into the runtime, print its id, and return.
     #[command(
-        long_about = "The runtime compiles the stream in the project's own .venv and loads it. \
-                      Attached, the stream lives as long as this command: Ctrl-C, a closed \
-                      terminal or a killed tatolab unloads it. With -d, the runtime keeps it, \
-                      across its own restarts, until `tatolab stop` or `tatolab rm`."
+        long_about = "The runtime compiles the stream in the project's own .venv, loads it, and \
+                      records it: it runs across the runtime's restarts until `tatolab stop` or \
+                      `tatolab rm`. Running the same project and function again replaces it under \
+                      the same id. Prints the stream's id and how to follow it with \
+                      `tatolab logs -f`; exits 0 once the load is accepted, and 1 naming why it \
+                      was refused."
     )]
     Run {
         #[command(flatten)]
         stream_load_arguments: StreamLoadArguments,
-        /// Hand the stream to the runtime to keep, print one line, and return.
-        #[arg(short = 'd', long = "detach")]
-        detach: bool,
     },
-    /// Run this project's stream attached and load it again on every saved edit.
+    /// Load this project's stream, follow its records, and load it again on every saved edit.
     #[command(
-        long_about = "`run` attached, plus a watch on the project's .py files: each settled save \
-                      stops the stream and loads it again. A load the runtime refuses waits for \
-                      the next save; when the runtime goes away, dev waits for it and loads again."
+        long_about = "`run`, then the stream's records followed, plus a watch on the project's \
+                      .py files: each settled save runs the stream again, which replaces it once \
+                      the save compiles. A save the runtime refuses leaves the running stream \
+                      as it was. Ctrl-C ends dev and leaves the stream loaded. When the runtime \
+                      goes away, dev says so, waits for it to re-load the stream from its record, \
+                      and follows it again."
     )]
     Dev {
         #[command(flatten)]
         stream_load_arguments: StreamLoadArguments,
     },
-    /// Stop a stream: unload it, and keep a kept one stopped across restarts.
+    /// Stop a stream: unload it, and keep it stopped across restarts.
     Stop {
         #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
         stream: Option<String>,
     },
-    /// Load a stopped kept stream again, or retry a failed one.
+    /// Load a stopped stream again, or retry a failed one.
     Start {
         #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
         stream: Option<String>,
@@ -166,15 +168,15 @@ enum TatolabVerb {
         #[arg(value_names = ["STREAM", "DISPLAY_NAME"], num_args = 1..=2, required = true)]
         stream_then_display_name: Vec<String>,
     },
-    /// List the streams the runtime holds: attached, kept, stopped or failed, and why each failed.
+    /// List the streams the runtime holds: running, stopped or failed, and why each failed.
     Streams,
     /// Set how far one output port of a stream is readable.
     #[command(
         long_about = "Private (the default here) lets this machine's other streams and agents read \
                       the port; --public lets readers off the machine read it too; --remove makes \
                       it internal to its stream. The change is live — a reader the new level no \
-                      longer allows is cut at once — and a kept stream records it, over what its \
-                      function exposes, across restarts."
+                      longer allows is cut at once — and the stream's record holds it, over what \
+                      its function exposes, across restarts."
     )]
     #[command(
         override_usage = "tatolab expose [STREAM] <NODE> <PORT> [--public | --remove]",
@@ -230,8 +232,8 @@ enum TatolabVerb {
         long_about = "For an MCP host to launch: `claude mcp add tatolab -- tatolab mcp`, or `ssh \
                       <machine> tatolab mcp` for the runtime on another machine. Copies bytes \
                       between stdio and the runtime's MCP server, through its local API socket, \
-                      without reading them. A stream the host loads attached lives as long as \
-                      this connection."
+                      without reading them. A stream the host runs is recorded by the runtime and \
+                      outlives this connection."
     )]
     Mcp,
     /// Grant this machine's users the permission a VirtualCameraSink needs, once.
@@ -289,19 +291,8 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
         }
         TatolabVerb::Run {
             stream_load_arguments,
-            detach: true,
         } => caller_working_directory().and_then(|caller_working_directory| {
-            stream_actions_on_the_runtime::run_stream_kept(
-                &stream_load_arguments,
-                &caller_working_directory,
-            )
-        }),
-        TatolabVerb::Run {
-            stream_load_arguments,
-            detach: false,
-        } => caller_working_directory().and_then(|caller_working_directory| {
-            attached_stream_on_the_runtime::run_stream_attached(
-                AttachedStreamVerb::Run,
+            stream_actions_on_the_runtime::run_stream(
                 &stream_load_arguments,
                 &caller_working_directory,
             )
@@ -309,8 +300,7 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
         TatolabVerb::Dev {
             stream_load_arguments,
         } => caller_working_directory().and_then(|caller_working_directory| {
-            attached_stream_on_the_runtime::run_stream_attached(
-                AttachedStreamVerb::Dev,
+            stream_followed_and_reloaded_on_every_save::follow_the_stream_and_reload_it_on_every_save(
                 &stream_load_arguments,
                 &caller_working_directory,
             )

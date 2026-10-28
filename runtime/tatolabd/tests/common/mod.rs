@@ -27,7 +27,7 @@ use streamlib::sdk::runtime::{
     StreamRecordsInTheStateDirectory,
 };
 
-/// The line `tatolabd` logs once its local API is served and its kept streams
+/// The line `tatolabd` logs once its local API is served and its recorded streams
 /// re-loaded.
 pub const THE_RUNTIME_IS_SERVING_LOG_LINE: &str = "the runtime is serving:";
 
@@ -243,7 +243,7 @@ impl TatolabTestMachineRoot {
         self.path().join("state")
     }
 
-    /// `<state>/streams/`, one `<stream id>.json` record per kept stream.
+    /// `<state>/streams/`, one `<stream id>.json` record per recorded stream.
     pub fn streams_directory(&self) -> PathBuf {
         self.state_directory().join("streams")
     }
@@ -373,10 +373,10 @@ pub fn the_stream_id_of_the_function(project_directory: &Path, function: &str) -
     the_location_of_the_function(project_directory, function).stream_id()
 }
 
-/// The record of a kept stream: the function `function` of `stream.py` in
+/// The record of a recorded stream: the function `function` of `stream.py` in
 /// `project_directory`, running `graph` under `interpreter`, keyed by the
 /// stream id its location computes to.
-pub fn a_kept_stream_record(
+pub fn a_stream_record(
     function: &str,
     graph: serde_json::Value,
     project_directory: &Path,

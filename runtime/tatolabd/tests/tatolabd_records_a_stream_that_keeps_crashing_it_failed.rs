@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A kept stream that keeps crashing `tatolabd` is recorded failed, GPU-free:
+//! A recorded stream that keeps crashing `tatolabd` is recorded failed, GPU-free:
 //! the crash-on-demand test node crashes the runtime while its stream loads,
 //! twice, and the next start lists the stream failed with its reason and
 //! skips it; `start_stream` retries it past its crash, to the GPU the runtime
@@ -14,18 +14,18 @@
 mod common;
 
 use common::{
-    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_kept_stream_record,
-    a_stream_graph_crashing_while, an_executable_standing_in_for_the_interpreter,
-    call_a_tool_over_the_local_api, expect_the_runtime_to_crash_on_segv,
+    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_stream_graph_crashing_while,
+    a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
+    expect_the_runtime_to_crash_on_segv,
 };
 
 #[test]
-fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start_retries_it() {
+fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start_retries_it() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let crash_trigger = machine_root.project_directory().join("crash-armed");
     std::fs::write(&crash_trigger, "").unwrap();
-    let crasher = a_kept_stream_record(
+    let crasher = a_stream_record(
         "crasher",
         a_stream_graph_crashing_while("crasher", &crash_trigger),
         &machine_root.project_directory(),
@@ -37,7 +37,7 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
     let the_crashers_record = || {
         machine_root
             .current_stream_record_of(&crasher_stream_id)
-            .expect("the crasher's record is kept")
+            .expect("the crasher's record stays")
     };
     let run_in_progress_record = machine_root.runtime_run_in_progress_record_path();
 
@@ -84,7 +84,7 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
     let standard_error = runtime.standard_error();
     assert!(
         standard_error.contains(&format!(
-            "the kept stream `{crasher_stream_id}` is failed, so it is not re-loaded"
+            "the stream `{crasher_stream_id}` is failed, so it is not re-loaded"
         )),
         "{standard_error}"
     );
@@ -118,13 +118,13 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
 }
 
 #[test]
-fn a_kept_stream_whose_venv_was_deleted_comes_back_failed_naming_the_venv() {
+fn a_recorded_stream_whose_venv_was_deleted_comes_back_failed_naming_the_venv() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let deleted_interpreter = machine_root.project_directory().join(".venv/bin/python");
     machine_root
         .stream_records()
-        .write(&a_kept_stream_record(
+        .write(&a_stream_record(
             "orphan",
             common::a_native_only_stream_graph("orphan"),
             &machine_root.project_directory(),
