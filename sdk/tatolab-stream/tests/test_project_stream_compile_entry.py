@@ -677,8 +677,6 @@ def test_a_module_targets_refusal_names_the_file_its_module_resolved_to(anchor_d
 
 
 def test_the_compile_takes_no_name_and_names_the_graph_by_its_function(anchor_directory: Path):
-    """A stream's display name is the runtime's to record, so `--name` never reaches the
-    compile and the graph is named by the function alone."""
     ran = anchor_directory / "entry-ran.txt"
     write_app(
         anchor_directory,

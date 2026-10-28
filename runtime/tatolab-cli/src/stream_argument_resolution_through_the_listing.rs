@@ -34,14 +34,21 @@ pub(crate) fn stream_id_the_stream_argument_names_on_the_running_runtime(
 }
 
 /// The id of the one stream of `listed_streams` that `stream_argument` names — its id, else a
-/// display name only it holds — or, when it is omitted or empty, the one whose project directory
-/// is the one `resolved_working_directory` reads; else why not, listing the candidates.
+/// display name only it holds — or, when it is omitted, the one whose project directory is the
+/// one `resolved_working_directory` reads; else why not, listing the candidates. An empty
+/// argument names nothing and is refused, so an unset variable never falls back to the working
+/// directory.
 pub(crate) fn stream_id_the_stream_argument_names(
     listed_streams: &[ListStreamsToolResultStream],
     stream_argument: Option<&str>,
     resolved_working_directory: impl FnOnce() -> Result<PathBuf, TatolabCommandFailure>,
 ) -> Result<String, TatolabCommandFailure> {
-    match stream_argument.filter(|stream_argument| !stream_argument.is_empty()) {
+    match stream_argument {
+        Some("") => Err(
+            "an empty stream argument names no stream; name one by its id or its display name, \
+             or leave it out for the stream loaded from the working directory"
+                .to_owned(),
+        ),
         Some(stream_argument) => {
             stream_id_named_by_id_or_display_name(listed_streams, stream_argument)
         }
@@ -299,10 +306,21 @@ mod tests {
             resolved(None, "/srv/hello"),
             Ok("hello-main-3f2a9c".to_owned())
         );
-        assert_eq!(
-            resolved(Some(""), "/srv/hello"),
-            Ok("hello-main-3f2a9c".to_owned()),
-            "an empty argument is an omitted one"
+    }
+
+    #[test]
+    fn an_empty_argument_is_refused_and_never_read_as_the_working_directorys_stream() {
+        let refusal =
+            stream_id_the_stream_argument_names(&the_machines_streams(), Some(""), || {
+                panic!("an empty argument is not an omitted one")
+            })
+            .unwrap_err()
+            .message_for_the_user
+            .unwrap();
+
+        assert!(
+            refusal.starts_with("an empty stream argument names no stream"),
+            "{refusal}"
         );
     }
 

@@ -205,10 +205,7 @@ pub(crate) fn run_runtime_logs_verb(
 ) -> Result<u8, TatolabCommandFailure> {
     let on_disk_request = OnDiskRuntimeLogRequest::from(&logs_arguments);
     let on_disk_only_flags_given = on_disk_request.on_disk_only_flags_given();
-    let stream_argument = logs_arguments
-        .requested_stream
-        .as_deref()
-        .filter(|requested_stream| !requested_stream.is_empty());
+    let stream_argument = logs_arguments.requested_stream.as_deref();
     match (stream_argument, on_disk_only_flags_given.is_empty()) {
         (Some(_), false) => Err(TatolabCommandFailure::refused(format!(
             "`--stream` reads a loaded stream's records from the runtime, which takes no {}. \

@@ -498,6 +498,40 @@ fn a_stream_the_runtime_does_not_hold_is_refused_listing_the_streams_before_any_
 }
 
 #[test]
+fn an_empty_stream_argument_is_refused_and_never_falls_back_to_the_working_directory() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
+        vec![listed_stream(
+            "hello-main-3f2a9c",
+            "main",
+            &canonical_project_directory,
+        )],
+        "remove_stream",
+        StubToolAnswer::tool_result(
+            r#"{"stream":"hello-main-3f2a9c","unloaded":true,"forgotten":true}"#,
+        ),
+    );
+
+    let refused = run_tatolab_in(
+        &isolated_machine_directories,
+        project_directory.path(),
+        &["rm", ""],
+    );
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        standard_error_text(&refused).contains("an empty stream argument names no stream"),
+        "{}",
+        standard_error_text(&refused)
+    );
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("remove_stream"),
+        Vec::<serde_json::Value>::new()
+    );
+}
+
+#[test]
 fn a_display_name_one_stream_holds_reaches_the_tool_as_that_streams_id() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
         vec![

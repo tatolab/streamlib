@@ -2892,6 +2892,34 @@ mod tests {
 
     #[test]
     #[serial]
+    fn a_run_giving_a_display_name_that_shows_nothing_is_refused_before_its_compile() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let camera = project.stream_id_of("camera");
+        let record = a_kept_record_of(&project, "camera", serde_json::json!([]));
+        let running =
+            a_kept_stream_loaded_without_its_start(&runner, state_directory.path(), &record);
+
+        for showing_nothing in ["", "  "] {
+            let refusal = refusal_of(runner.run_stream(RunStreamRequest {
+                display_name: Some(showing_nothing.to_string()),
+                ..project.run_request(LoadedStreamHolding::Kept)
+            }));
+
+            assert!(refusal.contains("shows nothing"), "{refusal}");
+            assert!(
+                !refusal.contains("uv sync"),
+                "refused before the compile, which this project cannot run: {refusal}"
+            );
+        }
+        assert!(!running.has_ended());
+        assert_eq!(running.display_name(), "camera");
+        assert_eq!(the_record_of(state_directory.path(), &camera), record);
+    }
+
+    #[test]
+    #[serial]
     fn renaming_an_attached_stream_shows_it_under_the_name_and_records_nothing() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
