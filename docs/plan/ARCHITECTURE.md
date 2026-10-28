@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description; unbuilt: `H264Encoder`'s CPU arm)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, stream-identity-and-persistence; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, installs the Tatolab runtime once — `curl | sh` on Linux, `Tatolab.app` on a Mac,
@@ -804,7 +804,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — SHIPPED (OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ stream-identity-and-persistence; OPEN: resources across streams)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a message whose
   payload is bytes. The engine has no type layer and applies no encoding: ports carry no
@@ -2796,7 +2796,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Owner, 2026-10-01, on #2560's research. [one-runtime-per-machine; runtime-hosting — SHIPPED
   #2721]
 
-## Networking — transport, moq, webrtc — SHIPPED (unbuilt: a publicly valid certificate on the every-interface listener)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ stream-identity-and-persistence; unbuilt: a publicly valid certificate on the every-interface listener)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
@@ -3460,7 +3460,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Owner, 2026-10-02, 2026-10-11 and 2026-10-24. [runtime-hosting — SHIPPED #2721;
   machine-lock-without-administrator — SHIPPED #2929]
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, relay-setting-fields, stream-identity-and-persistence)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
