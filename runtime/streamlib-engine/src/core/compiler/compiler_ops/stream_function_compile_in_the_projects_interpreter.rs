@@ -26,7 +26,7 @@ use crate::core::child_process_lifetime::{
     give_the_child_no_descriptor_beyond_stdio,
 };
 use crate::core::error::{Error, Result};
-use crate::core::runtime::StreamEnvironment;
+use crate::core::runtime::{StreamEnvironment, StreamLocation};
 use crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind;
 
 /// The module `tatolab.stream` compiles a project's stream function with.
@@ -49,11 +49,15 @@ const COMPILE_STANDARD_ERROR_LOG_LABEL: &str = "stream-function-compile";
 const COMPILE_STANDARD_OUTPUT_KEPT_BYTES: usize = 64 * 1024 * 1024;
 
 /// A project's stream function compiled in the project's own interpreter: the
-/// graph it compiled to, and the environment its processor interpreters start in.
+/// graph it compiled to, where the stream's code lives, and the environment its
+/// processor interpreters start in.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StreamFunctionCompiledInTheProjectsInterpreter {
     /// The stream graph the compile entry printed, as it printed it.
     pub(crate) graph_json: serde_json::Value,
+    /// The project directory and the stream function's `module:qualname` the
+    /// compile entry reported.
+    pub(crate) stream_location: StreamLocation,
     /// The project directory the compile entry reported, and the project's
     /// venv interpreter.
     pub(crate) stream_environment: StreamEnvironment,
@@ -68,6 +72,7 @@ pub(crate) struct StreamFunctionCompiledInTheProjectsInterpreter {
 struct ProjectStreamCompileDocument {
     stream_graph: serde_json::Value,
     project_directory: PathBuf,
+    stream_function: String,
 }
 
 /// The interpreter a project's streams run in: `<project>/.venv/bin/python`,
@@ -278,6 +283,10 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     })?;
     Ok(StreamFunctionCompiledInTheProjectsInterpreter {
         graph_json: compile_document.stream_graph,
+        stream_location: StreamLocation {
+            project_directory: compile_document.project_directory.clone(),
+            stream_function: compile_document.stream_function,
+        },
         stream_environment: StreamEnvironment {
             project_directory: compile_document.project_directory,
             interpreter,
@@ -385,13 +394,14 @@ mod tests {
             serde_json::json!({
                 "stream_graph": a_compiled_graph(),
                 "project_directory": project_directory,
+                "stream_function": "stream:camera_preview",
             })
         )
     }
 
     #[test]
     #[serial]
-    fn a_compile_returns_the_graph_and_the_project_and_its_venv_interpreter() {
+    fn a_compile_returns_the_graph_the_location_and_the_projects_venv_interpreter() {
         // A literal path rather than one built from the shell's `$PWD`: a shell
         // started outside its parent's `PWD` reads `getcwd()`, which on macOS
         // resolves the temporary directory's `/var` symlink to `/private/var`.
@@ -405,6 +415,13 @@ mod tests {
             .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
 
         assert_eq!(compiled.graph_json, a_compiled_graph());
+        assert_eq!(
+            compiled.stream_location,
+            StreamLocation {
+                project_directory: PathBuf::from(reported_project_directory),
+                stream_function: "stream:camera_preview".to_string(),
+            }
+        );
         assert_eq!(
             compiled.stream_environment,
             StreamEnvironment {

@@ -60,7 +60,7 @@ impl LogRouteOwner {
     /// What a log of this owner holds, as a warning names it.
     fn what_its_log_holds(&self) -> String {
         match self {
-            Self::LoadedStream(stream_name) => format!("the stream `{stream_name}`"),
+            Self::LoadedStream(stream_id) => format!("the stream `{stream_id}`"),
             Self::TheRuntimeItself => "the runtime's own log".to_string(),
         }
     }
@@ -116,7 +116,7 @@ impl std::fmt::Debug for LoadedStreamLogRoute {
 }
 
 impl LoadedStreamLogRoute {
-    /// The route of the stream `stream_name` of the runtime `runtime_id`, its
+    /// The route of the stream `stream_id` of the runtime `runtime_id`, its
     /// JSONL file opened under `project_directory`'s `.streamlib/logs/`.
     ///
     /// Opened through the logging pathway the calling thread's dispatcher
@@ -125,17 +125,12 @@ impl LoadedStreamLogRoute {
     /// no file.
     pub fn open_in_project_directory(
         runtime_id: &str,
-        stream_name: &str,
+        stream_id: &str,
         project_directory: &Path,
     ) -> Arc<Self> {
-        let owner = LogRouteOwner::LoadedStream(stream_name.to_string());
+        let owner = LogRouteOwner::LoadedStream(stream_id.to_string());
         Self::open_writing_its_jsonl_file_at(runtime_id, owner, |started_at_millis| {
-            loaded_stream_log_path(
-                project_directory,
-                runtime_id,
-                stream_name,
-                started_at_millis,
-            )
+            loaded_stream_log_path(project_directory, runtime_id, stream_id, started_at_millis)
         })
     }
 
@@ -203,8 +198,8 @@ impl LoadedStreamLogRoute {
                 owner.records_held_in_memory(),
             )),
             stream_a_thread_carrying_it_works_for: match &owner {
-                LogRouteOwner::LoadedStream(stream_name) => {
-                    StreamThisThreadWorksFor::named(stream_name)
+                LogRouteOwner::LoadedStream(stream_id) => {
+                    StreamThisThreadWorksFor::named(stream_id)
                 }
                 LogRouteOwner::TheRuntimeItself => StreamThisThreadWorksFor::NONE,
             },
@@ -221,10 +216,10 @@ impl LoadedStreamLogRoute {
         &self.runtime_id
     }
 
-    /// The stream's URL-safe cast name; `None` for the runtime's own log.
-    pub fn stream_name(&self) -> Option<&str> {
+    /// The stream's id; `None` for the runtime's own log.
+    pub fn stream_id(&self) -> Option<&str> {
         match &self.owner {
-            LogRouteOwner::LoadedStream(stream_name) => Some(stream_name),
+            LogRouteOwner::LoadedStream(stream_id) => Some(stream_id),
             LogRouteOwner::TheRuntimeItself => None,
         }
     }
@@ -595,7 +590,7 @@ mod tests {
             the_runtimes_own_page.records.is_empty(),
             "{the_runtimes_own_page:?}"
         );
-        assert_eq!(the_runtimes_own_route.stream_name(), None);
+        assert_eq!(the_runtimes_own_route.stream_id(), None);
         let a_streams_page = a_streams_route.log_records_after(0, 256);
         assert_eq!(
             a_streams_page
@@ -605,6 +600,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2]
         );
-        assert_eq!(a_streams_route.stream_name(), Some("camera"));
+        assert_eq!(a_streams_route.stream_id(), Some("camera"));
     }
 }

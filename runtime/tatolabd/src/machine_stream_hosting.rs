@@ -283,7 +283,7 @@ fn stream_teardown_abandoned_by_its_watchdog(stream: &LoadedStreamInThisRuntime)
         }) => Some(format!(
             "the teardown of the stream `{}` outlived its watchdog while waiting on \
              {what_its_teardown_was_waiting_on}, and was abandoned",
-            stream.stream_name()
+            stream.stream_id()
         )),
         _ => None,
     }

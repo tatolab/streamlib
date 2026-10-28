@@ -23,18 +23,22 @@ use common::{
 fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start_retries_it() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
-    let kept_stream_records = machine_root.kept_stream_records();
     let crash_trigger = machine_root.project_directory().join("crash-armed");
     std::fs::write(&crash_trigger, "").unwrap();
-    kept_stream_records
-        .write(&a_kept_stream_record(
-            "crasher",
-            a_stream_graph_crashing_while("crasher", &crash_trigger),
-            &machine_root.project_directory(),
-            &an_executable_standing_in_for_the_interpreter(),
-            false,
-        ))
-        .unwrap();
+    let crasher = a_kept_stream_record(
+        "crasher",
+        a_stream_graph_crashing_while("crasher", &crash_trigger),
+        &machine_root.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        false,
+    );
+    machine_root.stream_records().write(&crasher).unwrap();
+    let crasher_stream_id = crasher.stream_id;
+    let the_crashers_record = || {
+        machine_root
+            .current_stream_record_of(&crasher_stream_id)
+            .expect("the crasher's record is kept")
+    };
     let run_in_progress_record = machine_root.runtime_run_in_progress_record_path();
 
     expect_the_runtime_to_crash_on_segv(
@@ -42,13 +46,13 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
     );
     assert_eq!(
         std::fs::read_to_string(&run_in_progress_record).unwrap(),
-        "crasher\tSIGSEGV\n",
-        "the crash was not pinned on the stream that was loading"
+        format!("{crasher_stream_id}\tSIGSEGV\n"),
+        "the crash was not pinned on the id of the stream that was loading"
     );
     expect_the_runtime_to_crash_on_segv(
         machine_root.tatolabd_command_with_no_vulkan_driver(&runtime_unit.tatolabd),
     );
-    let after_two_crashes = kept_stream_records.read("crasher").unwrap().unwrap();
+    let after_two_crashes = the_crashers_record();
     assert_eq!(after_two_crashes.runtime_crashes_in_a_row_implicating_it, 1);
     assert!(!after_two_crashes.is_failed());
 
@@ -61,9 +65,12 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
         serde_json::json!({}),
     )
     .json();
-    let after_two_crashes_and_the_start_that_failed_it =
-        kept_stream_records.read("crasher").unwrap().unwrap();
-    assert_eq!(listed["streams"][0]["name"], "crasher", "{listed}");
+    let after_two_crashes_and_the_start_that_failed_it = the_crashers_record();
+    assert_eq!(
+        listed["streams"][0]["stream"],
+        crasher_stream_id.as_str(),
+        "{listed}"
+    );
     assert_eq!(listed["streams"][0]["state"], "failed", "{listed}");
     let failed_because = listed["streams"][0]["failed_because"]
         .as_str()
@@ -76,7 +83,9 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
     );
     let standard_error = runtime.standard_error();
     assert!(
-        standard_error.contains("the kept stream `crasher` is failed, so it is not re-loaded"),
+        standard_error.contains(&format!(
+            "the kept stream `{crasher_stream_id}` is failed, so it is not re-loaded"
+        )),
         "{standard_error}"
     );
 
@@ -84,7 +93,7 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
     let retried = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "start_stream",
-        serde_json::json!({"stream": "crasher"}),
+        serde_json::json!({"stream": crasher_stream_id}),
     );
     runtime.interrupt_and_expect_a_clean_exit();
 
@@ -102,7 +111,7 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
         "a clean stop left the run-in-progress record behind"
     );
     assert_eq!(
-        kept_stream_records.read("crasher").unwrap().unwrap(),
+        the_crashers_record(),
         after_two_crashes_and_the_start_that_failed_it,
         "a retry the engine refused changes nothing the stream owns"
     );
@@ -114,7 +123,7 @@ fn a_kept_stream_whose_venv_was_deleted_comes_back_failed_naming_the_venv() {
     let machine_root = TatolabTestMachineRoot::new();
     let deleted_interpreter = machine_root.project_directory().join(".venv/bin/python");
     machine_root
-        .kept_stream_records()
+        .stream_records()
         .write(&a_kept_stream_record(
             "orphan",
             common::a_native_only_stream_graph("orphan"),

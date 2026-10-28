@@ -56,13 +56,13 @@ pub fn note_what_the_engine_teardown_is_waiting_on(what: impl Into<String>) {
 }
 
 /// Count `abandoned_thread_count` threads `whose` teardown abandoned for the
-/// stream `stream_name` into the process-wide total, ending the runtime with
+/// stream `stream_id` into the process-wide total, ending the runtime with
 /// status 124 once it passes the engine's bound — a crash pinned on every
 /// stream a thread was abandoned for.
 pub(crate) fn count_threads_abandoned_in_this_process(
     abandoned_thread_count: usize,
     whose: &str,
-    stream_name: &str,
+    stream_id: &str,
 ) {
     if abandoned_thread_count == 0 {
         return;
@@ -71,9 +71,9 @@ pub(crate) fn count_threads_abandoned_in_this_process(
         let mut streams_whose_threads_were_abandoned = STREAMS_WHOSE_THREADS_WERE_ABANDONED.lock();
         if !streams_whose_threads_were_abandoned
             .iter()
-            .any(|abandoned_for| abandoned_for == stream_name)
+            .any(|abandoned_for| abandoned_for == stream_id)
         {
-            streams_whose_threads_were_abandoned.push(stream_name.to_string());
+            streams_whose_threads_were_abandoned.push(stream_id.to_string());
         }
     }
     let abandoned_so_far = THREADS_ABANDONED_IN_THIS_PROCESS
@@ -177,10 +177,10 @@ pub(crate) struct ArmedTeardownWatchdogOfOneStream {
 }
 
 impl ArmedTeardownWatchdogOfOneStream {
-    /// Arm `stream_name`'s watchdog for `budget`; on expiry it hands
+    /// Arm `stream_id`'s watchdog for `budget`; on expiry it hands
     /// `abandon_the_stream` what the stream's teardown was still waiting on.
     pub(crate) fn arm(
-        stream_name: &str,
+        stream_id: &str,
         budget: Duration,
         teardown_progress_note: TeardownProgressNoteOfOneStream,
         abandon_the_stream: impl FnOnce(String) + Send + 'static,
@@ -188,7 +188,7 @@ impl ArmedTeardownWatchdogOfOneStream {
         teardown_progress_note.note_what_the_teardown_is_waiting_on("nothing it has noted yet");
         Self {
             _disarmed_when_dropped: spawn_a_watchdog_thread(
-                &format!("stream-watchdog-{stream_name}"),
+                &format!("stream-watchdog-{stream_id}"),
                 budget,
                 move || {
                     abandon_the_stream(

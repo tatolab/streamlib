@@ -143,7 +143,7 @@ impl Compiler {
         );
         if let Some(this_stream) = runtime_ctx.this_stream() {
             crate::core::pubsub::OutputPortExposureChange::StreamCompiled {
-                stream_name: this_stream.stream_name().to_string(),
+                stream_id: this_stream.stream_id().to_string(),
             }
             .publish();
         }

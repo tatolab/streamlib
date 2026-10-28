@@ -5,7 +5,7 @@
 //! subscribe to one track at a relay as any MoQ client does, and write its
 //! first `N` objects into `<dir>` — one file each, an index of their groups,
 //! timestamps and payload form, and the track's catalog entry. A stream's exposed port is the
-//! track `<node>/<port>` of the broadcast `<machine>/<stream>.hang`; the
+//! track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang`; the
 //! machine's local relay answers at `http://127.0.0.1:4443`. A relay URL
 //! carrying a credential is read from stdin with `-`, never an argument.
 
@@ -46,7 +46,7 @@ struct ReadTrackArguments {
     /// relay serves. `-` reads it from stdin, for a URL carrying a credential,
     /// which is then named by its scheme, host and port alone.
     relay_url: String,
-    /// The broadcast's path at the relay, e.g. `<machine>/<stream>.hang`.
+    /// The broadcast's path at the relay, e.g. `<machine>/<stream id>.hang`.
     broadcast: String,
     /// The track's name in the broadcast, e.g. `<node>/<port>`.
     track: String,

@@ -564,7 +564,7 @@ pub(crate) fn find_device_carrying_label(
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TheNodeAVirtualCameraIsNamedFor<'a> {
     pub(crate) stream_project_directory: &'a Path,
-    pub(crate) stream_name: &'a str,
+    pub(crate) stream_id: &'a str,
     pub(crate) node_name: &'a str,
 }
 
@@ -572,7 +572,7 @@ pub(crate) struct TheNodeAVirtualCameraIsNamedFor<'a> {
 /// stream's name and the node's name, on the engine's own stable-id recipe.
 fn stable_camera_id(node: TheNodeAVirtualCameraIsNamedFor<'_>) -> String {
     let mut hash = fnv1a_64_hash_of(node.stream_project_directory.as_os_str().as_encoded_bytes());
-    for name in [node.stream_name, node.node_name] {
+    for name in [node.stream_id, node.node_name] {
         hash = fnv1a_64_hash_of(&[&hash.to_le_bytes()[..], name.as_bytes()].concat());
     }
     four_base36_characters_of(hash)
@@ -808,7 +808,7 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
             self.config.name.as_deref(),
             TheNodeAVirtualCameraIsNamedFor {
                 stream_project_directory: ctx.stream_project_directory(),
-                stream_name: ctx.stream_name(),
+                stream_id: ctx.stream_id(),
                 node_name: &node_name,
             },
         );
@@ -1644,7 +1644,7 @@ mod tests {
     fn the_node_named(node_name: &str) -> TheNodeAVirtualCameraIsNamedFor<'_> {
         TheNodeAVirtualCameraIsNamedFor {
             stream_project_directory: Path::new("/home/someone/apps/desk"),
-            stream_name: "main",
+            stream_id: "main",
             node_name,
         }
     }
@@ -1663,7 +1663,7 @@ mod tests {
         let other_stream_of_the_same_project = camera_name_for(
             None,
             TheNodeAVirtualCameraIsNamedFor {
-                stream_name: "preview",
+                stream_id: "preview",
                 ..the_node_named("virtualcamerasink")
             },
         );

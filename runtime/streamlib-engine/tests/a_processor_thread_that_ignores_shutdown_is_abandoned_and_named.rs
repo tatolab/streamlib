@@ -68,7 +68,7 @@ fn a_running_stream_with_a_processor_that_ignores_shutdown(
     let stream = runner
         .load_an_empty_stream(
             OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                .named("main"),
+                .with_stream_id("main"),
         )
         .expect("an empty stream loads");
     let processor_id = stream

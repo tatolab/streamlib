@@ -28,7 +28,7 @@ fn an_empty_stream_loaded_into(
             streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
                 project_directory,
             )
-            .named("main"),
+            .with_stream_id("main"),
         )
         .expect("an empty stream loads")
 }

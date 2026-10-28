@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The name this machine is addressed by, the first part of
-//! `<machine>/<stream>/<node>/<port>`: its hostname, cast the way every
+//! `<machine>/<stream id>/<node>/<port>`: its hostname, cast the way every
 //! exposed name is. Nothing is claimed, suffixed or recorded: a hostname
 //! matters on its own machine, and a relay's root names the machine there.
 

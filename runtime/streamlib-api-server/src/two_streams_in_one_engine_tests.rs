@@ -67,20 +67,20 @@ impl AnEngineLoadingTwoStreams {
             tempfile::tempdir().expect("a project directory"),
             tempfile::tempdir().expect("a project directory"),
         ];
-        let [first, second] = [("first", 0), ("second", 1)].map(|(stream_name, project)| {
+        let [first, second] = [("first", 0), ("second", 1)].map(|(stream_id, project)| {
             let stream = engine
                 .load_an_empty_stream(
                     OptionsForLoadingOneStream::in_project_directory(
                         project_directories[project].path(),
                     )
-                    .named(stream_name),
+                    .with_stream_id(stream_id),
                 )
                 .expect("the stream loads");
             let mut idle_node = ProcessorSpec::new(
                 TwoStreamsTestIdleNode::processor_class_import_path(),
                 json!({}),
             );
-            idle_node.display_name = Some(format!("idle-in-{stream_name}"));
+            idle_node.display_name = Some(format!("idle-in-{stream_id}"));
             stream
                 .add_processor_reporting_its_name(idle_node)
                 .expect("the idle node is added");
@@ -131,16 +131,16 @@ fn tool_error_text(tool_result: &Value) -> String {
 async fn the_local_api_serves_each_of_two_streams_by_name() {
     let loaded = AnEngineLoadingTwoStreams::load();
 
-    for (stream_name, own_node) in [("first", "idle-in-first"), ("second", "idle-in-second")] {
+    for (stream_id, own_node) in [("first", "idle-in-first"), ("second", "idle-in-second")] {
         let graph = first_text_block_json(
             &tool_call_result(
                 loaded.operations_on_the_loaded_streams(),
                 "graph",
-                json!({ "stream": stream_name }),
+                json!({ "stream": stream_id }),
             )
             .await,
         );
-        assert_eq!(graph["stream"], stream_name, "{graph}");
+        assert_eq!(graph["stream"], stream_id, "{graph}");
         assert_eq!(
             node_names_in(&graph),
             [own_node],
@@ -187,7 +187,7 @@ async fn a_mutation_lands_only_in_the_stream_it_names() {
 async fn a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
     let loaded = AnEngineLoadingTwoStreams::load();
 
-    for stream_not_loaded in ["third", "", ".."] {
+    for stream_not_loaded in ["third", "First", "", ".."] {
         let refusal = tool_error_text(
             &tool_call_result(
                 loaded.operations_on_the_loaded_streams(),
@@ -204,12 +204,6 @@ async fn a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
         assert!(
             refusal.contains("first") && refusal.contains("second"),
             "{refusal}"
-        );
-        assert_eq!(
-            refusal.contains("cannot name a stream"),
-            stream_not_loaded != "third",
-            "only a name that casts to nothing is refused as one that cannot name a stream: \
-             {refusal}"
         );
     }
     assert!(
@@ -465,8 +459,8 @@ async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
     assert_eq!(
         nothing_exposed["streams"],
         json!([
-            { "name": "first", "exposed_output_ports": [] },
-            { "name": "second", "exposed_output_ports": [] },
+            { "stream": "first", "exposed_output_ports": [] },
+            { "stream": "second", "exposed_output_ports": [] },
         ])
     );
 
@@ -487,9 +481,9 @@ async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
     let [first, second] = [0, 1].map(|stream| listing["streams"][stream].clone());
     assert_eq!(
         second,
-        json!({ "name": "second", "exposed_output_ports": [] })
+        json!({ "stream": "second", "exposed_output_ports": [] })
     );
-    assert_eq!(first["name"], "first");
+    assert_eq!(first["stream"], "first");
     let mut exposed_output_ports = first["exposed_output_ports"]
         .as_array()
         .expect("a stream lists its exposed ports")

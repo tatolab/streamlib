@@ -50,10 +50,10 @@ fn in_the_project(project_directory: &Path) -> OptionsForLoadingOneStream {
 fn an_empty_stream_loaded_into(
     runner: &Runner,
     project_directory: &Path,
-    stream_name: &str,
+    stream_id: &str,
 ) -> Arc<LoadedStreamInThisRuntime> {
     runner
-        .load_an_empty_stream(in_the_project(project_directory).named(stream_name))
+        .load_an_empty_stream(in_the_project(project_directory).with_stream_id(stream_id))
         .expect("an empty stream loads")
 }
 
@@ -73,7 +73,7 @@ fn the_refusal_of(
     why: &str,
 ) -> Error {
     match load {
-        Ok(stream) => panic!("the stream `{}` loaded, and {why}", stream.stream_name()),
+        Ok(stream) => panic!("the stream `{}` loaded, and {why}", stream.stream_id()),
         Err(refusal) => refusal,
     }
 }
@@ -230,11 +230,11 @@ fn a_loaded_stream_name_is_recorded_in_its_cast_and_one_casting_to_nothing_is_re
     )
     .expect("the graph loads");
     assert_eq!(the_graph_document_of(&stream)["stream"], "my-stream");
-    assert_eq!(runner.names_of_the_loaded_streams(), ["my-stream"]);
+    assert_eq!(runner.ids_of_the_loaded_streams(), ["my-stream"]);
     assert!(
         Arc::ptr_eq(
             &runner
-                .loaded_stream_named("My Stream")
+                .loaded_stream_of_the_id("My Stream")
                 .expect("a lookup casts the name it is given"),
             &stream
         ),
@@ -257,7 +257,7 @@ fn a_loaded_stream_name_is_recorded_in_its_cast_and_one_casting_to_nothing_is_re
         refusal.contains("cannot load the stream `!!!`"),
         "{refusal}"
     );
-    assert_eq!(runner.names_of_the_loaded_streams(), ["my-stream"]);
+    assert_eq!(runner.ids_of_the_loaded_streams(), ["my-stream"]);
 }
 
 /// A stream name already loaded is refused naming where the first stream came
@@ -301,7 +301,7 @@ fn a_stream_name_already_loaded_is_refused_naming_where_the_first_came_from() {
         "the refusal must name where the first stream came from: {refusal}"
     );
     assert!(refusal.contains("--name"), "{refusal}");
-    assert_eq!(runner.names_of_the_loaded_streams(), ["main"]);
+    assert_eq!(runner.ids_of_the_loaded_streams(), ["main"]);
     assert_eq!(
         the_graph_document_of(&first)["nodes"]
             .as_array()
@@ -319,11 +319,11 @@ fn a_stream_name_already_loaded_is_refused_naming_where_the_first_came_from() {
                 "stream": "Main",
                 "nodes": [{"name": "camera", "type": camera.as_str()}]
             })),
-            in_the_project(second_project_directory.path()).named("second"),
+            in_the_project(second_project_directory.path()).with_stream_id("second"),
         )
         .expect("the same graph loads under another name");
-    assert_eq!(renamed.stream_name(), "second");
-    assert_eq!(runner.names_of_the_loaded_streams(), ["main", "second"]);
+    assert_eq!(renamed.stream_id(), "second");
+    assert_eq!(runner.ids_of_the_loaded_streams(), ["main", "second"]);
 }
 
 /// A stream whose function adds nothing compiles to an empty graph, and the
@@ -352,7 +352,7 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
     let named_by_the_load_refusal = the_refusal_of(
         runner.load_stream_from_graph_snapshot(
             &the_spec_in(serde_json::json!({"nodes": []})),
-            in_the_project(project_directory.path()).named("named-by-the-load"),
+            in_the_project(project_directory.path()).with_stream_id("named-by-the-load"),
         ),
         "an empty graph is refused",
     )
@@ -375,7 +375,7 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
         unnamed_refusal.contains("names no stream") && unnamed_refusal.contains("--name"),
         "{unnamed_refusal}"
     );
-    assert!(runner.names_of_the_loaded_streams().is_empty());
+    assert!(runner.ids_of_the_loaded_streams().is_empty());
 }
 
 #[test]
@@ -402,7 +402,7 @@ fn an_exposure_naming_an_input_port_is_refused_naming_the_outputs() {
     assert!(refusal.contains("no output port `frames_in`"), "{refusal}");
     assert!(refusal.contains("video"), "{refusal}");
     assert!(
-        runner.names_of_the_loaded_streams().is_empty(),
+        runner.ids_of_the_loaded_streams().is_empty(),
         "a refused graph adds no stream"
     );
 }
@@ -438,7 +438,7 @@ fn a_load_refused_for_a_missing_link_port_adds_none_of_its_nodes() {
         refusal.contains("no input port `no_such_input`"),
         "{refusal}"
     );
-    assert!(runner.names_of_the_loaded_streams().is_empty());
+    assert!(runner.ids_of_the_loaded_streams().is_empty());
 }
 
 #[test]
@@ -540,7 +540,7 @@ fn a_load_refused_at_a_link_adds_no_stream() {
         "the load must be refused at the link, not before it: {refusal:?}"
     );
     assert!(
-        runner.names_of_the_loaded_streams().is_empty(),
+        runner.ids_of_the_loaded_streams().is_empty(),
         "a load refused at a link added a stream"
     );
     load(

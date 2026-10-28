@@ -70,14 +70,14 @@ impl StreamThisThreadWorksFor {
         name_length: 0,
     };
 
-    /// The stream `stream_name` names, cut at the longest name a thread
+    /// The stream `stream_id` names, cut at the longest name a thread
     /// carries.
-    pub(crate) fn named(stream_name: &str) -> Self {
+    pub(crate) fn named(stream_id: &str) -> Self {
         let mut stream = Self::NONE;
-        let carried = stream_name
+        let carried = stream_id
             .len()
             .min(LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH);
-        stream.name_bytes[..carried].copy_from_slice(&stream_name.as_bytes()[..carried]);
+        stream.name_bytes[..carried].copy_from_slice(&stream_id.as_bytes()[..carried]);
         stream.name_length = carried as u8;
         stream
     }
@@ -383,17 +383,17 @@ impl CrashOfThePreviousRuntimeRun {
     fn read_from(record_bytes: &[u8]) -> Self {
         let mut crash = Self::default();
         for line in String::from_utf8_lossy(record_bytes).lines() {
-            let Some((stream_name, cause)) = line.split_once('\t') else {
+            let Some((stream_id, cause)) = line.split_once('\t') else {
                 continue;
             };
-            if stream_name.is_empty() {
+            if stream_id.is_empty() {
                 crash
                     .causes_on_threads_no_stream_owns
                     .push(cause.to_string());
             } else {
                 crash
                     .causes_by_implicated_stream
-                    .entry(stream_name.to_string())
+                    .entry(stream_id.to_string())
                     .or_insert_with(|| cause.to_string());
             }
         }
@@ -407,12 +407,12 @@ impl CrashOfThePreviousRuntimeRun {
     }
 }
 
-/// Append a line pinning the runtime's crash on each of `stream_names`.
-pub(crate) fn pin_the_runtimes_crash_on_each_stream(stream_names: &[String], cause: &str) {
+/// Append a line pinning the runtime's crash on each of `stream_ids`.
+pub(crate) fn pin_the_runtimes_crash_on_each_stream(stream_ids: &[String], cause: &str) {
     let cause = a_cause_fit_for_one_record_line(cause);
-    for stream_name in stream_names {
+    for stream_id in stream_ids {
         append_a_crash_line(
-            StreamThisThreadWorksFor::named(stream_name).name_bytes(),
+            StreamThisThreadWorksFor::named(stream_id).name_bytes(),
             &[cause.as_bytes()],
         );
     }
@@ -512,14 +512,14 @@ fn a_cause_fit_for_one_record_line(cause: &str) -> String {
 
 /// Append `<stream>\t<cause parts>\n` to the run-in-progress record, cut to
 /// fit one line. Async-signal-safe: no allocation, no lock, one `write`.
-fn append_a_crash_line(stream_name: &[u8], cause_parts: &[&[u8]]) {
+fn append_a_crash_line(stream_id: &[u8], cause_parts: &[&[u8]]) {
     let record_file_descriptor = RUN_IN_PROGRESS_RECORD_FILE_DESCRIPTOR.load(Ordering::SeqCst);
     if record_file_descriptor < 0 {
         return;
     }
     let mut line = [0u8; LONGEST_RUN_IN_PROGRESS_RECORD_LINE];
     let mut line_length = 0;
-    for part in [stream_name, b"\t".as_slice()].iter().chain(cause_parts) {
+    for part in [stream_id, b"\t".as_slice()].iter().chain(cause_parts) {
         let room_before_the_line_break = LONGEST_RUN_IN_PROGRESS_RECORD_LINE - 1 - line_length;
         let copied = part.len().min(room_before_the_line_break);
         line[line_length..line_length + copied].copy_from_slice(&part[..copied]);
@@ -713,12 +713,12 @@ mod tests {
 
     const RECORD_FILE_NAME: &str = "runtime-run-in-progress";
 
-    /// The route a thread of the stream `stream_name` carries, writing no file.
+    /// The route a thread of the stream `stream_id` carries, writing no file.
     fn the_log_route_of_the_stream(
-        stream_name: &str,
+        stream_id: &str,
         project_directory: &Path,
     ) -> Arc<LoadedStreamLogRoute> {
-        LoadedStreamLogRoute::open_in_project_directory("R-test", stream_name, project_directory)
+        LoadedStreamLogRoute::open_in_project_directory("R-test", stream_id, project_directory)
     }
 
     /// Re-run `test_path` in a child process holding a fresh directory for its

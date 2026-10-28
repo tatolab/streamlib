@@ -66,7 +66,8 @@ fn an_empty_stream_loaded_into(
 ) -> Arc<LoadedStreamInThisRuntime> {
     runner
         .load_an_empty_stream(
-            OptionsForLoadingOneStream::in_project_directory(project_directory).named("main"),
+            OptionsForLoadingOneStream::in_project_directory(project_directory)
+                .with_stream_id("main"),
         )
         .expect("an empty stream loads")
 }
@@ -107,7 +108,7 @@ fn assert_the_wait_ends_before_the_watchdog(
         "the stream must run its normal teardown after {what_requested_the_shutdown}",
     );
     assert!(
-        runner.names_of_the_loaded_streams().is_empty(),
+        runner.ids_of_the_loaded_streams().is_empty(),
         "a stream that ended must leave the stream table"
     );
 }

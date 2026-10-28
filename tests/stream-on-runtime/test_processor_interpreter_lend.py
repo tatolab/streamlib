@@ -34,7 +34,7 @@ from helper_process_observation import assert_runs_in_a_process_of_its_own_benea
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
 from processor_interpreter_lend_streams import interpreter_reporting_source_into_counting_sink
 from runtime_unit_under_test import SUITE_VENV_INTERPRETER, SUITE_VENV_PREFIX, RuntimeUnitUnderTest
-from stream_runs_on_tatolabd import TatolabRunOfAProject
+from stream_runs_on_tatolabd import TatolabRunOfAProject, stream_id_of_the_location
 
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
@@ -308,7 +308,9 @@ def test_a_relative_dir_names_the_project_from_the_callers_directory(
     )
 
     assert loaded_with(load_outcome) == 1
-    assert load_outcome.loaded_stream_name == "relatively_loaded"
+    assert load_outcome.loaded_stream_id == stream_id_of_the_location(
+        project_directory.resolve(), "stream:relatively_loaded"
+    )
 
 
 def test_tatolabd_maps_no_python_while_a_processor_interpreter_describes_a_node_type(

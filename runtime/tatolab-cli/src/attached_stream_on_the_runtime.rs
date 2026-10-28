@@ -326,7 +326,7 @@ impl AttachedStreamSession {
             "{} loaded ({}, project {}); Ctrl-C stops it",
             run_stream_result.stream,
             counted(run_stream_result.node_count, "node"),
-            run_stream_result.project_directory.display()
+            run_stream_result.location.project_directory.display()
         ));
         let loaded = FollowedAttachedStreamPosition {
             stream: run_stream_result.stream,

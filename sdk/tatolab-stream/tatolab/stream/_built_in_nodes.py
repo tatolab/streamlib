@@ -463,7 +463,7 @@ class _RelayTrackSourceConfigRequiredKeys(TypedDict):
 
     broadcast: str
     """The broadcast's path at the relay, exactly as its publisher wrote it. A stream's
-    is `<machine>/<stream>.hang`.
+    is `<machine>/<stream id>.hang`.
     """
 
     track: str
@@ -498,7 +498,7 @@ class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
     or on another machine through any relay that serves it, and how it reads a track any
     other MoQ publisher wrote. The track is named by `broadcast` and `track`, each
     exactly as its publisher wrote it: a stream's exposed port is the track
-    `<node>/<port>` of the broadcast `<machine>/<stream>.hang`.
+    `<node>/<port>` of the broadcast `<machine>/<stream id>.hang`.
 
     `track` carries each object's payload bytes as the relay delivered them, the first
     object of each group starting a group, and its catalog entry is the track's own from

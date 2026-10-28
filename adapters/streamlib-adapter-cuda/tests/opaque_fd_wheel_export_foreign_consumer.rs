@@ -357,11 +357,11 @@ fn finish_the_handoff_with_verdict(
 }
 
 /// Start the integration unit's `tatolabd`, load `probe_stream` from the
-/// suite's `device_exchange_streams` under `stream_name`, and accept the
+/// suite's `device_exchange_streams` shown as `display_name`, and accept the
 /// probe's handoff. `None` when `tatolabd` finds no Vulkan driver.
 fn start_the_probe_stream_and_accept_its_handoff(
     probe_stream: &str,
-    stream_name: &str,
+    display_name: &str,
 ) -> Option<ProbeHandoffUnderTest> {
     let suite_venv_interpreter = stream_on_runtime_suite_directory().join(".venv/bin/python");
     assert!(
@@ -484,7 +484,7 @@ fn start_the_probe_stream_and_accept_its_handoff(
         .arg("--dir")
         .arg(stream_on_runtime_suite_directory())
         .arg("--name")
-        .arg(stream_name)
+        .arg(display_name)
         .arg(format!("device_exchange_streams.py:{probe_stream}"))
         .env(TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE, &test_machine_root)
         .stdin(Stdio::null())

@@ -86,7 +86,7 @@ fn the_runtime_keeps_its_state_owner_only_and_writes_its_own_log_beneath_it() {
     runtime.interrupt_and_expect_a_clean_exit();
 
     assert_eq!(the_mode_of(&machine_root.state_directory()), 0o700);
-    assert_eq!(the_mode_of(&machine_root.kept_streams_directory()), 0o700);
+    assert_eq!(the_mode_of(&machine_root.streams_directory()), 0o700);
     let runtime_log_files: Vec<_> = std::fs::read_dir(machine_root.runtime_log_directory())
         .expect("the runtime's own log directory exists")
         .map(|entry| entry.unwrap().path())
@@ -107,15 +107,16 @@ fn the_runtime_keeps_its_state_owner_only_and_writes_its_own_log_beneath_it() {
 }
 
 /// At its start the runtime re-loads every kept stream neither stopped nor
-/// failed, reporting each by name: a stopped one is left unloaded, one whose
-/// interpreter is gone is recorded failed for it, and one the engine could
-/// not start — no GPU — stays kept for the next start, the runtime still up.
+/// failed, reporting each by its id: a stopped one is left unloaded, one whose
+/// interpreter is gone is recorded failed for it, one the engine could not
+/// start — no GPU — stays kept for the next start, and a record an earlier
+/// runtime wrote is listed failed, keyed by its file name, the runtime still up.
 #[test]
 fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_is_named() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
-    let kept_stream_records = machine_root.kept_stream_records();
-    for kept_stream_record in [
+    let stream_records = machine_root.stream_records();
+    let [front, parked, orphan] = [
         a_kept_stream_record(
             "front",
             a_native_only_stream_graph("front"),
@@ -137,9 +138,35 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
             &machine_root.project_directory().join(".venv/bin/python"),
             false,
         ),
-    ] {
-        kept_stream_records.write(&kept_stream_record).unwrap();
+    ];
+    for record in [&front, &parked, &orphan] {
+        stream_records.write(record).unwrap();
+        assert!(
+            machine_root
+                .streams_directory()
+                .join(format!("{}.json", record.stream_id))
+                .is_file(),
+            "the record of `{}` is `streams/<stream id>.json`",
+            record.stream_id
+        );
     }
+    std::fs::write(
+        machine_root.streams_directory().join("main.json"),
+        serde_json::json!({
+            "schema_version": 2,
+            "stream_name": "main",
+            "project_directory": machine_root.project_directory(),
+            "interpreter": an_executable_standing_in_for_the_interpreter(),
+            "stream_function": null,
+            "graph": a_native_only_stream_graph("main"),
+            "stopped": false,
+            "failed_because": null,
+            "runtime_crashes_in_a_row_implicating_it": 0,
+            "exposure_rulings": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
 
     let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command_with_no_vulkan_driver(&runtime_unit.tatolabd),
@@ -147,25 +174,36 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
 
     let standard_error = runtime.standard_error();
     assert!(
-        standard_error.contains("[start] Starting the stream `front`"),
-        "the kept stream `front` was loaded and its start begun:\n{standard_error}"
+        standard_error.contains(&format!(
+            "[start] Starting the stream `{}`",
+            front.stream_id
+        )),
+        "the kept stream `{}` was loaded and its start begun:\n{standard_error}",
+        front.stream_id
     );
     assert!(
-        standard_error.contains(
-            "the kept stream `front` was not re-loaded, and stays kept for the runtime's next start"
-        ),
+        standard_error.contains(&format!(
+            "the kept stream `{}` was not re-loaded, and stays kept for the runtime's next start",
+            front.stream_id
+        )),
         "{standard_error}"
     );
     assert!(
-        standard_error.contains("the kept stream `parked` is stopped, so it is not re-loaded"),
+        standard_error.contains(&format!(
+            "the kept stream `{}` is stopped, so it is not re-loaded",
+            parked.stream_id
+        )),
         "{standard_error}"
     );
     assert!(
-        !standard_error.contains("Starting the stream `parked`"),
+        !standard_error.contains(&format!("Starting the stream `{}`", parked.stream_id)),
         "{standard_error}"
     );
     assert!(
-        standard_error.contains("the kept stream `orphan` did not re-load, and is failed"),
+        standard_error.contains(&format!(
+            "the kept stream `{}` did not re-load, and is failed",
+            orphan.stream_id
+        )),
         "{standard_error}"
     );
     assert!(
@@ -179,7 +217,11 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
         "{standard_error}"
     );
     assert!(
-        standard_error.contains("0 kept streams re-loaded, 2 skipped"),
+        standard_error.contains("the stream `main` is failed, so it is not re-loaded"),
+        "{standard_error}"
+    );
+    assert!(
+        standard_error.contains("0 kept streams re-loaded, 3 skipped"),
         "{standard_error}"
     );
 
@@ -191,35 +233,64 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
         serde_json::json!({}),
     )
     .json();
-    let project_directory = machine_root.project_directory().display().to_string();
-    let mut listed_streams = listed["streams"].as_array().unwrap().clone();
-    listed_streams.sort_by_key(|listing| listing["name"].as_str().unwrap().to_owned());
-    let orphan_failed_because = listed_streams[1]["failed_because"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
-    assert!(
-        orphan_failed_because.contains(&format!(
-            "its interpreter {} is gone",
-            machine_root
-                .project_directory()
-                .join(".venv/bin/python")
-                .display()
-        )),
-        "{listed}"
+    let listed_streams = listed["streams"].as_array().unwrap().clone();
+    let listing_of = |stream_id: &str| {
+        listed_streams
+            .iter()
+            .find(|listing| listing["stream"] == stream_id)
+            .unwrap_or_else(|| panic!("`{stream_id}` is listed: {listed}"))
+            .clone()
+    };
+    let location_of = |function: &str| {
+        serde_json::json!({
+            "project_directory": machine_root.project_directory(),
+            "stream_function": format!("stream:{function}"),
+        })
+    };
+    assert_eq!(listed_streams.len(), 4, "{listed}");
+    assert_eq!(
+        listing_of(&front.stream_id),
+        serde_json::json!({"stream": front.stream_id, "display_name": "front", "location": location_of("front"), "state": "kept", "node_count": null, "failed_because": null})
     );
     assert_eq!(
-        listed_streams,
-        [
-            serde_json::json!({"name": "front", "state": "kept", "project_directory": project_directory, "node_count": null, "failed_because": null}),
-            serde_json::json!({"name": "orphan", "state": "failed", "project_directory": project_directory, "node_count": null, "failed_because": orphan_failed_because}),
-            serde_json::json!({"name": "parked", "state": "stopped", "project_directory": project_directory, "node_count": null, "failed_because": null}),
-        ]
+        listing_of(&parked.stream_id),
+        serde_json::json!({"stream": parked.stream_id, "display_name": "parked", "location": location_of("parked"), "state": "stopped", "node_count": null, "failed_because": null})
     );
-    for stream_name in ["front", "parked", "orphan"] {
+    let orphan_listing = listing_of(&orphan.stream_id);
+    assert_eq!(orphan_listing["state"], "failed", "{listed}");
+    assert!(
+        orphan_listing["failed_because"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&format!(
+                "its interpreter {} is gone",
+                machine_root
+                    .project_directory()
+                    .join(".venv/bin/python")
+                    .display()
+            )),
+        "{listed}"
+    );
+    let earlier_runtimes_listing = listing_of("main");
+    assert_eq!(earlier_runtimes_listing["state"], "failed", "{listed}");
+    assert_eq!(
+        earlier_runtimes_listing["location"],
+        serde_json::Value::Null
+    );
+    assert!(
+        earlier_runtimes_listing["failed_because"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("an earlier runtime recorded it"),
+        "{listed}"
+    );
+    for record in [&front, &parked, &orphan] {
         assert!(
-            kept_stream_records.read(stream_name).unwrap().is_some(),
-            "the record of `{stream_name}` was kept"
+            machine_root
+                .current_stream_record_of(&record.stream_id)
+                .is_some(),
+            "the record of `{}` was kept",
+            record.stream_id
         );
     }
     runtime.interrupt_and_expect_a_clean_exit();
@@ -232,17 +303,23 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
 fn a_kept_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
-    let kept_stream_records = machine_root.kept_stream_records();
-    kept_stream_records
-        .write(&a_kept_stream_record(
-            "parked",
-            a_native_only_stream_graph("parked"),
-            &machine_root.project_directory(),
-            &an_executable_standing_in_for_the_interpreter(),
-            true,
-        ))
-        .unwrap();
-    let record_path = kept_stream_records.record_path_of("parked").unwrap();
+    let stream_records = machine_root.stream_records();
+    let parked = a_kept_stream_record(
+        "parked",
+        a_native_only_stream_graph("parked"),
+        &machine_root.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        true,
+    );
+    stream_records.write(&parked).unwrap();
+    let parked_stream_id = parked.stream_id;
+    let record_path = stream_records.record_path_of(&parked_stream_id).unwrap();
+    assert_eq!(
+        record_path,
+        machine_root
+            .streams_directory()
+            .join(format!("{parked_stream_id}.json"))
+    );
 
     let mut first_runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command(&runtime_unit.tatolabd),
@@ -250,17 +327,19 @@ fn a_kept_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let exposed = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "expose_port",
-        serde_json::json!({"stream": "parked", "node": "testpattern", "port": "video", "level": "private"}),
+        serde_json::json!({"stream": parked_stream_id, "node": "testpattern", "port": "video", "level": "private"}),
     )
     .json();
     first_runtime.interrupt_and_expect_a_clean_exit();
 
     assert_eq!(
         exposed,
-        serde_json::json!({"stream": "parked", "node": "testpattern", "port": "video", "level": "private", "recorded": true})
+        serde_json::json!({"stream": parked_stream_id, "node": "testpattern", "port": "video", "level": "private", "recorded": true})
     );
     assert_eq!(the_mode_of(&record_path), 0o600);
-    let recorded = kept_stream_records.read("parked").unwrap().unwrap();
+    let recorded = machine_root
+        .current_stream_record_of(&parked_stream_id)
+        .expect("the record is kept");
     assert!(recorded.stopped);
     assert_eq!(
         serde_json::to_value(&recorded.exposure_rulings).unwrap(),
@@ -279,16 +358,20 @@ fn a_kept_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let removed = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "remove_stream",
-        serde_json::json!({"stream": "parked"}),
+        serde_json::json!({"stream": parked_stream_id}),
     )
     .json();
     second_runtime.interrupt_and_expect_a_clean_exit();
 
-    assert_eq!(listed["streams"][0]["name"], "parked", "{listed}");
+    assert_eq!(
+        listed["streams"][0]["stream"],
+        parked_stream_id.as_str(),
+        "{listed}"
+    );
     assert_eq!(listed["streams"][0]["state"], "stopped", "{listed}");
     assert_eq!(
         removed,
-        serde_json::json!({"stream": "parked", "unloaded": false, "forgotten": true})
+        serde_json::json!({"stream": parked_stream_id, "unloaded": false, "forgotten": true})
     );
     assert!(
         !record_path.exists(),

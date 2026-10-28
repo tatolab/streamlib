@@ -143,6 +143,7 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
     assert finished.returncode == 0, finished.stdout + finished.stderr
     compiled = json.loads(finished.stdout)
     assert Path(compiled["project_directory"]) == app_directory.resolve()
+    assert compiled["stream_function"] == "stream:main"
     stream_graph = compiled["stream_graph"]
     assert stream_graph["stream"] == "main"
     assert [node["type"] for node in stream_graph["nodes"]] == [

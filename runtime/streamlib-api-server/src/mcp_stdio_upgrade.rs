@@ -193,7 +193,7 @@ pub(crate) mod tests {
     use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
     use crate::control_plane_stub_support::{
-        LocalApiServedOnAFreshSocket, STUB_STREAM_NAME, response_head_over_the_socket,
+        LocalApiServedOnAFreshSocket, STUB_STREAM_ID, response_head_over_the_socket,
     };
     use crate::mcp::tests::{
         ControlPlaneMcpDispatchStubRuntime, HandshakeRevisionMcpClient,
@@ -219,7 +219,7 @@ pub(crate) mod tests {
 
     /// The arguments of the slow `add_node` call.
     fn slow_add_node_arguments() -> Value {
-        json!({ "stream": STUB_STREAM_NAME, "type": "nodes.slow:SlowNode" })
+        json!({ "stream": STUB_STREAM_ID, "type": "nodes.slow:SlowNode" })
     }
 
     pub(crate) async fn upgraded_mcp_stdio_stream(

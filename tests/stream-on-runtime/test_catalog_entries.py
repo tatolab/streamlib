@@ -44,14 +44,14 @@ def test_declared_replaced_refused_and_read_downstream(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     tatolabd = start_tatolabd_running_stream(a_keeping_source_and_a_replacing_one_read_downstream)
-    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
+    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
     local_api = tatolabd.local_api_client()
-    local_api.await_every_node_running(stream=stream_name, timeout=GRAPH_READY_TIMEOUT_SECONDS)
+    local_api.await_every_node_running(stream=stream_id, timeout=GRAPH_READY_TIMEOUT_SECONDS)
 
     refusal = tatolabd.await_marker("CATALOG_ENTRY_REFUSED", timeout=MARKER_TIMEOUT_SECONDS)
     tatolabd.await_marker("CATALOG_ENTRY_REPLACED", timeout=MARKER_TIMEOUT_SECONDS)
-    graph = local_api.graph(stream_name)
-    registry = local_api.registry(stream_name)
+    graph = local_api.graph(stream_id)
+    registry = local_api.registry(stream_id)
 
     read_downstream: "list[Any]" = []
     occurrence = 0

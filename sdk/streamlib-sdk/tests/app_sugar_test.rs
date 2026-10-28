@@ -68,7 +68,7 @@ fn an_engine_loading_one_empty_stream(
     let stream = runner
         .load_an_empty_stream(
             OptionsForLoadingOneStream::in_project_directory(project_directory)
-                .named(streamlib::sdk::THE_STREAM_NAME_AN_APP_LOADS),
+                .with_stream_id(streamlib::sdk::THE_STREAM_ID_AN_APP_LOADS),
         )
         .expect("the empty stream loads");
     (runner, stream)

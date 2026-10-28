@@ -23,7 +23,8 @@ use streamlib::sdk::processor_interpreter::{
     processor_interpreter_bootstrap_path,
 };
 use streamlib::sdk::runtime::{
-    KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord, KeptStreamRecordsInTheStateDirectory,
+    STREAM_RECORD_SCHEMA_VERSION, StreamLocation, StreamRecord, StreamRecordAsRead,
+    StreamRecordsInTheStateDirectory,
 };
 
 /// The line `tatolabd` logs once its local API is served and its kept streams
@@ -242,8 +243,8 @@ impl TatolabTestMachineRoot {
         self.path().join("state")
     }
 
-    /// `<state>/streams/`, one record per kept stream.
-    pub fn kept_streams_directory(&self) -> PathBuf {
+    /// `<state>/streams/`, one `<stream id>.json` record per kept stream.
+    pub fn streams_directory(&self) -> PathBuf {
         self.state_directory().join("streams")
     }
 
@@ -262,11 +263,25 @@ impl TatolabTestMachineRoot {
         self.path().join("p")
     }
 
-    /// The kept-stream records under this machine's state directory, as the
+    /// The stream records under this machine's state directory, as the
     /// engine writes and reads them.
-    pub fn kept_stream_records(&self) -> KeptStreamRecordsInTheStateDirectory {
-        KeptStreamRecordsInTheStateDirectory::open(&self.kept_streams_directory())
-            .expect("the kept-streams directory opens")
+    pub fn stream_records(&self) -> StreamRecordsInTheStateDirectory {
+        StreamRecordsInTheStateDirectory::open(&self.streams_directory())
+            .expect("the streams directory opens")
+    }
+
+    /// The record of `stream_id` the runtime wrote under this schema, `None`
+    /// when there is none.
+    pub fn current_stream_record_of(&self, stream_id: &str) -> Option<StreamRecord> {
+        match self
+            .stream_records()
+            .read(stream_id)
+            .expect("the record reads")
+        {
+            Some(StreamRecordAsRead::Current(record)) => Some(record),
+            Some(earlier) => panic!("`{stream_id}` is an earlier runtime's record: {earlier:?}"),
+            None => None,
+        }
     }
 
     /// A `tatolabd` command on this machine that inherits none of the
@@ -304,9 +319,9 @@ impl TatolabTestMachineRoot {
 }
 
 /// A stream of one test pattern.
-pub fn a_native_only_stream_graph(stream_name: &str) -> serde_json::Value {
+pub fn a_native_only_stream_graph(stream_id: &str) -> serde_json::Value {
     serde_json::json!({
-        "stream": stream_name,
+        "stream": stream_id,
         "nodes": [{
             "name": "testpattern",
             "type": "tatolab.stream:TestPatternSource",
@@ -321,9 +336,9 @@ pub const CRASH_ON_DEMAND_TEST_NODE_TYPE: &str =
 
 /// A stream of one crash-on-demand node, which crashes the runtime on
 /// `SIGSEGV` at the stream's load while `trigger` exists.
-pub fn a_stream_graph_crashing_while(stream_name: &str, trigger: &Path) -> serde_json::Value {
+pub fn a_stream_graph_crashing_while(stream_id: &str, trigger: &Path) -> serde_json::Value {
     serde_json::json!({
-        "stream": stream_name,
+        "stream": stream_id,
         "nodes": [{
             "name": "crasher",
             "type": CRASH_ON_DEMAND_TEST_NODE_TYPE,
@@ -344,21 +359,37 @@ pub fn expect_the_runtime_to_crash_on_segv(tatolabd_command: Command) {
     );
 }
 
-/// The record of a kept stream `stream_name` running `graph` from
-/// `project_directory` under `interpreter`.
+/// The location of the function `function` of `stream.py` in `project_directory`.
+pub fn the_location_of_the_function(project_directory: &Path, function: &str) -> StreamLocation {
+    StreamLocation {
+        project_directory: project_directory.to_path_buf(),
+        stream_function: format!("stream:{function}"),
+    }
+}
+
+/// The stream id the runtime computes for the function `function` of
+/// `stream.py` in `project_directory`.
+pub fn the_stream_id_of_the_function(project_directory: &Path, function: &str) -> String {
+    the_location_of_the_function(project_directory, function).stream_id()
+}
+
+/// The record of a kept stream: the function `function` of `stream.py` in
+/// `project_directory`, running `graph` under `interpreter`, keyed by the
+/// stream id its location computes to.
 pub fn a_kept_stream_record(
-    stream_name: &str,
+    function: &str,
     graph: serde_json::Value,
     project_directory: &Path,
     interpreter: &Path,
     stopped: bool,
-) -> KeptStreamRecord {
-    KeptStreamRecord {
-        schema_version: KEPT_STREAM_RECORD_SCHEMA_VERSION,
-        stream_name: stream_name.to_owned(),
-        project_directory: project_directory.to_path_buf(),
+) -> StreamRecord {
+    let location = the_location_of_the_function(project_directory, function);
+    StreamRecord {
+        schema_version: STREAM_RECORD_SCHEMA_VERSION,
+        stream_id: location.stream_id(),
+        location,
+        display_name: function.to_owned(),
         interpreter: interpreter.to_path_buf(),
-        stream_function: None,
         graph,
         stopped,
         failed_because: None,

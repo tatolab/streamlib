@@ -48,8 +48,8 @@ impl AddedProcessor {
     }
 }
 
-/// The name of the one stream an [`App`] loads.
-pub const THE_STREAM_NAME_AN_APP_LOADS: &str = "main";
+/// The stream id of the one stream an [`App`] loads; its display name too.
+pub const THE_STREAM_ID_AN_APP_LOADS: &str = "main";
 
 /// Thin authoring sugar over a [`Runner`] and one stream loaded in it:
 /// construct, add processors, connect ports, run.
@@ -64,8 +64,8 @@ pub struct App {
 }
 
 impl App {
-    /// Build an `App` over a fresh [`Runner`] holding one empty stream named
-    /// [`THE_STREAM_NAME_AN_APP_LOADS`] whose project directory is the current
+    /// Build an `App` over a fresh [`Runner`] holding one empty stream with the id
+    /// [`THE_STREAM_ID_AN_APP_LOADS`] whose project directory is the current
     /// directory.
     pub fn new() -> Result<Self> {
         let project_directory = std::env::current_dir().map_err(|e| {
@@ -76,14 +76,14 @@ impl App {
         Self::new_in_project_directory(project_directory)
     }
 
-    /// Build an `App` over a fresh [`Runner`] holding one empty stream named
-    /// [`THE_STREAM_NAME_AN_APP_LOADS`] whose project directory is
+    /// Build an `App` over a fresh [`Runner`] holding one empty stream with the id
+    /// [`THE_STREAM_ID_AN_APP_LOADS`] whose project directory is
     /// `project_directory`.
     pub fn new_in_project_directory(project_directory: impl Into<PathBuf>) -> Result<Self> {
         let runner = Runner::new()?;
         let stream = runner.load_an_empty_stream(
             OptionsForLoadingOneStream::in_project_directory(project_directory)
-                .named(THE_STREAM_NAME_AN_APP_LOADS),
+                .with_stream_id(THE_STREAM_ID_AN_APP_LOADS),
         )?;
         Ok(Self { runner, stream })
     }

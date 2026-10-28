@@ -39,8 +39,8 @@ use crate::iceoryx2::{
 /// One output port a loaded stream exposes, as it stands now.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExposedOutputPortOfALoadedStream {
-    /// The stream's cast name.
-    pub stream_name: String,
+    /// The stream's id.
+    pub stream_id: String,
     /// The node's name.
     pub node_name: String,
     /// The node's id for this load, which a node removed and added again
@@ -57,8 +57,8 @@ pub struct ExposedOutputPortOfALoadedStream {
 /// One loaded stream with the output ports it exposes now.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedStreamAndTheOutputPortsItExposes {
-    /// The stream's cast name.
-    pub stream_name: String,
+    /// The stream's id.
+    pub stream_id: String,
     /// The output ports it exposes, private or public.
     pub exposed_output_ports: Vec<ExposedOutputPortOfALoadedStream>,
 }
@@ -171,7 +171,7 @@ impl LoadedStreamInThisRuntime {
                         exposed_ports
                             .exposed_ports_and_their_levels()
                             .map(|(port_name, level)| ExposedOutputPortOfALoadedStream {
-                                stream_name: self.stream_name().to_string(),
+                                stream_id: self.stream_id().to_string(),
                                 node_name: node.display_name.clone(),
                                 node_id: node.id.clone(),
                                 port_name: port_name.to_string(),
@@ -200,7 +200,7 @@ impl LoadedStreamInThisRuntime {
             .iceoryx2_node
             .clone();
         let compiler = Arc::clone(&self.compiler);
-        let stream_name = self.stream_name().to_string();
+        let stream_id = self.stream_id().to_string();
         let node_name = node_name.to_string();
         let port_name = port_name.to_string();
         // A stream's graph lock is held across a compile, which may take a
@@ -210,7 +210,7 @@ impl LoadedStreamInThisRuntime {
                 subscribe_holding_the_source_side_open(
                     &compiler,
                     iceoryx2_node,
-                    stream_name,
+                    stream_id,
                     &node_name,
                     &port_name,
                 )
@@ -228,7 +228,7 @@ impl LoadedStreamInThisRuntime {
 fn subscribe_holding_the_source_side_open(
     compiler: &crate::core::compiler::Compiler,
     iceoryx2_node: crate::iceoryx2::Iceoryx2Node,
-    stream_name: String,
+    stream_id: String,
     node_name: &str,
     port_name: &str,
 ) -> Result<ExposedOutputPortSubscription> {
@@ -236,16 +236,16 @@ fn subscribe_holding_the_source_side_open(
         compiler.scope(|graph, _tx| -> Result<_> {
             refuse_a_reader_the_port_does_not_allow(
                 graph,
-                &stream_name,
+                &stream_id,
                 node_name,
                 port_name,
                 OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
             )?;
             let (node, port_cast) =
-                the_output_port_named_on_this_graph(graph, &stream_name, node_name, port_name)?;
+                the_output_port_named_on_this_graph(graph, &stream_id, node_name, port_name)?;
             if !node.runs_its_processor() {
                 return Err(Error::Link(format!(
-                    "node `{}` of the stream `{stream_name}` is not running, so its port \
+                    "node `{}` of the stream `{stream_id}` is not running, so its port \
                      `{port_cast}` publishes nothing yet",
                     node.display_name,
                 )));
@@ -278,7 +278,7 @@ fn subscribe_holding_the_source_side_open(
         forwarder,
         source_side,
         level_now,
-        stream_name,
+        stream_id,
         node_name: node_display_name,
         port_name: port_cast,
     })
@@ -303,7 +303,7 @@ pub struct ExposedOutputPortSubscription {
     forwarder: ReservedSlotForwarder<MessageReadFromInputPort>,
     source_side: SourceSideHeldOpenForTheRuntimesPublisher,
     level_now: LevelOfAnExposedOutputPortNow,
-    stream_name: String,
+    stream_id: String,
     node_name: String,
     port_name: String,
 }
@@ -311,7 +311,7 @@ pub struct ExposedOutputPortSubscription {
 impl std::fmt::Debug for ExposedOutputPortSubscription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExposedOutputPortSubscription")
-            .field("stream_name", &self.stream_name)
+            .field("stream_id", &self.stream_id)
             .field("node_name", &self.node_name)
             .field("port_name", &self.port_name)
             .finish_non_exhaustive()
@@ -342,8 +342,8 @@ impl ExposedOutputPortSubscription {
     }
 
     /// The stream the port belongs to.
-    pub fn stream_name(&self) -> &str {
-        &self.stream_name
+    pub fn stream_id(&self) -> &str {
+        &self.stream_id
     }
 
     /// The node the port belongs to.
@@ -486,7 +486,7 @@ mod tests {
             let stream = runner
                 .load_an_empty_stream(
                     OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                        .named("a"),
+                        .with_stream_id("a"),
                 )
                 .expect("the stream loads");
             stream
@@ -597,7 +597,7 @@ mod tests {
             .expect("an exposed port subscribes");
         assert_eq!(
             (
-                subscription.stream_name(),
+                subscription.stream_id(),
                 subscription.node_name(),
                 subscription.port_name()
             ),
@@ -763,7 +763,7 @@ mod tests {
             .unwrap();
         let camera_id = camera.stream.the_node_named("camera").unwrap().processor_id;
         let exposed_out1 = ExposedOutputPortOfALoadedStream {
-            stream_name: "a".to_string(),
+            stream_id: "a".to_string(),
             node_name: "camera".to_string(),
             node_id: camera_id,
             port_name: "out1".to_string(),

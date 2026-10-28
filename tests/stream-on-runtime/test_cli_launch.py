@@ -43,7 +43,7 @@ from conftest import (
 )
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
-from stream_runs_on_tatolabd import TatolabRunOfAProject
+from stream_runs_on_tatolabd import TatolabRunOfAProject, stream_id_of_the_location
 from tatolab.stream import TestPatternSource
 from test_processor_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
 
@@ -135,20 +135,35 @@ SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 # How long an attached stream's source has to write its first bag on `video`.
 FIRST_BAG_WRITTEN_TIMEOUT_SECONDS = 30.0
 
-#: The one stream every project here compiles to.
-STREAM_NAME = "main"
+#: The one stream function every project here defines, as its location names it.
+STREAM_FUNCTION_OF_EVERY_PROJECT = "stream:main"
 
-#: The engine's line once the attached stream's unload has finished.
-THE_STREAM_STOPPED_LOG_LINE = f"[stop] The stream `{STREAM_NAME}` stopped"
-
-# What `dev` says as a save makes it stop the stream and load it again.
-DEV_LOADING_AGAIN_AFTER_A_SAVE = f"tatolab dev: a saved change — loading {STREAM_NAME} again"
 # What `dev` says when a load is refused and nothing is loaded until the next save.
 DEV_NO_STREAM_IS_LOADED = "tatolab dev: no stream is loaded — fix it and save again"
-# What `dev` says once a refused save left the stream it was to replace running.
-DEV_KEPT_THE_RUNNING_STREAM = (
-    f"tatolab dev: {STREAM_NAME} keeps running the last save that loaded — fix it and save again"
-)
+
+
+def stream_id_of_the_project(app_directory: Path) -> str:
+    """The stream id the runtime keys and addresses the project's one stream by."""
+    return stream_id_of_the_location(app_directory.resolve(), STREAM_FUNCTION_OF_EVERY_PROJECT)
+
+
+def the_stream_stopped_log_line(stream_id: str) -> str:
+    """The engine's line once the attached stream's unload has finished."""
+    return f"[stop] The stream `{stream_id}` stopped"
+
+
+def dev_loading_again_after_a_save(stream_id: str) -> str:
+    """What `dev` says as a save makes it stop the stream and load it again."""
+    return f"tatolab dev: a saved change — loading {stream_id} again"
+
+
+def dev_kept_the_running_stream(stream_id: str) -> str:
+    """What `dev` says once a refused save left the stream it was to replace running."""
+    return (
+        f"tatolab dev: {stream_id} keeps running the last save that loaded — fix it and save "
+        f"again"
+    )
+
 
 def assert_only_its_owner_can_open(local_api_socket_path: Path) -> None:
     status = os.stat(local_api_socket_path)
@@ -199,27 +214,32 @@ def test_an_attached_stream_loads_into_the_runtime_and_a_ctrl_c_unloads_it(
     defect in the path itself.
     """
     app_directory = make_tatolab_project({"stream.py": STREAM_WITH_ONE_NATIVE_SOURCE})
+    stream_id = stream_id_of_the_project(app_directory)
     tatolabd = start_tatolabd()
 
     attached = attach_the_projects_stream(tatolabd, app_directory, verb)
     loaded = attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     local_api = tatolabd.local_api_client()
-    running_graph = local_api.await_every_node_running(stream=STREAM_NAME)
+    running_graph = local_api.await_every_node_running(stream=stream_id)
     listed_streams = local_api.list_streams()
 
-    assert loaded["stream_name"] == STREAM_NAME
+    assert loaded["stream_id"] == stream_id
     assert int(loaded["node_count"]) == 1
     assert Path(loaded["project_directory"]) == app_directory.resolve()
     assert listed_streams == [
         {
-            "name": STREAM_NAME,
+            "stream": stream_id,
+            "display_name": "main",
+            "location": {
+                "project_directory": str(app_directory.resolve()),
+                "stream_function": STREAM_FUNCTION_OF_EVERY_PROJECT,
+            },
             "state": "attached",
-            "project_directory": str(app_directory.resolve()),
             "node_count": 1,
             "failed_because": None,
         }
     ]
-    assert running_graph["stream"] == STREAM_NAME
+    assert running_graph["stream"] == stream_id
     assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1, (
         running_graph["nodes"]
     )
@@ -229,7 +249,9 @@ def test_an_attached_stream_loads_into_the_runtime_and_a_ctrl_c_unloads_it(
     assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
         f"`tatolab {verb}` must exit cleanly on SIGINT; standard error:\n{attached.recent_stderr()}"
     )
-    tatolabd.await_stderr_containing(THE_STREAM_STOPPED_LOG_LINE, timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
+    tatolabd.await_stderr_containing(
+        the_stream_stopped_log_line(stream_id), timeout=CLEAN_EXIT_TIMEOUT_SECONDS
+    )
     assert local_api.list_streams() == [], "a Ctrl-C to `tatolab` unloads its stream"
     assert tatolabd.process.poll() is None, "the runtime outlives the stream it unloaded"
 
@@ -399,8 +421,9 @@ def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_a
 
     attached = attach_the_projects_stream(tatolabd, app_directory)
     attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
-    graph = tatolabd.local_api_client().call_tool("graph", {"stream": STREAM_NAME})
-    assert graph["stream"] == STREAM_NAME
+    stream_id = stream_id_of_the_project(app_directory)
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    assert graph["stream"] == stream_id
 
     assert_the_tcp_listener_scan_sees_the_listeners_this_process_holds()
     assert_the_scan_sees_the_unix_socket_listener_held_by(
@@ -443,15 +466,25 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
     attached = attach_the_projects_stream(tatolabd, app_directory)
     attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
 
+    stream_id = stream_id_of_the_project(app_directory)
     listed = succeeded(run_tatolab_observation_verb("streams"))
-    assert listed.splitlines()[0].split() == ["NAME", "STATE", "NODES", "PROJECT"], listed
-    assert re.search(rf"^{STREAM_NAME}\s+attached\s+2\s+", listed, re.MULTILINE), listed
+    assert listed.splitlines()[0].split() == [
+        "ID",
+        "NAME",
+        "STATE",
+        "NODES",
+        "PROJECT",
+        "FUNCTION",
+    ], listed
+    assert re.search(
+        rf"^{re.escape(stream_id)}\s+main\s+attached\s+2\s+", listed, re.MULTILINE
+    ), listed
 
     bags_the_source_wrote = 0
     deadline = time.monotonic() + FIRST_BAG_WRITTEN_TIMEOUT_SECONDS
     while bags_the_source_wrote == 0 and time.monotonic() < deadline:
         graph = json.loads(
-            succeeded(run_tatolab_observation_verb("graph", "--stream", STREAM_NAME))
+            succeeded(run_tatolab_observation_verb("graph", "--stream", stream_id))
         )
         [source_node] = [
             graph_node
@@ -464,7 +497,7 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
         time.sleep(0.1)
     assert bags_the_source_wrote > 0, f"the source wrote nothing on `video`: {source_node}"
 
-    succeeded(run_tatolab_observation_verb("logs", "--stream", STREAM_NAME))
+    succeeded(run_tatolab_observation_verb("logs", "--stream", stream_id))
 
     attached.interrupt()
     assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
@@ -532,26 +565,28 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
 
     attached = attach_the_projects_stream(tatolabd, app_directory)
     attached.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
-    running_graph = tatolabd.local_api_client().await_every_node_running(stream=STREAM_NAME)
+    running_graph = tatolabd.local_api_client().await_every_node_running(
+        stream=stream_id_of_the_project(app_directory)
+    )
     assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1
 
     attached.interrupt()
     assert attached.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
-def the_first_streams_output(tatolabd: TatolabdUnderTest) -> str:
-    """`tatolabd`'s standard error through the first stream's stop."""
+def the_first_streams_output(tatolabd: TatolabdUnderTest, stream_id: str) -> str:
+    """`tatolabd`'s standard error through the first stop of the stream `stream_id`."""
     the_first_streams_stop = tatolabd.await_stderr_containing(
-        THE_STREAM_STOPPED_LOG_LINE, timeout=CLEAN_EXIT_TIMEOUT_SECONDS
+        the_stream_stopped_log_line(stream_id), timeout=CLEAN_EXIT_TIMEOUT_SECONDS
     )
     return tatolabd.stderr_text.split(the_first_streams_stop, 1)[0] + the_first_streams_stop
 
 
-def frames_the_scaffolded_effect_wrote(tatolabd: TatolabdUnderTest) -> int:
+def frames_the_scaffolded_effect_wrote(tatolabd: TatolabdUnderTest, stream_id: str) -> int:
     """The bags the running scaffold's effect has written on its output, read off `graph`."""
     [effect_node] = [
         graph_node
-        for graph_node in tatolabd.local_api_client().graph(stream=STREAM_NAME)["nodes"]
+        for graph_node in tatolabd.local_api_client().graph(stream=stream_id)["nodes"]
         if graph_node["name"] == SCAFFOLDED_EFFECT_NODE_NAME
     ]
     return effect_node["components"]["metrics"]["written_bags_by_output_port"][
@@ -583,8 +618,9 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 
     dev = attach_the_projects_stream(tatolabd, app_directory, "dev")
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
-    live_graph = tatolabd.local_api_client().call_tool("graph", {"stream": STREAM_NAME})
-    assert live_graph["stream"] == STREAM_NAME, (
+    stream_id = stream_id_of_the_project(app_directory)
+    live_graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    assert live_graph["stream"] == stream_id, (
         f"the runtime must render the stream it was loaded as; graph was {live_graph}"
     )
     assert live_graph["exposed"] == [
@@ -603,11 +639,11 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 
     # Long enough for the source to have driven many frames through the effect.
     time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
-    frames_written = frames_the_scaffolded_effect_wrote(tatolabd)
+    frames_written = frames_the_scaffolded_effect_wrote(tatolabd, stream_id)
     dev.interrupt()
     assert dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, dev.recent_stderr()
 
-    stream_output = the_first_streams_output(tatolabd)
+    stream_output = the_first_streams_output(tatolabd, stream_id)
     assert_the_effect_carried_live_video(
         tatolabd, stream_output, frames_written, "the app `tatolab new` writes"
     )
@@ -669,7 +705,8 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
         f"the warning block on `tatolab run`'s standard error must name the device literal; it "
         f"ended:\n{tatolab_run.recent_stderr()}"
     )
-    assert output.index("cross-floor check") < output.index(f"tatolab: {STREAM_NAME} loaded"), (
+    loaded_note = f"tatolab: {stream_id_of_the_project(app_directory)} loaded"
+    assert output.index("cross-floor check") < output.index(loaded_note), (
         f"the warning block must come ahead of the loaded note:\n{output}"
     )
     assert "imports `cupy`" in tatolabd.stderr_text, (
@@ -766,7 +803,10 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     assert fleet.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
         f"a graph of {HELPER_PLACED_PROCESSOR_COUNT} helpers must still unload cleanly"
     )
-    tatolabd.await_stderr_containing(THE_STREAM_STOPPED_LOG_LINE, timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
+    tatolabd.await_stderr_containing(
+        the_stream_stopped_log_line(stream_id_of_the_project(fleet_app)),
+        timeout=CLEAN_EXIT_TIMEOUT_SECONDS,
+    )
 
 
 def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
@@ -829,6 +869,7 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     app_directory = make_scaffolded_sample_stream_project(make_tatolab_project, run_tatolab)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
     last_good_effect_source = effect_module.read_text()
+    stream_id = stream_id_of_the_project(app_directory)
     tatolabd = start_tatolabd()
     local_api = tatolabd.local_api_client()
 
@@ -836,13 +877,17 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
     node_ids_before_the_bad_save = node_ids_of(
-        local_api.await_every_node_running(stream=STREAM_NAME)
+        local_api.await_every_node_running(stream=stream_id)
     )
 
     time.sleep(SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS)
     effect_module.write_text("def process(self ctx:\n    this does not parse\n")
-    dev.await_stderr_containing(DEV_LOADING_AGAIN_AFTER_A_SAVE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    dev.await_stderr_containing(DEV_KEPT_THE_RUNNING_STREAM, timeout=NODE_READY_TIMEOUT_SECONDS)
+    dev.await_stderr_containing(
+        dev_loading_again_after_a_save(stream_id), timeout=NODE_READY_TIMEOUT_SECONDS
+    )
+    dev.await_stderr_containing(
+        dev_kept_the_running_stream(stream_id), timeout=NODE_READY_TIMEOUT_SECONDS
+    )
     time.sleep(
         SCAFFOLD_OBSERVATION_WINDOW_SECONDS - SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS
     )
@@ -853,19 +898,19 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     assert dev.process.poll() is None, (
         f"a bad save must not take `dev` down; standard error ended:\n{dev.recent_stderr()}"
     )
-    assert node_ids_of(local_api.graph(stream=STREAM_NAME)) == node_ids_before_the_bad_save, (
+    assert node_ids_of(local_api.graph(stream=stream_id)) == node_ids_before_the_bad_save, (
         "a bad save must leave the same load of the stream running"
     )
     assert [listed["state"] for listed in local_api.list_streams()] == ["attached"]
-    assert THE_STREAM_STOPPED_LOG_LINE not in tatolabd.stderr_text, (
+    assert the_stream_stopped_log_line(stream_id) not in tatolabd.stderr_text, (
         "the stream stopped although the bad save was to leave it running"
     )
-    frames_written_before_the_good_save = frames_the_scaffolded_effect_wrote(tatolabd)
+    frames_written_before_the_good_save = frames_the_scaffolded_effect_wrote(tatolabd, stream_id)
 
     effect_module.write_text(the_scaffolded_effect_edited(last_good_effect_source))
     assert_the_effect_carried_live_video(
         tatolabd,
-        the_first_streams_output(tatolabd),
+        the_first_streams_output(tatolabd, stream_id),
         frames_written_before_the_good_save,
         "the stream running when the bad save landed, up to the good save",
     )
@@ -888,7 +933,7 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
         "started"
     )
     node_ids_after_the_good_save = node_ids_of(
-        local_api.await_every_node_running(stream=STREAM_NAME)
+        local_api.await_every_node_running(stream=stream_id)
     )
     assert set(node_ids_after_the_good_save).isdisjoint(node_ids_before_the_bad_save), (
         "a good save replaces the stream with a load of its own"

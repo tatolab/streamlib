@@ -190,7 +190,7 @@ pub(crate) fn the_stub_runtimes_description()
 }
 
 /// The one stream a stub runtime loads: the stub itself.
-pub(crate) const STUB_STREAM_NAME: &str = "stub-stream";
+pub(crate) const STUB_STREAM_ID: &str = "stub-stream";
 
 /// The tag of the stub's one load, the same for every call in this process.
 pub(crate) fn the_stub_streams_tag() -> ::streamlib::sdk::runtime::LoadedStreamTag {
@@ -202,15 +202,15 @@ pub(crate) fn the_stub_streams_tag() -> ::streamlib::sdk::runtime::LoadedStreamT
     })
 }
 
-/// Refuse a call naming a stream other than [`STUB_STREAM_NAME`], in the
+/// Refuse a call naming a stream other than [`STUB_STREAM_ID`], in the
 /// engine's words.
 pub(crate) fn refuse_a_stream_the_stub_runtime_does_not_load(
-    stream_name: &str,
+    stream_id: &str,
 ) -> ::streamlib::sdk::error::Result<()> {
-    match stream_name {
-        STUB_STREAM_NAME => Ok(()),
+    match stream_id {
+        STUB_STREAM_ID => Ok(()),
         other => Err(::streamlib::sdk::error::Error::NotFound(format!(
-            "no stream named `{other}` is loaded in this runtime. Loaded: {STUB_STREAM_NAME}"
+            "no stream named `{other}` is loaded in this runtime. Loaded: {STUB_STREAM_ID}"
         ))),
     }
 }
@@ -221,7 +221,7 @@ pub(crate) fn the_stub_runtime_takes_no_stream_action(
     action: &str,
 ) -> ::streamlib::sdk::error::Error {
     ::streamlib::sdk::error::Error::Runtime(format!(
-        "`{action}` was refused: the stub runtime loads `{STUB_STREAM_NAME}` and takes no stream \
+        "`{action}` was refused: the stub runtime loads `{STUB_STREAM_ID}` and takes no stream \
          action"
     ))
 }
@@ -249,50 +249,50 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             }
             fn runtime_operations_of_the_stream_a_call_names(
                 &self,
-                stream_name: &str,
+                stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<
                 ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
             > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
-                    stream_name,
+                    stream_id,
                 )?;
                 Ok(::std::sync::Arc::new(self.clone()))
             }
             fn node_catalog_of_the_stream_a_call_names(
                 &self,
-                stream_name: &str,
+                stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<
                 Vec<::streamlib::sdk::descriptors::ProcessorDescriptor>,
             > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
-                    stream_name,
+                    stream_id,
                 )?;
                 Ok(::streamlib::sdk::processors::PROCESSOR_REGISTRY.list_registered())
             }
             fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
                 &self,
-                stream_name: &str,
+                stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<
                 Vec<::streamlib::sdk::descriptors::ProcessorDescriptor>,
             > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
-                    stream_name,
+                    stream_id,
                 )?;
                 Ok(Vec::new())
             }
-            fn names_of_the_loaded_streams(&self) -> Vec<String> {
-                vec![$crate::control_plane_stub_support::STUB_STREAM_NAME.to_string()]
+            fn ids_of_the_loaded_streams(&self) -> Vec<String> {
+                vec![$crate::control_plane_stub_support::STUB_STREAM_ID.to_string()]
             }
             fn log_records_of_the_stream_a_call_names(
                 &self,
-                stream_name: &str,
+                stream_id: &str,
                 after: u64,
                 _max_count: usize,
             ) -> ::streamlib::sdk::error::Result<
                 ::streamlib::sdk::runtime::LogRecordsPageOfOneLoadedStream,
             > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
-                    stream_name,
+                    stream_id,
                 )?;
                 Ok(::streamlib::sdk::runtime::LogRecordsPageOfOneLoadedStream {
                     stream_tag: $crate::control_plane_stub_support::the_stub_streams_tag(),
@@ -313,7 +313,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             }
             fn stop_stream(
                 &self,
-                _stream_name: &str,
+                _stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamStopOutcome> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "stop_stream",
@@ -321,7 +321,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             }
             fn start_stream(
                 &self,
-                _stream_name: &str,
+                _stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamStartOutcome> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "start_stream",
@@ -329,7 +329,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             }
             fn remove_stream(
                 &self,
-                _stream_name: &str,
+                _stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamRemoveOutcome> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "remove_stream",
@@ -337,16 +337,17 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             }
             fn list_streams(&self) -> Vec<::streamlib::sdk::runtime::StreamListing> {
                 vec![::streamlib::sdk::runtime::StreamListing {
-                    name: $crate::control_plane_stub_support::STUB_STREAM_NAME.to_string(),
+                    stream_id: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),
+                    display_name: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),
+                    stream_location: None,
                     state: ::streamlib::sdk::runtime::StreamListingState::Attached,
-                    project_directory: ::std::path::PathBuf::new(),
                     node_count: None,
                     failed_because: None,
                 }]
             }
             fn expose_port(
                 &self,
-                _stream_name: &str,
+                _stream_id: &str,
                 _node: &str,
                 _port: &str,
                 _level: ::streamlib::sdk::graph::OutputPortExposureLevel,
@@ -359,7 +360,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             }
             fn unload_the_attached_stream_if_still_the_same(
                 &self,
-                _stream_name: &str,
+                _stream_id: &str,
                 _stream_tag: ::streamlib::sdk::runtime::LoadedStreamTag,
             ) -> bool {
                 false

@@ -48,7 +48,11 @@ from runtime_load_streams import (
     pattern_linked_from_a_port_it_lacks_into_an_encoder,
 )
 from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT
-from stream_runs_on_tatolabd import TatolabRunOfAProject
+from stream_runs_on_tatolabd import (
+    TatolabRunOfAProject,
+    stream_id_of_a_hand_written_graph,
+    stream_id_of_a_suite_stream_function,
+)
 from tatolab.stream import (
     H264Encoder,
     RelayTrackSource,
@@ -91,10 +95,10 @@ NOT_THE_COMPILE_DOCUMENT = "standard output is not the compile document"
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
 
-def pattern_to_encoder_graph(*, stream_name: str = "pattern-to-encoder") -> "dict[str, Any]":
+def pattern_to_encoder_graph(*, stream_function_name: str = "pattern-to-encoder") -> "dict[str, Any]":
     """A test pattern into an H.264 encoder, exposing the pattern's output."""
     return {
-        "stream": stream_name,
+        "stream": stream_function_name,
         "nodes": [
             {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
             {
@@ -168,12 +172,11 @@ def test_a_graph_naming_every_compiled_built_in_by_its_type_loads(
 def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        pattern_to_encoder_graph(stream_name="pattern-to-encoder")
-    )
+    graph = pattern_to_encoder_graph()
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
 
     assert loaded_with(run_outcome) == 2
-    assert run_outcome.loaded_stream_name == "pattern-to-encoder"
+    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(graph)
 
 
 def test_the_deepest_config_the_builder_compiles_loads(
@@ -233,7 +236,7 @@ def test_a_compiled_graph_that_is_a_list_rather_than_a_graph_is_refused_naming_i
 ):
     refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver('[{"name": "x", "type": "y"}]'))
 
-    assert "names no stream" in refusal
+    assert "the graph does not parse" in refusal
 
 
 def test_a_lone_surrogate_escape_in_a_compiled_config_is_refused_naming_it(
@@ -294,15 +297,16 @@ def test_a_python_node_type_the_process_never_imported_loads_by_describing_it(
     assert DESCRIBED_NODE_MODULE not in sys.modules
 
 
-def test_the_stream_name_a_graph_carries_is_cast(
+def test_the_stream_id_casts_the_function_name_of_its_location(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        pattern_to_encoder_graph(stream_name="Front Camera")
-    )
+    graph = pattern_to_encoder_graph(stream_function_name="Front Camera")
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
 
     assert loaded_with(run_outcome) == 2
-    assert run_outcome.loaded_stream_name == "front-camera"
+    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(graph)
+    assert run_outcome.loaded_stream_id is not None
+    assert "-front-camera-" in run_outcome.loaded_stream_id
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="surrogate-escaped paths are POSIX's")
@@ -339,33 +343,36 @@ def test_a_project_directory_whose_name_is_not_utf8_is_refused_naming_it(
 def test_an_empty_graph_is_refused_by_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(empty_graph()))
+    graph = empty_graph()
+    refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
 
-    assert "the stream `main` holds no node" in refusal
+    assert f"the stream `{stream_id_of_a_hand_written_graph(graph)}` holds no node" in refusal
     assert "stream_builder.add(" in refusal
 
 
-def test_a_graph_naming_no_stream_is_refused(
+def test_a_graph_naming_no_stream_loads_under_the_id_of_its_location(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    """A runtime's streams are told apart by name, so a graph has to carry one."""
+    """A stream is keyed by the id its location computes to, so the graph's own
+    `stream` is only the default display name and a graph may carry none."""
     graph = pattern_to_encoder_graph()
     del graph["stream"]
 
-    refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
 
-    assert "names no stream" in refusal
+    assert loaded_with(run_outcome) == 2
+    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(graph)
 
 
-def test_a_stream_name_casting_to_nothing_is_refused_naming_it(
+def test_a_function_name_casting_to_nothing_is_left_out_of_the_stream_id(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    refusal = refused_naming(
-        run_stream_on_tatolabd_with_no_vulkan_driver(pattern_to_encoder_graph(stream_name=".."))
-    )
+    graph = pattern_to_encoder_graph(stream_function_name="..")
 
-    assert "`..`" in refusal
-    assert "cannot name anything" in refusal
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+
+    assert loaded_with(run_outcome) == 2
+    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(graph)
 
 
 def test_a_compile_document_nested_far_past_the_maximum_is_refused_rather_than_crashing(
@@ -544,17 +551,19 @@ def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_local_api(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     tatolabd = start_tatolabd_running_stream(named_pattern_into_a_named_sink)
-    stream_name = tatolabd.attached_stream_runs[-1].await_loaded()["stream_name"]
+    stream_id = tatolabd.attached_stream_runs[-1].await_loaded()["stream_id"]
     local_api = tatolabd.local_api_client()
     local_api.await_every_node_running(
-        stream=stream_name, expected_node_names=["loaded-pattern", "loaded-sink"]
+        stream=stream_id, expected_node_names=["loaded-pattern", "loaded-sink"]
     )
-    served_graph = local_api.call_tool("graph", {"stream": stream_name})
+    served_graph = local_api.call_tool("graph", {"stream": stream_id})
     machine_wide_graph = local_api.graph()
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
-    assert served_graph["stream"] == "named_pattern_into_a_named_sink"
+    assert served_graph["stream"] == stream_id_of_a_suite_stream_function(
+        named_pattern_into_a_named_sink
+    )
     assert served_graph["machine"], served_graph
     assert served_graph["machine"] == machine_wide_graph["machine"], machine_wide_graph
     served_node_names = [served_node["name"] for served_node in served_graph["nodes"]]

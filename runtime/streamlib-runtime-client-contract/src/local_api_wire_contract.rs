@@ -48,7 +48,7 @@ impl std::fmt::Display for LoadedStreamInstance {
 /// The `logs` tool's result: one loaded stream's records after the sequence number asked for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogsToolResult {
-    /// The stream's cast name.
+    /// The stream's id.
     pub stream: String,
     /// The load whose records these are; a page naming another instance than the last numbers
     /// its records afresh.
@@ -70,20 +70,32 @@ pub struct LogsToolResultRecord {
     pub record: serde_json::Value,
 }
 
+/// Where a stream's code lives, as the local API reports it: its project directory, resolved,
+/// and its stream function as `module:qualname`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamLocationOnTheWire {
+    /// The project directory's absolute path, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The stream function as `module:qualname`.
+    pub stream_function: String,
+}
+
 /// The `run_stream` tool's result: the stream a project's compile loaded and started.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunStreamToolResult {
-    /// The name the stream was loaded under.
+    /// The stream's id, computed from its location; every tool naming the stream takes it.
     pub stream: String,
+    /// The label the stream is shown under.
+    pub display_name: String,
     /// This load of it, as its `logs` pages name it.
     pub stream_instance: LoadedStreamInstance,
     /// Whether the runtime keeps it; else it is attached to the connection that ran it.
     pub kept: bool,
-    /// The project the compile ran in.
-    pub project_directory: PathBuf,
+    /// Where the stream's code lives.
+    pub location: StreamLocationOnTheWire,
     /// How many nodes the loaded graph holds.
     pub node_count: usize,
-    /// Whether the load replaced the kept stream of the same project and function.
+    /// Whether the load replaced the kept stream of the same location.
     pub replaced_the_kept_record: bool,
     /// Each line the compile wrote to its standard error, the cross-floor check's warnings
     /// among them; empty when it wrote nothing.
@@ -93,7 +105,7 @@ pub struct RunStreamToolResult {
 /// The `stop_stream` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StopStreamToolResult {
-    /// The stream's cast name.
+    /// The stream's id.
     pub stream: String,
     /// Always true: a stream the runtime could not unload is refused instead.
     pub stopped: bool,
@@ -108,7 +120,7 @@ pub struct StopStreamToolResult {
 /// The `start_stream` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartStreamToolResult {
-    /// The stream's cast name.
+    /// The stream's id.
     pub stream: String,
     /// How many nodes the loaded graph holds.
     pub node_count: usize,
@@ -117,7 +129,7 @@ pub struct StartStreamToolResult {
 /// The `remove_stream` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoveStreamToolResult {
-    /// The stream's cast name.
+    /// The stream's id.
     pub stream: String,
     /// Whether the stream was loaded and is now unloaded.
     pub unloaded: bool,
@@ -135,12 +147,15 @@ pub struct ListStreamsToolResult {
 /// One stream of a [`ListStreamsToolResult`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListStreamsToolResultStream {
-    /// The stream's cast name.
-    pub name: String,
+    /// The stream's id; every tool naming the stream takes it.
+    pub stream: String,
+    /// The label the stream is shown under.
+    pub display_name: String,
+    /// Where the stream's code lives; `null` for a stream a library host loaded, and for a
+    /// record an earlier runtime wrote.
+    pub location: Option<StreamLocationOnTheWire>,
     /// Whether it is attached, kept, stopped or failed.
     pub state: ListedStreamState,
-    /// The stream's project directory.
-    pub project_directory: PathBuf,
     /// How many nodes its loaded graph holds; `null` when it is not loaded.
     pub node_count: Option<usize>,
     /// Why it is failed; `null` when it is not.
@@ -212,7 +227,7 @@ impl std::fmt::Display for ExposePortLevel {
 /// The `expose_port` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExposePortToolResult {
-    /// The stream's cast name.
+    /// The stream's id.
     pub stream: String,
     /// The node, as the owner named it.
     pub node: String,
@@ -449,15 +464,19 @@ mod tests {
 
         assert_eq!(
             wire_text(&RunStreamToolResult {
-                stream: "camera".to_owned(),
+                stream: "project-main-3f2a9c".to_owned(),
+                display_name: "main".to_owned(),
                 stream_instance: LoadedStreamInstance("4".to_owned()),
                 kept: true,
-                project_directory: PathBuf::from("/srv/project"),
+                location: StreamLocationOnTheWire {
+                    project_directory: PathBuf::from("/srv/project"),
+                    stream_function: "stream:main".to_owned(),
+                },
                 node_count: 3,
                 replaced_the_kept_record: false,
                 compile_warnings: vec!["tatolab: one warning".to_owned()],
             }),
-            r#"{"stream":"camera","stream_instance":"4","kept":true,"project_directory":"/srv/project","node_count":3,"replaced_the_kept_record":false,"compile_warnings":["tatolab: one warning"]}"#
+            r#"{"stream":"project-main-3f2a9c","display_name":"main","stream_instance":"4","kept":true,"location":{"project_directory":"/srv/project","stream_function":"stream:main"},"node_count":3,"replaced_the_kept_record":false,"compile_warnings":["tatolab: one warning"]}"#
         );
         assert_eq!(
             wire_text(&StartStreamToolResult {
@@ -478,29 +497,27 @@ mod tests {
             wire_text(&ListStreamsToolResult {
                 streams: vec![
                     ListStreamsToolResultStream {
-                        name: "camera".to_owned(),
+                        stream: "cam-main-0a1b2c".to_owned(),
+                        display_name: "Desk camera".to_owned(),
+                        location: Some(StreamLocationOnTheWire {
+                            project_directory: PathBuf::from("/srv/cam"),
+                            stream_function: "stream:main".to_owned(),
+                        }),
                         state: ListedStreamState::Attached,
-                        project_directory: PathBuf::from("/srv/cam"),
                         node_count: Some(4),
                         failed_because: None,
                     },
                     ListStreamsToolResultStream {
-                        name: "parked".to_owned(),
-                        state: ListedStreamState::Stopped,
-                        project_directory: PathBuf::from("/srv/parked"),
-                        node_count: None,
-                        failed_because: None,
-                    },
-                    ListStreamsToolResultStream {
-                        name: "crasher".to_owned(),
+                        stream: "main".to_owned(),
+                        display_name: "main".to_owned(),
+                        location: None,
                         state: ListedStreamState::Failed,
-                        project_directory: PathBuf::from("/srv/crasher"),
                         node_count: None,
-                        failed_because: Some("it crashed the runtime".to_owned()),
+                        failed_because: Some("an earlier runtime recorded it".to_owned()),
                     },
                 ],
             }),
-            r#"{"streams":[{"name":"camera","state":"attached","project_directory":"/srv/cam","node_count":4,"failed_because":null},{"name":"parked","state":"stopped","project_directory":"/srv/parked","node_count":null,"failed_because":null},{"name":"crasher","state":"failed","project_directory":"/srv/crasher","node_count":null,"failed_because":"it crashed the runtime"}]}"#
+            r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","stream_function":"stream:main"},"state":"attached","node_count":4,"failed_because":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it"}]}"#
         );
         assert_eq!(
             wire_text(&LogsToolResult {

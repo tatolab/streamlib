@@ -320,7 +320,7 @@ def the_link_into(graph: dict, name: str) -> str:
 
 def await_metrics_satisfying(
     local_api: LocalApiClient,
-    stream_name: str,
+    stream_id: str,
     name: str,
     satisfied: "Callable[[dict], bool]",
     awaited: str,
@@ -330,7 +330,7 @@ def await_metrics_satisfying(
     deadline = time.monotonic() + DISCARDED_SAMPLES_TIMEOUT_SECONDS
     metrics: dict = {}
     while time.monotonic() < deadline:
-        metrics = node_named(local_api.call_tool("graph", {"stream": stream_name}), name)[
+        metrics = node_named(local_api.call_tool("graph", {"stream": stream_id}), name)[
             "components"
         ].get("metrics", {})
         if satisfied(metrics):
@@ -362,14 +362,14 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
     )
     tatolabd = start_tatolabd()
     tatolab_run = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory))
-    stream_name = tatolab_run.await_loaded()["stream_name"]
+    stream_id = tatolab_run.await_loaded()["stream_id"]
     local_api = tatolabd.local_api_client()
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
-    link_id = the_link_into(local_api.call_tool("graph", {"stream": stream_name}), "windowed-consumer")
+    link_id = the_link_into(local_api.call_tool("graph", {"stream": stream_id}), "windowed-consumer")
 
     metrics = await_metrics_satisfying(
         local_api,
-        stream_name,
+        stream_id,
         "windowed-consumer",
         lambda metrics: metrics.get("discarded_samples_by_link", {}).get(link_id, 0) > 0,
         f"discarded samples on {link_id}",

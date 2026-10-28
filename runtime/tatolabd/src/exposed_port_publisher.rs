@@ -4,7 +4,7 @@
 //! The runtime's one publisher. Every exposed output port of every loaded
 //! stream is forwarded as written to each joined relay whose levels include the
 //! port's, as the track `<node>/<port>` of the stream's broadcast
-//! `<root>/<machine>/<stream>.hang`, beside the broadcast's catalog merged
+//! `<root>/<machine>/<stream id>.hang`, beside the broadcast's catalog merged
 //! from the ports' entries. It decodes no payload, knows no port's encoding and
 //! offers every exposed port.
 
@@ -368,7 +368,7 @@ impl RelayDialedByThePublisher {
 /// An exposed port's address in the runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct ExposedOutputPortAddress {
-    stream_name: String,
+    stream_id: String,
     node_name: String,
     port_name: String,
     /// Tells a node removed and added again under its name from the one it
@@ -379,7 +379,7 @@ struct ExposedOutputPortAddress {
 impl ExposedOutputPortAddress {
     fn of(exposed_port: &ExposedOutputPortOfALoadedStream) -> Self {
         Self {
-            stream_name: exposed_port.stream_name.clone(),
+            stream_id: exposed_port.stream_id.clone(),
             node_name: exposed_port.node_name.clone(),
             port_name: exposed_port.port_name.clone(),
             node_id: exposed_port.node_id.clone(),
@@ -396,7 +396,7 @@ impl std::fmt::Display for ExposedOutputPortAddress {
         write!(
             f,
             "{}/{}/{}",
-            self.stream_name, self.node_name, self.port_name
+            self.stream_id, self.node_name, self.port_name
         )
     }
 }
@@ -411,9 +411,9 @@ struct BroadcastOfAStreamAtARelay {
 }
 
 impl BroadcastOfAStreamAtARelay {
-    fn announced_at(relay: &RelayDialedByThePublisher, stream_name: &str) -> Option<Self> {
+    fn announced_at(relay: &RelayDialedByThePublisher, stream_id: &str) -> Option<Self> {
         let broadcast_path = format!(
-            "{}/{stream_name}{BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ}",
+            "{}/{stream_id}{BROADCAST_SUFFIX_OF_A_CATALOG_THE_PLAYERS_READ}",
             relay.dialed_as.broadcast_root
         );
         let created = (|| -> Result<Self, moq_net::Error> {
@@ -477,7 +477,7 @@ impl BroadcastOfAStreamAtARelay {
 
     /// Write the catalog last published again, whole, as the first frame of a
     /// fresh group on both spellings: what a subscriber joining now reads.
-    fn rewrite_the_catalog_whole(&mut self, relay_id: &RelayInstanceId, stream_name: &str) {
+    fn rewrite_the_catalog_whole(&mut self, relay_id: &RelayInstanceId, stream_id: &str) {
         for (catalog_track, producer) in [
             (hang::Catalog::DEFAULT_NAME, &mut self.catalog),
             (hang::Catalog::COMPRESSED_NAME, &mut self.compressed_catalog),
@@ -488,7 +488,7 @@ impl BroadcastOfAStreamAtARelay {
             {
                 tracing::warn!(
                     relay = %relay_id,
-                    "the catalog track `{catalog_track}` of the stream `{stream_name}` was not \
+                    "the catalog track `{catalog_track}` of the stream `{stream_id}` was not \
                      written again whole: {refusal}"
                 );
             }
@@ -720,9 +720,9 @@ impl ExposedPortPublisher {
                 .is_some_and(|due_at| due_at <= now)
         }) {
             relay.catalogs_last_rewritten_whole_at = now;
-            for ((relay_id, stream_name), broadcast) in &mut self.broadcasts {
+            for ((relay_id, stream_id), broadcast) in &mut self.broadcasts {
                 if relay_id == &relay.dialed_as.relay_id {
-                    broadcast.rewrite_the_catalog_whole(relay_id, stream_name);
+                    broadcast.rewrite_the_catalog_whole(relay_id, stream_id);
                 }
             }
         }
@@ -853,13 +853,13 @@ impl ExposedPortPublisher {
             if track_writer.reaches(&relay.dialed_as.relay_id) {
                 continue;
             }
-            let broadcast = match self.broadcasts.entry((
-                relay.dialed_as.relay_id.clone(),
-                address.stream_name.clone(),
-            )) {
+            let broadcast = match self
+                .broadcasts
+                .entry((relay.dialed_as.relay_id.clone(), address.stream_id.clone()))
+            {
                 std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
                 std::collections::hash_map::Entry::Vacant(vacant) => {
-                    match BroadcastOfAStreamAtARelay::announced_at(relay, &address.stream_name) {
+                    match BroadcastOfAStreamAtARelay::announced_at(relay, &address.stream_id) {
                         Some(broadcast) => vacant.insert(broadcast),
                         None => continue,
                     }
@@ -892,35 +892,34 @@ impl ExposedPortPublisher {
 
     fn publish_each_broadcast_and_its_catalog(&mut self) {
         let forwarded_ports = &self.forwarded_ports;
-        self.broadcasts
-            .retain(|(relay_id, stream_name), broadcast| {
-                let ports_at_this_relay: Vec<(&ExposedOutputPortAddress, &ForwardedExposedPort)> =
-                    forwarded_ports
-                        .iter()
-                        .filter(|(address, forwarded)| {
-                            &address.stream_name == stream_name
-                                && lock_the_writer(&forwarded.track_writer).reaches(relay_id)
-                        })
-                        .collect();
-                if ports_at_this_relay.is_empty() {
-                    tracing::info!(
-                        relay = %relay_id,
-                        "the broadcast of the stream `{stream_name}` is withdrawn"
-                    );
-                    return false;
-                }
-                broadcast.publish_the_catalog(&the_catalog_merged_from_the_entries_of(
-                    ports_at_this_relay
-                        .iter()
-                        .filter_map(|(address, forwarded)| {
-                            forwarded
-                                .catalog_entry
-                                .as_ref()
-                                .map(|catalog_entry| (address.track_name(), catalog_entry))
-                        }),
-                ));
-                true
-            });
+        self.broadcasts.retain(|(relay_id, stream_id), broadcast| {
+            let ports_at_this_relay: Vec<(&ExposedOutputPortAddress, &ForwardedExposedPort)> =
+                forwarded_ports
+                    .iter()
+                    .filter(|(address, forwarded)| {
+                        &address.stream_id == stream_id
+                            && lock_the_writer(&forwarded.track_writer).reaches(relay_id)
+                    })
+                    .collect();
+            if ports_at_this_relay.is_empty() {
+                tracing::info!(
+                    relay = %relay_id,
+                    "the broadcast of the stream `{stream_id}` is withdrawn"
+                );
+                return false;
+            }
+            broadcast.publish_the_catalog(&the_catalog_merged_from_the_entries_of(
+                ports_at_this_relay
+                    .iter()
+                    .filter_map(|(address, forwarded)| {
+                        forwarded
+                            .catalog_entry
+                            .as_ref()
+                            .map(|catalog_entry| (address.track_name(), catalog_entry))
+                    }),
+            ));
+            true
+        });
     }
 }
 
@@ -929,7 +928,7 @@ async fn subscribe_to(
     address: &ExposedOutputPortAddress,
 ) -> Result<ExposedOutputPortSubscription, String> {
     let stream = engine
-        .loaded_stream_named(&address.stream_name)
+        .loaded_stream_of_the_id(&address.stream_id)
         .map_err(|refusal| refusal.to_string())?;
     stream
         .subscribe_to_an_exposed_output_port(address.node_name.clone(), address.port_name.clone())
@@ -957,7 +956,7 @@ async fn read_into(
         Err(reason) => tracing::warn!(
             "the exposed port `{}/{}/{}` is not published: its helper could not open its \
              port: {reason}",
-            subscription.stream_name(),
+            subscription.stream_id(),
             subscription.node_name(),
             subscription.port_name()
         ),
@@ -1252,7 +1251,7 @@ mod tests {
     #[test]
     fn a_node_added_again_under_its_name_is_another_port() {
         let exposed_at = |node_id: ProcessorUniqueId| ExposedOutputPortOfALoadedStream {
-            stream_name: "desk".to_string(),
+            stream_id: "desk".to_string(),
             node_name: "camera".to_string(),
             node_id,
             port_name: "video".to_string(),
@@ -1345,7 +1344,7 @@ mod tests {
         }
         publisher.forwarded_ports.insert(
             ExposedOutputPortAddress {
-                stream_name: "desk".to_string(),
+                stream_id: "desk".to_string(),
                 node_name: "camera".to_string(),
                 port_name: "video".to_string(),
                 node_id: ProcessorUniqueId::new(),

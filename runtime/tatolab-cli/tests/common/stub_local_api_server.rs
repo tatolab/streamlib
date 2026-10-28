@@ -748,9 +748,10 @@ pub fn run_stream_tool_result_text(
 ) -> String {
     serde_json::json!({
         "stream": stream,
+        "display_name": "main",
         "stream_instance": STUB_FIRST_STREAM_INSTANCE,
         "kept": kept,
-        "project_directory": project_directory,
+        "location": {"project_directory": project_directory, "stream_function": "stream:main"},
         "node_count": node_count,
         "replaced_the_kept_record": false,
         "compile_warnings": compile_warnings,

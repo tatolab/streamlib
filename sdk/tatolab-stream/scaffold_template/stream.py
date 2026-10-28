@@ -6,8 +6,8 @@
 `tatolab dev` loads the one `@stream` below by convention — there is no
 manifest — and restarts it when you edit `nodes/halftone_lens_effect.py` or
 `nodes/brightness_meter.py`. While it runs, http://127.0.0.1:4446/ lists the
-stream's public track and http://127.0.0.1:4446/watch/<machine>/main plays it
-in a browser.
+stream's public track and http://127.0.0.1:4446/watch/<machine>/<stream id>
+plays it in a browser; `tatolab streams` lists the stream id.
 
 Nodes live in their own modules, never in this file: each one runs in its
 own child interpreter, which imports the class by name.

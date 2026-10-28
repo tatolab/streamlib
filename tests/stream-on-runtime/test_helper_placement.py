@@ -434,11 +434,11 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
         compile_stream_to_graph(stale_build_labelled_source),
         project_directory=child_startup_directory,
     )
-    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
+    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
     tatolabd.await_stderr_containing(HELPER_DIED_SETTING_UP_LOG_LINE_FRAGMENT)
     processor_states = {
         node["name"]: node.get("components", {}).get("state")
-        for node in tatolabd.local_api_client().graph(stream_name)["nodes"]
+        for node in tatolabd.local_api_client().graph(stream_id)["nodes"]
     }
     tatolabd.interrupt()
     tatolabd.await_exit()

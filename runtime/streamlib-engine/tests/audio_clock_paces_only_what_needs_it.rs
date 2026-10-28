@@ -94,7 +94,7 @@ fn run_a_graph_of(processor: ProcessorSpec) {
             streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
                 project_directory.path(),
             )
-            .named("main"),
+            .with_stream_id("main"),
         )
         .expect("an empty stream loads");
     stream.add_processor(processor).expect("add the processor");
