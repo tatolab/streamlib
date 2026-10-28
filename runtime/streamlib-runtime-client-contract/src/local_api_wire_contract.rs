@@ -569,10 +569,8 @@ mod tests {
             r#"{"stream":"camera","node":"source","port":"video","level":"public","recorded":false,"not_recorded_because":"cannot write"}"#
         );
         assert_eq!(
-            serde_json::from_str::<StopStreamToolResult>(
-                r#"{"stream":"camera","stopped":true}"#
-            )
-            .unwrap(),
+            serde_json::from_str::<StopStreamToolResult>(r#"{"stream":"camera","stopped":true}"#)
+                .unwrap(),
             stopped(None)
         );
     }

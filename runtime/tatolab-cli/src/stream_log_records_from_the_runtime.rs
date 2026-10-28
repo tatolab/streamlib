@@ -6,13 +6,18 @@
 
 use std::io::Write;
 
-use streamlib_runtime_client_contract::local_api_wire_contract::LogsToolResult;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    LoadedStreamInstance, LogsToolResult,
+};
 use streamlib_runtime_client_contract::runtime_log_event_pretty_rendering::format_event_pretty;
 
 use crate::runtime_log_files_reader::{RuntimeLogRecordFilters, decode_runtime_log_record_value};
 
 /// The local API tool that pages a loaded stream's log records by sequence number.
 pub(crate) const LOGS_TOOL_NAME: &str = "logs";
+
+/// The local API tool a runtime describes itself with, its own log's folder among it.
+pub(crate) const DESCRIBE_RUNTIME_TOOL_NAME: &str = "describe_runtime";
 
 /// How long a reader following a stream's records waits after a page that brought nothing.
 pub(crate) const STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL: std::time::Duration =
@@ -27,6 +32,35 @@ pub(crate) fn logs_tool_arguments_after(
     logs_arguments.insert("stream".to_owned(), stream.into());
     logs_arguments.insert("after".to_owned(), after.into());
     logs_arguments
+}
+
+/// The load of a stream a follow reads, by the instance its `logs` pages name; `None` until the
+/// first page names it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LoadedStreamInstanceBeingFollowed(Option<LoadedStreamInstance>);
+
+impl LoadedStreamInstanceBeingFollowed {
+    /// The load `stream_instance` names.
+    pub(crate) fn the_load(stream_instance: LoadedStreamInstance) -> Self {
+        Self(Some(stream_instance))
+    }
+
+    /// Whether a page naming `page_instance` names another load than the one followed, which it
+    /// then follows instead; the first page's load is followed without answering true.
+    pub(crate) fn page_names_another_load(&mut self, page_instance: &LoadedStreamInstance) -> bool {
+        let another_load = self
+            .0
+            .as_ref()
+            .is_some_and(|followed_instance| followed_instance != page_instance);
+        self.0 = Some(page_instance.clone());
+        another_load
+    }
+}
+
+/// What a follow notes when a page names another load of `stream`: it reads that load from its
+/// first record.
+pub(crate) fn stream_loaded_again_note(stream: &str) -> String {
+    format!("{stream} was loaded again — following it from its first record")
 }
 
 /// The page `logs_tool_result_text` carries, or why it is not one.

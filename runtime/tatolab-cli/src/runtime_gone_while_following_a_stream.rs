@@ -14,9 +14,7 @@ use crate::local_api_mcp_tool_client::{
     LocalApiMcpToolClientFailure, LocalApiMcpToolClientFailureKind,
 };
 use crate::stream_actions_on_the_runtime::tool_result_from;
-
-/// The local API tool a runtime describes itself with, its own log's folder among it.
-pub(crate) const DESCRIBE_RUNTIME_TOOL_NAME: &str = "describe_runtime";
+use crate::stream_log_records_from_the_runtime::DESCRIBE_RUNTIME_TOOL_NAME;
 
 /// The runtime's own log folder, as the runtime described it while it answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,26 +53,24 @@ impl RuntimeLogDirectoryAsDescribed {
 
     /// `the runtime went away — it crashed or was stopped; …`, naming where its log is.
     pub(crate) fn the_runtime_went_away_message(&self) -> String {
-        let where_its_log_is = match self {
-            Self::WrittenIn(runtime_log_directory) => format!(
+        let runtime_log_directory = match self {
+            Self::WrittenIn(runtime_log_directory) => Ok(runtime_log_directory.clone()),
+            Self::NoneWritten => Err("it wrote no log of its own".to_owned()),
+            Self::NotDescribed => TatolabStateDirectory::resolve_for_a_reader_without_creating()
+                .map(|tatolab_state_directory| tatolab_state_directory.runtime_log_directory())
+                .map_err(|state_directory_refusal| {
+                    format!(
+                        "its log is in the runtime's state directory, which this user cannot \
+                         place: {state_directory_refusal}"
+                    )
+                }),
+        };
+        let where_its_log_is = match runtime_log_directory {
+            Ok(runtime_log_directory) => format!(
                 "its log is under {}",
-                directory_with_its_trailing_slash(runtime_log_directory)
+                directory_with_its_trailing_slash(&runtime_log_directory)
             ),
-            Self::NoneWritten => "it wrote no log of its own".to_owned(),
-            Self::NotDescribed => {
-                match TatolabStateDirectory::resolve_for_a_reader_without_creating() {
-                    Ok(tatolab_state_directory) => format!(
-                        "its log is under {}",
-                        directory_with_its_trailing_slash(
-                            &tatolab_state_directory.runtime_log_directory()
-                        )
-                    ),
-                    Err(state_directory_refusal) => format!(
-                        "its log is in the runtime's state directory, which this user cannot place: \
-                     {state_directory_refusal}"
-                    ),
-                }
-            }
+            Err(no_log_folder_to_name) => no_log_folder_to_name,
         };
         format!("the runtime went away — it crashed or was stopped; {where_its_log_is}")
     }

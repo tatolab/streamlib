@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListStreamsToolResult, ListedStreamState, LoadedStreamInstance, RunStreamToolResult,
+    ListStreamsToolResult, ListedStreamState, RunStreamToolResult,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -29,7 +29,7 @@ use crate::machine_runtime_local_api_socket::{
 use crate::process_signal_handling::block_the_stop_signals_and_listen;
 use crate::project_source_change_watcher::watch_project_sources;
 use crate::runtime_gone_while_following_a_stream::{
-    DESCRIBE_RUNTIME_TOOL_NAME, RuntimeLogDirectoryAsDescribed, the_runtime_is_gone,
+    RuntimeLogDirectoryAsDescribed, the_runtime_is_gone,
 };
 use crate::runtime_log_files_reader::RuntimeLogRecordFilters;
 use crate::stream_actions_on_the_runtime::{
@@ -37,8 +37,9 @@ use crate::stream_actions_on_the_runtime::{
     the_running_stream_described, tool_result_from,
 };
 use crate::stream_log_records_from_the_runtime::{
-    LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
-    render_stream_log_records_page, stream_log_records_page_from,
+    DESCRIBE_RUNTIME_TOOL_NAME, LOGS_TOOL_NAME, LoadedStreamInstanceBeingFollowed,
+    STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
+    render_stream_log_records_page, stream_loaded_again_note, stream_log_records_page_from,
 };
 use crate::verb_standard_output::{
     standard_output_closed_or_failed, write_and_flush_verb_standard_output,
@@ -51,7 +52,7 @@ const DEV_CONNECTION_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How often `dev` looks for the runtime's socket again after losing its connection, and asks a
 /// restarted runtime again whether it has re-loaded the followed stream.
-const RUNTIME_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const RUNTIME_SOCKET_AND_RE_LOAD_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// What `dev` prefixes each of its notes on standard error with.
 const DEV_NOTE_PREFIX: &str = "tatolab dev";
@@ -71,13 +72,16 @@ enum FinishedUnlessStopped<CallOutcome> {
     StopSignalDelivered,
 }
 
-/// The stream `dev` follows: its id, the load of it whose records it reads — `None` until the
-/// first page of a load it did not run names it — and the record it has read up to.
+/// The stream `dev` follows: its id, the load of it whose records it reads, the record it has
+/// read up to, and whether a refused reload left it to confirm the stream still runs.
 #[derive(Debug, Clone)]
 struct FollowedStreamPosition {
     stream: String,
-    stream_instance: Option<LoadedStreamInstance>,
+    stream_instance: LoadedStreamInstanceBeingFollowed,
     after: u64,
+    /// A reload was refused, and the next `logs` page says whether the runtime still holds the
+    /// stream the reload was to replace.
+    a_refused_reload_left_it_to_confirm: bool,
 }
 
 impl FollowedStreamPosition {
@@ -85,8 +89,9 @@ impl FollowedStreamPosition {
     fn from_the_first_record_of(stream: String) -> Self {
         Self {
             stream,
-            stream_instance: None,
+            stream_instance: LoadedStreamInstanceBeingFollowed::default(),
             after: 0,
+            a_refused_reload_left_it_to_confirm: false,
         }
     }
 }
@@ -146,7 +151,6 @@ pub(crate) fn follow_the_stream_and_reload_it_on_every_save(
             dev_session_events_open: true,
             project_sources_changed_during_a_call: false,
             runtime_log_directory: RuntimeLogDirectoryAsDescribed::NotDescribed,
-            a_refused_reload_left_its_stream_to_confirm: false,
         }
         .run_until_it_ends(),
     );
@@ -164,9 +168,6 @@ struct DevSession {
     project_sources_changed_during_a_call: bool,
     /// Where the runtime said its own log is, named when it goes away.
     runtime_log_directory: RuntimeLogDirectoryAsDescribed,
-    /// A reload was refused, and the next `logs` page says whether the runtime still holds the
-    /// stream the reload was to replace.
-    a_refused_reload_left_its_stream_to_confirm: bool,
 }
 
 impl DevSession {
@@ -207,11 +208,17 @@ impl DevSession {
                     }
                 }
                 DevSessionStep::WaitForTheNextSave => self.wait_for_the_next_save().await,
-                DevSessionStep::Run(running) => match &connected_client {
-                    Some(connected_client) => self.run(connected_client, running).await,
-                    None => {
-                        DevSessionStep::WaitForTheRuntime(running.map(|running| running.stream))
+                DevSessionStep::Run(followed_stream_the_run_replaces) => match &connected_client {
+                    Some(connected_client) => {
+                        self.run_the_stream_over_the_connection(
+                            connected_client,
+                            followed_stream_the_run_replaces,
+                        )
+                        .await
                     }
+                    None => DevSessionStep::WaitForTheRuntime(
+                        followed_stream_the_run_replaces.map(|followed| followed.stream),
+                    ),
                 },
                 DevSessionStep::WaitForTheReLoadOf(stream) => match &connected_client {
                     Some(connected_client) => {
@@ -295,12 +302,12 @@ impl DevSession {
         DevSessionStep::Exit(Ok(0))
     }
 
-    /// Run the stream over the connection; `running` is the stream already followed, which the
-    /// run replaces once its compile succeeds.
-    async fn run(
+    /// Run the stream over the connection; `followed_stream_the_run_replaces` is the stream
+    /// already followed, which the run replaces once its compile succeeds.
+    async fn run_the_stream_over_the_connection(
         &mut self,
         connected_client: &LocalApiMcpToolClient,
-        running: Option<FollowedStreamPosition>,
+        followed_stream_the_run_replaces: Option<FollowedStreamPosition>,
     ) -> DevSessionStep {
         self.project_sources_changed_during_a_call = false;
         let run_stream_arguments = self.stream_load_request.run_stream_tool_arguments();
@@ -329,14 +336,17 @@ impl DevSession {
             .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)
         }) {
             Ok(run_stream_result) => run_stream_result,
-            Err(run_failure) => return self.after_a_failed_run(run_failure, running),
+            Err(run_failure) => {
+                return self.after_a_failed_run(run_failure, followed_stream_the_run_replaces);
+            }
         };
         write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
         self.note(&the_running_stream_described(&run_stream_result));
         let loaded = FollowedStreamPosition {
-            stream: run_stream_result.stream,
-            stream_instance: Some(run_stream_result.stream_instance),
-            after: 0,
+            stream_instance: LoadedStreamInstanceBeingFollowed::the_load(
+                run_stream_result.stream_instance,
+            ),
+            ..FollowedStreamPosition::from_the_first_record_of(run_stream_result.stream)
         };
         if self.project_sources_changed_during_a_call {
             return self.run_again_after_a_save(loaded);
@@ -367,23 +377,25 @@ impl DevSession {
     fn after_a_failed_run(
         &mut self,
         run_failure: LocalApiMcpToolClientFailure,
-        running: Option<FollowedStreamPosition>,
+        followed_stream_the_run_replaces: Option<FollowedStreamPosition>,
     ) -> DevSessionStep {
         if let Some(after_the_runtime_went_away) = self.after_the_runtime_went_away(
             &run_failure,
-            running.as_ref().map(|running| running.stream.as_str()),
+            followed_stream_the_run_replaces
+                .as_ref()
+                .map(|followed| followed.stream.as_str()),
         ) {
             return after_the_runtime_went_away;
         }
         self.note(&run_failure.to_string());
-        match running {
+        match followed_stream_the_run_replaces {
             Some(followed) if self.project_sources_changed_during_a_call => {
                 DevSessionStep::Run(Some(followed))
             }
-            Some(followed) => {
-                self.a_refused_reload_left_its_stream_to_confirm = true;
-                DevSessionStep::Follow(followed)
-            }
+            Some(followed) => DevSessionStep::Follow(FollowedStreamPosition {
+                a_refused_reload_left_it_to_confirm: true,
+                ..followed
+            }),
             None if self.project_sources_changed_during_a_call => DevSessionStep::Run(None),
             None => {
                 self.note(NO_STREAM_IS_LOADED_UNTIL_A_SAVE_COMPILES);
@@ -417,25 +429,21 @@ impl DevSession {
                     .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)
             }) {
                 Ok(stream_log_records_page) => stream_log_records_page,
-                Err(logs_failure) => return self.after_a_failed_follow(&stream, logs_failure),
+                Err(logs_failure) => {
+                    return self.after_a_failed_follow(
+                        &stream,
+                        logs_failure,
+                        followed.a_refused_reload_left_it_to_confirm,
+                    );
+                }
             };
-            match &followed.stream_instance {
-                None => {
-                    followed.stream_instance = Some(stream_log_records_page.stream_instance.clone())
-                }
-                Some(followed_instance)
-                    if *followed_instance != stream_log_records_page.stream_instance =>
-                {
-                    self.note(&format!(
-                        "{stream} was loaded again — following it from its first record"
-                    ));
-                    followed = FollowedStreamPosition {
-                        stream_instance: Some(stream_log_records_page.stream_instance),
-                        ..FollowedStreamPosition::from_the_first_record_of(stream)
-                    };
-                    continue;
-                }
-                Some(_) => {}
+            if followed
+                .stream_instance
+                .page_names_another_load(&stream_log_records_page.stream_instance)
+            {
+                self.note(&stream_loaded_again_note(&stream));
+                followed.after = 0;
+                continue;
             }
             let rendered_records = render_stream_log_records_page(
                 &stream,
@@ -446,7 +454,7 @@ impl DevSession {
             if let Err(write_failure) = write_and_flush_verb_standard_output(&rendered_records) {
                 return DevSessionStep::Exit(standard_output_closed_or_failed(write_failure));
             }
-            if std::mem::take(&mut self.a_refused_reload_left_its_stream_to_confirm) {
+            if std::mem::take(&mut followed.a_refused_reload_left_it_to_confirm) {
                 self.note(&format!(
                     "{stream} keeps running the last save that loaded — fix it and save again"
                 ));
@@ -475,6 +483,7 @@ impl DevSession {
         &mut self,
         stream: &str,
         logs_failure: LocalApiMcpToolClientFailure,
+        a_refused_reload_left_it_to_confirm: bool,
     ) -> DevSessionStep {
         if let Some(after_the_runtime_went_away) =
             self.after_the_runtime_went_away(&logs_failure, Some(stream))
@@ -482,7 +491,7 @@ impl DevSession {
             return after_the_runtime_went_away;
         }
         if logs_failure.kind == LocalApiMcpToolClientFailureKind::ToolCallFailed
-            && std::mem::take(&mut self.a_refused_reload_left_its_stream_to_confirm)
+            && a_refused_reload_left_it_to_confirm
         {
             self.note(NO_STREAM_IS_LOADED_UNTIL_A_SAVE_COMPILES);
             return DevSessionStep::WaitForTheNextSave;
@@ -529,7 +538,7 @@ impl DevSession {
         ));
         loop {
             match self
-                .finish_unless_stopped(tokio::time::sleep(RUNTIME_POLL_INTERVAL))
+                .finish_unless_stopped(tokio::time::sleep(RUNTIME_SOCKET_AND_RE_LOAD_POLL_INTERVAL))
                 .await
             {
                 FinishedUnlessStopped::Finished(()) => {}
@@ -596,9 +605,9 @@ impl DevSession {
             match listed_streams
                 .iter()
                 .find(|listed_stream| listed_stream.stream == stream)
-                .map(|listed_stream| (listed_stream.state, listed_stream.node_count))
+                .map(|listed_stream| (listed_stream.state, listed_stream.node_count.is_some()))
             {
-                Some((ListedStreamState::Running, Some(_))) => {
+                Some((ListedStreamState::Running, true)) => {
                     self.note(&format!(
                         "{stream} is loaded again — following it from its first record"
                     ));
@@ -606,7 +615,7 @@ impl DevSession {
                         FollowedStreamPosition::from_the_first_record_of(stream),
                     );
                 }
-                Some((ListedStreamState::Running, None)) => {}
+                Some((ListedStreamState::Running, false)) => {}
                 Some((not_running, _)) => {
                     self.note(&format!(
                         "{stream} came back {not_running}, so it is not followed; save again to \
@@ -627,7 +636,7 @@ impl DevSession {
                 );
             }
             match self
-                .finish_unless_stopped(tokio::time::sleep(RUNTIME_POLL_INTERVAL))
+                .finish_unless_stopped(tokio::time::sleep(RUNTIME_SOCKET_AND_RE_LOAD_POLL_INTERVAL))
                 .await
             {
                 FinishedUnlessStopped::Finished(()) => {}

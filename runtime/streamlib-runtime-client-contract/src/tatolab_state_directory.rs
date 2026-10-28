@@ -102,7 +102,7 @@ impl TatolabStateDirectory {
     }
 
     /// `<state>/streams/`, one record per stream the runtime runs.
-    pub fn streams_directory(&self) -> PathBuf {
+    pub fn stream_records_directory(&self) -> PathBuf {
         self.path.join("streams")
     }
 
@@ -306,7 +306,7 @@ mod tests {
             assert_eq!(mode, 0o700, "{}", level.display());
         }
         assert_eq!(
-            state_directory.streams_directory(),
+            state_directory.stream_records_directory(),
             path.join("streams")
         );
         assert_eq!(state_directory.runtime_log_directory(), path.join("logs"));

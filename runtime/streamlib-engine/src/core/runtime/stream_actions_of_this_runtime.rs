@@ -204,7 +204,7 @@ pub struct OutputPortExposureOutcome {
 }
 
 /// How many of the runtime's crashes in a row a recorded stream is implicated
-/// in before it is failed (runtime-hosting decision 5).
+/// in before it is failed.
 pub const RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM: u32 = 2;
 
 /// What [`Runner::reload_every_recorded_stream_neither_stopped_nor_failed`]
@@ -425,7 +425,7 @@ impl Runner {
                     compile_warnings,
                 )
             }
-            (_, Some(loaded)) => Err(a_stream_id_already_loaded_refusal(
+            (None, Some(loaded)) => Err(a_stream_id_already_loaded_refusal(
                 &loaded,
                 STOP_IT_FIRST_TO_LOAD_THIS_ONE,
             )),
@@ -438,24 +438,25 @@ impl Runner {
                             .unwrap_or(&stream_id)
                             .to_string()
                     });
-                let record = StreamRecord::of_a_running_stream(
-                    stream_location.clone(),
-                    display_name_of_a_new_stream.clone(),
+                let stream_record = StreamRecord::of_a_running_stream(
+                    stream_location,
+                    display_name_of_a_new_stream,
                     &stream_environment,
                     graph_json,
                 );
-                let stream = self
-                    .load_and_start_a_stream(OneStreamAStreamActionLoads::recorded_by(&record))?;
-                if let Err(write_refusal) = stream_records.write(&record) {
+                let stream = self.load_and_start_a_stream(
+                    OneStreamAStreamActionLoads::recorded_by(&stream_record),
+                )?;
+                if let Err(write_refusal) = stream_records.write(&stream_record) {
                     unload_a_stream_an_action_took_back(&stream, "its record was not written");
                     return Err(write_refusal);
                 }
                 Ok(StreamRunOutcome {
                     node_count: stream.node_count(),
                     stream_tag: stream.stream_tag(),
-                    stream_id,
-                    display_name: display_name_of_a_new_stream,
-                    stream_location,
+                    stream_id: stream_record.stream_id,
+                    display_name: stream_record.display_name,
+                    stream_location: stream_record.location,
                     replaced_a_recorded_stream: false,
                     compile_warnings,
                 })
@@ -1418,7 +1419,7 @@ mod tests {
 
     /// A runner handed a lend directory, recording its streams in
     /// `streams_directory` when one is given.
-    fn a_runner_keeping_its_streams_in(streams_directory: Option<&Path>) -> Arc<Runner> {
+    fn a_runner_recording_its_streams_in(streams_directory: Option<&Path>) -> Arc<Runner> {
         ensure_test_mocks_registered();
         let runner = Runner::new().expect("the runner builds");
         runner
@@ -1700,7 +1701,7 @@ mod tests {
     #[test]
     #[serial]
     fn a_run_on_a_runtime_given_no_state_directory_is_refused_by_name() {
-        let runner = a_runner_keeping_its_streams_in(None);
+        let runner = a_runner_recording_its_streams_in(None);
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([]),
@@ -1718,7 +1719,7 @@ mod tests {
     fn a_second_streams_directory_is_refused_naming_the_first() {
         let state_directory = tempfile::tempdir().unwrap();
         let first = state_directory.path().join("streams");
-        let runner = a_runner_keeping_its_streams_in(Some(&first));
+        let runner = a_runner_recording_its_streams_in(Some(&first));
 
         let refusal = refusal_of(
             runner.record_streams_in_the_state_directory(&state_directory.path().join("other")),
@@ -1731,7 +1732,7 @@ mod tests {
     #[serial]
     fn a_run_in_a_project_with_no_venv_interpreter_is_refused_pointing_at_uv_sync() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
 
         let refusal = refusal_of(runner.run_stream(project.run_request()));
@@ -1745,7 +1746,7 @@ mod tests {
     #[serial]
     fn a_run_whose_id_a_loaded_stream_of_another_location_holds_is_refused_naming_both() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let (project, other_project) =
             ProjectWithAStubCompile::two_with_no_venv_whose_ids_collide("camera");
         let project = project.given_a_venv_compiling_warning(
@@ -1784,7 +1785,7 @@ mod tests {
     #[serial]
     fn a_run_whose_id_a_stream_its_host_loaded_holds_is_refused_naming_both() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([]),
@@ -1841,7 +1842,7 @@ mod tests {
         ];
         for (state, mark) in holder_states {
             let state_directory = tempfile::tempdir().unwrap();
-            let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+            let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
             let mut holder = a_record_of(&other_project, "camera", serde_json::json!([]));
             mark(&mut holder);
             records_in(state_directory.path()).write(&holder).unwrap();
@@ -1879,7 +1880,7 @@ mod tests {
     #[serial]
     fn a_run_whose_compile_fails_leaves_the_running_stream_loaded_and_its_record_untouched() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([]),
@@ -1923,7 +1924,7 @@ mod tests {
     #[serial]
     fn a_replace_whose_load_is_refused_and_whose_previous_stream_cannot_re_load_reports_both() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(
             the_graph_of_a_function_exposing_a_port_its_node_lacks("camera"),
         );
@@ -1966,7 +1967,7 @@ mod tests {
         ));
         let camera = project.stream_id_of("camera");
         {
-            let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+            let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
             let running = a_recorded_stream_loaded_without_its_start(
                 &runner,
                 state_directory.path(),
@@ -1990,7 +1991,7 @@ mod tests {
             assert!(refusal.contains("already stopped"), "{refusal}");
         }
 
-        let fresh_runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let fresh_runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         assert!(
             fresh_runner
@@ -2064,7 +2065,7 @@ mod tests {
     #[serial]
     fn stopping_a_loaded_recorded_stream_whose_record_is_unreadable_unloads_it_naming_the_record() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let record = a_record_of(&project, "camera", serde_json::json!([]));
@@ -2114,7 +2115,7 @@ mod tests {
     fn stopping_a_loaded_recorded_stream_whose_record_cannot_be_written_still_unloads_it() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
-        let runner = a_runner_keeping_its_streams_in(Some(&streams_directory));
+        let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let running = a_recorded_stream_loaded_without_its_start(
@@ -2141,7 +2142,7 @@ mod tests {
     #[serial]
     fn raising_a_port_of_a_loaded_recorded_stream_whose_record_is_unreadable_changes_it_live() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let recorded = a_recorded_stream_loaded_without_its_start(
@@ -2189,7 +2190,7 @@ mod tests {
     fn raising_a_port_of_a_loaded_recorded_stream_whose_record_cannot_be_written_changes_it_live() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
-        let runner = a_runner_keeping_its_streams_in(Some(&streams_directory));
+        let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let recorded = a_recorded_stream_loaded_without_its_start(
@@ -2227,7 +2228,7 @@ mod tests {
     fn restricting_a_port_of_a_loaded_recorded_stream_whose_record_cannot_be_written_is_refused() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
-        let runner = a_runner_keeping_its_streams_in(Some(&streams_directory));
+        let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let record = a_record_of(
@@ -2267,7 +2268,7 @@ mod tests {
     #[serial]
     fn restricting_a_port_of_a_loaded_recorded_stream_whose_record_is_unreadable_is_refused() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let recorded = a_recorded_stream_loaded_without_its_start(
@@ -2310,7 +2311,7 @@ mod tests {
     fn a_loaded_recorded_stream_whose_record_is_gone_raises_live_naming_the_record_and_never_restricts()
      {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let recorded = a_recorded_stream_loaded_without_its_start(
@@ -2358,7 +2359,7 @@ mod tests {
     #[serial]
     fn starting_a_recorded_stream_whose_record_is_unreadable_is_refused_naming_the_record() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let mut stopped = a_record_of(&project, "camera", serde_json::json!([]));
@@ -2382,7 +2383,7 @@ mod tests {
     #[serial]
     fn stopping_a_stream_its_host_loaded_unloads_it_and_records_nothing() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         a_stream_its_host_loaded(&runner, &project, "camera");
 
@@ -2400,7 +2401,7 @@ mod tests {
     fn an_action_naming_no_stream_the_runtime_holds_is_refused_naming_the_loaded_and_recorded_ones()
     {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         a_stream_its_host_loaded(&runner, &project, "hosted-one");
         let mut stopped = a_record_of(&project, "recorded-one", serde_json::json!([]));
@@ -2441,7 +2442,7 @@ mod tests {
     #[serial]
     fn a_stream_action_finds_a_stream_by_its_exact_id_alone() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let hosted = a_stream_its_host_loaded(&runner, &project, "camera");
         let camera = project.stream_id_of("camera");
@@ -2476,7 +2477,7 @@ mod tests {
     #[serial]
     fn removing_a_recorded_stream_unloads_it_and_forgets_its_record() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let microphone = project.stream_id_of("microphone");
@@ -2520,7 +2521,7 @@ mod tests {
         let camera = project.stream_id_of("camera");
         let microphone = project.stream_id_of("microphone");
         {
-            let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+            let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
             let running = a_recorded_stream_loaded_without_its_start(
                 &runner,
                 state_directory.path(),
@@ -2560,7 +2561,7 @@ mod tests {
             );
         }
 
-        let fresh_runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let fresh_runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         let shown_as: Vec<(String, String)> = fresh_runner
             .list_streams()
@@ -2580,7 +2581,7 @@ mod tests {
     fn a_rename_whose_record_cannot_be_written_is_refused_and_the_stream_is_shown_as_it_was() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
-        let runner = a_runner_keeping_its_streams_in(Some(&streams_directory));
+        let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let running = a_recorded_stream_loaded_without_its_start(
@@ -2606,7 +2607,7 @@ mod tests {
     #[serial]
     fn renaming_a_loaded_recorded_stream_whose_record_is_unreadable_is_refused_naming_the_record() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let running = a_recorded_stream_loaded_without_its_start(
@@ -2635,7 +2636,7 @@ mod tests {
     #[serial]
     fn a_run_giving_a_display_name_that_shows_nothing_is_refused_before_its_compile() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let record = a_record_of(&project, "camera", serde_json::json!([]));
@@ -2663,7 +2664,7 @@ mod tests {
     #[serial]
     fn renaming_a_stream_its_host_loaded_shows_it_under_the_name_and_records_nothing() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let hosted = a_stream_its_host_loaded(&runner, &project, "camera");
 
@@ -2681,7 +2682,7 @@ mod tests {
     fn a_rename_is_refused_for_a_name_showing_nothing_an_id_held_by_no_stream_and_an_earlier_record()
      {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let hosted = a_stream_its_host_loaded(&runner, &project, "camera");
         let camera = project.stream_id_of("camera");
@@ -2722,7 +2723,7 @@ mod tests {
     fn the_listing_names_each_stream_by_id_display_name_and_location_and_one_not_loaded_counts_no_node()
      {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         a_stream_its_host_loaded(&runner, &project, "a-hosted");
         a_recorded_stream_loaded_without_its_start(
@@ -2783,7 +2784,7 @@ mod tests {
         }))
         .unwrap();
         std::fs::write(&earlier_record_path, &earlier_record_bytes).unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         runner.count_the_previous_runtime_runs_end_against_the_recorded_streams(
             &a_crash_pinned_on(&["main"]),
@@ -2857,7 +2858,7 @@ mod tests {
     #[serial]
     fn a_port_of_a_loaded_recorded_stream_changes_live_and_its_ruling_is_recorded() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let recorded = a_recorded_stream_loaded_without_its_start(
@@ -2910,7 +2911,7 @@ mod tests {
     #[serial]
     fn a_port_of_a_stream_its_host_loaded_changes_live_and_nothing_is_recorded() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let hosted = a_stream_its_host_loaded(&runner, &project, "camera");
 
@@ -2939,7 +2940,7 @@ mod tests {
     #[serial]
     fn a_port_of_a_stopped_stream_is_recorded_once_the_recorded_graph_holds_its_node() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let camera = project.stream_id_of("camera");
         let mut stopped = a_record_of(&project, "camera", serde_json::json!([]));
@@ -2976,7 +2977,7 @@ mod tests {
     #[serial]
     fn a_recorded_streams_rulings_hold_at_its_load_and_one_on_a_port_its_node_lacks_is_skipped() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let mut record = a_record_of(
             &project,
@@ -3015,7 +3016,7 @@ mod tests {
     #[serial]
     fn a_recorded_restriction_is_the_level_a_recorded_stream_holds_before_it_starts() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let mut record = a_record_of(
             &project,
@@ -3068,7 +3069,7 @@ mod tests {
         let mut stopped = a_record_of(&project, "d-stopped", serde_json::json!([]));
         stopped.stopped = true;
         records.write(&stopped).unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         let reloads = runner.reload_every_recorded_stream_neither_stopped_nor_failed();
 
@@ -3111,7 +3112,7 @@ mod tests {
     #[serial]
     fn a_recorded_stream_stopped_or_removed_between_the_listing_and_its_reload_stays_unloaded() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([]),
@@ -3143,7 +3144,7 @@ mod tests {
     #[serial]
     fn a_record_unreadable_by_its_reload_is_reported_unreadable_by_its_path() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let records = records_in(state_directory.path());
         records
@@ -3172,7 +3173,7 @@ mod tests {
     #[serial]
     fn a_recorded_stream_loaded_between_the_listing_and_its_reload_is_left_as_it_is() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
         let record = a_record_of(&project, "camera", serde_json::json!([]));
         records_in(state_directory.path()).write(&record).unwrap();
@@ -3197,7 +3198,7 @@ mod tests {
     #[serial]
     fn a_run_of_another_function_replaces_no_stream() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(
             the_graph_of_a_function_exposing_a_port_its_node_lacks("studio"),
         );
@@ -3247,7 +3248,7 @@ mod tests {
     #[serial]
     fn two_worktrees_of_one_project_run_side_by_side_under_two_ids_and_neither_is_refused() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let main_worktree = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "main",
             serde_json::json!([]),
@@ -3295,7 +3296,7 @@ mod tests {
     #[serial]
     fn a_run_starts_the_stream_under_its_locations_id_and_records_it() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let camera_project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([]),
@@ -3390,7 +3391,7 @@ mod tests {
     fn a_run_of_the_records_location_replaces_it_under_its_id_keeping_its_renamed_display_name_and_rulings()
      {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
@@ -3482,7 +3483,7 @@ mod tests {
         ));
         let camera = project.stream_id_of("camera");
         {
-            let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+            let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
             runner.run_stream(project.run_request()).unwrap();
             runner
                 .expose_port(&camera, "source", "out1", OutputPortExposureLevel::Private)
@@ -3509,7 +3510,7 @@ mod tests {
             assert!(refusal.contains("already loaded"), "{refusal}");
         }
 
-        let restarted = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let restarted = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let reloads = restarted.reload_every_recorded_stream_neither_stopped_nor_failed();
 
         assert!(
@@ -3533,7 +3534,7 @@ mod tests {
     #[serial]
     fn an_owners_restriction_recorded_between_the_listing_and_the_reload_holds_at_the_load() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([]),
@@ -3584,7 +3585,7 @@ mod tests {
     #[serial]
     fn a_run_whose_start_is_refused_unloads_the_stream_it_loaded_and_records_nothing() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         runner
             .install_setup_hook(|_| Err(Error::Configuration("the setup hook refuses".into())))
             .unwrap();
@@ -3609,7 +3610,7 @@ mod tests {
     fn a_run_whose_record_is_not_written_unloads_the_stream_it_started() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
-        let runner = a_runner_keeping_its_streams_in(Some(&streams_directory));
+        let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([]),
@@ -3633,7 +3634,7 @@ mod tests {
     #[serial]
     fn a_replace_whose_load_is_refused_after_the_unload_re_loads_the_previous_record() {
         let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
@@ -3680,7 +3681,7 @@ mod tests {
     fn a_replace_whose_record_is_not_written_unloads_the_new_stream_and_re_loads_the_previous() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
-        let runner = a_runner_keeping_its_streams_in(Some(&streams_directory));
+        let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
@@ -3738,7 +3739,7 @@ mod tests {
         }
         let crasher = project.stream_id_of("crasher");
         let steady = project.stream_id_of("steady");
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         let failed_by_the_first = runner
             .count_the_previous_runtime_runs_end_against_the_recorded_streams(&a_crash_pinned_on(
@@ -3795,7 +3796,7 @@ mod tests {
             .write(&a_record_of(&project, "crasher", serde_json::json!([])))
             .unwrap();
         let crasher = project.stream_id_of("crasher");
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let a_crash_pinned_on_no_stream =
             HowThePreviousRuntimeRunEnded::Crashed(CrashOfThePreviousRuntimeRun {
                 causes_by_implicated_stream: BTreeMap::new(),
@@ -3844,7 +3845,7 @@ mod tests {
         failed.failed_because = Some("it crashed the runtime".to_string());
         failed.runtime_crashes_in_a_row_implicating_it = 2;
         records_in(state_directory.path()).write(&failed).unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         runner.count_the_previous_runtime_runs_end_against_the_recorded_streams(
             &HowThePreviousRuntimeRunEnded::Cleanly,
@@ -3876,7 +3877,7 @@ mod tests {
         records_in(state_directory.path())
             .write(&a_record_of(&project, "camera", serde_json::json!([])))
             .unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         let reloads = runner.reload_every_recorded_stream_neither_stopped_nor_failed();
 
@@ -3895,7 +3896,7 @@ mod tests {
             "{failed_because}"
         );
         assert!(failed_because.contains("re-load"), "{failed_because}");
-        let fresh_runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let fresh_runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         assert!(matches!(
             fresh_runner
                 .reload_every_recorded_stream_neither_stopped_nor_failed()
@@ -3914,7 +3915,7 @@ mod tests {
         failed.failed_because = Some("it crashed the runtime".to_string());
         failed.runtime_crashes_in_a_row_implicating_it = 2;
         records_in(state_directory.path()).write(&failed).unwrap();
-        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         let refusal = refusal_of(runner.start_stream(&crasher));
 

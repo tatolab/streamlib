@@ -33,7 +33,7 @@ use crate::process_signal_handling::{
     an_interrupt_was_delivered_during_the_read, end_the_read_on_interrupt,
 };
 use crate::runtime_gone_while_following_a_stream::{
-    DESCRIBE_RUNTIME_TOOL_NAME, RuntimeLogDirectoryAsDescribed, the_runtime_is_gone,
+    RuntimeLogDirectoryAsDescribed, the_runtime_is_gone,
 };
 use crate::runtime_log_files_reader::{
     RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadFailure, RuntimeLogReadStep,
@@ -42,8 +42,9 @@ use crate::runtime_log_files_reader::{
 use crate::stream_actions_on_the_runtime::{STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP};
 use crate::stream_argument_resolution_through_the_listing::stream_id_the_stream_argument_names_on_the_running_runtime;
 use crate::stream_log_records_from_the_runtime::{
-    LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
-    render_stream_log_records_page, stream_log_records_page_from,
+    DESCRIBE_RUNTIME_TOOL_NAME, LOGS_TOOL_NAME, LoadedStreamInstanceBeingFollowed,
+    STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
+    render_stream_log_records_page, stream_loaded_again_note, stream_log_records_page_from,
 };
 use crate::verb_standard_output::standard_output_closed_or_failed;
 
@@ -305,7 +306,7 @@ pub(crate) fn print_stream_log_records_read_from_the_runtime(
     how_it_goes_on: &HowAFollowedReadOfTheRuntimeGoesOn<'_>,
 ) -> Result<u8, TatolabCommandFailure> {
     let mut after = 0;
-    let mut read_instance = None;
+    let mut loaded_stream_instance_being_followed = LoadedStreamInstanceBeingFollowed::default();
     while !(how_it_goes_on.read_interrupted)() {
         let logs_tool_result_text = read_records_page_after(after).map_err(|logs_failure| {
             let _ = standard_output.flush();
@@ -321,18 +322,16 @@ pub(crate) fn print_stream_log_records_read_from_the_runtime(
         })?;
         let stream_log_records_page = stream_log_records_page_from(&logs_tool_result_text)
             .map_err(TatolabCommandFailure::refused)?;
-        match &read_instance {
-            None => read_instance = Some(stream_log_records_page.stream_instance.clone()),
-            Some(instance_read) if *instance_read != stream_log_records_page.stream_instance => {
-                let _ = writeln!(
-                    standard_error,
-                    "tatolab: {stream} was loaded again — following it from its first record"
-                );
-                read_instance = Some(stream_log_records_page.stream_instance);
-                after = 0;
-                continue;
-            }
-            Some(_) => {}
+        if loaded_stream_instance_being_followed
+            .page_names_another_load(&stream_log_records_page.stream_instance)
+        {
+            let _ = writeln!(
+                standard_error,
+                "tatolab: {}",
+                stream_loaded_again_note(stream)
+            );
+            after = 0;
+            continue;
         }
         let rendered_records = render_stream_log_records_page(
             stream,

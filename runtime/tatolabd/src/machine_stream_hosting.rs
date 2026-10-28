@@ -86,8 +86,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     crate::numbered_message_writer_test_node::register_the_numbered_message_writer_test_node();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::paired_group_writer_test_node::register_the_paired_group_writer_test_node();
-    if let Err(stream_records_refusal) =
-        engine.record_streams_in_the_state_directory(&tatolab_state_directory.streams_directory())
+    if let Err(stream_records_refusal) = engine
+        .record_streams_in_the_state_directory(&tatolab_state_directory.stream_records_directory())
     {
         return write_refusal_to_standard_error(&format!(
             "the runtime cannot record streams: {stream_records_refusal}"
