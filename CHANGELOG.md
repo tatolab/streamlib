@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.8](https://github.com/tatolab/streamlib/compare/v0.55.7...v0.55.8) (2026-10-28)
+
+
+### Features
+
+* **relays:** each relay-adapter setting declares its field type and, separately, whether it is secret ([#2949](https://github.com/tatolab/streamlib/issues/2949)) ([7d12c6f](https://github.com/tatolab/streamlib/commit/7d12c6f2ac007760ff35fa0a7749adb23a60f6a4))
+
 ## [0.55.7](https://github.com/tatolab/streamlib/compare/v0.55.6...v0.55.7) (2026-10-27)
 
 
