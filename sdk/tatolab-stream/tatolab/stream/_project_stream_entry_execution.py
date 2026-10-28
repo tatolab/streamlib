@@ -33,10 +33,15 @@ __all__ = [
     "project_directory_the_stream_entry_imports_from",
     "refuse_a_stream_name_that_casts_to_nothing",
     "select_stream_function",
+    "stream_function_location",
     "stream_functions_defined_in",
 ]
 
 _STREAM_DESCRIPTION_ATTRIBUTE = "__streamlib_stream_description__"
+
+# The module name CPython gives the file it was launched with, which an entry file
+# runs as.
+_ENTRY_FILE_RUN_MODULE_NAME = "__main__"
 
 
 def execute_app_entry_file(entry_file: Path) -> dict[str, Any]:
@@ -204,3 +209,27 @@ def project_directory_the_stream_entry_imports_from(
     if isinstance(resolved_stream_entry, ResolvedStreamEntryFile):
         return resolved_stream_entry.entry_file.resolve().parent
     return anchor_directory.resolve()
+
+
+def stream_function_location(
+    stream_function: Callable[..., Any],
+    resolved_stream_entry: ResolvedStreamEntry,
+    project_directory: Path,
+) -> str:
+    """The stream function as `module:qualname`, the half of its location the runtime
+    hashes beside the project directory.
+
+    A function the entry file defines runs as `__main__`, so its module is spelled as
+    the entry file's path relative to the project directory, `.py` dropped and `/` read
+    as `.` — `stream.py:main` and `stream:main` are one location. A function imported
+    from another module keeps that module.
+    """
+    module_name = stream_function.__module__
+    if module_name == _ENTRY_FILE_RUN_MODULE_NAME and isinstance(
+        resolved_stream_entry, ResolvedStreamEntryFile
+    ):
+        entry_file_in_the_project = resolved_stream_entry.entry_file.resolve().relative_to(
+            project_directory
+        )
+        module_name = ".".join(entry_file_in_the_project.with_suffix("").parts)
+    return f"{module_name}:{stream_function.__qualname__}"

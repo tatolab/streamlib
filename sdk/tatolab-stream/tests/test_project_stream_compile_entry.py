@@ -115,7 +115,7 @@ def compiled_document(finished: "subprocess.CompletedProcess[str]") -> "dict[str
     assert finished.returncode == 0, finished.stderr
     assert finished.stdout.count("\n") == 1 and finished.stdout.endswith("\n"), finished.stdout
     document = json.loads(finished.stdout)
-    assert set(document) == {"stream_graph", "project_directory"}, document
+    assert set(document) == {"stream_graph", "project_directory", "stream_function"}, document
     return document
 
 
@@ -429,6 +429,7 @@ def test_the_compile_entry_prints_the_stream_graph_and_its_project_directory(
     assert compiled_document(finished) == {
         "stream_graph": FRONT_STREAM_GRAPH,
         "project_directory": str(anchor_directory),
+        "stream_function": "stream:front",
     }
     assert finished.stderr == "", "a clean compile says nothing on stderr"
 
@@ -463,6 +464,7 @@ def test_a_module_target_compiles_with_the_anchor_as_the_project(anchor_director
     assert document == {
         "stream_graph": FRONT_STREAM_GRAPH,
         "project_directory": str(anchor_directory),
+        "stream_function": "module_target_rigs.desk:front",
     }
 
 
@@ -492,7 +494,66 @@ def test_a_file_target_in_a_subdirectory_compiles_with_that_subdirectory_as_the_
     assert document == {
         "stream_graph": BACK_STREAM_GRAPH,
         "project_directory": str(anchor_directory / "rigs"),
+        "stream_function": "desk:back",
     }
+
+
+# ---------------------------------------------------------------------------
+# The stream function the document reports, half of the stream's location
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("arguments", "stream_function"),
+    [
+        ((), "stream:main"),
+        (("stream.py",), "stream:main"),
+        (("stream.py:main",), "stream:main"),
+        (("stream:main",), "stream:main"),
+        (("-f", "stream.py"), "stream:main"),
+        (("rig.py:back",), "rig:back"),
+        (("-f", "solo.py"), "solo:main"),
+        (("located_rigs.desk:front",), "located_rigs.desk:front"),
+    ],
+)
+def test_the_document_reports_the_stream_function_as_module_and_qualname_never_main(
+    anchor_directory: Path, arguments: "tuple[str, ...]", stream_function: str
+):
+    write_app(anchor_directory, "stream.py", MINIMAL_STREAM_SOURCE)
+    write_app(anchor_directory, "rig.py", TWO_STREAM_SOURCE)
+    write_app(anchor_directory, "solo.py", MINIMAL_STREAM_SOURCE)
+    write_app(anchor_directory, "located_rigs/__init__.py", "")
+    write_app(anchor_directory, "located_rigs/desk.py", TWO_STREAM_SOURCE)
+
+    document = compiled_document(run_compile_entry(anchor_directory, *arguments))
+
+    assert document["stream_function"] == stream_function
+
+
+def test_an_entry_file_in_a_subdirectory_reports_its_module_relative_to_its_own_directory(
+    anchor_directory: Path,
+):
+    write_app(anchor_directory, "rigs/desk.py", MINIMAL_STREAM_SOURCE)
+
+    document = compiled_document(run_compile_entry(anchor_directory, "-f", "rigs/desk.py"))
+
+    assert document["project_directory"] == str(anchor_directory / "rigs")
+    assert document["stream_function"] == "desk:main"
+
+
+def test_a_stream_imported_into_the_entry_file_reports_the_module_that_defines_it(
+    anchor_directory: Path,
+):
+    write_app(anchor_directory, "imported_location_rigs.py", TWO_STREAM_SOURCE)
+    write_app(
+        anchor_directory,
+        "stream.py",
+        "from imported_location_rigs import front\n" + MINIMAL_STREAM_SOURCE,
+    )
+
+    document = compiled_document(run_compile_entry(anchor_directory, "stream.py:front"))
+
+    assert document["stream_function"] == "imported_location_rigs:front"
 
 
 @pytest.mark.parametrize("missing_module_name", ["no_such_rig_module", "no_such_rig_package.desk"])
