@@ -46,7 +46,9 @@ use clap::{CommandFactory, Parser, Subcommand};
 use streamlib_runtime_client_contract::local_api_wire_contract::ExposePortLevel;
 
 use crate::attached_stream_on_the_runtime::AttachedStreamVerb;
-use crate::stream_actions_on_the_runtime::StreamLoadArguments;
+use crate::stream_actions_on_the_runtime::{
+    STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP, StreamLoadArguments,
+};
 use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
@@ -136,24 +138,18 @@ enum TatolabVerb {
         stream_load_arguments: StreamLoadArguments,
     },
     /// Stop a stream: unload it, and keep a kept one stopped across restarts.
-    #[command(long_about = STREAM_ARGUMENT_LONG_ABOUT)]
     Stop {
-        /// The stream to stop: its id, or a display name only it holds (default: the stream
-        /// loaded from the working directory).
+        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
         stream: Option<String>,
     },
     /// Load a stopped kept stream again, or retry a failed one.
-    #[command(long_about = STREAM_ARGUMENT_LONG_ABOUT)]
     Start {
-        /// The stream to start: its id, or a display name only it holds (default: the stream
-        /// loaded from the working directory).
+        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
         stream: Option<String>,
     },
     /// Remove a stream: unload it and forget it.
-    #[command(long_about = STREAM_ARGUMENT_LONG_ABOUT)]
     Rm {
-        /// The stream to remove: its id, or a display name only it holds (default: the stream
-        /// loaded from the working directory).
+        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
         stream: Option<String>,
     },
     /// Show a stream under another display name; its id and address stay as they are.
@@ -162,12 +158,10 @@ enum TatolabVerb {
         long_about = "Show a stream under another display name — any text, never cast and never \
                       unique. Its id, its address and its broadcast stay as they are, so no reader \
                       of its ports is cut off, and the name holds across restarts and re-loads \
-                      without --name. STREAM is its id, or a display name only it holds; omitted, \
-                      it is the one stream loaded from the working directory."
+                      without --name."
     )]
     Rename {
-        /// The stream by its id or a display name only it holds (default: the stream loaded from
-        /// the working directory), then the display name to show it under.
+        /// [STREAM], as every stream verb takes it, then the display name to show it under.
         #[arg(value_names = ["STREAM", "DISPLAY_NAME"], num_args = 1..=2, required = true)]
         stream_then_display_name: Vec<String>,
     },
@@ -183,9 +177,8 @@ enum TatolabVerb {
     )]
     #[command(override_usage = "tatolab expose [STREAM] <NODE> <PORT> [--public | --remove]")]
     Expose {
-        /// The stream by its id or a display name only it holds (default: the stream loaded from
-        /// the working directory), the node by its name in the stream's graph, and the output
-        /// port by its name on the node.
+        /// [STREAM], as every stream verb takes it; the node by its name in the stream's graph;
+        /// and the output port by its name on the node.
         #[arg(value_names = ["STREAM", "NODE", "PORT"], num_args = 2..=3, required = true)]
         stream_then_node_then_port: Vec<String>,
         /// Make the port public instead of private.
@@ -251,14 +244,8 @@ enum TatolabVerb {
     },
 }
 
-/// What every verb naming one stream says of its stream argument.
-const STREAM_ARGUMENT_LONG_ABOUT: &str = "STREAM is a stream id, or a display name exactly one \
-    stream holds. Omitted, it is the one stream loaded from the working directory, stopped and \
-    failed ones included. An argument several streams match, or none, is refused listing each \
-    candidate's id and display name.";
-
 /// The working directory a project defaults to.
-fn caller_working_directory() -> Result<PathBuf, TatolabCommandFailure> {
+pub(crate) fn caller_working_directory() -> Result<PathBuf, TatolabCommandFailure> {
     std::env::current_dir().map_err(|io_failure| {
         TatolabCommandFailure::refused(format!("cannot read the working directory: {io_failure}"))
     })
@@ -335,41 +322,20 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
         }
         TatolabVerb::Rename {
             stream_then_display_name,
-        } => match stream_then_display_name.as_slice() {
-            [display_name] => stream_actions_on_the_runtime::rename_stream(None, display_name),
-            [stream, display_name] => {
-                stream_actions_on_the_runtime::rename_stream(Some(stream), display_name)
-            }
-            _ => Err(TatolabCommandFailure::refused(
-                "rename takes [STREAM] DISPLAY_NAME".to_owned(),
-            )),
-        },
+        } => stream_actions_on_the_runtime::rename_stream(&stream_then_display_name),
         TatolabVerb::Streams => stream_actions_on_the_runtime::list_streams(),
         TatolabVerb::Expose {
             stream_then_node_then_port,
             public,
             remove,
-        } => {
-            let (stream, node, port) = match stream_then_node_then_port.as_slice() {
-                [node, port] => (None, node, port),
-                [stream, node, port] => (Some(stream.as_str()), node, port),
-                _ => {
-                    return Err(TatolabCommandFailure::refused(
-                        "expose takes [STREAM] NODE PORT".to_owned(),
-                    ));
-                }
-            };
-            stream_actions_on_the_runtime::expose_port(
-            stream,
-            node,
-            port,
+        } => stream_actions_on_the_runtime::expose_port(
+            &stream_then_node_then_port,
             match (public, remove) {
                 (true, _) => ExposePortLevel::Public,
                 (false, true) => ExposePortLevel::Internal,
                 (false, false) => ExposePortLevel::Private,
             },
-        )
-        }
+        ),
         TatolabVerb::Relays => relay_verbs_on_the_runtime::list_relays(),
         TatolabVerb::Relay { relay_verb } => relay_verbs_on_the_runtime::run_relay_verb(relay_verb),
         TatolabVerb::Graph { requested_stream } => {

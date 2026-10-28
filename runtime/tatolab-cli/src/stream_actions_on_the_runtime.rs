@@ -74,6 +74,16 @@ impl StreamActionTool {
     }
 }
 
+/// The short help of a verb's stream argument.
+pub(crate) const STREAM_ARGUMENT_HELP: &str = "The stream: its id, or a display name only it holds \
+    (default: the stream loaded from the working directory)";
+
+/// The long help of a verb's stream argument.
+pub(crate) const STREAM_ARGUMENT_LONG_HELP: &str = "The stream: a stream id, or a display name \
+    exactly one stream holds. Omitted, it is the one stream loaded from the working directory, \
+    stopped and failed ones included. An argument several streams match, or none, is refused \
+    listing each candidate's id and display name.";
+
 /// What `streams` prints when the runtime holds none.
 const NO_STREAMS_IN_THIS_RUNTIME_LINE: &str = "No streams in this runtime.\n";
 
@@ -365,14 +375,22 @@ fn rendered_removed_stream_line(remove_stream_result: &RemoveStreamToolResult) -
     )
 }
 
-/// `tatolab rename [STREAM] DISPLAY_NAME`.
+/// `tatolab rename [STREAM] DISPLAY_NAME`, its positionals as given.
 pub(crate) fn rename_stream(
-    stream_argument: Option<&str>,
-    display_name: &str,
+    stream_then_display_name: &[String],
 ) -> Result<u8, TatolabCommandFailure> {
+    let (stream_argument, display_name) = match stream_then_display_name {
+        [display_name] => (None, display_name),
+        [stream, display_name] => (Some(stream.as_str()), display_name),
+        _ => {
+            return Err(TatolabCommandFailure::refused(
+                "rename takes [STREAM] DISPLAY_NAME".to_owned(),
+            ));
+        }
+    };
     let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
     let mut rename_stream_arguments = stream_tool_arguments(&stream);
-    rename_stream_arguments.insert("display_name".to_owned(), display_name.into());
+    rename_stream_arguments.insert("display_name".to_owned(), display_name.as_str().into());
     let rename_stream_result: RenameStreamToolResult =
         call_one_stream_action_tool(StreamActionTool::RenameStream, rename_stream_arguments)?;
     write_verb_standard_output(&format!(
@@ -461,14 +479,21 @@ fn expose_port_tool_arguments(
     expose_port_arguments
 }
 
-/// `tatolab expose [STREAM] NODE PORT [--public | --remove]`: `private`, `public` or
-/// `internal`.
+/// `tatolab expose [STREAM] NODE PORT [--public | --remove]`, its positionals as given:
+/// `private`, `public` or `internal`.
 pub(crate) fn expose_port(
-    stream_argument: Option<&str>,
-    node: &str,
-    port: &str,
+    stream_then_node_then_port: &[String],
     requested_level: ExposePortLevel,
 ) -> Result<u8, TatolabCommandFailure> {
+    let (stream_argument, node, port) = match stream_then_node_then_port {
+        [node, port] => (None, node, port),
+        [stream, node, port] => (Some(stream.as_str()), node, port),
+        _ => {
+            return Err(TatolabCommandFailure::refused(
+                "expose takes [STREAM] NODE PORT".to_owned(),
+            ));
+        }
+    };
     let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
     let expose_port_result: ExposePortToolResult = call_one_stream_action_tool(
         StreamActionTool::ExposePort,

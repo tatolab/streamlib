@@ -749,13 +749,12 @@ impl Runner {
                     "the stream `{stream_id}` was not renamed: {unreadable}"
                 ))
             })?;
-        match (record, &loaded) {
-            (None, None) => return Err(self.a_stream_this_runtime_does_not_hold(stream_id)),
-            (Some(mut record), _) => {
-                record.display_name = display_name.to_string();
-                self.write_a_stream_record(&record)?;
-            }
-            (None, Some(_)) => {}
+        if record.is_none() && loaded.is_none() {
+            return Err(self.a_stream_this_runtime_does_not_hold(stream_id));
+        }
+        if let Some(mut record) = record {
+            record.display_name = display_name.to_string();
+            self.write_a_stream_record(&record)?;
         }
         if let Some(loaded) = loaded {
             loaded.rename(display_name.to_string());
@@ -1508,8 +1507,6 @@ fn refuse_an_id_another_location_holds(
     }
 }
 
-/// Log what the runtime's previous run crashed on, a crash no stream owns as
-/// the runtime bug it is.
 /// Refuse a display name that is empty or only whitespace: a stream is always
 /// shown under something.
 fn refuse_a_display_name_with_nothing_to_show(display_name: &str) -> Result<()> {
@@ -1522,6 +1519,8 @@ fn refuse_a_display_name_with_nothing_to_show(display_name: &str) -> Result<()> 
     Ok(())
 }
 
+/// Log what the runtime's previous run crashed on, a crash no stream owns as
+/// the runtime bug it is.
 fn log_the_previous_runtime_runs_crash(crash: &CrashOfThePreviousRuntimeRun) {
     for (stream_id, cause) in &crash.causes_by_implicated_stream {
         tracing::error!(

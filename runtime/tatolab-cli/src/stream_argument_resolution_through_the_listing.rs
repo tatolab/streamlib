@@ -6,7 +6,7 @@
 //! from the working directory. Anything else is refused listing the candidates' ids and display
 //! names, so a script or an agent can name one by its id. The tools only ever see ids.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListStreamsToolResult, ListStreamsToolResultStream,
@@ -22,35 +22,34 @@ pub(crate) fn stream_id_the_stream_argument_names_on_the_running_runtime(
 ) -> Result<String, TatolabCommandFailure> {
     let list_streams_result: ListStreamsToolResult =
         call_one_stream_action_tool(StreamActionTool::ListStreams, serde_json::Map::new())?;
-    let resolved_working_directory = std::env::current_dir()
-        .and_then(|working_directory| working_directory.canonicalize())
-        .map_err(|io_failure| {
+    stream_id_the_stream_argument_names(&list_streams_result.streams, stream_argument, || {
+        let working_directory = crate::caller_working_directory()?;
+        working_directory.canonicalize().map_err(|io_failure| {
             TatolabCommandFailure::refused(format!(
-                "cannot read the working directory: {io_failure}"
+                "cannot resolve the working directory {}: {io_failure}",
+                working_directory.display()
             ))
-        })?;
-    stream_id_the_stream_argument_names(
-        &list_streams_result.streams,
-        stream_argument,
-        &resolved_working_directory,
-    )
-    .map_err(TatolabCommandFailure::refused)
+        })
+    })
 }
 
 /// The id of the one stream of `listed_streams` that `stream_argument` names — its id, else a
 /// display name only it holds — or, when it is omitted or empty, the one whose project directory
-/// is `resolved_working_directory`; else why not, listing the candidates.
+/// is the one `resolved_working_directory` reads; else why not, listing the candidates.
 pub(crate) fn stream_id_the_stream_argument_names(
     listed_streams: &[ListStreamsToolResultStream],
     stream_argument: Option<&str>,
-    resolved_working_directory: &Path,
-) -> Result<String, String> {
+    resolved_working_directory: impl FnOnce() -> Result<PathBuf, TatolabCommandFailure>,
+) -> Result<String, TatolabCommandFailure> {
     match stream_argument.filter(|stream_argument| !stream_argument.is_empty()) {
         Some(stream_argument) => {
             stream_id_named_by_id_or_display_name(listed_streams, stream_argument)
         }
-        None => stream_id_recorded_from_the_directory(listed_streams, resolved_working_directory),
+        None => {
+            stream_id_recorded_from_the_directory(listed_streams, &resolved_working_directory()?)
+        }
     }
+    .map_err(TatolabCommandFailure::refused)
 }
 
 fn stream_id_named_by_id_or_display_name(
@@ -63,47 +62,66 @@ fn stream_id_named_by_id_or_display_name(
     {
         return Ok(listed_stream.stream.clone());
     }
-    let holding_the_display_name: Vec<&ListStreamsToolResultStream> = listed_streams
-        .iter()
-        .filter(|listed_stream| listed_stream.display_name == stream_argument)
-        .collect();
-    match holding_the_display_name.as_slice() {
-        [the_one] => Ok(the_one.stream.clone()),
-        [] => Err(format!(
-            "no stream in this runtime has the id or the display name \"{stream_argument}\"{}",
-            every_stream_listed_as_a_candidate(listed_streams)
-        )),
-        several => Err(format!(
-            "{} streams are shown as \"{stream_argument}\"; name one by its id:\n{}",
-            several.len(),
-            candidates_listed(several.iter().copied())
-        )),
-    }
+    the_one_candidates_stream_id(
+        listed_streams,
+        |listed_stream| listed_stream.display_name == stream_argument,
+        || {
+            format!(
+                "no stream in this runtime has the id or the display name \"{stream_argument}\"{}",
+                every_stream_listed_as_a_candidate(listed_streams)
+            )
+        },
+        |several| {
+            format!("{several} streams are shown as \"{stream_argument}\"; name one by its id")
+        },
+    )
 }
 
 fn stream_id_recorded_from_the_directory(
     listed_streams: &[ListStreamsToolResultStream],
     resolved_working_directory: &Path,
 ) -> Result<String, String> {
-    let recorded_from_the_directory: Vec<&ListStreamsToolResultStream> = listed_streams
-        .iter()
-        .filter(|listed_stream| {
+    let directory = resolved_working_directory.display();
+    the_one_candidates_stream_id(
+        listed_streams,
+        |listed_stream| {
             listed_stream.location.as_ref().is_some_and(|location| {
                 location.project_directory.as_path() == resolved_working_directory
             })
-        })
+        },
+        || {
+            format!(
+                "no stream in this runtime was loaded from {directory}; name one by its id or its \
+                 display name{}",
+                every_stream_listed_as_a_candidate(listed_streams)
+            )
+        },
+        |several| {
+            format!(
+                "{several} streams in this runtime were loaded from {directory}; name one by its id"
+            )
+        },
+    )
+}
+
+/// The id of the one stream of `listed_streams` that `is_a_candidate`; else `refusal_for_none`,
+/// or `heading_for_several` over the candidates, one per line.
+fn the_one_candidates_stream_id(
+    listed_streams: &[ListStreamsToolResultStream],
+    is_a_candidate: impl Fn(&ListStreamsToolResultStream) -> bool,
+    refusal_for_none: impl FnOnce() -> String,
+    heading_for_several: impl FnOnce(usize) -> String,
+) -> Result<String, String> {
+    let candidates: Vec<&ListStreamsToolResultStream> = listed_streams
+        .iter()
+        .filter(|listed_stream| is_a_candidate(listed_stream))
         .collect();
-    let directory = resolved_working_directory.display();
-    match recorded_from_the_directory.as_slice() {
+    match candidates.as_slice() {
         [the_one] => Ok(the_one.stream.clone()),
-        [] => Err(format!(
-            "no stream in this runtime was loaded from {directory}; name one by its id or its \
-             display name{}",
-            every_stream_listed_as_a_candidate(listed_streams)
-        )),
+        [] => Err(refusal_for_none()),
         several => Err(format!(
-            "{} streams in this runtime were loaded from {directory}; name one by its id:\n{}",
-            several.len(),
+            "{}:\n{}",
+            heading_for_several(several.len()),
             candidates_listed(several.iter().copied())
         )),
     }
@@ -180,12 +198,25 @@ mod tests {
         ]
     }
 
+    /// What `stream_id_the_stream_argument_names` answers over `listed_streams` from
+    /// `working_directory`, a refusal read as its message.
+    fn resolved_over(
+        listed_streams: &[ListStreamsToolResultStream],
+        stream_argument: Option<&str>,
+        working_directory: &str,
+    ) -> Result<String, String> {
+        stream_id_the_stream_argument_names(listed_streams, stream_argument, || {
+            Ok(PathBuf::from(working_directory))
+        })
+        .map_err(|refusal| {
+            refusal
+                .message_for_the_user
+                .expect("a refusal names its reason")
+        })
+    }
+
     fn resolved(stream_argument: Option<&str>, working_directory: &str) -> Result<String, String> {
-        stream_id_the_stream_argument_names(
-            &the_machines_streams(),
-            stream_argument,
-            Path::new(working_directory),
-        )
+        resolved_over(&the_machines_streams(), stream_argument, working_directory)
     }
 
     #[test]
@@ -216,11 +247,7 @@ mod tests {
         ));
 
         assert_eq!(
-            stream_id_the_stream_argument_names(
-                &listed_streams,
-                Some("hello-main-3f2a9c"),
-                Path::new("/")
-            ),
+            resolved_over(&listed_streams, Some("hello-main-3f2a9c"), "/"),
             Ok("hello-main-3f2a9c".to_owned())
         );
     }
@@ -256,6 +283,17 @@ mod tests {
     }
 
     #[test]
+    fn a_named_stream_never_reads_the_working_directory() {
+        let resolved = stream_id_the_stream_argument_names(
+            &the_machines_streams(),
+            Some("Hello camera"),
+            || panic!("an explicit argument needs no working directory"),
+        );
+
+        assert_eq!(resolved.unwrap(), "hello-main-3f2a9c");
+    }
+
+    #[test]
     fn an_omitted_argument_is_the_one_stream_recorded_from_the_working_directory() {
         assert_eq!(
             resolved(None, "/srv/hello"),
@@ -278,7 +316,7 @@ mod tests {
         )];
 
         assert_eq!(
-            stream_id_the_stream_argument_names(&listed_streams, None, Path::new("/srv/rig")),
+            resolved_over(&listed_streams, None, "/srv/rig"),
             Ok("rig-back-9f8e7d".to_owned())
         );
     }
@@ -315,7 +353,7 @@ mod tests {
     #[test]
     fn a_runtime_holding_no_stream_says_so() {
         assert_eq!(
-            stream_id_the_stream_argument_names(&[], None, Path::new("/srv/hello")),
+            resolved_over(&[], None, "/srv/hello"),
             Err(
                 "no stream in this runtime was loaded from /srv/hello; name one by its id or its \
                  display name. This runtime holds no stream."

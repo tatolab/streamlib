@@ -34,6 +34,7 @@ use crate::runtime_log_files_reader::{
     RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadFailure, RuntimeLogReadStep,
     RuntimeLogRecordFilters, RuntimeLogRecordsReader,
 };
+use crate::stream_actions_on_the_runtime::{STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP};
 use crate::stream_argument_resolution_through_the_listing::stream_id_the_stream_argument_names_on_the_running_runtime;
 use crate::stream_log_records_from_the_runtime::{
     LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
@@ -57,9 +58,12 @@ pub(crate) struct RuntimeLogsVerbArguments {
     /// Enumerate the stream logs on disk instead of reading one.
     #[arg(long = "list")]
     pub(crate) list_stream_logs_on_disk: bool,
-    /// The loaded stream whose records to read from the runtime: its id, or a display name only
-    /// it holds (default: the stream loaded from the working directory).
-    #[arg(long = "stream", value_name = "STREAM")]
+    #[arg(
+        long = "stream",
+        value_name = "STREAM",
+        help = STREAM_ARGUMENT_HELP,
+        long_help = STREAM_ARGUMENT_LONG_HELP
+    )]
     pub(crate) requested_stream: Option<String>,
     /// Follow as new records land (like `tail -F`): the log file across rotations, or with
     /// --stream the runtime's records by sequence number.
@@ -205,48 +209,53 @@ pub(crate) fn run_runtime_logs_verb(
         .requested_stream
         .as_deref()
         .filter(|requested_stream| !requested_stream.is_empty());
-    if stream_argument.is_some() || on_disk_only_flags_given.is_empty() {
-        if !on_disk_only_flags_given.is_empty() {
-            return Err(TatolabCommandFailure::refused(format!(
-                "`--stream` reads a loaded stream's records from the runtime, which takes no {}. \
-                 Drop `--stream` to read an on-disk log file instead.",
-                on_disk_only_flags_given.join(", ")
-            )));
+    match (stream_argument, on_disk_only_flags_given.is_empty()) {
+        (Some(_), false) => Err(TatolabCommandFailure::refused(format!(
+            "`--stream` reads a loaded stream's records from the runtime, which takes no {}. \
+             Drop `--stream` to read an on-disk log file instead.",
+            on_disk_only_flags_given.join(", ")
+        ))),
+        (_, true) => print_the_records_of_a_loaded_stream(stream_argument, &on_disk_request),
+        (None, false) => {
+            route_ctrl_c_to_the_end_of_the_read()?;
+            let standard_output = io::stdout();
+            let mut buffered_standard_output = io::BufWriter::new(standard_output.lock());
+            print_stream_log_files_on_disk(
+                &log_dir(),
+                &on_disk_request,
+                &mut buffered_standard_output,
+                &mut io::stderr(),
+                &an_interrupt_was_delivered_during_the_read,
+                RUNTIME_LOG_FOLLOW_POLL_INTERVAL,
+            )
         }
-        let requested_stream =
-            stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
-        let requested_stream = requested_stream.as_str();
-        let local_api_socket_path = local_api_socket_of_the_running_runtime()?;
-        route_ctrl_c_to_the_end_of_the_read()?;
-        let mut local_api_connection =
-            LocalApiConnection::open(&local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)?;
-        let standard_output = io::stdout();
-        let mut buffered_standard_output = io::BufWriter::new(standard_output.lock());
-        return print_stream_log_records_read_from_the_runtime(
-            requested_stream,
-            &mut |after| {
-                local_api_connection.call_tool(
-                    LOGS_TOOL_NAME,
-                    logs_tool_arguments_after(requested_stream, after),
-                )
-            },
-            &on_disk_request,
-            &mut buffered_standard_output,
-            &mut io::stderr(),
-            &an_interrupt_was_delivered_during_the_read,
-            STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL,
-        );
     }
+}
+
+/// The records the runtime holds for the loaded stream `stream_argument` names, or the one loaded
+/// from the working directory, through the request's filters.
+fn print_the_records_of_a_loaded_stream(
+    stream_argument: Option<&str>,
+    stream_log_request: &OnDiskRuntimeLogRequest,
+) -> Result<u8, TatolabCommandFailure> {
+    let stream_id = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
+    let local_api_socket_path = local_api_socket_of_the_running_runtime()?;
     route_ctrl_c_to_the_end_of_the_read()?;
+    let mut local_api_connection =
+        LocalApiConnection::open(&local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)?;
     let standard_output = io::stdout();
     let mut buffered_standard_output = io::BufWriter::new(standard_output.lock());
-    print_stream_log_files_on_disk(
-        &log_dir(),
-        &on_disk_request,
+    print_stream_log_records_read_from_the_runtime(
+        &stream_id,
+        &mut |after| {
+            local_api_connection
+                .call_tool(LOGS_TOOL_NAME, logs_tool_arguments_after(&stream_id, after))
+        },
+        stream_log_request,
         &mut buffered_standard_output,
         &mut io::stderr(),
         &an_interrupt_was_delivered_during_the_read,
-        RUNTIME_LOG_FOLLOW_POLL_INTERVAL,
+        STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL,
     )
 }
 
