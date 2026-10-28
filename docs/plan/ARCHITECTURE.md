@@ -255,7 +255,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the location alone, `<folder>-<function>-<hash>`: the project directory's last component and
   the function's name, each cast as every exposed name is (§Networking), and the first six hex
   digits of a SHA-256 over the location, folder and function truncated so the id fits the
-  cast's 63 characters with the hash whole. Two locations whose ids would be equal are refused
+  cast's 63 characters with the hash whole; a folder or function casting to nothing is left
+  out, so no spelling refuses a stream. Two locations whose ids would be equal are refused
   naming both. The stream id is the stream part of the address and of the broadcast
   (§Networking), the key of the stream's record and logs, and what every local-API tool naming
   a stream takes. A moved project directory is a new stream. Its **display name** is a label
@@ -263,7 +264,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   name, `--name` or `run_stream {name}` sets it at a load, `rename_stream {stream,
   display_name}` or `tatolab rename <stream> <display name>` changes it, and a re-load without
   `--name` keeps it. A CLI verb's stream argument is a stream id, or a display name exactly one
-  stream holds; omitted, it is the one stream loaded from the working directory; an ambiguous
+  stream holds; omitted, it is the one stream recorded from the working directory — stopped and failed
+  included; an ambiguous
   or unmatched argument, or a directory with none or several, is refused listing the
   candidates' ids and display names. `run_stream` returns the id and the display name;
   `list_streams` lists each stream's id, display name, location, state (and why, when failed)
@@ -274,19 +276,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stream's ports (owner, 2026-10-27).
 - **DECIDED** — Every loaded stream persists. A stream loaded into the runtime — by
   `Tatolab.app`, `tatolab run` or an agent's `run_stream` — is recorded and re-loaded at every
-  start; there is no attached stream, `run_stream` takes no `keep`,
+  start unless stopped or failed; there is no attached stream, `run_stream` takes no `keep`,
   `tatolab run` has no `-d`, and a closing `/mcp/stdio` connection unloads nothing. A stream is
   running, stopped or failed — the two-crashes-in-a-row and cannot-re-load rules apply to every
   stream — and only `stop` / `stop_stream` and `rm` / `remove_stream` end one. A load of a
   location already loaded or recorded replaces that stream under the same id, keeping its
-  display name and the owner's exposure rulings; the running stream is unloaded only once the
+  display name unless the load gives one, and the owner's exposure rulings; the running stream is unloaded only once the
   compile succeeded, and a refused load re-loads it. `tatolab run` loads and returns, printing
   the stream id, the display name and how to follow it (`tatolab logs -f`); it exits 0 once
   the load is accepted and 1 naming the reason when it is refused. `tatolab logs -f` follows a
   stream's records and `tatolab dev` follows them and re-loads on save; Ctrl-C ends the
-  following, never the stream. A runtime crash ends `logs -f` and `dev` with an error naming
-  it; `dev` then waits for the runtime, which re-loads the stream from its record, and follows
-  again. Owner, 2026-10-27. [stream-identity-and-persistence]
+  following, never the stream. A runtime crash ends `logs -f` with an error naming it; `dev`
+  names the crash and keeps running, waits for the runtime, which re-loads the stream from its
+  record, and follows again. Owner, 2026-10-27. [stream-identity-and-persistence]
   Rejected: `run` following the stream with Ctrl-C detaching only the terminal — Ctrl-C would
   read as stop; `dev` and `logs -f` follow (owner, 2026-10-27).
 - **DECIDED** — Several streams in one project or package: a stream is a decorated function,
@@ -3533,7 +3535,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   generated schema and the prompt fixture — and no mesh key. Every channel reserves one
   subscriber slot beyond its fixed cap, the exposed-port publisher's, and no other.
   [zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; package-split-and-lend — SHIPPED
-  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853]
+  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853; amended by
+  stream-identity-and-persistence: `rename_stream` is a stream action]
 - **DECIDED** — The api-server is engine-side infrastructure in the `runtime/` tree: it is
   hosted — statically linked, never dlopen'd — by `tatolabd` (and by the `streamlib` crate
   for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —
@@ -3551,7 +3554,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
   tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
-  #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description]
+  #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description; amended by
+  stream-identity-and-persistence: `rename` is a stream verb]
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
   local API socket and the iceoryx2 domain. On Linux it is

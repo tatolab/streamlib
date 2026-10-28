@@ -13,7 +13,7 @@ on the label, or on anything but where its code lives.
 ## Decision
 
 - A stream loaded into the runtime simply exists, however it was loaded: from `Tatolab.app`,
-  `tatolab run`, or an agent's `run_stream`. Every load is recorded and comes back at every start.
+  `tatolab run`, or an agent's `run_stream`. Every load is recorded and comes back at every start unless stopped or failed.
   Following a stream — `tatolab logs -f`, `tatolab dev` — is the client's view of it, and
   ending the view never ends the stream; only `stop` and `rm` do. `keep`, `run -d` and the
   attached state go away.
