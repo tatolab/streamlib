@@ -289,11 +289,15 @@ Rust doc that `cargo xtask generate-built-in-node-classes` renders into `_built_
 
 ## Tickets
 
-Derived by `/derive-tickets`, as two tracer bullets, identity first:
-1. **Stream identity**, a new ticket: location, id, display name, `rename`, every key and
-   address by id, and CLI resolution.
-2. **#2950, persistence**: `keep`, `-d` and attached removed; `run` returns; `logs -f` and `dev`
-   follow; the tests rewritten. #2950's body is rewritten then.
+Milestone: **Streams persist and keep a stable address**. Identity is split at the seam
+between keying and naming, so each ticket fits one context window.
+1. **#2957: the stream id.** Location, id, every key and address by id, the schema-3
+   record and the `streams` table. Blocked by: none.
+2. **#2958: the display name.** The display name, `rename_stream` / `tatolab rename`, and
+   CLI stream arguments by id, display name or working directory. Blocked by: #2957.
+3. **#2950: persistence.** `keep`, `-d` and attached removed; `run` returns; `logs -f` and
+   `dev` follow; the tests and docs rewritten; it owns the REMOVED list. Blocked by: #2957,
+   #2958.
 
 ## REMOVED
 
