@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.57.0](https://github.com/tatolab/streamlib/compare/v0.56.0...v0.57.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** a stream's display name is renamable, and a CLI stream argument resolves by id, display name or working directory ([#2962](https://github.com/tatolab/streamlib/issues/2962))
+
+### Features
+
+* **runtime:** a stream's display name is renamable, and a CLI stream argument resolves by id, display name or working directory ([#2962](https://github.com/tatolab/streamlib/issues/2962)) ([1f928a5](https://github.com/tatolab/streamlib/commit/1f928a5efdd89a56e4f2a682ccbdc35033f6c65e))
+
 ## [0.56.0](https://github.com/tatolab/streamlib/compare/v0.55.8...v0.56.0) (2026-10-28)
 
 
