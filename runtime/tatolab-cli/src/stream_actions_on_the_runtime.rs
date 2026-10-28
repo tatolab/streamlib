@@ -101,19 +101,19 @@ pub(crate) struct StreamLoadArguments {
     /// Show the stream under this display name instead of its function's; a re-load without it
     /// keeps the name the stream has.
     #[arg(long = "name", value_name = "NAME")]
-    pub(crate) requested_stream_name: Option<OsString>,
+    pub(crate) requested_display_name: Option<OsString>,
 }
 
 /// What `run` and `dev` ask the runtime to load: a project, the stream function in it, and the
-/// name to load it under.
+/// display name to show it under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StreamLoadRequest {
     /// The absolute project directory the runtime compiles in.
     pub(crate) project_directory: String,
     /// TARGET or FILE verbatim; `None` for the sole @stream in stream.py.
     pub(crate) stream_function: Option<String>,
-    /// The name asked for; `None` for the function's own.
-    pub(crate) stream_name: Option<String>,
+    /// The display name asked for; `None` keeps the one the stream has.
+    pub(crate) display_name: Option<String>,
 }
 
 impl StreamLoadRequest {
@@ -149,11 +149,11 @@ impl StreamLoadRequest {
                 .filter(|stream_function| !stream_function.is_empty())
                 .map(|stream_function| utf8_text_of("the stream to load", stream_function))
                 .transpose()?,
-            stream_name: stream_load_arguments
-                .requested_stream_name
+            display_name: stream_load_arguments
+                .requested_display_name
                 .as_ref()
-                .filter(|stream_name| !stream_name.is_empty())
-                .map(|stream_name| utf8_text_of("--name", stream_name))
+                .filter(|display_name| !display_name.is_empty())
+                .map(|display_name| utf8_text_of("--name", display_name))
                 .transpose()?,
         })
     }
@@ -173,8 +173,8 @@ impl StreamLoadRequest {
             run_stream_arguments
                 .insert("stream_function".to_owned(), stream_function.clone().into());
         }
-        if let Some(stream_name) = &self.stream_name {
-            run_stream_arguments.insert("name".to_owned(), stream_name.clone().into());
+        if let Some(display_name) = &self.display_name {
+            run_stream_arguments.insert("name".to_owned(), display_name.clone().into());
         }
         run_stream_arguments.insert("keep".to_owned(), keep.into());
         run_stream_arguments
@@ -531,13 +531,13 @@ mod tests {
     fn load_arguments(
         requested_stream_target: Option<&str>,
         requested_entry_file: Option<&str>,
-        requested_stream_name: Option<&str>,
+        requested_display_name: Option<&str>,
     ) -> StreamLoadArguments {
         StreamLoadArguments {
             requested_stream_target: requested_stream_target.map(OsString::from),
             requested_entry_file: requested_entry_file.map(OsString::from),
             requested_project_directory: None,
-            requested_stream_name: requested_stream_name.map(OsString::from),
+            requested_display_name: requested_display_name.map(OsString::from),
         }
     }
 
