@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.56.0](https://github.com/tatolab/streamlib/compare/v0.55.8...v0.56.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** key and address a stream by a stream id computed from its location ([#2960](https://github.com/tatolab/streamlib/issues/2960))
+
+### Features
+
+* **runtime:** key and address a stream by a stream id computed from its location ([#2960](https://github.com/tatolab/streamlib/issues/2960)) ([8b6a09d](https://github.com/tatolab/streamlib/commit/8b6a09d665b520282d3b611f28ec70efa90efdf1))
+
 ## [0.55.8](https://github.com/tatolab/streamlib/compare/v0.55.7...v0.55.8) (2026-10-28)
 
 
