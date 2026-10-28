@@ -153,7 +153,8 @@ fn the_logs_help_names_both_modes_and_every_flag() {
         "[RUNTIME_ID-STREAM]",
         "exactly as the runtime mirrored it",
         "as the runtime holds them",
-        "Omit with --list or --stream",
+        "Omit it to read a loaded stream's records from the runtime",
+        "the one loaded from the working directory",
         "--list",
         "--stream <STREAM>",
         "-f, --follow",
@@ -375,9 +376,14 @@ mod against_an_isolated_machine {
 
     use super::common::isolated_machine_directories::IsolatedMachineDirectories;
     use super::common::runtime_log_line_fixtures::a_log_record;
-    use super::common::stub_local_api_server::{StubLocalApiScript, StubStreamLogRecords};
+    use super::common::stub_local_api_server::{
+        StubLocalApiScript, StubStreamLogRecords, StubToolAnswer,
+    };
     use super::common::tatolab_binary_run::{standard_error_text, standard_output_text};
     use super::{FollowingTatolab, rendered_line};
+
+    /// The id of the one stream the stub runtime lists, shown as `camera`.
+    const DESK_CAMERA_STREAM_ID: &str = "desk-camera-0a1b2c";
 
     fn records_saying(messages: &[&str]) -> Vec<serde_json::Value> {
         messages
@@ -386,17 +392,42 @@ mod against_an_isolated_machine {
             .collect()
     }
 
+    /// A runtime holding one stream, shown as `camera` and loaded from `project_directory`,
+    /// whose `logs` pages `records` two at a time.
+    fn a_runtime_holding_the_desk_camera_paging(
+        records: Vec<serde_json::Value>,
+        project_directory: &std::path::Path,
+    ) -> StubLocalApiScript {
+        StubLocalApiScript {
+            stream_log_records: Some(StubStreamLogRecords {
+                records,
+                page_size: 2,
+            }),
+            tool_answers_by_name: std::collections::HashMap::from([(
+                "list_streams".to_owned(),
+                vec![StubToolAnswer::tool_result(
+                    &json!({"streams": [{
+                        "stream": DESK_CAMERA_STREAM_ID, "display_name": "camera", "state": "kept",
+                        "location": {"project_directory": project_directory,
+                                     "stream_function": "stream:camera"},
+                        "node_count": 3, "failed_because": null,
+                    }]})
+                    .to_string(),
+                )],
+            )]),
+            ..StubLocalApiScript::default()
+        }
+    }
+
     #[test]
     fn logs_of_a_stream_reads_its_records_from_the_runtime_page_by_page_to_the_newest() {
         let isolated_machine_directories = IsolatedMachineDirectories::new();
-        let stub_local_api_server =
-            isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
-                stream_log_records: Some(StubStreamLogRecords {
-                    records: records_saying(&["started", "running", "slowing"]),
-                    page_size: 2,
-                }),
-                ..StubLocalApiScript::default()
-            });
+        let stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
+            a_runtime_holding_the_desk_camera_paging(
+                records_saying(&["started", "running", "slowing"]),
+                std::path::Path::new("/srv/desk"),
+            ),
+        );
 
         let read = isolated_machine_directories.run_tatolab(&["logs", "--stream", "camera"]);
 
@@ -414,10 +445,72 @@ mod against_an_isolated_machine {
         assert_eq!(
             stub_local_api_server.recorded_arguments_of("logs"),
             [
-                json!({"stream": "camera", "after": 0}),
-                json!({"stream": "camera", "after": 2}),
-                json!({"stream": "camera", "after": 3}),
-            ]
+                json!({"stream": DESK_CAMERA_STREAM_ID, "after": 0}),
+                json!({"stream": DESK_CAMERA_STREAM_ID, "after": 2}),
+                json!({"stream": DESK_CAMERA_STREAM_ID, "after": 3}),
+            ],
+            "the display name resolves to the id, which is all the tool sees"
+        );
+    }
+
+    #[test]
+    fn logs_with_no_stream_and_no_file_reads_the_stream_loaded_from_the_working_directory() {
+        let project_directory = tempfile::tempdir().unwrap();
+        let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
+            a_runtime_holding_the_desk_camera_paging(
+                records_saying(&["started"]),
+                &canonical_project_directory,
+            ),
+        );
+
+        let read = isolated_machine_directories
+            .tatolab_command(&["logs"])
+            .current_dir(project_directory.path())
+            .output()
+            .unwrap();
+
+        assert!(read.status.success(), "{}", standard_error_text(&read));
+        assert_eq!(
+            standard_output_text(&read),
+            format!("{}\n", rendered_line("started", " INFO"))
+        );
+        assert_eq!(
+            stub_local_api_server.recorded_arguments_of("logs")[0],
+            json!({"stream": DESK_CAMERA_STREAM_ID, "after": 0})
+        );
+    }
+
+    #[test]
+    fn logs_with_no_stream_outside_every_streams_project_is_refused_listing_the_streams() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
+            a_runtime_holding_the_desk_camera_paging(
+                records_saying(&["started"]),
+                std::path::Path::new("/srv/desk"),
+            ),
+        );
+
+        let refused = isolated_machine_directories
+            .tatolab_command(&["logs"])
+            .current_dir(elsewhere.path())
+            .output()
+            .unwrap();
+
+        assert_eq!(refused.status.code(), Some(1));
+        assert_eq!(
+            standard_error_text(&refused),
+            format!(
+                "error: no stream in this runtime was loaded from {}; name one by its id or its \
+                 display name:\n  {DESK_CAMERA_STREAM_ID}  \"camera\"\n",
+                elsewhere.path().canonicalize().unwrap().display()
+            )
+        );
+        assert_eq!(
+            stub_local_api_server.recorded_arguments_of("logs"),
+            Vec::<serde_json::Value>::new()
         );
     }
 
@@ -425,14 +518,12 @@ mod against_an_isolated_machine {
     #[test]
     fn logs_of_a_stream_followed_reads_on_across_pages_by_sequence_number_until_ctrl_c() {
         let isolated_machine_directories = IsolatedMachineDirectories::new();
-        let stub_local_api_server =
-            isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
-                stream_log_records: Some(StubStreamLogRecords {
-                    records: records_saying(&["first", "second", "third"]),
-                    page_size: 2,
-                }),
-                ..StubLocalApiScript::default()
-            });
+        let stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
+            a_runtime_holding_the_desk_camera_paging(
+                records_saying(&["first", "second", "third"]),
+                std::path::Path::new("/srv/desk"),
+            ),
+        );
         let following_tatolab = FollowingTatolab::spawn(
             isolated_machine_directories.tatolab_command(&["logs", "--stream", "camera", "-f"]),
         );

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab logs`: with RUNTIME_ID-STREAM, one loaded stream's on-disk JSONL log rendered as the
-//! runtime mirrored it; with `--list`, the stream logs on disk; with `--stream`, a loaded stream's
-//! records as the machine's runtime holds them, read by sequence number.
+//! runtime mirrored it; with `--list`, the stream logs on disk; otherwise a loaded stream's records
+//! as the machine's runtime holds them, read by sequence number — the stream `--stream` names, by
+//! its id or a display name only it holds, or the one loaded from the working directory.
 
 use std::fmt::Write as _;
 use std::io::{self, Write};
@@ -33,6 +34,7 @@ use crate::runtime_log_files_reader::{
     RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadFailure, RuntimeLogReadStep,
     RuntimeLogRecordFilters, RuntimeLogRecordsReader,
 };
+use crate::stream_argument_resolution_through_the_listing::stream_id_the_stream_argument_names_on_the_running_runtime;
 use crate::stream_log_records_from_the_runtime::{
     LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
     render_stream_log_records_page, stream_log_records_page_from,
@@ -48,14 +50,15 @@ const LATEST_STARTED_AT_YEAR_RENDERED_AS_A_DATE: i32 = 9999;
 /// `tatolab logs`' flags.
 #[derive(Args, Debug)]
 pub(crate) struct RuntimeLogsVerbArguments {
-    /// The stream log to read: `<runtime_id>-<stream>`, as --list names it. Omit with --list or
-    /// --stream.
+    /// The stream log on disk to read: `<runtime_id>-<stream>`, as --list names it. Omit it to
+    /// read a loaded stream's records from the runtime.
     #[arg(value_name = "RUNTIME_ID-STREAM")]
     pub(crate) stream_log_instance_name: Option<String>,
     /// Enumerate the stream logs on disk instead of reading one.
     #[arg(long = "list")]
     pub(crate) list_stream_logs_on_disk: bool,
-    /// Read this loaded stream's records from the running runtime instead of a file on disk.
+    /// The loaded stream whose records to read from the runtime: its id, or a display name only
+    /// it holds (default: the stream loaded from the working directory).
     #[arg(long = "stream", value_name = "STREAM")]
     pub(crate) requested_stream: Option<String>,
     /// Follow as new records land (like `tail -F`): the log file across rotations, or with
@@ -188,21 +191,21 @@ impl From<&RuntimeLogsVerbArguments> for OnDiskRuntimeLogRequest {
     }
 }
 
-/// `tatolab logs`: `--stream` reads a loaded stream's records from the runtime, anything else
-/// reads the disk.
+/// `tatolab logs`: a file's name or `--list` reads the disk; anything else reads a loaded
+/// stream's records from the runtime — `--stream`'s, or the working directory's.
 ///
-/// A file's name and `--list` have no meaning against the runtime, so asking for both is refused
-/// rather than silently ignoring the flag.
+/// A file's name and `--list` have no meaning against the runtime, so asking for them with
+/// `--stream` is refused rather than silently ignoring the flag.
 pub(crate) fn run_runtime_logs_verb(
     logs_arguments: RuntimeLogsVerbArguments,
 ) -> Result<u8, TatolabCommandFailure> {
     let on_disk_request = OnDiskRuntimeLogRequest::from(&logs_arguments);
-    if let Some(requested_stream) = logs_arguments
+    let on_disk_only_flags_given = on_disk_request.on_disk_only_flags_given();
+    let stream_argument = logs_arguments
         .requested_stream
         .as_deref()
-        .filter(|requested_stream| !requested_stream.is_empty())
-    {
-        let on_disk_only_flags_given = on_disk_request.on_disk_only_flags_given();
+        .filter(|requested_stream| !requested_stream.is_empty());
+    if stream_argument.is_some() || on_disk_only_flags_given.is_empty() {
         if !on_disk_only_flags_given.is_empty() {
             return Err(TatolabCommandFailure::refused(format!(
                 "`--stream` reads a loaded stream's records from the runtime, which takes no {}. \
@@ -210,6 +213,9 @@ pub(crate) fn run_runtime_logs_verb(
                 on_disk_only_flags_given.join(", ")
             )));
         }
+        let requested_stream =
+            stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
+        let requested_stream = requested_stream.as_str();
         let local_api_socket_path = local_api_socket_of_the_running_runtime()?;
         route_ctrl_c_to_the_end_of_the_read()?;
         let mut local_api_connection =

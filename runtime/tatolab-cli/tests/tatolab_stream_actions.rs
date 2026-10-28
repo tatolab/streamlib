@@ -1,15 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab run -d`, `stop`, `start`, `rm`, `streams` and `expose` run as a user runs them,
-//! against a stub local API at an isolated machine's fixed socket: the tool each calls, the
-//! arguments it sends, the one line or table it prints, and how a refusal reads.
+//! `tatolab run -d`, `stop`, `start`, `rm`, `rename`, `streams` and `expose` run as a user runs
+//! them, against a stub local API at an isolated machine's fixed socket: the tool each calls, the
+//! arguments it sends, the one line or table it prints, and how a refusal reads. A verb naming one
+//! stream resolves its argument through `list_streams` — by id, by a display name one stream
+//! holds, or by the working directory — and the tool sees the id alone.
 
 #![cfg(any(target_os = "linux", feature = "machine-directories-under-a-test-root"))]
 
 mod common;
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use serde_json::json;
 
@@ -20,18 +23,65 @@ use common::stub_local_api_server::{
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
-/// A machine whose runtime answers `tool_name` with `tool_answer`.
-fn a_runtime_answering(
+/// One stream as `list_streams` lists it, loaded from `project_directory`.
+fn listed_stream(
+    stream_id: &str,
+    display_name: &str,
+    project_directory: &Path,
+) -> serde_json::Value {
+    json!({
+        "stream": stream_id, "display_name": display_name, "state": "kept",
+        "location": {"project_directory": project_directory, "stream_function": "stream:main"},
+        "node_count": 3, "failed_because": null,
+    })
+}
+
+/// A machine whose runtime lists `listed_streams` and answers `tool_name` with `tool_answer`.
+fn a_runtime_listing_and_answering(
+    listed_streams: Vec<serde_json::Value>,
     tool_name: &str,
     tool_answer: StubToolAnswer,
 ) -> (IsolatedMachineDirectories, StubLocalApiServer) {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let stub_local_api_server =
         isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
-            tool_answers_by_name: HashMap::from([(tool_name.to_owned(), vec![tool_answer])]),
+            tool_answers_by_name: HashMap::from([
+                (
+                    "list_streams".to_owned(),
+                    vec![StubToolAnswer::tool_result(
+                        &json!({ "streams": listed_streams }).to_string(),
+                    )],
+                ),
+                (tool_name.to_owned(), vec![tool_answer]),
+            ]),
             ..StubLocalApiScript::default()
         });
     (isolated_machine_directories, stub_local_api_server)
+}
+
+/// A machine whose runtime holds the one stream `cam` and answers `tool_name` with `tool_answer`.
+fn a_runtime_answering(
+    tool_name: &str,
+    tool_answer: StubToolAnswer,
+) -> (IsolatedMachineDirectories, StubLocalApiServer) {
+    a_runtime_listing_and_answering(
+        vec![listed_stream("cam", "Camera", Path::new("/srv/cam"))],
+        tool_name,
+        tool_answer,
+    )
+}
+
+/// Run `tatolab_arguments` in `working_directory` to its exit.
+fn run_tatolab_in(
+    isolated_machine_directories: &IsolatedMachineDirectories,
+    working_directory: &Path,
+    tatolab_arguments: &[&str],
+) -> std::process::Output {
+    isolated_machine_directories
+        .tatolab_command(tatolab_arguments)
+        .current_dir(working_directory)
+        .output()
+        .unwrap()
 }
 
 /// Run `tatolab_arguments` to a successful exit, answering what it printed.
@@ -427,10 +477,10 @@ fn a_kept_restriction_the_runtime_refused_for_its_record_exits_one_printing_noth
 }
 
 #[test]
-fn a_stream_the_runtime_does_not_hold_is_refused_in_its_words() {
-    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
+fn a_stream_the_runtime_does_not_hold_is_refused_listing_the_streams_before_any_action() {
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "stop_stream",
-        StubToolAnswer::tool_failure("no stream `nope`; this runtime holds: cam"),
+        StubToolAnswer::tool_result(&stop_stream_tool_result_text("cam", true)),
     );
 
     let refused = isolated_machine_directories.run_tatolab(&["stop", "nope"]);
@@ -438,6 +488,207 @@ fn a_stream_the_runtime_does_not_hold_is_refused_in_its_words() {
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         standard_error_text(&refused),
-        "error: stop_stream failed: no stream `nope`; this runtime holds: cam\n"
+        "error: no stream in this runtime has the id or the display name \"nope\":\n  cam  \
+         \"Camera\"\n"
+    );
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("stop_stream"),
+        Vec::<serde_json::Value>::new()
+    );
+}
+
+#[test]
+fn a_display_name_one_stream_holds_reaches_the_tool_as_that_streams_id() {
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
+        vec![
+            listed_stream("hello-main-3f2a9c", "Hello camera", Path::new("/srv/hello")),
+            listed_stream("desk-main-0a1b2c", "Desk", Path::new("/srv/desk")),
+        ],
+        "stop_stream",
+        StubToolAnswer::tool_result(&stop_stream_tool_result_text("hello-main-3f2a9c", true)),
+    );
+
+    printed_by_a_successful(&isolated_machine_directories, &["stop", "Hello camera"]);
+
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("stop_stream"),
+        [json!({"stream": "hello-main-3f2a9c"})]
+    );
+}
+
+/// In a project directory one stream was loaded from, every verb naming a stream acts on it
+/// without naming it — `expose` with its two positionals.
+#[test]
+fn every_stream_verb_acts_on_the_stream_loaded_from_the_working_directory_when_none_is_named() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+    for (tatolab_arguments, tool_name, tool_answer, sent) in [
+        (
+            &["stop"][..],
+            "stop_stream",
+            stop_stream_tool_result_text("hello-main-3f2a9c", true),
+            json!({"stream": "hello-main-3f2a9c"}),
+        ),
+        (
+            &["start"][..],
+            "start_stream",
+            json!({"stream": "hello-main-3f2a9c", "node_count": 3}).to_string(),
+            json!({"stream": "hello-main-3f2a9c"}),
+        ),
+        (
+            &["rm"][..],
+            "remove_stream",
+            json!({"stream": "hello-main-3f2a9c", "unloaded": true, "forgotten": true}).to_string(),
+            json!({"stream": "hello-main-3f2a9c"}),
+        ),
+        (
+            &["rename", "Hello camera"][..],
+            "rename_stream",
+            json!({"stream": "hello-main-3f2a9c", "display_name": "Hello camera"}).to_string(),
+            json!({"stream": "hello-main-3f2a9c", "display_name": "Hello camera"}),
+        ),
+        (
+            &["expose", "effect", "video"][..],
+            "expose_port",
+            json!({"stream": "hello-main-3f2a9c", "node": "effect", "port": "video",
+                   "level": "private", "recorded": true})
+            .to_string(),
+            json!({"stream": "hello-main-3f2a9c", "node": "effect", "port": "video",
+                   "level": "private"}),
+        ),
+    ] {
+        let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
+            vec![
+                listed_stream("hello-main-3f2a9c", "main", &canonical_project_directory),
+                listed_stream("desk-main-0a1b2c", "main", Path::new("/srv/desk")),
+            ],
+            tool_name,
+            StubToolAnswer::tool_result(&tool_answer),
+        );
+
+        let finished = run_tatolab_in(
+            &isolated_machine_directories,
+            project_directory.path(),
+            tatolab_arguments,
+        );
+
+        assert_eq!(
+            finished.status.code(),
+            Some(0),
+            "{tatolab_arguments:?}: {}",
+            standard_error_text(&finished)
+        );
+        assert_eq!(
+            stub_local_api_server.recorded_arguments_of(tool_name),
+            [sent],
+            "{tatolab_arguments:?}"
+        );
+    }
+}
+
+#[test]
+fn a_directory_several_streams_were_loaded_from_is_refused_listing_them_and_nothing_is_called() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
+        vec![
+            listed_stream("rig-front-0a1b2c", "front", &canonical_project_directory),
+            listed_stream("rig-back-9f8e7d", "back", &canonical_project_directory),
+        ],
+        "stop_stream",
+        StubToolAnswer::tool_result(&stop_stream_tool_result_text("rig-front-0a1b2c", true)),
+    );
+
+    let refused = run_tatolab_in(
+        &isolated_machine_directories,
+        project_directory.path(),
+        &["stop"],
+    );
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(
+        standard_error_text(&refused),
+        format!(
+            "error: 2 streams in this runtime were loaded from {}; name one by its id:\n  \
+             rig-front-0a1b2c  \"front\"\n  rig-back-9f8e7d  \"back\"\n",
+            canonical_project_directory.display()
+        )
+    );
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("stop_stream"),
+        Vec::<serde_json::Value>::new()
+    );
+}
+
+#[test]
+fn a_display_name_several_streams_hold_is_refused_listing_their_ids() {
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
+        vec![
+            listed_stream("hello-main-3f2a9c", "main", Path::new("/srv/hello")),
+            listed_stream("desk-main-0a1b2c", "main", Path::new("/srv/desk")),
+        ],
+        "rename_stream",
+        StubToolAnswer::tool_result("{}"),
+    );
+
+    let refused = isolated_machine_directories.run_tatolab(&["rename", "main", "Hello camera"]);
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(
+        standard_error_text(&refused),
+        "error: 2 streams are shown as \"main\"; name one by its id:\n  hello-main-3f2a9c  \
+         \"main\"\n  desk-main-0a1b2c  \"main\"\n"
+    );
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("rename_stream"),
+        Vec::<serde_json::Value>::new()
+    );
+}
+
+#[test]
+fn rename_shows_a_named_stream_under_the_display_name_as_given() {
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
+        "rename_stream",
+        StubToolAnswer::tool_result(r#"{"stream":"cam","display_name":"  Desk cam ✨"}"#),
+    );
+
+    let printed = printed_by_a_successful(
+        &isolated_machine_directories,
+        &["rename", "cam", "  Desk cam ✨"],
+    );
+
+    assert_eq!(printed, "cam is shown as \"  Desk cam ✨\"\n");
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("rename_stream"),
+        [json!({"stream": "cam", "display_name": "  Desk cam ✨"})]
+    );
+}
+
+#[test]
+fn expose_takes_the_stream_as_its_first_of_three_positionals_and_refuses_four() {
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
+        "expose_port",
+        StubToolAnswer::tool_result(
+            &json!({"stream": "cam", "node": "effect", "port": "video", "level": "public",
+                    "recorded": true})
+            .to_string(),
+        ),
+    );
+
+    printed_by_a_successful(
+        &isolated_machine_directories,
+        &["expose", "Camera", "effect", "video", "--public"],
+    );
+    let refused =
+        isolated_machine_directories.run_tatolab(&["expose", "cam", "effect", "video", "extra"]);
+
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("expose_port"),
+        [json!({"stream": "cam", "node": "effect", "port": "video", "level": "public"})]
+    );
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "clap refuses a fourth positional"
     );
 }

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The streams the machine's runtime holds, managed one call at a time: `run -d`, `stop`,
-//! `start`, `rm`, `streams` and `expose`, each the local API tool of the same purpose, and the
-//! one line or table each prints. `run` attached and `dev` share the load request.
+//! `start`, `rm`, `rename`, `streams` and `expose`, each the local API tool of the same purpose,
+//! and the one line or table each prints. A verb naming one stream resolves its stream argument
+//! to an id through `list_streams` first. `run` attached and `dev` share the load request.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -13,13 +14,15 @@ use clap::Args;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    RemoveStreamToolResult, RunStreamToolResult, STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
-    STREAM_LOAD_TOOL_CALL_TIMEOUT, StartStreamToolResult, StopStreamToolResult,
+    RemoveStreamToolResult, RenameStreamToolResult, RunStreamToolResult,
+    STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
+    StartStreamToolResult, StopStreamToolResult,
 };
 
 use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
+use crate::stream_argument_resolution_through_the_listing::stream_id_the_stream_argument_names_on_the_running_runtime;
 use crate::verb_output_table::rendered_padded_table;
 use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard_output};
 
@@ -34,6 +37,8 @@ pub(crate) enum StreamActionTool {
     StartStream,
     /// Unloads a stream and forgets its record.
     RemoveStream,
+    /// Shows a stream under another display name.
+    RenameStream,
     /// Lists the streams the runtime holds.
     ListStreams,
     /// Sets one output port's exposure level.
@@ -48,6 +53,7 @@ impl StreamActionTool {
             StreamActionTool::StopStream => "stop_stream",
             StreamActionTool::StartStream => "start_stream",
             StreamActionTool::RemoveStream => "remove_stream",
+            StreamActionTool::RenameStream => "rename_stream",
             StreamActionTool::ListStreams => "list_streams",
             StreamActionTool::ExposePort => "expose_port",
         }
@@ -61,6 +67,7 @@ impl StreamActionTool {
             }
             StreamActionTool::StopStream
             | StreamActionTool::RemoveStream
+            | StreamActionTool::RenameStream
             | StreamActionTool::ExposePort => STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
             StreamActionTool::ListStreams => OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         }
@@ -91,7 +98,8 @@ pub(crate) struct StreamLoadArguments {
     /// walk-up).
     #[arg(long = "dir", value_name = "DIR")]
     pub(crate) requested_project_directory: Option<OsString>,
-    /// Load the stream under this name instead of its function's.
+    /// Show the stream under this display name instead of its function's; a re-load without it
+    /// keeps the name the stream has.
     #[arg(long = "name", value_name = "NAME")]
     pub(crate) requested_stream_name: Option<OsString>,
 }
@@ -225,7 +233,7 @@ pub(crate) fn call_one_tool_reading_its_result<ToolResult: DeserializeOwned>(
 
 /// Call `tool` once on the machine's running runtime, bounded by its own timeout, and read its
 /// result as `ToolResult`.
-fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
+pub(crate) fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
     tool: StreamActionTool,
     tool_arguments: serde_json::Map<String, serde_json::Value>,
 ) -> Result<ToolResult, TatolabCommandFailure> {
@@ -278,11 +286,12 @@ pub(crate) fn stop_stream_tool_arguments(
     stream_tool_arguments(stream)
 }
 
-/// `tatolab stop STREAM`.
-pub(crate) fn stop_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
+/// `tatolab stop [STREAM]`.
+pub(crate) fn stop_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
     let stop_stream_result: StopStreamToolResult = call_one_stream_action_tool(
         StreamActionTool::StopStream,
-        stop_stream_tool_arguments(stream),
+        stop_stream_tool_arguments(&stream),
     )?;
     if let Some(not_recorded_warning) = stop_not_recorded_warning_line(&stop_stream_result) {
         write_verb_standard_error(&not_recorded_warning);
@@ -316,10 +325,13 @@ fn stop_not_recorded_warning_line(stop_stream_result: &StopStreamToolResult) -> 
         })
 }
 
-/// `tatolab start STREAM`.
-pub(crate) fn start_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
-    let start_stream_result: StartStreamToolResult =
-        call_one_stream_action_tool(StreamActionTool::StartStream, stream_tool_arguments(stream))?;
+/// `tatolab start [STREAM]`.
+pub(crate) fn start_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
+    let start_stream_result: StartStreamToolResult = call_one_stream_action_tool(
+        StreamActionTool::StartStream,
+        stream_tool_arguments(&stream),
+    )?;
     write_verb_standard_output(&format!(
         "{} started ({})\n",
         start_stream_result.stream,
@@ -327,11 +339,12 @@ pub(crate) fn start_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
     ))
 }
 
-/// `tatolab rm STREAM`.
-pub(crate) fn remove_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
+/// `tatolab rm [STREAM]`.
+pub(crate) fn remove_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
     let remove_stream_result: RemoveStreamToolResult = call_one_stream_action_tool(
         StreamActionTool::RemoveStream,
-        stream_tool_arguments(stream),
+        stream_tool_arguments(&stream),
     )?;
     write_verb_standard_output(&rendered_removed_stream_line(&remove_stream_result))
 }
@@ -350,6 +363,22 @@ fn rendered_removed_stream_line(remove_stream_result: &RemoveStreamToolResult) -
         "{} removed{what_removing_did}\n",
         remove_stream_result.stream
     )
+}
+
+/// `tatolab rename [STREAM] DISPLAY_NAME`.
+pub(crate) fn rename_stream(
+    stream_argument: Option<&str>,
+    display_name: &str,
+) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
+    let mut rename_stream_arguments = stream_tool_arguments(&stream);
+    rename_stream_arguments.insert("display_name".to_owned(), display_name.into());
+    let rename_stream_result: RenameStreamToolResult =
+        call_one_stream_action_tool(StreamActionTool::RenameStream, rename_stream_arguments)?;
+    write_verb_standard_output(&format!(
+        "{} is shown as \"{}\"\n",
+        rename_stream_result.stream, rename_stream_result.display_name
+    ))
 }
 
 /// `tatolab streams`.
@@ -432,16 +461,18 @@ fn expose_port_tool_arguments(
     expose_port_arguments
 }
 
-/// `tatolab expose STREAM NODE PORT [--public | --remove]`: `private`, `public` or `internal`.
+/// `tatolab expose [STREAM] NODE PORT [--public | --remove]`: `private`, `public` or
+/// `internal`.
 pub(crate) fn expose_port(
-    stream: &str,
+    stream_argument: Option<&str>,
     node: &str,
     port: &str,
     requested_level: ExposePortLevel,
 ) -> Result<u8, TatolabCommandFailure> {
+    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
     let expose_port_result: ExposePortToolResult = call_one_stream_action_tool(
         StreamActionTool::ExposePort,
-        expose_port_tool_arguments(stream, node, port, requested_level),
+        expose_port_tool_arguments(&stream, node, port, requested_level),
     )?;
     if let Some(not_recorded_warning) = exposure_not_recorded_warning_line(&expose_port_result) {
         write_verb_standard_error(&not_recorded_warning);
