@@ -106,16 +106,16 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     disagreement is the case this asserts.
     """
     tatolabd = start_tatolabd_running_stream(microphone_into_a_speaker_and_a_block_counting_probe)
-    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
+    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
     local_api = tatolabd.local_api_client()
     local_api.await_every_node_running(
-        stream=stream_name, timeout=PLAYBACK_READINESS_TIMEOUT_SECONDS
+        stream=stream_id, timeout=PLAYBACK_READINESS_TIMEOUT_SECONDS
     )
     # What the sentinel settled to, read back off the live graph: the values are
     # this machine's device format, which is the whole reason the port declares
     # `match_device` instead of five written values.
     rendered = the_speakers_settled_window_contract(
-        local_api.call_tool("graph", {"stream": stream_name}), SPEAKER_NODE_NAME
+        local_api.call_tool("graph", {"stream": stream_id}), SPEAKER_NODE_NAME
     )
 
     # Blocks really moving on the port the speaker reads, rather than a sleep
@@ -188,9 +188,9 @@ def test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup(
     worse than failing, so the sink refuses and the processor never reaches
     Running."""
     tatolabd = start_tatolabd_running_stream(speaker_sink_naming_an_unopenable_device)
-    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
+    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
     node_states = tatolabd.local_api_client().await_every_node_past_setup(
-        stream=stream_name, timeout=READINESS_TIMEOUT_SECONDS
+        stream=stream_id, timeout=READINESS_TIMEOUT_SECONDS
     )
     tatolabd.interrupt()
     tatolabd.await_clean_exit()

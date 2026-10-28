@@ -73,6 +73,10 @@ const NO_STREAMS_IN_THIS_RUNTIME_LINE: &str = "No streams in this runtime.\n";
 /// What `streams` prints in place of a node count for a stream that is not loaded.
 const NOT_LOADED_NODE_COUNT_CELL: &str = "-";
 
+/// The `PROJECT` and `FUNCTION` cells of a stream with no location: one a library host loaded,
+/// or a record an earlier runtime wrote.
+const NO_LOCATION_CELL: &str = "-";
+
 /// The flags `run` and `dev` name the stream to load with.
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct StreamLoadArguments {
@@ -256,7 +260,7 @@ fn rendered_kept_stream_line(run_stream_result: &RunStreamToolResult) -> String 
     format!(
         "{} kept (project {})\n",
         run_stream_result.stream,
-        run_stream_result.project_directory.display()
+        run_stream_result.location.project_directory.display()
     )
 }
 
@@ -355,30 +359,41 @@ pub(crate) fn list_streams() -> Result<u8, TatolabCommandFailure> {
     write_verb_standard_output(&rendered_streams_table(&list_streams_result.streams))
 }
 
-/// The `NAME  STATE  NODES  PROJECT` table, each column as wide as its widest cell, then a line
-/// per failed stream saying why it failed; one line when there is no stream.
+/// The `ID  NAME  STATE  NODES  PROJECT  FUNCTION` table, each column as wide as its widest cell,
+/// then a line per failed stream saying why it failed; one line when there is no stream.
 fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> String {
     if listed_streams.is_empty() {
         return NO_STREAMS_IN_THIS_RUNTIME_LINE.to_owned();
     }
     let header_row = [
+        "ID".to_owned(),
         "NAME".to_owned(),
         "STATE".to_owned(),
         "NODES".to_owned(),
         "PROJECT".to_owned(),
+        "FUNCTION".to_owned(),
     ];
     let stream_rows = listed_streams.iter().map(|listed_stream| {
+        let (project_cell, function_cell) = match &listed_stream.location {
+            Some(location) => (
+                location.project_directory.display().to_string(),
+                location.stream_function.clone(),
+            ),
+            None => (NO_LOCATION_CELL.to_owned(), NO_LOCATION_CELL.to_owned()),
+        };
         [
-            listed_stream.name.clone(),
+            listed_stream.stream.clone(),
+            listed_stream.display_name.clone(),
             listed_stream.state.to_string(),
             listed_stream.node_count.map_or_else(
                 || NOT_LOADED_NODE_COUNT_CELL.to_owned(),
                 |node_count| node_count.to_string(),
             ),
-            listed_stream.project_directory.display().to_string(),
+            project_cell,
+            function_cell,
         ]
     });
-    let table_rows: Vec<[String; 4]> = std::iter::once(header_row).chain(stream_rows).collect();
+    let table_rows: Vec<[String; 6]> = std::iter::once(header_row).chain(stream_rows).collect();
     let mut rendered_table = rendered_padded_table(&table_rows);
     if listed_streams
         .iter()
@@ -387,13 +402,18 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
         rendered_table.push('\n');
     }
     for listed_stream in listed_streams {
-        if let Some(failed_because) = &listed_stream.failed_because {
-            let name = &listed_stream.name;
-            rendered_table.push_str(&format!(
-                "{name} failed: {failed_because}. `tatolab start {name}` retries it, \
-                 `tatolab rm {name}` forgets it.\n"
-            ));
-        }
+        let Some(failed_because) = &listed_stream.failed_because else {
+            continue;
+        };
+        let stream_id = &listed_stream.stream;
+        let failed_line = match listed_stream.location {
+            Some(_) => format!(
+                "{stream_id} failed: {failed_because}. `tatolab start {stream_id}` retries it, \
+                 `tatolab rm {stream_id}` forgets it.\n"
+            ),
+            None => format!("{stream_id} failed: {failed_because}.\n"),
+        };
+        rendered_table.push_str(&failed_line);
     }
     rendered_table
 }
@@ -471,7 +491,9 @@ mod tests {
     use std::path::PathBuf;
 
     use serde_json::json;
-    use streamlib_runtime_client_contract::local_api_wire_contract::LoadedStreamInstance;
+    use streamlib_runtime_client_contract::local_api_wire_contract::{
+        LoadedStreamInstance, StreamLocationOnTheWire,
+    };
 
     use super::*;
 
@@ -557,10 +579,14 @@ mod tests {
 
     fn run_stream_result_warning(compile_warnings: &[&str]) -> RunStreamToolResult {
         RunStreamToolResult {
-            stream: "camera".to_owned(),
+            stream: "project-camera-3f2a9c".to_owned(),
+            display_name: "camera".to_owned(),
             stream_instance: LoadedStreamInstance("4".to_owned()),
             kept: true,
-            project_directory: PathBuf::from("/srv/project"),
+            location: StreamLocationOnTheWire {
+                project_directory: PathBuf::from("/srv/project"),
+                stream_function: "stream:camera".to_owned(),
+            },
             node_count: 3,
             replaced_the_kept_record: false,
             compile_warnings: compile_warnings
@@ -597,10 +623,10 @@ mod tests {
     }
 
     #[test]
-    fn the_kept_line_names_the_stream_and_its_project() {
+    fn the_kept_line_names_the_stream_id_and_its_project() {
         assert_eq!(
             rendered_kept_stream_line(&run_stream_result_warning(&[])),
-            "camera kept (project /srv/project)\n"
+            "project-camera-3f2a9c kept (project /srv/project)\n"
         );
     }
 
@@ -624,7 +650,7 @@ mod tests {
     fn a_run_stream_result_without_compile_warnings_is_not_a_run_stream_result() {
         assert!(
             serde_json::from_str::<RunStreamToolResult>(
-                r#"{"stream": "camera", "stream_instance": "4", "kept": true, "project_directory": "/srv/project", "node_count": 3, "replaced_the_kept_record": false}"#
+                r#"{"stream": "project-camera-3f2a9c", "display_name": "camera", "stream_instance": "4", "kept": true, "location": {"project_directory": "/srv/project", "stream_function": "stream:camera"}, "node_count": 3, "replaced_the_kept_record": false}"#
             )
             .is_err(),
             "the runtime always answers `compile_warnings`, empty when the compile wrote nothing"
@@ -696,20 +722,24 @@ mod tests {
     }
 
     #[test]
-    fn the_streams_table_aligns_its_columns_and_marks_a_stream_not_loaded() {
+    fn the_streams_table_lists_each_stream_by_id_with_its_name_and_location() {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
-                {"name": "camera", "state": "attached", "project_directory": "/srv/cam", "node_count": 4},
-                {"name": "a", "state": "stopped", "project_directory": "/srv/a", "node_count": null},
+                {"stream": "cam-main-0a1b2c", "display_name": "Desk camera", "state": "attached",
+                 "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
+                 "node_count": 4},
+                {"stream": "a-back-9f8e7d", "display_name": "back", "state": "stopped",
+                 "location": {"project_directory": "/srv/a", "stream_function": "rigs:back"},
+                 "node_count": null},
             ]
         }))
         .unwrap();
 
         assert_eq!(
             rendered_streams_table(&list_streams_result.streams),
-            "NAME    STATE     NODES  PROJECT\n\
-             camera  attached  4      /srv/cam\n\
-             a       stopped   -      /srv/a\n"
+            "ID               NAME         STATE     NODES  PROJECT   FUNCTION\n\
+             cam-main-0a1b2c  Desk camera  attached  4      /srv/cam  stream:main\n\
+             a-back-9f8e7d    back         stopped   -      /srv/a    rigs:back\n"
         );
         assert_eq!(rendered_streams_table(&[]), "No streams in this runtime.\n");
     }
@@ -718,21 +748,22 @@ mod tests {
     fn the_streams_table_says_under_it_why_each_failed_stream_failed() {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
-                {"name": "camera", "state": "kept", "project_directory": "/srv/cam", "node_count": 4, "failed_because": null},
-                {"name": "crasher", "state": "failed", "project_directory": "/srv/crash", "node_count": null,
-                 "failed_because": "it was implicated in the runtime's last 2 crashes in a row, the last: SIGSEGV"},
+                {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "kept",
+                 "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
+                 "node_count": 4, "failed_because": null},
+                {"stream": "main", "display_name": "main", "state": "failed", "location": null,
+                 "node_count": null, "failed_because": "an earlier runtime recorded it"},
             ]
         }))
         .unwrap();
 
         assert_eq!(
             rendered_streams_table(&list_streams_result.streams),
-            "NAME     STATE   NODES  PROJECT\n\
-             camera   kept    4      /srv/cam\n\
-             crasher  failed  -      /srv/crash\n\
+            "ID               NAME  STATE   NODES  PROJECT   FUNCTION\n\
+             cam-main-0a1b2c  main  kept    4      /srv/cam  stream:main\n\
+             main             main  failed  -      -         -\n\
              \n\
-             crasher failed: it was implicated in the runtime's last 2 crashes in a row, the \
-             last: SIGSEGV. `tatolab start crasher` retries it, `tatolab rm crasher` forgets it.\n"
+             main failed: an earlier runtime recorded it.\n"
         );
     }
 

@@ -55,12 +55,12 @@ fn number_of(event: &Event) -> usize {
     }
 }
 
-/// The stream `stream_name`, tagged `stream_tag`, loaded in the runtime
+/// The stream `stream_id`, tagged `stream_tag`, loaded in the runtime
 /// `runtime_id`.
-fn a_loaded_stream(runtime_id: &str, stream_name: &str, stream_tag: u32) -> LoadedStreamIdentity {
+fn a_loaded_stream(runtime_id: &str, stream_id: &str, stream_tag: u32) -> LoadedStreamIdentity {
     LoadedStreamIdentity {
         runtime_id: runtime_id.to_string(),
-        stream_name: stream_name.to_string(),
+        stream_id: stream_id.to_string(),
         stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(stream_tag),
     }
 }

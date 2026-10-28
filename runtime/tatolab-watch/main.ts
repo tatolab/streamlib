@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// The preview page: plays the broadcast `/watch/<machine>/<stream>` names off
+// The preview page: plays the broadcast `/watch/<machine>/<stream id>` names off
 // the machine's local relay, pinned to the video track `<node>/<port>` when the
 // path names one.
 
@@ -131,5 +131,5 @@ const watchedAddress = watchedAddressFromThePath(location.pathname);
 if (watchedAddress) {
 	playTheWatchedAddress(watchedAddress);
 } else {
-	showTheStatus("open /watch/<machine>/<stream> or /watch/<machine>/<stream>/<node>/<port>");
+	showTheStatus("open /watch/<machine>/<stream id> or /watch/<machine>/<stream id>/<node>/<port>");
 }

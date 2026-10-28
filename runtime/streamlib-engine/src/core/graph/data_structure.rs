@@ -35,8 +35,8 @@ pub struct Graph {
     /// The petgraph DiGraph storing processors as nodes and links as edges.
     digraph: DiGraph<ProcessorNode, Link>,
 
-    /// The name of the stream this graph was loaded as, until then `None`.
-    loaded_stream_name: Option<String>,
+    /// The id of the stream this graph was loaded as, until then `None`.
+    loaded_stream_id: Option<String>,
 
     /// The node types this graph's stream resolves.
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
@@ -66,7 +66,7 @@ impl Graph {
     ) -> Self {
         Self {
             digraph: DiGraph::new(),
-            loaded_stream_name: None,
+            loaded_stream_id: None,
             node_types_this_stream_resolves,
             compiled_at: None,
             state: GraphState::Idle,
@@ -112,14 +112,14 @@ impl Graph {
         self.state = state;
     }
 
-    /// The name of the stream this graph was loaded as, if it was loaded as one.
-    pub fn loaded_stream_name(&self) -> Option<&str> {
-        self.loaded_stream_name.as_deref()
+    /// The id of the stream this graph was loaded as, if it was loaded as one.
+    pub fn loaded_stream_id(&self) -> Option<&str> {
+        self.loaded_stream_id.as_deref()
     }
 
-    /// Record the name of the stream this graph was loaded as.
-    pub fn set_loaded_stream_name(&mut self, stream_name: String) {
-        self.loaded_stream_name = Some(stream_name);
+    /// Record the id of the stream this graph was loaded as.
+    pub fn set_loaded_stream_id(&mut self, stream_id: String) {
+        self.loaded_stream_id = Some(stream_id);
     }
 
     /// Get when the graph was compiled.
@@ -171,7 +171,7 @@ impl Graph {
     pub(crate) fn to_graph_response(&self, machine: String) -> GraphResponse {
         let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
         GraphResponse {
-            stream: self.loaded_stream_name.clone(),
+            stream: self.loaded_stream_id.clone(),
             nodes: self
                 .digraph
                 .node_indices()
@@ -203,11 +203,11 @@ impl Graph {
 }
 
 /// The node `node_name` names once cast in `graph`, the graph of the stream
-/// `stream_name`, refused by name — listing the nodes it holds — when there is
+/// `stream_id`, refused by name — listing the nodes it holds — when there is
 /// none.
 pub(crate) fn node_named_or_refused<'graph>(
     graph: &'graph Graph,
-    stream_name: &str,
+    stream_id: &str,
     node_name: &str,
 ) -> crate::core::Result<&'graph crate::core::graph::ProcessorNode> {
     graph
@@ -216,8 +216,8 @@ pub(crate) fn node_named_or_refused<'graph>(
         .first()
         .ok_or_else(|| {
             crate::core::Error::ProcessorNotFound(format!(
-                "no node in the stream `{stream_name}` is named {node_name:?}. The stream \
-                 `{stream_name}` holds: {}",
+                "no node in the stream `{stream_id}` is named {node_name:?}. The stream \
+                 `{stream_id}` holds: {}",
                 node_names_listed_for_a_refusal(
                     graph
                         .traversal()

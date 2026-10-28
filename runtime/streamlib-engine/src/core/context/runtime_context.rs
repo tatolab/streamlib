@@ -26,7 +26,7 @@ use crate::iceoryx2::Iceoryx2Node;
 /// its log route.
 #[derive(Debug)]
 pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
-    /// The runtime id, cast name and tag the stream's events carry.
+    /// The runtime id, stream id and tag the stream's events carry.
     pub(crate) identity: LoadedStreamIdentity,
     /// The directory the stream's project lives in.
     pub(crate) project_directory: Arc<std::path::Path>,
@@ -170,9 +170,9 @@ impl RuntimeContext {
         &self.runtime_directory
     }
 
-    /// The URL-safe cast name of the stream this context serves.
-    pub fn stream_name(&self) -> &str {
-        &self.loaded_stream.identity.stream_name
+    /// The id of the stream this context serves.
+    pub fn stream_id(&self) -> &str {
+        &self.loaded_stream.identity.stream_id
     }
 
     /// The project directory of the stream this context serves.
@@ -559,9 +559,9 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().runtime_directory()
     }
 
-    /// The URL-safe cast name of the stream this processor runs in.
-    pub fn stream_name(&self) -> &str {
-        self.host_base().stream_name()
+    /// The id of the stream this processor runs in.
+    pub fn stream_id(&self) -> &str {
+        self.host_base().stream_id()
     }
 
     /// The project directory of the stream this processor runs in.
@@ -631,9 +631,9 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
 
     // ------------ Engine-internal host accessors ------------
 
-    /// The URL-safe cast name of the stream this processor runs in.
-    pub fn stream_name(&self) -> &str {
-        self.host_base().stream_name()
+    /// The id of the stream this processor runs in.
+    pub fn stream_id(&self) -> &str {
+        self.host_base().stream_id()
     }
 
     /// The project directory of the stream this processor runs in.
@@ -710,7 +710,7 @@ mod one_off_acquisition_counting_tests {
         let stream = runner
             .load_an_empty_stream(
                 OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .named("main"),
+                    .with_stream_id("main"),
             )
             .expect("an empty stream loads");
         stream.start().expect("the stream starts");

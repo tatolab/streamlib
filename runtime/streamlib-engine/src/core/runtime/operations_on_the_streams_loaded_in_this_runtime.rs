@@ -42,45 +42,45 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::describe_this_runtime`].
     fn describe_this_runtime(&self) -> DescribeRuntimeToolResult;
 
-    /// The operations on the loaded stream `stream_name` names. Refused with
+    /// The operations on the loaded stream `stream_id` names. Refused with
     /// [`Error::NotFound`](crate::core::error::Error::NotFound) naming the loaded streams when it is not loaded.
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
     ) -> Result<Arc<dyn RuntimeOperations>>;
 
-    /// The node types the loaded stream `stream_name` names resolves — the
+    /// The node types the loaded stream `stream_id` names resolves — the
     /// native ones, then the ones described in its own interpreter — with the
     /// same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
     fn node_catalog_of_the_stream_a_call_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
     ) -> Result<Vec<ProcessorDescriptor>>;
 
     /// The node types described in the own interpreter of the loaded stream
-    /// `stream_name` names, with the same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
+    /// `stream_id` names, with the same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal.
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
     ) -> Result<Vec<ProcessorDescriptor>>;
 
-    /// The cast names of the loaded streams, in order.
-    fn names_of_the_loaded_streams(&self) -> Vec<String>;
+    /// The ids of the loaded streams, in order.
+    fn ids_of_the_loaded_streams(&self) -> Vec<String>;
 
-    /// Every loaded stream, in name order, with the output ports it exposes
+    /// Every loaded stream, in id order, with the output ports it exposes
     /// now — one read of the stream table. Blocks while a stream compiles, so
     /// the local API calls it from a blocking task.
     fn every_loaded_stream_and_the_output_ports_it_exposes(
         &self,
     ) -> Vec<LoadedStreamAndTheOutputPortsItExposes>;
 
-    /// The log records of the loaded stream `stream_name` names, numbered
+    /// The log records of the loaded stream `stream_id` names, numbered
     /// after `after`, at most `max_count` of them, with the tag of the load
     /// that numbered them; refused naming the loaded streams when it is not
     /// loaded.
     fn log_records_of_the_stream_a_call_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
         after: u64,
         max_count: usize,
     ) -> Result<LogRecordsPageOfOneLoadedStream>;
@@ -89,13 +89,13 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome>;
 
     /// [`Runner::stop_stream`].
-    fn stop_stream(&self, stream_name: &str) -> Result<StreamStopOutcome>;
+    fn stop_stream(&self, stream_id: &str) -> Result<StreamStopOutcome>;
 
     /// [`Runner::start_stream`].
-    fn start_stream(&self, stream_name: &str) -> Result<StreamStartOutcome>;
+    fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome>;
 
     /// [`Runner::remove_stream`].
-    fn remove_stream(&self, stream_name: &str) -> Result<StreamRemoveOutcome>;
+    fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome>;
 
     /// [`Runner::list_streams`].
     fn list_streams(&self) -> Vec<StreamListing>;
@@ -103,7 +103,7 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::expose_port`].
     fn expose_port(
         &self,
-        stream_name: &str,
+        stream_id: &str,
         node: &str,
         port: &str,
         level: OutputPortExposureLevel,
@@ -112,7 +112,7 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::unload_the_attached_stream_if_still_the_same`].
     fn unload_the_attached_stream_if_still_the_same(
         &self,
-        stream_name: &str,
+        stream_id: &str,
         stream_tag: LoadedStreamTag,
     ) -> bool;
 }
@@ -128,33 +128,33 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
     ) -> Result<Arc<dyn RuntimeOperations>> {
-        self.loaded_stream_named(stream_name)
+        self.loaded_stream_of_the_id(stream_id)
             .map(|stream| stream as Arc<dyn RuntimeOperations>)
     }
 
     fn node_catalog_of_the_stream_a_call_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
     ) -> Result<Vec<ProcessorDescriptor>> {
-        self.loaded_stream_named(stream_name)
+        self.loaded_stream_of_the_id(stream_id)
             .map(|stream| stream.node_types_this_stream_resolves().node_catalog())
     }
 
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
     ) -> Result<Vec<ProcessorDescriptor>> {
-        self.loaded_stream_named(stream_name).map(|stream| {
+        self.loaded_stream_of_the_id(stream_id).map(|stream| {
             stream
                 .node_types_this_stream_resolves()
                 .descriptors_described_in_this_streams_processor_interpreter()
         })
     }
 
-    fn names_of_the_loaded_streams(&self) -> Vec<String> {
-        Runner::names_of_the_loaded_streams(self)
+    fn ids_of_the_loaded_streams(&self) -> Vec<String> {
+        Runner::ids_of_the_loaded_streams(self)
     }
 
     fn every_loaded_stream_and_the_output_ports_it_exposes(
@@ -165,11 +165,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn log_records_of_the_stream_a_call_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
         after: u64,
         max_count: usize,
     ) -> Result<LogRecordsPageOfOneLoadedStream> {
-        self.loaded_stream_named(stream_name)
+        self.loaded_stream_of_the_id(stream_id)
             .map(|stream| LogRecordsPageOfOneLoadedStream {
                 stream_tag: stream.stream_tag(),
                 records_page: stream.log_records_after(after, max_count),
@@ -180,16 +180,16 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::run_stream(self, request)
     }
 
-    fn stop_stream(&self, stream_name: &str) -> Result<StreamStopOutcome> {
-        Runner::stop_stream(self, stream_name)
+    fn stop_stream(&self, stream_id: &str) -> Result<StreamStopOutcome> {
+        Runner::stop_stream(self, stream_id)
     }
 
-    fn start_stream(&self, stream_name: &str) -> Result<StreamStartOutcome> {
-        Runner::start_stream(self, stream_name)
+    fn start_stream(&self, stream_id: &str) -> Result<StreamStartOutcome> {
+        Runner::start_stream(self, stream_id)
     }
 
-    fn remove_stream(&self, stream_name: &str) -> Result<StreamRemoveOutcome> {
-        Runner::remove_stream(self, stream_name)
+    fn remove_stream(&self, stream_id: &str) -> Result<StreamRemoveOutcome> {
+        Runner::remove_stream(self, stream_id)
     }
 
     fn list_streams(&self) -> Vec<StreamListing> {
@@ -198,19 +198,19 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn expose_port(
         &self,
-        stream_name: &str,
+        stream_id: &str,
         node: &str,
         port: &str,
         level: OutputPortExposureLevel,
     ) -> Result<OutputPortExposureOutcome> {
-        Runner::expose_port(self, stream_name, node, port, level)
+        Runner::expose_port(self, stream_id, node, port, level)
     }
 
     fn unload_the_attached_stream_if_still_the_same(
         &self,
-        stream_name: &str,
+        stream_id: &str,
         stream_tag: LoadedStreamTag,
     ) -> bool {
-        Runner::unload_the_attached_stream_if_still_the_same(self, stream_name, stream_tag)
+        Runner::unload_the_attached_stream_if_still_the_same(self, stream_id, stream_tag)
     }
 }

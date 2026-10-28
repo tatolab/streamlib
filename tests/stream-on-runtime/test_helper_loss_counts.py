@@ -184,11 +184,11 @@ class LossCountingStreamRunning:
 
     tatolabd: TatolabdUnderTest
     local_api: LocalApiClient
-    stream_name: str
+    stream_id: str
 
     def graph(self) -> "dict[str, Any]":
         """The stream's live graph."""
-        return self.local_api.call_tool("graph", {"stream": self.stream_name})
+        return self.local_api.call_tool("graph", {"stream": self.stream_id})
 
     def metrics_of(self, name: str) -> "dict[str, Any]":
         """What `graph` renders under `name`'s `metrics`, or `{}` for no key."""
@@ -236,10 +236,10 @@ def launch_the_loss_counting_node(
     tatolab_run = tatolabd.run_stream_attached(
         TatolabRunOfAProject(working_directory=project_directory)
     )
-    stream_name = tatolab_run.await_loaded()["stream_name"]
+    stream_id = tatolab_run.await_loaded()["stream_id"]
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
     return LossCountingStreamRunning(
-        tatolabd=tatolabd, local_api=tatolabd.local_api_client(), stream_name=stream_name
+        tatolabd=tatolabd, local_api=tatolabd.local_api_client(), stream_id=stream_id
     )
 
 
@@ -376,7 +376,7 @@ def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
     )
 
     loss_counting_stream.local_api.call_tool(
-        "remove_node", {"stream": loss_counting_stream.stream_name, "name": "slow-sink"}
+        "remove_node", {"stream": loss_counting_stream.stream_id, "name": "slow-sink"}
     )
     assert all(
         rendered["name"] != "slow-sink" for rendered in loss_counting_stream.graph()["nodes"]

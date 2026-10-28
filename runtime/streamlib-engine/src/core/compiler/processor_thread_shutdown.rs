@@ -194,9 +194,9 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
         abandoned_processors.len(),
         &format!(
             "removing processors from the stream `{}`",
-            the_stream_the_processors_belong_to.stream_name
+            the_stream_the_processors_belong_to.stream_id
         ),
-        &the_stream_the_processors_belong_to.stream_name,
+        &the_stream_the_processors_belong_to.stream_id,
     );
 
     let mut first_node_left_behind = None;
@@ -434,7 +434,7 @@ mod tests {
             &graph_arc,
             &LoadedStreamIdentity {
                 runtime_id: "processor-thread-shutdown-test".to_string(),
-                stream_name: "main".to_string(),
+                stream_id: "main".to_string(),
                 stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
             },
             processor_ids,

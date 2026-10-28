@@ -212,7 +212,7 @@ fn a_kept_streams_path_that_is_not_a_directory_is_refused_naming_it() {
         std::fs::Permissions::from_mode(0o700),
     )
     .unwrap();
-    std::fs::write(machine_root.kept_streams_directory(), "not a directory").unwrap();
+    std::fs::write(machine_root.streams_directory(), "not a directory").unwrap();
 
     let refusal = run_tatolabd_to_its_refusal(&runtime_unit, &machine_root, &[]);
 
@@ -221,7 +221,7 @@ fn a_kept_streams_path_that_is_not_a_directory_is_refused_naming_it() {
         "{refusal}"
     );
     assert!(
-        refusal.contains(&machine_root.kept_streams_directory().display().to_string()),
+        refusal.contains(&machine_root.streams_directory().display().to_string()),
         "{refusal}"
     );
 }

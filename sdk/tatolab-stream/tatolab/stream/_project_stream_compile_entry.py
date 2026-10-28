@@ -10,11 +10,11 @@ The runtime starts it as `<venv python> -I -m tatolab.stream._project_stream_com
 --verb {run,dev} [TARGET] [-f FILE] [--dir DIR] [--name NAME]`, with the anchor
 directory as the working directory; `--dir` is only how the caller's command spelled
 it. On success stdout carries exactly one JSON object,
-`{"stream_graph": ..., "project_directory": ...}`, and the exit code is 0. A refusal
-prints `error: <message>` to stderr and exits 1; an app or compile failure prints the
-app's own traceback to stderr and exits 1; an app's deliberate `SystemExit` keeps its
-code, so exit 0 with nothing on stdout is an app that chose to exit, and there is no
-stream to start.
+`{"stream_graph": ..., "project_directory": ..., "stream_function": "<module>:<qualname>"}`,
+and the exit code is 0. A refusal prints `error: <message>` to stderr and exits 1; an
+app or compile failure prints the app's own traceback to stderr and exits 1; an app's
+deliberate `SystemExit` keeps its code, so exit 0 with nothing on stdout is an app that
+chose to exit, and there is no stream to start.
 
 `-I` keeps the working directory off `sys.path` while this module and
 `tatolab.stream` import, so a project module named like a standard-library one they
@@ -47,6 +47,7 @@ from ._project_stream_entry_execution import (
     project_directory_the_stream_entry_imports_from,
     refuse_a_stream_name_that_casts_to_nothing,
     select_stream_function,
+    stream_function_location,
     stream_functions_defined_in,
 )
 from ._project_stream_entry_resolution import (
@@ -62,6 +63,7 @@ __all__ = ["main"]
 
 COMPILED_STREAM_GRAPH_DOCUMENT_KEY = "stream_graph"
 COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY = "project_directory"
+COMPILED_STREAM_FUNCTION_DOCUMENT_KEY = "stream_function"
 
 _PROJECT_STREAM_COMPILE_MODULE_FILE_NAMES = (
     "_project_stream_compile_entry.py",
@@ -259,12 +261,14 @@ def compile_the_requested_stream(
         print_app_failure(entry_described, compile_failure)
         return None
 
+    project_directory = project_directory_the_stream_entry_imports_from(
+        resolved_stream_entry, anchor_directory
+    )
     return {
         COMPILED_STREAM_GRAPH_DOCUMENT_KEY: stream_graph,
-        COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(
-            project_directory_the_stream_entry_imports_from(
-                resolved_stream_entry, anchor_directory
-            )
+        COMPILED_PROJECT_DIRECTORY_DOCUMENT_KEY: str(project_directory),
+        COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_location(
+            stream_function, resolved_stream_entry, project_directory
         ),
     }
 

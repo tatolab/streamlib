@@ -26,24 +26,24 @@ pub fn loaded_stream_log_directory(project_directory: &Path) -> PathBuf {
     project_directory.join(".streamlib").join("logs")
 }
 
-/// `<runtime_id>-<stream_name with every '.' written as '_'>`: the name a loaded stream's log
+/// `<runtime_id>-<stream_id with every '.' written as '_'>`: the name a loaded stream's log
 /// segments carry where a runtime's carry its id, so
 /// [`parse_runtime_log_segment_file_name`] reads it back whole as the segment's `runtime_id`.
-pub fn loaded_stream_log_instance_name(runtime_id: &str, stream_name: &str) -> String {
-    format!("{runtime_id}-{}", stream_name.replace('.', "_"))
+pub fn loaded_stream_log_instance_name(runtime_id: &str, stream_id: &str) -> String {
+    format!("{runtime_id}-{}", stream_id.replace('.', "_"))
 }
 
 /// Path of the active JSONL segment of one loaded stream:
-/// `<project_directory>/.streamlib/logs/<runtime_id>-<stream_name>-<started_at_millis>.jsonl`,
-/// the stream name spelled as [`loaded_stream_log_instance_name`] spells it.
+/// `<project_directory>/.streamlib/logs/<runtime_id>-<stream_id>-<started_at_millis>.jsonl`,
+/// the stream id spelled as [`loaded_stream_log_instance_name`] spells it.
 pub fn loaded_stream_log_path(
     project_directory: &Path,
     runtime_id: &str,
-    stream_name: &str,
+    stream_id: &str,
     started_at_millis: u128,
 ) -> PathBuf {
     loaded_stream_log_directory(project_directory).join(active_runtime_log_segment_file_name(
-        &loaded_stream_log_instance_name(runtime_id, stream_name),
+        &loaded_stream_log_instance_name(runtime_id, stream_id),
         started_at_millis,
     ))
 }

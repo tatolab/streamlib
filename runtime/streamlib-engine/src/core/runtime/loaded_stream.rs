@@ -17,7 +17,8 @@ use super::runtime::EngineResourcesSharedByEveryStream;
 use super::stream_actions_of_this_runtime::{AttachedStreamRunSource, LoadedStreamHolding};
 use super::{
     ArmedTeardownWatchdogOfOneStream, RuntimeOperations, RuntimeStatus,
-    ShutdownEscalationOfOneStream, StreamEnvironment, TeardownProgressNoteOfOneStream,
+    ShutdownEscalationOfOneStream, StreamEnvironment, StreamLocation,
+    TeardownProgressNoteOfOneStream,
 };
 use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::LoadedStreamAHelperProcessBelongsTo;
 use crate::core::compiler::{Compiler, PendingOperation};
@@ -124,6 +125,18 @@ pub struct LoadedStreamInThisRuntime {
     /// What an attached `run_stream` compiled this stream from; unset for
     /// every other load.
     attached_stream_run_source: OnceLock<AttachedStreamRunSource>,
+    /// The label the stream is shown under.
+    display_name: String,
+    /// Where the stream's code lives; `None` for a stream a library host loads.
+    stream_location: Option<StreamLocation>,
+}
+
+/// What a loaded stream is keyed by and shown as: its id, its display name,
+/// and the location its id was computed from, when it has one.
+pub(crate) struct LoadedStreamNaming {
+    pub(crate) stream_id: String,
+    pub(crate) display_name: String,
+    pub(crate) stream_location: Option<StreamLocation>,
 }
 
 /// How a loaded stream ended, and the wait for it. Held apart from the stream
@@ -197,16 +210,21 @@ pub enum HowALoadedStreamEnded {
 impl LoadedStreamInThisRuntime {
     pub(crate) fn new(
         engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
-        stream_name: String,
+        naming: LoadedStreamNaming,
         project_directory: PathBuf,
         stream_environment: Option<StreamEnvironment>,
         teardown_watchdog_budget: Duration,
         holding: LoadedStreamHolding,
     ) -> Result<Arc<Self>> {
+        let LoadedStreamNaming {
+            stream_id,
+            display_name,
+            stream_location,
+        } = naming;
         let stream_tag = LoadedStreamTag::next_in_this_process()?;
         let log_route = LoadedStreamLogRoute::open_in_project_directory(
             engine_resources_shared_by_every_stream.runtime_id.as_str(),
-            &stream_name,
+            &stream_id,
             &project_directory,
         );
         let _entered_this_streams_log_route = log_route.enter_on_this_thread();
@@ -214,14 +232,14 @@ impl LoadedStreamInThisRuntime {
             runtime_id: engine_resources_shared_by_every_stream
                 .runtime_id
                 .to_string(),
-            stream_name: stream_name.clone(),
+            stream_id: stream_id.clone(),
             stream_tag,
         };
         let node_types_this_stream_resolves = Arc::new(NodeTypesOneStreamResolves::new());
         let compiler = Arc::new(Compiler::new_resolving_node_types_through(Arc::clone(
             &node_types_this_stream_resolves,
         )));
-        compiler.scope(|graph, _tx| graph.set_loaded_stream_name(stream_name.clone()));
+        compiler.scope(|graph, _tx| graph.set_loaded_stream_id(stream_id.clone()));
         let runtime_context = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(RuntimeStatus::Initial));
         let graph_change_listener: Arc<Mutex<dyn EventListener>> =
@@ -235,7 +253,7 @@ impl LoadedStreamInThisRuntime {
             Arc::clone(&graph_change_listener),
         )?;
         tracing::info!(
-            "Loading the stream `{stream_name}` from {}",
+            "Loading the stream `{stream_id}` from {}",
             project_directory.display()
         );
 
@@ -274,6 +292,8 @@ impl LoadedStreamInThisRuntime {
             this_stream: this_stream.clone(),
             holding,
             attached_stream_run_source: OnceLock::new(),
+            display_name,
+            stream_location,
         }))
     }
 
@@ -281,9 +301,19 @@ impl LoadedStreamInThisRuntime {
     // Identity
     // =========================================================================
 
-    /// The stream's URL-safe cast name, its key in the stream table.
-    pub fn stream_name(&self) -> &str {
-        &self.this_streams_identity_and_handles.identity.stream_name
+    /// The stream's id, its key in the stream table and its address.
+    pub fn stream_id(&self) -> &str {
+        &self.this_streams_identity_and_handles.identity.stream_id
+    }
+
+    /// The label the stream is shown under.
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    /// Where the stream's code lives; `None` for a stream a library host loads.
+    pub fn stream_location(&self) -> Option<&StreamLocation> {
+        self.stream_location.as_ref()
     }
 
     /// The directory the stream's project lives in.
@@ -404,7 +434,7 @@ impl LoadedStreamInThisRuntime {
     /// Start the stream: the engine's GPU context — created now when no stream
     /// has started — viewed through this stream's surface store and pipeline
     /// cache, its own runtime context, then a commit of every queued change.
-    #[tracing::instrument(name = "stream.start", skip_all, fields(stream = %self.stream_name()))]
+    #[tracing::instrument(name = "stream.start", skip_all, fields(stream = %self.stream_id()))]
     pub fn start(self: &Arc<Self>) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
@@ -412,11 +442,11 @@ impl LoadedStreamInThisRuntime {
             return Err(Error::Runtime(format!(
                 "the stream `{}` was not started: its shutdown has been requested, and a stream \
                  that shut down is loaded again rather than restarted",
-                self.stream_name()
+                self.stream_id()
             )));
         }
         *self.status.lock() = RuntimeStatus::Starting;
-        tracing::info!("[start] Starting the stream `{}`", self.stream_name());
+        tracing::info!("[start] Starting the stream `{}`", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStarting);
 
         let engine = &self.engine_resources_shared_by_every_stream;
@@ -462,7 +492,7 @@ impl LoadedStreamInThisRuntime {
         tracing::info!("[start] Committing pending graph operations");
         self.compiler.commit(&this_streams_runtime_context)?;
 
-        tracing::info!("[start] The stream `{}` started", self.stream_name());
+        tracing::info!("[start] The stream `{}` started", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStarted);
         Ok(())
     }
@@ -506,7 +536,7 @@ impl LoadedStreamInThisRuntime {
     /// its name taken, until [`Runner::unload_stream`] ends it.
     ///
     /// [`Runner::unload_stream`]: crate::core::runtime::Runner::unload_stream
-    #[tracing::instrument(name = "stream.stop", skip_all, fields(stream = %self.stream_name()))]
+    #[tracing::instrument(name = "stream.stop", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
@@ -519,7 +549,7 @@ impl LoadedStreamInThisRuntime {
             *stream_status = RuntimeStatus::Stopping;
         }
 
-        tracing::info!("[stop] Stopping the stream `{}`", self.stream_name());
+        tracing::info!("[stop] Stopping the stream `{}`", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopping);
 
         let this_streams_runtime_context_while_started = self.runtime_context.lock().clone();
@@ -568,7 +598,7 @@ impl LoadedStreamInThisRuntime {
 
         *self.status.lock() = RuntimeStatus::Stopped;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopped);
-        tracing::info!("[stop] The stream `{}` stopped", self.stream_name());
+        tracing::info!("[stop] The stream `{}` stopped", self.stream_id());
         processor_removal_outcome
     }
 
@@ -581,7 +611,7 @@ impl LoadedStreamInThisRuntime {
             tracing::info!(
                 reason,
                 "the shutdown of the stream `{}` was requested",
-                self.stream_name()
+                self.stream_id()
             );
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimeShutdown);
         }
@@ -598,7 +628,7 @@ impl LoadedStreamInThisRuntime {
             tracing::warn!(
                 reason,
                 "the shutdown of the stream `{}` was forced",
-                self.stream_name()
+                self.stream_id()
             );
         }
         self.start_this_streams_shutdown_thread_once();
@@ -614,7 +644,7 @@ impl LoadedStreamInThisRuntime {
             return;
         };
         let started = std::thread::Builder::new()
-            .name(format!("stream-shutdown-{}", self.stream_name()))
+            .name(format!("stream-shutdown-{}", self.stream_id()))
             .spawn(move || this_stream.shut_this_stream_down_under_its_watchdog());
         if let Err(spawn_failure) = started {
             // Released so the next request, or the engine's next walk, retries.
@@ -622,7 +652,7 @@ impl LoadedStreamInThisRuntime {
             tracing::error!(
                 "the shutdown thread of the stream `{}` could not start; the next request \
                  retries it: {spawn_failure}",
-                self.stream_name()
+                self.stream_id()
             );
         }
     }
@@ -630,7 +660,7 @@ impl LoadedStreamInThisRuntime {
     fn shut_this_stream_down_under_its_watchdog(self: Arc<Self>) {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         let watchdog = ArmedTeardownWatchdogOfOneStream::arm(
-            self.stream_name(),
+            self.stream_id(),
             self.teardown_watchdog_budget,
             self.teardown_progress_note().clone(),
             {
@@ -672,7 +702,7 @@ impl LoadedStreamInThisRuntime {
             Err(stop_failure) => {
                 tracing::error!(
                     "the stream `{}` failed to stop: {stop_failure}",
-                    self.stream_name()
+                    self.stream_id()
                 );
                 HowALoadedStreamEnded::StoppedReportingAFailure(stop_failure.to_string())
             }
@@ -702,13 +732,13 @@ impl LoadedStreamInThisRuntime {
              {what_its_teardown_was_waiting_on}. Its {killed_helper_process_groups} helper \
              process group(s) were killed, its teardown thread was abandoned, and it was \
              unloaded; every other stream keeps running.",
-            self.stream_name(),
+            self.stream_id(),
             self.teardown_watchdog_budget.as_secs_f64(),
         );
         crate::core::runtime::count_threads_abandoned_in_this_process(
             1,
-            &format!("the teardown of the stream `{}`", self.stream_name()),
-            self.stream_name(),
+            &format!("the teardown of the stream `{}`", self.stream_id()),
+            self.stream_id(),
         );
         self.let_go_of_this_stream_then_mark_it_ended(
             HowALoadedStreamEnded::AbandonedByItsTeardownWatchdog {
@@ -767,7 +797,7 @@ impl LoadedStreamInThisRuntime {
             tracing::error!(
                 "freeing the shared pool entries of the stream `{}` panicked; they are freed \
                  once idle past the window instead: {}",
-                self.stream_name(),
+                self.stream_id(),
                 what_a_panic_said(freeing_panic.as_ref())
             );
         }
@@ -790,7 +820,7 @@ impl LoadedStreamInThisRuntime {
             Some(HowALoadedStreamEnded::StoppedReportingAFailure(stop_failure)) => {
                 Err(Error::Runtime(format!(
                     "the stream `{}` failed to stop: {stop_failure}",
-                    self.stream_name()
+                    self.stream_id()
                 )))
             }
             Some(HowALoadedStreamEnded::AbandonedByItsTeardownWatchdog {
@@ -798,7 +828,7 @@ impl LoadedStreamInThisRuntime {
             }) => Err(Error::Runtime(format!(
                 "the teardown of the stream `{}` outlived its watchdog while waiting on \
                  {what_its_teardown_was_waiting_on}; the stream was abandoned and unloaded",
-                self.stream_name()
+                self.stream_id()
             ))),
         }
     }

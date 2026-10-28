@@ -22,6 +22,7 @@ reach that call:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 from collections.abc import Callable
@@ -30,12 +31,28 @@ from pathlib import Path
 from typing import Any
 
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY, SUITE_VENV_INTERPRETER
+from tatolab.stream._exposed_name_cast import (
+    ExposedNameCastsToNothingError,
+    cast_exposed_name_to_url_safe,
+)
 
 #: How the runtime starts a project's interpreter on the compile entry, ahead of its arguments.
 COMPILE_ENTRY_INVOCATION = ("-I", "-m", "tatolab.stream._project_stream_compile_entry")
 
 #: The compile document a hand-written graph's project prints, beside its `.venv`.
 HAND_WRITTEN_COMPILE_DOCUMENT_FILE_NAME = "hand-written-compile-document.json"
+
+#: The module a hand-written graph's compile document reports its stream function in.
+HAND_WRITTEN_STREAM_FUNCTION_MODULE = "stream"
+
+#: The function a hand-written graph's compile document reports when the graph names no stream.
+HAND_WRITTEN_STREAM_FUNCTION_WHEN_THE_GRAPH_NAMES_NONE = "main"
+
+#: Longest a stream id is: the exposed-name cast's bound.
+STREAM_ID_MAXIMUM_LENGTH = 63
+
+#: How many hex digits of the location's SHA-256 a stream id carries.
+STREAM_ID_HASH_HEX_DIGITS = 6
 
 #: Modules a compile interpreter must never import to reach a stream function:
 #: a test module imports pytest, the harness and whatever it skips on.
@@ -60,9 +77,9 @@ class StreamFunctionNotRunnableFromTheSuiteProject(ValueError):
 
 
 def tatolab_run_of_a_suite_stream_function(
-    stream_function: "Callable[..., Any]", stream_name: "str | None"
+    stream_function: "Callable[..., Any]", display_name: "str | None"
 ) -> TatolabRunOfAProject:
-    """`tatolab run <module>:<function> [--name <stream_name>]` from the suite directory.
+    """`tatolab run <module>:<function> [--name <display_name>]` from the suite directory.
 
     Refused by name for a function the project's compile interpreter could not
     import: one defined inside another function, in a test module, or in
@@ -93,11 +110,86 @@ def tatolab_run_of_a_suite_stream_function(
             f"run from"
         )
     tatolab_run_arguments: "tuple[str, ...]" = (target,)
-    if stream_name is not None:
-        tatolab_run_arguments += ("--name", stream_name)
+    if display_name is not None:
+        tatolab_run_arguments += ("--name", display_name)
     return TatolabRunOfAProject(
         working_directory=STREAM_ON_RUNTIME_SUITE_DIRECTORY,
         tatolab_run_arguments=tatolab_run_arguments,
+    )
+
+
+def hand_written_stream_function_of(graph: "dict[str, Any] | str") -> str:
+    """The `module:function` a hand-written graph's compile document reports: its `stream`
+    key as the function, so two hand-written graphs of one reported project are two locations."""
+    graph_document: Any = graph
+    if isinstance(graph, str):
+        try:
+            graph_document = json.loads(graph)
+        except (ValueError, RecursionError):
+            graph_document = None
+    stream_named = graph_document.get("stream") if isinstance(graph_document, dict) else None
+    function = (
+        stream_named
+        if isinstance(stream_named, str) and stream_named
+        else HAND_WRITTEN_STREAM_FUNCTION_WHEN_THE_GRAPH_NAMES_NONE
+    )
+    return f"{HAND_WRITTEN_STREAM_FUNCTION_MODULE}:{function}"
+
+
+def stream_id_of_the_location(project_directory: Path, stream_function: str) -> str:
+    """The stream id the runtime keys and addresses the stream at this location by,
+    `<folder>-<function>-<hash>`, written out from the plan's rule as the suite's own
+    oracle: the project directory's last component and the function's own name, each
+    cast, a part casting to nothing left out, folder and function cut to fit 63
+    characters, and six hex digits of SHA-256 over `<project_directory>\\n<module:qualname>`."""
+    location_hash = hashlib.sha256(
+        f"{project_directory}\n{stream_function}".encode()
+    ).hexdigest()[:STREAM_ID_HASH_HEX_DIGITS]
+    qualname = stream_function.rsplit(":", 1)[-1]
+    function_name = qualname.rsplit(".", 1)[-1]
+    cast_parts: "list[str]" = []
+    for part in (project_directory.name, function_name):
+        try:
+            cast_parts.append(cast_exposed_name_to_url_safe(part))
+        except ExposedNameCastsToNothingError:
+            continue
+    characters_left = STREAM_ID_MAXIMUM_LENGTH - STREAM_ID_HASH_HEX_DIGITS - len(cast_parts)
+    if sum(map(len, cast_parts)) > characters_left:
+        if len(cast_parts) == 1:
+            shares = [characters_left]
+        else:
+            first_even_share = characters_left // 2
+            second_even_share = characters_left - first_even_share
+            first_length, second_length = map(len, cast_parts)
+            if first_length <= first_even_share:
+                shares = [first_length, characters_left - first_length]
+            elif second_length <= second_even_share:
+                shares = [characters_left - second_length, second_length]
+            else:
+                shares = [first_even_share, second_even_share]
+        cast_parts = [
+            cut_part
+            for cut_part in (part[:share].rstrip("-") for part, share in zip(cast_parts, shares))
+            if cut_part
+        ]
+    return "-".join([*cast_parts, location_hash])
+
+
+def stream_id_of_a_suite_stream_function(stream_function: "Callable[..., Any]") -> str:
+    """The stream id `tatolab run <module>:<function>` from the suite directory loads under."""
+    return stream_id_of_the_location(
+        STREAM_ON_RUNTIME_SUITE_DIRECTORY,
+        f"{stream_function.__module__}:{stream_function.__qualname__}",
+    )
+
+
+def stream_id_of_a_hand_written_graph(
+    graph: "dict[str, Any] | str", *, reported_project_directory: "Path | None" = None
+) -> str:
+    """The stream id a hand-written graph's project loads under."""
+    return stream_id_of_the_location(
+        reported_project_directory or STREAM_ON_RUNTIME_SUITE_DIRECTORY,
+        hand_written_stream_function_of(graph),
     )
 
 
@@ -134,7 +226,8 @@ def write_a_hand_written_graph_project(
     reported_project_directory: "Path | None" = None,
     processor_interpreter: "Path | None" = None,
 ) -> HandWrittenGraphProject:
-    """Write a project at `project_directory` whose compile prints `graph` verbatim.
+    """Write a project at `project_directory` whose compile prints `graph` verbatim, its
+    stream function reported as `stream:<the graph's stream>`.
 
     `reported_project_directory` defaults to the suite directory, so the
     suite's node modules describe; `processor_interpreter` to the suite venv's.
@@ -149,6 +242,8 @@ def write_a_hand_written_graph_project(
         + graph_text_of(graph)
         + ', "project_directory": '
         + json.dumps(str(reported_project_directory))
+        + ', "stream_function": '
+        + json.dumps(hand_written_stream_function_of(graph))
         + "}\n",
         encoding="utf-8",
     )

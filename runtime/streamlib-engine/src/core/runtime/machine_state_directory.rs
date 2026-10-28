@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The kept streams a runtime holds in its state directory: one record per
-//! stream, written whole or not at all, and the owner's exposure rulings each
-//! record carries, split around the stream's load.
+//! The streams a runtime records in its state directory: one record per
+//! stream, named by its id and written whole or not at all, and the owner's
+//! exposure rulings each record carries, split around the stream's load.
 
 use std::path::{Path, PathBuf};
 
@@ -13,33 +13,34 @@ use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
 };
 use streamlib_runtime_client_contract::owner_only_file_written_whole::write_an_owner_only_file_whole;
 
-use super::{StreamEnvironment, StreamListingState};
-use crate::core::graph::{OutputPortExposureLevel, cast_exposed_name_to_url_safe};
+use super::{StreamEnvironment, StreamListingState, StreamLocation};
+use crate::core::graph::{
+    OutputPortExposureLevel, cast_exposed_name_to_url_safe, is_in_exposed_name_cast_form,
+};
 use crate::core::{Error, Result};
 
-/// The schema version of a kept-stream record this runtime writes and reads.
-pub const KEPT_STREAM_RECORD_SCHEMA_VERSION: u32 = 2;
+/// The schema version of a stream record this runtime writes and reads.
+pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 3;
 
-/// The extension every kept-stream record's file name carries.
-const KEPT_STREAM_RECORD_FILE_EXTENSION: &str = "json";
+/// The extension every stream record's file name carries.
+const STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
-/// One kept stream, as its runtime re-loads it: the graph compiled at its
-/// load, the environment its interpreters start in, whether it was stopped or
-/// has failed, and the owner's exposure rulings.
+/// One stream, as its runtime re-loads it: its id and location, its display
+/// name, the graph compiled at its load, the interpreter its processors start
+/// in, whether it was stopped or has failed, and the owner's exposure rulings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct KeptStreamRecord {
-    /// [`KEPT_STREAM_RECORD_SCHEMA_VERSION`] for a record this runtime wrote.
+pub struct StreamRecord {
+    /// [`STREAM_RECORD_SCHEMA_VERSION`] for a record this runtime wrote.
     pub schema_version: u32,
-    /// The stream's URL-safe cast name, which its file is named after.
-    pub stream_name: String,
-    /// The directory the stream's own modules import from.
-    pub project_directory: PathBuf,
+    /// The stream id its location computes to, which its file is named after.
+    pub stream_id: String,
+    /// Where the stream's code lives.
+    pub location: StreamLocation,
+    /// The label the stream is shown under.
+    pub display_name: String,
     /// The project's venv interpreter, as it was spelled at the load.
     pub interpreter: PathBuf,
-    /// The stream function as the load named it, `None` for the sole
-    /// `@stream` in the project's `stream.py`.
-    pub stream_function: Option<String>,
     /// The graph compiled at the load, before any ruling was applied.
     pub graph: serde_json::Value,
     /// Whether the owner stopped the stream, so a restart leaves it unloaded.
@@ -55,22 +56,22 @@ pub struct KeptStreamRecord {
     pub exposure_rulings: Vec<OwnerExposureRuling>,
 }
 
-impl KeptStreamRecord {
-    /// A record of the stream `stream_name` running from `stream_environment`,
-    /// neither stopped nor failed, implicated in no crash, and carrying no
-    /// ruling.
+impl StreamRecord {
+    /// A record of the stream at `location`, shown as `display_name` and
+    /// running from `stream_environment`, neither stopped nor failed,
+    /// implicated in no crash, and carrying no ruling.
     pub fn of_a_running_stream(
-        stream_name: impl Into<String>,
+        location: StreamLocation,
+        display_name: impl Into<String>,
         stream_environment: &StreamEnvironment,
-        stream_function: Option<String>,
         graph: serde_json::Value,
     ) -> Self {
         Self {
-            schema_version: KEPT_STREAM_RECORD_SCHEMA_VERSION,
-            stream_name: stream_name.into(),
-            project_directory: stream_environment.project_directory.clone(),
+            schema_version: STREAM_RECORD_SCHEMA_VERSION,
+            stream_id: location.stream_id(),
+            location,
+            display_name: display_name.into(),
             interpreter: stream_environment.interpreter.clone(),
-            stream_function,
             graph,
             stopped: false,
             failed_because: None,
@@ -110,7 +111,7 @@ impl KeptStreamRecord {
     /// The environment the stream's interpreters start in.
     pub fn stream_environment(&self) -> StreamEnvironment {
         StreamEnvironment {
-            project_directory: self.project_directory.clone(),
+            project_directory: self.location.project_directory.clone(),
             interpreter: self.interpreter.clone(),
         }
     }
@@ -123,7 +124,59 @@ impl KeptStreamRecord {
     }
 }
 
-/// The owner's decision on how far one output port of a kept stream may be
+/// A record an earlier runtime wrote under an earlier schema, which this
+/// runtime lists failed and never loads: it stays, keyed by its file name,
+/// until it is removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamRecordOfAnEarlierRuntime {
+    /// The record's file name without its extension, which names it.
+    pub stream_id: String,
+    /// The schema version it was written under.
+    pub schema_version: u64,
+    /// The project directory it records, when it records one.
+    pub project_directory: Option<PathBuf>,
+}
+
+impl StreamRecordOfAnEarlierRuntime {
+    /// Why the record is listed failed, and how to run its stream again.
+    pub fn failed_because(&self) -> String {
+        let run_it_again = match &self.project_directory {
+            Some(project_directory) => {
+                format!(
+                    "run it again with `tatolab run` in {}",
+                    project_directory.display()
+                )
+            }
+            None => "run it again with `tatolab run` in its project".to_string(),
+        };
+        format!(
+            "an earlier runtime recorded it, under record schema {}, and this runtime does not \
+             load it; {run_it_again}, and `tatolab rm {}` forgets this record",
+            self.schema_version, self.stream_id
+        )
+    }
+}
+
+/// One file of the state directory's `streams/`, read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamRecordAsRead {
+    /// A record this runtime writes.
+    Current(StreamRecord),
+    /// A record an earlier runtime wrote, listed failed.
+    RecordedByAnEarlierRuntime(StreamRecordOfAnEarlierRuntime),
+}
+
+impl StreamRecordAsRead {
+    /// The id the record is keyed by.
+    pub fn stream_id(&self) -> &str {
+        match self {
+            Self::Current(record) => &record.stream_id,
+            Self::RecordedByAnEarlierRuntime(earlier) => &earlier.stream_id,
+        }
+    }
+}
+
+/// The owner's decision on how far one output port of a stream may be
 /// read, which wins over the level the stream function gave it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -309,81 +362,88 @@ fn graph_with_the_owners_exposure_rulings_applied(
     ruled_graph
 }
 
-/// A kept-stream record that could not be read, by the path it sits at.
+/// A stream record that could not be read, by the path it sits at.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeptStreamRecordReadFailure {
-    /// The record's file, or the kept-streams directory when no record file is reached.
+pub struct StreamRecordReadFailure {
+    /// The record's file, or the streams directory when no record file is reached.
     pub path: PathBuf,
     /// Why it could not be read.
     pub reason: String,
 }
 
-impl std::fmt::Display for KeptStreamRecordReadFailure {
+impl std::fmt::Display for StreamRecordReadFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "the kept-stream record {} cannot be read: {}",
+            "the stream record {} cannot be read: {}",
             self.path.display(),
             self.reason
         )
     }
 }
 
-impl From<KeptStreamRecordReadFailure> for Error {
-    fn from(unreadable: KeptStreamRecordReadFailure) -> Self {
+impl From<StreamRecordReadFailure> for Error {
+    fn from(unreadable: StreamRecordReadFailure) -> Self {
         Error::Runtime(unreadable.to_string())
     }
 }
 
-/// The kept-stream records in a state directory's `streams/`, one
-/// `<stream>.json` per kept stream.
+/// The stream records in a state directory's `streams/`, one `<stream id>.json`
+/// per stream.
 #[derive(Debug, Clone)]
-pub struct KeptStreamRecordsInTheStateDirectory {
-    kept_streams_directory: PathBuf,
+pub struct StreamRecordsInTheStateDirectory {
+    streams_directory: PathBuf,
 }
 
-impl KeptStreamRecordsInTheStateDirectory {
-    /// The records in `kept_streams_directory`, created owner-only when it is
+impl StreamRecordsInTheStateDirectory {
+    /// The records in `streams_directory`, created owner-only when it is
     /// absent; a path there that is not a directory is refused by name.
-    pub fn open(kept_streams_directory: &Path) -> Result<Self> {
+    pub fn open(streams_directory: &Path) -> Result<Self> {
         create_directory_and_its_missing_parents_at_mode(
-            kept_streams_directory,
+            streams_directory,
             OWNER_ONLY_DIRECTORY_MODE,
         )
         .map_err(|cannot_create| {
             Error::Configuration(format!(
-                "the kept-streams directory {} cannot be opened: {cannot_create}",
-                kept_streams_directory.display()
+                "the streams directory {} cannot be opened: {cannot_create}",
+                streams_directory.display()
             ))
         })?;
         Ok(Self {
-            kept_streams_directory: kept_streams_directory.to_path_buf(),
+            streams_directory: streams_directory.to_path_buf(),
         })
     }
 
     /// The directory the records sit in.
-    pub fn kept_streams_directory(&self) -> &Path {
-        &self.kept_streams_directory
+    pub fn streams_directory(&self) -> &Path {
+        &self.streams_directory
     }
 
-    /// The file the record of `stream_name` sits at: `<cast name>.json`.
-    pub fn record_path_of(&self, stream_name: &str) -> Result<PathBuf> {
-        let stream_cast = cast_exposed_name_to_url_safe(stream_name)?;
-        Ok(self
-            .kept_streams_directory
-            .join(format!("{stream_cast}.{KEPT_STREAM_RECORD_FILE_EXTENSION}")))
+    /// The file the record of `stream_id` sits at, `<stream id>.json`; `None`
+    /// when `stream_id` is not in the cast form every id takes, so it names
+    /// no record.
+    pub fn record_path_of(&self, stream_id: &str) -> Option<PathBuf> {
+        is_in_exposed_name_cast_form(stream_id).then(|| {
+            self.streams_directory
+                .join(format!("{stream_id}.{STREAM_RECORD_FILE_EXTENSION}"))
+        })
     }
 
     /// Write `record` whole or not at all, owner-only.
-    pub fn write(&self, record: &KeptStreamRecord) -> Result<()> {
-        let record_path = self.record_path_of(&record.stream_name)?;
+    pub fn write(&self, record: &StreamRecord) -> Result<()> {
         let refuse = |what_failed: String| {
             Error::Runtime(format!(
-                "the kept-stream record of `{}` was not written to {}: {what_failed}",
-                record.stream_name,
-                record_path.display()
+                "the record of the stream `{}` was not written to {}: {what_failed}",
+                record.stream_id,
+                self.streams_directory.display()
             ))
         };
+        let record_path = self.record_path_of(&record.stream_id).ok_or_else(|| {
+            refuse(format!(
+                "`{}` is not a stream id, so it names no record file",
+                record.stream_id
+            ))
+        })?;
         let mut record_json = serde_json::to_vec_pretty(record)
             .map_err(|cannot_serialize| refuse(cannot_serialize.to_string()))?;
         record_json.push(b'\n');
@@ -393,22 +453,19 @@ impl KeptStreamRecordsInTheStateDirectory {
         Ok(())
     }
 
-    /// The record of `stream_name`, `None` when there is none; a record that
+    /// The record of `stream_id`, `None` when there is none; a record that
     /// cannot be read is refused naming its path.
     pub fn read(
         &self,
-        stream_name: &str,
-    ) -> std::result::Result<Option<KeptStreamRecord>, KeptStreamRecordReadFailure> {
-        let record_path = self
-            .record_path_of(stream_name)
-            .map_err(|names_no_record| KeptStreamRecordReadFailure {
-                path: self.kept_streams_directory.clone(),
-                reason: format!("no record can be named `{stream_name}`: {names_no_record}"),
-            })?;
+        stream_id: &str,
+    ) -> std::result::Result<Option<StreamRecordAsRead>, StreamRecordReadFailure> {
+        let Some(record_path) = self.record_path_of(stream_id) else {
+            return Ok(None);
+        };
         match std::fs::read(&record_path) {
-            Ok(record_bytes) => read_a_kept_stream_record(&record_path, &record_bytes).map(Some),
+            Ok(record_bytes) => read_a_stream_record(&record_path, &record_bytes).map(Some),
             Err(not_read) if not_read.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(not_read) => Err(KeptStreamRecordReadFailure {
+            Err(not_read) => Err(StreamRecordReadFailure {
                 path: record_path,
                 reason: not_read.to_string(),
             }),
@@ -416,30 +473,30 @@ impl KeptStreamRecordsInTheStateDirectory {
     }
 
     /// Every record in the directory, ordered by file name; each that cannot
-    /// be read — malformed, or of another schema version — is reported by its
+    /// be read — malformed, or of a later schema version — is reported by its
     /// path and the rest are still read.
     pub fn read_every(
         &self,
-    ) -> Vec<std::result::Result<KeptStreamRecord, KeptStreamRecordReadFailure>> {
-        let directory_entries = match std::fs::read_dir(&self.kept_streams_directory) {
+    ) -> Vec<std::result::Result<StreamRecordAsRead, StreamRecordReadFailure>> {
+        let directory_entries = match std::fs::read_dir(&self.streams_directory) {
             Ok(directory_entries) => directory_entries,
             Err(not_listed) => {
-                return vec![Err(KeptStreamRecordReadFailure {
-                    path: self.kept_streams_directory.clone(),
+                return vec![Err(StreamRecordReadFailure {
+                    path: self.streams_directory.clone(),
                     reason: format!("the directory cannot be listed: {not_listed}"),
                 })];
             }
         };
         let mut record_paths: Vec<PathBuf> = directory_entries
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| is_a_kept_stream_record_file_name(path))
+            .filter(|path| is_a_stream_record_file_name(path))
             .collect();
         record_paths.sort();
         record_paths
             .into_iter()
             .map(|record_path| match std::fs::read(&record_path) {
-                Ok(record_bytes) => read_a_kept_stream_record(&record_path, &record_bytes),
-                Err(not_read) => Err(KeptStreamRecordReadFailure {
+                Ok(record_bytes) => read_a_stream_record(&record_path, &record_bytes),
+                Err(not_read) => Err(StreamRecordReadFailure {
                     path: record_path,
                     reason: not_read.to_string(),
                 }),
@@ -447,17 +504,19 @@ impl KeptStreamRecordsInTheStateDirectory {
             .collect()
     }
 
-    /// Remove the record of `stream_name`; `false` when there was none.
-    pub fn remove(&self, stream_name: &str) -> Result<bool> {
-        let record_path = self.record_path_of(stream_name)?;
+    /// Remove the record of `stream_id`; `false` when there was none.
+    pub fn remove(&self, stream_id: &str) -> Result<bool> {
+        let Some(record_path) = self.record_path_of(stream_id) else {
+            return Ok(false);
+        };
         match std::fs::remove_file(&record_path) {
             Ok(()) => {
-                self.sync_the_kept_streams_directory();
+                self.sync_the_streams_directory();
                 Ok(true)
             }
             Err(not_removed) if not_removed.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(not_removed) => Err(Error::Runtime(format!(
-                "the kept-stream record {} was not removed: {not_removed}",
+                "the stream record {} was not removed: {not_removed}",
                 record_path.display()
             ))),
         }
@@ -465,73 +524,88 @@ impl KeptStreamRecordsInTheStateDirectory {
 
     /// Sync the records' directory, best effort, so a rename or a removal in
     /// it reaches the disk.
-    fn sync_the_kept_streams_directory(&self) {
-        if let Ok(directory) = std::fs::File::open(&self.kept_streams_directory) {
+    fn sync_the_streams_directory(&self) {
+        if let Ok(directory) = std::fs::File::open(&self.streams_directory) {
             let _ = directory.sync_all();
         }
     }
 }
 
-/// Whether `path` names a record: `<name>.json`, not a hidden temporary.
-fn is_a_kept_stream_record_file_name(path: &Path) -> bool {
-    let hidden = path
-        .file_name()
-        .is_some_and(|file_name| file_name.to_string_lossy().starts_with('.'));
-    !hidden
-        && path
-            .extension()
-            .is_some_and(|extension| extension == KEPT_STREAM_RECORD_FILE_EXTENSION)
+/// Whether `path` names a record: `<stream id>.json`. A stream id may begin
+/// with `.`, and a whole-file write's temporary ends in `.tmp`, so the
+/// extension alone tells them apart.
+fn is_a_stream_record_file_name(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == STREAM_RECORD_FILE_EXTENSION)
 }
 
-/// Read one record from `record_bytes`, refusing a record of another schema
-/// version by that version before its fields are read.
-fn read_a_kept_stream_record(
+/// Read one record from `record_bytes`: a record of an earlier schema version
+/// is read as one an earlier runtime wrote, keyed by its file name, and one of
+/// a later version is refused by that version before its fields are read.
+fn read_a_stream_record(
     record_path: &Path,
     record_bytes: &[u8],
-) -> std::result::Result<KeptStreamRecord, KeptStreamRecordReadFailure> {
-    let failure = |reason: String| KeptStreamRecordReadFailure {
+) -> std::result::Result<StreamRecordAsRead, StreamRecordReadFailure> {
+    let failure = |reason: String| StreamRecordReadFailure {
         path: record_path.to_path_buf(),
         reason,
     };
     let record_document: serde_json::Value = serde_json::from_slice(record_bytes)
         .map_err(|not_json| failure(format!("it is not JSON: {not_json}")))?;
-    match record_document
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-    {
-        Some(version) if version == u64::from(KEPT_STREAM_RECORD_SCHEMA_VERSION) => {}
-        Some(other_version) => {
-            return Err(failure(format!(
-                "it is a record of schema version {other_version}, and this runtime reads \
-                 version {KEPT_STREAM_RECORD_SCHEMA_VERSION}"
-            )));
-        }
-        None => {
-            return Err(failure(
-                "it carries no `schema_version`, so it is not a kept-stream record".to_string(),
-            ));
-        }
-    }
-    let record = KeptStreamRecord::deserialize(&record_document).map_err(|not_a_record| {
-        failure(format!("it is not a kept-stream record: {not_a_record}"))
-    })?;
     let record_file_stem = record_path
         .file_stem()
         .map(|file_stem| file_stem.to_string_lossy().into_owned())
         .unwrap_or_default();
-    match cast_exposed_name_to_url_safe(&record.stream_name) {
-        Ok(stream_cast) if stream_cast == record_file_stem => Ok(record),
-        Ok(stream_cast) => Err(failure(format!(
-            "it records the stream `{}`, whose record is `{stream_cast}.\
-             {KEPT_STREAM_RECORD_FILE_EXTENSION}` and not this file, so no stream action on \
-             `{record_file_stem}` reaches it; rename it or remove it",
-            record.stream_name
-        ))),
-        Err(casts_to_nothing) => Err(failure(format!(
-            "it records a stream named `{}`, which names no stream: {casts_to_nothing}",
-            record.stream_name
-        ))),
+    let current_version = u64::from(STREAM_RECORD_SCHEMA_VERSION);
+    match record_document
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+    {
+        Some(version) if version == current_version => {}
+        Some(earlier_version) if earlier_version < current_version => {
+            return Ok(StreamRecordAsRead::RecordedByAnEarlierRuntime(
+                StreamRecordOfAnEarlierRuntime {
+                    stream_id: record_file_stem,
+                    schema_version: earlier_version,
+                    project_directory: record_document
+                        .get("project_directory")
+                        .and_then(serde_json::Value::as_str)
+                        .map(PathBuf::from),
+                },
+            ));
+        }
+        Some(later_version) => {
+            return Err(failure(format!(
+                "it is a record of schema version {later_version}, and this runtime reads \
+                 version {STREAM_RECORD_SCHEMA_VERSION}"
+            )));
+        }
+        None => {
+            return Err(failure(
+                "it carries no `schema_version`, so it is not a stream record".to_string(),
+            ));
+        }
     }
+    let record = StreamRecord::deserialize(&record_document)
+        .map_err(|not_a_record| failure(format!("it is not a stream record: {not_a_record}")))?;
+    let recorded_stream_id = &record.stream_id;
+    if *recorded_stream_id != record_file_stem {
+        return Err(failure(format!(
+            "it records the stream `{recorded_stream_id}`, whose record is \
+             `{recorded_stream_id}.{STREAM_RECORD_FILE_EXTENSION}` and not this file, so no \
+             stream action on `{record_file_stem}` reaches it; rename it or remove it"
+        )));
+    }
+    let location_stream_id = record.location.stream_id();
+    if *recorded_stream_id != location_stream_id {
+        return Err(failure(format!(
+            "it records the stream `{recorded_stream_id}` at {}, whose stream id is \
+             `{location_stream_id}`; a stream's id is the one its location computes to, so \
+             remove this record and run the stream again",
+            record.location
+        )));
+    }
+    Ok(StreamRecordAsRead::Current(record))
 }
 
 #[cfg(test)]
@@ -539,21 +613,30 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    fn a_record_named(stream_name: &str) -> KeptStreamRecord {
-        KeptStreamRecord::of_a_running_stream(
-            stream_name,
-            &StreamEnvironment {
-                project_directory: PathBuf::from("/home/someone/camera-app"),
-                interpreter: PathBuf::from("/home/someone/camera-app/.venv/bin/python"),
+    /// A record of the stream `function` in the project folder `folder`.
+    fn a_record_of(folder: &str, function: &str) -> StreamRecord {
+        let project_directory = PathBuf::from(format!("/home/someone/{folder}"));
+        StreamRecord::of_a_running_stream(
+            StreamLocation {
+                project_directory: project_directory.clone(),
+                stream_function: format!("stream:{function}"),
             },
-            Some("stream.py:main".to_string()),
+            function,
+            &StreamEnvironment {
+                interpreter: project_directory.join(".venv/bin/python"),
+                project_directory,
+            },
             serde_json::json!({
-                "stream": stream_name,
+                "stream": function,
                 "nodes": [{"name": "camera", "type": "tatolab.stream:CameraSource", "config": {}}],
                 "links": [],
                 "exposed": [{"node": "camera", "port": "video", "level": "private"}],
             }),
         )
+    }
+
+    fn current(record: StreamRecord) -> StreamRecordAsRead {
+        StreamRecordAsRead::Current(record)
     }
 
     fn file_names_in(directory: &Path) -> Vec<String> {
@@ -574,44 +657,81 @@ mod tests {
     }
 
     #[test]
-    fn a_written_record_reads_back_whole_from_a_file_named_after_its_stream() {
+    fn a_written_record_reads_back_whole_from_a_file_named_after_its_stream_id() {
         let state_directory = tempfile::tempdir().unwrap();
         let records =
-            KeptStreamRecordsInTheStateDirectory::open(&state_directory.path().join("streams"))
+            StreamRecordsInTheStateDirectory::open(&state_directory.path().join("streams"))
                 .unwrap();
-        let mut record = a_record_named("camera-preview");
+        let mut record = a_record_of("camera-app", "preview");
         record.stopped = true;
         record.record_the_owners_exposure_ruling(a_ruling(
             "camera",
             "video",
             OutputPortExposureLevel::Internal,
         ));
+        let stream_id = record.location.stream_id();
+        assert_eq!(record.stream_id, stream_id);
 
         records.write(&record).unwrap();
 
         assert_eq!(
-            records.read("camera-preview").unwrap(),
-            Some(record.clone())
+            records.read(&stream_id).unwrap(),
+            Some(current(record.clone()))
         );
-        assert_eq!(records.read_every(), vec![Ok(record)]);
+        assert_eq!(records.read_every(), vec![Ok(current(record))]);
         assert_eq!(
-            file_names_in(records.kept_streams_directory()),
-            ["camera-preview.json"]
+            file_names_in(records.streams_directory()),
+            [format!("{stream_id}.json")]
         );
+    }
+
+    #[test]
+    fn a_record_whose_id_begins_with_a_dot_is_read_like_any_other() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let record = a_record_of(".config-app", "preview");
+        assert!(
+            record.stream_id.starts_with(".config-app-"),
+            "{}",
+            record.stream_id
+        );
+
+        records.write(&record).unwrap();
+
+        assert_eq!(records.read_every(), vec![Ok(current(record))]);
+    }
+
+    #[test]
+    fn a_record_holds_its_id_location_and_display_name_under_schema_3() {
+        let record = a_record_of("camera-app", "preview");
+
+        let written = serde_json::to_value(&record).unwrap();
+
+        assert_eq!(written["schema_version"], 3);
+        assert_eq!(written["stream_id"], record.location.stream_id());
+        assert_eq!(
+            written["location"],
+            serde_json::json!({
+                "project_directory": "/home/someone/camera-app",
+                "stream_function": "stream:preview",
+            })
+        );
+        assert_eq!(written["display_name"], "preview");
     }
 
     #[test]
     fn the_streams_directory_is_owner_only_and_each_record_is_its_owners_alone() {
         let state_directory = tempfile::tempdir().unwrap();
-        let kept_streams_directory = state_directory.path().join("streams");
-        let records = KeptStreamRecordsInTheStateDirectory::open(&kept_streams_directory).unwrap();
+        let streams_directory = state_directory.path().join("streams");
+        let records = StreamRecordsInTheStateDirectory::open(&streams_directory).unwrap();
+        let record = a_record_of("camera-app", "preview");
 
-        records.write(&a_record_named("camera-preview")).unwrap();
+        records.write(&record).unwrap();
 
         let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode_of(&kept_streams_directory), 0o700);
+        assert_eq!(mode_of(&streams_directory), 0o700);
         assert_eq!(
-            mode_of(&kept_streams_directory.join("camera-preview.json")),
+            mode_of(&records.record_path_of(&record.stream_id).unwrap()),
             0o600
         );
     }
@@ -619,31 +739,34 @@ mod tests {
     #[test]
     fn a_rewrite_replaces_the_record_whole_and_leaves_no_temporary_file() {
         let state_directory = tempfile::tempdir().unwrap();
-        let records = KeptStreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        let first = a_record_named("camera-preview");
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let first = a_record_of("camera-app", "preview");
         records.write(&first).unwrap();
 
         let mut stopped = first.clone();
         stopped.stopped = true;
         records.write(&stopped).unwrap();
 
-        assert_eq!(records.read("camera-preview").unwrap(), Some(stopped));
         assert_eq!(
-            file_names_in(records.kept_streams_directory()),
-            ["camera-preview.json"]
+            records.read(&first.stream_id).unwrap(),
+            Some(current(stopped))
+        );
+        assert_eq!(
+            file_names_in(records.streams_directory()),
+            [format!("{}.json", first.stream_id)]
         );
     }
 
     #[test]
     fn every_record_is_read_and_each_unreadable_one_is_reported_by_its_path() {
         let state_directory = tempfile::tempdir().unwrap();
-        let records = KeptStreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        let directory = records.kept_streams_directory().to_path_buf();
-        records.write(&a_record_named("a-camera")).unwrap();
-        records.write(&a_record_named("d-microphone")).unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let directory = records.streams_directory().to_path_buf();
+        let camera = a_record_of("a-camera", "main");
+        records.write(&camera).unwrap();
         std::fs::write(directory.join("b-malformed.json"), b"{ not json").unwrap();
-        let mut later_schema = serde_json::to_value(a_record_named("c-later")).unwrap();
-        later_schema["schema_version"] = serde_json::json!(3);
+        let mut later_schema = serde_json::to_value(a_record_of("c-later", "main")).unwrap();
+        later_schema["schema_version"] = serde_json::json!(4);
         later_schema["crashed_at"] = serde_json::json!("2026-10-10T00:00:00Z");
         std::fs::write(
             directory.join("c-later.json"),
@@ -655,73 +778,175 @@ mod tests {
 
         let every_record = records.read_every();
 
-        assert_eq!(every_record.len(), 4, "{every_record:?}");
-        assert_eq!(every_record[0], Ok(a_record_named("a-camera")));
+        assert_eq!(every_record.len(), 3, "{every_record:?}");
+        assert_eq!(every_record[0], Ok(current(camera)));
         let malformed = every_record[1].as_ref().unwrap_err();
         assert_eq!(malformed.path, directory.join("b-malformed.json"));
         assert!(malformed.reason.contains("not JSON"), "{malformed}");
         let later = every_record[2].as_ref().unwrap_err();
         assert_eq!(later.path, directory.join("c-later.json"));
-        assert!(later.reason.contains("schema version 3"), "{later}");
-        assert_eq!(every_record[3], Ok(a_record_named("d-microphone")));
+        assert!(later.reason.contains("schema version 4"), "{later}");
     }
 
     #[test]
-    fn a_record_whose_stream_name_is_not_its_file_name_is_reported_unreadable_by_its_path() {
+    fn a_schema_2_record_is_read_as_an_earlier_runtimes_keyed_by_its_file_name() {
         let state_directory = tempfile::tempdir().unwrap();
-        let records = KeptStreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        records.write(&a_record_named("a-camera")).unwrap();
-        let renamed_copy = records.kept_streams_directory().join("b-copy.json");
-        std::fs::copy(records.record_path_of("a-camera").unwrap(), &renamed_copy).unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        std::fs::write(
+            records.streams_directory().join("main.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2,
+                "stream_name": "main",
+                "project_directory": "/home/someone/hello",
+                "interpreter": "/home/someone/hello/.venv/bin/python",
+                "stream_function": null,
+                "graph": {"stream": "main", "nodes": [], "links": []},
+                "stopped": false,
+                "failed_because": null,
+                "runtime_crashes_in_a_row_implicating_it": 0,
+                "exposure_rulings": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let earlier = StreamRecordOfAnEarlierRuntime {
+            stream_id: "main".to_string(),
+            schema_version: 2,
+            project_directory: Some(PathBuf::from("/home/someone/hello")),
+        };
+        assert_eq!(
+            records.read_every(),
+            vec![Ok(StreamRecordAsRead::RecordedByAnEarlierRuntime(
+                earlier.clone()
+            ))]
+        );
+        assert_eq!(
+            records.read("main").unwrap(),
+            Some(StreamRecordAsRead::RecordedByAnEarlierRuntime(
+                earlier.clone()
+            ))
+        );
+        let failed_because = earlier.failed_because();
+        assert!(
+            failed_because.contains("an earlier runtime recorded it"),
+            "{failed_because}"
+        );
+        assert!(
+            failed_because.contains("run it again with `tatolab run` in /home/someone/hello"),
+            "{failed_because}"
+        );
+        assert!(records.remove("main").unwrap());
+        assert!(records.read_every().is_empty());
+    }
+
+    #[test]
+    fn a_record_whose_stream_id_is_not_its_file_name_is_reported_unreadable_by_its_path() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let camera = a_record_of("a-camera", "main");
+        records.write(&camera).unwrap();
+        let renamed_copy = records.streams_directory().join("zz-copy.json");
+        std::fs::copy(
+            records.record_path_of(&camera.stream_id).unwrap(),
+            &renamed_copy,
+        )
+        .unwrap();
 
         let every_record = records.read_every();
 
         assert_eq!(every_record.len(), 2, "{every_record:?}");
-        assert_eq!(every_record[0], Ok(a_record_named("a-camera")));
+        assert_eq!(every_record[0], Ok(current(camera.clone())));
         let mismatched = every_record[1].as_ref().unwrap_err();
         assert_eq!(mismatched.path, renamed_copy);
-        assert!(mismatched.reason.contains("`a-camera`"), "{mismatched}");
-        let refusal = records.read("b-copy").unwrap_err();
+        assert!(
+            mismatched
+                .reason
+                .contains(&format!("`{}`", camera.stream_id)),
+            "{mismatched}"
+        );
+        let refusal = records.read("zz-copy").unwrap_err();
         assert_eq!(refusal.path, renamed_copy);
+    }
+
+    #[test]
+    fn a_record_whose_id_is_not_the_one_its_location_computes_to_is_reported_naming_both() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let mut record = a_record_of("camera-app", "preview");
+        record.stream_id = "camera-app-preview-000000".to_string();
+        std::fs::write(
+            records
+                .streams_directory()
+                .join("camera-app-preview-000000.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let refusal = records
+            .read("camera-app-preview-000000")
+            .unwrap_err()
+            .to_string();
+
+        assert!(refusal.contains("`camera-app-preview-000000`"), "{refusal}");
+        assert!(
+            refusal.contains(&format!("`{}`", record.location.stream_id())),
+            "{refusal}"
+        );
     }
 
     #[test]
     fn a_record_carrying_a_field_this_runtime_does_not_read_is_reported_naming_it() {
         let state_directory = tempfile::tempdir().unwrap();
-        let records = KeptStreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        let mut record = serde_json::to_value(a_record_named("camera-preview")).unwrap();
-        record["stoped"] = serde_json::json!(true);
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let record = a_record_of("camera-app", "preview");
+        let mut record_document = serde_json::to_value(&record).unwrap();
+        record_document["stoped"] = serde_json::json!(true);
         std::fs::write(
-            records.kept_streams_directory().join("camera-preview.json"),
-            serde_json::to_vec(&record).unwrap(),
+            records.record_path_of(&record.stream_id).unwrap(),
+            serde_json::to_vec(&record_document).unwrap(),
         )
         .unwrap();
 
-        let refusal = records.read("camera-preview").unwrap_err().to_string();
+        let refusal = records.read(&record.stream_id).unwrap_err().to_string();
 
-        assert!(refusal.contains("camera-preview.json"), "{refusal}");
+        assert!(
+            refusal.contains(&format!("{}.json", record.stream_id)),
+            "{refusal}"
+        );
         assert!(refusal.contains("stoped"), "{refusal}");
     }
 
     #[test]
     fn a_removed_record_is_gone_and_removing_it_again_reports_there_was_none() {
         let state_directory = tempfile::tempdir().unwrap();
-        let records = KeptStreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        records.write(&a_record_named("camera-preview")).unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let record = a_record_of("camera-app", "preview");
+        records.write(&record).unwrap();
 
-        assert!(records.remove("camera-preview").unwrap());
-        assert_eq!(records.read("camera-preview").unwrap(), None);
-        assert!(!records.remove("camera-preview").unwrap());
+        assert!(records.remove(&record.stream_id).unwrap());
+        assert_eq!(records.read(&record.stream_id).unwrap(), None);
+        assert!(!records.remove(&record.stream_id).unwrap());
         assert!(records.read_every().is_empty());
     }
 
     #[test]
-    fn a_kept_streams_path_that_is_not_a_directory_is_refused_by_name() {
+    fn a_name_that_is_not_a_stream_id_names_no_record() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+
+        assert_eq!(records.record_path_of("../escape"), None);
+        assert_eq!(records.read("Camera Preview").unwrap(), None);
+        assert!(!records.remove("Camera Preview").unwrap());
+    }
+
+    #[test]
+    fn a_streams_path_that_is_not_a_directory_is_refused_by_name() {
         let state_directory = tempfile::tempdir().unwrap();
         let not_a_directory = state_directory.path().join("streams");
         std::fs::write(&not_a_directory, b"").unwrap();
 
-        let refusal = KeptStreamRecordsInTheStateDirectory::open(&not_a_directory)
+        let refusal = StreamRecordsInTheStateDirectory::open(&not_a_directory)
             .unwrap_err()
             .to_string();
 
@@ -820,7 +1045,7 @@ mod tests {
 
     #[test]
     fn a_later_ruling_on_a_port_replaces_the_earlier_one_whatever_its_spelling() {
-        let mut record = a_record_named("camera-preview");
+        let mut record = a_record_of("camera-app", "preview");
         record.record_the_owners_exposure_ruling(a_ruling(
             "camera",
             "video",

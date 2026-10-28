@@ -45,7 +45,11 @@ from conftest import AttachedTatolabRun, PrivateMachineDirectories, TatolabdUnde
 from local_api_client import LocalApiClient, LocalApiRefusedTheRequest
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE
 from runtime_unit_under_test import MachineDirectoriesUnderATestRoot, RuntimeUnitUnderTest
-from stream_runs_on_tatolabd import COMPILE_ENTRY_INVOCATION, TatolabRunOfAProject
+from stream_runs_on_tatolabd import (
+    COMPILE_ENTRY_INVOCATION,
+    TatolabRunOfAProject,
+    stream_id_of_the_location,
+)
 
 #: A load is the project's compile, and on the runtime's first start its GPU context.
 STREAM_RUNNING_TIMEOUT_SECONDS = 90.0
@@ -64,10 +68,10 @@ MCP_REQUEST_META = {
     CLIENT_INFO_META_KEY: {"name": "done-means-agent", "version": "0"},
 }
 
-#: The two projects of the done-means, each running the sole `@stream` of its
-#: own `stream.py`, named after the function.
-ALPHA_STREAM = "alpha_pattern"
-BRAVO_STREAM = "bravo_pattern"
+#: The stream functions of the done-means's two projects, each the sole `@stream`
+#: of its own `stream.py` and the default display name of its stream.
+ALPHA_STREAM_FUNCTION = "alpha_pattern"
+BRAVO_STREAM_FUNCTION = "bravo_pattern"
 
 #: Every project stream here: a test pattern into a node that reads its frames,
 #: its `video` exposed public by the stream function — the author's suggestion,
@@ -117,8 +121,8 @@ def exposure_at(level: str) -> "list[dict[str, str]]":
 NO_RUNTIME_REFUSAL_PREFIX = "no runtime is running on this machine: nothing answers at "
 NO_RUNTIME_REFUSAL_REMEDY = "Start one by running `tatolabd` in a terminal."
 
-KEPT_STREAM_RECORD_FILE_MODE = 0o600
-KEPT_STREAM_RECORD_SCHEMA_VERSION = 2
+STREAM_RECORD_FILE_MODE = 0o600
+STREAM_RECORD_SCHEMA_VERSION = 3
 
 
 def runtime_serving_log_line(reloaded_count: int, skipped_count: int) -> str:
@@ -129,9 +133,9 @@ def runtime_serving_log_line(reloaded_count: int, skipped_count: int) -> str:
     )
 
 
-def stream_stopped_log_line(stream_name: str) -> str:
+def stream_stopped_log_line(stream_id: str) -> str:
     """The engine's line once a stream's graceful stop has finished."""
-    return f"{ENGINE_GRACEFUL_STOP_LOG_LINE}{stream_name}` stopped"
+    return f"{ENGINE_GRACEFUL_STOP_LOG_LINE}{stream_id}` stopped"
 
 
 def make_project_running_a_pattern_stream(
@@ -149,66 +153,87 @@ def make_project_running_a_pattern_stream(
     ).resolve()
 
 
-def listed_streams_by_name(local_api: LocalApiClient) -> "dict[str, dict[str, Any]]":
-    """`list_streams`, keyed by stream name."""
-    return {listed["name"]: listed for listed in local_api.list_streams()}
+def stream_function_of_the_pattern_project(stream_function_name: str) -> str:
+    """The pattern stream's function as its location names it: `stream:<function>`."""
+    return f"stream:{stream_function_name}"
 
 
-def listing_of(stream_name: str, state: str, project_directory: Path, node_count: "int | None") -> "dict[str, Any]":
-    """One `list_streams` entry of a stream that is not failed."""
+def stream_id_of_the_pattern_project(project_directory: Path, stream_function_name: str) -> str:
+    """The stream id the runtime keys and addresses the project's pattern stream by."""
+    return stream_id_of_the_location(
+        project_directory, stream_function_of_the_pattern_project(stream_function_name)
+    )
+
+
+def listed_streams_by_id(local_api: LocalApiClient) -> "dict[str, dict[str, Any]]":
+    """`list_streams`, keyed by stream id."""
+    return {listed["stream"]: listed for listed in local_api.list_streams()}
+
+
+def listing_of(
+    stream_id: str,
+    stream_function_name: str,
+    state: str,
+    project_directory: Path,
+    node_count: "int | None",
+) -> "dict[str, Any]":
+    """One `list_streams` entry of a pattern stream that is not failed, shown under its
+    function's name."""
     return {
-        "name": stream_name,
+        "stream": stream_id,
+        "display_name": stream_function_name,
+        "location": {
+            "project_directory": str(project_directory),
+            "stream_function": stream_function_of_the_pattern_project(stream_function_name),
+        },
         "state": state,
-        "project_directory": str(project_directory),
         "node_count": node_count,
         "failed_because": None,
     }
 
 
 def await_stream_unlisted(
-    local_api: LocalApiClient, stream_name: str, *, timeout: float = ATTACHED_STREAM_UNLOAD_TIMEOUT_SECONDS
+    local_api: LocalApiClient, stream_id: str, *, timeout: float = ATTACHED_STREAM_UNLOAD_TIMEOUT_SECONDS
 ) -> "dict[str, dict[str, Any]]":
-    """Poll `list_streams` until `stream_name` is no longer listed; return the listing then."""
+    """Poll `list_streams` until `stream_id` is no longer listed; return the listing then."""
     deadline = time.monotonic() + timeout
     while True:
-        listed = listed_streams_by_name(local_api)
-        if stream_name not in listed:
+        listed = listed_streams_by_id(local_api)
+        if stream_id not in listed:
             return listed
         if time.monotonic() >= deadline:
             raise AssertionError(
-                f"the stream `{stream_name}` was still listed {timeout}s after its connection "
+                f"the stream `{stream_id}` was still listed {timeout}s after its connection "
                 f"closed: {listed}"
             )
         time.sleep(STREAM_LISTING_POLL_INTERVAL_SECONDS)
 
 
 def assert_the_pattern_is_wired_to_the_reader_inside_the_stream(
-    local_api: LocalApiClient, stream_name: str
+    local_api: LocalApiClient, stream_id: str
 ) -> None:
     """The stream's one link, the pattern into the reader, reaches `wired`: proof it runs,
     read from inside the stream, never by reading a port across its edge."""
-    stream_links = local_api.graph(stream_name)["links"]
+    stream_links = local_api.graph(stream_id)["links"]
     assert len(stream_links) == 1, stream_links
-    link_state = local_api.await_link_state(stream_links[0]["id"], "wired", stream=stream_name)
-    assert link_state == "wired", f"the pattern-to-reader link of `{stream_name}` is {link_state}"
+    link_state = local_api.await_link_state(stream_links[0]["id"], "wired", stream=stream_id)
+    assert link_state == "wired", f"the pattern-to-reader link of `{stream_id}` is {link_state}"
 
 
-def stream_names_in_the_machine_graph(local_api: LocalApiClient) -> "list[str]":
-    """Each loaded stream's name, from `graph` with no stream named."""
+def stream_ids_in_the_machine_graph(local_api: LocalApiClient) -> "list[str]":
+    """Each loaded stream's id, from `graph` with no stream named."""
     return sorted(stream_graph["stream"] for stream_graph in local_api.graph()["streams"])
 
 
-def kept_stream_record_path(
-    machine_directories: MachineDirectoriesUnderATestRoot, stream_name: str
-) -> Path:
-    """`<state>/streams/<stream>.json`."""
-    return machine_directories.kept_streams_directory / f"{stream_name}.json"
+def stream_record_path(machine_directories: MachineDirectoriesUnderATestRoot, stream_id: str) -> Path:
+    """`<state>/streams/<stream id>.json`."""
+    return machine_directories.kept_streams_directory / f"{stream_id}.json"
 
 
-def read_kept_stream_record(tatolabd: TatolabdUnderTest, stream_name: str) -> "dict[str, Any]":
-    """The kept-stream record the runtime wrote, after checking it is its owner's alone."""
-    record_path = kept_stream_record_path(tatolabd.machine_directories, stream_name)
-    assert stat.S_IMODE(os.stat(record_path).st_mode) == KEPT_STREAM_RECORD_FILE_MODE, record_path
+def read_stream_record(tatolabd: TatolabdUnderTest, stream_id: str) -> "dict[str, Any]":
+    """The stream record the runtime wrote, after checking it is its owner's alone."""
+    record_path = stream_record_path(tatolabd.machine_directories, stream_id)
+    assert stat.S_IMODE(os.stat(record_path).st_mode) == STREAM_RECORD_FILE_MODE, record_path
     return json.loads(record_path.read_text(encoding="utf-8"))
 
 
@@ -243,10 +268,10 @@ def stop_tatolabd_cleanly(tatolabd: TatolabdUnderTest) -> None:
 
 
 def first_rendering_of_the_stream_once_tatolabd_serves(
-    start_tatolabd: "Callable[..., TatolabdUnderTest]", stream_name: str
+    start_tatolabd: "Callable[..., TatolabdUnderTest]", stream_id: str
 ) -> "tuple[TatolabdUnderTest, dict[str, Any], int]":
     """Start `tatolabd`, read the machine-wide graph from the moment its socket
-    answers, and return the first rendering that holds `stream_name` with the
+    answers, and return the first rendering that holds `stream_id` with the
     count of renderings read before it.
 
     `tatolabd` serves before it re-loads its kept streams, and the watch reads
@@ -261,7 +286,7 @@ def first_rendering_of_the_stream_once_tatolabd_serves(
         if tatolabd.process.poll() is not None:
             raise AssertionError(
                 f"tatolabd exited {tatolabd.process.returncode} before it re-loaded "
-                f"`{stream_name}`:\n{tatolabd.recent_stderr()}"
+                f"`{stream_id}`:\n{tatolabd.recent_stderr()}"
             )
         try:
             machine_graph = local_api.graph()
@@ -269,12 +294,12 @@ def first_rendering_of_the_stream_once_tatolabd_serves(
             machine_graph = None
         if machine_graph is not None:
             for stream_graph in machine_graph["streams"]:
-                if stream_graph["stream"] == stream_name:
+                if stream_graph["stream"] == stream_id:
                     return tatolabd, stream_graph, renderings_without_the_stream
             renderings_without_the_stream += 1
         if time.monotonic() >= deadline:
             raise AssertionError(
-                f"tatolabd did not re-load `{stream_name}` within {STREAM_RUNNING_TIMEOUT_SECONDS}s:"
+                f"tatolabd did not re-load `{stream_id}` within {STREAM_RUNNING_TIMEOUT_SECONDS}s:"
                 f"\n{tatolabd.recent_stderr()}"
             )
         time.sleep(FIRST_RENDERING_POLL_INTERVAL_SECONDS)
@@ -425,24 +450,25 @@ def test_every_verb_that_reaches_the_runtime_fails_at_once_naming_the_socket_and
 ):
     """No verb ever starts a runtime: each fails at the socket, naming it and
     how to start the runtime, and leaves the machine lock free for `tatolabd`."""
-    project_directory = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
+    project_directory = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
+    alpha_stream_id = stream_id_of_the_pattern_project(project_directory, ALPHA_STREAM_FUNCTION)
     local_api_socket_path = private_machine_directories.machine_directories.local_api_socket_path
     every_verb_reaching_the_runtime = (
         ("run",),
         ("run", "-d"),
         ("run", "--dir", str(project_directory), "--name", "other"),
         ("dev",),
-        ("stop", ALPHA_STREAM),
-        ("start", ALPHA_STREAM),
-        ("rm", ALPHA_STREAM),
+        ("stop", alpha_stream_id),
+        ("start", alpha_stream_id),
+        ("rm", alpha_stream_id),
         ("streams",),
-        ("expose", ALPHA_STREAM, EXPOSED_NODE, EXPOSED_PORT),
-        ("expose", ALPHA_STREAM, EXPOSED_NODE, EXPOSED_PORT, "--public"),
-        ("expose", ALPHA_STREAM, EXPOSED_NODE, EXPOSED_PORT, "--remove"),
+        ("expose", alpha_stream_id, EXPOSED_NODE, EXPOSED_PORT),
+        ("expose", alpha_stream_id, EXPOSED_NODE, EXPOSED_PORT, "--public"),
+        ("expose", alpha_stream_id, EXPOSED_NODE, EXPOSED_PORT, "--remove"),
         ("graph",),
-        ("graph", "--stream", ALPHA_STREAM),
-        ("logs", "--stream", ALPHA_STREAM),
-        ("logs", "--stream", ALPHA_STREAM, "-f"),
+        ("graph", "--stream", alpha_stream_id),
+        ("logs", "--stream", alpha_stream_id),
+        ("logs", "--stream", alpha_stream_id, "-f"),
         ("mcp",),
     )
 
@@ -527,14 +553,14 @@ def test_describe_runtime_answers_the_running_tatolabd_its_uptime_growing_and_re
 def write_the_kept_record_run_d_leaves(
     private_machine_directories: PrivateMachineDirectories,
     project_directory: Path,
-    stream_name: str,
     *,
     stopped: bool,
 ) -> "dict[str, Any]":
-    """Write the kept-stream record `tatolab run -d` leaves for the project's
+    """Write the stream record `tatolab run -d` leaves for the project's
     sole stream — and, `stopped`, the one a `tatolab stop` after it leaves —
-    its graph compiled by the project's own interpreter as the runtime
-    compiles it; return the record.
+    its graph and location compiled by the project's own interpreter as the
+    runtime compiles them, under the id that location computes to; return the
+    record.
 
     Starting a stream needs a GPU context, so a GPU-free test cannot have the
     runtime write it; a stopped stream is never started again by a restart, so
@@ -552,21 +578,28 @@ def write_the_kept_record_run_d_leaves(
     )
     compile_document = json.loads(compiled.stdout)
     record = {
-        "schema_version": KEPT_STREAM_RECORD_SCHEMA_VERSION,
-        "stream_name": stream_name,
-        "project_directory": compile_document["project_directory"],
+        "schema_version": STREAM_RECORD_SCHEMA_VERSION,
+        "stream_id": stream_id_of_the_location(
+            Path(compile_document["project_directory"]), compile_document["stream_function"]
+        ),
+        "location": {
+            "project_directory": compile_document["project_directory"],
+            "stream_function": compile_document["stream_function"],
+        },
+        "display_name": compile_document["stream_graph"]["stream"],
         "interpreter": str(project_interpreter),
-        "stream_function": None,
         "graph": compile_document["stream_graph"],
         "stopped": stopped,
         "failed_because": None,
         "runtime_crashes_in_a_row_implicating_it": 0,
         "exposure_rulings": [],
     }
-    record_path = kept_stream_record_path(private_machine_directories.machine_directories, stream_name)
+    record_path = stream_record_path(
+        private_machine_directories.machine_directories, record["stream_id"]
+    )
     record_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     record_path.write_text(json.dumps(record), encoding="utf-8")
-    record_path.chmod(KEPT_STREAM_RECORD_FILE_MODE)
+    record_path.chmod(STREAM_RECORD_FILE_MODE)
     return record
 
 
@@ -576,60 +609,74 @@ def test_a_stopped_kept_stream_stays_stopped_across_restarts_takes_the_owners_ru
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    project_directory = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
+    project_directory = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
+    alpha_stream_id = stream_id_of_the_pattern_project(project_directory, ALPHA_STREAM_FUNCTION)
     record = write_the_kept_record_run_d_leaves(
-        private_machine_directories, project_directory, ALPHA_STREAM, stopped=True
+        private_machine_directories, project_directory, stopped=True
     )
+    assert record["stream_id"] == alpha_stream_id, record
     assert record["graph"]["exposed"] == exposure_at("public"), record["graph"]
-    stopped_listing = listing_of(ALPHA_STREAM, "stopped", Path(record["project_directory"]), None)
+    recorded_project_directory = record["location"]["project_directory"]
+    stopped_listing = listing_of(
+        alpha_stream_id, ALPHA_STREAM_FUNCTION, "stopped", Path(recorded_project_directory), None
+    )
 
     tatolabd = start_tatolabd()
     tatolabd.await_stderr_containing(runtime_serving_log_line(0, 0))
-    assert f"the kept stream `{ALPHA_STREAM}` is stopped, so it is not re-loaded" in tatolabd.stderr_text
+    assert f"the kept stream `{alpha_stream_id}` is stopped, so it is not re-loaded" in tatolabd.stderr_text
     assert tatolabd.local_api_client().list_streams() == [stopped_listing]
     listed_table = assert_tatolab_succeeded(run_tatolab("streams", working_directory=project_directory))
-    assert listed_table.splitlines()[0].split() == ["NAME", "STATE", "NODES", "PROJECT"]
+    assert listed_table.splitlines()[0].split() == [
+        "ID",
+        "NAME",
+        "STATE",
+        "NODES",
+        "PROJECT",
+        "FUNCTION",
+    ]
     assert listed_table.splitlines()[1].split() == [
-        ALPHA_STREAM,
+        alpha_stream_id,
+        ALPHA_STREAM_FUNCTION,
         "stopped",
         "-",
-        record["project_directory"],
+        recorded_project_directory,
+        stream_function_of_the_pattern_project(ALPHA_STREAM_FUNCTION),
     ]
 
     exposed = assert_tatolab_succeeded(
         run_tatolab(
-            "expose", ALPHA_STREAM, EXPOSED_NODE, EXPOSED_PORT, working_directory=project_directory
+            "expose", alpha_stream_id, EXPOSED_NODE, EXPOSED_PORT, working_directory=project_directory
         )
     )
     assert exposed == (
-        f"{ALPHA_STREAM}/{EXPOSED_NODE}/{EXPOSED_PORT} is private (recorded; it holds across "
+        f"{alpha_stream_id}/{EXPOSED_NODE}/{EXPOSED_PORT} is private (recorded; it holds across "
         f"restarts)\n"
     )
     refused_node = run_tatolab(
-        "expose", ALPHA_STREAM, "no-such-node", EXPOSED_PORT, working_directory=project_directory
+        "expose", alpha_stream_id, "no-such-node", EXPOSED_PORT, working_directory=project_directory
     )
     assert refused_node.returncode == 1, refused_node.stderr
     assert "holds no node `no-such-node`" in refused_node.stderr, refused_node.stderr
     owners_ruling = {"node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": "private"}
-    assert read_kept_stream_record(tatolabd, ALPHA_STREAM)["exposure_rulings"] == [owners_ruling]
+    assert read_stream_record(tatolabd, alpha_stream_id)["exposure_rulings"] == [owners_ruling]
 
     tatolabd = restart_tatolabd(tatolabd, start_tatolabd)
     tatolabd.await_stderr_containing(runtime_serving_log_line(0, 0))
     assert tatolabd.local_api_client().list_streams() == [stopped_listing]
-    restarted_record = read_kept_stream_record(tatolabd, ALPHA_STREAM)
+    restarted_record = read_stream_record(tatolabd, alpha_stream_id)
     assert restarted_record["stopped"] is True
     assert restarted_record["exposure_rulings"] == [owners_ruling]
-    refused_stop = run_tatolab("stop", ALPHA_STREAM, working_directory=project_directory)
+    refused_stop = run_tatolab("stop", alpha_stream_id, working_directory=project_directory)
     assert refused_stop.returncode == 1, refused_stop.stderr
     assert "already stopped" in refused_stop.stderr, refused_stop.stderr
 
-    removed = assert_tatolab_succeeded(run_tatolab("rm", ALPHA_STREAM, working_directory=project_directory))
-    assert removed == f"{ALPHA_STREAM} removed (forgotten)\n"
-    assert not kept_stream_record_path(tatolabd.machine_directories, ALPHA_STREAM).exists()
+    removed = assert_tatolab_succeeded(run_tatolab("rm", alpha_stream_id, working_directory=project_directory))
+    assert removed == f"{alpha_stream_id} removed (forgotten)\n"
+    assert not stream_record_path(tatolabd.machine_directories, alpha_stream_id).exists()
     assert assert_tatolab_succeeded(
         run_tatolab("streams", working_directory=project_directory)
     ) == "No streams in this runtime.\n"
-    refused_rm = run_tatolab("rm", ALPHA_STREAM, working_directory=project_directory)
+    refused_rm = run_tatolab("rm", alpha_stream_id, working_directory=project_directory)
     assert refused_rm.returncode == 1, refused_rm.stderr
 
     tatolabd = restart_tatolabd(tatolabd, start_tatolabd)
@@ -647,29 +694,31 @@ def test_two_projects_kept_streams_run_come_back_after_a_restart_and_stop_start_
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
-    bravo_project = make_project_running_a_pattern_stream(make_tatolab_project, BRAVO_STREAM)
+    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
+    alpha_stream_id = stream_id_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)
+    bravo_project = make_project_running_a_pattern_stream(make_tatolab_project, BRAVO_STREAM_FUNCTION)
+    bravo_stream_id = stream_id_of_the_pattern_project(bravo_project, BRAVO_STREAM_FUNCTION)
     tatolabd = start_tatolabd()
 
-    for stream_name, project_directory in ((ALPHA_STREAM, alpha_project), (BRAVO_STREAM, bravo_project)):
+    for stream_id, project_directory in ((alpha_stream_id, alpha_project), (bravo_stream_id, bravo_project)):
         kept = assert_tatolab_succeeded(run_tatolab("run", "-d", working_directory=project_directory))
-        assert kept == f"{stream_name} kept (project {project_directory})\n"
-    alpha_kept = listing_of(ALPHA_STREAM, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
-    bravo_kept = listing_of(BRAVO_STREAM, "kept", bravo_project, PROJECT_STREAM_NODE_COUNT)
+        assert kept == f"{stream_id} kept (project {project_directory})\n"
+    alpha_kept = listing_of(alpha_stream_id, ALPHA_STREAM_FUNCTION, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
+    bravo_kept = listing_of(bravo_stream_id, BRAVO_STREAM_FUNCTION, "kept", bravo_project, PROJECT_STREAM_NODE_COUNT)
 
     def assert_both_kept_streams_run(tatolabd: TatolabdUnderTest) -> None:
         local_api = tatolabd.local_api_client()
-        for stream_name in (ALPHA_STREAM, BRAVO_STREAM):
+        for stream_id in (alpha_stream_id, bravo_stream_id):
             local_api.await_every_node_running(
-                stream=stream_name, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
+                stream=stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
             )
-        assert listed_streams_by_name(local_api) == {
-            ALPHA_STREAM: alpha_kept,
-            BRAVO_STREAM: bravo_kept,
+        assert listed_streams_by_id(local_api) == {
+            alpha_stream_id: alpha_kept,
+            bravo_stream_id: bravo_kept,
         }
-        assert stream_names_in_the_machine_graph(local_api) == [ALPHA_STREAM, BRAVO_STREAM]
-        for stream_name in (ALPHA_STREAM, BRAVO_STREAM):
-            assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, stream_name)
+        assert stream_ids_in_the_machine_graph(local_api) == [alpha_stream_id, bravo_stream_id]
+        for stream_id in (alpha_stream_id, bravo_stream_id):
+            assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, stream_id)
 
     assert_both_kept_streams_run(tatolabd)
     table_rows = [
@@ -679,12 +728,30 @@ def test_two_projects_kept_streams_run_come_back_after_a_restart_and_stop_start_
         ).splitlines()[1:]
     ]
     assert sorted(table_rows) == [
-        [ALPHA_STREAM, "kept", str(PROJECT_STREAM_NODE_COUNT), str(alpha_project)],
-        [BRAVO_STREAM, "kept", str(PROJECT_STREAM_NODE_COUNT), str(bravo_project)],
+        [
+            alpha_stream_id,
+            ALPHA_STREAM_FUNCTION,
+            "kept",
+            str(PROJECT_STREAM_NODE_COUNT),
+            str(alpha_project),
+            stream_function_of_the_pattern_project(ALPHA_STREAM_FUNCTION),
+        ],
+        [
+            bravo_stream_id,
+            BRAVO_STREAM_FUNCTION,
+            "kept",
+            str(PROJECT_STREAM_NODE_COUNT),
+            str(bravo_project),
+            stream_function_of_the_pattern_project(BRAVO_STREAM_FUNCTION),
+        ],
     ]
-    for stream_name, project_directory in ((ALPHA_STREAM, alpha_project), (BRAVO_STREAM, bravo_project)):
-        record = read_kept_stream_record(tatolabd, stream_name)
-        assert (record["project_directory"], record["stopped"]) == (str(project_directory), False)
+    for stream_id, project_directory in ((alpha_stream_id, alpha_project), (bravo_stream_id, bravo_project)):
+        record = read_stream_record(tatolabd, stream_id)
+        assert (record["stream_id"], record["location"]["project_directory"], record["stopped"]) == (
+            stream_id,
+            str(project_directory),
+            False,
+        )
 
     tatolabd = restart_tatolabd(tatolabd, start_tatolabd)
     tatolabd.await_stderr_containing(
@@ -692,44 +759,44 @@ def test_two_projects_kept_streams_run_come_back_after_a_restart_and_stop_start_
     )
     assert_both_kept_streams_run(tatolabd)
 
-    stopped = assert_tatolab_succeeded(run_tatolab("stop", ALPHA_STREAM, working_directory=alpha_project))
+    stopped = assert_tatolab_succeeded(run_tatolab("stop", alpha_stream_id, working_directory=alpha_project))
     assert stopped == (
-        f"{ALPHA_STREAM} stopped; it stays stopped across restarts until "
-        f"`tatolab start {ALPHA_STREAM}`\n"
+        f"{alpha_stream_id} stopped; it stays stopped across restarts until "
+        f"`tatolab start {alpha_stream_id}`\n"
     )
-    alpha_stopped = listing_of(ALPHA_STREAM, "stopped", alpha_project, None)
+    alpha_stopped = listing_of(alpha_stream_id, ALPHA_STREAM_FUNCTION, "stopped", alpha_project, None)
     local_api = tatolabd.local_api_client()
-    assert listed_streams_by_name(local_api) == {ALPHA_STREAM: alpha_stopped, BRAVO_STREAM: bravo_kept}
-    assert stream_names_in_the_machine_graph(local_api) == [BRAVO_STREAM]
+    assert listed_streams_by_id(local_api) == {alpha_stream_id: alpha_stopped, bravo_stream_id: bravo_kept}
+    assert stream_ids_in_the_machine_graph(local_api) == [bravo_stream_id]
 
     tatolabd = restart_tatolabd(tatolabd, start_tatolabd)
     tatolabd.await_stderr_containing(
         runtime_serving_log_line(1, 0), timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
-    assert f"the kept stream `{ALPHA_STREAM}` is stopped, so it is not re-loaded" in tatolabd.stderr_text
+    assert f"the kept stream `{alpha_stream_id}` is stopped, so it is not re-loaded" in tatolabd.stderr_text
     local_api = tatolabd.local_api_client()
-    local_api.await_every_node_running(stream=BRAVO_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
-    assert listed_streams_by_name(local_api) == {ALPHA_STREAM: alpha_stopped, BRAVO_STREAM: bravo_kept}
-    assert stream_names_in_the_machine_graph(local_api) == [BRAVO_STREAM]
+    local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    assert listed_streams_by_id(local_api) == {alpha_stream_id: alpha_stopped, bravo_stream_id: bravo_kept}
+    assert stream_ids_in_the_machine_graph(local_api) == [bravo_stream_id]
 
-    started = assert_tatolab_succeeded(run_tatolab("start", ALPHA_STREAM, working_directory=alpha_project))
-    assert started == f"{ALPHA_STREAM} started ({PROJECT_STREAM_NODE_COUNT} nodes)\n"
+    started = assert_tatolab_succeeded(run_tatolab("start", alpha_stream_id, working_directory=alpha_project))
+    assert started == f"{alpha_stream_id} started ({PROJECT_STREAM_NODE_COUNT} nodes)\n"
     assert_both_kept_streams_run(tatolabd)
-    assert read_kept_stream_record(tatolabd, ALPHA_STREAM)["stopped"] is False
+    assert read_stream_record(tatolabd, alpha_stream_id)["stopped"] is False
 
-    removed = assert_tatolab_succeeded(run_tatolab("rm", ALPHA_STREAM, working_directory=alpha_project))
-    assert removed == f"{ALPHA_STREAM} removed (unloaded and forgotten)\n"
-    assert not kept_stream_record_path(tatolabd.machine_directories, ALPHA_STREAM).exists()
-    assert listed_streams_by_name(local_api) == {BRAVO_STREAM: bravo_kept}
-    assert stream_names_in_the_machine_graph(local_api) == [BRAVO_STREAM]
+    removed = assert_tatolab_succeeded(run_tatolab("rm", alpha_stream_id, working_directory=alpha_project))
+    assert removed == f"{alpha_stream_id} removed (unloaded and forgotten)\n"
+    assert not stream_record_path(tatolabd.machine_directories, alpha_stream_id).exists()
+    assert listed_streams_by_id(local_api) == {bravo_stream_id: bravo_kept}
+    assert stream_ids_in_the_machine_graph(local_api) == [bravo_stream_id]
 
     tatolabd = restart_tatolabd(tatolabd, start_tatolabd)
     tatolabd.await_stderr_containing(
         runtime_serving_log_line(1, 0), timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
     local_api = tatolabd.local_api_client()
-    local_api.await_every_node_running(stream=BRAVO_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
-    assert listed_streams_by_name(local_api) == {BRAVO_STREAM: bravo_kept}
+    local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    assert listed_streams_by_id(local_api) == {bravo_stream_id: bravo_kept}
     stop_tatolabd_cleanly(tatolabd)
 
 
@@ -739,25 +806,27 @@ def test_an_attached_run_unloads_on_ctrl_c_and_on_a_killed_cli_while_a_kept_stre
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
-    bravo_project = make_project_running_a_pattern_stream(make_tatolab_project, BRAVO_STREAM)
+    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
+    alpha_stream_id = stream_id_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)
+    bravo_project = make_project_running_a_pattern_stream(make_tatolab_project, BRAVO_STREAM_FUNCTION)
+    bravo_stream_id = stream_id_of_the_pattern_project(bravo_project, BRAVO_STREAM_FUNCTION)
     tatolabd = start_tatolabd()
     assert_tatolab_succeeded(run_tatolab("run", "-d", working_directory=bravo_project))
     local_api = tatolabd.local_api_client()
-    bravo_kept = listing_of(BRAVO_STREAM, "kept", bravo_project, PROJECT_STREAM_NODE_COUNT)
-    alpha_attached = listing_of(ALPHA_STREAM, "attached", alpha_project, PROJECT_STREAM_NODE_COUNT)
+    bravo_kept = listing_of(bravo_stream_id, BRAVO_STREAM_FUNCTION, "kept", bravo_project, PROJECT_STREAM_NODE_COUNT)
+    alpha_attached = listing_of(alpha_stream_id, ALPHA_STREAM_FUNCTION, "attached", alpha_project, PROJECT_STREAM_NODE_COUNT)
 
     def attach_alpha() -> AttachedTatolabRun:
         attached = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=alpha_project))
         loaded = attached.await_loaded(timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
-        assert (loaded["stream_name"], int(loaded["node_count"])) == (
-            ALPHA_STREAM,
+        assert (loaded["stream_id"], int(loaded["node_count"])) == (
+            alpha_stream_id,
             PROJECT_STREAM_NODE_COUNT,
         )
-        local_api.await_every_node_running(stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
-        assert listed_streams_by_name(local_api) == {
-            ALPHA_STREAM: alpha_attached,
-            BRAVO_STREAM: bravo_kept,
+        local_api.await_every_node_running(stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+        assert listed_streams_by_id(local_api) == {
+            alpha_stream_id: alpha_attached,
+            bravo_stream_id: bravo_kept,
         }
         return attached
 
@@ -765,7 +834,7 @@ def test_an_attached_run_unloads_on_ctrl_c_and_on_a_killed_cli_while_a_kept_stre
     exposed_live_only = assert_tatolab_succeeded(
         run_tatolab(
             "expose",
-            ALPHA_STREAM,
+            alpha_stream_id,
             EXPOSED_NODE,
             EXPOSED_PORT,
             "--remove",
@@ -773,28 +842,28 @@ def test_an_attached_run_unloads_on_ctrl_c_and_on_a_killed_cli_while_a_kept_stre
         )
     )
     assert exposed_live_only == (
-        f"{ALPHA_STREAM}/{EXPOSED_NODE}/{EXPOSED_PORT} is internal (live only: an attached stream "
+        f"{alpha_stream_id}/{EXPOSED_NODE}/{EXPOSED_PORT} is internal (live only: an attached stream "
         f"keeps no record)\n"
     )
-    assert local_api.graph(ALPHA_STREAM)["exposed"] == exposure_at("internal")
-    assert not kept_stream_record_path(tatolabd.machine_directories, ALPHA_STREAM).exists()
+    assert local_api.graph(alpha_stream_id)["exposed"] == exposure_at("internal")
+    assert not stream_record_path(tatolabd.machine_directories, alpha_stream_id).exists()
     attached_ended_by_ctrl_c.interrupt()
     assert attached_ended_by_ctrl_c.await_exit(timeout=TATOLABD_EXIT_TIMEOUT_SECONDS) == 0, (
         attached_ended_by_ctrl_c.recent_stderr()
     )
-    tatolabd.await_stderr_containing(stream_stopped_log_line(ALPHA_STREAM))
-    assert listed_streams_by_name(local_api) == {BRAVO_STREAM: bravo_kept}
+    tatolabd.await_stderr_containing(stream_stopped_log_line(alpha_stream_id))
+    assert listed_streams_by_id(local_api) == {bravo_stream_id: bravo_kept}
 
     attached_ended_by_sigkill = attach_alpha()
-    assert local_api.graph(ALPHA_STREAM)["exposed"] == exposure_at("public"), (
+    assert local_api.graph(alpha_stream_id)["exposed"] == exposure_at("public"), (
         "an attached stream's live level is never recorded: the next run takes the function's"
     )
     os.kill(attached_ended_by_sigkill.pid, signal.SIGKILL)
     assert attached_ended_by_sigkill.await_exit() == -signal.SIGKILL
-    assert await_stream_unlisted(local_api, ALPHA_STREAM) == {BRAVO_STREAM: bravo_kept}
-    tatolabd.await_stderr_containing(stream_stopped_log_line(ALPHA_STREAM), occurrence=2)
-    local_api.await_every_node_running(stream=BRAVO_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
-    assert stream_names_in_the_machine_graph(local_api) == [BRAVO_STREAM]
+    assert await_stream_unlisted(local_api, alpha_stream_id) == {bravo_stream_id: bravo_kept}
+    tatolabd.await_stderr_containing(stream_stopped_log_line(alpha_stream_id), occurrence=2)
+    local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    assert stream_ids_in_the_machine_graph(local_api) == [bravo_stream_id]
     stop_tatolabd_cleanly(tatolabd)
 
 
@@ -804,23 +873,24 @@ def test_expose_sets_a_running_streams_port_internal_private_or_public_live_and_
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
+    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
+    alpha_stream_id = stream_id_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)
     tatolabd = start_tatolabd()
     assert_tatolab_succeeded(run_tatolab("run", "-d", working_directory=alpha_project))
     local_api = tatolabd.local_api_client()
     running_graph = local_api.await_every_node_running(
-        stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
+        stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
     assert running_graph["exposed"] == exposure_at("public")
     node_ids_while_running = sorted(node["id"] for node in running_graph["nodes"])
-    start_line = f"[start] Starting the stream `{ALPHA_STREAM}`"
+    start_line = f"[start] Starting the stream `{alpha_stream_id}`"
     assert tatolabd.stderr_text.count(start_line) == 1, tatolabd.recent_stderr()
 
     for flags, level in (((), "private"), (("--remove",), "internal"), (("--public",), "public")):
         exposed = assert_tatolab_succeeded(
             run_tatolab(
                 "expose",
-                ALPHA_STREAM,
+                alpha_stream_id,
                 EXPOSED_NODE,
                 EXPOSED_PORT,
                 *flags,
@@ -828,31 +898,31 @@ def test_expose_sets_a_running_streams_port_internal_private_or_public_live_and_
             )
         )
         assert exposed == (
-            f"{ALPHA_STREAM}/{EXPOSED_NODE}/{EXPOSED_PORT} is {level} (recorded; it holds across "
+            f"{alpha_stream_id}/{EXPOSED_NODE}/{EXPOSED_PORT} is {level} (recorded; it holds across "
             f"restarts)\n"
         )
-        graph_right_after = local_api.graph(ALPHA_STREAM)
+        graph_right_after = local_api.graph(alpha_stream_id)
         assert graph_right_after["exposed"] == exposure_at(level), (level, graph_right_after["exposed"])
         assert sorted(node["id"] for node in graph_right_after["nodes"]) == node_ids_while_running, (
             "expose must change the level live, never reload the stream"
         )
         cli_graph = json.loads(
             assert_tatolab_succeeded(
-                run_tatolab("graph", "--stream", ALPHA_STREAM, working_directory=alpha_project)
+                run_tatolab("graph", "--stream", alpha_stream_id, working_directory=alpha_project)
             )
         )
         assert cli_graph["exposed"] == exposure_at(level), (level, cli_graph["exposed"])
-        assert read_kept_stream_record(tatolabd, ALPHA_STREAM)["exposure_rulings"] == [
+        assert read_stream_record(tatolabd, alpha_stream_id)["exposure_rulings"] == [
             {"node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": level}
         ]
 
-    local_api.await_every_node_running(stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    local_api.await_every_node_running(stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert tatolabd.stderr_text.count(start_line) == 1, (
         f"expose restarted the stream:\n{tatolabd.recent_stderr()}"
     )
-    assert stream_stopped_log_line(ALPHA_STREAM) not in tatolabd.stderr_text
-    assert listed_streams_by_name(local_api) == {
-        ALPHA_STREAM: listing_of(ALPHA_STREAM, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
+    assert stream_stopped_log_line(alpha_stream_id) not in tatolabd.stderr_text
+    assert listed_streams_by_id(local_api) == {
+        alpha_stream_id: listing_of(alpha_stream_id, ALPHA_STREAM_FUNCTION, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
     }
     stop_tatolabd_cleanly(tatolabd)
 
@@ -867,16 +937,17 @@ def test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_bef
     restart and after a crash, the stream's very first rendering — read from
     the moment `tatolabd` serves, while it re-loads — already carries the
     owner's level, so no reader could have been admitted at the function's."""
-    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
+    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
+    alpha_stream_id = stream_id_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)
     tatolabd = start_tatolabd()
     assert_tatolab_succeeded(run_tatolab("run", "-d", working_directory=alpha_project))
     tatolabd.local_api_client().await_every_node_running(
-        stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
+        stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
     assert_tatolab_succeeded(
-        run_tatolab("expose", ALPHA_STREAM, EXPOSED_NODE, EXPOSED_PORT, working_directory=alpha_project)
+        run_tatolab("expose", alpha_stream_id, EXPOSED_NODE, EXPOSED_PORT, working_directory=alpha_project)
     )
-    record = read_kept_stream_record(tatolabd, ALPHA_STREAM)
+    record = read_stream_record(tatolabd, alpha_stream_id)
     assert record["graph"]["exposed"] == exposure_at("public"), (
         "the record keeps the function's own level beside the owner's ruling"
     )
@@ -895,53 +966,54 @@ def test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_bef
 
     stop_tatolabd_cleanly(tatolabd)
     tatolabd, first_rendering, renderings_before_it = first_rendering_of_the_stream_once_tatolabd_serves(
-        start_tatolabd, ALPHA_STREAM
+        start_tatolabd, alpha_stream_id
     )
     assert_the_first_rendering_carries(first_rendering, renderings_before_it, "private")
     local_api = tatolabd.local_api_client()
     assert local_api.await_every_node_running(
-        stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
+        stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )["exposed"] == exposure_at("private")
     assert "kept and not applied" not in tatolabd.stderr_text, tatolabd.recent_stderr()
-    assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, ALPHA_STREAM)
+    assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, alpha_stream_id)
 
     assert_tatolab_succeeded(
         run_tatolab(
             "expose",
-            ALPHA_STREAM,
+            alpha_stream_id,
             EXPOSED_NODE,
             EXPOSED_PORT,
             "--remove",
             working_directory=alpha_project,
         )
     )
-    assert local_api.graph(ALPHA_STREAM)["exposed"] == exposure_at("internal")
+    assert local_api.graph(alpha_stream_id)["exposed"] == exposure_at("internal")
     crash_tatolabd(tatolabd)
     tatolabd, first_rendering, renderings_before_it = first_rendering_of_the_stream_once_tatolabd_serves(
-        start_tatolabd, ALPHA_STREAM
+        start_tatolabd, alpha_stream_id
     )
     assert_the_first_rendering_carries(first_rendering, renderings_before_it, "internal")
     local_api = tatolabd.local_api_client()
     graph_running_after_the_crash = local_api.await_every_node_running(
-        stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
+        stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
     assert graph_running_after_the_crash["exposed"] == exposure_at("internal")
-    assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, ALPHA_STREAM)
-    assert listed_streams_by_name(local_api) == {
-        ALPHA_STREAM: listing_of(ALPHA_STREAM, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
+    assert_the_pattern_is_wired_to_the_reader_inside_the_stream(local_api, alpha_stream_id)
+    assert listed_streams_by_id(local_api) == {
+        alpha_stream_id: listing_of(alpha_stream_id, ALPHA_STREAM_FUNCTION, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
     }
-    assert read_kept_stream_record(tatolabd, ALPHA_STREAM)["graph"]["exposed"] == exposure_at("public")
+    assert read_stream_record(tatolabd, alpha_stream_id)["graph"]["exposed"] == exposure_at("public")
     stop_tatolabd_cleanly(tatolabd)
 
 
-#: The kept streams a start re-loads ahead of the three an owner changes while
-#: it re-loads; each is a GPU start of its own, which holds the window open.
-STREAMS_RE_LOADED_AHEAD = tuple(f"a{index}_pattern" for index in range(6))
-#: Named to sort after every stream re-loaded ahead, as a start re-loads in
-#: record-file order.
-RESTRICTED_WHILE_RE_LOADING_STREAM = "zz_restricted_pattern"
-STOPPED_WHILE_RE_LOADING_STREAM = "zz_stopped_pattern"
-REMOVED_WHILE_RE_LOADING_STREAM = "zz_removed_pattern"
+#: The stream functions of the kept streams a start re-loads ahead of the three
+#: an owner changes while it re-loads; each is a GPU start of its own, which
+#: holds the window open.
+STREAM_FUNCTIONS_RE_LOADED_AHEAD = tuple(f"a{index}_pattern" for index in range(6))
+#: Each named so its project folder, the leading part of its stream id, sorts
+#: after every stream re-loaded ahead, as a start re-loads in record-file order.
+RESTRICTED_WHILE_RE_LOADING_STREAM_FUNCTION = "zz_restricted_pattern"
+STOPPED_WHILE_RE_LOADING_STREAM_FUNCTION = "zz_stopped_pattern"
+REMOVED_WHILE_RE_LOADING_STREAM_FUNCTION = "zz_removed_pattern"
 #: How long a start re-loading seven kept streams may take to say it is serving.
 RE_LOAD_OF_SEVEN_STREAMS_TIMEOUT_SECONDS = 2 * STREAM_RUNNING_TIMEOUT_SECONDS
 
@@ -958,42 +1030,45 @@ def test_a_restriction_stop_or_rm_made_while_tatolabd_re_loads_its_kept_streams_
     answers — before the re-load reaches them — is never overruled by it: the
     restriction holds from the stream's load, the stopped stream stays
     unloaded, and the removed one is not loaded."""
-    projects_by_stream = {
-        stream_name: make_project_running_a_pattern_stream(make_tatolab_project, stream_name)
-        for stream_name in (
-            *STREAMS_RE_LOADED_AHEAD,
-            RESTRICTED_WHILE_RE_LOADING_STREAM,
-            STOPPED_WHILE_RE_LOADING_STREAM,
-            REMOVED_WHILE_RE_LOADING_STREAM,
+    projects_by_stream_function = {
+        stream_function_name: make_project_running_a_pattern_stream(
+            make_tatolab_project, stream_function_name
+        )
+        for stream_function_name in (
+            *STREAM_FUNCTIONS_RE_LOADED_AHEAD,
+            RESTRICTED_WHILE_RE_LOADING_STREAM_FUNCTION,
+            STOPPED_WHILE_RE_LOADING_STREAM_FUNCTION,
+            REMOVED_WHILE_RE_LOADING_STREAM_FUNCTION,
         )
     }
-    project_directories_by_stream = {
-        stream_name: Path(
-            write_the_kept_record_run_d_leaves(
-                private_machine_directories, project_directory, stream_name, stopped=False
-            )["project_directory"]
+    records_by_stream_function = {
+        stream_function_name: write_the_kept_record_run_d_leaves(
+            private_machine_directories, project_directory, stopped=False
         )
-        for stream_name, project_directory in projects_by_stream.items()
+        for stream_function_name, project_directory in projects_by_stream_function.items()
     }
+    stream_id_of = {
+        stream_function_name: record["stream_id"]
+        for stream_function_name, record in records_by_stream_function.items()
+    }
+    restricted_stream_id = stream_id_of[RESTRICTED_WHILE_RE_LOADING_STREAM_FUNCTION]
+    stopped_stream_id = stream_id_of[STOPPED_WHILE_RE_LOADING_STREAM_FUNCTION]
+    removed_stream_id = stream_id_of[REMOVED_WHILE_RE_LOADING_STREAM_FUNCTION]
 
     tatolabd = start_tatolabd()
-    some_project = projects_by_stream[RESTRICTED_WHILE_RE_LOADING_STREAM]
+    some_project = projects_by_stream_function[RESTRICTED_WHILE_RE_LOADING_STREAM_FUNCTION]
     assert_tatolab_succeeded(
         run_tatolab(
             "expose",
-            RESTRICTED_WHILE_RE_LOADING_STREAM,
+            restricted_stream_id,
             EXPOSED_NODE,
             EXPOSED_PORT,
             "--remove",
             working_directory=some_project,
         )
     )
-    assert_tatolab_succeeded(
-        run_tatolab("stop", STOPPED_WHILE_RE_LOADING_STREAM, working_directory=some_project)
-    )
-    assert_tatolab_succeeded(
-        run_tatolab("rm", REMOVED_WHILE_RE_LOADING_STREAM, working_directory=some_project)
-    )
+    assert_tatolab_succeeded(run_tatolab("stop", stopped_stream_id, working_directory=some_project))
+    assert_tatolab_succeeded(run_tatolab("rm", removed_stream_id, working_directory=some_project))
     re_load_reached_them_first = "the runtime is serving: " in tatolabd.stderr_text
     tatolabd.await_stderr_containing(
         "the runtime is serving: ", timeout=RE_LOAD_OF_SEVEN_STREAMS_TIMEOUT_SECONDS
@@ -1001,38 +1076,44 @@ def test_a_restriction_stop_or_rm_made_while_tatolabd_re_loads_its_kept_streams_
     local_api = tatolabd.local_api_client()
 
     restricted_graph = local_api.await_every_node_running(
-        stream=RESTRICTED_WHILE_RE_LOADING_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
+        stream=restricted_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
     assert restricted_graph["exposed"] == exposure_at("internal"), (
         "the owner's restriction made while the start re-loaded was overruled by the re-load; "
         f"the re-load had already finished when the owner acted: {re_load_reached_them_first}"
     )
-    assert read_kept_stream_record(tatolabd, RESTRICTED_WHILE_RE_LOADING_STREAM)[
-        "exposure_rulings"
-    ] == [{"node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": "internal"}]
-    assert read_kept_stream_record(tatolabd, STOPPED_WHILE_RE_LOADING_STREAM)["stopped"] is True
-    assert not kept_stream_record_path(
-        tatolabd.machine_directories, REMOVED_WHILE_RE_LOADING_STREAM
-    ).exists()
-    assert listed_streams_by_name(local_api) == {
+    assert read_stream_record(tatolabd, restricted_stream_id)["exposure_rulings"] == [
+        {"node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": "internal"}
+    ]
+    assert read_stream_record(tatolabd, stopped_stream_id)["stopped"] is True
+    assert not stream_record_path(tatolabd.machine_directories, removed_stream_id).exists()
+
+    def listing_of_the_recorded(stream_function_name: str, state: str, node_count: "int | None") -> "dict[str, Any]":
+        return listing_of(
+            stream_id_of[stream_function_name],
+            stream_function_name,
+            state,
+            Path(records_by_stream_function[stream_function_name]["location"]["project_directory"]),
+            node_count,
+        )
+
+    stream_functions_running = (
+        *STREAM_FUNCTIONS_RE_LOADED_AHEAD,
+        RESTRICTED_WHILE_RE_LOADING_STREAM_FUNCTION,
+    )
+    assert listed_streams_by_id(local_api) == {
         **{
-            stream_name: listing_of(
-                stream_name,
-                "kept",
-                project_directories_by_stream[stream_name],
-                PROJECT_STREAM_NODE_COUNT,
+            stream_id_of[stream_function_name]: listing_of_the_recorded(
+                stream_function_name, "kept", PROJECT_STREAM_NODE_COUNT
             )
-            for stream_name in (*STREAMS_RE_LOADED_AHEAD, RESTRICTED_WHILE_RE_LOADING_STREAM)
+            for stream_function_name in stream_functions_running
         },
-        STOPPED_WHILE_RE_LOADING_STREAM: listing_of(
-            STOPPED_WHILE_RE_LOADING_STREAM,
-            "stopped",
-            project_directories_by_stream[STOPPED_WHILE_RE_LOADING_STREAM],
-            None,
+        stopped_stream_id: listing_of_the_recorded(
+            STOPPED_WHILE_RE_LOADING_STREAM_FUNCTION, "stopped", None
         ),
     }, f"the re-load had already finished when the owner acted: {re_load_reached_them_first}"
-    assert stream_names_in_the_machine_graph(local_api) == sorted(
-        (*STREAMS_RE_LOADED_AHEAD, RESTRICTED_WHILE_RE_LOADING_STREAM)
+    assert stream_ids_in_the_machine_graph(local_api) == sorted(
+        stream_id_of[stream_function_name] for stream_function_name in stream_functions_running
     )
     stop_tatolabd_cleanly(tatolabd)
 
@@ -1043,15 +1124,17 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     start_mcp_session_over_the_verb: "Callable[[], McpJsonRpcClientOverTheVerb]",
 ):
-    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM)
-    bravo_project = make_project_running_a_pattern_stream(make_tatolab_project, BRAVO_STREAM)
+    alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
+    alpha_stream_id = stream_id_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)
+    bravo_project = make_project_running_a_pattern_stream(make_tatolab_project, BRAVO_STREAM_FUNCTION)
+    bravo_stream_id = stream_id_of_the_pattern_project(bravo_project, BRAVO_STREAM_FUNCTION)
     tatolabd = start_tatolabd()
     local_api = tatolabd.local_api_client()
-    alpha_kept = listing_of(ALPHA_STREAM, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
-    bravo_kept = listing_of(BRAVO_STREAM, "kept", bravo_project, PROJECT_STREAM_NODE_COUNT)
+    alpha_kept = listing_of(alpha_stream_id, ALPHA_STREAM_FUNCTION, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
+    bravo_kept = listing_of(bravo_stream_id, BRAVO_STREAM_FUNCTION, "kept", bravo_project, PROJECT_STREAM_NODE_COUNT)
 
     def listed_through(agent: McpJsonRpcClientOverTheVerb) -> "dict[str, dict[str, Any]]":
-        return {listed["name"]: listed for listed in agent.call_tool("list_streams")["streams"]}
+        return {listed["stream"]: listed for listed in agent.call_tool("list_streams")["streams"]}
 
     def run_stream(
         agent: McpJsonRpcClientOverTheVerb, project_directory: Path, *, keep: bool
@@ -1063,40 +1146,47 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     # Two projects kept, both running; the owner sets one port at each level
     # live, ending on private, and nothing restarts.
     agent = start_mcp_session_over_the_verb()
-    for stream_name, project_directory in ((ALPHA_STREAM, alpha_project), (BRAVO_STREAM, bravo_project)):
+    for stream_id, stream_function_name, project_directory in (
+        (alpha_stream_id, ALPHA_STREAM_FUNCTION, alpha_project),
+        (bravo_stream_id, BRAVO_STREAM_FUNCTION, bravo_project),
+    ):
         kept_run = run_stream(agent, project_directory, keep=True)
         stream_instance = kept_run.pop("stream_instance")
         assert isinstance(stream_instance, str) and stream_instance, kept_run
         assert kept_run == {
-            "stream": stream_name,
+            "stream": stream_id,
+            "display_name": stream_function_name,
             "kept": True,
-            "project_directory": str(project_directory),
+            "location": {
+                "project_directory": str(project_directory),
+                "stream_function": stream_function_of_the_pattern_project(stream_function_name),
+            },
             "node_count": PROJECT_STREAM_NODE_COUNT,
             "replaced_the_kept_record": False,
             "compile_warnings": [],
         }
-        local_api.await_every_node_running(stream=stream_name, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
-    assert listed_through(agent) == {ALPHA_STREAM: alpha_kept, BRAVO_STREAM: bravo_kept}
+        local_api.await_every_node_running(stream=stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    assert listed_through(agent) == {alpha_stream_id: alpha_kept, bravo_stream_id: bravo_kept}
     assert sorted(
         stream_graph["stream"] for stream_graph in agent.call_tool("graph")["streams"]
-    ) == [ALPHA_STREAM, BRAVO_STREAM]
-    alpha_graph_while_running = agent.call_tool("graph", {"stream": ALPHA_STREAM})
+    ) == [alpha_stream_id, bravo_stream_id]
+    alpha_graph_while_running = agent.call_tool("graph", {"stream": alpha_stream_id})
     assert alpha_graph_while_running["exposed"] == exposure_at("public")
     alpha_node_ids_while_running = sorted(node["id"] for node in alpha_graph_while_running["nodes"])
-    alpha_start_line = f"[start] Starting the stream `{ALPHA_STREAM}`"
+    alpha_start_line = f"[start] Starting the stream `{alpha_stream_id}`"
     assert tatolabd.stderr_text.count(alpha_start_line) == 1, tatolabd.recent_stderr()
     for level in ("internal", "public", "private"):
         assert agent.call_tool(
             "expose_port",
-            {"stream": ALPHA_STREAM, "node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": level},
+            {"stream": alpha_stream_id, "node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": level},
         ) == {
-            "stream": ALPHA_STREAM,
+            "stream": alpha_stream_id,
             "node": EXPOSED_NODE,
             "port": EXPOSED_PORT,
             "level": level,
             "recorded": True,
         }
-        alpha_graph_right_after = agent.call_tool("graph", {"stream": ALPHA_STREAM})
+        alpha_graph_right_after = agent.call_tool("graph", {"stream": alpha_stream_id})
         assert alpha_graph_right_after["exposed"] == exposure_at(level), (
             level,
             alpha_graph_right_after["exposed"],
@@ -1104,23 +1194,23 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
         assert sorted(
             node["id"] for node in alpha_graph_right_after["nodes"]
         ) == alpha_node_ids_while_running, "expose_port must change the level live, never reload"
-        assert read_kept_stream_record(tatolabd, ALPHA_STREAM)["exposure_rulings"] == [
+        assert read_stream_record(tatolabd, alpha_stream_id)["exposure_rulings"] == [
             {"node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": level}
         ]
-    local_api.await_every_node_running(stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    local_api.await_every_node_running(stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert tatolabd.stderr_text.count(alpha_start_line) == 1, (
         f"expose_port restarted the stream:\n{tatolabd.recent_stderr()}"
     )
-    assert stream_stopped_log_line(ALPHA_STREAM) not in tatolabd.stderr_text
-    assert agent.call_tool("stop_stream", {"stream": BRAVO_STREAM}) == {
-        "stream": BRAVO_STREAM,
+    assert stream_stopped_log_line(alpha_stream_id) not in tatolabd.stderr_text
+    assert agent.call_tool("stop_stream", {"stream": bravo_stream_id}) == {
+        "stream": bravo_stream_id,
         "stopped": True,
         "kept": True,
     }
     assert agent.close_standard_input() == 0, agent.standard_error_text
-    assert listed_streams_by_name(local_api) == {
-        ALPHA_STREAM: alpha_kept,
-        BRAVO_STREAM: listing_of(BRAVO_STREAM, "stopped", bravo_project, None),
+    assert listed_streams_by_id(local_api) == {
+        alpha_stream_id: alpha_kept,
+        bravo_stream_id: listing_of(bravo_stream_id, BRAVO_STREAM_FUNCTION, "stopped", bravo_project, None),
     }, "a kept stream outlives the connection that ran it"
 
     # Across a crash's restart: the kept stream's first rendering already
@@ -1128,7 +1218,7 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     # one stays stopped.
     crash_tatolabd(tatolabd)
     tatolabd, first_rendering, renderings_before_it = first_rendering_of_the_stream_once_tatolabd_serves(
-        start_tatolabd, ALPHA_STREAM
+        start_tatolabd, alpha_stream_id
     )
     assert first_rendering["exposed"] == exposure_at("private"), (
         f"the first rendering after the crash's re-load carried {first_rendering['exposed']} "
@@ -1138,43 +1228,43 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
         runtime_serving_log_line(1, 0), timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
     local_api = tatolabd.local_api_client()
-    local_api.await_every_node_running(stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    local_api.await_every_node_running(stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     agent = start_mcp_session_over_the_verb()
     assert listed_through(agent) == {
-        ALPHA_STREAM: alpha_kept,
-        BRAVO_STREAM: listing_of(BRAVO_STREAM, "stopped", bravo_project, None),
+        alpha_stream_id: alpha_kept,
+        bravo_stream_id: listing_of(bravo_stream_id, BRAVO_STREAM_FUNCTION, "stopped", bravo_project, None),
     }
-    assert agent.call_tool("graph", {"stream": ALPHA_STREAM})["exposed"] == exposure_at("private")
-    assert agent.call_tool("start_stream", {"stream": BRAVO_STREAM}) == {
-        "stream": BRAVO_STREAM,
+    assert agent.call_tool("graph", {"stream": alpha_stream_id})["exposed"] == exposure_at("private")
+    assert agent.call_tool("start_stream", {"stream": bravo_stream_id}) == {
+        "stream": bravo_stream_id,
         "node_count": PROJECT_STREAM_NODE_COUNT,
     }
-    local_api.await_every_node_running(stream=BRAVO_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
-    assert listed_through(agent) == {ALPHA_STREAM: alpha_kept, BRAVO_STREAM: bravo_kept}
-    assert agent.call_tool("remove_stream", {"stream": BRAVO_STREAM}) == {
-        "stream": BRAVO_STREAM,
+    local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    assert listed_through(agent) == {alpha_stream_id: alpha_kept, bravo_stream_id: bravo_kept}
+    assert agent.call_tool("remove_stream", {"stream": bravo_stream_id}) == {
+        "stream": bravo_stream_id,
         "unloaded": True,
         "forgotten": True,
     }
-    assert listed_through(agent) == {ALPHA_STREAM: alpha_kept}
-    assert not kept_stream_record_path(tatolabd.machine_directories, BRAVO_STREAM).exists()
+    assert listed_through(agent) == {alpha_stream_id: alpha_kept}
+    assert not stream_record_path(tatolabd.machine_directories, bravo_stream_id).exists()
 
     # Attached to the agent's connection: gone once its stdin closes.
     assert run_stream(agent, bravo_project, keep=False)["kept"] is False
-    local_api.await_every_node_running(stream=BRAVO_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
-    assert listed_through(agent)[BRAVO_STREAM] == listing_of(
-        BRAVO_STREAM, "attached", bravo_project, PROJECT_STREAM_NODE_COUNT
+    local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    assert listed_through(agent)[bravo_stream_id] == listing_of(
+        bravo_stream_id, BRAVO_STREAM_FUNCTION, "attached", bravo_project, PROJECT_STREAM_NODE_COUNT
     )
     assert agent.close_standard_input() == 0, agent.standard_error_text
-    assert await_stream_unlisted(local_api, BRAVO_STREAM) == {ALPHA_STREAM: alpha_kept}
+    assert await_stream_unlisted(local_api, bravo_stream_id) == {alpha_stream_id: alpha_kept}
 
     # Attached to a connection whose host crashed: gone once the verb is killed.
     crashing_agent = start_mcp_session_over_the_verb()
     assert run_stream(crashing_agent, bravo_project, keep=False)["kept"] is False
-    local_api.await_every_node_running(stream=BRAVO_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    local_api.await_every_node_running(stream=bravo_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert crashing_agent.kill() == -signal.SIGKILL
-    assert await_stream_unlisted(local_api, BRAVO_STREAM) == {ALPHA_STREAM: alpha_kept}
-    assert not kept_stream_record_path(tatolabd.machine_directories, BRAVO_STREAM).exists()
+    assert await_stream_unlisted(local_api, bravo_stream_id) == {alpha_stream_id: alpha_kept}
+    assert not stream_record_path(tatolabd.machine_directories, bravo_stream_id).exists()
 
-    local_api.await_every_node_running(stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    local_api.await_every_node_running(stream=alpha_stream_id, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     stop_tatolabd_cleanly(tatolabd)

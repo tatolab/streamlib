@@ -49,14 +49,14 @@ pub trait EventListener: Send {
 }
 
 /// The loaded stream an event belongs to: the runtime that loaded it, its
-/// cast name, and its process-unique tag, which tells apart two streams loaded
-/// under one name — one abandoned by its watchdog and the one loaded after it.
+/// stream id, and its process-unique tag, which tells apart two streams loaded
+/// under one id — one abandoned by its watchdog and the one loaded after it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LoadedStreamIdentity {
     /// The id of the runtime the stream is loaded in.
     pub runtime_id: String,
-    /// The stream's URL-safe cast name.
-    pub stream_name: String,
+    /// The stream's id.
+    pub stream_id: String,
     /// The stream's process-unique tag, never reused in one process.
     pub stream_tag: LoadedStreamTag,
 }
@@ -72,13 +72,13 @@ impl LoadedStreamIdentity {
     }
 }
 
-/// `<runtime id>/<stream name>#<stream tag>`, unique in the process.
+/// `<runtime id>/<stream id>#<stream tag>`, unique in the process.
 impl std::fmt::Display for LoadedStreamIdentity {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
             "{}/{}#{}",
-            self.runtime_id, self.stream_name, self.stream_tag
+            self.runtime_id, self.stream_id, self.stream_tag
         )
     }
 }
@@ -201,7 +201,7 @@ impl Event {
 pub enum OutputPortExposureChange {
     /// An output port of a stream was put at a level.
     LevelSet {
-        stream_name: String,
+        stream_id: String,
         node_name: String,
         port_name: String,
         level: OutputPortExposureLevel,
@@ -209,9 +209,9 @@ pub enum OutputPortExposureChange {
     /// An output port's catalog entry was replaced by a different one.
     CatalogEntryReplaced { port_name: String },
     /// A stream's graph was compiled: its nodes may have started or left.
-    StreamCompiled { stream_name: String },
+    StreamCompiled { stream_id: String },
     /// A stream left its runtime.
-    StreamUnloaded { stream_name: String },
+    StreamUnloaded { stream_id: String },
 }
 
 impl OutputPortExposureChange {
@@ -657,7 +657,7 @@ mod tests {
     fn a_loaded_stream_identity() -> LoadedStreamIdentity {
         LoadedStreamIdentity {
             runtime_id: "Rtest".to_string(),
-            stream_name: "main".to_string(),
+            stream_id: "main".to_string(),
             stream_tag: LoadedStreamTag::numbered_for_a_test(7),
         }
     }

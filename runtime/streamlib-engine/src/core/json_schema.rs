@@ -30,7 +30,7 @@ pub use streamlib_processor_schema::ProcessorClassImportPath;
 /// [`GraphSnapshot`](crate::core::graph_snapshot::GraphSnapshot).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct GraphResponse {
-    /// The name of the stream this graph was loaded as. Absent until a load.
+    /// The stream id this graph was loaded under, its stream's address. Absent until a load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
     /// All nodes in the graph.
@@ -42,7 +42,7 @@ pub struct GraphResponse {
     #[serde(default)]
     pub exposed: Vec<ExposedOutputPortOutput>,
     /// The name of the machine the stream runs on, the first part of
-    /// `<machine>/<stream>/<node>/<port>`.
+    /// `<machine>/<stream id>/<node>/<port>`.
     pub machine: String,
 }
 
@@ -52,7 +52,7 @@ pub struct GraphResponse {
 #[serde(deny_unknown_fields)]
 pub struct MachineWideGraphResponse {
     /// The machine's name, the first part of
-    /// `<machine>/<stream>/<node>/<port>`.
+    /// `<machine>/<stream id>/<node>/<port>`.
     pub machine: String,
     /// Each loaded stream's graph, as a call naming that stream returns it.
     pub streams: Vec<GraphResponse>,
@@ -275,7 +275,7 @@ pub struct MachineWideRegistryResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeTypesDescribedInOneStreamOutput {
-    /// The stream's name.
+    /// The stream's id.
     pub stream: String,
     /// The types described in its interpreter, which only this stream adds.
     pub nodes: Vec<ProcessorDescriptorOutput>,

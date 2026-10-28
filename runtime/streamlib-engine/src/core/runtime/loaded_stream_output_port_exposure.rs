@@ -40,13 +40,13 @@ impl LoadedStreamInThisRuntime {
         })?;
         let port_address = format!("{node_display_name}/{port_cast}");
         tracing::debug!(
-            stream = %self.stream_name(),
+            stream = %self.stream_id(),
             port = %port_address,
             %level,
             "[exposure] port `{port_address}` is now {level}"
         );
         OutputPortExposureChange::LevelSet {
-            stream_name: self.stream_name().to_string(),
+            stream_id: self.stream_id().to_string(),
             node_name: node_display_name,
             port_name: port_cast,
             level,
@@ -76,28 +76,28 @@ impl LoadedStreamInThisRuntime {
         node_name: &str,
         port_name: &str,
     ) -> Result<(&'graph mut ProcessorNode, String)> {
-        the_output_port_named_on_this_graph(graph, self.stream_name(), node_name, port_name)
+        the_output_port_named_on_this_graph(graph, self.stream_id(), node_name, port_name)
     }
 }
 
 /// Refuse a reader from `location` of output port `port_name` of node
-/// `node_name` on `graph`, the graph of the stream `stream_name`, naming the
+/// `node_name` on `graph`, the graph of the stream `stream_id`, naming the
 /// port and its level, when that level does not allow a reader there.
 pub(crate) fn refuse_a_reader_the_port_does_not_allow(
     graph: &mut Graph,
-    stream_name: &str,
+    stream_id: &str,
     node_name: &str,
     port_name: &str,
     location: OutputPortReaderOutsideItsStream,
 ) -> Result<()> {
     let (node, port_cast) =
-        the_output_port_named_on_this_graph(graph, stream_name, node_name, port_name)?;
+        the_output_port_named_on_this_graph(graph, stream_id, node_name, port_name)?;
     let level = exposure_level_of_output_port(node, &port_cast);
     if output_port_exposure_allows_the_reader(level, location.location()) {
         return Ok(());
     }
     Err(a_reader_the_port_does_not_allow(
-        stream_name,
+        stream_id,
         &node.display_name,
         port_cast,
         level,
@@ -116,14 +116,14 @@ fn exposure_level_of_output_port(node: &ProcessorNode, port_cast: &str) -> Outpu
 
 /// The one refusal of a reader an output port's level does not allow.
 fn a_reader_the_port_does_not_allow(
-    stream_name: &str,
+    stream_id: &str,
     node_display_name: &str,
     port_cast: String,
     level: OutputPortExposureLevel,
     location: OutputPortReaderOutsideItsStream,
 ) -> Error {
     Error::OutputPortNotExposedToTheReader(Box::new(OutputPortNotExposedToTheReader {
-        stream: stream_name.to_string(),
+        stream: stream_id.to_string(),
         node: node_display_name.to_string(),
         port: port_cast,
         level: level.to_string(),
@@ -133,19 +133,19 @@ fn a_reader_the_port_does_not_allow(
 }
 
 /// The node `node_name` names in `graph`, the graph of the stream
-/// `stream_name`, and the cast name of its output port `port_name`, each
+/// `stream_id`, and the cast name of its output port `port_name`, each
 /// refused by name — listing what the stream holds — when it is not there.
 pub(crate) fn the_output_port_named_on_this_graph<'graph>(
     graph: &'graph mut Graph,
-    stream_name: &str,
+    stream_id: &str,
     node_name: &str,
     port_name: &str,
 ) -> Result<(&'graph mut ProcessorNode, String)> {
-    let named = node_named_or_refused(graph, stream_name, node_name)?;
+    let named = node_named_or_refused(graph, stream_id, node_name)?;
     let port_cast = cast_exposed_name_to_url_safe(port_name)?.into_owned();
     if !named.has_output(&port_cast) {
         return Err(Error::NodeInAStreamHasNoOutputPortNamed {
-            stream: stream_name.to_string(),
+            stream: stream_id.to_string(),
             node: named.display_name.clone(),
             port: port_name.to_string(),
             output_ports_the_node_has: port_names_listed_for_a_refusal(

@@ -290,18 +290,18 @@ async fn connect_impl(
     Ok(link_id)
 }
 
-/// The node `node_name` names once cast in the stream `stream_name`, whose
+/// The node `node_name` names once cast in the stream `stream_id`, whose
 /// graph `compiler` holds.
 ///
 /// Refused by name when the stream holds no node by that name, listing the
 /// ones it does.
 fn the_node_this_stream_names(
     compiler: &Arc<Compiler>,
-    stream_name: &str,
+    stream_id: &str,
     node_name: &str,
 ) -> Result<NodeInTheGraph> {
     compiler.scope(|graph, _tx| {
-        node_named_or_refused(graph, stream_name, node_name).map(|named| NodeInTheGraph {
+        node_named_or_refused(graph, stream_id, node_name).map(|named| NodeInTheGraph {
             processor_id: named.id.clone(),
             name: named.display_name.clone(),
         })
@@ -544,7 +544,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph> {
-        the_node_this_stream_names(&self.compiler, self.stream_name(), node_name)
+        the_node_this_stream_names(&self.compiler, self.stream_id(), node_name)
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -675,7 +675,7 @@ mod connect_wires_without_inspecting_a_port_tests {
     fn the_fixtures_stream() -> LoadedStreamIdentity {
         LoadedStreamIdentity {
             runtime_id: "Rconnectsilence".to_string(),
-            stream_name: "main".to_string(),
+            stream_id: "main".to_string(),
             stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
         }
     }

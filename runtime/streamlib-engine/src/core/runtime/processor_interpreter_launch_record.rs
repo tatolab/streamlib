@@ -236,7 +236,7 @@ mod tests {
     /// A stream named `main` whose project is `project_directory` and which
     /// starts no processor interpreter.
     fn a_stream_with_no_environment(project_directory: &Path) -> OptionsForLoadingOneStream {
-        OptionsForLoadingOneStream::in_project_directory(project_directory).named("main")
+        OptionsForLoadingOneStream::in_project_directory(project_directory).with_stream_id("main")
     }
 
     /// A project directory holding a stand-in venv interpreter that answers
@@ -313,7 +313,7 @@ mod tests {
         match load {
             Ok(stream) => panic!(
                 "the stream `{}` loaded, and {why_it_is_refused}",
-                stream.stream_name()
+                stream.stream_id()
             ),
             Err(refusal) => refusal,
         }
@@ -346,7 +346,7 @@ mod tests {
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&rust_type]),
                 OptionsForLoadingOneStream::in_stream_environment(stream_environment.clone())
-                    .named("main"),
+                    .with_stream_id("main"),
             )
             .expect("a graph of Rust types loads");
 
@@ -360,7 +360,7 @@ mod tests {
                 OptionsForLoadingOneStream::in_project_directory(
                     project_directory_of_the_stream_with_no_environment.path(),
                 )
-                .named("no-environment"),
+                .with_stream_id("no-environment"),
             )
             .expect("an empty stream loads");
         assert_eq!(stream_with_no_environment.stream_environment(), None);
@@ -403,7 +403,7 @@ mod tests {
         assert_eq!(node_types, [python_type]);
         assert!(refusal.contains("no stream environment"), "{refusal}");
         assert!(
-            runner.names_of_the_loaded_streams().is_empty(),
+            runner.ids_of_the_loaded_streams().is_empty(),
             "a refused load adds no stream"
         );
     }
@@ -434,7 +434,8 @@ mod tests {
         let load_outcome = runner
             .load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested(
                 &a_graph_of(&[&python_type]),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment).named("main"),
+                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
+                    .with_stream_id("main"),
             )
             .expect("a load a machine shutdown cut short is abandoned without a refusal");
         interrupter.join().unwrap();
@@ -447,7 +448,7 @@ mod tests {
             load_outcome,
             StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest
         ));
-        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
     }
 
     /// An interrupt belongs to the stream whose load it cut short: the next
@@ -476,7 +477,7 @@ mod tests {
                 .load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested(
                     &a_graph_of(&[&interrupted_type]),
                     OptionsForLoadingOneStream::in_stream_environment(hanging_environment)
-                        .named("main"),
+                        .with_stream_id("main"),
                 )
                 .expect("the interrupted load is abandoned");
             interrupter.join().unwrap();
@@ -492,7 +493,8 @@ mod tests {
         let stream = runner
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&later_type]),
-                OptionsForLoadingOneStream::in_stream_environment(later_environment).named("main"),
+                OptionsForLoadingOneStream::in_stream_environment(later_environment)
+                    .with_stream_id("main"),
             )
             .expect("a later load describes its types");
 
@@ -512,7 +514,8 @@ mod tests {
         let refusal = the_refusal_of(
             Runner::new().unwrap().load_stream_from_graph_snapshot(
                 &a_graph_of(&[&python_type]),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment).named("main"),
+                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
+                    .with_stream_id("main"),
             ),
             "a type to describe needs a lend directory",
         );
@@ -568,14 +571,15 @@ mod tests {
         let first_stream = runner
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&loaded_type]),
-                OptionsForLoadingOneStream::in_stream_environment(first_environment).named("first"),
+                OptionsForLoadingOneStream::in_stream_environment(first_environment)
+                    .with_stream_id("first"),
             )
             .expect("the first stream describes the type");
         let second_stream = runner
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&loaded_type]),
                 OptionsForLoadingOneStream::in_stream_environment(second_environment)
-                    .named("second"),
+                    .with_stream_id("second"),
             )
             .expect("the second stream describes the type");
 
@@ -694,7 +698,8 @@ mod tests {
                     }]
                 }))
                 .expect("the test graph reads"),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment).named("main"),
+                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
+                    .with_stream_id("main"),
             ),
             "the engine refuses the link",
         );
@@ -703,7 +708,7 @@ mod tests {
             matches!(refusal, Error::InvalidLink(_)),
             "the load must be refused at the link, after the describe: {refusal:?}"
         );
-        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
         let left_behind_process_id: libc::pid_t =
             std::fs::read_to_string(&left_behind_process_id_file)
                 .expect("the describe's interpreter ran")

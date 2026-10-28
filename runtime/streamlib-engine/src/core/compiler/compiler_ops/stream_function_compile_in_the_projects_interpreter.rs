@@ -26,7 +26,7 @@ use crate::core::child_process_lifetime::{
     give_the_child_no_descriptor_beyond_stdio,
 };
 use crate::core::error::{Error, Result};
-use crate::core::runtime::StreamEnvironment;
+use crate::core::runtime::{StreamEnvironment, StreamLocation};
 use crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind;
 
 /// The module `tatolab.stream` compiles a project's stream function with.
@@ -49,11 +49,15 @@ const COMPILE_STANDARD_ERROR_LOG_LABEL: &str = "stream-function-compile";
 const COMPILE_STANDARD_OUTPUT_KEPT_BYTES: usize = 64 * 1024 * 1024;
 
 /// A project's stream function compiled in the project's own interpreter: the
-/// graph it compiled to, and the environment its processor interpreters start in.
+/// graph it compiled to, where the stream's code lives, and the environment its
+/// processor interpreters start in.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StreamFunctionCompiledInTheProjectsInterpreter {
     /// The stream graph the compile entry printed, as it printed it.
     pub(crate) graph_json: serde_json::Value,
+    /// The project directory and the stream function's `module:qualname` the
+    /// compile entry reported.
+    pub(crate) stream_location: StreamLocation,
     /// The project directory the compile entry reported, and the project's
     /// venv interpreter.
     pub(crate) stream_environment: StreamEnvironment,
@@ -68,6 +72,7 @@ pub(crate) struct StreamFunctionCompiledInTheProjectsInterpreter {
 struct ProjectStreamCompileDocument {
     stream_graph: serde_json::Value,
     project_directory: PathBuf,
+    stream_function: String,
 }
 
 /// The interpreter a project's streams run in: `<project>/.venv/bin/python`,
@@ -268,6 +273,14 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
         &standard_output_bytes,
     )
     .map_err(|not_a_compile_document| {
+        if is_a_compile_document_naming_no_stream_function(&standard_output_bytes) {
+            return Error::Configuration(format!(
+                "the stream function in {project} compiled, and the project's `tatolab-stream` \
+                 is older than this runtime: its compile document names no `stream_function`, \
+                 which the stream's id is computed from. Run `uv sync` in {project} to take a \
+                 `tatolab-stream` as new as the runtime"
+            ));
+        }
         Error::Runtime(format!(
             "the stream function in {project} compiled, and `{interpreter_shown}`'s \
                      standard output is not the compile document ({not_a_compile_document}); it \
@@ -278,6 +291,10 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     })?;
     Ok(StreamFunctionCompiledInTheProjectsInterpreter {
         graph_json: compile_document.stream_graph,
+        stream_location: StreamLocation {
+            project_directory: compile_document.project_directory.clone(),
+            stream_function: compile_document.stream_function,
+        },
         stream_environment: StreamEnvironment {
             project_directory: compile_document.project_directory,
             interpreter,
@@ -288,6 +305,19 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
             .filter(|line| !line.is_empty())
             .map(str::to_string)
             .collect(),
+    })
+}
+
+/// Whether `standard_output` is a compile document but for its missing
+/// `stream_function`, as a `tatolab-stream` older than the runtime prints it.
+fn is_a_compile_document_naming_no_stream_function(standard_output: &[u8]) -> bool {
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(standard_output) else {
+        return false;
+    };
+    document.as_object().is_some_and(|fields| {
+        fields.contains_key("stream_graph")
+            && fields.contains_key("project_directory")
+            && !fields.contains_key("stream_function")
     })
 }
 
@@ -385,13 +415,14 @@ mod tests {
             serde_json::json!({
                 "stream_graph": a_compiled_graph(),
                 "project_directory": project_directory,
+                "stream_function": "stream:camera_preview",
             })
         )
     }
 
     #[test]
     #[serial]
-    fn a_compile_returns_the_graph_and_the_project_and_its_venv_interpreter() {
+    fn a_compile_returns_the_graph_the_location_and_the_projects_venv_interpreter() {
         // A literal path rather than one built from the shell's `$PWD`: a shell
         // started outside its parent's `PWD` reads `getcwd()`, which on macOS
         // resolves the temporary directory's `/var` symlink to `/private/var`.
@@ -406,6 +437,13 @@ mod tests {
 
         assert_eq!(compiled.graph_json, a_compiled_graph());
         assert_eq!(
+            compiled.stream_location,
+            StreamLocation {
+                project_directory: PathBuf::from(reported_project_directory),
+                stream_function: "stream:camera_preview".to_string(),
+            }
+        );
+        assert_eq!(
             compiled.stream_environment,
             StreamEnvironment {
                 project_directory: PathBuf::from(reported_project_directory),
@@ -414,6 +452,27 @@ mod tests {
             "the project directory is the one the compile entry reported, and the \
              interpreter the venv's as spelled"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn a_compile_document_naming_no_stream_function_is_refused_pointing_at_uv_sync() {
+        let project = ProjectWithAStubVenvInterpreter::running(&format!(
+            "cat <<COMPILED\n{}\nCOMPILED",
+            serde_json::json!({
+                "stream_graph": a_compiled_graph(),
+                "project_directory": "/srv/an-older-tatolab-stream",
+            })
+        ));
+
+        let refusal = project
+            .compile(None, None)
+            .expect_err("a document naming no stream function is refused")
+            .to_string();
+
+        assert!(refusal.contains("older than this runtime"), "{refusal}");
+        assert!(refusal.contains("`stream_function`"), "{refusal}");
+        assert!(refusal.contains("uv sync"), "{refusal}");
     }
 
     #[test]

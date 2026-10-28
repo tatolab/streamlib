@@ -107,7 +107,7 @@ pub struct RuntimeLogEvent {
     /// for a record no stream emitted, which reaches only the pretty mirror.
     pub runtime_id: String,
 
-    /// The URL-safe cast name of the loaded stream that emitted the record. `None` for a
+    /// The id of the loaded stream that emitted the record. `None` for a
     /// record no stream emitted.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub stream: Option<String>,

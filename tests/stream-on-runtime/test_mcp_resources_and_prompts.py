@@ -120,7 +120,7 @@ EXPLICIT_ARGUMENT = re.compile(r"`([a-z_]+)`: `([^`]+)`")
 
 
 def await_link_state(
-    client: "ScriptedMcpClient", stream_name: str, link_id: str, wanted: str
+    client: "ScriptedMcpClient", stream_id: str, link_id: str, wanted: str
 ) -> str:
     """Poll the stream's `graph` until one link reaches `wanted`, and report what it reached.
 
@@ -132,7 +132,7 @@ def await_link_state(
     deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
     link = None
     while time.monotonic() < deadline:
-        graph = client.call_tool("graph", {"stream": stream_name})
+        graph = client.call_tool("graph", {"stream": stream_id})
         link = next((each for each in graph["links"] if each["id"] == link_id), None)
         if link is not None and link["state"] in (wanted, "error"):
             return link["state"] + (
@@ -143,7 +143,7 @@ def await_link_state(
 
 
 def await_added_node_state(
-    client: "ScriptedMcpClient", stream_name: str, node_name: str, wanted: str
+    client: "ScriptedMcpClient", stream_id: str, node_name: str, wanted: str
 ) -> str:
     """Poll the stream's `graph` until one node reaches `wanted`, and report what it reached.
 
@@ -158,7 +158,7 @@ def await_added_node_state(
         node = next(
             (
                 each
-                for each in client.call_tool("graph", {"stream": stream_name})["nodes"]
+                for each in client.call_tool("graph", {"stream": stream_id})["nodes"]
                 if each["name"] == node_name
             ),
             None,
@@ -270,7 +270,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
 
     machine_wide_graph_before = client.read_json_resource(resource_uris_by_name["graph"])
     (graph_before,) = machine_wide_graph_before["streams"]
-    stream_name = graph_before["stream"]
+    stream_id = graph_before["stream"]
     assert len(graph_before["links"]) == 1, graph_before["links"]
     replaced_link = graph_before["links"][0]
 
@@ -278,7 +278,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     (catalog_of_the_stream,) = [
         stream_catalog
         for stream_catalog in catalog["streams"]
-        if stream_catalog["stream"] == stream_name
+        if stream_catalog["stream"] == stream_id
     ]
     catalog_paths = [entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]]
     inserted_type = "processors.bag_marking_effect:BagMarkingEffect"
@@ -291,7 +291,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     type_argument = next(name for name in argument_names if name not in ("stream", link_argument))
     recipe_text = client.prompt_text(
         insert_prompt.name,
-        {"stream": stream_name, link_argument: replaced_link["id"], type_argument: inserted_type},
+        {"stream": stream_id, link_argument: replaced_link["id"], type_argument: inserted_type},
     )
     steps = numbered_steps(recipe_text)
     assert steps, f"the recipe lists no steps:\n{recipe_text}"
@@ -312,7 +312,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     graph_after: "dict[str, Any]" = {}
     for tool_name, instruction in steps:
         spelled = dict(EXPLICIT_ARGUMENT.findall(instruction))
-        assert spelled.get("stream") == stream_name, (
+        assert spelled.get("stream") == stream_id, (
             f"step `{tool_name}` must name the stream the graph resource reported: {instruction}"
         )
         stream_the_step_names = spelled["stream"]
@@ -353,20 +353,20 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     # read `graph` again for.
     for link_id in returned_link_ids:
         assert links_by_id[link_id]["state"] in ("pending", "wired"), links_by_id.get(link_id)
-        assert await_link_state(client, stream_name, link_id, "wired") == "wired", (
+        assert await_link_state(client, stream_id, link_id, "wired") == "wired", (
             "the helper's own answer is what makes the link wired; a link stuck "
             "pending is a helper that never opened its port, and one in error "
             "carries the helper's reason"
         )
     links_by_id = {
-        link["id"]: link for link in client.call_tool("graph", {"stream": stream_name})["links"]
+        link["id"]: link for link in client.call_tool("graph", {"stream": stream_id})["links"]
     }
     upstream_link, downstream_link = (links_by_id[link_id] for link_id in returned_link_ids)
     assert upstream_link["source"] == replaced_link["source"]
     assert upstream_link["target"]["node"] == added_node_name
     assert downstream_link["source"]["node"] == added_node_name
     assert downstream_link["target"] == replaced_link["target"]
-    assert await_added_node_state(client, stream_name, added_node_name, "Running") == "Running", (
+    assert await_added_node_state(client, stream_id, added_node_name, "Running") == "Running", (
         "the splice is only carrying bags once the inserted node runs; a node "
         "stuck Idle is a helper that never started it"
     )
@@ -385,7 +385,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         dict(
             zip(
                 [argument.name for argument in camera_prompt.arguments or [] if argument.required],
-                [stream_name, source_endpoint["node"], source_endpoint["port"]],
+                [stream_id, source_endpoint["node"], source_endpoint["port"]],
                 strict=True,
             )
         ),

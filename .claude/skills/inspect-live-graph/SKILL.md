@@ -5,13 +5,13 @@ description: Dump a running StreamLib stream's live graph — nodes by name, por
 
 # inspect-live-graph
 
-The read-only ground-truth verb. Everything else keys off names that only the live graph knows — node names and port names, which with the stream name form a port's address, `<stream>/<node>/<port>`. Never guess these; dump the graph and read them.
+The read-only ground-truth verb. Everything else keys off names that only the live graph knows — node names and port names, which with the stream id form a port's address, `<stream id>/<node>/<port>`. Never guess these; dump the graph and read them.
 
 ## Steps
 
 ### 1. Export the live graph
 ```bash
-tatolab graph --stream <stream>
+tatolab graph --stream <stream id>
 # or every loaded stream at once:
 tatolab graph
 ```
@@ -21,14 +21,14 @@ With `--stream`, the result is that stream's graph in the shape a load takes: `s
 - **Node names** — each node's `name`, which instances the runtime actually stood up, and under which `type`. A name is cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`; a defaulted `CameraSource` is `camerasource`, a second one `camerasource-2`).
 - **Port names** — the exact input / output port names each node declares under `ports`, as the runtime reports them rather than as the source reads.
 - **Links** — each end is rendered right-anchored: `{node, port}` in this stream, `{stream, node, port}` for a source in another stream on this machine.
-- **Port addresses** — a port is `<stream>/<node>/<port>`: the stream's name, the source node's `name`, and its output port under `ports.outputs`; `<machine>/<stream>/<node>/<port>` names the same port with `machine` in front. Exposed, it is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the local relay — feed that to `read-live-track`.
+- **Port addresses** — a port is `<stream id>/<node>/<port>`: the stream id (`stream`), the source node's `name`, and its output port under `ports.outputs`; `<machine>/<stream id>/<node>/<port>` names the same port with `machine` in front. Exposed, it is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — feed that to `read-live-track`.
 - **Exposed ports** — `exposed` lists each exposed output port and its level, private or public. A port not listed is internal: no track until it is exposed.
 - **States / metrics** — confirm a node is `Running` and moving data (non-zero counters) rather than merely instantiated.
 
 ### 3. Save it when it is evidence
 To freeze the topology for a PR or a before/after diff, redirect to a file (`graph` has no `--output` flag) — only when no node's config carries a secret (see Notes); otherwise read it in a pipe and record what you read:
 ```bash
-tatolab graph --stream <stream> > /tmp/graph-before.json
+tatolab graph --stream <stream id> > /tmp/graph-before.json
 ```
 For a full evidence bundle (graph + tracks read + logs), use `capture-stream-evidence`.
 

@@ -27,6 +27,7 @@ mod runtime_unique_id;
 mod status;
 mod stream_actions_of_this_runtime;
 mod stream_environment;
+mod stream_location_and_id;
 
 pub use crate::core::compiler::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
@@ -58,8 +59,8 @@ pub(crate) use helper_process_group_registry::{
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use machine_name::MachineName;
 pub use machine_state_directory::{
-    KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord, KeptStreamRecordReadFailure,
-    KeptStreamRecordsInTheStateDirectory, OwnerExposureRuling,
+    OwnerExposureRuling, STREAM_RECORD_SCHEMA_VERSION, StreamRecord, StreamRecordAsRead,
+    StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
 };
 pub(crate) use machine_state_directory::{
     OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
@@ -77,7 +78,7 @@ pub use operations_on_the_streams_loaded_in_this_runtime::{
 };
 pub use runtime::{
     EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
-    StreamLoadObservingMachineShutdownRequests,
+    StreamLoadObservingMachineShutdownRequests, WhatALoadedStreamIsKeyedBy,
 };
 pub use runtime_crash_pinned_on_a_stream::{
     CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, RuntimeRunInProgressRecord,
@@ -106,3 +107,4 @@ pub use stream_actions_of_this_runtime::{
     StreamStopOutcome,
 };
 pub use stream_environment::StreamEnvironment;
+pub use stream_location_and_id::StreamLocation;

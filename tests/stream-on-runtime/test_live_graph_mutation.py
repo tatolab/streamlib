@@ -167,7 +167,7 @@ def link_with_id(graph: dict, link_id: str) -> "dict | None":
 
 
 def await_link_state(
-    local_api: LocalApiClient, stream_name: str, link_id: str, wanted: str
+    local_api: LocalApiClient, stream_id: str, link_id: str, wanted: str
 ) -> str:
     """Poll the stream's `graph` until one link reaches `wanted`, and report what it reached.
 
@@ -181,7 +181,7 @@ def await_link_state(
     deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
     link = None
     while time.monotonic() < deadline:
-        link = link_with_id(local_api.call_tool("graph", {"stream": stream_name}), link_id)
+        link = link_with_id(local_api.call_tool("graph", {"stream": stream_id}), link_id)
         if link is not None and link["state"] in (wanted, "error"):
             return link["state"] + (
                 f" ({link['error_reason']})" if link.get("error_reason") else ""
@@ -190,7 +190,7 @@ def await_link_state(
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
-def await_node_state(local_api: LocalApiClient, stream_name: str, name: str, wanted: str) -> str:
+def await_node_state(local_api: LocalApiClient, stream_id: str, name: str, wanted: str) -> str:
     """Poll the stream's `graph` until one node reaches `wanted`, and report what it reached.
 
     A helper-placed node reads `Running` only once its helper has finished
@@ -201,7 +201,7 @@ def await_node_state(local_api: LocalApiClient, stream_name: str, name: str, wan
     deadline = time.monotonic() + FIRST_FRAME_TIMEOUT_SECONDS
     state = "absent"
     while time.monotonic() < deadline:
-        graph = local_api.call_tool("graph", {"stream": stream_name})
+        graph = local_api.call_tool("graph", {"stream": stream_id})
         state = node_named(graph, name)["components"]["state"]
         if state == wanted:
             return state
@@ -210,10 +210,10 @@ def await_node_state(local_api: LocalApiClient, stream_name: str, name: str, wan
 
 
 def bags_written_on(
-    local_api: LocalApiClient, stream_name: str, node_name: str, output_port: str
+    local_api: LocalApiClient, stream_id: str, node_name: str, output_port: str
 ) -> int:
     """The bags `node_name` has written on `output_port` so far, read off `graph`."""
-    graph = local_api.call_tool("graph", {"stream": stream_name})
+    graph = local_api.call_tool("graph", {"stream": stream_id})
     return node_named(graph, node_name)["components"]["metrics"]["written_bags_by_output_port"][
         output_port
     ]
@@ -227,7 +227,7 @@ class PatternStreamRunning:
     tatolabd: TatolabdUnderTest
     tatolab_run: AttachedTatolabRun
     local_api: LocalApiClient
-    stream_name: str
+    stream_id: str
 
 
 def start_the_pattern_stream(
@@ -242,14 +242,14 @@ def start_the_pattern_stream(
     )
     tatolabd = start_tatolabd()
     tatolab_run = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory))
-    stream_name = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)["stream_name"]
+    stream_id = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)["stream_id"]
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
     return PatternStreamRunning(
         app_directory=app_directory,
         tatolabd=tatolabd,
         tatolab_run=tatolab_run,
         local_api=tatolabd.local_api_client(),
-        stream_name=stream_name,
+        stream_id=stream_id,
     )
 
 
@@ -272,14 +272,14 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     pattern_stream = start_the_pattern_stream(
         make_tatolab_project, start_tatolabd, {"processors/__init__.py": ""}
     )
-    app_directory, tatolabd, local_api, stream_name = (
+    app_directory, tatolabd, local_api, stream_id = (
         pattern_stream.app_directory,
         pattern_stream.tatolabd,
         pattern_stream.local_api,
-        pattern_stream.stream_name,
+        pattern_stream.stream_id,
     )
 
-    graph_before = local_api.call_tool("graph", {"stream": stream_name})
+    graph_before = local_api.call_tool("graph", {"stream": stream_id})
     pattern = node_named(graph_before, "pattern")
     assert pattern["components"]["state"] == "Running"
     assert graph_before["links"] == []
@@ -291,7 +291,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     added = local_api.call_tool(
         "add_node",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "FIRST_EFFECT_SAW_A_FRAME"},
             "name": "effect",
@@ -299,7 +299,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
     assert added == {"name": "effect"}
 
-    graph_after_add = local_api.call_tool("graph", {"stream": stream_name})
+    graph_after_add = local_api.call_tool("graph", {"stream": stream_id})
     effect = node_named(graph_after_add, "effect")
     assert effect["type"] == f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}"
     assert effect["config"] == {"marker": "FIRST_EFFECT_SAW_A_FRAME"}
@@ -309,7 +309,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     connected = local_api.call_tool(
         "connect",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "from_node": "pattern",
             "from_port": "video",
             "to_node": "effect",
@@ -318,15 +318,15 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
     upstream_link_id = connected["link_id"]
 
-    graph_after_connect = local_api.call_tool("graph", {"stream": stream_name})
+    graph_after_connect = local_api.call_tool("graph", {"stream": stream_id})
     upstream_link = link_with_id(graph_after_connect, upstream_link_id)
     assert upstream_link is not None, f"the link is missing from {graph_after_connect['links']}"
     assert upstream_link["state"] in ("pending", "wired"), (
         "`connect` onto a helper returns before that helper has opened its "
         f"port, so the link reads pending or wired and nothing else: {upstream_link}"
     )
-    assert await_node_state(local_api, stream_name, "effect", "Running") == "Running"
-    assert await_link_state(local_api, stream_name, upstream_link_id, "wired") == "wired", (
+    assert await_node_state(local_api, stream_id, "effect", "Running") == "Running"
+    assert await_link_state(local_api, stream_id, upstream_link_id, "wired") == "wired", (
         "the helper's own answer is what makes the link wired; a link stuck "
         "pending is a helper that never opened its port, and one in error "
         "carries the helper's reason"
@@ -342,7 +342,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     second = local_api.call_tool(
         "add_node",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "SECOND_EFFECT_SAW_A_FRAME"},
             "name": "second-effect",
@@ -351,7 +351,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     local_api.call_tool(
         "connect",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "from_node": "pattern",
             "from_port": "video",
             "to_node": second["name"],
@@ -366,7 +366,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     downstream = local_api.call_tool(
         "add_node",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "DOWNSTREAM_EFFECT_SAW_A_FRAME"},
             "name": "downstream-effect",
@@ -375,7 +375,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     local_api.call_tool(
         "connect",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "from_node": "effect",
             "from_port": "video_to_downstream",
             "to_node": downstream["name"],
@@ -383,42 +383,42 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         },
     )
     tatolabd.await_marker("DOWNSTREAM_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
-    assert bags_written_on(local_api, stream_name, "effect", "video_to_downstream") > 0
+    assert bags_written_on(local_api, stream_id, "effect", "video_to_downstream") > 0
 
     # A native built-in added live, by the type `graph` reports for one: its
     # class in `tatolab.stream`, resolved apart from a project's processors.
     live_added_pattern = local_api.call_tool(
         "add_node",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "type": LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
             "config": {"width": 320, "height": 180},
             "name": "live-added-pattern",
         },
     )
     assert (
-        await_node_state(local_api, stream_name, live_added_pattern["name"], "Running")
+        await_node_state(local_api, stream_id, live_added_pattern["name"], "Running")
         == "Running"
     )
 
-    local_api.call_tool("disconnect", {"stream": stream_name, "link_id": upstream_link_id})
-    graph_after_disconnect = local_api.call_tool("graph", {"stream": stream_name})
+    local_api.call_tool("disconnect", {"stream": stream_id, "link_id": upstream_link_id})
+    graph_after_disconnect = local_api.call_tool("graph", {"stream": stream_id})
     assert link_with_id(graph_after_disconnect, upstream_link_id) is None
     # Nothing feeds the effect any more, so nothing leaves it — once the frame
     # it already held when the link went has gone out. A write count that then
     # stands still across a window is the disconnect taking.
     time.sleep(SECONDS_FOR_A_HELD_FRAME_TO_LEAVE)
-    written_once_starved = bags_written_on(local_api, stream_name, "effect", "video_to_downstream")
+    written_once_starved = bags_written_on(local_api, stream_id, "effect", "video_to_downstream")
     time.sleep(SECONDS_A_STARVED_OUTPUT_IS_WATCHED)
     assert (
-        bags_written_on(local_api, stream_name, "effect", "video_to_downstream")
+        bags_written_on(local_api, stream_id, "effect", "video_to_downstream")
         == written_once_starved
     ), "bags still leave a disconnected effect"
 
-    assert local_api.call_tool("remove_node", {"stream": stream_name, "name": "effect"}) == {
+    assert local_api.call_tool("remove_node", {"stream": stream_id, "name": "effect"}) == {
         "removed_name": "effect"
     }
-    graph_after_remove = local_api.call_tool("graph", {"stream": stream_name})
+    graph_after_remove = local_api.call_tool("graph", {"stream": stream_id})
     assert all(node["name"] != "effect" for node in graph_after_remove["nodes"])
     assert all(
         "effect" not in (link["source"]["node"], link["target"]["node"])
@@ -501,13 +501,13 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
             "processors/slowly_importing_sink.py": SLOWLY_IMPORTING_SINK_SOURCE,
         },
     )
-    local_api, stream_name = pattern_stream.local_api, pattern_stream.stream_name
-    pattern = node_named(local_api.call_tool("graph", {"stream": stream_name}), "pattern")
+    local_api, stream_id = pattern_stream.local_api, pattern_stream.stream_id
+    pattern = node_named(local_api.call_tool("graph", {"stream": stream_id}), "pattern")
 
     sink = local_api.call_tool(
         "add_node",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}",
             "name": "sink",
         },
@@ -517,7 +517,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
         lambda: local_api.call_tool(
             "connect",
             {
-                "stream": stream_name,
+                "stream": stream_id,
                 "from_node": pattern["name"],
                 "from_port": "video",
                 "to_node": sink["name"],
@@ -530,7 +530,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     )
 
     graph_seconds, graph_while_importing = seconds_taken_by(
-        lambda: local_api.call_tool("graph", {"stream": stream_name})
+        lambda: local_api.call_tool("graph", {"stream": stream_id})
     )
     assert graph_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
         f"graph took {graph_seconds:.1f}s, waiting on a helper still importing"
@@ -541,15 +541,15 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
 
     add_seconds, _ = seconds_taken_by(
         lambda: local_api.call_tool(
-            "add_node", {"stream": stream_name, "type": pattern["type"], "name": "second-pattern"}
+            "add_node", {"stream": stream_id, "type": pattern["type"], "name": "second-pattern"}
         )
     )
     assert add_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
         f"add_node took {add_seconds:.1f}s, waiting on a helper still importing"
     )
 
-    assert await_node_state(local_api, stream_name, "sink", "Running") == "Running"
-    assert await_link_state(local_api, stream_name, connected["link_id"], "wired") == "wired", (
+    assert await_node_state(local_api, stream_id, "sink", "Running") == "Running"
+    assert await_link_state(local_api, stream_id, connected["link_id"], "wired") == "wired", (
         "the link connected during the import is wired once the helper is up"
     )
 
@@ -572,14 +572,14 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     project can reach is the ordinary way an agent gets this wrong.
     """
     pattern_stream = start_the_pattern_stream(make_tatolab_project, start_tatolabd, {})
-    local_api, stream_name = pattern_stream.local_api, pattern_stream.stream_name
+    local_api, stream_id = pattern_stream.local_api, pattern_stream.stream_id
 
     refusal = local_api.call_tool_refusal(
-        "add_node", {"stream": stream_name, "type": "processors.no_such_module:Missing"}
+        "add_node", {"stream": stream_id, "type": "processors.no_such_module:Missing"}
     )
     assert re.search(r"no_such_module|No module named", refusal), refusal
 
-    graph: "dict[str, Any]" = local_api.call_tool("graph", {"stream": stream_name})
+    graph: "dict[str, Any]" = local_api.call_tool("graph", {"stream": stream_id})
     assert [n["name"] for n in graph["nodes"] if n["name"] == "pattern"], (
         "a refused add must leave the running graph as it was"
     )
@@ -587,7 +587,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     port_refusal = local_api.call_tool_refusal(
         "connect",
         {
-            "stream": stream_name,
+            "stream": stream_id,
             "from_node": "pattern",
             "from_port": "no_such_port",
             "to_node": "pattern",

@@ -363,7 +363,7 @@ fn write_one(record: &LogRecord, outputs: &mut DrainWorkerOutputs<'_>) {
             .map(|route| route.runtime_id().to_string())
             .unwrap_or_default(),
         stream: stream_route
-            .and_then(|stream_route| stream_route.stream_name())
+            .and_then(|stream_route| stream_route.stream_id())
             .map(str::to_string),
         source,
         level: record.level,

@@ -112,7 +112,7 @@ pub mod sdk {
     /// `Runner` op.
     pub mod app;
 
-    pub use app::{AddedProcessor, App, AppPortEndpoint, THE_STREAM_NAME_AN_APP_LOADS};
+    pub use app::{AddedProcessor, App, AppPortEndpoint, THE_STREAM_ID_AN_APP_LOADS};
 
     // ---- Processors namespace ----
     pub mod processors {

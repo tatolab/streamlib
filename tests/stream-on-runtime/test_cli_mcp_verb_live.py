@@ -28,7 +28,7 @@ from mcp_types.version import LATEST_PROTOCOL_VERSION
 from conftest import PrivateMachineDirectories, TatolabdUnderTest
 from runtime_unit_under_test import RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import TatolabRunOfAProject
-from test_cli_launch import NODE_READY_TIMEOUT_SECONDS, STREAM_NAME, STREAM_WITH_ONE_NATIVE_SOURCE
+from test_cli_launch import NODE_READY_TIMEOUT_SECONDS, STREAM_WITH_ONE_NATIVE_SOURCE
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -95,7 +95,8 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    a_runtime_holding_one_attached_stream(make_tatolab_project, start_tatolabd)
+    tatolabd = a_runtime_holding_one_attached_stream(make_tatolab_project, start_tatolabd)
+    stream_id = tatolabd.await_the_latest_attached_stream_loaded()
     verb_command = mcp_verb_command(runtime_unit)
     verb = StdioServerParameters(
         command=verb_command[0],
@@ -127,7 +128,7 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
             prompt = await client.get_prompt(
                 "fan_output_to_another_consumer",
                 {
-                    "stream": STREAM_NAME,
+                    "stream": stream_id,
                     "from_node": source_name,
                     "from_port": "video",
                     "type": "nodes.effect:Effect",
@@ -149,7 +150,7 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
 
     assert answered["protocol_version"] == LATEST_PROTOCOL_VERSION
     assert answered["tool_names"] == CONTROL_TOOL_NAMES
-    assert answered["stream_graph"]["stream"] == STREAM_NAME
+    assert answered["stream_graph"]["stream"] == stream_id
     assert answered["machine_graph"]["machine"], answered["machine_graph"]
     for uri, contents in answered["resources"].items():
         (document,) = contents

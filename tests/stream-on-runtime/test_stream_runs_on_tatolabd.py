@@ -83,7 +83,8 @@ def test_a_hand_written_graph_projects_interpreter_prints_the_graph_as_the_compi
 
     assert compiled.stdout == (
         '{"stream_graph": ' + graph_text + ', "project_directory": '
-        + json.dumps(str(tmp_path / "nodes-live-here")) + "}\n"
+        + json.dumps(str(tmp_path / "nodes-live-here"))
+        + ', "stream_function": "stream:hand-written"}\n'
     )
     assert project.tatolab_run == TatolabRunOfAProject(working_directory=tmp_path / "project")
 

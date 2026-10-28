@@ -299,8 +299,12 @@ fn streams_prints_the_table_of_what_the_runtime_holds() {
         "list_streams",
         StubToolAnswer::tool_result(
             &json!({"streams": [
-                {"name": "cam", "state": "kept", "project_directory": "/srv/cam", "node_count": 3},
-                {"name": "mic", "state": "stopped", "project_directory": "/srv/mic", "node_count": null},
+                {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "kept",
+                 "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
+                 "node_count": 3},
+                {"stream": "mic-listen-9f8e7d", "display_name": "Desk mic", "state": "stopped",
+                 "location": {"project_directory": "/srv/mic", "stream_function": "stream:listen"},
+                 "node_count": null},
             ]})
             .to_string(),
         ),
@@ -310,9 +314,9 @@ fn streams_prints_the_table_of_what_the_runtime_holds() {
 
     assert_eq!(
         printed,
-        "NAME  STATE    NODES  PROJECT\n\
-         cam   kept     3      /srv/cam\n\
-         mic   stopped  -      /srv/mic\n"
+        "ID                 NAME      STATE    NODES  PROJECT   FUNCTION\n\
+         cam-main-0a1b2c    main      kept     3      /srv/cam  stream:main\n\
+         mic-listen-9f8e7d  Desk mic  stopped  -      /srv/mic  stream:listen\n"
     );
     assert_eq!(
         stub_local_api_server.recorded_arguments_of("list_streams"),

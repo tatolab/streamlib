@@ -3,7 +3,7 @@
 
 //! The grammar every chunk of an address obeys.
 //!
-//! An address is `<machine>/<stream>/<node>/<port>`, and a chunk is a name the
+//! An address is `<machine>/<stream id>/<node>/<port>`, and a chunk is a name the
 //! exposed-name cast leaves as it is and does not refuse. Every other grammar
 //! that holds a chunk — a channel name's — defers here.
 
@@ -30,7 +30,7 @@ pub(crate) fn first_reason_this_is_not_one_address_chunk(candidate: &str) -> Opt
 /// same rule.
 pub fn what_one_address_chunk_may_be() -> String {
     format!(
-        "An address is <machine>/<stream>/<node>/<port>, leading parts omitted meaning here, \
+        "An address is <machine>/<stream id>/<node>/<port>, leading parts omitted meaning here, \
          and each part is one address chunk: a name already in the form every exposed name is \
          cast to — lowercase a-z 0-9 - . _ ~, no leading, trailing or doubled '-', at most \
          {EXPOSED_NAME_MAXIMUM_LENGTH} characters, and neither '.' nor '..'"
@@ -137,6 +137,6 @@ mod tests {
     /// The rule a refusal ends with spells the four-part address.
     #[test]
     fn the_rule_spells_the_four_part_address() {
-        assert!(what_one_address_chunk_may_be().contains("<machine>/<stream>/<node>/<port>"));
+        assert!(what_one_address_chunk_may_be().contains("<machine>/<stream id>/<node>/<port>"));
     }
 }

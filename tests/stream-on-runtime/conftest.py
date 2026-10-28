@@ -16,7 +16,7 @@ Ctrl-C to it stops the stream) or `-d` (the runtime keeps it). What a test
 hands a loading fixture — `stream_or_graph` — is one of:
 
 - a `@stream` function of one of the suite's `*_streams.py` (or other non-test)
-  modules, run as `tatolab run <module>:<function> [--name <stream_name>]` from
+  modules, run as `tatolab run <module>:<function> [--name <display_name>]` from
   the suite directory, a project whose `.venv` is the suite venv. A function
   defined in a test module, inside another function or built at run time is
   refused by name: move it to a `*_streams.py` module, taking what varies from
@@ -140,7 +140,7 @@ STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN = re.compile(
 
 #: What an attached `tatolab run` (or `dev`) notes on standard error once its stream loaded and started.
 ATTACHED_STREAM_LOADED_NOTE_PATTERN = re.compile(
-    r"^tatolab(?: dev)?: (?P<stream_name>\S+) loaded \((?P<node_count>\d+) nodes?, "
+    r"^tatolab(?: dev)?: (?P<stream_id>\S+) loaded \((?P<node_count>\d+) nodes?, "
     r"project (?P<project_directory>.+)\); Ctrl-C stops it$"
 )
 
@@ -345,7 +345,7 @@ class AttachedTatolabRun(RuntimeProcessUnderTest):
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS, occurrence: int = 1
     ) -> "re.Match[str]":
         """Wait for its `occurrence`-th note that the stream loaded and started;
-        the match's groups are `stream_name`, `node_count` and `project_directory`."""
+        the match's groups are `stream_id`, `node_count` and `project_directory`."""
         loaded_note_count = 0
 
         def observe(line: str) -> Any:
@@ -406,18 +406,18 @@ class TatolabCommandsOfThisTest:
         self,
         stream_or_graph: StreamOrGraph,
         *,
-        stream_name: "str | None" = None,
+        display_name: "str | None" = None,
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
     ) -> TatolabRunOfAProject:
         """The `tatolab run` that loads `stream_or_graph`; see the module docstring."""
         if isinstance(stream_or_graph, TatolabRunOfAProject):
-            assert stream_name is None and project_directory is None and processor_interpreter is None, (
+            assert display_name is None and project_directory is None and processor_interpreter is None, (
                 "a project's own `tatolab run` names its stream and project in its arguments"
             )
             return stream_or_graph
         if isinstance(stream_or_graph, (dict, str)):
-            assert stream_name is None, (
+            assert display_name is None, (
                 "a hand-written graph names its stream in its `stream` key"
             )
             self.hand_written_graph_project_count += 1
@@ -432,7 +432,7 @@ class TatolabCommandsOfThisTest:
             "a `@stream` function of the suite runs in the suite project; run another "
             "project's stream with `TatolabRunOfAProject`"
         )
-        return tatolab_run_of_a_suite_stream_function(stream_or_graph, stream_name)
+        return tatolab_run_of_a_suite_stream_function(stream_or_graph, display_name)
 
 
 class TatolabdUnderTest(RuntimeProcessUnderTest):
@@ -490,15 +490,15 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS
     ) -> str:
         """Wait for the latest attached `tatolab run`'s note that its stream loaded;
-        return the stream's name."""
+        return the stream's id."""
         assert self.attached_stream_runs, "no attached `tatolab run` was started on this tatolabd"
-        return self.attached_stream_runs[-1].await_loaded(timeout=timeout)["stream_name"]
+        return self.attached_stream_runs[-1].await_loaded(timeout=timeout)["stream_id"]
 
     def run_stream_attached(
         self,
         stream_or_graph: StreamOrGraph,
         *,
-        stream_name: "str | None" = None,
+        display_name: "str | None" = None,
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
@@ -511,7 +511,7 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         """
         tatolab_run = self._tatolab_commands.tatolab_run_of(
             stream_or_graph,
-            stream_name=stream_name,
+            display_name=display_name,
             project_directory=project_directory,
             processor_interpreter=processor_interpreter,
         )
@@ -602,7 +602,7 @@ def start_tatolabd_running_stream(
 ) -> "Callable[..., TatolabdUnderTest]":
     """Start this test's `tatolabd`, then run `stream_or_graph` on it with an attached `tatolab run`.
 
-    `start_tatolabd_running_stream(stream_or_graph, *, stream_name=None,
+    `start_tatolabd_running_stream(stream_or_graph, *, display_name=None,
     project_directory=None, processor_interpreter=None, extra_environment=None,
     working_directory=None) -> TatolabdUnderTest`. `extra_environment` and
     `working_directory` are `tatolabd`'s, so the stream's processor interpreters
@@ -615,7 +615,7 @@ def start_tatolabd_running_stream(
     def start(
         stream_or_graph: StreamOrGraph,
         *,
-        stream_name: "str | None" = None,
+        display_name: "str | None" = None,
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
@@ -626,7 +626,7 @@ def start_tatolabd_running_stream(
         )
         started_tatolabd.run_stream_attached(
             stream_or_graph,
-            stream_name=stream_name,
+            display_name=display_name,
             project_directory=project_directory,
             processor_interpreter=processor_interpreter,
         )
@@ -641,8 +641,8 @@ class StreamRunWithNoVulkanDriverOutcome:
 
     #: Whether the stream's graph loaded — its start then refused at the GPU.
     loaded: bool
-    #: The stream's name as the engine cast it, once it loaded.
-    loaded_stream_name: "str | None"
+    #: The stream id the engine loaded it under, once it loaded.
+    loaded_stream_id: "str | None"
     #: How many processors the load added, as its unload removed them.
     loaded_node_count: "int | None"
     #: `tatolab run`'s refusal, from its `error: <reason>` line on.
@@ -667,7 +667,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
     """Run a stream attached on a `tatolabd` that reaches no Vulkan driver, to the end of the run.
 
     `run_stream_on_tatolabd_with_no_vulkan_driver(stream_or_graph, *,
-    stream_name=None, project_directory=None, processor_interpreter=None,
+    display_name=None, project_directory=None, processor_interpreter=None,
     extra_environment=None) -> StreamRunWithNoVulkanDriverOutcome`. Needs no
     device: a graph the load refuses ends `tatolab run` with that refusal; one
     it loads is refused at its start, at the GPU, before any device opens. The
@@ -697,7 +697,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
     def run(
         stream_or_graph: StreamOrGraph,
         *,
-        stream_name: "str | None" = None,
+        display_name: "str | None" = None,
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
@@ -707,7 +707,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
         )
         tatolab_run = tatolab_commands_of_this_test.tatolab_run_of(
             stream_or_graph,
-            stream_name=stream_name,
+            display_name=display_name,
             project_directory=project_directory,
             processor_interpreter=processor_interpreter,
         )
@@ -734,7 +734,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             )
         return StreamRunWithNoVulkanDriverOutcome(
             loaded=start_began is not None,
-            loaded_stream_name=start_began.group("stream_name") if start_began else None,
+            loaded_stream_id=start_began.group("stream_id") if start_began else None,
             loaded_node_count=(
                 int(unload.group("processor_count")) if start_began and unload else None
             ),

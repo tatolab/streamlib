@@ -28,31 +28,33 @@ use common::{
 /// One engine on the GPU at a time, so the tests' runs never contend for it.
 static ONE_STREAM_ON_THE_GPU_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-const THE_KEPT_STREAM_STARTED_LOG_LINE: &str = "[start] The stream `main` started";
 const THE_KEPT_STREAM_STARTS_WITHIN: Duration = Duration::from_secs(60);
 
-/// A `tatolabd` on a fresh machine whose kept stream `main` is re-loaded and
-/// started at its start.
+/// The line the runtime logs once the stream `stream_id` started.
+fn the_stream_started_log_line(stream_id: &str) -> String {
+    format!("[start] The stream `{stream_id}` started")
+}
+
+/// A `tatolabd` on a fresh machine whose kept stream, the function `main`, is
+/// re-loaded and started at its start; returns it and the stream's id.
 fn start_tatolabd_re_loading_the_kept_native_only_stream(
     runtime_unit: &TemporaryRuntimeUnit,
     machine_root: &TatolabTestMachineRoot,
-) -> SpawnedTatolabd {
-    machine_root
-        .kept_stream_records()
-        .write(&a_kept_stream_record(
-            "main",
-            a_native_only_stream_graph("main"),
-            &machine_root.project_directory(),
-            &an_executable_standing_in_for_the_interpreter(),
-            false,
-        ))
-        .unwrap();
+) -> (SpawnedTatolabd, String) {
+    let main = a_kept_stream_record(
+        "main",
+        a_native_only_stream_graph("main"),
+        &machine_root.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        false,
+    );
+    machine_root.stream_records().write(&main).unwrap();
     let mut runtime = SpawnedTatolabd::spawn(machine_root.tatolabd_command(&runtime_unit.tatolabd));
     runtime.wait_until_standard_error_carries(
-        THE_KEPT_STREAM_STARTED_LOG_LINE,
+        &the_stream_started_log_line(&main.stream_id),
         THE_KEPT_STREAM_STARTS_WITHIN,
     );
-    runtime
+    (runtime, main.stream_id)
 }
 
 #[test]
@@ -62,7 +64,7 @@ fn a_kept_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_by_an
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
-    let mut runtime =
+    let (mut runtime, main_stream_id) =
         start_tatolabd_re_loading_the_kept_native_only_stream(&runtime_unit, &machine_root);
 
     let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
@@ -74,13 +76,21 @@ fn a_kept_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_by_an
     .json();
     runtime.interrupt_and_expect_a_clean_exit();
 
-    assert_eq!(graph["streams"][0]["stream"], "main", "{graph}");
+    assert_eq!(
+        graph["streams"][0]["stream"],
+        main_stream_id.as_str(),
+        "{graph}"
+    );
     assert_eq!(
         listed["streams"],
         serde_json::json!([{
-            "name": "main",
+            "stream": main_stream_id,
+            "display_name": "main",
+            "location": {
+                "project_directory": machine_root.project_directory(),
+                "stream_function": "stream:main",
+            },
             "state": "kept",
-            "project_directory": machine_root.project_directory().display().to_string(),
             "node_count": 1,
             "failed_because": null,
         }])
@@ -88,16 +98,14 @@ fn a_kept_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_by_an
     assert!(
         runtime
             .standard_error()
-            .contains("[stop] The stream `main` stopped"),
+            .contains(&format!("[stop] The stream `{main_stream_id}` stopped")),
         "{}",
         runtime.standard_error()
     );
     assert!(
         !machine_root
-            .kept_stream_records()
-            .read("main")
-            .unwrap()
-            .unwrap()
+            .current_stream_record_of(&main_stream_id)
+            .expect("the record is kept")
             .stopped,
         "a runtime's stop leaves its kept streams to re-load at the next start"
     );
@@ -113,7 +121,7 @@ fn a_third_interrupt_ends_the_process_with_status_130() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
-    let mut runtime =
+    let (mut runtime, _main_stream_id) =
         start_tatolabd_re_loading_the_kept_native_only_stream(&runtime_unit, &machine_root);
 
     for _ in 0..3 {
@@ -147,24 +155,22 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_star
     let machine_root = TatolabTestMachineRoot::new();
     let crash_trigger = machine_root.project_directory().join("crash-armed");
     std::fs::write(&crash_trigger, "").unwrap();
-    let kept_stream_records = machine_root.kept_stream_records();
-    for kept_stream_record in [
-        a_kept_stream_record(
-            "crasher",
-            a_stream_graph_crashing_while("crasher", &crash_trigger),
-            &machine_root.project_directory(),
-            &an_executable_standing_in_for_the_interpreter(),
-            false,
-        ),
-        a_kept_stream_record(
-            "main",
-            a_native_only_stream_graph("main"),
-            &machine_root.project_directory(),
-            &an_executable_standing_in_for_the_interpreter(),
-            false,
-        ),
-    ] {
-        kept_stream_records.write(&kept_stream_record).unwrap();
+    let crasher = a_kept_stream_record(
+        "crasher",
+        a_stream_graph_crashing_while("crasher", &crash_trigger),
+        &machine_root.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        false,
+    );
+    let main = a_kept_stream_record(
+        "main",
+        a_native_only_stream_graph("main"),
+        &machine_root.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        false,
+    );
+    for record in [&crasher, &main] {
+        machine_root.stream_records().write(record).unwrap();
     }
 
     for _ in 0..2 {
@@ -172,7 +178,7 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_star
     }
     let mut runtime = SpawnedTatolabd::spawn(machine_root.tatolabd_command(&runtime_unit.tatolabd));
     runtime.wait_until_standard_error_carries(
-        THE_KEPT_STREAM_STARTED_LOG_LINE,
+        &the_stream_started_log_line(&main.stream_id),
         THE_KEPT_STREAM_STARTS_WITHIN,
     );
     let listed_after_two_crashes = call_a_tool_over_the_local_api(
@@ -185,7 +191,7 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_star
     let started = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "start_stream",
-        serde_json::json!({"stream": "crasher"}),
+        serde_json::json!({"stream": crasher.stream_id}),
     )
     .json();
     let listed_after_the_retry = call_a_tool_over_the_local_api(
@@ -196,33 +202,46 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_star
     .json();
     runtime.interrupt_and_expect_a_clean_exit();
 
-    let crasher = &listed_after_two_crashes["streams"][0];
-    assert_eq!(crasher["name"], "crasher", "{listed_after_two_crashes}");
-    assert_eq!(crasher["state"], "failed", "{listed_after_two_crashes}");
+    let listed_crasher = &listed_after_two_crashes["streams"][0];
+    assert_eq!(
+        listed_crasher["stream"],
+        crasher.stream_id.as_str(),
+        "{listed_after_two_crashes}"
+    );
+    assert_eq!(
+        listed_crasher["state"], "failed",
+        "{listed_after_two_crashes}"
+    );
     assert!(
-        crasher["failed_because"]
+        listed_crasher["failed_because"]
             .as_str()
             .is_some_and(|failed_because| failed_because.contains("last 2 crashes in a row")),
         "{listed_after_two_crashes}"
     );
-    let main = &listed_after_two_crashes["streams"][1];
-    assert_eq!(
-        (&main["name"], &main["state"], &main["node_count"]),
-        (&"main".into(), &"kept".into(), &1.into()),
-        "{listed_after_two_crashes}"
-    );
-    assert_eq!(started["stream"], "crasher", "{started}");
-    let crasher = &listed_after_the_retry["streams"][0];
+    let listed_main = &listed_after_two_crashes["streams"][1];
     assert_eq!(
         (
-            &crasher["state"],
-            &crasher["node_count"],
-            &crasher["failed_because"]
+            &listed_main["stream"],
+            &listed_main["state"],
+            &listed_main["node_count"]
+        ),
+        (&main.stream_id.as_str().into(), &"kept".into(), &1.into()),
+        "{listed_after_two_crashes}"
+    );
+    assert_eq!(started["stream"], crasher.stream_id.as_str(), "{started}");
+    let retried_crasher = &listed_after_the_retry["streams"][0];
+    assert_eq!(
+        (
+            &retried_crasher["state"],
+            &retried_crasher["node_count"],
+            &retried_crasher["failed_because"]
         ),
         (&"kept".into(), &1.into(), &serde_json::Value::Null),
         "{listed_after_the_retry}"
     );
-    let retried = kept_stream_records.read("crasher").unwrap().unwrap();
+    let retried = machine_root
+        .current_stream_record_of(&crasher.stream_id)
+        .expect("the crasher's record is kept");
     assert_eq!(retried.runtime_crashes_in_a_row_implicating_it, 0);
     assert!(!retried.is_failed());
 }
@@ -238,28 +257,25 @@ fn a_clean_restart_between_two_crashes_resets_the_count() {
     let machine_root = TatolabTestMachineRoot::new();
     let crash_trigger = machine_root.project_directory().join("crash-armed");
     std::fs::write(&crash_trigger, "").unwrap();
-    let kept_stream_records = machine_root.kept_stream_records();
-    kept_stream_records
-        .write(&a_kept_stream_record(
-            "crasher",
-            a_stream_graph_crashing_while("crasher", &crash_trigger),
-            &machine_root.project_directory(),
-            &an_executable_standing_in_for_the_interpreter(),
-            false,
-        ))
-        .unwrap();
+    let crasher = a_kept_stream_record(
+        "crasher",
+        a_stream_graph_crashing_while("crasher", &crash_trigger),
+        &machine_root.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        false,
+    );
+    machine_root.stream_records().write(&crasher).unwrap();
 
     expect_the_runtime_to_crash_on_segv(machine_root.tatolabd_command(&runtime_unit.tatolabd));
     std::fs::remove_file(&crash_trigger).unwrap();
     let mut runtime = SpawnedTatolabd::spawn(machine_root.tatolabd_command(&runtime_unit.tatolabd));
     runtime.wait_until_standard_error_carries(
-        "[start] The stream `crasher` started",
+        &the_stream_started_log_line(&crasher.stream_id),
         THE_KEPT_STREAM_STARTS_WITHIN,
     );
-    let count_after_one_crash = kept_stream_records
-        .read("crasher")
-        .unwrap()
-        .unwrap()
+    let count_after_one_crash = machine_root
+        .current_stream_record_of(&crasher.stream_id)
+        .expect("the crasher's record is kept")
         .runtime_crashes_in_a_row_implicating_it;
     runtime.interrupt_and_expect_a_clean_exit();
     std::fs::write(&crash_trigger, "").unwrap();
@@ -268,7 +284,9 @@ fn a_clean_restart_between_two_crashes_resets_the_count() {
     }
 
     assert_eq!(count_after_one_crash, 1);
-    let after_the_clean_restart = kept_stream_records.read("crasher").unwrap().unwrap();
+    let after_the_clean_restart = machine_root
+        .current_stream_record_of(&crasher.stream_id)
+        .expect("the crasher's record is kept");
     assert_eq!(
         after_the_clean_restart.runtime_crashes_in_a_row_implicating_it, 1,
         "the clean stop reset the count, so only the crash after it was counted"

@@ -4,7 +4,7 @@
 //! Pinning a crash of the runtime on the stream whose thread crashed it.
 //!
 //! `docs/plan/ARCHITECTURE.md` §Processor model, failure isolation: a
-//! thread working for a stream carries the stream's name; handlers for the
+//! thread working for a stream carries the stream's id; handlers for the
 //! fatal signals on the alternate stack, a hook on a panic that ends the
 //! process, and the ends past a watchdog each append the crashing thread's
 //! stream to the run-in-progress record — a file opened at the runtime's start
@@ -22,11 +22,12 @@ use std::sync::atomic::{AtomicI32, AtomicPtr, Ordering};
 use std::sync::{Once, OnceLock};
 
 use super::loaded_stream::what_a_panic_said;
+use super::stream_location_and_id::STREAM_ID_MAXIMUM_LENGTH;
 use crate::core::{Error, Result};
 
-/// The longest stream name a thread carries for its crash: a stream's cast
-/// name is at most 63 bytes.
-const LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH: usize = 63;
+/// The longest stream id a thread carries for its crash: every id whole, its
+/// hash included, so a crash count finds the stream by its exact id.
+const LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH: usize = STREAM_ID_MAXIMUM_LENGTH;
 
 /// The longest line one crash appends to the run-in-progress record.
 const LONGEST_RUN_IN_PROGRESS_RECORD_LINE: usize = 512;
@@ -55,39 +56,39 @@ const LATEST_PANICS_KEPT_FOR_AN_ESCAPE_TO_MATCH: usize = 16;
 /// The file descriptor slot's value while a run's record is being begun.
 const RUN_IN_PROGRESS_RECORD_BEING_BEGUN: libc::c_int = -2;
 
-/// The stream a thread works for, by its cast name, held where a fatal-signal
+/// The stream a thread works for, by its id, held where a fatal-signal
 /// handler can read it without allocating or locking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StreamThisThreadWorksFor {
-    name_bytes: [u8; LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH],
-    name_length: u8,
+    stream_id_bytes: [u8; LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH],
+    stream_id_length: u8,
 }
 
 impl StreamThisThreadWorksFor {
     /// No stream: a thread a crash on implicates none.
     pub(crate) const NONE: Self = Self {
-        name_bytes: [0; LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH],
-        name_length: 0,
+        stream_id_bytes: [0; LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH],
+        stream_id_length: 0,
     };
 
-    /// The stream `stream_name` names, cut at the longest name a thread
+    /// The stream `stream_id` names, cut at the longest id a thread
     /// carries.
-    pub(crate) fn named(stream_name: &str) -> Self {
+    pub(crate) fn of_the_stream_id(stream_id: &str) -> Self {
         let mut stream = Self::NONE;
-        let carried = stream_name
+        let carried = stream_id
             .len()
-            .min(LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH);
-        stream.name_bytes[..carried].copy_from_slice(&stream_name.as_bytes()[..carried]);
-        stream.name_length = carried as u8;
+            .min(LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH);
+        stream.stream_id_bytes[..carried].copy_from_slice(&stream_id.as_bytes()[..carried]);
+        stream.stream_id_length = carried as u8;
         stream
     }
 
-    fn name_bytes(&self) -> &[u8] {
-        &self.name_bytes[..usize::from(self.name_length)]
+    fn stream_id_bytes(&self) -> &[u8] {
+        &self.stream_id_bytes[..usize::from(self.stream_id_length)]
     }
 
     fn is_none(&self) -> bool {
-        self.name_length == 0
+        self.stream_id_length == 0
     }
 }
 
@@ -230,7 +231,7 @@ impl HowThePreviousRuntimeRunEnded {
 /// What the previous run's crash was pinned on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CrashOfThePreviousRuntimeRun {
-    /// Each stream the crash was pinned on, by its cast name, with the first
+    /// Each stream the crash was pinned on, by its id, with the first
     /// cause pinned on it.
     pub causes_by_implicated_stream: BTreeMap<String, String>,
     /// Each cause pinned on a thread no stream owns. With none here and no
@@ -383,17 +384,17 @@ impl CrashOfThePreviousRuntimeRun {
     fn read_from(record_bytes: &[u8]) -> Self {
         let mut crash = Self::default();
         for line in String::from_utf8_lossy(record_bytes).lines() {
-            let Some((stream_name, cause)) = line.split_once('\t') else {
+            let Some((stream_id, cause)) = line.split_once('\t') else {
                 continue;
             };
-            if stream_name.is_empty() {
+            if stream_id.is_empty() {
                 crash
                     .causes_on_threads_no_stream_owns
                     .push(cause.to_string());
             } else {
                 crash
                     .causes_by_implicated_stream
-                    .entry(stream_name.to_string())
+                    .entry(stream_id.to_string())
                     .or_insert_with(|| cause.to_string());
             }
         }
@@ -407,12 +408,12 @@ impl CrashOfThePreviousRuntimeRun {
     }
 }
 
-/// Append a line pinning the runtime's crash on each of `stream_names`.
-pub(crate) fn pin_the_runtimes_crash_on_each_stream(stream_names: &[String], cause: &str) {
+/// Append a line pinning the runtime's crash on each of `stream_ids`.
+pub(crate) fn pin_the_runtimes_crash_on_each_stream(stream_ids: &[String], cause: &str) {
     let cause = a_cause_fit_for_one_record_line(cause);
-    for stream_name in stream_names {
+    for stream_id in stream_ids {
         append_a_crash_line(
-            StreamThisThreadWorksFor::named(stream_name).name_bytes(),
+            StreamThisThreadWorksFor::of_the_stream_id(stream_id).stream_id_bytes(),
             &[cause.as_bytes()],
         );
     }
@@ -453,7 +454,7 @@ pub fn pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread(
     let cause = a_cause_fit_for_one_record_line(&format!(
         "a panic that escaped the main thread: {what_it_said}{location}"
     ));
-    append_a_crash_line(stream.name_bytes(), &[cause.as_bytes()]);
+    append_a_crash_line(stream.stream_id_bytes(), &[cause.as_bytes()]);
 }
 
 /// Remove the run-in-progress record as the owner ends the process at once —
@@ -512,14 +513,14 @@ fn a_cause_fit_for_one_record_line(cause: &str) -> String {
 
 /// Append `<stream>\t<cause parts>\n` to the run-in-progress record, cut to
 /// fit one line. Async-signal-safe: no allocation, no lock, one `write`.
-fn append_a_crash_line(stream_name: &[u8], cause_parts: &[&[u8]]) {
+fn append_a_crash_line(stream_id: &[u8], cause_parts: &[&[u8]]) {
     let record_file_descriptor = RUN_IN_PROGRESS_RECORD_FILE_DESCRIPTOR.load(Ordering::SeqCst);
     if record_file_descriptor < 0 {
         return;
     }
     let mut line = [0u8; LONGEST_RUN_IN_PROGRESS_RECORD_LINE];
     let mut line_length = 0;
-    for part in [stream_name, b"\t".as_slice()].iter().chain(cause_parts) {
+    for part in [stream_id, b"\t".as_slice()].iter().chain(cause_parts) {
         let room_before_the_line_break = LONGEST_RUN_IN_PROGRESS_RECORD_LINE - 1 - line_length;
         let copied = part.len().min(room_before_the_line_break);
         line[line_length..line_length + copied].copy_from_slice(&part[..copied]);
@@ -603,7 +604,7 @@ extern "C" fn pin_the_crash_on_the_threads_stream_then_hand_the_signal_on(
         b""
     };
     append_a_crash_line(
-        stream.name_bytes(),
+        stream.stream_id_bytes(),
         &[signal_name.as_bytes(), while_a_panic_unwound],
     );
     hand_the_signal_on(signal, signal_information, signal_context);
@@ -713,12 +714,12 @@ mod tests {
 
     const RECORD_FILE_NAME: &str = "runtime-run-in-progress";
 
-    /// The route a thread of the stream `stream_name` carries, writing no file.
+    /// The route a thread of the stream `stream_id` carries, writing no file.
     fn the_log_route_of_the_stream(
-        stream_name: &str,
+        stream_id: &str,
         project_directory: &Path,
     ) -> Arc<LoadedStreamLogRoute> {
-        LoadedStreamLogRoute::open_in_project_directory("R-test", stream_name, project_directory)
+        LoadedStreamLogRoute::open_in_project_directory("R-test", stream_id, project_directory)
     }
 
     /// Re-run `test_path` in a child process holding a fresh directory for its
@@ -764,14 +765,14 @@ mod tests {
     }
 
     #[test]
-    fn a_stream_name_past_the_longest_a_thread_carries_is_cut() {
+    fn a_stream_id_past_the_longest_a_thread_carries_is_cut() {
         let long_name = "s".repeat(80);
 
-        let carried = StreamThisThreadWorksFor::named(&long_name);
+        let carried = StreamThisThreadWorksFor::of_the_stream_id(&long_name);
 
         assert_eq!(
-            carried.name_bytes(),
-            &long_name.as_bytes()[..LONGEST_STREAM_NAME_A_THREAD_CARRIES_FOR_ITS_CRASH]
+            carried.stream_id_bytes(),
+            &long_name.as_bytes()[..LONGEST_STREAM_ID_A_THREAD_CARRIES_FOR_ITS_CRASH]
         );
         assert!(StreamThisThreadWorksFor::NONE.is_none());
     }

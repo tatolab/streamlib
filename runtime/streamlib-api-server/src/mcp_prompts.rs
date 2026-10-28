@@ -154,30 +154,30 @@ impl LocalApiMcpServerHandler {
 
 impl LocalApiMcpServerHandler {
     /// `recipe_for` rendered against the graph and node catalog of the loaded
-    /// stream `stream_name` names as they are now, as the prompt `description`
+    /// stream `stream_id` names as they are now, as the prompt `description`
     /// names; a stream not loaded is refused naming the loaded ones.
     async fn render_a_recipe_against_the_stream_it_names(
         &self,
-        stream_name: &str,
+        stream_id: &str,
         description: &str,
         recipe_for: impl FnOnce(&GraphResponse, &[ProcessorDescriptor]) -> Result<GraphRecipe, McpError>,
     ) -> Result<GetPromptResult, McpError> {
         let operations_on_the_loaded_streams = &self.operations_on_the_loaded_streams;
         let stream_operations =
-            the_stream_a_prompt_names(operations_on_the_loaded_streams, stream_name)?;
+            the_stream_a_prompt_names(operations_on_the_loaded_streams, stream_id)?;
         let live_graph: GraphResponse = serde_json::from_value(
             exported_live_graph_json(&stream_operations).await?,
         )
         .map_err(|e| McpError::internal_error(format!("graph export did not parse: {e}"), None))?;
         let node_catalog = operations_on_the_loaded_streams
-            .node_catalog_of_the_stream_a_call_names(stream_name)
+            .node_catalog_of_the_stream_a_call_names(stream_id)
             .map_err(|refusal| prompt_stream_refusal(&refusal))?;
-        let stream_name_as_graph_reports_it = live_graph
+        let stream_id_as_the_graph_reports_it = live_graph
             .stream
             .clone()
-            .unwrap_or_else(|| stream_name.to_string());
+            .unwrap_or_else(|| stream_id.to_string());
         Ok(recipe_for(&live_graph, &node_catalog)?
-            .prompt_result(&stream_name_as_graph_reports_it, description))
+            .prompt_result(&stream_id_as_the_graph_reports_it, description))
     }
 }
 
@@ -185,10 +185,10 @@ impl LocalApiMcpServerHandler {
 /// the loaded streams — as invalid params.
 fn the_stream_a_prompt_names(
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-    stream_name: &str,
+    stream_id: &str,
 ) -> Result<Arc<dyn RuntimeOperations>, McpError> {
     operations_on_the_loaded_streams
-        .runtime_operations_of_the_stream_a_call_names(stream_name)
+        .runtime_operations_of_the_stream_a_call_names(stream_id)
         .map_err(|refusal| prompt_stream_refusal(&refusal))
 }
 
@@ -228,17 +228,17 @@ struct GraphRecipe {
 
 impl GraphRecipe {
     /// The recipe as a `prompts/get` result: one user message carrying its
-    /// text, every step naming `stream_name`.
-    fn prompt_result(&self, stream_name: &str, description: &str) -> GetPromptResult {
+    /// text, every step naming `stream_id`.
+    fn prompt_result(&self, stream_id: &str, description: &str) -> GetPromptResult {
         GetPromptResult::new(vec![PromptMessage::new_text(
             Role::User,
-            self.rendered_text(stream_name),
+            self.rendered_text(stream_id),
         )])
         .with_description(description)
     }
 
     /// The text an agent follows. Each step is its own line, `N. `tool` — …`.
-    fn rendered_text(&self, stream_name: &str) -> String {
+    fn rendered_text(&self, stream_id: &str) -> String {
         let mut text = format!(
             "{}\n\nSteps — each calls one tool this runtime serves:\n",
             self.introduction_text
@@ -247,7 +247,7 @@ impl GraphRecipe {
             // Writing into a `String` cannot fail.
             let _ = writeln!(
                 text,
-                "{}. `{}` — `stream`: `{stream_name}`; {}",
+                "{}. `{}` — `stream`: `{stream_id}`; {}",
                 index + 1,
                 step.tool_name,
                 step.instruction

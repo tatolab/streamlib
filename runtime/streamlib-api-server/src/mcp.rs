@@ -54,13 +54,12 @@ use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::{Error, Result as StreamlibResult};
 use streamlib::sdk::graph::{
     InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, OutputPortExposureLevel,
-    cast_exposed_name_to_url_safe,
 };
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     LoadedStreamHolding, LoadedStreamTag, LogRecordsPageOfOneLoadedStream,
     OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest, RuntimeOperations,
-    StreamListingState, StreamRunOutcome,
+    StreamListingState, StreamLocation, StreamRunOutcome,
 };
 use streamlib_relay_adapter_sdk::{RelayInstanceControlRefusal, RelayInstancesOfThisMachine};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -68,6 +67,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListRelaysToolResult, ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState,
     LoadedStreamInstance, LogsToolResult, LogsToolResultRecord, RemoveRelayToolResult,
     RemoveStreamToolResult, RunStreamToolResult, StartStreamToolResult, StopStreamToolResult,
+    StreamLocationOnTheWire,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -90,7 +90,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` lists them, each by its stream id with its display name and location, attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to show it under another display name — and answers its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, the same location replaces its stream under the same id. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -101,14 +101,14 @@ const DEFAULT_LOGS_RECORD_COUNT: u32 = 256;
 const MAX_LOGS_RECORD_COUNT: u32 = 4096;
 
 /// What every required `stream` argument says.
-const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about, by the name `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
+const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about, by the stream id `run_stream`, `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
 
 /// What `graph`'s optional `stream` argument says.
-const GRAPH_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream whose graph to export, by the name `list_streams` reports. Omit it for every loaded stream's graph under the machine's name.";
+const GRAPH_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream whose graph to export, by the stream id `list_streams` reports. Omit it for every loaded stream's graph under the machine's name.";
 
 /// What a stream action's `stream` argument says.
 const STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION: &str =
-    "The stream, by the name `list_streams` reports: loaded, or kept and not loaded.";
+    "The stream, by the stream id `list_streams` reports: loaded, or kept and not loaded.";
 
 /// The tool error `run_stream` answers `keep: false` with on a one-shot `POST
 /// /mcp` call, which has no connection to attach a stream to.
@@ -146,7 +146,7 @@ impl StreamsAttachedToOneMcpStdioConnection {
             .lock()
             .iter()
             .flatten()
-            .map(|(_stream_name, stream_tag)| *stream_tag)
+            .map(|(_stream_id, stream_tag)| *stream_tag)
             .collect()
     }
 
@@ -161,12 +161,12 @@ impl StreamsAttachedToOneMcpStdioConnection {
         let mut attached_streams_while_open = self.attached_streams_while_open.lock();
         match attached_streams_while_open.as_mut() {
             Some(attached_streams) => {
-                attached_streams.push((run.stream_name.clone(), run.stream_tag));
+                attached_streams.push((run.stream_id.clone(), run.stream_tag));
             }
             None => {
                 drop(attached_streams_while_open);
                 operations_on_the_loaded_streams
-                    .unload_the_attached_stream_if_still_the_same(&run.stream_name, run.stream_tag);
+                    .unload_the_attached_stream_if_still_the_same(&run.stream_id, run.stream_tag);
             }
         }
     }
@@ -182,22 +182,22 @@ impl StreamsAttachedToOneMcpStdioConnection {
             .lock()
             .take()
             .unwrap_or_default();
-        for (stream_name, stream_tag) in attached_streams {
+        for (stream_id, stream_tag) in attached_streams {
             let operations_on_the_loaded_streams = Arc::clone(operations_on_the_loaded_streams);
-            let unload_stream_name = stream_name.clone();
+            let stream_id_to_unload = stream_id.clone();
             match tokio::task::spawn_blocking(move || {
                 operations_on_the_loaded_streams
-                    .unload_the_attached_stream_if_still_the_same(&unload_stream_name, stream_tag)
+                    .unload_the_attached_stream_if_still_the_same(&stream_id_to_unload, stream_tag)
             })
             .await
             {
                 Ok(true) => tracing::info!(
-                    "the attached stream `{stream_name}` was unloaded: the `/mcp/stdio` \
+                    "the attached stream `{stream_id}` was unloaded: the `/mcp/stdio` \
                      connection that attached it closed"
                 ),
                 Ok(false) => {}
                 Err(join_failure) => tracing::warn!(
-                    "the attached stream `{stream_name}` was not unloaded as its connection \
+                    "the attached stream `{stream_id}` was not unloaded as its connection \
                      closed: {join_failure}"
                 ),
             }
@@ -421,11 +421,11 @@ struct RunStreamToolArguments {
     )]
     stream_function: Option<String>,
     #[schemars(
-        description = "The name to load the stream under, in place of the function's own. A name already loaded or kept is refused."
+        description = "The display name to show the stream under, in place of the function's own. The stream id comes from the location alone."
     )]
     name: Option<String>,
     #[schemars(
-        description = "`true` keeps the stream in the runtime, re-loaded whenever the runtime starts; a kept run of the same project and function replaces the kept stream. `false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes; a one-shot `POST /mcp` call can only keep."
+        description = "`true` keeps the stream in the runtime, re-loaded whenever the runtime starts; a kept run of the same location replaces the kept stream. `false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes; a one-shot `POST /mcp` call can only keep."
     )]
     keep: bool,
 }
@@ -536,7 +536,7 @@ type ToolCallAnswer = Result<CallToolResult, String>;
 #[tool_router]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream>/<node>/<port>`. Without `stream`, `{machine, streams}` holds every loaded stream's graph."
+        description = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. Without `stream`, `{machine, streams}` holds every loaded stream's graph."
     )]
     async fn graph(
         &self,
@@ -581,7 +581,7 @@ impl LocalApiMcpServerHandler {
         serialized_tool_result(
             "logs",
             &LogsToolResult {
-                stream: the_cast_name_of_a_stream_a_call_named(&stream),
+                stream,
                 stream_instance: the_instance_of_the_load_tagged(stream_tag),
                 records: page
                     .records
@@ -699,7 +699,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped or failed included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the stream this connection attached, from the same project and function, replaces it — under the name the function compiles to now when neither run passed `name`. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `stream_instance` names this load, as its `logs` pages do. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
+        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream under its stream id, `<folder>-<function>-<hash>`, which the runtime computes from its location — the resolved project directory and the function's `module:qualname` — and answers as `stream`, beside its `display_name` (the function's name, or `name`) and its `location`. An id another location holds is refused naming both. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's location replaces it, keeping its display name unless `name` is given and the owner's exposure levels; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the location of a stream this connection attached replaces it. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `stream_instance` names this load, as its `logs` pages do. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
     )]
     async fn run_stream(
         &self,
@@ -730,7 +730,7 @@ impl LocalApiMcpServerHandler {
                 let run = operations_on_the_loaded_streams.run_stream(RunStreamRequest {
                     project_directory,
                     stream_function,
-                    stream_name: name,
+                    display_name: name,
                     holding: if keep {
                         LoadedStreamHolding::Kept
                     } else {
@@ -755,10 +755,11 @@ impl LocalApiMcpServerHandler {
         serialized_tool_result(
             "run_stream",
             &RunStreamToolResult {
-                stream: run.stream_name,
+                stream: run.stream_id,
+                display_name: run.display_name,
                 stream_instance: the_instance_of_the_load_tagged(run.stream_tag),
                 kept: keep,
-                project_directory: run.project_directory,
+                location: stream_location_on_the_wire(run.stream_location),
                 node_count: run.node_count,
                 replaced_the_kept_record: run.replaced_the_kept_record,
                 compile_warnings: run.compile_warnings,
@@ -781,7 +782,7 @@ impl LocalApiMcpServerHandler {
         serialized_tool_result(
             "stop_stream",
             &StopStreamToolResult {
-                stream: stopped.stream_name,
+                stream: stopped.stream_id,
                 stopped: true,
                 kept: stopped.kept,
                 not_recorded_because: stopped.stop_not_recorded_because,
@@ -804,7 +805,7 @@ impl LocalApiMcpServerHandler {
         serialized_tool_result(
             "start_stream",
             &StartStreamToolResult {
-                stream: started.stream_name,
+                stream: started.stream_id,
                 node_count: started.node_count,
             },
         )
@@ -825,7 +826,7 @@ impl LocalApiMcpServerHandler {
         serialized_tool_result(
             "remove_stream",
             &RemoveStreamToolResult {
-                stream: removed.stream_name,
+                stream: removed.stream_id,
                 unloaded: removed.unloaded,
                 forgotten: removed.forgotten,
             },
@@ -833,7 +834,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "List every stream the runtime holds by name: `attached` (lives as long as the connection that ran it), `kept`, `stopped`, or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start; skipped at the start until `start_stream` retries it), with its project directory, the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
+        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — project directory and `module:qualname` stream function, `null` for a record an earlier runtime wrote — and its state: `attached` (lives as long as the connection that ran it), `kept`, `stopped`, or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until `start_stream` retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_stream` forgetting it), with the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
     )]
     async fn list_streams(
         &self,
@@ -850,9 +851,10 @@ impl LocalApiMcpServerHandler {
                 streams: listings
                     .into_iter()
                     .map(|listing| ListStreamsToolResultStream {
-                        name: listing.name,
+                        stream: listing.stream_id,
+                        display_name: listing.display_name,
+                        location: listing.stream_location.map(stream_location_on_the_wire),
                         state: listed_stream_state_on_the_wire(listing.state),
-                        project_directory: listing.project_directory,
                         node_count: listing.node_count,
                         failed_because: listing.failed_because,
                     })
@@ -881,7 +883,7 @@ impl LocalApiMcpServerHandler {
         serialized_tool_result(
             "expose_port",
             &ExposePortToolResult {
-                stream: exposed.stream_name,
+                stream: exposed.stream_id,
                 node: exposed.node,
                 port: exposed.port,
                 level: expose_port_level_on_the_wire(exposed.level),
@@ -999,17 +1001,17 @@ fn expose_port_level_on_the_wire(level: OutputPortExposureLevel) -> ExposePortLe
     }
 }
 
-/// The cast name of the stream a call named, as the runtime lists it; the name
-/// as given when it casts to nothing.
 /// The instance a `run_stream` result and a `logs` page name the load tagged `stream_tag` by.
 fn the_instance_of_the_load_tagged(stream_tag: LoadedStreamTag) -> LoadedStreamInstance {
     LoadedStreamInstance(stream_tag.to_string())
 }
 
-fn the_cast_name_of_a_stream_a_call_named(stream: &str) -> String {
-    cast_exposed_name_to_url_safe(stream)
-        .map(|stream_cast| stream_cast.into_owned())
-        .unwrap_or_else(|_| stream.to_string())
+/// Where a stream's code lives, as the local API reports it.
+fn stream_location_on_the_wire(stream_location: StreamLocation) -> StreamLocationOnTheWire {
+    StreamLocationOnTheWire {
+        project_directory: stream_location.project_directory,
+        stream_function: stream_location.stream_function,
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -1161,7 +1163,7 @@ pub(crate) mod tests {
     //! and what must never be again.
 
     use crate::control_plane_stub_support::{
-        LocalApiServedOnAFreshSocket, STUB_MACHINE_NAME, STUB_STREAM_NAME,
+        LocalApiServedOnAFreshSocket, STUB_MACHINE_NAME, STUB_STREAM_ID,
     };
     use rmcp::RoleClient;
     use rmcp::model::{
@@ -1684,7 +1686,7 @@ pub(crate) mod tests {
             runtime,
             "add_node",
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "type": "processors.grayscale_effect:GrayscaleEffect",
                 "config": { "strength": 0.5 },
                 "name": "Gray"
@@ -1727,7 +1729,7 @@ pub(crate) mod tests {
             runtime,
             "add_node",
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "type": "processors.grayscale_effect:GrayscaleEffect",
                 "name": "gray"
             }),
@@ -1790,7 +1792,7 @@ pub(crate) mod tests {
                 streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
                     project_directory.path(),
                 )
-                .named("main"),
+                .with_stream_id("main"),
             )
             .unwrap();
 
@@ -1828,7 +1830,7 @@ pub(crate) mod tests {
         let body = tool_call_result(
             runtime,
             "add_node",
-            json!({ "stream": STUB_STREAM_NAME, "type": "tatolab.stream:CameraSource" }),
+            json!({ "stream": STUB_STREAM_ID, "type": "tatolab.stream:CameraSource" }),
         )
         .await;
         let stated = first_text_block_json(&body);
@@ -1859,7 +1861,7 @@ pub(crate) mod tests {
             runtime,
             "add_node",
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "type": "processors.grayscale_effect:GrayscaleEffect",
                 "display_name": "gray"
             }),
@@ -1882,7 +1884,7 @@ pub(crate) mod tests {
             runtime.clone(),
             "connect",
             json!({
-                "stream": STUB_STREAM_NAME, "from_node": "camera", "from_port": "video",
+                "stream": STUB_STREAM_ID, "from_node": "camera", "from_port": "video",
                 "to_node": "fx", "to_port": "video_from_upstream"
             }),
         )
@@ -1896,7 +1898,7 @@ pub(crate) mod tests {
         let disconnect_body = tool_call_result(
             runtime,
             "disconnect",
-            json!({ "stream": STUB_STREAM_NAME, "link_id": "link-9" }),
+            json!({ "stream": STUB_STREAM_ID, "link_id": "link-9" }),
         )
         .await;
         assert_eq!(disconnect_body["isError"], false, "body={disconnect_body}");
@@ -1928,7 +1930,7 @@ pub(crate) mod tests {
         let body = call_the_connect_tool(
             runtime,
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "from_node": "Front Camera", "from_port": "Video",
                 "to_node": "Gray FX", "to_port": "video_from_upstream",
             }),
@@ -1970,7 +1972,7 @@ pub(crate) mod tests {
     async fn tools_call_connect_refuses_an_end_missing_its_node_or_port_naming_the_field() {
         for missing_field in ["from_node", "from_port", "to_node", "to_port"] {
             let mut arguments = json!({
-                "stream": STUB_STREAM_NAME, "from_node": "camera", "from_port": "video",
+                "stream": STUB_STREAM_ID, "from_node": "camera", "from_port": "video",
                 "to_node": "fx", "to_port": "video_from_upstream",
             });
             arguments
@@ -2007,7 +2009,7 @@ pub(crate) mod tests {
             "to_processor_display_name",
         ] {
             let mut arguments = json!({
-                "stream": STUB_STREAM_NAME, "from_node": "camera", "from_port": "video",
+                "stream": STUB_STREAM_ID, "from_node": "camera", "from_port": "video",
                 "to_node": "fx", "to_port": "video_from_upstream",
             });
             arguments[unknown_field] = json!("camera");
@@ -2037,7 +2039,7 @@ pub(crate) mod tests {
         let body = call_the_connect_tool(
             runtime,
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "from_node": "camera",
                 "from_port": "video",
                 "to_node": "fx",
@@ -2059,13 +2061,13 @@ pub(crate) mod tests {
     async fn tools_call_connect_refuses_a_node_this_node_does_not_hold_at_either_end() {
         for arguments in [
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "from_node": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME,
                 "from_port": "video",
                 "to_node": "fx", "to_port": "video",
             }),
             json!({
-                "stream": STUB_STREAM_NAME, "from_node": "camera", "from_port": "video",
+                "stream": STUB_STREAM_ID, "from_node": "camera", "from_port": "video",
                 "to_node": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME,
                 "to_port": "video",
             }),
@@ -2092,11 +2094,11 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn tools_call_disconnect_takes_its_stream_and_a_link_id_alone() {
         for (arguments, what_the_refusal_must_name) in [
-            (json!({ "stream": STUB_STREAM_NAME }), "link_id"),
+            (json!({ "stream": STUB_STREAM_ID }), "link_id"),
             (json!({ "link_id": "link-9" }), "stream"),
             (
                 json!({
-                    "stream": STUB_STREAM_NAME,
+                    "stream": STUB_STREAM_ID,
                     "link_id": "link-9",
                     "machine": "studio-display",
                 }),
@@ -2134,7 +2136,7 @@ pub(crate) mod tests {
         let body = call_the_connect_tool(
             runtime,
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "from_node": "camerasource",
                 "from_port": "video",
                 "to_node": "fx",
@@ -2163,7 +2165,7 @@ pub(crate) mod tests {
         let body = tool_call_result(
             runtime,
             "remove_node",
-            json!({ "stream": STUB_STREAM_NAME, "name": "FX" }),
+            json!({ "stream": STUB_STREAM_ID, "name": "FX" }),
         )
         .await;
         let stated = first_text_block_json(&body);
@@ -2198,7 +2200,7 @@ pub(crate) mod tests {
             runtime,
             "remove_node",
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "name": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME
             }),
         )
@@ -2221,7 +2223,7 @@ pub(crate) mod tests {
         let body = tool_call_result(
             runtime,
             "connect",
-            json!({ "stream": STUB_STREAM_NAME, "from_node": "camera" }),
+            json!({ "stream": STUB_STREAM_ID, "from_node": "camera" }),
         )
         .await;
         assert_eq!(body["isError"], true, "body={body}");
@@ -2236,7 +2238,7 @@ pub(crate) mod tests {
         let body = tool_call_result(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             "graph",
-            json!({ "stream": STUB_STREAM_NAME }),
+            json!({ "stream": STUB_STREAM_ID }),
         )
         .await;
         let graph = first_text_block_json(&body);
@@ -2277,7 +2279,7 @@ pub(crate) mod tests {
         assert_eq!(body["isError"], true, "{body}");
         let text = body["content"][0]["text"].as_str().unwrap();
         assert!(
-            text.contains("elsewhere") && text.contains(STUB_STREAM_NAME),
+            text.contains("elsewhere") && text.contains(STUB_STREAM_ID),
             "{text}"
         );
     }
@@ -2300,14 +2302,14 @@ pub(crate) mod tests {
         let body = tool_call_result(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             "logs",
-            json!({ "stream": STUB_STREAM_NAME, "after": 7, "count": 16 }),
+            json!({ "stream": STUB_STREAM_ID, "after": 7, "count": 16 }),
         )
         .await;
 
         assert_eq!(
             first_text_block_json(&body),
             json!({
-                "stream": STUB_STREAM_NAME,
+                "stream": STUB_STREAM_ID,
                 "stream_instance": crate::control_plane_stub_support::the_stub_streams_tag()
                     .to_string(),
                 "records": [],
@@ -2321,8 +2323,8 @@ pub(crate) mod tests {
     async fn tools_call_logs_refuses_a_call_naming_no_stream_or_one_not_loaded() {
         for (arguments, what_the_refusal_must_name) in [
             (json!({ "after": 0 }), "stream"),
-            (json!({ "stream": "elsewhere" }), STUB_STREAM_NAME),
-            (json!({ "stream": STUB_STREAM_NAME, "since": 3 }), "since"),
+            (json!({ "stream": "elsewhere" }), STUB_STREAM_ID),
+            (json!({ "stream": STUB_STREAM_ID, "since": 3 }), "since"),
         ] {
             let body = tool_call_result(
                 Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
@@ -2378,35 +2380,35 @@ pub(crate) mod tests {
             ("stop_stream", json!({}), "stream"),
             (
                 "stop_stream",
-                json!({ "stream": STUB_STREAM_NAME, "reason": "done" }),
+                json!({ "stream": STUB_STREAM_ID, "reason": "done" }),
                 "reason",
             ),
             ("start_stream", json!({}), "stream"),
             (
                 "start_stream",
-                json!({ "stream": STUB_STREAM_NAME, "keep": true }),
+                json!({ "stream": STUB_STREAM_ID, "keep": true }),
                 "keep",
             ),
             ("remove_stream", json!({}), "stream"),
             (
                 "remove_stream",
-                json!({ "stream": STUB_STREAM_NAME, "force": true }),
+                json!({ "stream": STUB_STREAM_ID, "force": true }),
                 "force",
             ),
             (
                 "list_streams",
-                json!({ "stream": STUB_STREAM_NAME }),
+                json!({ "stream": STUB_STREAM_ID }),
                 "stream",
             ),
             (
                 "expose_port",
-                json!({ "stream": STUB_STREAM_NAME, "node": "camera", "port": "video" }),
+                json!({ "stream": STUB_STREAM_ID, "node": "camera", "port": "video" }),
                 "level",
             ),
             (
                 "expose_port",
                 json!({
-                    "stream": STUB_STREAM_NAME, "node": "camera", "port": "video",
+                    "stream": STUB_STREAM_ID, "node": "camera", "port": "video",
                     "level": "everyone",
                 }),
                 "everyone",
@@ -2414,7 +2416,7 @@ pub(crate) mod tests {
             (
                 "expose_port",
                 json!({
-                    "stream": STUB_STREAM_NAME, "node": "camera", "port": "video",
+                    "stream": STUB_STREAM_ID, "node": "camera", "port": "video",
                     "level": "public", "exposed": true,
                 }),
                 "exposed",
@@ -2512,7 +2514,8 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn list_streams_answers_each_stream_by_name_state_project_node_count_and_failure() {
+    async fn list_streams_answers_each_streams_id_display_name_location_state_node_count_and_failure()
+     {
         for arguments in [json!({}), json!(null)] {
             let (_served, client) =
                 connected_mcp_client(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
@@ -2526,9 +2529,10 @@ pub(crate) mod tests {
                 first_text_block_json(&body),
                 json!({
                     "streams": [{
-                        "name": STUB_STREAM_NAME,
+                        "stream": STUB_STREAM_ID,
+                        "display_name": STUB_STREAM_ID,
+                        "location": null,
                         "state": "attached",
-                        "project_directory": "",
                         "node_count": null,
                         "failed_because": null,
                     }]
@@ -2652,7 +2656,7 @@ pub(crate) mod tests {
     /// graph export takes, so the prompts parse what a real node answers.
     fn two_linked_nodes_graph() -> Value {
         json!({
-            "stream": crate::control_plane_stub_support::STUB_STREAM_NAME,
+            "stream": crate::control_plane_stub_support::STUB_STREAM_ID,
             "nodes": [
                 {
                     "id": "PatternSourceId",
@@ -2713,7 +2717,7 @@ pub(crate) mod tests {
         let body = tool_call_result(
             Arc::new(runtime),
             "graph",
-            json!({ "stream": STUB_STREAM_NAME }),
+            json!({ "stream": STUB_STREAM_ID }),
         )
         .await;
         let text = body["content"][0]["text"].as_str().unwrap();
@@ -2741,15 +2745,15 @@ pub(crate) mod tests {
         for (recipe, arguments) in [
             (
                 "insert_node_between_linked_nodes",
-                json!({ "stream": STUB_STREAM_NAME, "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
+                json!({ "stream": STUB_STREAM_ID, "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
             ),
             (
                 "fan_output_to_another_consumer",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
+                json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
             ),
             (
                 "show_channel_on_virtual_camera",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video" }),
+                json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video" }),
             ),
         ] {
             texts.push((
@@ -2985,7 +2989,7 @@ pub(crate) mod tests {
         assert_eq!(entry["inputs"][0]["delivery_profile"], "newest");
         assert_eq!(
             after["streams"],
-            json!([{ "stream": STUB_STREAM_NAME, "nodes": [] }]),
+            json!([{ "stream": STUB_STREAM_ID, "nodes": [] }]),
             "each loaded stream lists the types its own interpreter described"
         );
     }
@@ -3101,15 +3105,15 @@ pub(crate) mod tests {
         for (prompt_name, arguments) in [
             (
                 "insert_node_between_linked_nodes",
-                json!({ "stream": STUB_STREAM_NAME, "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
+                json!({ "stream": STUB_STREAM_ID, "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
             ),
             (
                 "fan_output_to_another_consumer",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
+                json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
             ),
             (
                 "show_channel_on_virtual_camera",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video" }),
+                json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video" }),
             ),
         ] {
             let text = prompt_text(stub_serving_two_linked_nodes(), prompt_name, arguments).await;
@@ -3129,7 +3133,7 @@ pub(crate) mod tests {
         let text = prompt_text(
             stub_serving_two_linked_nodes(),
             "insert_node_between_linked_nodes",
-            json!({ "stream": STUB_STREAM_NAME, "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
+            json!({ "stream": STUB_STREAM_ID, "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
         )
         .await;
 
@@ -3179,7 +3183,7 @@ pub(crate) mod tests {
         let registered = prompt_text(
             stub_serving_two_linked_nodes(),
             "fan_output_to_another_consumer",
-            json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video", "type": class_import_path }),
+            json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video", "type": class_import_path }),
         )
         .await;
         assert!(
@@ -3190,7 +3194,7 @@ pub(crate) mod tests {
         let unregistered = prompt_text(
             stub_serving_two_linked_nodes(),
             "fan_output_to_another_consumer",
-            json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video", "type": "never_imported:Effect" }),
+            json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video", "type": "never_imported:Effect" }),
         )
         .await;
         assert!(
@@ -3206,7 +3210,7 @@ pub(crate) mod tests {
         let text = prompt_text(
             stub_serving_two_linked_nodes(),
             "show_channel_on_virtual_camera",
-            json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video", "camera_name": "Desk \"cam\"" }),
+            json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video", "camera_name": "Desk \"cam\"" }),
         )
         .await;
 
@@ -3237,7 +3241,7 @@ pub(crate) mod tests {
             (
                 "a missing required argument",
                 "insert_node_between_linked_nodes",
-                json!({ "stream": STUB_STREAM_NAME, "link_id": "link-pattern-to-window" }),
+                json!({ "stream": STUB_STREAM_ID, "link_id": "link-pattern-to-window" }),
                 "`type`",
             ),
             (
@@ -3250,36 +3254,36 @@ pub(crate) mod tests {
                 "a stream not loaded",
                 "show_channel_on_virtual_camera",
                 json!({ "stream": "elsewhere", "from_node": "pattern", "from_port": "video" }),
-                STUB_STREAM_NAME,
+                STUB_STREAM_ID,
             ),
             (
                 "a link the graph does not have",
                 "insert_node_between_linked_nodes",
-                json!({ "stream": STUB_STREAM_NAME, "link_id": "no-such-link", "type": "effects:Blur" }),
+                json!({ "stream": STUB_STREAM_ID, "link_id": "no-such-link", "type": "effects:Blur" }),
                 "no-such-link",
             ),
             (
                 "a node the graph does not have",
                 "show_channel_on_virtual_camera",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": "nosuchnode", "from_port": "video" }),
+                json!({ "stream": STUB_STREAM_ID, "from_node": "nosuchnode", "from_port": "video" }),
                 "nosuchnode",
             ),
             (
                 "a port that is not one of the node's outputs",
                 "show_channel_on_virtual_camera",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": "window", "from_port": "video" }),
+                json!({ "stream": STUB_STREAM_ID, "from_node": "window", "from_port": "video" }),
                 "video",
             ),
             (
                 "an argument that is not a string",
                 "show_channel_on_virtual_camera",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": 7, "from_port": "video" }),
+                json!({ "stream": STUB_STREAM_ID, "from_node": 7, "from_port": "video" }),
                 "7",
             ),
             (
                 "a misspelled argument",
                 "show_channel_on_virtual_camera",
-                json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video", "camera_nme": "desk" }),
+                json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video", "camera_nme": "desk" }),
                 "camera_nme",
             ),
         ] {
@@ -3303,7 +3307,7 @@ pub(crate) mod tests {
         let text = prompt_text(
             stub_serving_two_linked_nodes(),
             "fan_output_to_another_consumer",
-            json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
+            json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
         )
         .await;
 
@@ -3327,7 +3331,7 @@ pub(crate) mod tests {
         let text = prompt_text(
             stub_serving_two_linked_nodes(),
             "fan_output_to_another_consumer",
-            json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video", "type": ordered_input_probe }),
+            json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video", "type": ordered_input_probe }),
         )
         .await;
 
@@ -3351,7 +3355,7 @@ pub(crate) mod tests {
         let text = prompt_text(
             Arc::new(runtime),
             "show_channel_on_virtual_camera",
-            json!({ "stream": STUB_STREAM_NAME, "from_node": "pattern", "from_port": "video" }),
+            json!({ "stream": STUB_STREAM_ID, "from_node": "pattern", "from_port": "video" }),
         )
         .await;
 
@@ -3411,7 +3415,7 @@ pub(crate) mod tests {
             let text = prompt_text(
                 Arc::new(runtime),
                 "insert_node_between_linked_nodes",
-                json!({ "stream": STUB_STREAM_NAME, "link_id": "link-pattern-to-window", "type": inserted_probe }),
+                json!({ "stream": STUB_STREAM_ID, "link_id": "link-pattern-to-window", "type": inserted_probe }),
             )
             .await;
 
@@ -3439,7 +3443,7 @@ pub(crate) mod tests {
         let text = prompt_text(
             stub_serving_two_linked_nodes(),
             "insert_node_between_linked_nodes",
-            json!({ "stream": STUB_STREAM_NAME, "link_id": "link-pattern-to-window", "type": "effects:WrittenJustNow" }),
+            json!({ "stream": STUB_STREAM_ID, "link_id": "link-pattern-to-window", "type": "effects:WrittenJustNow" }),
         )
         .await;
 
@@ -3472,7 +3476,7 @@ pub(crate) mod tests {
         let text = prompt_text(
             Arc::new(runtime),
             "insert_node_between_linked_nodes",
-            json!({ "stream": STUB_STREAM_NAME, "link_id": "link-pattern-to-window", "type": "effects:NeverImported" }),
+            json!({ "stream": STUB_STREAM_ID, "link_id": "link-pattern-to-window", "type": "effects:NeverImported" }),
         )
         .await;
 

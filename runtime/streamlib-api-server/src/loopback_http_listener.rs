@@ -53,8 +53,8 @@ struct LoopbackHttpListingOfTheMachinesStreams {
 /// One loaded stream in the listing.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct LoopbackHttpListingOfOneStream {
-    /// The stream's cast name.
-    name: String,
+    /// The stream's id, the stream part of its address.
+    stream: String,
     /// The output ports it exposes, private or public; an internal port is not
     /// exposed and is not listed.
     exposed_output_ports: Vec<LoopbackHttpListingOfOneExposedOutputPort>,
@@ -190,7 +190,7 @@ fn the_listing_of_the_machines_streams_now(
             .every_loaded_stream_and_the_output_ports_it_exposes()
             .into_iter()
             .map(|loaded_stream| LoopbackHttpListingOfOneStream {
-                name: loaded_stream.stream_name,
+                stream: loaded_stream.stream_id,
                 exposed_output_ports: loaded_stream
                     .exposed_output_ports
                     .into_iter()

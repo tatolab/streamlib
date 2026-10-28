@@ -83,7 +83,7 @@ mod tests {
         let stream = runner
             .load_an_empty_stream(
                 OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .named("main"),
+                    .with_stream_id("main"),
             )
             .unwrap();
         let source_type = stream

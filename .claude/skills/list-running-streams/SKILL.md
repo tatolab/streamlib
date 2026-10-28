@@ -1,6 +1,6 @@
 ---
 name: list-running-streams
-description: List the streams the machine's one StreamLib runtime holds — attached, kept, stopped or failed — so you can pick one by name before running any other control verb. Use when you need to know what is running — after loading a stream with `tatolab run` / `tatolab dev`, when a verb refuses a stream name, or any time you must find the stream name every other verb takes. Wraps `tatolab streams`.
+description: List the streams the machine's one StreamLib runtime holds — attached, kept, stopped or failed — so you can pick one by its stream id before running any other control verb. Use when you need to know what is running — after loading a stream with `tatolab run` / `tatolab dev`, when a verb refuses a stream id, or any time you must find the stream id every other verb takes. Wraps `tatolab streams`.
 ---
 
 # list-running-streams
@@ -16,19 +16,20 @@ tatolab streams
 An aligned table, then a line under it per failed stream saying why it failed:
 
 ```
-NAME    STATE     NODES  PROJECT
-camera  attached  4      /home/me/camera
-lab     kept      6      /home/me/lab
-old     stopped   -      /home/me/old
+ID                   NAME    STATE     NODES  PROJECT          FUNCTION
+camera-main-3f2a9c   main    attached  4      /home/me/camera  stream:main
+lab-rig-0a1b2c       rig     kept      6      /home/me/lab     stream:rig
+old-main-9f8e7d      main    stopped   -      /home/me/old     stream:main
 ```
 
-- `NAME` — the stream's name, which `stop`, `start`, `rm`, `expose`, `graph --stream` and `logs --stream` take, and the `<stream>` in a port's broadcast `<machine>/<stream>.hang`. It is the function's name, or `--name` on `run`, cast to lowercase URL-safe.
+- `ID` — the stream id, which `stop`, `start`, `rm`, `expose`, `graph --stream` and `logs --stream` take, and the `<stream id>` in a port's broadcast `<machine>/<stream id>.hang`. The runtime computes it from the stream's location — `<folder>-<function>-<hash>` over the resolved project directory and the stream function — so running the same project again keeps it, and another checkout of the project gets another.
+- `NAME` — the display name: the function's name, or `--name` on `run`. It is a label, never an address.
 - `STATE` — `attached` (lives as long as the `tatolab run`, `tatolab dev` or MCP connection that loaded it), `kept` (loaded with `run -d`; comes back on every start of the runtime), `stopped` (kept, unloaded by `tatolab stop`), or `failed` (kept, implicated in the runtime's last two crashes in a row or unable to re-load at its start).
 - `NODES` — the loaded graph's node count; `-` when the stream is not loaded.
-- `PROJECT` — the project directory the runtime compiled it in.
+- `PROJECT` and `FUNCTION` — the stream's location: the project directory the runtime compiled it in, and its stream function as `module:function`; `-` for a record an earlier runtime wrote, which is listed `failed` until `rm` forgets it.
 
 ### 2. Read the outcome
-- **A row in `attached` or `kept`** — that stream is loaded; hand its name to `drive-running-stream`.
+- **A row in `attached` or `kept`** — that stream is loaded; hand its id to `drive-running-stream`.
 - **`No streams in this runtime.`** — the runtime answers and holds nothing. Load one with `tatolab run --dir <project>` (attached) or `tatolab run -d --dir <project>` (kept).
 - **`no runtime is running on this machine: nothing answers at <socket>`** — no runtime is up for this user. The machine's runtime is a service (`systemctl --user start tatolabd` on Linux, the "Run Tatolab" switch in `Tatolab.app` on macOS) or `tatolabd` in a terminal — the owner's to start; a session that needs a runtime of its own starts the test-only build instead (`drive-running-stream`). When another user holds the machine, the refusal names them.
 - **`stopped` / `failed`** — not loaded. `tatolab start <name>` loads it again (retrying a failed one); `tatolab rm <name>` forgets it.

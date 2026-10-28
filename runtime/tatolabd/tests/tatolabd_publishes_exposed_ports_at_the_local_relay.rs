@@ -28,7 +28,7 @@ use common::{
     LocalRelayPortsOfATest, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
     a_kept_stream_record, a_port_free_for_udp_and_tcp_on,
     an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    the_local_apis_answer_to_get, the_staged_local_relay_executable,
+    the_local_apis_answer_to_get, the_staged_local_relay_executable, the_stream_id_of_the_function,
 };
 use streamlib::sdk::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use streamlib_relay_adapter_local::LocalRelayListener;
@@ -114,11 +114,11 @@ impl TatolabdPublishingTheStream {
         let runtime_unit = TemporaryRuntimeUnit::with_its_lend_and_the_local_relay();
         let machine_root = TatolabTestMachineRoot::new();
         let ports = LocalRelayPortsOfATest::free_now();
-        for (stream_name, graph) in streams {
+        for (function, graph) in streams {
             machine_root
-                .kept_stream_records()
+                .stream_records()
                 .write(&a_kept_stream_record(
-                    stream_name,
+                    function,
                     graph.clone(),
                     &machine_root.project_directory(),
                     &an_executable_standing_in_for_the_interpreter(),
@@ -129,9 +129,11 @@ impl TatolabdPublishingTheStream {
         let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
         ports.given_to(&mut tatolabd_command);
         let mut runtime = SpawnedTatolabd::spawn(tatolabd_command);
-        for (stream_name, _) in streams {
+        for (function, _) in streams {
+            let stream_id =
+                the_stream_id_of_the_function(&machine_root.project_directory(), function);
             runtime.wait_until_standard_error_carries(
-                &format!("[start] The stream `{stream_name}` started"),
+                &format!("[start] The stream `{stream_id}` started"),
                 THE_STREAM_STARTS_WITHIN,
             );
         }
@@ -170,19 +172,26 @@ impl TatolabdPublishingTheStream {
         self.the_broadcast_of_the_stream_at(STREAM, listener)
     }
 
-    /// The path of `stream_name`'s broadcast at this runtime's local relay.
-    fn broadcast_path_of_the_stream(&self, stream_name: &str) -> String {
-        format!("{}/{stream_name}.hang", self.machine)
+    /// The stream id of this machine's stream function `function`.
+    fn stream_id_of(&self, function: &str) -> String {
+        the_stream_id_of_the_function(&self.machine_root.project_directory(), function)
     }
 
-    /// `stream_name`'s broadcast as an anonymous client of `listener` reads it.
+    /// The path of the broadcast of the stream function `function` at this
+    /// runtime's local relay: `<machine>/<stream id>.hang`.
+    fn broadcast_path_of_the_stream(&self, function: &str) -> String {
+        format!("{}/{}.hang", self.machine, self.stream_id_of(function))
+    }
+
+    /// The broadcast of the stream function `function` as an anonymous client
+    /// of `listener` reads it.
     fn the_broadcast_of_the_stream_at(
         &self,
-        stream_name: &str,
+        function: &str,
         listener: LocalRelayListener,
     ) -> BroadcastReadAtAListener {
         let dial_url = self.dial_url_of(listener);
-        let broadcast_path = self.broadcast_path_of_the_stream(stream_name);
+        let broadcast_path = self.broadcast_path_of_the_stream(function);
         self.async_runtime.block_on(async move {
             let subscribed = moq_tokio::origin::spawn();
             let session = moq_tokio::connect::Config::default()
@@ -217,7 +226,9 @@ impl TatolabdPublishingTheStream {
     fn put_the_port_of_the_node_at(&self, node: &str, port: &str, level: &str) {
         self.call(
             "expose_port",
-            serde_json::json!({"stream": STREAM, "node": node, "port": port, "level": level}),
+            serde_json::json!({
+                "stream": self.stream_id_of(STREAM), "node": node, "port": port, "level": level,
+            }),
         );
     }
 
@@ -226,7 +237,7 @@ impl TatolabdPublishingTheStream {
         self.call(
             "add_node",
             serde_json::json!({
-                "stream": STREAM,
+                "stream": self.stream_id_of(STREAM),
                 "type": WRITER_NODE_TYPE,
                 "name": node,
             }),
@@ -239,7 +250,7 @@ impl TatolabdPublishingTheStream {
         self.call(
             "add_node",
             serde_json::json!({
-                "stream": STREAM,
+                "stream": self.stream_id_of(STREAM),
                 "type": PAIRED_GROUP_WRITER_NODE_TYPE,
                 "name": node,
             }),
@@ -306,7 +317,7 @@ impl TatolabdPublishingTheStream {
         self.call(
             "add_node",
             serde_json::json!({
-                "stream": READER_STREAM,
+                "stream": self.stream_id_of(READER_STREAM),
                 "type": "tatolab.stream:RelayTrackSource",
                 "name": node,
                 "config": config,
@@ -318,7 +329,8 @@ impl TatolabdPublishingTheStream {
         self.call(
             "expose_port",
             serde_json::json!({
-                "stream": READER_STREAM, "node": node, "port": port, "level": "private",
+                "stream": self.stream_id_of(READER_STREAM),
+                "node": node, "port": port, "level": "private",
             }),
         );
     }
@@ -345,11 +357,12 @@ impl TatolabdPublishingTheStream {
         }
     }
 
-    /// The bags `node` of `stream_name` has written on `port`, read off `graph`.
-    fn bags_written_by(&self, stream_name: &str, node: &str, port: &str) -> u64 {
+    /// The bags `node` of the stream function `function` has written on
+    /// `port`, read off `graph`.
+    fn bags_written_by(&self, function: &str, node: &str, port: &str) -> u64 {
         let graph = the_local_apis_answer_to_get(
             &self.machine_root.local_api_socket_path(),
-            &format!("/api/graph?stream={stream_name}"),
+            &format!("/api/graph?stream={}", self.stream_id_of(function)),
         );
         graph["nodes"]
             .as_array()
@@ -363,7 +376,7 @@ impl TatolabdPublishingTheStream {
     fn remove_the_node_named(&self, node: &str) {
         self.call(
             "remove_node",
-            serde_json::json!({"stream": STREAM, "name": node}),
+            serde_json::json!({"stream": self.stream_id_of(STREAM), "name": node}),
         );
     }
 
@@ -987,9 +1000,9 @@ fn this_machine_lacks_vulkan_video() -> bool {
 
 /// A stream encoding H.264 behind a private port: the test pattern into
 /// `H264Encoder`, whose `encoded_video` is private.
-fn a_stream_encoding_h264_on_a_private_port(stream_name: &str) -> serde_json::Value {
+fn a_stream_encoding_h264_on_a_private_port(stream_id: &str) -> serde_json::Value {
     serde_json::json!({
-        "stream": stream_name,
+        "stream": stream_id,
         "nodes": [
             {"name": "testpattern", "type": "tatolab.stream:TestPatternSource",
              "config": {"width": 320, "height": 240}},
@@ -1033,13 +1046,14 @@ fn a_relay_track_source_feeds_a_decoder_another_streams_private_h264_port() {
     publishing.call(
         "add_node",
         serde_json::json!({
-            "stream": READER_STREAM, "type": "tatolab.stream:H264Decoder", "name": "decoder",
+            "stream": publishing.stream_id_of(READER_STREAM),
+            "type": "tatolab.stream:H264Decoder", "name": "decoder",
         }),
     );
     publishing.call(
         "connect",
         serde_json::json!({
-            "stream": READER_STREAM,
+            "stream": publishing.stream_id_of(READER_STREAM),
             "from_node": "fromcamera", "from_port": "track",
             "to_node": "decoder", "to_port": "encoded_video",
         }),

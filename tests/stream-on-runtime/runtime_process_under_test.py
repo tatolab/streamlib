@@ -48,7 +48,7 @@ STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT = "a machine shutdown was requested while
 
 #: The engine's line once a stream's graph has loaded and its start begins,
 #: before the engine's GPU context is reached.
-STREAM_START_BEGAN_LOG_LINE_PATTERN = re.compile(r"\[start\] Starting the stream `(?P<stream_name>[^`]+)`")
+STREAM_START_BEGAN_LOG_LINE_PATTERN = re.compile(r"\[start\] Starting the stream `(?P<stream_id>[^`]+)`")
 
 #: How `tatolabd` ends every refusal: a final line on standard error.
 TATOLABD_REFUSAL_LINE_PREFIX = "tatolabd: "

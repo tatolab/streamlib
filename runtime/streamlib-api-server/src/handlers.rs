@@ -197,9 +197,9 @@ pub(crate) async fn machine_wide_graph_json(
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
 ) -> Result<Value> {
     let mut stream_graphs = Vec::new();
-    for stream_name in operations_on_the_loaded_streams.names_of_the_loaded_streams() {
+    for stream_id in operations_on_the_loaded_streams.ids_of_the_loaded_streams() {
         let stream_operations = match operations_on_the_loaded_streams
-            .runtime_operations_of_the_stream_a_call_names(&stream_name)
+            .runtime_operations_of_the_stream_a_call_names(&stream_id)
         {
             Ok(stream_operations) => stream_operations,
             Err(Error::NotFound(_)) => continue,
@@ -223,16 +223,14 @@ pub(crate) fn machine_wide_registry_response(
     MachineWideRegistryResponse {
         nodes: node_catalog_response(&PROCESSOR_REGISTRY.list_registered()).nodes,
         streams: operations_on_the_loaded_streams
-            .names_of_the_loaded_streams()
+            .ids_of_the_loaded_streams()
             .into_iter()
-            .filter_map(|stream_name| {
+            .filter_map(|stream_id| {
                 let described = operations_on_the_loaded_streams
-                    .node_types_described_in_the_interpreter_of_the_stream_a_call_names(
-                        &stream_name,
-                    )
+                    .node_types_described_in_the_interpreter_of_the_stream_a_call_names(&stream_id)
                     .ok()?;
                 Some(NodeTypesDescribedInOneStreamOutput {
-                    stream: stream_name,
+                    stream: stream_id,
                     nodes: node_catalog_response(&described).nodes,
                 })
             })
@@ -256,7 +254,7 @@ pub(crate) fn error_response(status: StatusCode, error: &impl std::fmt::Display)
     path = "/api/graph",
     tag = "graph",
     params(
-        ("stream" = Option<String>, Query, description = "The loaded stream whose graph to export; absent exports every loaded stream's under the machine's name")
+        ("stream" = Option<String>, Query, description = "The loaded stream whose graph to export, by its stream id; absent exports every loaded stream's under the machine's name")
     ),
     responses(
         (status = 200, description = "With `stream`, that stream's current graph; without, `{machine, streams}` holding every loaded stream's", body = GraphOfOneStreamOrOfEveryStream),
@@ -291,7 +289,7 @@ pub(crate) async fn get_graph(
     path = "/api/registry",
     tag = "registry",
     params(
-        ("stream" = Option<String>, Query, description = "The loaded stream whose node catalog to list; absent lists the native types and each loaded stream's own")
+        ("stream" = Option<String>, Query, description = "The loaded stream whose node catalog to list, by its stream id; absent lists the native types and each loaded stream's own")
     ),
     responses(
         (status = 200, description = "With `stream`, the node types that stream can add: the natively compiled ones, then the ones described in its own interpreter. Without, `{nodes, streams}`: the native types, then each loaded stream's described types under that stream", body = NodeTypesOfOneStreamOrOfEveryStream),
@@ -686,7 +684,7 @@ pub(crate) mod router_surface_tests {
             "/api/registry".to_string(),
             format!(
                 "/api/registry?stream={}",
-                crate::control_plane_stub_support::STUB_STREAM_NAME
+                crate::control_plane_stub_support::STUB_STREAM_ID
             ),
         ] {
             let request = Request::builder()
@@ -775,7 +773,7 @@ pub(crate) mod router_surface_tests {
             let refusal = body["error"].as_str().unwrap_or_default();
             assert!(
                 refusal.contains("elsewhere")
-                    && refusal.contains(crate::control_plane_stub_support::STUB_STREAM_NAME),
+                    && refusal.contains(crate::control_plane_stub_support::STUB_STREAM_ID),
                 "GET {uri}: {refusal}"
             );
         }
@@ -792,7 +790,7 @@ pub(crate) mod router_surface_tests {
                 "GET",
                 format!(
                     "/api/registry?stream={}",
-                    crate::control_plane_stub_support::STUB_STREAM_NAME
+                    crate::control_plane_stub_support::STUB_STREAM_ID
                 ),
                 "",
             ),
@@ -875,7 +873,7 @@ pub(crate) mod router_surface_tests {
                 format!(
                     "{}?stream={}",
                     path,
-                    crate::control_plane_stub_support::STUB_STREAM_NAME
+                    crate::control_plane_stub_support::STUB_STREAM_ID
                 )
             });
         let routes_outside_the_spec = [
