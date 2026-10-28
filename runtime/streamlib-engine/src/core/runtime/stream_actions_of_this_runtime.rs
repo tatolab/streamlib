@@ -338,9 +338,9 @@ impl Runner {
     }
 
     /// Compile the request's stream function in its project's interpreter,
-    /// then load and start the graph under the stream id its location — the
-    /// resolved project directory and the function's `module:qualname` —
-    /// computes to, and record it.
+    /// record the graph under the stream id its location — the resolved
+    /// project directory and the function's `module:qualname` — computes to,
+    /// then load and start it; a refused start leaves nothing recorded.
     ///
     /// An id held by another location is refused naming both. A load of a
     /// location already recorded replaces it under the same id, keeping its
@@ -444,13 +444,19 @@ impl Runner {
                     &stream_environment,
                     graph_json,
                 );
-                let stream = self.load_and_start_a_stream(
+                stream_records.write(&stream_record)?;
+                let stream = match self.load_and_start_a_stream(
                     OneStreamAStreamActionLoads::recorded_by(&stream_record),
-                )?;
-                if let Err(write_refusal) = stream_records.write(&stream_record) {
-                    unload_a_stream_an_action_took_back(&stream, "its record was not written");
-                    return Err(write_refusal);
-                }
+                ) {
+                    Ok(stream) => stream,
+                    Err(start_refusal) => {
+                        forget_the_record_a_refused_run_wrote(
+                            stream_records,
+                            &stream_record.stream_id,
+                        );
+                        return Err(start_refusal);
+                    }
+                };
                 Ok(StreamRunOutcome {
                     node_count: stream.node_count(),
                     stream_tag: stream.stream_tag(),
@@ -1114,9 +1120,11 @@ impl Runner {
     }
 
     /// Replace `previous_record` by `replacement`, whose compile already
-    /// succeeded writing `compile_warnings`: unload the running stream, load
-    /// and start the new graph with the previous rulings, and record it. A
-    /// refused load re-loads the previous record when its stream was running.
+    /// succeeded writing `compile_warnings`: record it with the previous
+    /// rulings, then unload the running stream and load and start the new
+    /// graph. A record that cannot be written leaves the running stream as it
+    /// was; a refused load records the previous record again and re-loads it
+    /// when its stream was running.
     fn replace_a_recorded_stream(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
@@ -1126,19 +1134,22 @@ impl Runner {
         compile_warnings: Vec<String>,
     ) -> Result<StreamRunOutcome> {
         replacement.exposure_rulings = previous_record.exposure_rulings.clone();
+        stream_records.write(&replacement)?;
         let was_running = previously_loaded.is_some();
         if let Some(previously_loaded) = previously_loaded {
             unload_a_stream_an_action_took_back(&previously_loaded, "its record is replaced");
         }
-        let replaced = self
-            .load_and_start_a_stream(OneStreamAStreamActionLoads::recorded_by(&replacement))
-            .and_then(|stream| match stream_records.write(&replacement) {
-                Ok(()) => Ok(stream),
-                Err(write_refusal) => {
-                    unload_a_stream_an_action_took_back(&stream, "its record was not written");
-                    Err(write_refusal)
-                }
-            });
+        let replaced =
+            self.load_and_start_a_stream(OneStreamAStreamActionLoads::recorded_by(&replacement));
+        if replaced.is_err()
+            && let Err(not_written) = stream_records.write(&previous_record)
+        {
+            tracing::error!(
+                "the stream `{}` was not replaced, and its previous record was not written back, \
+                 so the runtime's next start loads the refused graph: {not_written}",
+                previous_record.stream_id
+            );
+        }
         match replaced {
             Ok(stream) => Ok(StreamRunOutcome {
                 node_count: stream.node_count(),
@@ -1296,6 +1307,21 @@ fn refuse_an_id_another_location_holds(
                 .unwrap_or_default()
         )),
         _ => Ok(()),
+    }
+}
+
+/// Forget the record a run wrote before its start was refused, so a refused run
+/// leaves nothing recorded; a record that cannot be removed is logged, and the
+/// runtime's next start tries to load it.
+fn forget_the_record_a_refused_run_wrote(
+    stream_records: &StreamRecordsInTheStateDirectory,
+    stream_id: &str,
+) {
+    if let Err(not_removed) = stream_records.remove(stream_id) {
+        tracing::error!(
+            "the stream `{stream_id}` was refused at its start, and the record its run wrote \
+             was not removed: {not_removed}"
+        );
     }
 }
 
@@ -3583,11 +3609,18 @@ mod tests {
     )]
     #[test]
     #[serial]
-    fn a_run_whose_start_is_refused_unloads_the_stream_it_loaded_and_records_nothing() {
+    fn a_run_records_its_stream_before_the_start_and_a_refused_start_records_nothing() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let records_seen_by_the_start = Arc::new(Mutex::new(None));
+        let records_the_start_saw = Arc::clone(&records_seen_by_the_start);
+        let streams_directory = state_directory.path().to_path_buf();
         runner
-            .install_setup_hook(|_| Err(Error::Configuration("the setup hook refuses".into())))
+            .install_setup_hook(move |_| {
+                *records_the_start_saw.lock() =
+                    Some(records_in(&streams_directory).read_every().len());
+                Err(Error::Configuration("the setup hook refuses".into()))
+            })
             .unwrap();
         let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
             "camera",
@@ -3597,6 +3630,11 @@ mod tests {
         let refusal = refusal_of(runner.run_stream(project.run_request()));
 
         assert!(refusal.contains("the setup hook refuses"), "{refusal}");
+        assert_eq!(
+            *records_seen_by_the_start.lock(),
+            Some(1),
+            "the stream is recorded before its start, so a crash in the start is counted"
+        );
         assert!(runner.ids_of_the_loaded_streams().is_empty());
         assert!(records_in(state_directory.path()).read_every().is_empty());
     }
@@ -3607,7 +3645,7 @@ mod tests {
     )]
     #[test]
     #[serial]
-    fn a_run_whose_record_is_not_written_unloads_the_stream_it_started() {
+    fn a_run_whose_record_is_not_written_loads_nothing() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
         let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
@@ -3678,7 +3716,7 @@ mod tests {
     )]
     #[test]
     #[serial]
-    fn a_replace_whose_record_is_not_written_unloads_the_new_stream_and_re_loads_the_previous() {
+    fn a_replace_whose_record_is_not_written_leaves_the_running_stream_as_it_was() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
         let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
@@ -3700,15 +3738,14 @@ mod tests {
         };
 
         assert!(refusal.contains("was not written"), "{refusal}");
-        assert!(!refusal.contains("did not re-load"), "{refusal}");
-        let restored = runner
+        let running = runner
             .loaded_stream_of_the_id(&camera)
-            .expect("the previous record is loaded again");
-        assert_ne!(restored.stream_tag(), first.stream_tag);
+            .expect("the running stream stays loaded");
+        assert_eq!(running.stream_tag(), first.stream_tag);
         assert_eq!(
-            the_exposures_graph_renders_for(&restored),
+            the_exposures_graph_renders_for(&running),
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
-            "the stream loaded is the previous record's, not the one whose record was refused"
+            "the stream running is the previous record's, not the one whose record was refused"
         );
         assert_eq!(
             the_current_record_in(&streams_directory, &camera),

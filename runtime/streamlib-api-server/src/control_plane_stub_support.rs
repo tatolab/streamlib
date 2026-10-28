@@ -232,7 +232,7 @@ pub(crate) fn the_stub_runtime_takes_no_stream_action(
 /// every call naming it reaches a clone of the stub (whose state is shared
 /// behind `Arc`s); the node catalog is the native registry's,
 /// and its interpreter described nothing; the stub stream's log holds no
-/// record; it lists as attached, and every stream action is refused.
+/// record; it lists as running, and every stream action is refused.
 ///
 /// [`OperationsOnTheStreamsLoadedInThisRuntime`]: ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime
 macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {

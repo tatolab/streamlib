@@ -246,7 +246,7 @@ uninstall_tatolab() {
 		esac
 	done
 	rm -rf "$TATOLAB_INSTALL_DIRECTORY"
-	say "Tatolab is uninstalled. Its state directory, with your kept streams and logs, is left in place:"
+	say "Tatolab is uninstalled. Its state directory, with your streams' records and logs, is left in place:"
 	say "  ${XDG_STATE_HOME:-$HOME/.local/state}/tatolab"
 }
 

@@ -407,7 +407,7 @@ mod tests {
     /// leaves this process holding no new TCP listener, loopback included. The
     /// scan covers the whole test process, so every test in this binary that
     /// holds a TCP listener runs serially with it. A running runtime's own proof
-    /// is `test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_at_all`.
+    /// is `test_the_runtime_listens_on_tcp_at_its_loopback_http_alone`.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[serial_test::serial(tcp_listeners_of_this_test_process)]

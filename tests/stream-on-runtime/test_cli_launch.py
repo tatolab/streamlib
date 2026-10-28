@@ -410,7 +410,7 @@ def assert_the_scan_sees_the_unix_socket_listener_held_by(pid: int, unix_socket_
     )
 
 
-def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone_and_tatolab_not_at_all(
+def test_the_runtime_listens_on_tcp_at_its_loopback_http_alone(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
