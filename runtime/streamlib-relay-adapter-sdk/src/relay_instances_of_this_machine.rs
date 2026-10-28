@@ -11,8 +11,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use streamlib_runtime_client_contract::local_api_wire_contract::ListedRelayInstance;
 
-use crate::relay_secret_setting::secret_setting_names_in_the_schema;
-use crate::{RelayAdapter, RelayAdapterRefusal, RelayInstanceId};
+use crate::{RelayAdapter, RelayAdapterRefusal, RelayAdapterSettingField, RelayInstanceId};
 
 /// One adapter as the relay-adapter catalog lists it: enough for a form that
 /// knows no adapter.
@@ -26,8 +25,8 @@ pub struct RelayAdapterCatalogEntry {
     pub display_icon_data_uri: String,
     /// What the adapter joins.
     pub doc: String,
-    /// The JSON Schema of an instance's settings, each secret `writeOnly`.
-    pub settings_schema: Value,
+    /// The settings an instance takes, each as the field a form draws.
+    pub settings: Vec<RelayAdapterSettingField>,
 }
 
 impl RelayAdapterCatalogEntry {
@@ -38,7 +37,7 @@ impl RelayAdapterCatalogEntry {
             display_name: A::display_name().to_string(),
             display_icon_data_uri: Self::display_icon_data_uri_of_the_svg(A::display_icon_svg()),
             doc: A::doc().to_string(),
-            settings_schema: A::settings_schema(),
+            settings: A::setting_fields(),
         }
     }
 
@@ -52,7 +51,11 @@ impl RelayAdapterCatalogEntry {
 
     /// The settings of this adapter that are secrets.
     pub fn secret_setting_names(&self) -> Vec<String> {
-        secret_setting_names_in_the_schema(&self.settings_schema)
+        self.settings
+            .iter()
+            .filter(|setting| setting.secret)
+            .map(|setting| setting.name.clone())
+            .collect()
     }
 }
 

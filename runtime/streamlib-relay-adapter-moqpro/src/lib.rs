@@ -14,8 +14,9 @@ mod moqpro_relay_token;
 use streamlib_relay_adapter_sdk::{
     BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter,
     RelayAdapterCatalogEntry, RelayAdapterInstanceMaker, RelayAdapterKind, RelayAdapterRefusal,
-    RelayConnectionState, RelayConnectionStateReceiver, RelayDialCredential, RelayInstanceId,
-    RelaySettingsJsonSchema, relay_instance_settings_from_json,
+    RelayAdapterSettingField, RelayConnectionState, RelayConnectionStateReceiver,
+    RelayDialCredential, RelayInstanceId, relay_adapter_setting_fields_of,
+    relay_instance_settings_from_json,
 };
 use tokio::sync::watch;
 
@@ -95,8 +96,8 @@ impl RelayAdapter for MoqProRelayAdapter {
         &self.relay_id
     }
 
-    fn settings_schema() -> serde_json::Value {
-        MoqProRelayInstanceSettings::processor_config_schema_document()
+    fn setting_fields() -> Vec<RelayAdapterSettingField> {
+        relay_adapter_setting_fields_of::<MoqProRelayInstanceSettings>()
     }
 
     fn join(&mut self, settings: serde_json::Value) -> Result<JoinedRelay, RelayAdapterRefusal> {
@@ -178,6 +179,7 @@ mod tests {
     use super::*;
     use moq_auth::{Algorithm, Key, KeyId, Pattern};
     use std::time::{Duration, Instant};
+    use streamlib_relay_adapter_sdk::RelaySettingFieldType;
     use streamlib_relay_adapter_sdk::secrecy::ExposeSecret;
     use streamlib_relay_adapter_sdk::url::Url;
 
@@ -205,30 +207,20 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_takes_the_project_and_the_key_as_a_secret() {
+    fn the_catalog_lists_the_project_as_a_string_and_the_key_as_a_secret_file() {
         let entry = MoqProRelayAdapterInstanceMaker::for_the_machine(the_machine()).catalog_entry();
         assert_eq!(entry.kind, "moqpro");
-        let mut properties = entry.settings_schema["properties"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        properties.sort();
-        assert_eq!(properties, ["project_id", "signing_key"]);
-        assert_eq!(entry.secret_setting_names(), ["signing_key"]);
-        let mut required = entry.settings_schema["required"]
-            .as_array()
-            .unwrap()
-            .clone();
-        required.sort_by_key(|name| name.to_string());
-        assert_eq!(
-            required,
-            [
-                serde_json::json!("project_id"),
-                serde_json::json!("signing_key")
-            ]
-        );
+        let [project_id, signing_key] = entry.settings.as_slice() else {
+            panic!("{:#?}", entry.settings)
+        };
+        assert_eq!(project_id.name, "project_id");
+        assert_eq!(project_id.field_type, RelaySettingFieldType::String);
+        assert!(!project_id.secret);
+        assert!(project_id.required);
+        assert_eq!(signing_key.name, "signing_key");
+        assert_eq!(signing_key.field_type, RelaySettingFieldType::File);
+        assert!(signing_key.secret);
+        assert!(signing_key.required);
     }
 
     #[test]

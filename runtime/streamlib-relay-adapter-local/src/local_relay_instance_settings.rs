@@ -19,7 +19,8 @@ pub struct LocalRelayInstanceSettings {
 mod tests {
     use super::*;
     use streamlib_relay_adapter_sdk::{
-        RelayInstanceId, RelaySettingsJsonSchema, relay_instance_settings_from_json,
+        RelayInstanceId, RelaySettingFieldType, relay_adapter_setting_fields_of,
+        relay_instance_settings_from_json,
     };
 
     fn relay_id() -> RelayInstanceId {
@@ -45,9 +46,14 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_describes_the_port_alone() {
-        let schema = LocalRelayInstanceSettings::processor_config_schema_document();
-        let properties = schema["properties"].as_object().unwrap();
-        assert_eq!(properties.keys().collect::<Vec<_>>(), vec!["port"]);
+    fn the_port_alone_is_a_setting_an_optional_number() {
+        let fields = relay_adapter_setting_fields_of::<LocalRelayInstanceSettings>();
+        let [port] = fields.as_slice() else {
+            panic!("{fields:#?}")
+        };
+        assert_eq!(port.name, "port");
+        assert_eq!(port.field_type, RelaySettingFieldType::Number);
+        assert!(!port.secret);
+        assert!(!port.required);
     }
 }

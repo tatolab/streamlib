@@ -9,8 +9,9 @@ use streamlib_relay_adapter_sdk::url::Url;
 use streamlib_relay_adapter_sdk::{
     BroadcastPath, JoinedRelay, MachineName, OutputPortExposureLevel, RelayAdapter,
     RelayAdapterCatalogEntry, RelayAdapterInstanceMaker, RelayAdapterKind, RelayAdapterRefusal,
-    RelayConnectionState, RelayConnectionStateReceiver, RelayDialCredential, RelayInstanceId,
-    RelaySecretSetting, RelaySettingsJsonSchema, relay_instance_settings_from_json,
+    RelayAdapterSettingField, RelayConnectionState, RelayConnectionStateReceiver,
+    RelayDialCredential, RelayInstanceId, RelaySecretEnteredAsString, RelaySecretSetting,
+    relay_adapter_setting_fields_of, relay_instance_settings_from_json,
 };
 use tokio::sync::watch;
 
@@ -21,7 +22,7 @@ use tokio::sync::watch;
 struct SecretHoldingTestRelaySettings {
     /// The secret the tests look for everywhere it must not be.
     #[allow(dead_code)]
-    token: RelaySecretSetting,
+    token: RelaySecretSetting<RelaySecretEnteredAsString>,
     #[serde(default)]
     #[allow(dead_code)]
     label: Option<String>,
@@ -53,8 +54,8 @@ impl RelayAdapter for SecretHoldingTestRelayAdapter {
         &self.relay_id
     }
 
-    fn settings_schema() -> serde_json::Value {
-        SecretHoldingTestRelaySettings::processor_config_schema_document()
+    fn setting_fields() -> Vec<RelayAdapterSettingField> {
+        relay_adapter_setting_fields_of::<SecretHoldingTestRelaySettings>()
     }
 
     fn join(&mut self, settings: serde_json::Value) -> Result<JoinedRelay, RelayAdapterRefusal> {

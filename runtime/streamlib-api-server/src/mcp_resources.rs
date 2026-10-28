@@ -28,7 +28,7 @@ pub(crate) const NODE_CATALOG_RESOURCE_URI: &str = "streamlib://node-catalog";
 /// Every loaded stream's running graph: nodes, links, states, metrics.
 pub(crate) const LIVE_GRAPH_RESOURCE_URI: &str = "streamlib://graph";
 
-/// Every relay adapter `add_relay` takes, with its settings schema.
+/// Every relay adapter `add_relay` takes, with its settings.
 pub(crate) const RELAY_ADAPTER_CATALOG_RESOURCE_URI: &str = "streamlib://relay-adapter-catalog";
 
 const JSON_RESOURCE_MIME_TYPE: &str = "application/json";
@@ -46,7 +46,7 @@ pub(crate) fn resources_list_result() -> ListResourcesResult {
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
         Resource::new(RELAY_ADAPTER_CATALOG_RESOURCE_URI, "relay-adapter-catalog")
             .with_title("Relay-adapter catalog")
-            .with_description("Every relay adapter compiled into the runtime, under `adapters`: its `kind`, as `add_relay` takes it, the name people read it by (`display_name`), the provider's logo as an inline `data:` URI an `<img>` shows (`display_icon_data_uri`), what it joins (`doc`), and its `settings_schema` (JSON Schema 2020-12; the keys `add_relay` and `configure_relay` take in `settings`), each secret marked `writeOnly` — kept in the OS secret store and listed by `list_relays` only as set or unset.")
+            .with_description("Every relay adapter compiled into the runtime, under `adapters`: its `kind`, as `add_relay` takes it, the name people read it by (`display_name`), the provider's logo as an inline `data:` URI an `<img>` shows (`display_icon_data_uri`), what it joins (`doc`), and its `settings`, the keys `add_relay` and `configure_relay` take in `settings`: each with its `name`, its `type` (`string`, `url`, `number`, `boolean`, `select` with its `options`, `string_list`, or `file` — a file's text, picked or pasted), whether it is `secret` — kept in the OS secret store and listed by `list_relays` only as set or unset — whether it is `required`, its `doc`, and its `default` when it has one.")
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
     ])
 }

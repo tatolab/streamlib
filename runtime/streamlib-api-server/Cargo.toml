@@ -42,7 +42,7 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.55.7" }
 # shapes it serves.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.55.7" }
 # The machine's relay instances the relay tools drive, and the relay-adapter catalog.
-streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk" }
+streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk", features = ["utoipa"] }
 
 # `trace` for every request's span; `fs` serves the preview page's files on the loopback listener.
 tower-http = { version = "0.6", features = ["trace", "fs"] }

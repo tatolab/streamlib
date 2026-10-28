@@ -25,6 +25,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 url = "2.5.8"
+# Host-only OpenAPI schema derive for the relay-adapter catalog's setting
+# fields, behind the off-by-default `utoipa` feature the local API enables.
+utoipa = { version = "5.3", optional = true }
+
+[features]
+# Adds a `utoipa::ToSchema` derive to the setting-field types the
+# relay-adapter catalog serves.
+utoipa = ["dep:utoipa"]
 
 [lints]
 workspace = true

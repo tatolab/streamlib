@@ -6,7 +6,9 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
-use streamlib_relay_adapter_sdk::{RelayAdapterCatalogEntry, RelayInstancesOfThisMachine};
+use streamlib_relay_adapter_sdk::{
+    RelayAdapterCatalogEntry, RelayAdapterSettingField, RelayInstancesOfThisMachine,
+};
 use utoipa::OpenApi;
 
 /// Shared HTTP handler state.
@@ -35,9 +37,8 @@ pub(crate) struct RelayAdapterCatalogResponseAdapter {
     pub display_icon_data_uri: String,
     /// What the adapter joins.
     pub doc: String,
-    /// The JSON Schema of an instance's settings; each secret is `writeOnly`.
-    #[schema(value_type = Object)]
-    pub settings_schema: serde_json::Value,
+    /// The settings an instance takes, each as the field a form draws.
+    pub settings: Vec<RelayAdapterSettingField>,
 }
 
 impl From<RelayAdapterCatalogEntry> for RelayAdapterCatalogResponseAdapter {
@@ -47,7 +48,7 @@ impl From<RelayAdapterCatalogEntry> for RelayAdapterCatalogResponseAdapter {
             display_name,
             display_icon_data_uri,
             doc,
-            settings_schema,
+            settings,
         }: RelayAdapterCatalogEntry,
     ) -> Self {
         Self {
@@ -55,7 +56,7 @@ impl From<RelayAdapterCatalogEntry> for RelayAdapterCatalogResponseAdapter {
             display_name,
             display_icon_data_uri,
             doc,
-            settings_schema,
+            settings,
         }
     }
 }
@@ -96,7 +97,7 @@ pub(crate) struct ErrorResponse {
     info(
         title = "StreamLib Runtime API",
         version = "0.1.0",
-        description = "Observation API for the machine's runtime: the graph of each stream it loads, the node types each can add, and its event stream. `/api/relay-adapters` lists the relay adapters a relay instance is added through, each with its settings schema. `/api/graph` and `/api/registry` take an optional `stream` query parameter naming one loaded stream, and read every loaded stream without it. A stream's graph is defined by its code, so this API does not mutate it.",
+        description = "Observation API for the machine's runtime: the graph of each stream it loads, the node types each can add, and its event stream. `/api/relay-adapters` lists the relay adapters a relay instance is added through, each with its settings. `/api/graph` and `/api/registry` take an optional `stream` query parameter naming one loaded stream, and read every loaded stream without it. A stream's graph is defined by its code, so this API does not mutate it.",
         license(name = "BUSL-1.1")
     ),
     tags(

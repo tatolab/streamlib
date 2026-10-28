@@ -849,8 +849,9 @@ mod tests {
     use streamlib_relay_adapter_sdk::url::Url;
     use streamlib_relay_adapter_sdk::{
         BroadcastPath, BuiltInRelayInstance, OutputPortExposureLevel, RelayAdapterKind,
-        RelayConnectionState, RelayConnectionStateReceiver, RelayDialCredential,
-        RelaySecretSetting, relay_instance_settings_from_json,
+        RelayAdapterSettingField, RelayConnectionState, RelayConnectionStateReceiver,
+        RelayDialCredential, RelaySecretEnteredAsUrl, RelaySecretSetting,
+        relay_adapter_setting_fields_of, relay_instance_settings_from_json,
     };
 
     use super::*;
@@ -871,7 +872,7 @@ mod tests {
     #[serde(deny_unknown_fields)]
     struct ProviderRelaySettings {
         /// The relay's URL, its token in the path.
-        relay_url_carrying_a_token: RelaySecretSetting,
+        relay_url_carrying_a_token: RelaySecretSetting<RelaySecretEnteredAsUrl>,
         #[serde(default)]
         region: Option<String>,
     }
@@ -908,9 +909,8 @@ mod tests {
             &self.relay_id
         }
 
-        fn settings_schema() -> Value {
-            use streamlib_relay_adapter_sdk::RelaySettingsJsonSchema;
-            ProviderRelaySettings::processor_config_schema_document()
+        fn setting_fields() -> Vec<RelayAdapterSettingField> {
+            relay_adapter_setting_fields_of::<ProviderRelaySettings>()
         }
 
         fn join(&mut self, settings: Value) -> Result<JoinedRelay, RelayAdapterRefusal> {
@@ -998,7 +998,7 @@ mod tests {
                     TEST_RELAY_ADAPTER_DISPLAY_ICON_SVG,
                 ),
                 doc: "A relay every machine has.".to_string(),
-                settings_schema: json!({"type": "object", "properties": {}}),
+                settings: Vec::new(),
             }
         }
 

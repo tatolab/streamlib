@@ -4,8 +4,8 @@
 //! What a moq.pro relay instance's settings may say.
 
 use serde::Deserialize;
-use streamlib_relay_adapter_sdk::RelaySecretSetting;
 use streamlib_relay_adapter_sdk::url::Url;
+use streamlib_relay_adapter_sdk::{RelaySecretEnteredAsFile, RelaySecretSetting};
 
 /// moq.pro's one relay cluster, every project served at its path under it;
 /// `https://cdn.moq.dev` names the same cluster.
@@ -47,7 +47,7 @@ pub struct MoqProRelayInstanceSettings {
     /// The project's signing key, the JWK moq.pro gave for it, as JSON or
     /// base64url JSON. It mints read and write for every broadcast of the
     /// project.
-    pub signing_key: RelaySecretSetting,
+    pub signing_key: RelaySecretSetting<RelaySecretEnteredAsFile>,
 }
 
 /// Why a moq.pro instance's project id was refused.
