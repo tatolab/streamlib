@@ -155,6 +155,7 @@ enum TatolabVerb {
     /// Show a stream under another display name; its id and address stay as they are.
     #[command(
         override_usage = "tatolab rename [STREAM] <DISPLAY_NAME>",
+        after_long_help = STREAM_ARGUMENT_LONG_HELP,
         long_about = "Show a stream under another display name — any text, never cast and never \
                       unique. Its id, its address and its broadcast stay as they are, so no reader \
                       of its ports is cut off, and the name holds across restarts and re-loads \
@@ -175,7 +176,10 @@ enum TatolabVerb {
                       longer allows is cut at once — and a kept stream records it, over what its \
                       function exposes, across restarts."
     )]
-    #[command(override_usage = "tatolab expose [STREAM] <NODE> <PORT> [--public | --remove]")]
+    #[command(
+        override_usage = "tatolab expose [STREAM] <NODE> <PORT> [--public | --remove]",
+        after_long_help = STREAM_ARGUMENT_LONG_HELP
+    )]
     Expose {
         /// [STREAM], as every stream verb takes it; the node by its name in the stream's graph;
         /// and the output port by its name on the node.

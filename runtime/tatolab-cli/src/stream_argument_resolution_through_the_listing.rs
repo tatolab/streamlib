@@ -35,13 +35,13 @@ pub(crate) fn stream_id_the_stream_argument_names_on_the_running_runtime(
 
 /// The id of the one stream of `listed_streams` that `stream_argument` names — its id, else a
 /// display name only it holds — or, when it is omitted, the one whose project directory is the
-/// one `resolved_working_directory` reads; else why not, listing the candidates. An empty
+/// one `read_the_resolved_working_directory` reads; else why not, listing the candidates. An empty
 /// argument names nothing and is refused, so an unset variable never falls back to the working
 /// directory.
 pub(crate) fn stream_id_the_stream_argument_names(
     listed_streams: &[ListStreamsToolResultStream],
     stream_argument: Option<&str>,
-    resolved_working_directory: impl FnOnce() -> Result<PathBuf, TatolabCommandFailure>,
+    read_the_resolved_working_directory: impl FnOnce() -> Result<PathBuf, TatolabCommandFailure>,
 ) -> Result<String, TatolabCommandFailure> {
     match stream_argument {
         Some("") => Err(
@@ -52,9 +52,10 @@ pub(crate) fn stream_id_the_stream_argument_names(
         Some(stream_argument) => {
             stream_id_named_by_id_or_display_name(listed_streams, stream_argument)
         }
-        None => {
-            stream_id_recorded_from_the_directory(listed_streams, &resolved_working_directory()?)
-        }
+        None => stream_id_recorded_from_the_directory(
+            listed_streams,
+            &read_the_resolved_working_directory()?,
+        ),
     }
     .map_err(TatolabCommandFailure::refused)
 }
