@@ -338,9 +338,9 @@ impl Runner {
     }
 
     /// Compile the request's stream function in its project's interpreter,
-    /// record the graph under the stream id its location — the resolved
-    /// project directory and the function's `module:qualname` — computes to,
-    /// then load and start it; a refused start leaves nothing recorded.
+    /// load the graph under the stream id its location — the resolved project
+    /// directory and the function's `module:qualname` — computes to, record
+    /// it, then start it; a refused load or start leaves nothing recorded.
     ///
     /// An id held by another location is refused naming both. A load of a
     /// location already recorded replaces it under the same id, keeping its
@@ -444,19 +444,18 @@ impl Runner {
                     &stream_environment,
                     graph_json,
                 );
-                stream_records.write(&stream_record)?;
-                let stream = match self.load_and_start_a_stream(
+                let stream = self.load_a_stream_with_the_owners_rulings(
                     OneStreamAStreamActionLoads::recorded_by(&stream_record),
-                ) {
-                    Ok(stream) => stream,
-                    Err(start_refusal) => {
-                        forget_the_record_a_refused_run_wrote(
-                            stream_records,
-                            &stream_record.stream_id,
-                        );
-                        return Err(start_refusal);
-                    }
-                };
+                )?;
+                if let Err(write_refusal) = stream_records.write(&stream_record) {
+                    unload_a_stream_an_action_took_back(&stream, "its record was not written");
+                    return Err(write_refusal);
+                }
+                if let Err(start_refusal) = stream.start() {
+                    unload_a_stream_an_action_took_back(&stream, "its start was refused");
+                    forget_the_record_a_refused_run_wrote(stream_records, &stream_record.stream_id);
+                    return Err(start_refusal);
+                }
                 Ok(StreamRunOutcome {
                     node_count: stream.node_count(),
                     stream_tag: stream.stream_tag(),
@@ -3645,7 +3644,7 @@ mod tests {
     )]
     #[test]
     #[serial]
-    fn a_run_whose_record_is_not_written_loads_nothing() {
+    fn a_run_whose_record_is_not_written_unloads_its_stream_and_records_nothing() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
         let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
