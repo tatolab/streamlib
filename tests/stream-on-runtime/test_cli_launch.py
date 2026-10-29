@@ -1000,8 +1000,9 @@ def test_a_stream_function_that_raises_is_recorded_failed_with_its_traceback_and
             f"a raising stream function must exit non-zero; standard error:\n"
             f"{stream_run.recent_stderr()}"
         )
-        assert stream_run.failed_stream() is not None, stream_run.stdout_text
-        failed_stream_id, printed_reason = stream_run.failed_stream()
+        failed_stream = stream_run.failed_stream()
+        assert failed_stream is not None, stream_run.stdout_text
+        failed_stream_id, printed_reason = failed_stream
         assert failed_stream_id == stream_id
     else:
         stream_run.await_stderr_containing(

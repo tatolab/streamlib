@@ -92,16 +92,14 @@ impl StreamRecord {
         failed_because: impl Into<String>,
     ) -> Self {
         Self {
-            schema_version: STREAM_RECORD_SCHEMA_VERSION,
-            stream_id: location.stream_id(),
-            location,
-            display_name: display_name.into(),
-            interpreter: stream_environment.interpreter.clone(),
             graph: None,
-            stopped: false,
             failed_because: Some(failed_because.into()),
-            runtime_crashes_in_a_row_implicating_it: 0,
-            exposure_rulings: Vec::new(),
+            ..Self::of_a_running_stream(
+                location,
+                display_name,
+                stream_environment,
+                serde_json::Value::Null,
+            )
         }
     }
 

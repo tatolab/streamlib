@@ -345,27 +345,26 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
             standard_output_head_as_a_refusal_quotes_it(&standard_output_bytes)
         ))
     };
-    if is_a_compile_document_naming_no_stream_function(&standard_output_bytes) {
-        return Err(Error::Configuration(format!(
-            "the stream function in {project} compiled, and the project's `tatolab-stream` is \
-             older than this runtime: its compile document names no `stream_function`, which \
-             the stream's id is computed from. Run `uv sync` in {project} to take a \
-             `tatolab-stream` as new as the runtime"
-        )));
-    }
     let compile_document =
         serde_json::from_slice::<ProjectStreamCompileDocument>(&standard_output_bytes)
             .map_err(|not_a_compile_document| not_the_compile_document(&not_a_compile_document))?;
+    let names_a_graph_and_no_stream_function =
+        compile_document.stream_graph.is_some() && compile_document.stream_function.is_none();
     let project_directory = compile_document.project_directory.clone();
-    let what_the_projects_code_gave =
-        compile_document
-            .what_the_projects_code_gave()
-            .ok_or_else(|| {
-                not_the_compile_document(
-                    &"it holds no one of a graph, `failed_because`, `not_defined_because` or \
-                  `import_failed_because`",
-                )
-            })?;
+    let Some(what_the_projects_code_gave) = compile_document.what_the_projects_code_gave() else {
+        if names_a_graph_and_no_stream_function {
+            return Err(Error::Configuration(format!(
+                "the stream function in {project} compiled, and the project's `tatolab-stream` \
+                 is older than this runtime: its compile document names no `stream_function`, \
+                 which the stream's id is computed from. Run `uv sync` in {project} to take a \
+                 `tatolab-stream` as new as the runtime"
+            )));
+        }
+        return Err(not_the_compile_document(
+            &"it holds no one of a graph, `failed_because`, `not_defined_because` or \
+              `import_failed_because`",
+        ));
+    };
     Ok(StreamFunctionCompileInTheProjectsInterpreterReport {
         what_the_projects_code_gave,
         stream_environment: StreamEnvironment {
@@ -378,20 +377,6 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
             .filter(|line| !line.is_empty())
             .map(str::to_string)
             .collect(),
-    })
-}
-
-/// Whether `standard_output` is a compiled graph's document but for its
-/// missing `stream_function`, as a `tatolab-stream` older than the runtime
-/// prints it.
-fn is_a_compile_document_naming_no_stream_function(standard_output: &[u8]) -> bool {
-    let Ok(document) = serde_json::from_slice::<serde_json::Value>(standard_output) else {
-        return false;
-    };
-    document.as_object().is_some_and(|fields| {
-        fields.contains_key("stream_graph")
-            && fields.contains_key("project_directory")
-            && !fields.contains_key("stream_function")
     })
 }
 

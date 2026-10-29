@@ -104,6 +104,23 @@ pub struct StreamLoadedOrFailedByARun {
     pub replaced_a_recorded_stream: bool,
 }
 
+impl StreamLoadedOrFailedByARun {
+    /// The stream `record` records, in `state`.
+    fn of_the_record(
+        record: StreamRecord,
+        state: StreamStateAfterItsRun,
+        replaced_a_recorded_stream: bool,
+    ) -> Self {
+        Self {
+            stream_id: record.stream_id,
+            display_name: record.display_name,
+            stream_location: record.location,
+            state,
+            replaced_a_recorded_stream,
+        }
+    }
+}
+
 /// Whether a stream [`Runner::run_stream`] took in runs, or why it is failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamStateAfterItsRun {
@@ -593,7 +610,7 @@ impl Runner {
                 self.recorded_stream_ids_listed_for_a_refusal()
             )));
         };
-        let Some(graph_json) = record.graph.clone() else {
+        let Some(graph_json) = record.graph.as_ref() else {
             drop(one_stream_action_at_a_time);
             let compiled_again =
                 self.compile_and_run_a_recorded_stream_from_its_location(&record)?;
@@ -608,7 +625,7 @@ impl Runner {
                 ))),
             };
         };
-        let stream = match self.load_a_recorded_stream_from_its_record(&record, &graph_json) {
+        let stream = match self.load_a_recorded_stream_from_its_record(&record, graph_json) {
             Ok(stream) => stream,
             Err(retry_refusal)
                 if record.is_failed()
@@ -939,13 +956,13 @@ impl Runner {
                 );
                 continue;
             }
-            let Some(graph_json) = record.graph.clone() else {
+            let Some(graph_json) = record.graph.as_ref() else {
                 drop(one_stream_action_at_a_time);
                 reloads
                     .push(self.reload_a_recorded_stream_holding_no_graph_by_compiling_it(&record));
                 continue;
             };
-            match self.load_a_recorded_stream_from_its_record(&record, &graph_json) {
+            match self.load_a_recorded_stream_from_its_record(&record, graph_json) {
                 Ok(stream) => {
                     tracing::info!(
                         "the stream `{stream_id}` re-loaded from {} with {} nodes",
@@ -1194,18 +1211,24 @@ impl Runner {
                     .to_string(),
                 Err(_) => stream_location.stream_function_name(),
             });
-        let mut stream_record = match graph_or_why_none {
-            Ok(graph_json) => StreamRecord::of_a_running_stream(
-                stream_location,
-                display_name,
-                stream_environment,
-                graph_json,
+        let (mut stream_record, failed_because_its_code_gave_no_graph) = match graph_or_why_none {
+            Ok(graph_json) => (
+                StreamRecord::of_a_running_stream(
+                    stream_location,
+                    display_name,
+                    stream_environment,
+                    graph_json,
+                ),
+                None,
             ),
-            Err(failed_because) => StreamRecord::of_a_stream_whose_compile_failed(
-                stream_location,
-                display_name,
-                stream_environment,
-                failed_because,
+            Err(failed_because) => (
+                StreamRecord::of_a_stream_whose_compile_failed(
+                    stream_location,
+                    display_name,
+                    stream_environment,
+                    failed_because.clone(),
+                ),
+                Some(failed_because),
             ),
         };
         let replaced_a_recorded_stream = previous_record.is_some();
@@ -1216,41 +1239,57 @@ impl Runner {
         if let Some(previously_loaded) = previously_loaded {
             unload_a_stream_an_action_took_back(&previously_loaded, "its record is replaced");
         }
-        let state = match &stream_record.graph {
-            Some(graph_json) => match self.load_and_start_a_stream(
-                OneStreamAStreamActionLoads::recorded_by(&stream_record, graph_json),
-            ) {
-                Ok(stream) => StreamStateAfterItsRun::Running {
-                    stream_tag: stream.stream_tag(),
-                    node_count: stream.node_count(),
-                },
-                Err(load_refusal) if is_the_machines_shutdown_requested() => {
-                    return Err(load_refusal);
-                }
-                Err(load_refusal) => {
-                    let failed_because = load_refusal.to_string();
-                    stream_record.failed_because = Some(failed_because.clone());
-                    if let Err(not_written) = stream_records.write(&stream_record) {
-                        tracing::error!(
-                            "the stream `{stream_id}` did not load, and was not recorded \
-                             failed, so the runtime's next start loads it again: \
-                             {not_written}"
-                        );
-                    }
-                    StreamStateAfterItsRun::Failed { failed_because }
-                }
-            },
-            None => StreamStateAfterItsRun::Failed {
-                failed_because: stream_record.failed_because.clone().unwrap_or_default(),
-            },
+        let state = match failed_because_its_code_gave_no_graph {
+            Some(failed_because) => StreamStateAfterItsRun::Failed { failed_because },
+            None => self.load_and_start_a_recorded_stream_recording_it_failed_when_refused(
+                stream_records,
+                &mut stream_record,
+            )?,
         };
-        Ok(StreamLoadedOrFailedByARun {
-            stream_id: stream_record.stream_id,
-            display_name: stream_record.display_name,
-            stream_location: stream_record.location,
+        Ok(StreamLoadedOrFailedByARun::of_the_record(
+            stream_record,
             state,
             replaced_a_recorded_stream,
-        })
+        ))
+    }
+
+    /// Load and start the graph `stream_record` holds; a refused load or start
+    /// records it failed with the reason, unless a machine shutdown abandoned
+    /// it, when the refusal is returned and the record left for the next start
+    /// to load.
+    fn load_and_start_a_recorded_stream_recording_it_failed_when_refused(
+        &self,
+        stream_records: &StreamRecordsInTheStateDirectory,
+        stream_record: &mut StreamRecord,
+    ) -> Result<StreamStateAfterItsRun> {
+        let loaded = match &stream_record.graph {
+            Some(graph_json) => self.load_and_start_a_stream(
+                OneStreamAStreamActionLoads::recorded_by(stream_record, graph_json),
+            ),
+            None => Err(Error::Runtime(format!(
+                "the stream `{}` holds no graph to load",
+                stream_record.stream_id
+            ))),
+        };
+        match loaded {
+            Ok(stream) => Ok(StreamStateAfterItsRun::Running {
+                stream_tag: stream.stream_tag(),
+                node_count: stream.node_count(),
+            }),
+            Err(load_refusal) if is_the_machines_shutdown_requested() => Err(load_refusal),
+            Err(load_refusal) => {
+                let failed_because = load_refusal.to_string();
+                stream_record.failed_because = Some(failed_because.clone());
+                if let Err(not_written) = stream_records.write(stream_record) {
+                    tracing::error!(
+                        "the stream `{}` did not load, and was not recorded failed, so the \
+                         runtime's next start loads it again: {not_written}",
+                        stream_record.stream_id
+                    );
+                }
+                Ok(StreamStateAfterItsRun::Failed { failed_because })
+            }
+        }
     }
 
     /// The record of `stream_location` a run of it replaces, and its stream
@@ -1290,6 +1329,19 @@ impl Runner {
         }
     }
 
+    /// Refuse a run of `stream_location` whose id another location holds, or a
+    /// stream loaded without a record holds.
+    fn refuse_a_run_of_a_location_whose_id_another_holds(
+        &self,
+        stream_location: &StreamLocation,
+    ) -> Result<()> {
+        self.the_recorded_stream_a_run_of_its_location_replaces(
+            &stream_location.stream_id(),
+            stream_location,
+        )
+        .map(|_| ())
+    }
+
     /// Record failed the stream of `stream_location`, whose named function the
     /// project's entry no longer defines, unloading it; refused with
     /// `not_defined_because` when no record holds it.
@@ -1314,15 +1366,13 @@ impl Runner {
         if let Some(loaded) = loaded {
             unload_a_stream_an_action_took_back(&loaded, "its function is no longer defined");
         }
-        Ok(StreamLoadedOrFailedByARun {
-            stream_id: record.stream_id,
-            display_name: record.display_name,
-            stream_location: record.location,
-            state: StreamStateAfterItsRun::Failed {
+        Ok(StreamLoadedOrFailedByARun::of_the_record(
+            record,
+            StreamStateAfterItsRun::Failed {
                 failed_because: not_defined_because,
             },
-            replaced_a_recorded_stream: true,
-        })
+            true,
+        ))
     }
 
     /// Record failed, with `import_failed_because`, every stream recorded from
@@ -1354,8 +1404,7 @@ impl Runner {
             let stream_location = StreamLocation::of_a_project_whose_entry_did_not_import(
                 stream_environment.project_directory.clone(),
             );
-            let stream_id = stream_location.stream_id();
-            self.the_recorded_stream_a_run_of_its_location_replaces(&stream_id, &stream_location)?;
+            self.refuse_a_run_of_a_location_whose_id_another_holds(&stream_location)?;
             let display_name =
                 display_name_the_run_gives.unwrap_or_else(|| stream_location.project_folder_name());
             let record = StreamRecord::of_a_stream_whose_compile_failed(
@@ -1365,15 +1414,13 @@ impl Runner {
                 import_failed_because.clone(),
             );
             stream_records.write(&record)?;
-            return Ok(vec![StreamLoadedOrFailedByARun {
-                stream_id: record.stream_id,
-                display_name: record.display_name,
-                stream_location: record.location,
-                state: StreamStateAfterItsRun::Failed {
+            return Ok(vec![StreamLoadedOrFailedByARun::of_the_record(
+                record,
+                StreamStateAfterItsRun::Failed {
                     failed_because: import_failed_because,
                 },
-                replaced_a_recorded_stream: false,
-            }]);
+                false,
+            )]);
         }
         let mut streams_failed = Vec::with_capacity(records_of_the_project.len());
         for mut record in records_of_the_project {
@@ -1382,15 +1429,13 @@ impl Runner {
             if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(&record.stream_id) {
                 unload_a_stream_an_action_took_back(&loaded, "its project's entry did not import");
             }
-            streams_failed.push(StreamLoadedOrFailedByARun {
-                stream_id: record.stream_id,
-                display_name: record.display_name,
-                stream_location: record.location,
-                state: StreamStateAfterItsRun::Failed {
+            streams_failed.push(StreamLoadedOrFailedByARun::of_the_record(
+                record,
+                StreamStateAfterItsRun::Failed {
                     failed_because: import_failed_because.clone(),
                 },
-                replaced_a_recorded_stream: true,
-            });
+                true,
+            ));
         }
         Ok(streams_failed)
     }
@@ -1443,12 +1488,17 @@ impl Runner {
             stream_function: the_stream_target_that_compiles_a_location_again(&record.location),
             display_name: None,
         })?;
-        run.streams.into_iter().next().ok_or_else(|| {
-            Error::Runtime(format!(
-                "the stream `{}` was compiled from {}, and its run took in no stream",
-                record.stream_id, record.location
-            ))
-        })
+        let mut streams = run.streams.into_iter();
+        let the_project_took_in_one_stream =
+            record.location.is_a_project_whose_entry_did_not_import() && streams.len() == 1;
+        streams
+            .find(|stream| the_project_took_in_one_stream || stream.stream_id == record.stream_id)
+            .ok_or_else(|| {
+                Error::Runtime(format!(
+                    "the stream `{}` was compiled from {}, and its run did not take it in",
+                    record.stream_id, record.location
+                ))
+            })
     }
 
     /// The re-load at the runtime's start of `record`, which holds no graph:
@@ -1633,15 +1683,19 @@ struct StreamARunCompiled<'run> {
 }
 
 /// The project directory whose `.venv/bin/python` is `interpreter`; `None` when
-/// it is not one.
+/// it is not one. A stream compiled from a file in a subdirectory records that
+/// subdirectory as its location, so the directory its compile ran in — and its
+/// venv — is the interpreter's alone.
 fn the_project_directory_whose_venv_holds(interpreter: &Path) -> Option<PathBuf> {
     let venv_bin = interpreter.parent()?;
     let venv = venv_bin.parent()?;
-    (interpreter.file_name()? == "python"
-        && venv_bin.file_name()? == "bin"
-        && venv.file_name()? == ".venv")
-        .then(|| venv.parent().map(Path::to_path_buf))
-        .flatten()
+    if interpreter.file_name()? != "python"
+        || venv_bin.file_name()? != "bin"
+        || venv.file_name()? != ".venv"
+    {
+        return None;
+    }
+    venv.parent().map(Path::to_path_buf)
 }
 
 /// The target that compiles the stream at `location` again: none for a

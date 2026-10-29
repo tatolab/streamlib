@@ -288,16 +288,16 @@ fn rendered_run_stream_lines(run_stream_result: &RunStreamToolResult) -> String 
     run_stream_result
         .streams
         .iter()
-        .map(|stream| match stream.state {
-            RunStreamToolResultStreamState::Running => {
-                format!(
-                    "{}\n  follow it: tatolab logs -f\n",
-                    the_stream_a_run_took_in_described(stream)
-                )
-            }
-            RunStreamToolResultStreamState::Failed => {
-                format!("{}\n", the_stream_a_run_took_in_described(stream))
-            }
+        .map(|stream| {
+            let follow_it = if stream.state == RunStreamToolResultStreamState::Running {
+                "\n  follow it: tatolab logs -f"
+            } else {
+                ""
+            };
+            format!(
+                "{}{follow_it}\n",
+                the_stream_a_run_took_in_described(stream)
+            )
         })
         .collect()
 }
