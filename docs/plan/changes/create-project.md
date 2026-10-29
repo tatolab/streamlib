@@ -188,15 +188,14 @@ Paths are under `runtime/` unless marked otherwise.
   1. resolve or draw the directory;
   2. refuse existing scaffold files;
   3. write the scaffold;
-  4. `make_the_projects_venv`;
-  5. `run_stream` with no function and the folder's name as the display name.
-  - After step 3 nothing refuses: a failed venv or compile is the placeholder or failed records
-    of step 5. The reply is the run's result plus `project_directory`.
+  4. `run_stream` with no function and the folder's name as the display name, which makes the
+     venv as every load does.
+  - After step 3 nothing refuses: a failed venv or compile is step 4's placeholder or failed
+    records. The reply is the run's result plus `project_directory`.
   - The tool is `create_project {project_directory?}`; a relative directory is refused, as
     `run_stream` refuses one. `CreateProjectToolResult` goes in the wire contract.
   - The budget, `PROJECT_VENV_SYNC_BOUND` plus the compile and load bounds, sits under a new
     `PROJECT_CREATE_TOOL_CALL_TIMEOUT` (600s), held by the const-asserts beside `:274-313`.
-- **Tests.** Every item in "Test plan" is added work.
 
 ## MODIFIED
 
@@ -245,7 +244,8 @@ Paths are under `runtime/` unless marked otherwise.
   verb it fails with no runtime. It prints the `run` line for the stream, then
   `follow it: cd <dir> && tatolab dev`. The CLI no longer embeds the templates.
 - **`tatolab run`** prints one line per stream loaded, a failed one as `<id> failed: <reason>`,
-  then `follow it: tatolab logs -f`.
+  then `follow it: tatolab logs -f` for one stream, or `tatolab logs -f <stream id>` per
+  stream for several, since a bare `logs -f` refuses there.
   - It exits 0 when every stream is running, and 1 when any is `failed` or the load is refused
     (`main.rs:118-123` long_about).
   - A `--name` with no target in a project of several streams is refused by the runtime.
@@ -254,8 +254,8 @@ Paths are under `runtime/` unless marked otherwise.
   On save it re-loads the project with one `run_stream`, then follows the streams that load
   returned, failed ones included, so a traceback shows in the followed records. A stream that
   vanished from `stream.py` prints its reason once and is dropped from following.
-- **`tatolab logs -f` without a stream argument** in a several-stream directory keeps today's
-  refusal (`stream_argument_resolution_through_the_listing.rs:20-60`).
+- **A bare `tatolab logs -f`** in a several-stream directory keeps today's refusal
+  (`stream_argument_resolution_through_the_listing.rs:20-60`).
 - **The scaffold's `stream.py`** module docstring (`scaffold_template/stream.py:6-8`) says
   `tatolab dev` loads every `@stream` below. `test_scaffold_template.py:126-138` still pins one
   stream, `main`.
@@ -290,8 +290,8 @@ Paths are under `runtime/` unless marked otherwise.
 ## Test plan
 
 - **Stream suite** (`sdk/tatolab-stream/tests/test_project_stream_compile_entry.py`):
-  - `--every-stream` writes every `@stream` in definition order, with its graph, location and
-    docstring;
+  - `--every-stream` writes every `@stream` in definition order, with its `stream_graph`,
+    `stream_function` and `description`;
   - a raising function becomes its own `failed_because` entry while the others compile;
   - an unimportable entry exits 1 with its traceback;
   - imported and aliased streams count as today (`:544`, `:748`);
