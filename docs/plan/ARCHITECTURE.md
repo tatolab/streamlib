@@ -239,7 +239,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; amended by create-project:
-  `create_project`]
+  `create_project`; amended by project-loads-every-stream: `list_project_streams`]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
@@ -297,7 +297,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   scaffold writes, naming them; a directory that already holds a project is added by loading it.
   The runtime unit carries a pinned uv on both floors; the runtime makes every `.venv` with it,
   uv taking the Python `.python-version` pins from the machine or fetching it. A load of a
-  project with no `.venv/bin/python` makes one first, an existing `.venv` is never touched, a
+  project with no `.venv/bin/python` makes one first, a `.venv` holding `bin/python` is never
+  touched, a
   failed sync removes the half-made `.venv`, and uv's refusal comes back in its own words.
   The tool and `new` return the stream id, the display name and the project directory. Owner,
   2026-10-28. [create-project]
@@ -3539,7 +3540,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   agent-readable-processor-catalog — SHIPPED #2232; local-transport-hardening —
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
-  runtime-description]
+  runtime-description; amended by create-project: `create_project` joins the stream actions;
+  amended by project-loads-every-stream: `list_project_streams` joins the stream actions]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no

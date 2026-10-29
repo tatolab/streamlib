@@ -21,9 +21,9 @@ before making `--name` or a display name stand for more than one stream.
   of the project as it was, as a refused load already does for one stream.
 - A display name given at a load names one stream, so `--name` is refused when a load would load
   several.
-- A stream whose function was deleted from `stream.py` is recorded `failed` on the project's next
-  load, naming the missing function. Only `rm` forgets a stream, so a deletion never silently
-  forgets one.
+- A stream whose function was deleted from `stream.py` is unloaded and recorded `failed` on the
+  project's next load, naming the missing function. Only `rm` forgets a stream, so a deletion
+  never silently forgets one.
 - The runtime, not each client, finds a project's streams: `list_project_streams` returns each
   function, its docstring and, when loaded, its id and state.
 

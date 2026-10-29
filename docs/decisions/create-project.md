@@ -29,7 +29,7 @@ because its `.venv` has not been made yet.
 - The runtime unit carries a pinned uv on both floors, and the runtime makes every `.venv`
   with it: create always does, and a load of a project with no `.venv/bin/python` does it
   first. uv takes the Python the project's `.python-version` pins from the machine or fetches
-  it. An existing `.venv` is never touched.
+  it. A `.venv` holding `bin/python` is never touched.
 
 ## Rejected alternatives
 
