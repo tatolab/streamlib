@@ -34,7 +34,7 @@ thiserror = { workspace = true }
 # The contract a running runtime offers its clients: the runtime directory its local API socket
 # sits in, the machine runtime lock's holder, the state directory its own log sits in, a stream's
 # log files, and the wire names and tool result shapes its local API speaks.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.57.0" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.58.0" }
 # The MCP client of a runtime's local API: the official SDK's, over the local API socket — one
 # request per call over `POST /mcp`, or a connection of its own over the `/mcp/stdio` upgrade.
 rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket", "transport-async-rw"] }
